@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -82,13 +83,79 @@ var sinkLiteral = regexp.MustCompile(`^(prometheus\.Labels|attribute\.Set)$`)
 // flow is the data-flow state of one package: the struct types that hold a
 // queue-row field and the helpers that return one.
 type flow struct {
-	fset    *token.FileSet
-	structs map[string]bool
-	helpers map[string]bool
+	fset          *token.FileSet
+	structs       map[string]bool
+	helpers       map[string]bool
+	loggerFields  map[string]bool
+	loggerResults map[string]bool
+	helperFields  map[string]map[string]bool
+}
+
+// isLoggerType reports whether a type expression names a slog or log logger.
+func isLoggerType(expr ast.Expr) bool {
+	switch typed := expr.(type) {
+	case *ast.StarExpr:
+		return isLoggerType(typed.X)
+	case *ast.SelectorExpr:
+		base, ok := typed.X.(*ast.Ident)
+		return ok && typed.Sel.Name == "Logger" && (base.Name == "slog" || base.Name == "log")
+	}
+	return false
+}
+
+// holdsStruct unwraps a pointer, slice, array or map type to the struct type name it names.
+func holdsStruct(expr ast.Expr) string {
+	switch typed := expr.(type) {
+	case *ast.StarExpr:
+		return holdsStruct(typed.X)
+	case *ast.ArrayType:
+		return holdsStruct(typed.Elt)
+	case *ast.MapType:
+		return holdsStruct(typed.Value)
+	case *ast.Ident:
+		return typed.Name
+	}
+	return ""
 }
 
 func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
-	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}}
+	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}}
+	fieldTypes := map[string][]string{}
+	for _, sf := range pkg {
+		for _, decl := range sf.file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Type.Results != nil {
+				for _, result := range fn.Type.Results.List {
+					if isLoggerType(result.Type) {
+						f.loggerResults[fn.Name.Name] = true
+					}
+				}
+			}
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok {
+					continue
+				}
+				for _, field := range st.Fields.List {
+					if isLoggerType(field.Type) {
+						for _, name := range field.Names {
+							f.loggerFields[name.Name] = true
+						}
+					}
+					if inner := holdsStruct(field.Type); inner != "" {
+						fieldTypes[ts.Name.Name] = append(fieldTypes[ts.Name.Name], inner)
+					}
+				}
+			}
+		}
+	}
 	for _, sf := range pkg {
 		for _, decl := range sf.file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
@@ -116,23 +183,75 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 	}
 	for changed := true; changed; {
 		changed = false
+		for outer, inners := range fieldTypes {
+			for _, inner := range inners {
+				if f.structs[inner] && !f.structs[outer] {
+					f.structs[outer] = true
+					changed = true
+				}
+			}
+		}
+	}
+	for changed := true; changed; {
+		changed = false
 		for _, sf := range pkg {
 			for _, decl := range sf.file.Decls {
 				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil || f.helpers[fn.Name.Name] {
+				if !ok || fn.Body == nil {
 					continue
 				}
 				scope := f.scope(fn)
+				parents := parentMap(fn.Body)
+				var guards []*ast.CallExpr
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					if call, ok := node.(*ast.CallExpr); ok && isGuardCall(fset, sf.src, call) {
+						guards = append(guards, call)
+					}
+					return true
+				})
+				open := func(expr ast.Expr) bool {
+					if !scope.valueTainted(expr) {
+						return false
+					}
+					for _, leaf := range scope.leavesOf(fset, sf.src, expr) {
+						if !scope.guarded(fset, sf.src, fn.Body, parents, guards, leaf) {
+							return true
+						}
+					}
+					return false
+				}
 				ast.Inspect(fn.Body, func(node ast.Node) bool {
 					if _, lit := node.(*ast.FuncLit); lit {
 						return false
 					}
-					if ret, ok := node.(*ast.ReturnStmt); ok {
-						for _, result := range ret.Results {
-							if scope.valueTainted(result) && !f.helpers[fn.Name.Name] {
-								f.helpers[fn.Name.Name] = true
-								changed = true
+					ret, ok := node.(*ast.ReturnStmt)
+					if !ok {
+						return true
+					}
+					for _, result := range ret.Results {
+						if lit := compositeOf(result); lit != nil {
+							for _, elt := range lit.Elts {
+								field, value := "*", elt
+								if kv, ok := elt.(*ast.KeyValueExpr); ok {
+									if key, ok := kv.Key.(*ast.Ident); ok {
+										field = key.Name
+									}
+									value = kv.Value
+								}
+								if scope.tainted(value) && open(value) {
+									if f.helperFields[fn.Name.Name] == nil {
+										f.helperFields[fn.Name.Name] = map[string]bool{}
+									}
+									if !f.helperFields[fn.Name.Name][field] {
+										f.helperFields[fn.Name.Name][field] = true
+										changed = true
+									}
+								}
 							}
+						}
+						if !f.helpers[fn.Name.Name] && open(result) {
+							f.helpers[fn.Name.Name] = true
+							changed = true
 						}
 					}
 					return true
@@ -147,10 +266,47 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 // value, the struct variables that hold one as a field, and the names that
 // were assigned from one another.
 type scope struct {
+	fields  map[string]bool
 	flow    *flow
 	locals  map[string]bool
 	structs map[string]bool
+	loggers map[string]bool
 	link    map[string]string
+}
+
+// isLogger reports whether an expression is a logger: a variable or field of a logger type, a call that
+// returns one, or a With/WithGroup of one.
+func (s *scope) isLogger(expr ast.Expr) bool {
+	switch typed := expr.(type) {
+	case *ast.Ident:
+		return s.loggers[typed.Name]
+	case *ast.ParenExpr:
+		return s.isLogger(typed.X)
+	case *ast.SelectorExpr:
+		return s.flow.loggerFields[typed.Sel.Name]
+	case *ast.CallExpr:
+		switch fun := typed.Fun.(type) {
+		case *ast.Ident:
+			return s.flow.loggerResults[fun.Name]
+		case *ast.SelectorExpr:
+			if base, ok := fun.X.(*ast.Ident); ok && (base.Name == "slog" || base.Name == "log") && (fun.Sel.Name == "Default" || fun.Sel.Name == "New") {
+				return true
+			}
+			if fun.Sel.Name == "With" || fun.Sel.Name == "WithGroup" {
+				return s.isLogger(fun.X)
+			}
+			return s.flow.loggerResults[fun.Sel.Name]
+		}
+	}
+	return false
+}
+
+var loggerMethod = regexp.MustCompile(`^((Debug|Info|Warn|Error)(Context)?|Log|LogAttrs|With|WithGroup|Print[a-z]*|Fatal[a-z]*|Panic[a-z]*)$`)
+
+// isLoggerSink reports whether a call is a method call on a logger that emits its arguments.
+func (s *scope) isLoggerSink(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && loggerMethod.MatchString(sel.Sel.Name) && s.isLogger(sel.X)
 }
 
 func (s *scope) find(name string) string {
@@ -170,6 +326,85 @@ func (s *scope) union(a, b string) {
 	}
 }
 
+// compositeOf unwraps & and parentheses to a composite literal.
+func compositeOf(expr ast.Expr) *ast.CompositeLit {
+	switch typed := expr.(type) {
+	case *ast.CompositeLit:
+		return typed
+	case *ast.UnaryExpr:
+		return compositeOf(typed.X)
+	case *ast.ParenExpr:
+		return compositeOf(typed.X)
+	}
+	return nil
+}
+
+// taintedFields names the keyed fields of a composite literal that hold a queue-row value; "*" stands for a positional one.
+func (s *scope) taintedFields(lit *ast.CompositeLit) []string {
+	var out []string
+	for _, elt := range lit.Elts {
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			if key, ok := kv.Key.(*ast.Ident); ok && s.tainted(kv.Value) {
+				out = append(out, key.Name)
+			}
+			continue
+		}
+		if s.tainted(elt) {
+			out = append(out, "*")
+		}
+	}
+	return out
+}
+
+func (s *scope) fieldPrefix(path string) bool {
+	for key := range s.fields {
+		if strings.HasPrefix(key, path+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// markFrom records the tainted fields a value carries into a variable.
+func (s *scope) markFrom(name string, rhs ast.Expr, mark func(string, map[string]bool)) {
+	if lit := compositeOf(rhs); lit != nil {
+		for _, field := range s.taintedFields(lit) {
+			mark(name+"."+field, s.fields)
+		}
+	}
+	if call, ok := rhs.(*ast.CallExpr); ok {
+		var callee string
+		switch fun := call.Fun.(type) {
+		case *ast.Ident:
+			callee = fun.Name
+		case *ast.SelectorExpr:
+			callee = fun.Sel.Name
+		}
+		for field := range s.flow.helperFields[callee] {
+			mark(name+"."+field, s.fields)
+		}
+	}
+}
+
+func rootIdent(expr ast.Expr) *ast.Ident {
+	for {
+		switch typed := expr.(type) {
+		case *ast.Ident:
+			return typed
+		case *ast.SelectorExpr:
+			expr = typed.X
+		case *ast.IndexExpr:
+			expr = typed.X
+		case *ast.StarExpr:
+			expr = typed.X
+		case *ast.ParenExpr:
+			expr = typed.X
+		default:
+			return nil
+		}
+	}
+}
+
 func typeName(expr ast.Expr) string {
 	switch typed := expr.(type) {
 	case *ast.Ident:
@@ -185,16 +420,19 @@ func typeName(expr ast.Expr) string {
 }
 
 func (f *flow) scope(fn *ast.FuncDecl) *scope {
-	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, link: map[string]string{}}
+	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, loggers: map[string]bool{}, fields: map[string]bool{}, link: map[string]string{}}
 	fields := []*ast.FieldList{fn.Type.Params, fn.Recv}
 	for _, list := range fields {
 		if list == nil {
 			continue
 		}
 		for _, field := range list.List {
-			if f.structs[typeName(field.Type)] {
-				for _, name := range field.Names {
+			for _, name := range field.Names {
+				if f.structs[holdsStruct(field.Type)] {
 					s.structs[name.Name] = true
+				}
+				if isLoggerType(field.Type) {
+					s.loggers[name.Name] = true
 				}
 			}
 		}
@@ -211,14 +449,24 @@ func (f *flow) scope(fn *ast.FuncDecl) *scope {
 			switch typed := node.(type) {
 			case *ast.AssignStmt:
 				for i, lhs := range typed.Lhs {
-					id, ok := lhs.(*ast.Ident)
-					if !ok {
-						continue
-					}
 					rhs := typed.Rhs[0]
 					if len(typed.Rhs) == len(typed.Lhs) {
 						rhs = typed.Rhs[i]
 					}
+					if sel, isSel := lhs.(*ast.SelectorExpr); isSel {
+						if s.tainted(rhs) {
+							mark(selectorPath(sel), s.fields)
+						}
+						continue
+					}
+					id, ok := lhs.(*ast.Ident)
+					if !ok {
+						continue
+					}
+					if s.isLogger(rhs) {
+						mark(id.Name, s.loggers)
+					}
+					s.markFrom(id.Name, rhs, mark)
 					for _, name := range keys(rhs) {
 						s.union(id.Name, name)
 					}
@@ -231,10 +479,17 @@ func (f *flow) scope(fn *ast.FuncDecl) *scope {
 				}
 			case *ast.ValueSpec:
 				for i, id := range typed.Names {
-					if f.structs[typeName(typed.Type)] {
+					if f.structs[holdsStruct(typed.Type)] {
 						mark(id.Name, s.structs)
 					}
+					if isLoggerType(typed.Type) {
+						mark(id.Name, s.loggers)
+					}
 					if i < len(typed.Values) {
+						if s.isLogger(typed.Values[i]) {
+							mark(id.Name, s.loggers)
+						}
+						s.markFrom(id.Name, typed.Values[i], mark)
 						for _, name := range keys(typed.Values[i]) {
 							s.union(id.Name, name)
 						}
@@ -293,10 +548,27 @@ func selectorPath(sel *ast.SelectorExpr) string {
 func (s *scope) tainted(expr ast.Expr) bool {
 	switch typed := expr.(type) {
 	case *ast.Ident:
-		return rowKeyName.MatchString(typed.Name) || s.locals[typed.Name] || s.structs[typed.Name]
+		return rowKeyName.MatchString(typed.Name) || s.locals[typed.Name] || s.structs[typed.Name] || s.fieldPrefix(typed.Name)
 	case *ast.SelectorExpr:
 		if rowKeyName.MatchString(typed.Sel.Name) {
 			return true
+		}
+		path := selectorPath(typed)
+		if s.fields[path] || s.fieldPrefix(path) {
+			return true
+		}
+		if root := rootIdent(typed); root != nil && s.fields[root.Name+".*"] {
+			return true
+		}
+		return false
+	case *ast.CompositeLit:
+		for _, elt := range typed.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+			if s.tainted(elt) {
+				return true
+			}
 		}
 		return false
 	case *ast.ParenExpr:
@@ -409,6 +681,21 @@ func (s *scope) leaves(fset *token.FileSet, src []byte, expr ast.Expr) []ast.Exp
 	return out
 }
 
+// leavesOf is leaves with a composite literal taken element by element.
+func (s *scope) leavesOf(fset *token.FileSet, src []byte, expr ast.Expr) []ast.Expr {
+	if lit := compositeOf(expr); lit != nil {
+		var out []ast.Expr
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				elt = kv.Value
+			}
+			out = append(out, s.leaves(fset, src, elt)...)
+		}
+		return out
+	}
+	return s.leaves(fset, src, expr)
+}
+
 func parentMap(root ast.Node) map[ast.Node]ast.Node {
 	parents := map[ast.Node]ast.Node{}
 	var stack []ast.Node
@@ -519,21 +806,22 @@ func unguardedOutputs(fset *token.FileSet, pkg []srcFile, seen map[string]bool) 
 			check := func(sink ast.Node, args []ast.Expr) {
 				for _, arg := range args {
 					for _, leaf := range sc.leaves(fset, sf.src, arg) {
-						if sc.guarded(parents, guards, leaf) {
+						text := exprText(fset, sf.src, leaf)
+						if sc.guarded(fset, sf.src, fn.Body, parents, guards, leaf) {
 							continue
 						}
-						if _, ok := decodedRowFieldOutputs[where]; ok {
-							seen[where] = true
+						if exception, ok := decodedRowFieldOutputs[where]; ok && slices.Contains(exception.values, text) {
+							seen[where+"|"+text] = true
 							continue
 						}
-						found[where+" formats "+exprText(fset, sf.src, leaf)+" into an error or log line without a dominating "+guardCall+")"] = true
+						found[where+" formats "+text+" into an error or log line whose guard result does not control it ("+guardCall+")"] = true
 					}
 				}
 			}
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				switch typed := node.(type) {
 				case *ast.CallExpr:
-					if sinkCall.MatchString(exprText(fset, sf.src, typed.Fun)) {
+					if sinkCall.MatchString(exprText(fset, sf.src, typed.Fun)) || sc.isLoggerSink(typed) {
 						check(typed, typed.Args)
 					}
 				case *ast.CompositeLit:
@@ -552,24 +840,138 @@ func unguardedOutputs(fset *token.FileSet, pkg []srcFile, seen map[string]bool) 
 	return out
 }
 
-// guarded reports whether a guard call dominates the leaf and its arguments
-// reach the same value: the same name or selector path, a name linked to it by
-// an assignment, or a path that contains it.
-func (s *scope) guarded(parents map[ast.Node]ast.Node, guards []*ast.CallExpr, leaf ast.Expr) bool {
-	leafKeys := keys(leaf)
-	for _, guard := range guards {
-		if !dominates(parents, guard, leaf) {
-			continue
+// terminates reports whether a branch ends every path in a statement that leaves the enclosing flow.
+func terminates(block ast.Stmt) bool {
+	body, ok := block.(*ast.BlockStmt)
+	if !ok || len(body.List) == 0 {
+		return false
+	}
+	switch last := body.List[len(body.List)-1].(type) {
+	case *ast.ReturnStmt:
+		return true
+	case *ast.BranchStmt:
+		return true
+	case *ast.ExprStmt:
+		if call, ok := last.X.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "panic" {
+				return true
+			}
 		}
+	}
+	return false
+}
+
+// overwrites reports whether a branch assigns an expression with no queue-row value to the named variable.
+func (s *scope) overwrites(block ast.Stmt, name string) bool {
+	body, ok := block.(*ast.BlockStmt)
+	if !ok {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if assign, ok := node.(*ast.AssignStmt); ok {
+			for i, lhs := range assign.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == name && len(assign.Rhs) == len(assign.Lhs) && !s.tainted(assign.Rhs[i]) {
+					found = true
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// reassigned reports whether the variable is assigned a queue-row value between two positions.
+func (s *scope) reassigned(body ast.Node, name string, from, to token.Pos) bool {
+	found := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if assign, ok := node.(*ast.AssignStmt); ok && assign.Pos() >= from && assign.End() <= to {
+			for i, lhs := range assign.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name == name && len(assign.Rhs) == len(assign.Lhs) && s.tainted(assign.Rhs[i]) {
+					found = true
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// gateOf finds the if statement the detector's result controls: the call is its condition (or the negation of it), or
+// it is assigned to a variable that is the condition. It returns the statement and whether a true result takes the body.
+func gateOf(fset *token.FileSet, src []byte, fn ast.Node, parents map[ast.Node]ast.Node, guard *ast.CallExpr) (gate *ast.IfStmt, positive bool) {
+	condition := func(cond ast.Expr, target func(ast.Expr) bool) (bool, bool) {
+		if target(cond) {
+			return true, true
+		}
+		if not, ok := cond.(*ast.UnaryExpr); ok && not.Op == token.NOT && target(not.X) {
+			return true, false
+		}
+		return false, false
+	}
+	var found *ast.IfStmt
+	var polarity bool
+	ast.Inspect(fn, func(node ast.Node) bool {
+		ifs, ok := node.(*ast.IfStmt)
+		if !ok || found != nil {
+			return true
+		}
+		if matched, pos := condition(ifs.Cond, func(e ast.Expr) bool { return e == ast.Expr(guard) }); matched {
+			found, polarity = ifs, pos
+			return true
+		}
+		if parent, ok := parents[guard].(*ast.AssignStmt); ok && len(parent.Lhs) == 1 && len(parent.Rhs) == 1 && parent.Pos() < ifs.Pos() {
+			if id, ok := parent.Lhs[0].(*ast.Ident); ok {
+				if matched, pos := condition(ifs.Cond, func(e ast.Expr) bool { ident, ok := e.(*ast.Ident); return ok && ident.Name == id.Name }); matched {
+					found, polarity = ifs, pos
+				}
+			}
+		}
+		return true
+	})
+	return found, polarity
+}
+
+// guarded reports whether a detector call, whose arguments reach the same value as the leaf, has its result control the
+// path to the leaf: the value is not reassigned afterwards, and either the refused branch leaves the flow or overwrites
+// the value, or the leaf is only on the accepted branch.
+func (s *scope) guarded(fset *token.FileSet, src []byte, fn ast.Node, parents map[ast.Node]ast.Node, guards []*ast.CallExpr, leaf ast.Expr) bool {
+	leafKeys := keys(leaf)
+	root := rootIdent(leaf)
+	for _, guard := range guards {
+		covers := false
 		for _, arg := range guard.Args {
 			for _, guardKey := range keys(arg) {
 				for _, leafKey := range leafKeys {
 					if s.find(guardKey) == s.find(leafKey) ||
 						strings.HasPrefix(guardKey, leafKey+".") || strings.HasPrefix(leafKey, guardKey+".") {
-						return true
+						covers = true
 					}
 				}
 			}
+		}
+		if !covers {
+			continue
+		}
+		gate, positive := gateOf(fset, src, fn, parents, guard)
+		if gate == nil {
+			continue
+		}
+		refused, accepted := ast.Stmt(gate.Body), gate.Else
+		if !positive {
+			refused, accepted = gate.Else, ast.Stmt(gate.Body)
+		}
+		if accepted != nil && within(accepted, leaf) {
+			return true
+		}
+		if !dominates(parents, gate, leaf) {
+			continue
+		}
+		if root != nil && s.reassigned(fn, root.Name, gate.End(), leaf.Pos()) {
+			continue
+		}
+		if refused != nil && (terminates(refused) || (root != nil && s.overwrites(refused, root.Name))) {
+			return true
 		}
 	}
 	return false

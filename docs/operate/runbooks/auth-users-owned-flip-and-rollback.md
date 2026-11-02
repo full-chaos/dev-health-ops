@@ -95,14 +95,14 @@ Roll back in the opposite order. auth-service stops owning users first, so no ow
 
 Phase 4 cannot provision a new OIDC or SAML account: auth-service's sign-in join (`AUTH_SSO_JIT`) renders only from phase 5, and go-api refuses `public.users` writes while users are owned. The phase 4 check is therefore on accounts that already exist. `ci/auth_flipback_sso_k3s.sh` rehearses it on bigboy k3s, in a namespace the lead owns, in this order:
 
-1. At phase 3, create the OIDC provider row and the SAML provider row through the go-api admin route (`POST /api/v1/auth/sso/providers`, auto-provisioning on, `allowed_domains` set). No hand SQL.
-2. At phase 3, sign in with an OIDC and a SAML identity through go-api: go-api writes the two users (the OIDC and SAML users created through go-api at phase 3), each with `auth_provider` and `sso_provider_id` set.
+1. At phase 3, create the SAML provider row through the go-api admin route (`POST /api/v1/auth/sso/providers`, auto-provisioning on, `allowed_domains` set). No hand SQL.
+2. At phase 3, sign in with a SAML identity through go-api: go-api writes the user (the SAML user created through go-api at phase 3), with `auth_provider` and `sso_provider_id` set.
 3. U1, the `up-go-api` barrier, the users-backfill, a `users-reconcile` that reads 0, the `up-owned` barrier, U3.
-4. Sign in again with both identities under owned. Both answer 200 as the same accounts, and no `public.users` row changes.
+4. Sign in again with the same identity under owned. It answers 200 as the same account, and no `public.users` row changes.
 5. D1, the `down-auth` barrier, D2 (the flip back 4 to 3 of the Rollback section).
-6. Then sign in through go-api with both identities. Both answer 200 as the same accounts: no new account, no `identity_conflict`, and the auth schema counts equal those before the flip back.
+6. Then sign in through go-api with the same identity. It answers 200 as the same account: no new account, no `identity_conflict`, and the auth schema counts equal those before the flip back.
 
-The case of an account that auth-service provisions through its own sign-in join under owned, and then a flip back, exists only from phase 5. It has its own step in the orgs-owned flip kit (CHAOS-10998). The proof of that case stays `TestFlipBackSignInFindsAnAccountProvisionedUnderOwned` until then.
+The k3s rehearsal is SAML only: go-api refuses an OIDC issuer at a private address, so the OIDC leg stays in the integration tests (the OIDC leg stays in the integration tests of `internal/api/sso`). The case of an account that auth-service provisions through its own sign-in join under owned, and then a flip back, exists only from phase 5. It has its own step in the orgs-owned flip kit (CHAOS-10998). The proof of that case stays `TestFlipBackSignInFindsAnAccountProvisionedUnderOwned` until then.
 
 ## If a barrier fails
 

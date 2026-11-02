@@ -24,11 +24,10 @@ var (
 	fbNS       = "authfb-0a1b2c3d"
 	fbToken    = "0123456789abcdef"
 	fbPodCIDR  = "10.42.0.0/24"
-	fbIdpIP    = "11.0.0.1"
 	fbGoodEnvs = []string{
 		"AUTH_FB_IMAGE_DHO=" + fbDho, "AUTH_FB_IMAGE_SERVICE=" + fbService, "AUTH_FB_IMAGE_MIGRATE=" + fbMigrate,
 		"AUTH_FB_IMAGE_IDPSTUB=" + fbIdp, "AUTH_FB_NAMESPACE=" + fbNS, "AUTH_FB_RUN_TOKEN=" + fbToken,
-		"AUTH_FB_POD_CIDR=" + fbPodCIDR, "AUTH_FB_IDP_IP=" + fbIdpIP,
+		"AUTH_FB_POD_CIDR=" + fbPodCIDR,
 	}
 )
 
@@ -110,10 +109,6 @@ func TestFlipbackSSOK3sRefusesBadInputsBeforeAnyClusterCall(t *testing.T) {
 		"namespace default":       {with(fbGoodEnvs, "AUTH_FB_NAMESPACE=default"), "AUTH_FB_NAMESPACE must be authfb-<8 hex>"},
 		"token short":             {with(fbGoodEnvs, "AUTH_FB_RUN_TOKEN=abc"), "AUTH_FB_RUN_TOKEN must be 16 lowercase hex"},
 		"pod cidr wide":           {with(fbGoodEnvs, "AUTH_FB_POD_CIDR=10.0.0.0/8"), "AUTH_FB_POD_CIDR must be an IPv4 /24"},
-		"idp ip private":          {with(fbGoodEnvs, "AUTH_FB_IDP_IP=10.43.0.9"), "AUTH_FB_IDP_IP must be a global IPv4"},
-		"idp ip loopback":         {with(fbGoodEnvs, "AUTH_FB_IDP_IP=127.0.0.1"), "AUTH_FB_IDP_IP must be a global IPv4"},
-		"idp ip shared space":     {with(fbGoodEnvs, "AUTH_FB_IDP_IP=100.64.0.5"), "AUTH_FB_IDP_IP must be a global IPv4"},
-		"idp ip docs range":       {with(fbGoodEnvs, "AUTH_FB_IDP_IP=203.0.113.7"), "AUTH_FB_IDP_IP must be a global IPv4"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -171,7 +166,7 @@ var fbSteps = []string{
 	"S0 install at phase 3",
 	"S1 admin and organization",
 	"S2 provider rows through the go-api admin route",
-	"S3 SSO sign-in at phase 3 creates the OIDC and SAML users",
+	"S3 SSO sign-in at phase 3 creates the SAML user",
 	"S4 flip 3 to 4: U1 go-api forwards, barrier up-go-api",
 	"S5 users-backfill and users-reconcile",
 	"S6 barrier up-owned, U3 owned",
@@ -235,7 +230,7 @@ func TestFlipbackSSOK3sShape(t *testing.T) {
 		}
 	}
 	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "authService.ssoJit", "ssoJit=", "name: AUTH_SSO_JIT",
-		"create namespace", "delete namespace", "pkill", "killall", "nohup", "INSERT INTO", "UPDATE public", "DELETE FROM"} {
+		"create namespace", "delete namespace", "pkill", "killall", "nohup", "INSERT INTO", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "oidc"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script contains %q", banned)
 		}
@@ -272,10 +267,11 @@ func TestFlipbackSSORunbookCarriesTheStepLinesAndTheJITScope(t *testing.T) {
 	text := readText(t, filepath.Join(rootOf(t), "docs/operate/runbooks/auth-users-owned-flip-and-rollback.md"))
 	for _, want := range []string{
 		"ci/auth_flipback_sso_k3s.sh",
-		"OIDC and SAML users created through go-api at phase 3",
+		"SAML user created through go-api at phase 3",
 		"flip back 4 to 3",
 		"sign in through go-api",
 		"CHAOS-10998",
+		"OIDC leg stays in the integration tests",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the runbook lacks %q", want)

@@ -9,27 +9,28 @@
 #
 # S0 install at phase 3 (go-api forwards login), the hooks, the restore fence
 # S1 an admin user and an organization (one-off pods of the dho image)
-# S2 an OIDC and a SAML provider row through the go-api admin route (auto-provision on, allowed_domains set)
-# S3 an OIDC and a SAML sign-in through go-api at phase 3: go-api writes the two SSO users (the join is off in auth-service)
+# S2 a SAML provider row through the go-api admin route (auto-provision on, allowed_domains set)
+# S3 a SAML sign-in through go-api at phase 3: go-api writes the SSO user (the join is off in auth-service)
 # S4 flip 3 to 4: U1 (stage goApi), barrier up-go-api
-# S5 users-backfill (the two users reach the auth schema), users-reconcile (0 gated differences)
+# S5 users-backfill (the SSO user reaches the auth schema), users-reconcile (0 gated differences)
 # S6 barrier up-owned, U3 (stage owned)
-# S7 both sign-ins again under owned: same accounts, and no write to public.users
+# S7 the sign-in again under owned: same accounts, and no write to public.users
 # S8 flip back 4 to 3: D1 (stage goApi, grants kept), barrier down-auth, D2 (phase 3)
-# S9 both sign-ins through go-api again: same accounts, no new account, no identity conflict
+# S9 the sign-in through go-api again: same accounts, no new account, no identity conflict
 #
 # What is NOT here (pm 2026-11-02): an account that auth-service provisions through its sign-in join under owned. AUTH_SSO_JIT renders only
 # from phase 5, so it belongs to the orgs-owned flip (CHAOS-10998). Nothing here sets AUTH_SSO_JIT.
 #
-# The identity provider is the test stub internal/testsupport/idpstub, built and imported into the k3s containerd by the lead. go-api
-# dials an OIDC issuer only at a global address (internal/api/externalurl), so the stub's Service carries one global IPv4 as an
-# externalIP: the pod dials that address, kube-proxy sends it to the stub. SAML needs no outbound call.
+# The identity provider is the test stub internal/testsupport/idpstub (SAML mode), built and imported into the k3s containerd by the lead.
+# Scope (pm 2026-11-02, answers-11620-1.md amendment): SAML only. go-api dials an OIDC issuer only at a global address
+# (internal/api/externalurl), which a cluster stub cannot have without a host nat rule, so the OIDC leg stays in the integration tests
+# (internal/api/sso/flipback_owned_integration_test.go and the OIDC sign-in tests of that package). SAML makes no outbound call at sign-in.
 #
 # Images: go-api, auth-service and auth-migrate are registry DIGEST references (the Inspect image step of the main push run whose head is
 # the merge base); the stub is a local import ref idpstub-fb/idpstub:<tag> with pull policy Never.
 # Env (all required except --print-plan): AUTH_FB_KUBECONFIG (a namespace-scoped ServiceAccount kubeconfig), AUTH_FB_NAMESPACE (authfb-<8 hex>),
 # AUTH_FB_RUN_TOKEN (16 hex; the lead puts it in ConfigMap fb-run key token of the namespace), AUTH_FB_IMAGE_DHO, AUTH_FB_IMAGE_SERVICE,
-# AUTH_FB_IMAGE_MIGRATE, AUTH_FB_IMAGE_IDPSTUB, AUTH_FB_POD_CIDR (the node's pod /24), AUTH_FB_IDP_IP (one global IPv4 for the stub),
+# AUTH_FB_IMAGE_MIGRATE, AUTH_FB_IMAGE_IDPSTUB, AUTH_FB_POD_CIDR (the node's pod /24),
 # AUTH_FB_WORK (a directory for the run's own files). Secrets travel on stdin or in 0600 files of the run; none is on argv or in output.
 set -euo pipefail
 
@@ -41,7 +42,7 @@ readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-
 readonly IDP_RE='^idpstub-fb/idpstub:[a-z0-9][a-z0-9_.-]{0,62}$'
 readonly HOST_DEFAULT_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 readonly RELEASE="ap" FULL="ap-dev-health"
-readonly REDIRECT="https://app.fb.test/auth/oidc/callback"
+readonly IDP_HOST="idp.fb.test"
 readonly SP_ENTITY="https://sp.fb.test/saml/metadata"
 readonly DOMAIN="fb.test"
 PASSES=0
@@ -71,7 +72,6 @@ if [ "${PRINT_PLAN}" = 1 ]; then
   NS="authfb-00000000"
   RUN_TOKEN="0000000000000000"
   POD_CIDR="10.42.0.0/24"
-  IDP_IP="11.0.0.1"
 else
   IMG_DHO="${AUTH_FB_IMAGE_DHO:-}"
   IMG_SVC="${AUTH_FB_IMAGE_SERVICE:-}"
@@ -80,7 +80,6 @@ else
   NS="${AUTH_FB_NAMESPACE:-}"
   RUN_TOKEN="${AUTH_FB_RUN_TOKEN:-}"
   POD_CIDR="${AUTH_FB_POD_CIDR:-}"
-  IDP_IP="${AUTH_FB_IDP_IP:-}"
 fi
 for image in "${IMG_DHO}" "${IMG_SVC}" "${IMG_MIG}"; do
   [[ "${image}" =~ ${DIGEST_RE} ]] || die "an image is not a registry digest reference (repo@sha256:<64 hex>): ${image:-<unset>}"
@@ -89,9 +88,6 @@ done
 [[ "${NS}" =~ ^authfb-[0-9a-f]{8}$ ]] || die "AUTH_FB_NAMESPACE must be authfb-<8 hex>: ${NS:-<unset>}"
 [[ "${RUN_TOKEN}" =~ ^[0-9a-f]{16}$ ]] || die "AUTH_FB_RUN_TOKEN must be 16 lowercase hex characters"
 [[ "${POD_CIDR}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.0/24$ ]] || die "AUTH_FB_POD_CIDR must be an IPv4 /24 network (the node pod range): ${POD_CIDR:-<unset>}"
-[[ "${IDP_IP}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "AUTH_FB_IDP_IP must be a global IPv4 address: ${IDP_IP:-<unset>}"
-NOT_GLOBAL_RE='^(0|10|127)\.|^169\.254\.|^172\.(1[6-9]|2[0-9]|3[01])\.|^192\.168\.|^192\.0\.[02]\.|^198\.1[89]\.|^198\.51\.100\.|^203\.0\.113\.|^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|^(22[4-9]|2[3-5][0-9])\.'
-if [[ "${IDP_IP}" =~ ${NOT_GLOBAL_RE} ]]; then die "AUTH_FB_IDP_IP must be a global IPv4 address: ${IDP_IP} is private, loopback, shared, reserved or multicast"; fi
 for tool in helm jq; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"
 done
@@ -118,11 +114,6 @@ goApi:
   livenessProbe: {timeoutSeconds: 10}
   extraEnv:
     - {name: VALKEY_URI, value: "redis://${FULL}-valkey:6379/1"}
-    - {name: SSL_CERT_FILE, value: /run/idp/ca.pem}
-  extraVolumes:
-    - {name: idp-ca, configMap: {name: idp-ca}}
-  extraVolumeMounts:
-    - {name: idp-ca, mountPath: /run/idp, readOnly: true}
 authService:
   phase: 3
   loginStage: goApi
@@ -215,7 +206,7 @@ print_plan() {
     "S0 install at phase 3"
     "S1 admin and organization"
     "S2 provider rows through the go-api admin route"
-    "S3 SSO sign-in at phase 3 creates the OIDC and SAML users"
+    "S3 SSO sign-in at phase 3 creates the SAML user"
     "S4 flip 3 to 4: U1 go-api forwards, barrier up-go-api"
     "S5 users-backfill and users-reconcile"
     "S6 barrier up-owned, U3 owned"
@@ -329,10 +320,9 @@ pgq() { K exec -i "${PG_POD}" -- psql -X -q -U devhealth -d devhealth -At -v ON_
 
 # ---- the identity provider stub and its TLS material ---------------------------------------------------------------------------------
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 -subj "/CN=idpstub-fb" \
-  -addext "subjectAltName=IP:${IDP_IP}" -keyout "${WORK}/idp.key" -out "${WORK}/idp.pem" 2>/dev/null
+  -addext "subjectAltName=DNS:${IDP_HOST}" -keyout "${WORK}/idp.key" -out "${WORK}/idp.pem" 2>/dev/null
 K create secret generic idp-tls --from-file=server.pem="${WORK}/idp.pem" --from-file=server.key="${WORK}/idp.key" >/dev/null
-K create configmap idp-ca --from-file=ca.pem="${WORK}/idp.pem" >/dev/null
-IDP_USERS=(--user "oidc-sub-1,oidc.one@${DOMAIN},OIDC One" --user "saml-sub-1,saml.one@${DOMAIN},SAML One")
+IDP_USER="saml-sub-1,saml.one@${DOMAIN},SAML One"
 K apply -f - >/dev/null <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -349,8 +339,8 @@ spec:
         - name: idpstub
           image: ${IMG_IDP}
           imagePullPolicy: Never
-          args: ["serve", "-listen", ":8443", "-cert", "/certs/server.pem", "-key", "/certs/server.key", "-base-url", "https://${IDP_IP}",
-                 "-redirect-uri", "${REDIRECT}", "-sp-entity-id", "${SP_ENTITY}", "${IDP_USERS[0]}", "${IDP_USERS[1]}", "${IDP_USERS[2]}", "${IDP_USERS[3]}"]
+          args: ["saml", "-listen", ":8443", "-cert", "/certs/server.pem", "-key", "/certs/server.key", "-base-url", "https://${IDP_HOST}",
+                 "-sp-entity-id", "${SP_ENTITY}", "-user", "${IDP_USER}"]
           ports: [{name: https, containerPort: 8443}]
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts: [{name: tls, mountPath: /certs, readOnly: true}]
@@ -361,11 +351,10 @@ kind: Service
 metadata: {name: idpstub}
 spec:
   selector: {app: idpstub}
-  externalIPs: ["${IDP_IP}"]
   ports: [{name: https, port: 443, targetPort: https}]
 EOF
 K rollout status deploy/idpstub --timeout=180s >/dev/null
-pass "S0 the identity provider stub runs (local image ${IMG_IDP}, externalIP ${IDP_IP})"
+pass "S0 the identity provider stub runs (SAML mode, local image ${IMG_IDP})"
 
 # ---- S0 install at phase 3 -----------------------------------------------------------------------------------------------------------
 API_PASSWORD="$(openssl rand -hex 12)"
@@ -444,7 +433,7 @@ api() {
   curl -sS --max-time 90 -X "${method}" -b "${WORK}/jar" -c "${WORK}/jar" -o "${BODY}" -w '%{http_code}' "${args[@]}" "$(GO)${path}"
 }
 idp_get() { # URL -> headers in ${WORK}/idp.hdr, body in ${WORK}/idp.body
-  curl -sS --max-time 60 --cacert "${WORK}/idp.pem" --connect-to "${IDP_IP}:443:127.0.0.1:${PF_IDP}" -D "${WORK}/idp.hdr" -o "${WORK}/idp.body" "$1"
+  curl -sS --max-time 60 --cacert "${WORK}/idp.pem" --connect-to "${IDP_HOST}:443:127.0.0.1:${PF_IDP}" -D "${WORK}/idp.hdr" -o "${WORK}/idp.body" "$1"
 }
 jfile() { jq -n "$@" >"${WORK}/req.json"; }
 
@@ -468,46 +457,22 @@ jfile --arg e "${ADMIN_EMAIL}" --arg p "${ADMIN_PASSWORD}" '{email: $e, password
 [ "$(api POST /api/v1/auth/login "${WORK}/req.json")" = 200 ] || die "S2: the admin login through go-api did not answer 200"
 (umask 077; printf 'Authorization: Bearer %s\n' "$(jq -r '.access_token // empty' "${BODY}")" >"${WORK}/admin.hdr")
 if [ ! -s "${WORK}/admin.hdr" ] || grep -q 'Bearer $' "${WORK}/admin.hdr"; then die "S2: the admin login returned no access token"; fi
-idp_get "https://${IDP_IP}/saml/cert"
+idp_get "https://${IDP_HOST}/saml/cert"
 SAML_CERT="$(cat "${WORK}/idp.body")"
 grep -q 'BEGIN CERTIFICATE' <<<"${SAML_CERT}" || die "S2: the stub served no SAML certificate"
-jfile --arg ip "${IDP_IP}" --arg domain "${DOMAIN}" '{name: "fb-oidc", protocol: "oidc", auto_provision_users: true, default_role: "member", allowed_domains: [$domain],
-  oidc_config: {client_id: "fb-client", client_secret: "fb-not-a-secret", issuer: ("https://" + $ip), authorization_endpoint: ("https://" + $ip + "/authorize"),
-    token_endpoint: ("https://" + $ip + "/token"), userinfo_endpoint: ("https://" + $ip + "/userinfo"), jwks_uri: ("https://" + $ip + "/jwks"), scopes: ["openid", "email", "profile"]}}'
-status="$(api POST /api/v1/auth/sso/providers "${WORK}/req.json" "${WORK}/admin.hdr")"
-[ "${status}" = 200 ] || [ "${status}" = 201 ] || die "S2: the OIDC provider create answered ${status}"
-OIDC_ID="$(jq -r '.id // empty' "${BODY}")"
-jfile --arg ip "${IDP_IP}" --arg domain "${DOMAIN}" --arg cert "${SAML_CERT}" --arg sp "${SP_ENTITY}" '{name: "fb-saml", protocol: "saml", auto_provision_users: true, default_role: "member",
+jfile --arg ip "${IDP_HOST}" --arg domain "${DOMAIN}" --arg cert "${SAML_CERT}" --arg sp "${SP_ENTITY}" '{name: "fb-saml", protocol: "saml", auto_provision_users: true, default_role: "member",
   allow_idp_initiated: true, allowed_domains: [$domain],
   saml_config: {entity_id: ("https://" + $ip + "/saml/metadata"), sso_url: ("https://" + $ip + "/saml/sso"), certificate: $cert, sp_entity_id: $sp,
     sp_acs_url: "https://sp.fb.test/api/v1/auth/saml/{provider_id}/acs"}}'
 status="$(api POST /api/v1/auth/sso/providers "${WORK}/req.json" "${WORK}/admin.hdr")"
 [ "${status}" = 200 ] || [ "${status}" = 201 ] || die "S2: the SAML provider create answered ${status}"
 SAML_ID="$(jq -r '.id // empty' "${BODY}")"
-[[ "${OIDC_ID}" =~ ^[0-9a-f-]{36}$ ]] && [[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: a provider create returned no id"
-for id in "${OIDC_ID}" "${SAML_ID}"; do
-  status="$(api POST "/api/v1/auth/sso/providers/${id}/activate" "" "${WORK}/admin.hdr")"
-  [ "${status}" = 200 ] || die "S2: the provider activate answered ${status}"
-done
-pass "S2 an OIDC and a SAML provider row exist and are active (go-api admin route, auto-provision on, allowed_domains ${DOMAIN})"
+[[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: a provider create returned no id"
+status="$(api POST "/api/v1/auth/sso/providers/${SAML_ID}/activate" "" "${WORK}/admin.hdr")"
+[ "${status}" = 200 ] || die "S2: the provider activate answered ${status}"
+pass "S2 a SAML provider row exists and is active (go-api admin route, auto-provision on, allowed_domains ${DOMAIN})"
 
 # ---- sign-ins ---------------------------------------------------------------------------------------------------------------------------
-# signin_oidc: status of the callback; the body (tokens) is never printed
-signin_oidc() { # SUB -> prints status, and "token" when an access token came back
-  local url loc code state status
-  : >"${WORK}/jar"
-  jfile --arg r "${REDIRECT}" '{redirect_uri: $r}'
-  [ "$(api POST "/api/v1/auth/oidc/${OIDC_ID}/authorize" "${WORK}/req.json")" = 200 ] || { printf 'authorize-refused'; return 0; }
-  url="$(jq -r '.authorization_url' "${BODY}")"
-  state="$(jq -r '.state' "${BODY}")"
-  idp_get "${url}&login_hint=$1"
-  loc="$(sed -n 's/^[Ll]ocation: *//p' "${WORK}/idp.hdr" | tr -d '\r' | head -1)"
-  code="$(sed -n 's/.*[?&]code=\([^&]*\).*/\1/p' <<<"${loc}")"
-  [ -n "${code}" ] || { printf 'idp-no-code'; return 0; }
-  jfile --arg c "${code}" --arg s "${state}" '{code: $c, state: $s}'
-  status="$(api POST "/api/v1/auth/oidc/${OIDC_ID}/callback" "${WORK}/req.json")"
-  if [ "$(jq -r '.access_token // empty | length > 0' "${BODY}" 2>/dev/null)" = true ]; then printf '%s token' "${status}"; else printf '%s no-token' "${status}"; fi
-}
 signin_saml() { # SUB
   local url resp relay status
   : >"${WORK}/jar"
@@ -522,17 +487,15 @@ signin_saml() { # SUB
   status="$(api POST "/api/v1/auth/saml/${SAML_ID}/acs" "${WORK}/req.json")"
   if [ "$(jq -r '.access_token // empty | length > 0' "${BODY}" 2>/dev/null)" = true ]; then printf '%s token' "${status}"; else printf '%s no-token' "${status}"; fi
 }
-signin_both() { # LABEL: both sign-ins must answer "200 token"
-  local o s
+signin_both() { # LABEL: the sign-in must answer "200 token"
+  local s
   pf_all
-  o="$(signin_oidc oidc-sub-1)"
   s="$(signin_saml saml-sub-1)"
-  [ "${o}" = "200 token" ] || die "$1: the OIDC sign-in answered '${o}', want '200 token'"
   [ "${s}" = "200 token" ] || die "$1: the SAML sign-in answered '${s}', want '200 token'"
   pf_stop
 }
-SSO_EMAILS="'oidc.one@${DOMAIN}','saml.one@${DOMAIN}'"
-identity_snapshot() { # the identity columns of the two SSO users, and the table counts
+SSO_EMAILS="'saml.one@${DOMAIN}'"
+identity_snapshot() { # the identity columns of the SSO user, and the table counts
   pgq <<EOF
 SELECT concat_ws('|', id, email, auth_provider, sso_provider_id, auth_provider_id) FROM public.users WHERE email IN (${SSO_EMAILS}) ORDER BY email;
 SELECT 'users=' || (SELECT count(*) FROM public.users) || ' memberships=' || (SELECT count(*) FROM public.memberships);
@@ -541,12 +504,12 @@ EOF
 row_hash() { pgq <<<"SELECT md5(coalesce(string_agg(u::text, '|' ORDER BY u.id), '')) FROM public.users u WHERE email IN (${SSO_EMAILS});"; }
 auth_counts() { pgq <<<"SELECT 'auth.users=' || (SELECT count(*) FROM auth.users) || ' auth.external_identities=' || (SELECT count(*) FROM auth.external_identities) || ' auth.memberships=' || (SELECT count(*) FROM auth.memberships);"; }
 
-# ---- S3 sign-in at phase 3 creates the two users -----------------------------------------------------------------------------------------
+# ---- S3 sign-in at phase 3 creates the user -----------------------------------------------------------------------------------------
 signin_both "S3"
 SNAP3="$(identity_snapshot)"
-[ "$(grep -c '^[0-9a-f-]\{36\}|' <<<"${SNAP3}")" = 2 ] || die "S3: public.users does not hold exactly the two SSO users: ${SNAP3}"
-if ! grep -q "|oidc|${OIDC_ID}|" <<<"${SNAP3}" || ! grep -q "|saml|${SAML_ID}|" <<<"${SNAP3}"; then die "S3: the SSO users do not carry auth_provider and the provider row id: ${SNAP3}"; fi
-pass "S3 go-api wrote the OIDC and the SAML user at phase 3 (auth_provider, sso_provider_id set); ${SNAP3##*$'\n'}"
+[ "$(grep -c '^[0-9a-f-]\{36\}|' <<<"${SNAP3}")" = 1 ] || die "S3: public.users does not hold exactly the SSO user: ${SNAP3}"
+if ! grep -q "|saml|${SAML_ID}|" <<<"${SNAP3}"; then die "S3: the SSO user does not carry auth_provider and the provider row id: ${SNAP3}"; fi
+pass "S3 go-api wrote the SAML user at phase 3 (auth_provider, sso_provider_id set); ${SNAP3##*$'\n'}"
 
 # ---- S4 U1 and the barrier -------------------------------------------------------------------------------------------------------------------
 barrier() { RELEASE="${RELEASE}" NAMESPACE="${NS}" bash "${ROOT}/deploy/scripts/auth-users-owned-barrier.sh" "$1"; }
@@ -577,7 +540,7 @@ HASH_BEFORE="$(row_hash)"
 signin_both "S7"
 [ "$(identity_snapshot)" = "${SNAP3}" ] || die "S7: the identity columns or the table counts changed under owned"
 [ "$(row_hash)" = "${HASH_BEFORE}" ] || die "S7: a sign-in under owned wrote a public.users row"
-pass "S7 both SSO sign-ins under owned answered 200 as the same accounts and wrote nothing to public.users"
+pass "S7 the SAML sign-in under owned answered 200 as the same accounts and wrote nothing to public.users"
 
 # ---- S8 flip back ---------------------------------------------------------------------------------------------------------------------------------
 up_with_digest() { # LAYER: helm upgrade; a refused narrowing prints a digest in the Job log, which the acknowledgement then names
@@ -601,6 +564,6 @@ signin_both "S9"
 [ "$(identity_snapshot)" = "${SNAP3}" ] || die "S9: after the flip back the identity columns or the table counts differ from phase 3 (a new account or a conflict)"
 AUTH_AFTER="$(auth_counts)"
 [ "${AUTH_AFTER}" = "${AUTH_BEFORE}" ] || die "S9: the auth schema counts changed over the flip back: ${AUTH_BEFORE} -> ${AUTH_AFTER}"
-pass "S9 both SSO sign-ins through go-api after the flip back answered 200 as the same accounts; no new account, no identity conflict"
+pass "S9 the SAML sign-in through go-api after the flip back answered 200 as the same accounts; no new account, no identity conflict"
 
 printf 'AUTH FLIPBACK SSO K3S REHEARSAL PASSED\n'

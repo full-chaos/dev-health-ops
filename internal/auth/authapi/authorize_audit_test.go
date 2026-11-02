@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -316,4 +317,37 @@ func TestAuthorizeHighRiskWithNoSinkIs503(t *testing.T) {
 		}
 	})).ServeHTTP(w, req)
 	assertError(t, w, http.StatusServiceUnavailable, reasonStoreUnavailable)
+}
+
+// C6: the audit row's closed value sets are the wire sets.
+func TestAuthorizeAuditVocabularyIsTheWireVocabulary(t *testing.T) {
+	vocab := audit.AttributeVocabulary()
+	reasons := slices.Clone(vocab["decision_reason_code"])
+	slices.Sort(reasons)
+	if want := AuthorizeWireReasonCodes(); !slices.Equal(reasons, want) {
+		t.Errorf("decision_reason_code %v, want the wire codes %v", reasons, want)
+	}
+	types := slices.Clone(vocab["resource_type"])
+	slices.Sort(types)
+	want := slices.Clone(authorizeResourceTypes)
+	slices.Sort(want)
+	if !slices.Equal(types, want) {
+		t.Errorf("resource_type %v, want %v", types, want)
+	}
+}
+
+// Every high-risk catalog action is audited and no other is.
+func TestHighRiskActionIsTheCatalogClass(t *testing.T) {
+	high := 0
+	for _, a := range policycatalog.Default().Actions() {
+		if got, want := highRiskAction(a.ID), a.RiskClass == policycatalog.RiskHigh; got != want {
+			t.Errorf("%s: highRiskAction %v, risk class %s", a.ID, got, a.RiskClass)
+		}
+		if a.RiskClass == policycatalog.RiskHigh {
+			high++
+		}
+	}
+	if high == 0 || highRiskAction("nothing.here") {
+		t.Fatalf("%d high-risk actions; unknown action audited: %v", high, highRiskAction("nothing.here"))
+	}
 }

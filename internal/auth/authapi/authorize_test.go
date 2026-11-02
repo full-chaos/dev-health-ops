@@ -244,7 +244,7 @@ var decisionIDShape = regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`)
 
 func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	f := newAuthorizeFixture(t)
-	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator()}
+	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write}
 	routes, err := AuthorizeRoutes(deps)
 	if err != nil {
 		t.Fatal(err)

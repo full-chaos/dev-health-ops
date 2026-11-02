@@ -111,6 +111,9 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if deps.State == nil || deps.Evaluator == nil {
 		return nil, errors.New("authapi: the authorize routes need decision state and an evaluator")
 	}
+	if deps.Audit == nil {
+		return nil, errors.New("authapi: the authorize routes need an audit sink for high-risk decisions")
+	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
@@ -207,6 +210,9 @@ type authorizeItem struct {
 	principal ReferencedPrincipal
 	decision  authorization.Decision
 	now       int64
+	// orgKnown is true when the question's organization is a canonical uuid
+	// the decision transaction found.
+	orgKnown bool
 }
 
 // decide authenticates the caller, decodes the body, resolves every principal
@@ -281,6 +287,10 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode)
 		out[i] = doc
 	}
+	if err := h.auditHighRisk(ctx, items, out); err != nil {
+		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
+		return nil, false
+	}
 	return out, true
 }
 
@@ -334,6 +344,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			return errAuthorizeStateFailure
 		}
 		items[i].decision, items[i].now = d, snap.NowUnixNano()
+		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
 }

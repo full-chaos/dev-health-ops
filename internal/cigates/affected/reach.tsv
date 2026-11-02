@@ -118,6 +118,7 @@ internal/auth/contracts	contracts.go	internal/auth/decisioncache
 internal/auth/contracts	contracts.go	internal/auth/decisionstate
 internal/auth/contracts	contracts.go	internal/auth/delegationinput
 internal/auth/contracts	contracts.go	internal/auth/grant
+internal/auth/contracts	contracts.go	internal/auth/grantend
 internal/auth/contracts	contracts.go	internal/auth/httpapi
 internal/auth/contracts	contracts.go	internal/auth/identity
 internal/auth/contracts	contracts.go	internal/auth/identity/local
@@ -134,6 +135,7 @@ internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
+internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
@@ -141,6 +143,7 @@ internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
+internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/workflows

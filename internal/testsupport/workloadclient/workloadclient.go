@@ -42,6 +42,12 @@ func Token(t testing.TB) string {
 func New(t testing.TB) (*workloadtoken.Client, string) {
 	t.Helper()
 	token := Token(t)
+	return ForToken(t, token), token
+}
+
+// ForToken returns a client whose exchange answers token, a workload token issued by Issuer.
+func ForToken(t testing.TB, token string) *workloadtoken.Client {
+	t.Helper()
 	exchange := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
@@ -60,5 +66,5 @@ func New(t testing.TB) (*workloadtoken.Client, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client, token
+	return client
 }

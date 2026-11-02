@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/workloadclient"
 )
 
 // proxyClient is go-api's provisioning client against the live routes, with
@@ -21,7 +22,7 @@ func proxyClient(t *testing.T, e *routesEnv, header map[string]string) *authprov
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := authprovision.New(base, strings.TrimPrefix(header["Authorization"], "Bearer "), 10*time.Second)
+	client, err := authprovision.NewWorkload(base, workloadclient.ForToken(t, strings.TrimPrefix(header["Authorization"], "Bearer ")), 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

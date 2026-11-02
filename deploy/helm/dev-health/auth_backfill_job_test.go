@@ -99,7 +99,7 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 }
 
 // The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase
-// (4 users owned included), and phase 5 (orgs owned) is refused until its own public-table writer leaf.
+// (4 users owned, 5 orgs owned included).
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
 		for _, phase := range []string{"1", "2", "3", "4"} {
@@ -117,14 +117,17 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 				}
 			})
 		}
-		for _, phase := range []string{"5"} {
-			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
-				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
-				if err == nil || !strings.Contains(out, "phase 5 (orgs owned) needs its own public-table writer leaf") {
-					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
-				}
-			})
-		}
+		t.Run(verb+"/phase 5", func(t *testing.T) {
+			args := withSets(append(append([]string{}, backfillOn...), phase3Secrets...), "authService.backfill.verb="+verb, "authService.phase=5", "goApi.enabled=true")
+			args = append(append(append(append(args, sessionReaders...), sessionSuccessor...), authTrusted...), orgProvisioningOn...)
+			service, job := renderBackfill(t, args)
+			if err := ownedSwitchesAgree(t, service, job); err != nil {
+				t.Fatal(err)
+			}
+			if value, set := containerEnvValue(t, job, "AUTH_ORGS_OWNED"); !set || value != "true" {
+				t.Errorf("phase 5: the Job AUTH_ORGS_OWNED=%q set=%v; want true", value, set)
+			}
+		})
 	}
 }
 

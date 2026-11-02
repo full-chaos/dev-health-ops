@@ -1,8 +1,6 @@
 package devhealth_test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -26,14 +24,15 @@ func TestSSOJITOffRendersNothing(t *testing.T) {
 	}
 }
 
-// True needs orgs owned: every phase the chart renders today refuses it.
+// True needs orgs owned: every phase below 5 refuses it.
 func TestSSOJITTrueNeedsOrgsOwned(t *testing.T) {
 	const on = "authService.ssoJit=true"
 	for name, args := range map[string][]string{
-		"phase 2":       phaseArgs(2, "--set", on),
-		"phase 3":       phaseArgs(3, "--set", on),
-		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
-		"phase 4 owned": phaseArgs(4, "--set", on),
+		"phase 2":                          phaseArgs(2, "--set", on),
+		"phase 3":                          phaseArgs(3, "--set", on),
+		"phase 4 goApi":                    phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
+		"phase 4 owned":                    phaseArgs(4, "--set", on),
+		"phase 5 without org provisioning": phaseArgs(5, append([]string{"--set", on}, membershipRoutesOn...)...),
 	} {
 		_, out, err := renderAuth(t, args...)
 		if err == nil || !strings.Contains(out, "authService.ssoJit needs orgs owned") {
@@ -65,32 +64,5 @@ func TestSSOJITCannotBeSetThroughExtraEnv(t *testing.T) {
 	_, out, err := renderAuth(t, phaseArgs(4, "--set-json", `authService.extraEnv=[{"name":"AUTH_SSO_JIT","value":"true"}]`)...)
 	if err == nil || !strings.Contains(out, "authService.extraEnv must not set AUTH_SSO_JIT") {
 		t.Errorf("extraEnv rendered: err=%v out=%.300s", err, out)
-	}
-}
-
-// Phase 5 does not render yet, so the rendered env line is pinned by text: only
-// auth-service carries it, behind the one read of the switch. The phase 5 lift
-// proves the render.
-func TestSSOJITLineSitsOnAuthServiceOnly(t *testing.T) {
-	want := "{{- if eq (include \"dev-health.ssoJit\" .) \"true\" }}\n            - name: AUTH_SSO_JIT\n              value: \"true\"\n"
-	entries, err := filepath.Glob("templates/*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	carriers := 0
-	for _, path := range entries {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "- name: AUTH_SSO_JIT") {
-			carriers++
-			if filepath.Base(path) != "auth-service.yaml" || !strings.Contains(string(raw), want) {
-				t.Errorf("%s carries the env line in another form", path)
-			}
-		}
-	}
-	if carriers != 1 {
-		t.Fatalf("%d templates carry the env line, want 1", carriers)
 	}
 }

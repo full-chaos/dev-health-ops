@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
@@ -125,6 +126,9 @@ func authSnapshot(t *testing.T, docs []map[string]any) map[string]string {
 
 func renderPhase(t *testing.T, phase int, extra ...string) []map[string]any {
 	t.Helper()
+	if phase == 5 {
+		extra = append(append([]string{}, orgProvisioningOn...), extra...)
+	}
 	docs, out, err := renderAuth(t, phaseArgs(phase, extra...)...)
 	if err != nil {
 		t.Fatalf("phase %d: render failed: %v\n%.600s", phase, err, out)
@@ -133,7 +137,7 @@ func renderPhase(t *testing.T, phase int, extra ...string) []map[string]any {
 }
 
 func TestAuthPhaseRendersExactFlagSet(t *testing.T) {
-	for phase := 0; phase <= 4; phase++ {
+	for phase := 0; phase <= 5; phase++ {
 		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
 			got := authSnapshot(t, renderPhase(t, phase))
 			path := filepath.Join("testdata", "auth_phase", fmt.Sprintf("phase%d.golden.json", phase))
@@ -169,6 +173,7 @@ func TestAuthPhaseLadder(t *testing.T) {
 		2: {"AUTH_PROXY_SESSIONS"},
 		3: {"AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
 		4: {"AUTH_PROXY_CREDENTIALS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
+		5: {"AUTH_PROXY_CREDENTIALS", "AUTH_PROXY_LOCAL_LOGIN", "AUTH_PROXY_ORG_PROVISIONING", "AUTH_PROXY_SESSIONS", "AUTH_PROXY_SOCIAL"},
 	}
 	for phase, want := range ladder {
 		docs := renderPhase(t, phase)
@@ -203,23 +208,17 @@ func TestAuthPhaseZeroIsTheDefaultRender(t *testing.T) {
 	}
 }
 
-func TestAuthPhase5Refused(t *testing.T) {
-	for _, phase := range []int{5} {
-		for name, args := range map[string][]string{
-			"alone":             append(append([]string{}, authBase...), "--set", fmt.Sprintf("authService.phase=%d", phase)),
-			"with every input":  phaseArgs(3, "--set", fmt.Sprintf("authService.phase=%d", phase)),
-			"without a service": {"--set", "goApi.enabled=true", "--set", fmt.Sprintf("authService.phase=%d", phase)},
-		} {
-			t.Run(fmt.Sprintf("phase %d %s", phase, name), func(t *testing.T) {
-				_, out, err := renderAuth(t, args...)
-				if err == nil {
-					t.Fatal("rendered; phase 5 must be refused")
-				}
-				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358)", phase)) {
-					t.Fatalf("the refusal does not name the decision: %.400s", out)
-				}
-			})
-		}
+// Phase 5 needs its inputs: the phase 4 ones plus org provisioning. Without a service there is nothing to own.
+func TestAuthPhase5RefusedWithoutItsInputs(t *testing.T) {
+	for name, args := range map[string][]string{
+		"alone":             append(append([]string{}, authBase...), "--set", "authService.phase=5"),
+		"without a service": {"--set", "goApi.enabled=true", "--set", "authService.phase=5"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, out, err := renderAuth(t, args...); err == nil {
+				t.Fatalf("rendered; phase 5 needs its inputs: %.300s", out)
+			}
+		})
 	}
 }
 
@@ -398,7 +397,7 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 		extra []string
 	}
 	variants := map[string]variant{
-		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil}, "phase 4": {4, nil},
+		"phase 0": {0, nil}, "phase 1": {1, nil}, "phase 2": {2, nil}, "phase 3": {3, nil}, "phase 4": {4, nil}, "phase 5": {5, nil},
 		"phase 2 eddsa":       {2, []string{"--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"}},
 		"phase 3 link routes": {3, []string{"--set", "authService.socialLinkRoutes=true"}},
 	}
@@ -456,8 +455,12 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 					t.Errorf("auth-service mounts %s, but go-api does not forward it", aggregate)
 				}
 			}
-			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers || cfg.OrgsOwned {
-				t.Errorf("%s: owned switches auth-service users=%v orgs=%v, go-api users=%v; want users=%v and orgs=false", name, cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned, wantUsers)
+			goOrgsOwned, err := usersowned.OrgsFromLookup(goLookup)
+			if err != nil {
+				t.Fatalf("go-api refuses the rendered orgs-owned setting: %v", err)
+			}
+			if wantUsers, wantOrgs := v.phase >= 4, v.phase >= 5; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers || cfg.OrgsOwned != wantOrgs || goOrgsOwned != wantOrgs {
+				t.Errorf("%s: owned switches auth-service users=%v orgs=%v, go-api users=%v orgs=%v; want users=%v orgs=%v", name, cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned, goOrgsOwned, wantUsers, wantOrgs)
 			}
 			for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 				doc := authDoc(docs, "Job", job)
@@ -531,7 +534,7 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5 (refused at render), so the renders above show neither.
+	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5, so the renders above show neither.
 	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
 		names[name] = configs["phase 3 with link routes"]
 	}

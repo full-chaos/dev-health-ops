@@ -9,7 +9,7 @@
 #
 # S0 install at phase 3 (go-api forwards login), the hooks, the restore fence
 # S1 an admin user and an organization (one-off pods of the dho image)
-# S2 a SAML provider row through the go-api admin route (auto-provision on, allowed_domains set)
+# S2 a SAML provider row: ONE INSERT in this rehearsal namespace (go-api serves no provider create route; pm 2026-11-02)
 # S3 a SAML sign-in through go-api at phase 3: go-api writes the SSO user (the join is off in auth-service)
 # S4 flip 3 to 4: U1 (stage goApi), barrier up-go-api
 # S5 users-backfill (the SSO user reaches the auth schema), users-reconcile (0 gated differences)
@@ -57,12 +57,26 @@ pass() {
 }
 
 PRINT_PLAN=0
+PRINT_COUNT=0
 for arg in "$@"; do
   case "${arg}" in
     --print-plan) PRINT_PLAN=1 ;;
-    *) die "usage: ci/auth_flipback_sso_k3s.sh [--print-plan]" ;;
+    --print-live-count-sql) PRINT_COUNT=1 ;;
+    *) die "usage: ci/auth_flipback_sso_k3s.sh [--print-plan|--print-live-count-sql]" ;;
   esac
 done
+
+# The live phase 4 step is read-only first: the operator counts the providers and the SSO-linked users and creates nothing. The SQL goes
+# in on stdin of a read-only psql session; the script touches no cluster in this mode.
+if [ "${PRINT_COUNT}" = 1 ]; then
+  cat <<'SQL'
+BEGIN READ ONLY;
+SELECT 'sso_providers=' || count(*) FROM public.sso_providers;
+SELECT 'sso_linked_users=' || count(*) FROM public.users WHERE auth_provider IN ('oidc', 'saml') AND sso_provider_id IS NOT NULL;
+ROLLBACK;
+SQL
+  exit 0
+fi
 
 if [ "${PRINT_PLAN}" = 1 ]; then
   IMG_DHO="registry.invalid/dev-health-go-dho@sha256:$(printf '0%.0s' $(seq 1 64))"
@@ -205,7 +219,7 @@ print_plan() {
   local steps=(
     "S0 install at phase 3"
     "S1 admin and organization"
-    "S2 provider rows through the go-api admin route"
+    "S2 the SAML provider row, one INSERT in the rehearsal namespace"
     "S3 SSO sign-in at phase 3 creates the SAML user"
     "S4 flip 3 to 4: U1 go-api forwards, barrier up-go-api"
     "S5 users-backfill and users-reconcile"
@@ -451,27 +465,24 @@ oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN
 oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}"
 pass "S1 admin user and organization created by the admin verbs"
 
-# ---- S2 provider rows through the go-api admin route --------------------------------------------------------------------------------------
+# ---- S2 the SAML provider row: one INSERT, as the integration tests seed it (internal/api/sso seedProvider) -------------------------------------
 pf_all
-jfile --arg e "${ADMIN_EMAIL}" --arg p "${ADMIN_PASSWORD}" '{email: $e, password: $p}'
-status="$(api POST /api/v1/auth/login "${WORK}/req.json")"
-[ "${status}" = 200 ] || die "S2: the admin login through go-api answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
-(umask 077; printf 'Authorization: Bearer %s\n' "$(jq -r '.access_token // empty' "${BODY}")" >"${WORK}/admin.hdr")
-if [ ! -s "${WORK}/admin.hdr" ] || grep -q 'Bearer $' "${WORK}/admin.hdr"; then die "S2: the admin login returned no access token"; fi
 idp_get "https://${IDP_HOST}/saml/cert"
 SAML_CERT="$(cat "${WORK}/idp.body")"
 grep -q 'BEGIN CERTIFICATE' <<<"${SAML_CERT}" || die "S2: the stub served no SAML certificate"
-jfile --arg ip "${IDP_HOST}" --arg domain "${DOMAIN}" --arg cert "${SAML_CERT}" --arg sp "${SP_ENTITY}" '{name: "fb-saml", protocol: "saml", auto_provision_users: true, default_role: "member",
-  allow_idp_initiated: true, allowed_domains: [$domain],
-  saml_config: {entity_id: ("https://" + $ip + "/saml/metadata"), sso_url: ("https://" + $ip + "/saml/sso"), certificate: $cert, sp_entity_id: $sp,
-    sp_acs_url: "https://sp.fb.test/api/v1/auth/saml/{provider_id}/acs"}}'
-status="$(api POST /api/v1/auth/sso/providers "${WORK}/req.json" "${WORK}/admin.hdr")"
-[ "${status}" = 200 ] || [ "${status}" = 201 ] || die "S2: the SAML provider create answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
-SAML_ID="$(jq -r '.id // empty' "${BODY}")"
-[[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: a provider create returned no id"
-status="$(api POST "/api/v1/auth/sso/providers/${SAML_ID}/activate" "" "${WORK}/admin.hdr")"
-[ "${status}" = 200 ] || die "S2: the provider activate answered ${status}: $(jq -c '.detail // empty' "${BODY}" 2>/dev/null | cut -c1-200)"
-pass "S2 a SAML provider row exists and is active (go-api admin route, auto-provision on, allowed_domains ${DOMAIN})"
+SAML_CONFIG_JSON="$(jq -nc --arg ip "${IDP_HOST}" --arg cert "${SAML_CERT}" --arg sp "${SP_ENTITY}" '{entity_id: ("https://" + $ip + "/saml/metadata"), sso_url: ("https://" + $ip + "/saml/sso"),
+  certificate: $cert, sp_entity_id: $sp, sp_acs_url: "https://sp.fb.test/api/v1/auth/saml/{provider_id}/acs"}')"
+SAML_ID="$(pgq <<EOF
+WITH p AS (SELECT gen_random_uuid() AS id)
+INSERT INTO sso_providers (id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role, config, encrypted_secrets, allowed_domains, created_at, updated_at)
+SELECT p.id, o.id, 'fb-saml', 'saml', 'active', false, true, true, 'member',
+  replace(\$cfg\$${SAML_CONFIG_JSON}\$cfg\$, '{provider_id}', p.id::text)::json, NULL, '["${DOMAIN}"]'::json, now(), now()
+FROM p, organizations o WHERE o.name = 'FB Org'
+RETURNING id;
+EOF
+)"
+[[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: the provider INSERT returned no id: ${SAML_ID}"
+pass "S2 a SAML provider row exists and is active (one INSERT in this namespace, auto-provision on, allowed_domains ${DOMAIN})"
 
 # ---- sign-ins ---------------------------------------------------------------------------------------------------------------------------
 signin_saml() { # SUB

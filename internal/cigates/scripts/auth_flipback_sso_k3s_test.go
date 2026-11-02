@@ -248,7 +248,7 @@ func TestFlipbackSSOK3sShape(t *testing.T) {
 		}
 	}
 	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "authService.ssoJit", "ssoJit=", "name: AUTH_SSO_JIT",
-		"create namespace", "delete namespace", "pkill", "killall", "nohup", "/api/v1/auth/sso/providers", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "oidc"} {
+		"create namespace", "delete namespace", "pkill", "killall", "nohup", "/api/v1/auth/sso/providers", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "/oidc/", "oidc_config"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script contains %q", banned)
 		}

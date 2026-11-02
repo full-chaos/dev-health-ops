@@ -119,6 +119,11 @@
           "minimum": 0,
           "maximum": 5
         },
+        "loginStage": {
+          "description": "CHAOS-12532: the roll order of phase 3, authService then goApi. Unset is stage goApi. Refused at any other phase (the templates check it).",
+          "type": "string",
+          "enum": ["", "authService", "goApi"]
+        },
         "usersOwnedStage": {
           "description": "CHAOS-11606: the roll order of phase 4, goApi then owned. Required at phase 4, refused elsewhere (the templates check both).",
           "type": "string",

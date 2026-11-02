@@ -106,7 +106,7 @@ func TestLoginStageIsRefusedOutsidePhase3(t *testing.T) {
 func TestLoginStageValueIsClosed(t *testing.T) {
 	for _, bad := range []string{"GoApi", "auth-service", "both", "true"} {
 		_, out, err := renderAuth(t, loginStageArgs("3", bad)...)
-		if err == nil || !strings.Contains(out, "authService.loginStage") {
+		if err == nil || !strings.Contains(out, "loginStage") {
 			t.Errorf("loginStage %q rendered: err=%v out=%.300s", bad, err, out)
 		}
 	}

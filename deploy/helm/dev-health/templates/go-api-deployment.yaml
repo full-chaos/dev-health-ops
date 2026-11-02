@@ -120,7 +120,7 @@ authService.sso). Each renders only when on, so phases 0 and 1 carry no AUTH_PRO
 every route (its own default is off). The URL is this release's auth-service.
 */}}
 {{- $sessionsOn := eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true" }}
-{{- $proxyFlags := list (list "AUTH_PROXY_SESSIONS" $sessionsOn) (list "AUTH_PROXY_LOCAL_LOGIN" (eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true")) (list "AUTH_PROXY_CREDENTIALS" (eq (include "dev-health.authOn" (dict "flag" "credentials" "context" .)) "true")) (list "AUTH_PROXY_SOCIAL" (eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true")) (list "AUTH_PROXY_OIDC" (eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true")) (list "AUTH_PROXY_SAML" (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true")) }}
+{{- $proxyFlags := list (list "AUTH_PROXY_SESSIONS" $sessionsOn) (list "AUTH_PROXY_LOCAL_LOGIN" (eq (include "dev-health.authOn" (dict "flag" "goApiLocalLogin" "context" .)) "true")) (list "AUTH_PROXY_CREDENTIALS" (eq (include "dev-health.authOn" (dict "flag" "credentials" "context" .)) "true")) (list "AUTH_PROXY_SOCIAL" (eq (include "dev-health.authOn" (dict "flag" "goApiSocial" "context" .)) "true")) (list "AUTH_PROXY_OIDC" (eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true")) (list "AUTH_PROXY_SAML" (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true")) }}
 {{- $proxyOn := eq (include "dev-health.authProxyOn" .) "true" }}
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
 {{- /*

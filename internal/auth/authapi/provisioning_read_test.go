@@ -267,7 +267,7 @@ func TestReadRoutesAnswerWithoutWriting(t *testing.T) {
 
 func TestReadRoutesNoAuditNoOutbox(t *testing.T) {
 	src := readSources(t)
-	for _, word := range []string{"audit.", "Outbox", "outbox", "Commit(", "Exec(", "Begin("} {
+	for _, word := range []string{"audit.", "Outbox", "outbox", "Commit(", "Exec(", "Begin(", "INSERT", "UPDATE", "DELETE"} {
 		if strings.Contains(src, word) {
 			t.Errorf("the read routes' source names %q: reads write no audit row and no outbox row", word)
 		}

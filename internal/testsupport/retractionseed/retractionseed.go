@@ -139,9 +139,35 @@ type Store struct {
 	Conn driver.Conn
 }
 
+// Options changes what StartWith seeds.
+type Options struct {
+	// DaysClock is the now of Days; zero means the time of the seed.
+	DaysClock time.Time
+	// StopMerges keeps every row of ai_impact_metrics_daily in its own part: the
+	// state of a retraction row before the background merge.
+	StopMerges bool
+}
+
+// MonthEdgeClock returns the latest DaysClock of the seed whose last day is the
+// first of a month, so the seeded days cross a partition of the daily tables.
+func MonthEdgeClock(now time.Time) time.Time {
+	now = now.UTC()
+	clock := time.Date(now.Year(), now.Month(), 2, 0, 0, 0, 0, time.UTC)
+	if clock.After(now) {
+		clock = clock.AddDate(0, -1, 0)
+	}
+	return clock
+}
+
 // Start starts a ClickHouse, applies the migration chain and the seed, and
 // closes everything when the test ends.
 func Start(ctx context.Context, t *testing.T) Store {
+	t.Helper()
+	return StartWith(ctx, t, Options{})
+}
+
+// StartWith is Start with Options.
+func StartWith(ctx context.Context, t *testing.T, seedOptions Options) Store {
 	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
 	if err != nil {
@@ -162,14 +188,27 @@ func Start(ctx context.Context, t *testing.T) Store {
 		t.Fatalf("retractionseed: open connection: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return Store{Seed: Apply(ctx, t, conn), URI: instance.URI, Conn: conn}
+	if seedOptions.StopMerges {
+		if err := conn.Exec(ctx, `SYSTEM STOP MERGES ai_impact_metrics_daily`); err != nil {
+			t.Fatalf("retractionseed: stop merges: %v", err)
+		}
+	}
+	return Store{Seed: applyAt(ctx, t, conn, seedOptions.DaysClock), URI: instance.URI, Conn: conn}
 }
 
 // Apply seeds both organizations and returns the facts of the seed.
 func Apply(ctx context.Context, t testing.TB, conn driver.Conn) Seed {
 	t.Helper()
+	return applyAt(ctx, t, conn, time.Time{})
+}
+
+func applyAt(ctx context.Context, t testing.TB, conn driver.Conn, daysClock time.Time) Seed {
+	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
-	seed := Seed{Days: Days(now), OldComputedAt: now.Add(-2 * time.Hour), NewComputedAt: now.Add(-time.Hour)}
+	if daysClock.IsZero() {
+		daysClock = now
+	}
+	seed := Seed{Days: Days(daysClock), OldComputedAt: now.Add(-2 * time.Hour), NewComputedAt: now.Add(-time.Hour)}
 	for _, org := range []string{ControlOrg, RetractedOrg} {
 		seedTeams(ctx, t, conn, org, seed)
 		for dayIndex, day := range seed.Days {

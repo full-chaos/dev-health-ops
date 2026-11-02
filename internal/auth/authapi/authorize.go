@@ -75,8 +75,16 @@ type DecisionKey struct {
 	NowUnixNano int64
 }
 
-// liveFor reports a key row that may stand for the reference.
-func (k DecisionKey) liveFor(ReferencedPrincipal) bool { return false }
+// liveFor reports a key row that may stand for the reference: a platform
+// service-account key of the referenced principal, whose account is in the
+// organization the token names, neither revoked nor expired at the
+// transaction's clock. The account's own state is the decision's, not this
+// check's.
+func (k DecisionKey) liveFor(p ReferencedPrincipal) bool {
+	return k.Found && k.PrincipalID == p.ID && k.Class == serviceAccountKeyClass && k.DomainOwner == "platform" &&
+		k.AccountOrgID != "" && k.AccountOrgID == p.OrgID && !k.Revoked &&
+		k.NowUnixNano > 0 && k.ExpiresAtUnixNano != 0 && k.NowUnixNano < k.ExpiresAtUnixNano
+}
 
 // delegated reports an impersonation session. The decision core's delegation
 // rules are not wired to this route yet, so such a reference is denied with
@@ -368,14 +376,28 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 	return out, true
 }
 
-// evaluate checks each referenced session once, then decides each item over
-// its (principal, organization) snapshot, read once per pair. With the cache
-// in use, an item of a session that is not delegated reads its unfed values
-// and asks the cache first; a hit reads no snapshot.
+// evaluate checks each referenced session, or a service account's key row,
+// once, then decides each item over its (principal, organization) snapshot,
+// read once per pair. With the cache in use, an item of a user session that is
+// not delegated reads its unfed values and asks the cache first; a hit reads
+// no snapshot. A service account's decision never uses the cache: its
+// account row is in no cache key and no feed dependency.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem,
 	cached bool) error {
 	delegatedRefs := map[string]bool{}
+	accountRefs := map[string]bool{}
 	for ref, p := range resolved {
+		if p.Kind == ReferenceServiceAccount {
+			k, err := tx.ServiceAccountKey(ctx, p.CredentialID)
+			if err != nil {
+				return err
+			}
+			if !k.liveFor(p) {
+				return errAuthorizeReferenceRefused
+			}
+			accountRefs[ref] = true
+			continue
+		}
 		sid, err := session.ParseWireSessionID(p.SessionID)
 		if err != nil {
 			return errAuthorizeReferenceRefused
@@ -393,15 +415,16 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		principal uuid.UUID
 		org       string
 		delegated bool
+		account   bool
 	}
 	snapshots := map[pair]authorization.GrantSnapshot{}
 	unfed := map[pair]UnfedState{}
 	versions := map[pair]string{}
 	for i := range items {
 		q := items[i].question
-		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference]}
+		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference], accountRefs[q.PrincipalReference]}
 		items[i].cache = cacheBypass
-		if cached && !key.delegated {
+		if cached && !key.delegated && !key.account {
 			u, ok := unfed[key]
 			if !ok {
 				var err error

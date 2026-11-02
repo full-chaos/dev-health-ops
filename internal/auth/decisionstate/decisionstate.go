@@ -30,10 +30,13 @@ import (
 // ErrStore wraps every failed read. The error text never carries a value.
 var ErrStore = errors.New("decisionstate: state unavailable")
 
-// principalKindUser is the only principal kind with a decision rule today:
-// public.users holds user principals only. Every other kind denies until a
-// leaf names its rule.
-const principalKindUser = "user"
+// The principal kinds with a decision rule: a user (public.users holds user
+// principals only) and a service account (its auth.service_accounts row).
+// Every other kind denies until a leaf names its rule.
+const (
+	principalKindUser           = "user"
+	principalKindServiceAccount = "service_account"
+)
 
 // Config builds a Reader.
 type Config struct {
@@ -328,6 +331,9 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 	if t.r.collect {
 		s.deps = append(s.deps, principalDependencies(principal)...)
 	}
+	if kind == principalKindServiceAccount {
+		return t.serviceAccount(ctx, principal, enabled, s)
+	}
 	if kind != principalKindUser {
 		return nil
 	}
@@ -349,8 +355,29 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 	return nil
 }
 
-// organization reads the organization's status, the effective membership and
-// every grant row of the pair, in any state.
+// serviceAccount reads the account row of a service-account principal. With
+// no row the principal stays unknown. A service account has no users row and
+// no platform role.
+func (t *txReader) serviceAccount(ctx context.Context, principal uuid.UUID, enabled bool, s *snapshot) error {
+	var (
+		org    uuid.UUID
+		status string
+	)
+	err := t.tx.QueryRow(ctx, `SELECT organization_id, status FROM `+t.table("service_accounts")+` WHERE principal_id = $1`, principal).
+		Scan(&org, &status)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil
+	case err != nil:
+		return storeErr("service account", err)
+	}
+	s.applyServiceAccount(org, status, enabled)
+	return nil
+}
+
+// organization reads the organization's status, the effective membership (a
+// user's only: a service account has none) and every grant row of the pair,
+// in any state.
 func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s *snapshot) error {
 	var active bool
 	err := t.tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+t.table("organizations")+` WHERE id = $1`, org).Scan(&active)
@@ -364,24 +391,12 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 	default:
 		s.orgStatus = authorization.StatusSuspended
 	}
-	m, err := membership.EffectiveOn(ctx, t.tx, t.r.schema, org, principal)
-	if err != nil {
-		return storeErr("membership", err)
-	}
 	var membershipID *uuid.UUID
-	if t.r.collect {
-		var id uuid.UUID
-		err := t.tx.QueryRow(ctx, `SELECT id FROM `+t.table("memberships")+` WHERE organization_id = $1 AND principal_id = $2`, org, principal).Scan(&id)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-		case err != nil:
-			return storeErr("membership id", err)
-		default:
-			membershipID = &id
+	if s.account == nil {
+		var err error
+		if membershipID, err = t.membership(ctx, principal, org, s); err != nil {
+			return err
 		}
-	}
-	if m.Found {
-		s.membership = &authorization.Membership{OrgID: s.org, Role: m.Role, Status: authorization.ParseStatus(string(m.Status))}
 	}
 	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
 FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id = $2`, principal, org)
@@ -413,6 +428,31 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 		s.deps = append(s.deps, organizationDependencies(org, membershipID, grantIDs)...)
 	}
 	return nil
+}
+
+// membership reads the effective membership of the pair and, for the decision
+// cache, the id of its auth row.
+func (t *txReader) membership(ctx context.Context, principal, org uuid.UUID, s *snapshot) (*uuid.UUID, error) {
+	m, err := membership.EffectiveOn(ctx, t.tx, t.r.schema, org, principal)
+	if err != nil {
+		return nil, storeErr("membership", err)
+	}
+	var membershipID *uuid.UUID
+	if t.r.collect {
+		var id uuid.UUID
+		err := t.tx.QueryRow(ctx, `SELECT id FROM `+t.table("memberships")+` WHERE organization_id = $1 AND principal_id = $2`, org, principal).Scan(&id)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+		case err != nil:
+			return nil, storeErr("membership id", err)
+		default:
+			membershipID = &id
+		}
+	}
+	if m.Found {
+		s.membership = &authorization.Membership{OrgID: s.org, Role: m.Role, Status: authorization.ParseStatus(string(m.Status))}
+	}
+	return membershipID, nil
 }
 
 // snapshot is one (principal, organization) state. It holds no connection:
@@ -461,16 +501,58 @@ func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {
 	return authorization.WorkloadLimits{}, false
 }
 
-func (s *snapshot) ServiceAccount(string) (authorization.ServiceAccount, bool) {
-	return authorization.ServiceAccount{}, false
+// ServiceAccount is the account row of a service-account principal, with its
+// own organization whatever organization is asked about (the evaluator
+// refuses another one as org_mismatch); false for a platform decision and for
+// every other principal.
+func (s *snapshot) ServiceAccount(orgID string) (authorization.ServiceAccount, bool) {
+	if orgID == "" || s.account == nil {
+		return authorization.ServiceAccount{}, false
+	}
+	return *s.account, true
 }
 
-// applyServiceAccount sets the state of a service-account principal from its row.
-func (s *snapshot) applyServiceAccount(uuid.UUID, string, bool) {}
+// applyServiceAccount sets the state of a service-account principal from its
+// row (pm 12599 Q2): the principal is active, and the row carries the
+// account's state, active only when the row and the principal both say so. A
+// disabled account is then service_account_inactive, never principal_inactive;
+// every allow path of a service account checks the row.
+func (s *snapshot) applyServiceAccount(org uuid.UUID, status string, enabled bool) {
+	s.principal = authorization.StatusActive
+	st := authorization.StatusSuspended
+	if status == "active" && enabled {
+		st = authorization.StatusActive
+	}
+	s.account = &authorization.ServiceAccount{OrgID: org.String(), Status: st}
+}
 
-// ServiceAccountKey reads the key row a service-account reference names.
-func (t *txReader) ServiceAccountKey(context.Context, uuid.UUID) (authapi.DecisionKey, error) {
-	return authapi.DecisionKey{NowUnixNano: t.now}, nil
+// ServiceAccountKey reads the credential row a service-account reference
+// names and the organization of its principal's account row ("" with none),
+// with the transaction's clock. Whether the row is live is decided by the
+// caller from the raw columns.
+func (t *txReader) ServiceAccountKey(ctx context.Context, credentialID uuid.UUID) (authapi.DecisionKey, error) {
+	k := authapi.DecisionKey{NowUnixNano: t.now}
+	var (
+		expires *time.Time
+		org     *uuid.UUID
+	)
+	err := t.tx.QueryRow(ctx, `SELECT c.principal_id, c.credential_class, c.domain_owner, c.revoked_at IS NOT NULL, c.expires_at, sa.organization_id
+FROM `+t.table("credential_registry")+` c LEFT JOIN `+t.table("service_accounts")+` sa ON sa.principal_id = c.principal_id
+WHERE c.id = $1`, credentialID).Scan(&k.PrincipalID, &k.Class, &k.DomainOwner, &k.Revoked, &expires, &org)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return k, nil
+	case err != nil:
+		return authapi.DecisionKey{}, storeErr("service account key", err)
+	}
+	k.Found = true
+	if expires != nil {
+		k.ExpiresAtUnixNano = expires.UnixNano()
+	}
+	if org != nil {
+		k.AccountOrgID = org.String()
+	}
+	return k, nil
 }
 
 func (s *snapshot) NowUnixNano() int64 { return s.now }

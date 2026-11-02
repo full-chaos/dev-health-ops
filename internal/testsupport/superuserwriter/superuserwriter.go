@@ -23,8 +23,9 @@ const password = "superuserwriter-test-only-not-a-credential"
 // public tables except a write of public.users.is_superuser: users keeps
 // SELECT, DELETE and column-scoped INSERT and UPDATE of every other column. A
 // statement that names the column fails 42501. admin is a superuser pool of
-// the database at uri.
-func Pool(ctx context.Context, t testing.TB, admin *pgxpool.Pool, uri string) *pgxpool.Pool {
+// the database at uri. A role in readerRoles (go-api's session reader) is
+// granted to it, so it also holds that role's auth schema reads and no more.
+func Pool(ctx context.Context, t testing.TB, admin *pgxpool.Pool, uri string, readerRoles ...string) *pgxpool.Pool {
 	t.Helper()
 	var suffix [4]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
@@ -52,13 +53,17 @@ func Pool(ctx context.Context, t testing.TB, admin *pgxpool.Pool, uri string) *p
 		t.Fatal(err)
 	}
 	list := strings.Join(columns, ", ")
-	for _, statement := range []string{
+	statements := []string{
 		fmt.Sprintf(`GRANT USAGE ON SCHEMA public TO %q`, role),
 		fmt.Sprintf(`GRANT ALL ON ALL TABLES IN SCHEMA public TO %q`, role),
 		fmt.Sprintf(`REVOKE ALL ON public.users FROM %q`, role),
 		fmt.Sprintf(`GRANT SELECT, DELETE ON public.users TO %q`, role),
 		fmt.Sprintf(`GRANT INSERT (%s), UPDATE (%s) ON public.users TO %q`, list, list, role),
-	} {
+	}
+	for _, reader := range readerRoles {
+		statements = append(statements, fmt.Sprintf(`GRANT %q TO %q`, reader, role))
+	}
+	for _, statement := range statements {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}

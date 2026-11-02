@@ -20,7 +20,7 @@ func TestAdminInsertUserOmitsIsSuperuserWhenFalse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	env := platformroleseam.Start(ctx, t, true)
-	writer := superuserwriter.Pool(ctx, t, env.Admin, env.URI)
+	writer := superuserwriter.Pool(ctx, t, env.Admin, env.URI, env.ReaderRole)
 	read := func(id uuid.UUID) (superuser bool) {
 		if err := env.Admin.QueryRow(ctx, `SELECT is_superuser FROM public.users WHERE id = $1`, id).Scan(&superuser); err != nil {
 			t.Fatal(err)

@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "no_membership"
+    "reason": "no_membership",
+    "wire_reason_code": "no_membership"
   },
   "id": "cross-org-member-of-a-asks-b",
   "layer": "pdp",

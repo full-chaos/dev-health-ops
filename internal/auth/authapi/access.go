@@ -39,6 +39,7 @@ var errAccessUnavailable = errors.New("authapi: access token validator unavailab
 
 // AuthServiceAccessRows is the access-token row table of the auth-service
 // routes: every dev-health-auth-service row of the endpoint-profile inventory.
+// It holds the validate route's row too; no handler reads that row.
 func AuthServiceAccessRows() ([]accessverify.Row, error) {
 	return parseAccessRows(authv1.AuthServiceEndpointProfiles)
 }

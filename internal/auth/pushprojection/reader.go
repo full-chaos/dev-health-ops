@@ -180,21 +180,33 @@ func NewReader(cfg Config) (*Reader, error) {
 	if meter == nil {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/pushprojection")
 	}
-	for name, source := range map[string]struct {
-		desc  string
-		value *atomic.Int64
-	}{
-		"devhealth_auth_push_projection_lag":         {"Highest external_push_credential outbox id minus the reader's low-water mark at the last step.", &r.lag},
-		"devhealth_auth_push_projection_parked_rows": {"Rows parked for a retry (a gap or a parent not seen yet) at the last step.", &r.parked},
-		"devhealth_auth_push_projection_final_rows":  {"Rows parked for good (malformed, unknown organization, conflict) at the last step; the drift alert owns them.", &r.final},
-	} {
-		value := source.value
-		if _, err := meter.Int64ObservableGauge(name, metric.WithDescription(source.desc),
-			metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error { o.Observe(value.Load()); return nil })); err != nil {
-			return nil, fmt.Errorf("register %s: %w", name, err)
-		}
+	if err := r.registerGauges(meter); err != nil {
+		return nil, err
 	}
 	return r, nil
+}
+
+// registerGauges creates the reader's instruments with literal names, so the label census can read them.
+func (r *Reader) registerGauges(meter metric.Meter) error {
+	observe := func(value *atomic.Int64) metric.Int64Callback {
+		return func(_ context.Context, o metric.Int64Observer) error { o.Observe(value.Load()); return nil }
+	}
+	if _, err := meter.Int64ObservableGauge("devhealth_auth_push_projection_lag",
+		metric.WithDescription("Highest external_push_credential outbox id minus the reader's low-water mark at the last step."),
+		metric.WithInt64Callback(observe(&r.lag))); err != nil {
+		return fmt.Errorf("register the lag gauge: %w", err)
+	}
+	if _, err := meter.Int64ObservableGauge("devhealth_auth_push_projection_parked_rows",
+		metric.WithDescription("Rows parked for a retry (a gap or a parent not seen yet) at the last step."),
+		metric.WithInt64Callback(observe(&r.parked))); err != nil {
+		return fmt.Errorf("register the parked-rows gauge: %w", err)
+	}
+	if _, err := meter.Int64ObservableGauge("devhealth_auth_push_projection_final_rows",
+		metric.WithDescription("Rows parked for good (malformed, unknown organization, conflict) at the last step; the drift alert owns them."),
+		metric.WithInt64Callback(observe(&r.final))); err != nil {
+		return fmt.Errorf("register the final-rows gauge: %w", err)
+	}
+	return nil
 }
 
 func (r *Reader) readiness(context.Context) error {

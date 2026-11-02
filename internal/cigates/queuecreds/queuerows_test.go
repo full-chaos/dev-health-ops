@@ -43,6 +43,15 @@ func sqlKeys(text string) []string {
 	return out
 }
 
+// queueRowSQLKeys names the queue-row fields a string literal reads when the literal is a SQL statement.
+func queueRowSQLKeys(text string) []string {
+	upper := strings.ToUpper(text)
+	if !(strings.Contains(upper, "SELECT") || strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE")) {
+		return nil
+	}
+	return sqlKeys(text)
+}
+
 // queueRowReads finds every SQL string literal outside tests that names a
 // field of a queue row's JSON arguments or its dedupe key, keyed by the
 // declaration that holds it.
@@ -85,11 +94,10 @@ func queueRowReads(t *testing.T, root string) map[string][]string {
 						return true
 					}
 					text, err := strconv.Unquote(lit.Value)
-					upper := strings.ToUpper(text)
-					if err != nil || !(strings.Contains(upper, "SELECT") || strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE")) {
+					if err != nil {
 						return true
 					}
-					for _, key := range sqlKeys(text) {
+					for _, key := range queueRowSQLKeys(text) {
 						where := rel + "#" + name
 						if found[where] == nil {
 							found[where] = map[string]bool{}

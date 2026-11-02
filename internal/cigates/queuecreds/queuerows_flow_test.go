@@ -26,6 +26,8 @@ type srcFile struct {
 // formatCensus parses the Go files of the census directories under root and
 // returns one finding per queue-row value formatted into an error or log
 // output without a guard, and the classified outputs it met.
+func realRootOf(t *testing.T) string { return repoRoot(t) }
+
 func formatCensus(t *testing.T, root string, dirs []string) ([]string, map[string]bool) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -33,6 +35,9 @@ func formatCensus(t *testing.T, root string, dirs []string) ([]string, map[strin
 	seen := map[string]bool{}
 	for _, dir := range dirs {
 		packages := map[string][]srcFile{}
+		if _, err := os.Stat(filepath.Join(root, dir)); os.IsNotExist(err) && root != realRootOf(t) {
+			continue
+		}
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
@@ -621,7 +626,7 @@ func plantCensus(t *testing.T, files map[string]string) []string {
 			t.Fatal(err)
 		}
 	}
-	findings, _ := formatCensus(t, root, []string{"internal/joboutbox"})
+	findings, _ := formatCensus(t, root, censusDirs)
 	return findings
 }
 
@@ -717,6 +722,117 @@ func TestQueueRowSQLCensusFindsArgsAtAnyPosition(t *testing.T) {
 			}
 			if got != c.want {
 				t.Errorf("sqlKeys(%q) names args = %v, want %v", c.sql, got, c.want)
+			}
+		})
+	}
+}
+
+type cellPair struct{ name, plant, clean string }
+
+var r1FormatCells = []cellPair{
+	{"F13-guard-result-ignored",
+		"func f(row Row) { _ = credshape.AnyCredentialShaped(row.DedupeKey); slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func f(row Row) { if credshape.AnyCredentialShaped(row.DedupeKey) { return }; slog.Info(\"x\", \"k\", row.DedupeKey) }\n"},
+	{"F14-output-on-the-detector-true-branch",
+		"func f(row Row) { if credshape.AnyCredentialShaped(row.DedupeKey) { slog.Info(\"x\", \"k\", row.DedupeKey) } }\n",
+		"func f(row Row) { if credshape.AnyCredentialShaped(row.DedupeKey) { slog.Info(\"refused\") } else { slog.Info(\"x\", \"k\", row.DedupeKey) } }\n"},
+	{"F15-alias-reassigned-after-the-guard",
+		"func f(row, other Row) { k := row.DedupeKey; if credshape.AnyCredentialShaped(k) { return }; k = other.DedupeKey; slog.Info(\"x\", \"k\", k) }\n",
+		"func f(row, other Row) { k := row.DedupeKey; if credshape.AnyCredentialShaped(k) { return }; slog.Info(\"x\", \"k\", k) }\n"},
+	{"F16-sanitized-in-the-refused-branch",
+		"func f(row Row) { org := row.DedupeKey; refused := credshape.AnyCredentialShaped(row.DedupeKey); if refused { slog.Info(\"x\", \"k\", org) } }\n",
+		"func f(row Row) { org := row.DedupeKey; refused := credshape.AnyCredentialShaped(row.DedupeKey); if refused { org = \"\" }; slog.Info(\"x\", \"k\", org) }\n"},
+	{"F17-wrapper-composite",
+		"type Holder struct{ value string }\nfunc f(row Row) { h := Holder{value: row.DedupeKey}; slog.Info(\"x\", \"v\", h.value) }\n",
+		"type Holder struct{ value string }\nfunc f(row Row) { h := Holder{value: \"fixed\"}; slog.Info(\"x\", \"v\", h.value) }\n"},
+	{"F18-nested-struct-formatted-whole",
+		"type Holder struct{ r Row }\nfunc f(h Holder) error { return fmt.Errorf(\"bad %+v\", h) }\n",
+		"type Holder struct{ r Row }\nfunc f(h Holder) error { return fmt.Errorf(\"bad %d\", h.r.N) }\n"},
+	{"F18b-field-assigned-from-a-row",
+		"type Holder struct{ value string }\nfunc f(row Row) { var h Holder; h.value = row.DedupeKey; slog.Info(\"x\", \"v\", h.value) }\n",
+		"type Holder struct{ value string }\nfunc f(row Row) { var h Holder; h.value = \"fixed\"; slog.Info(\"x\", \"v\", h.value) }\n"},
+	{"F19-helper-returns-a-holder",
+		"type Holder struct{ value string }\nfunc wrap(row Row) Holder { return Holder{value: row.DedupeKey} }\nfunc f(row Row) { h := wrap(row); slog.Info(\"x\", \"v\", h.value) }\n",
+		"type Holder struct{ value string }\nfunc wrap(row Row) Holder { return Holder{value: \"fixed\"} }\nfunc f(row Row) { h := wrap(row); slog.Info(\"x\", \"v\", h.value) }\n"},
+	{"F20-logger-local-renamed",
+		"func f(logger *slog.Logger, row Row) { l := logger.With(\"a\", \"b\"); l.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func f(logger *slog.Logger, row Row) { l := logger.With(\"a\", \"b\"); l.Info(\"x\", \"k\", row.N) }\n"},
+	{"F21-logger-param-renamed",
+		"func f(lg *slog.Logger, row Row) { lg.Warn(\"x\", \"k\", row.DedupeKey) }\n",
+		"func f(lg *slog.Logger, row Row) { lg.Warn(\"x\", \"k\", row.N) }\n"},
+	{"F22-logger-field-renamed",
+		"type S struct{ out *slog.Logger }\nfunc (s *S) f(row Row) { s.out.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"type S struct{ out *slog.Logger }\nfunc (s *S) f(row Row) { s.out.Info(\"x\", \"k\", row.N) }\n"},
+}
+
+func TestQueueRowFormatCensusFollowsTheGuardResultAndTheValue(t *testing.T) {
+	for _, c := range r1FormatCells {
+		t.Run(c.name, func(t *testing.T) {
+			if got := plantCensus(t, map[string]string{"internal/joboutbox/x.go": c.plant}); len(got) == 0 {
+				t.Errorf("%s: the census did not turn red", c.name)
+			}
+		})
+		t.Run(c.name+"-clean", func(t *testing.T) {
+			if got := plantCensus(t, map[string]string{"internal/joboutbox/x.go": c.clean}); len(got) != 0 {
+				t.Errorf("%s: the clean twin is reported: %v", c.name, got)
+			}
+		})
+	}
+}
+
+var exceptionCells = []struct{ name, path, plant, clean string }{
+	{"X01-execute", "internal/jobruntime/adapter.go",
+		"func execute(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func execute(envelope Row) { slog.Info(\"x\", \"k\", envelope.CorrelationID) }\n"},
+	{"X02-logFinish", "internal/jobruntime/adapter.go",
+		"func logFinish(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func logFinish(envelope Row) { attributes := []any{\"c\", envelope.CorrelationID}; slog.Info(\"x\", attributes...) }\n"},
+	{"X03-startJobSpan", "internal/jobruntime/adapter.go",
+		"func startJobSpan(row Row, span Span) { span.SetAttributes(attribute.String(\"k\", row.DedupeKey)) }\n",
+		"func startJobSpan(envelope Row, span Span) { span.SetAttributes(attribute.String(\"k\", envelope.CorrelationID)) }\n"},
+	{"X04-writeManualInvestmentTrigger", "internal/workersctl/trigger_investment.go",
+		"func writeManualInvestmentTrigger(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func writeManualInvestmentTrigger(request Row) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
+	{"X05-writeManualWorkgraphTrigger", "internal/workersctl/trigger_workgraph.go",
+		"func writeManualWorkgraphTrigger(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func writeManualWorkgraphTrigger(request Row) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
+	{"X06-rollbackTriggerTx", "internal/workersctl/trigger_workgraph.go",
+		"func rollbackTriggerTx(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
+		"func rollbackTriggerTx(attrs []any) { args := make([]any, 0); args = append(args, attrs...); slog.Default().Error(\"x\", args...) }\n"},
+}
+
+func TestQueueRowFormatExceptionsCoverOnlyTheirOwnValue(t *testing.T) {
+	for _, c := range exceptionCells {
+		t.Run(c.name, func(t *testing.T) {
+			if got := plantCensus(t, map[string]string{c.path: c.plant}); len(got) == 0 {
+				t.Errorf("%s: an unlisted queue-row value in the exempt function was accepted", c.name)
+			}
+		})
+		t.Run(c.name+"-clean", func(t *testing.T) {
+			if got := plantCensus(t, map[string]string{c.path: c.clean}); len(got) != 0 {
+				t.Errorf("%s: the listed value is reported: %v", c.name, got)
+			}
+		})
+	}
+}
+
+func TestQueueRowSQLCensusStatementsAndOperators(t *testing.T) {
+	cases := []struct {
+		name, sql string
+		want      string
+	}{
+		{"S07-delete-returning", "DELETE FROM jobs WHERE state = 'x' RETURNING args", "args"},
+		{"S08-delete-returning-key", "DELETE FROM jobs WHERE dedupe_key = $1 RETURNING dedupe_key", "dedupe_key"},
+		{"S09-jsonb-minus", "SELECT args - 'legacy' FROM jobs", "args"},
+		{"S10-jsonb-path-minus", "SELECT args #- '{domain,id}' FROM jobs", "args"},
+		{"S11-jsonb-contains", "SELECT id FROM jobs WHERE args @> '{}'", "args"},
+		{"S12-quoted-literal-and-longer-column", "SELECT 'args' AS label, args_hash FROM jobs", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := strings.Join(queueRowSQLKeys(c.sql), ",")
+			if got != c.want {
+				t.Errorf("queueRowSQLKeys(%q) = %q, want %q", c.sql, got, c.want)
 			}
 		})
 	}

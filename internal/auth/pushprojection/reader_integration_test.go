@@ -528,7 +528,9 @@ func TestReaperKeepsAPushRowAboveTheCursorAndAStoppedReaderLosesNoRow(t *testing
 	}
 	guarded := e.seed
 	e.seedOutbox(t, `UPDATE auth.auth_outbox_events SET published_at = now() - interval '9 days' WHERE id = ANY($1)`, []int64{rowA, rowB})
-	guarded(t, `DELETE FROM auth.projection_cursor WHERE stream = 'external_push'`)
+	if e.count(t, `SELECT count(*) FROM auth.projection_cursor WHERE stream = 'external_push'`) > 0 { // none exists when the cell runs alone
+		guarded(t, `DELETE FROM auth.projection_cursor WHERE stream = 'external_push'`)
+	}
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
 	if _, err := audit.Reap(ctx, e.runtime, e.schema, cutoff, 1000); err != nil {
 		t.Fatal(err)

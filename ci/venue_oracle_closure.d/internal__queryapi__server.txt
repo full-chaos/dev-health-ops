@@ -21,6 +21,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/decisioncache
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
@@ -52,6 +53,7 @@ internal/auth/restorefence
 internal/auth/serviceaccount
 internal/auth/servicecred
 internal/auth/session
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/auth/workload

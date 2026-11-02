@@ -2289,6 +2289,15 @@ Limits:
   before the split existed) is `unassigned`; a remainder of 0 gives no entry, so a person with work items and no
   count in the window has no work-item point. An item with no assignee (the person `unassigned`) stays on team
   `unassigned`, and counts once (its primary entry). Membership plays no part. The rollup tables keep the primary team only (the known limit above).
+- The cycle of a landscape point (`cycle_p50_30d_hours`, CHAOS-12562) is the median over the days of the window that
+  hold a cycle: a git row with a merged pull request (`delivery_units` less `work_items_completed` above 0). A day with
+  no merged pull request has no cycle (its stored `cycle_p50_hours` 0 is not a cycle of 0 hours); a merged pull request
+  of 0 hours is a cycle of 0 and counts. Work items give no cycle. A person with no such day has no 30-day cycle: the
+  column is `Nullable(Float64)` and holds NULL, the person has no `cycle_throughput` point (the ranks of that map are
+  over the people with a cycle), and a mean over points leaves the person out. The whole-person report chart (ruling
+  D5986) reads the same days. Past days get the value when ic_finalize recomputes them (a roll step); a stored 0 of an
+  older day stays until then. Asserted on real ClickHouse by
+  `TestTheLandscapeCycleReadsOnlyTheDaysWithAMergedPullRequest` (jira, gitlab, github, linear).
   Past days get the split when the work_item family recomputes them and the landscape when ic_finalize recomputes
   them (a roll step). Asserted on real ClickHouse by `TestTheLandscapeTakesAWorkItemsTeamFromTheLadder` (jira,
   gitlab, github, linear). What stays:

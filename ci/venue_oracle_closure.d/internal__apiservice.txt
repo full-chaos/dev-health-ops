@@ -70,6 +70,7 @@ internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/auth/workload

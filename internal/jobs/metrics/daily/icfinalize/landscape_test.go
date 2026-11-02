@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+func hours(value float64) *float64 { return &value }
+
 func recordFor(records []LandscapeRecord, identity, mapName string) *LandscapeRecord {
 	for i := range records {
 		if records[i].IdentityID == identity && records[i].MapName == mapName {
@@ -17,8 +19,8 @@ func recordFor(records []LandscapeRecord, identity, mapName string) *LandscapeRe
 // Three maps per identity, because map_name is part of the table's sorting key.
 func TestComputeLandscapeEmitsThreeMapsPerIdentity(t *testing.T) {
 	records := ComputeLandscape([]RollingStat{
-		{IdentityID: "a", TeamID: "t", ChurnLOC30d: 10, DeliveryUnits30: 2, CycleP5030dHrs: 4, WIPMax30d: 1},
-		{IdentityID: "b", TeamID: "t", ChurnLOC30d: 20, DeliveryUnits30: 5, CycleP5030dHrs: 8, WIPMax30d: 3},
+		{IdentityID: "a", TeamID: "t", ChurnLOC30d: 10, DeliveryUnits30: 2, CycleP5030dHrs: hours(4), WIPMax30d: 1},
+		{IdentityID: "b", TeamID: "t", ChurnLOC30d: 20, DeliveryUnits30: 5, CycleP5030dHrs: hours(8), WIPMax30d: 3},
 	}, nil)
 	if len(records) != 6 {
 		t.Fatalf("got %d records, want 6 (2 identities x 3 maps)", len(records))
@@ -66,7 +68,7 @@ func TestNormalizationIsPerTeamNotGlobal(t *testing.T) {
 // of the output cannot tell them apart.
 func TestOneMemberTeamRanksAHalfOnEveryAxis(t *testing.T) {
 	records := ComputeLandscape([]RollingStat{
-		{IdentityID: "solo", TeamID: "T", ChurnLOC30d: 999, DeliveryUnits30: 7, CycleP5030dHrs: 3, WIPMax30d: 2},
+		{IdentityID: "solo", TeamID: "T", ChurnLOC30d: 999, DeliveryUnits30: 7, CycleP5030dHrs: hours(3), WIPMax30d: 2},
 	}, nil)
 	if len(records) != 3 {
 		t.Fatalf("got %d records, want 3", len(records))
@@ -81,7 +83,7 @@ func TestOneMemberTeamRanksAHalfOnEveryAxis(t *testing.T) {
 // The axis asymmetry survives composition: log1p on churn and cycle, RAW wip.
 func TestLandscapeRawAxesKeepTheReferenceAsymmetry(t *testing.T) {
 	records := ComputeLandscape([]RollingStat{
-		{IdentityID: "a", TeamID: "t", ChurnLOC30d: 100, DeliveryUnits30: 9, CycleP5030dHrs: 48, WIPMax30d: 5},
+		{IdentityID: "a", TeamID: "t", ChurnLOC30d: 100, DeliveryUnits30: 9, CycleP5030dHrs: hours(48), WIPMax30d: 5},
 	}, nil)
 	if got := recordFor(records, "a", "churn_throughput").XRaw; got != math.Log1p(100) {
 		t.Fatalf("churn XRaw = %v, want log1p(100)", got)
@@ -124,5 +126,40 @@ func TestTeamFallbackChainMatchesTheReference(t *testing.T) {
 		if record.TeamID != wantTeam {
 			t.Fatalf("identity %q -> team %q, want %q", identity, record.TeamID, wantTeam)
 		}
+	}
+}
+
+// A person with no 30-day cycle has no point on the cycle map and no place in
+// its ranks; the churn and WIP points stay, ranked among every member, with no
+// cycle. A cycle of 0 hours is a cycle.
+func TestAPersonWithNoCycleHasNoCycleMapPoint(t *testing.T) {
+	records := ComputeLandscape([]RollingStat{
+		{IdentityID: "fast", TeamID: "t", ChurnLOC30d: 10, DeliveryUnits30: 1, CycleP5030dHrs: hours(0)},
+		{IdentityID: "slow", TeamID: "t", ChurnLOC30d: 20, DeliveryUnits30: 2, CycleP5030dHrs: hours(9)},
+		{IdentityID: "none", TeamID: "t", ChurnLOC30d: 30, DeliveryUnits30: 3},
+	}, nil)
+	if len(records) != 8 {
+		t.Fatalf("got %d records, want 8 (3 churn, 2 cycle, 3 wip)", len(records))
+	}
+	if record := recordFor(records, "none", "cycle_throughput"); record != nil {
+		t.Fatalf("a person with no cycle has a cycle-map point: %+v", *record)
+	}
+	for _, name := range []string{"churn_throughput", "wip_throughput"} {
+		record := recordFor(records, "none", name)
+		if record == nil || record.CycleP50 != nil {
+			t.Fatalf("%s point of the person with no cycle = %+v, want a point with no cycle", name, record)
+		}
+	}
+	if got := recordFor(records, "none", "churn_throughput").XNorm; got != 2.5/3 {
+		t.Fatalf("churn XNorm of the person with no cycle = %v, want 2.5/3 (ranked among all three)", got)
+	}
+	for identity, want := range map[string]float64{"fast": 0.25, "slow": 0.75} {
+		record := recordFor(records, identity, "cycle_throughput")
+		if record == nil || record.XNorm != want || record.CycleP50 == nil {
+			t.Fatalf("%s cycle point = %+v, want XNorm %v among the two people with a cycle", identity, record, want)
+		}
+	}
+	if got := recordFor(records, "fast", "cycle_throughput").CycleP50; *got != 0 {
+		t.Fatalf("a cycle of 0 hours reads %v, want 0", *got)
 	}
 }

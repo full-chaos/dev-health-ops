@@ -170,7 +170,7 @@ func serve(mode string, args []string) error {
 }
 
 func requestLogLine(method, path string) string {
-	return "idpstub: " + method + " " + path
+	return "idpstub: " + strings.ReplaceAll(strings.ReplaceAll(method+" "+path, "\r", ""), "\n", "")
 }
 
 // writeFresh writes data to a NEW regular file; a file already there is removed first, never followed or reused.

@@ -477,7 +477,7 @@ func TestWhatIsNeverStored(t *testing.T) {
 
 func TestAMalformedReadIsNotStored(t *testing.T) {
 	for _, dep := range []Dependency{{AggregateType: "", AggregateID: "x", Revision: 1}, {AggregateType: "principal", AggregateID: "", Revision: 1},
-		{AggregateType: "principal", AggregateID: "x", Revision: 0}} {
+		{AggregateType: "principal", AggregateID: "x", Revision: -1}} {
 		r := newRig(t, 0)
 		k := baseKey(t)
 		if got := r.c.Put(k, allow(k), Read{Dependencies: []Dependency{dep}, Stamp: r.c.Begin()}); got != NotStoredInvalid {
@@ -642,4 +642,22 @@ func TestThePutResultsAreAClosedSet(t *testing.T) {
 			t.Fatalf("PutResults = %q, want %q", got, want)
 		}
 	}
+}
+
+// PLAN-10842-C Q2: an aggregate with no revision row yet (no audited event; a backfilled row) is a dependency at
+// revision 0. Any event of it is revision 1 or more, so it evicts the entry and its watermark makes Get miss.
+func TestADependencyAtRevisionZeroIsStoredAndAnyEventMisses(t *testing.T) {
+	r := newRig(t, 0)
+	k := baseKey(t)
+	rd := Read{Dependencies: []Dependency{{AggregateType: "resource_grant", AggregateID: "grt_backfilled", Revision: 0}}, Stamp: r.c.Begin()}
+	mustStore(t, r, k, allow(k), rd)
+	hit(t, r, k)
+	r.marks.set("resource_grant", "grt_backfilled", 1)
+	miss(t, r, k, "the first event of an aggregate read at revision 0")
+	mustStore(t, r, k, allow(k), Read{Dependencies: rd.Dependencies, Stamp: r.c.Begin()})
+	r.marks.set("resource_grant", "grt_backfilled", 0)
+	if err := r.c.Invalidate(t.Context(), "resource_grant", "grt_backfilled", 1); err != nil {
+		t.Fatal(err)
+	}
+	miss(t, r, k, "Invalidate at revision 1 of an aggregate read at revision 0")
 }

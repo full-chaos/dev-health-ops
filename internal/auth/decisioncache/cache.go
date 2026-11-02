@@ -73,11 +73,14 @@ type Key struct {
 	// Unfed carries the values the caller reads on every call because no feed event covers them (go-api's public.users
 	// and public.memberships). They are never served from the cache: a change in one is another key.
 	Unfed string
+	// State is a digest of the row versions the decision depends on, read in the caller's transaction on every call: a
+	// row committed, changed or removed before its feed event arrives is another key, so it is never served stale.
+	State string
 }
 
 func (k Key) encode() string {
 	b := make([]byte, 0, 128)
-	for _, s := range []string{k.PrincipalID, k.SessionID, k.OrganizationID, k.Action, k.ResourceKind, k.ResourceKey, k.Assurance, k.Unfed} {
+	for _, s := range []string{k.PrincipalID, k.SessionID, k.OrganizationID, k.Action, k.ResourceKind, k.ResourceKey, k.Assurance, k.Unfed, k.State} {
 		b = strconv.AppendQuote(b, s)
 		b = append(b, ',')
 	}

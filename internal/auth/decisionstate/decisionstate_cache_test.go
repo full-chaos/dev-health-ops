@@ -83,7 +83,11 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		"table:memberships":               "dep membership (mbr_) + tag membership",
 		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
 		"table:aggregate_revisions":       "the dependency revisions, same transaction",
-		"table:platform_role_assignments": "StateVersion: the row versions of the principal's assignments while auth owns the platform roles",
+		"state:principals":                "StateVersion: the principal row's version",
+		"state:organizations":             "StateVersion: the organization row's version",
+		"state:memberships":               "StateVersion: the pair's membership row version",
+		"state:resource_grants":           "StateVersion: every grant row of the pair",
+		"state:platform_role_assignments": "StateVersion: the principal's assignments while auth owns the platform roles",
 		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned",
 		"public:memberships":              "Unfed: the public role",
 		"call:StateOn":                    "public.users (is_active, superuser or the owned rule): dep user, Unfed, tag platform_role_assignment",
@@ -101,6 +105,7 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		{"table:", regexp.MustCompile(`table\("([a-z_]+)"\)`)},
 		{"public:", regexp.MustCompile(`public\.([a-z_]+)`)},
 		{"call:", regexp.MustCompile(`\.(StateOn|EffectiveOn)\(`)},
+		{"state:", regexp.MustCompile(`SELECT '([a-z_]+)', id::text, xmin::text`)},
 	} {
 		for _, m := range re.re.FindAllStringSubmatch(string(raw), -1) {
 			key := re.prefix + m[1]

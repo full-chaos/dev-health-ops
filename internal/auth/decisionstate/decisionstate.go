@@ -6,8 +6,12 @@ package decisionstate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -156,6 +160,65 @@ func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string)
 		u.MembershipRoleFound, u.MembershipRole = true, *role
 	}
 	return u, nil
+}
+
+// StateVersion is a digest of (table, id, xmin) of every row a decision of the pair depends on, in the transaction's
+// snapshot: the principal, the organization, the pair's membership row, every grant row of the pair, and the principal's
+// platform role assignments while auth owns them. Any committed insert, update or delete of one of them is a new
+// digest, with or without an outbox event; VACUUM FREEZE keeps xmin.
+func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID string) (string, error) {
+	org, err := uuid.Parse(orgID)
+	read := orgID != "" && err == nil && org.String() == orgID
+	args := []any{principal}
+	if read {
+		args = append(args, org)
+	}
+	rows, err := t.tx.Query(ctx, stateQuery(authschema.Quote(t.r.schema), read, t.r.users.PlatformRolesOwned), args...)
+	if err != nil {
+		return "", storeErr("state version", err)
+	}
+	defer rows.Close()
+	var found []stateRow
+	for rows.Next() {
+		var r stateRow
+		if err := rows.Scan(&r.table, &r.id, &r.xmin); err != nil {
+			return "", storeErr("state version", err)
+		}
+		found = append(found, r)
+	}
+	if err := rows.Err(); err != nil {
+		return "", storeErr("state version", err)
+	}
+	return stateDigest(found), nil
+}
+
+// stateRow is one row version: its table, id and xmin.
+type stateRow struct{ table, id, xmin string }
+
+// stateQuery reads the row versions of the pair: $1 is the principal, $2 the organization when org is set.
+func stateQuery(schema string, org, owned bool) string {
+	parts := []string{`SELECT 'principals', id::text, xmin::text FROM ` + schema + `.principals WHERE id = $1`}
+	if org {
+		parts = append(parts,
+			`SELECT 'organizations', id::text, xmin::text FROM `+schema+`.organizations WHERE id = $2`,
+			`SELECT 'memberships', id::text, xmin::text FROM `+schema+`.memberships WHERE organization_id = $2 AND principal_id = $1`,
+			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`)
+	}
+	if owned {
+		parts = append(parts, `SELECT 'platform_role_assignments', id::text, xmin::text FROM `+schema+`.platform_role_assignments WHERE principal_id = $1`)
+	}
+	return strings.Join(parts, "\nUNION ALL ")
+}
+
+// stateDigest is the sha256 of the sorted rows, so the order the database returns them in does not count.
+func stateDigest(rows []stateRow) string {
+	lines := make([]string, len(rows))
+	for i, r := range rows {
+		lines[i] = r.table + "\x00" + r.id + "\x00" + r.xmin
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 // revisions reads the revision of each dependency in the transaction; an aggregate with no row yet is revision 0.

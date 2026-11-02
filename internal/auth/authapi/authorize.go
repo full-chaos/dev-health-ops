@@ -76,6 +76,10 @@ type DecisionTx interface {
 	// Unfed is what no feed event covers, with the transaction's clock: read
 	// on every call while the decision cache is in use.
 	Unfed(ctx context.Context, principal uuid.UUID, orgID string) (UnfedState, error)
+	// StateVersion is a digest of the versions of the rows a decision of the
+	// pair depends on, read on every call while the decision cache is in use:
+	// a committed change is a new key before its feed event arrives.
+	StateVersion(ctx context.Context, principal uuid.UUID, orgID string) (string, error)
 }
 
 // DecisionState runs fn in one READ ONLY REPEATABLE READ transaction, so every
@@ -341,6 +345,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 	}
 	snapshots := map[pair]authorization.GrantSnapshot{}
 	unfed := map[pair]UnfedState{}
+	versions := map[pair]string{}
 	for i := range items {
 		q := items[i].question
 		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference]}
@@ -357,7 +362,15 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			if u.NowUnixNano <= 0 {
 				return errAuthorizeStateFailure
 			}
-			items[i].key = cacheKey(items[i], u)
+			version, ok := versions[key]
+			if !ok {
+				var err error
+				if version, err = tx.StateVersion(ctx, key.principal, key.org); err != nil {
+					return err
+				}
+				versions[key] = version
+			}
+			items[i].key = cacheKey(items[i], u, version)
 			if d, hit := h.Cache.Get(items[i].key); hit {
 				items[i].decision, items[i].now, items[i].cache = d, u.NowUnixNano, cacheHit
 				continue

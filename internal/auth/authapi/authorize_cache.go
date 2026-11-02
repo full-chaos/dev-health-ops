@@ -116,15 +116,16 @@ func (m cacheMetrics) put(ctx context.Context, result decisioncache.PutResult) {
 	m.puts.Add(ctx, 1, metric.WithAttributes(attribute.String("result", string(result))))
 }
 
-// cacheKey is the item's key: the request, the session, the catalog the evaluator decides under, and the unfed values.
+// cacheKey is the item's key: the request, the session, the catalog the evaluator decides under, the unfed values and the
+// row-version state of the pair.
 // This route decides no delegated session from the cache, so the actor chain is empty; the reference carries no
 // assurance and no entitlement aggregate exists.
-func cacheKey(item authorizeItem, u UnfedState) decisioncache.Key {
+func cacheKey(item authorizeItem, u UnfedState, state string) decisioncache.Key {
 	q := item.question
 	k := decisioncache.Key{
 		PrincipalID: session.WirePrincipalID(item.principal.ID), SessionID: item.principal.SessionID,
 		OrganizationID: q.OrganizationID, Action: q.Action, ResourceKind: q.ResourceType,
-		PolicyRevision: policycatalog.Default().Version(), Unfed: u.key(),
+		PolicyRevision: policycatalog.Default().Version(), Unfed: u.key(), State: state,
 	}
 	if q.ResourceType == "repository" {
 		k.ResourceKey = q.ResourceKey

@@ -12,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 )
 
-func legacyRefreshAccepted(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+func legacyRefreshTotal(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -40,21 +40,25 @@ func legacyRefreshAccepted(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 func TestCompatRefreshCountsAnAcceptedGoAPIRefreshTokenOnly(t *testing.T) {
 	f := newCompatFixture(t)
 	reader := sdkmetric.NewManualReader()
-	f.meter = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")
-	f.buildCompat()
+	counter, err := accessverify.NewRefreshCounter(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test"), AccessService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	SetRefreshAccepted(counter)
+	t.Cleanup(func() { SetRefreshAccepted(nil) })
 	f.sessions.legacyResult = accepted(f.record)
 
 	other := `{"refresh_token":"` + legacyToken(t, f, f.org.String(), "another-key-0123456789abcdef-0123456") + `"}`
 	f.do(http.MethodPost, PatternCompatRefresh, other, nil)
 	f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
-	if got := legacyRefreshAccepted(t, reader); got != 0 {
+	if got := legacyRefreshTotal(t, reader); got != 0 {
 		t.Fatalf("an unverifiable token or a native credential moved the counter to %d, want 0", got)
 	}
 	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+legacyToken(t, f, f.org.String(), testSecret)+`"}`, nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
-	if got := legacyRefreshAccepted(t, reader); got != 1 {
+	if got := legacyRefreshTotal(t, reader); got != 1 {
 		t.Fatalf("after one accepted go-api refresh token the counter is %d, want 1", got)
 	}
 }

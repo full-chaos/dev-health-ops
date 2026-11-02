@@ -60,6 +60,7 @@ services:
     environment:
       AUTH_ACCESS_TOKEN_ISSUER: ${REHEARSAL_VERIFY_ISSUER:-}
       SSL_CERT_FILE: /etc/rehearsal/tls/issuer.pem
+      AUTH_PROXY_SESSIONS: "true"
     volumes:
       - type: volume
         source: envelope_keys

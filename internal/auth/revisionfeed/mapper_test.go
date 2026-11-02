@@ -101,3 +101,24 @@ func TestHandleOutboxAppliesAMappedEvent(t *testing.T) {
 		t.Fatalf("a refused event invalidated: %d calls", n)
 	}
 }
+
+func TestFromOutboxMapsTheRevocationEvents(t *testing.T) {
+	for _, tc := range []struct{ aggregate, id, event, change string }{
+		{"session", "ses_EXAMPLE0000000000001", "session.revoked", `{"status":"revoked","reason":"caller"}`},
+		{"signing_key", "key_EXAMPLE0000000000000000000000000000000000001", "signing_key.compromised", `{"kid":"example.key"}`},
+		{"principal", "prn_EXAMPLE0000000000000001", "principal.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"password_changed"}`},
+		{"organization", "org_EXAMPLE0000000000000001", "organization.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"org_ended"}`},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			e := outboxEvent(tc.aggregate+":"+tc.id+":3", `{"revision":3,"change":`+tc.change+`}`)
+			e.AggregateType, e.AggregateID, e.EventType = tc.aggregate, tc.id, tc.event
+			got, err := FromOutbox(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AggregateType != tc.aggregate || got.EventType != tc.event || got.Payload.Revision != 3 || got.DedupeKey() != got.IdempotencyKey {
+				t.Fatalf("mapped event %+v", got)
+			}
+		})
+	}
+}

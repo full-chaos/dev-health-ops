@@ -59,7 +59,7 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 	// lexically valid. Timestamp parses the envelope's; the change object's
 	// timestamp members are parsed here, every one, not only the one known today.
 	for name, value := range event.Payload.Change {
-		if name != "expires_at" {
+		if name != "expires_at" && name != "revoked_before" {
 			continue
 		}
 		var text string

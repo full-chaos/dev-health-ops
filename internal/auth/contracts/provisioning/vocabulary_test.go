@@ -98,6 +98,29 @@ func TestVocabularyMatchesTheSchema(t *testing.T) {
 		if got, want := sorted(a.Required), sorted(change.Required); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s required change members: Go %v, schema %v", name, got, want)
 		}
+		perEvent := map[string][]string{}
+		for _, nested := range then.AllOf {
+			event := nested.If.Properties["event_type"].Const
+			perEvent[event] = nested.Then.Properties["payload"].Properties["change"].Required
+		}
+		if len(perEvent) != len(a.EventRequired) {
+			t.Errorf("%s per-event required: Go %v, schema %v", name, a.EventRequired, perEvent)
+		}
+		for event, want := range perEvent {
+			if !reflect.DeepEqual(sorted(a.EventRequired[event]), sorted(want)) {
+				t.Errorf("%s %s required change members: Go %v, schema %v", name, event, a.EventRequired[event], want)
+			}
+		}
+		for member, node := range change.Properties {
+			if node.Const != a.Fixed[member] {
+				t.Errorf("%s change.%s fixed value: Go %q, schema %q", name, member, a.Fixed[member], node.Const)
+			}
+		}
+		for member := range a.Fixed {
+			if change.Properties[member] == nil {
+				t.Errorf("%s change.%s is fixed in Go and not in the schema", name, member)
+			}
+		}
 	}
 	if len(branches) != len(enum) {
 		t.Errorf("schema has %d branches for %d aggregate types", len(branches), len(enum))
@@ -151,7 +174,24 @@ func TestCheckEventRefusesWhatTheSchemaRefuses(t *testing.T) {
 		{"valid principal", "principal", "prn_" + id, "principal.created", map[string]any{"status": "active"}, true},
 		{"valid user email change", "user", "prn_" + id, "user.email_changed", map[string]any{}, true},
 		{"valid organization slug", "organization", "org_" + id, "organization.updated", map[string]any{"slug": "acme-co"}, true},
-		{"unknown aggregate", "session", "prn_" + id, "session.revoked", map[string]any{}, false},
+		{"unknown aggregate", "refresh_credential", "prn_" + id, "refresh_credential.revoked", map[string]any{}, false},
+		{"session revoked", "session", "ses_" + id, "session.revoked", map[string]any{"status": "revoked", "reason": "caller"}, true},
+		{"session event is only revoked", "session", "ses_" + id, "session.created", map[string]any{"status": "revoked", "reason": "caller"}, false},
+		{"session status is revoked", "session", "ses_" + id, "session.revoked", map[string]any{"status": "active", "reason": "caller"}, false},
+		{"session reason is closed", "session", "ses_" + id, "session.revoked", map[string]any{"status": "revoked", "reason": "logged out"}, false},
+		{"session without reason", "session", "ses_" + id, "session.revoked", map[string]any{"status": "revoked"}, false},
+		{"session id of another prefix", "session", "prn_" + id, "session.revoked", map[string]any{"status": "revoked", "reason": "caller"}, false},
+		{"principal scope revoke", "principal", "prn_" + id, "principal.sessions_revoked", map[string]any{"revoked_before": "2026-09-03T09:59:59.123456Z", "reason": "password_changed"}, true},
+		{"principal scope revoke without boundary", "principal", "prn_" + id, "principal.sessions_revoked", map[string]any{"reason": "caller"}, false},
+		{"principal scope revoke without reason", "principal", "prn_" + id, "principal.sessions_revoked", map[string]any{"revoked_before": "2026-09-03T09:59:59Z"}, false},
+		{"principal scope revoke impossible date", "principal", "prn_" + id, "principal.sessions_revoked", map[string]any{"revoked_before": "2026-04-31T00:00:00Z", "reason": "caller"}, false},
+		{"principal created needs no boundary", "principal", "prn_" + id, "principal.created", map[string]any{"status": "active"}, true},
+		{"organization scope revoke", "organization", "org_" + id, "organization.sessions_revoked", map[string]any{"revoked_before": "2026-09-03T09:59:59Z", "reason": "org_ended"}, true},
+		{"organization scope revoke without boundary", "organization", "org_" + id, "organization.sessions_revoked", map[string]any{"reason": "org_ended"}, false},
+		{"signing key compromised", "signing_key", "key_" + id, "signing_key.compromised", map[string]any{"kid": "example.key-2026-09"}, true},
+		{"signing key without kid", "signing_key", "key_" + id, "signing_key.compromised", map[string]any{}, false},
+		{"signing key is only compromised", "signing_key", "key_" + id, "signing_key.activated", map[string]any{"kid": "k1"}, false},
+		{"signing key kid with a slash", "signing_key", "key_" + id, "signing_key.compromised", map[string]any{"kid": "a/b"}, false},
 		{"raw uuid id", "principal", id, "principal.created", map[string]any{}, false},
 		{"id of another prefix", "organization", "prn_" + id, "organization.created", map[string]any{}, false},
 		{"verb of another aggregate", "user", "prn_" + id, "principal.created", map[string]any{}, false},
@@ -184,7 +224,7 @@ func TestCheckEventRefusesWhatTheSchemaRefuses(t *testing.T) {
 	if Surface != contracts.ProvisioningEventSurface {
 		t.Errorf("Surface %q is not contracts' %q", Surface, contracts.ProvisioningEventSurface)
 	}
-	if WireID("principal", id) != "prn_"+id || WireID("session", id) != "" || WireID("principal", "a b") != "" ||
+	if WireID("principal", id) != "prn_"+id || WireID("refresh_credential", id) != "" || WireID("principal", "a b") != "" ||
 		WireID("principal", strings.Repeat("a", 60)) == "" || WireID("principal", strings.Repeat("a", 61)) != "" {
 		t.Error("WireID renders a wrong id")
 	}
@@ -241,5 +281,22 @@ func TestTheServiceAccountKeyEventCarriesAStatusAndACredentialIDOnly(t *testing.
 		if err := CheckEvent(c.aggregate, c.id, c.event, c.change); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+}
+
+// TestOnlyTerminalAggregatesAreOneShot: a one-shot aggregate keeps no revision counter, so it may carry exactly one
+// event verb (a terminal fact) and no other aggregate is one-shot.
+func TestOnlyTerminalAggregatesAreOneShot(t *testing.T) {
+	for _, name := range AggregateTypes() {
+		a, _ := AggregateOf(name)
+		if want := name == "session"; a.OneShot != want || IsOneShot(name) != want {
+			t.Errorf("%s one-shot = %v, want %v", name, a.OneShot, want)
+		}
+		if a.OneShot && len(a.Events) != 1 {
+			t.Errorf("%s is one-shot and has %d events, want exactly one", name, len(a.Events))
+		}
+	}
+	if IsOneShot("refresh_credential") {
+		t.Error("an unknown aggregate type is one-shot")
 	}
 }

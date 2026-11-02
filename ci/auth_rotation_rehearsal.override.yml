@@ -38,6 +38,13 @@ services:
         source: rehearsal_keys
         target: /run/auth/keys
         read_only: true
+  # go-api and query-api read auth.sessions to accept an EdDSA access token; the roles come from `migrate` (dho migrate roles).
+  auth-migrate:
+    environment:
+      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
+  auth-grants:
+    environment:
+      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
   go-api:
     environment:
       AUTH_ACCESS_TOKEN_ISSUER: ${REHEARSAL_VERIFY_ISSUER:-}

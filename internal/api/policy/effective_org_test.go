@@ -20,7 +20,7 @@ func effectiveOrgStack(t *testing.T, store *fakeStore, level Authz) http.Handler
 	t.Helper()
 	auth := authenticator(t, store)
 	scope := NewScope(auth, quiet())
-	return scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(level, actingOrg))))
+	return scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), level, actingOrg))))
 }
 
 func superClaims(c jwt.MapClaims) { c["is_superuser"] = true }

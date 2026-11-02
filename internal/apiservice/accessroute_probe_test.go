@@ -162,7 +162,7 @@ func probeRoutes(guard *policy.Guard) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: probeAuthenticated, Handler: guard.Wrap(policy.Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: probeAdmin, Handler: guard.Wrap(policy.Admin, echo)},
 		{Method: http.MethodGet, Pattern: probeOptional, Handler: guard.Wrap(policy.Optional, echo)},
-		{Method: http.MethodGet, Pattern: probeSuperuser, Handler: guard.Wrap(policy.Superuser, echo)},
+		{Method: http.MethodGet, Pattern: probeSuperuser, Handler: guard.WrapPlatform(policy.ActionAdminOrgs, echo)},
 		{Method: http.MethodGet, Pattern: probePublic, Handler: guard.Wrap(policy.Public, echo)},
 	}
 }

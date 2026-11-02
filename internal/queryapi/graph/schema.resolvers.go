@@ -230,7 +230,7 @@ func (r *queryResolver) ProductTelemetryDashboard(ctx context.Context, orgID str
 func (r *queryResolver) ProductTelemetryPlatformDashboard(ctx context.Context, input model.ProductTelemetryDashboardInput) (*model.ProductTelemetryPlatformDashboardType, error) {
 	spanCtx, finish := startProductTelemetrySpan(ctx, "productTelemetryPlatformDashboard")
 	claims, present := authctx.FromContext(ctx)
-	if err := producttelemetry.RequirePlatformAdmin(producttelemetry.Principal{Present: present, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}); err != nil {
+	if err := producttelemetry.RequirePlatformAdmin(producttelemetry.Principal{Present: present, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive, Platform: claims.Platform}); err != nil {
 		reason := "not_platform_admin"
 		if !present {
 			reason = "no_principal"
@@ -1017,7 +1017,7 @@ func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.Dat
 	spanCtx, finish := startDataHealthSpan(ctx, "dataHealth")
 
 	claims, ok := authctx.FromContext(ctx)
-	if err := datahealth.RequireOperator(datahealth.Principal{Present: ok, Role: claims.Role, IsSuperuser: claims.IsSuperuser}); err != nil {
+	if err := datahealth.RequireOperator(datahealth.Principal{Present: ok, Role: claims.Role, IsSuperuser: claims.IsSuperuser, Platform: claims.Platform}); err != nil {
 		reason := "not_operator"
 		if !ok {
 			reason = "no_principal"

@@ -42,13 +42,14 @@ plain `docker compose up` starts none of them.
 docker compose --profile auth up --build --wait auth-service
 ```
 
-That runs six services in order:
+That runs seven services in order:
 
 | Service | Job |
 | --- | --- |
 | `auth-keys-init` | One-shot. Writes the platform signing key (Ed25519, mode 0400, uid 65532) and its JWKS into its **own** `auth_signing_keys` volume with `dho mint envelope-keys --skip-existing`, with its own key id (`AUTH_SIGNING_KEY_ID`, default `auth-signing-local`). |
-| `auth-provision` | One-shot. Creates the unprivileged runtime login (default `devhealth_auth`) and, on **every run**, resets it to `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, so an elevated login cannot survive a re-provision. |
-| `auth-migrate` | One-shot. Applies the auth schema as the database owner and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
+| `auth-provision` | One-shot. Creates the unprivileged runtime login (default `devhealth_auth`) and the migration login (default `devhealth_auth_migrator`, `NOSUPERUSER`), re-asserts both on **every run** as `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` so an elevated login cannot survive a re-provision, and creates the auth schema `AUTHORIZATION` the migration login when it is absent. |
+| `auth-owner-grants` | One-shot, the only auth one-shot that keeps the database superuser's DSN. After the ops migrate it runs `auth-migrate owner-move -grants-only -apply`, which gives the migration login the privileges on the ops tables that the grants pass needs (each `WITH GRANT OPTION`, plus `REFERENCES` as the table-level anchor). It changes no owner. |
+| `auth-migrate` | One-shot. Applies the auth schema as the migration login, which owns the schema (`AUTH_SCHEMA_OWNER_ROLE` pins that), and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
 | `auth-grants` | One-shot. Runs `auth-migrate grants` (the grant-only pass) after `auth-migrate`, as the same elevated login, so the runtime login's table privileges, including those on the public tables, are current before auth-service starts. |
 | `auth-fence-init` | One-shot, dev compose only. `auth-migrate restore-fence init -if-absent` writes the first restore-fence row of the fresh database (timeline 1) so that auth-service is ready; a repeat bring-up exits 0 without writing. Never run it on a restored volume (use `restore-fence apply`), and the Helm chart has no such Job: a production database is initialised once by hand (see the first roll below). |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
@@ -138,11 +139,15 @@ Organization-wide tokens (no source) emit no event: the contract requires a
 
 ### The migration login owns the auth schema and is not a superuser
 
-The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) that owns the auth schema and every object in it. A superuser owner would lend superuser authority to any owner path in the schema. The pin, the environment variable `AUTH_SCHEMA_OWNER_ROLE` of the `auth-migrate` and `auth-grants` Jobs, names that role; with it set, every `auth-migrate` and `auth-grants` run checks, before any GRANT, that the schema and every object in it has that owner (the one append function of the push lifecycle, owned by its writer role, is the only exception) and that the role holds none of the five attributes. Unset, the check is off (the dev Compose stack migrates as a superuser).
+The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) that owns the auth schema and every object in it. A superuser owner would lend superuser authority to any owner path in the schema. The pin, the environment variable `AUTH_SCHEMA_OWNER_ROLE` (Helm: `authService.migrate.ownerRole`, empty by default and allowed empty at every phase) of the `auth-migrate` and `auth-grants` Jobs, names that role; with it set, every `auth-migrate` and `auth-grants` run checks, before any GRANT, that the schema and every object in it has that owner (the one append function of the push lifecycle, owned by its writer role, is the only exception) and that the role holds none of the five attributes. Unset, the check is off (the dev Compose stack migrates as a superuser).
 
 1. **Privileged, once, by the postgres superuser** (`kubectl exec` on the postgres pod; the password goes in on stdin and never on a command line): create the login; for a fresh database also `CREATE SCHEMA auth AUTHORIZATION <login>`. The login needs no `CREATE` on the database: `auth-migrate` does not run `CREATE SCHEMA` on a schema that exists.
 2. **An existing database whose schema a superuser owns:** run `auth-migrate owner-move -from <old owner> -to <login> -runtime-role <runtime login>` with the old owner's DSN (it must be a superuser). It prints counts only; add `-apply` to make the change. It moves the schema and every object the old owner owns in one transaction under the same locks as the grants pass, gives the login the privileges of the grants pass in the ops schema WITH GRANT OPTION, and re-grants the runtime login's rows in that schema as the login before it revokes the old grantor's rows, so a reader of the runtime login sees no gap. It is safe to run again. A restore from a backup taken before the move brings the old owner back: the pin fails and names this step.
 3. Rotate the migration Secret to the new DSN, then roll.
+
+**Compose:** a volume made before the migration login existed holds a `postgres`-owned auth schema. `auth-migrate` then stops at the pin with the owner-move remedy. Run `auth-migrate owner-move -from postgres -to devhealth_auth_migrator -runtime-role devhealth_auth -apply` once against that database (the same one-shot image, with the superuser DSN), or recreate the volume. A volume of a dev stack that never ran the auth profile has no auth schema and needs nothing.
+
+**What does not change here:** the kind proofs `ci/check_auth_k8s.sh` and `ci/check_session_cutover_rehearsal.sh` still migrate as a superuser DSN; the least-privilege path is proved by the Compose proof above and by the bigboy k3s rehearsal.
 
 **Rollback** is the Secret back to the old DSN **and** `auth-migrate owner-move -from <login> -to <old owner> -restore -apply`. The reverse run is not optional: on the old login a `REVOKE` reaches only the rows that login granted, so a later narrowing would leave the rows the migration login granted.
 
@@ -150,7 +155,7 @@ The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPE
 
 **The login holds `REFERENCES`, without grant option, on each ops table of that set.** PostgreSQL refuses a table-level `REVOKE ALL` from a role that holds no table-level privilege on the table, and the grants pass begins each ops table with that statement. `REFERENCES` lets this login create a foreign key to those tables from a table of its own, and nothing else. No auth migration may add such a key without a ruling; a test fails on a `REFERENCES` clause that names another schema.
 
-**`auth-migrate restore-fence apply` stays on the owner login.** It writes the legacy ops tables, which the migration login cannot. Run by hand with the old owner's DSN, it stops before any write and names the missing privilege when run as the migration login.
+**`auth-migrate restore-fence apply` and `restore-fence export` stay on the owner login.** `apply` writes the legacy ops tables and `export` reads them; the migration login is given neither. Run by hand with the old owner's DSN. `apply` as the migration login stops before any write and names the missing privilege; `export` is one read-only transaction and writes nothing, but the migration login holds no read privilege on most of those columns. The other verbs (`keys`, `sessions`, `workloads`, `workload-assertion-key-*`, `platform-role-bootstrap`, `platform-owner-grant`, `platform-owner-revoke`, `restore-fence init` and `status`) touch the auth schema only and run on the migration login.
 
 ## Kubernetes (Helm)
 

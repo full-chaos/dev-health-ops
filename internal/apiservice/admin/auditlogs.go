@@ -23,7 +23,7 @@ const auditLogFeature = "audit_log"
 func (h *handlers) auditLogRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: governancePrefix + "/audit-logs", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listAuditLogs))},
-		{Method: http.MethodGet, Pattern: governancePrefix + "/platform/audit-logs", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listPlatformAuditLogs))},
+		{Method: http.MethodGet, Pattern: governancePrefix + "/platform/audit-logs", Handler: h.guard.WrapPlatform(policy.ActionAdminAudit, http.HandlerFunc(h.listPlatformAuditLogs))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/audit-logs/{log_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getAuditLog))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/audit-logs/resource/{resource_type}/{resource_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getResourceAuditHistory))},
 		{Method: http.MethodGet, Pattern: governancePrefix + "/audit-logs/user/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUserAuditActivity))},

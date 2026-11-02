@@ -18,7 +18,9 @@ import (
 
 var superadminRequired = detail(http.StatusForbidden, "Superadmin access required")
 
-func isSuperuser(user *policy.User) bool { return user != nil && user.IsSuperuser }
+func holdsBilling(user *policy.User) bool {
+	return user != nil && user.Holds(policy.ActionAdminBilling)
+}
 
 // parseID is _parse_uuid: Python's uuid.UUID(value), 400 "Invalid <name>".
 func parseID(value, name string) (uuid.UUID, *reply) {
@@ -41,7 +43,7 @@ func (h handlers) listPlans(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if includeInactive && !isSuperuser(policy.UserFrom(r.Context())) {
+	if includeInactive && !holdsBilling(policy.UserFrom(r.Context())) {
 		h.write(w, superadminRequired)
 		return
 	}
@@ -98,10 +100,10 @@ func (h handlers) getPlan(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return reply{}, err
 		}
-		if plan == nil || (!plan.IsActive && !isSuperuser(user)) {
+		if plan == nil || (!plan.IsActive && !holdsBilling(user)) {
 			return detail(http.StatusNotFound, "Plan not found"), nil
 		}
-		if includeInactivePrices && !isSuperuser(user) {
+		if includeInactivePrices && !holdsBilling(user) {
 			return superadminRequired, nil
 		}
 		response, err := planResponse(r.Context(), tx, plan, includeInactivePrices)
@@ -134,7 +136,7 @@ func (h handlers) createPlan(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !isSuperuser(policy.UserFrom(r.Context())) {
+	if !holdsBilling(policy.UserFrom(r.Context())) {
 		h.write(w, superadminRequired)
 		return
 	}
@@ -337,7 +339,7 @@ func (h handlers) updatePlan(w http.ResponseWriter, r *http.Request) {
 		h.write(w, validation(errs))
 		return
 	}
-	if !isSuperuser(policy.UserFrom(r.Context())) {
+	if !holdsBilling(policy.UserFrom(r.Context())) {
 		h.write(w, superadminRequired)
 		return
 	}
@@ -425,7 +427,7 @@ func nullableArg[T any](null bool, value T) any {
 
 // deletePlan is delete_billing_plan: a soft delete.
 func (h handlers) deletePlan(w http.ResponseWriter, r *http.Request) {
-	if !isSuperuser(policy.UserFrom(r.Context())) {
+	if !holdsBilling(policy.UserFrom(r.Context())) {
 		h.write(w, superadminRequired)
 		return
 	}

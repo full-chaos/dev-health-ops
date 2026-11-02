@@ -32,7 +32,7 @@ const (
 func (h handlers) requirePlatformRole(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := policy.UserFrom(r.Context())
-		if policy.ImpersonationFrom(r.Context()) != nil || !user.IsSuperuser {
+		if policy.ImpersonationFrom(r.Context()) != nil || !user.Holds(policy.ActionAdminTelemetry) {
 			rejected.Add(r.Context(), 1, metric.WithAttributes(attribute.String("reason", "report_not_platform_role")))
 			h.logger.WarnContext(r.Context(), "telemetry report refused", slog.String("reason", "report_not_platform_role"))
 			policy.WriteDetail(w, http.StatusForbidden, "Instance-wide telemetry statistics require a platform role", nil)

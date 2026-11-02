@@ -284,7 +284,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	// guard, over HTTP, as the api role.
 	auth := authenticator(t, store)
 	scope := NewScope(auth, quiet())
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(Superuser, echo)))))
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Superuser, echo)))))
 	t.Cleanup(server.Close)
 	token := sign(t, claims(func(c jwt.MapClaims) {
 		c["sub"] = admUser.String()

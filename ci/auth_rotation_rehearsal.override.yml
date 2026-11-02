@@ -28,8 +28,8 @@ services:
         condition: service_healthy
   auth-service:
     environment:
-      AUTH_SIGNING_KEY_FILE: !reset null
-      AUTH_SIGNING_KEY_ID: !reset null
+      AUTH_SIGNING_KEY_FILE: ""
+      AUTH_SIGNING_KEY_ID: ""
       AUTH_SIGNING_KEYSET_FILE: /run/auth/keys/keyset.json
       AUTH_ACCESS_TOKEN_CLASS: ${REHEARSAL_ACCESS_CLASS:-eddsa}
       AUTH_TOKEN_ISSUER_URL: ${REHEARSAL_ISSUER_URL:?}

@@ -201,6 +201,7 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/login` | public | none | `unset` |
 | `POST /api/v1/auth/refresh` | protected | `refresh_credential` | `none` |
 | `POST /api/v1/auth/logout` | protected | `refresh_credential` | `none` |
+| `POST /api/v1/auth/validate` | protected | `ops_access_token_hs256`, `user_access_token` (body field `token`) | `none` |
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
 | `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |

@@ -224,6 +224,11 @@ var optionRegistry = []Option{
 			EnvAccessTokenAudience + ". Set but empty is refused at start",
 	},
 	{
+		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
+		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize and /v1/authorize:batch accept; unset refuses every caller. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
 		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
 		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
 			EnvTokenIssuerURL,

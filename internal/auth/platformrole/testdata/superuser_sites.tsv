@@ -33,7 +33,7 @@ internal/apiservice/admin/operator.go	userView	1
 internal/apiservice/admin/store.go	pgStore.userByID	1
 internal/apiservice/admin/users.go	handlers.updateUser	2
 internal/apiservice/admin/users.go	userResponseObject	1
-internal/apiservice/admin/userstore.go	pgStore.insertUser	3
+internal/apiservice/admin/userstore.go	pgStore.insertUser	4
 internal/apiservice/admin/userstore.go	pgStore.updateUser	4
 internal/apiservice/admin/userstore.go	scanFullUser	1
 internal/auth/authapi/compat.go	refreshUserInfo	1

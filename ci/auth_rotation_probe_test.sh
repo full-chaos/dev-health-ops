@@ -68,6 +68,7 @@ expect_rc floor-other-refusal 1 floor_remaining_seconds 'refused: compromised_te
 
 expect_eq refusal-reason "$(refusal_reason 'refused: compromised_terminal')" compromised_terminal
 expect_eq refusal-reason-floor "$(refusal_reason 'refused: floor_not_reached (floor reached in 7s)')" floor_not_reached
+expect_eq refusal-reason-after-compose-lines "$(refusal_reason "$(printf ' Container x Creating \n Container x Created \nrefused: table_not_empty\n')")" table_not_empty
 expect_rc refusal-reason-none 1 refusal_reason 'activate applied:'
 
 expect_eq keys-state "$(keys_list_state "$(printf 'a\tretiring\tsince 2026-11-02T10:00:00Z\nb\tactive\tsince 2026-11-02T10:05:00Z\n')" b)" active

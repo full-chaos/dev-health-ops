@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -18,13 +19,13 @@ func TestCredentialProjectionOrgIndexMigrationIsOneAdditiveIndex(t *testing.T) {
 	var sql string
 	for _, m := range migrations {
 		if m.Name == credentialProjectionOrgIndexMigration {
-			sql = sqlCode(m.SQL)
+			sql = strings.TrimSpace(sqlCode(m.SQL))
 		}
 	}
 	if sql == "" {
 		t.Fatalf("the lineage lacks the migration named %s", credentialProjectionOrgIndexMigration)
 	}
-	if !regexp.MustCompile(`(?s)\ACREATE INDEX credential_projection_org_idx\s+ON credential_projection \(domain_owner, organization_id, external_reference\);\s*\z`).MatchString(sql) {
+	if !regexp.MustCompile(`(?s)\ACREATE INDEX credential_projection_org_idx\s+ON credential_projection \(domain_owner, organization_id, external_reference\);\z`).MatchString(sql) {
 		t.Fatalf("the migration is not exactly the one index: %q", sql)
 	}
 }

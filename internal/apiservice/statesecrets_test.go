@@ -29,7 +29,7 @@ func stateConfig(t *testing.T, jwt, sso, github string) config.Config {
 func TestStatePurposeSecretsUseTheirOwnSuccessorKey(t *testing.T) {
 	t.Parallel()
 	jwt, sso, gh := strings.Repeat("j", 40), strings.Repeat("s", 40), strings.Repeat("g", 40)
-	gotSSO, gotGH := statePurposeSecrets(stateConfig(t, jwt, sso, gh))
+	gotSSO, _, gotGH := statePurposeSecrets(stateConfig(t, jwt, sso, gh))
 	if gotSSO != sso {
 		t.Fatal("the SSO state key is not SSO_STATE_SECRET when it is set")
 	}
@@ -44,12 +44,25 @@ func TestStatePurposeSecretsUseTheirOwnSuccessorKey(t *testing.T) {
 func TestStatePurposeSecretsFallBackToTheJWTKeyWhenUnset(t *testing.T) {
 	t.Parallel()
 	jwt := strings.Repeat("j", 40)
-	gotSSO, gotGH := statePurposeSecrets(stateConfig(t, jwt, "", ""))
+	gotSSO, _, gotGH := statePurposeSecrets(stateConfig(t, jwt, "", ""))
 	if gotSSO != jwt || gotGH.Secret != jwt {
 		t.Fatal("unset successors do not fall back to JWT_SECRET_KEY")
 	}
-	onlySSO, onlyGH := statePurposeSecrets(stateConfig(t, jwt, strings.Repeat("s", 40), ""))
+	onlySSO, _, onlyGH := statePurposeSecrets(stateConfig(t, jwt, strings.Repeat("s", 40), ""))
 	if onlyGH.Secret != jwt || onlySSO == jwt {
 		t.Fatal("one successor set must not change the other purpose")
+	}
+}
+
+func TestStatePurposeSecretsKeepTheJWTKeyAsVerifyFallbackWhenASuccessorIsSet(t *testing.T) {
+	t.Parallel()
+	jwt := strings.Repeat("j", 40)
+	_, ssoFallback, gh := statePurposeSecrets(stateConfig(t, jwt, strings.Repeat("s", 40), strings.Repeat("g", 40)))
+	if ssoFallback != jwt || gh.FallbackSecret != jwt {
+		t.Fatal("with successors set, the JWT key is not the verify fallback")
+	}
+	_, ssoFallback, gh = statePurposeSecrets(stateConfig(t, jwt, "", ""))
+	if ssoFallback != "" || gh.FallbackSecret != "" {
+		t.Fatal("with successors unset there is nothing to fall back from")
 	}
 }

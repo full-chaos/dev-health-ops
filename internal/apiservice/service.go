@@ -242,7 +242,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// in this process already uses. StateSecret is
 			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
 			// HKDF derives one key per protocol from it (state.go).
-			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, Signer: deps.Signer, Inner: proxy.inner,
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -505,7 +505,7 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.SSOStateSecret, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
 	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
 	if err != nil {
 		closeComponents(depComponents)

@@ -80,7 +80,7 @@ type Deps struct {
 	// purpose. Routes does not mount the real OIDC handlers
 	// without it, since an empty secret can mint no state a callback
 	// could ever verify.
-	StateSecret string
+	StateSecret, StateSecretFallback string // fallback: the key before the successor; verify only
 	// Signer mints the SSOLoginResponse token pair on a successful
 	// callback: the same edgetoken.Signer newProtection built from the
 	// api's own JWT_SECRET_KEY.

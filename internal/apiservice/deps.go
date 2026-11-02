@@ -155,7 +155,7 @@ type Deps struct {
 	GitHubApp         githubapp.Config
 	GitHubStateSigner githubapp.Signer
 	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET, else JWT_SECRET_KEY.
-	SSOStateSecret string
+	SSOStateSecret, SSOStateSecretFallback string
 	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
 	// callback's outbound seam: nil/empty in production (github.com and
 	// api.github.com, no redirects); the venue oracle points them at a stub.

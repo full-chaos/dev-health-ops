@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/token"
@@ -349,6 +350,18 @@ func TestLiveRotation(t *testing.T) {
 	}
 	if got := published(t, ctx, signer); got["b"] != "" || got["c"] != token.StateActive {
 		t.Fatalf("after the compromise published = %v; b must be gone at once", got)
+	}
+	// The compromised kid is the fact: one signing_key.compromised event, no event per session it minted.
+	var keyEvents, otherEvents int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'signing_key.compromised'
+		AND aggregate_id = $1 AND payload->'change'->>'kid' = 'b'`, provisioning.SigningKeyID("b")).Scan(&keyEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.auth_outbox_events WHERE event_type <> 'signing_key.compromised'`).Scan(&otherEvents); err != nil {
+		t.Fatal(err)
+	}
+	if keyEvents != 1 || otherEvents != 0 {
+		t.Fatalf("signing_key.compromised events %d, other events %d; want 1 and 0", keyEvents, otherEvents)
 	}
 	for id, want := range map[string]string{
 		mintedUnderB: "compromised", refreshedUnderB: "compromised",

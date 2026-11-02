@@ -207,7 +207,8 @@ func (e *env) seed(t *testing.T, sql string, args ...any) {
 
 // seedOutbox runs one statement against the guarded outbox inside audit.Commit. The guard (migration 0006) counts no
 // outbox write as state, so audit.Commit refuses an outbox-only statement as "changed no state"; a cursor row written
-// and deleted in the same transaction is the counted state that leaves nothing behind.
+// and deleted in the same transaction is the counted state that leaves nothing behind. (Arming the transaction by hand
+// instead would name the commit-guard setting, which the audit writer guard forbids outside authschema.)
 func (e *env) seedOutbox(t *testing.T, sql string, args ...any) {
 	t.Helper()
 	err := audit.Commit(context.Background(), e.admin, e.schema, audit.Mutation{

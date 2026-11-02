@@ -205,20 +205,27 @@ func (e *env) seed(t *testing.T, sql string, args ...any) {
 	}
 }
 
-// seedOutbox runs one statement against the guarded outbox the way the audit package's publisher cells do: the guard
-// (migration 0006) counts no outbox write as state, so audit.Commit refuses an outbox-only statement as "changed no state".
+// seedOutbox runs one statement against the guarded outbox inside audit.Commit. The guard (migration 0006) counts no
+// outbox write as state, so audit.Commit refuses an outbox-only statement as "changed no state"; a cursor row written
+// and deleted in the same transaction is the counted state that leaves nothing behind.
 func (e *env) seedOutbox(t *testing.T, sql string, args ...any) {
 	t.Helper()
-	ctx := context.Background()
-	tx := e.begin(t)
-	if _, err := tx.Exec(ctx, `SELECT set_config('dev_health.audit_txid', pg_current_xact_id()::text, true)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+	err := audit.Commit(context.Background(), e.admin, e.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			if _, err := tx.Exec(ctx, sql, args...); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO auth.projection_cursor (stream) VALUES ('seed_marker')`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `DELETE FROM auth.projection_cursor WHERE stream = 'seed_marker'`)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	})
+	if err != nil {
 		t.Fatalf("seedOutbox %q: %v", sql, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
 	}
 }
 

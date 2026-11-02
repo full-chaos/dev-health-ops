@@ -57,6 +57,12 @@ for var in AUTH_SIGNING_KEY_FILE AUTH_SIGNING_KEY_ID; do
   if grep -qE "^      ${var}: \"\"\$" "${OVR}"; then ok "override-blanks-${var}"; else bad "override-blanks-${var}"; fi
 done
 
+# go-api and query-api read auth.sessions to accept an EdDSA access token (smoke v5: missing_grant SELECT on sessions): the
+# migration jobs grant the session readers, as the chart does with authService.migrations.sessionReaders.
+for job in auth-migrate auth-grants; do
+  if awk -v job="${job}:" '$1 == job {on=1; next} /^  [a-z]/ {on=0} on && /AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api/ {found=1} END {exit !found}' "${OVR}"; then ok "override-grants-session-readers-${job}"; else bad "override-grants-session-readers-${job}"; fi
+done
+
 # The host SMTP sink is unreachable from the bigboy docker bridge (smoke v3: no route to host): the user is verified in the
 # throwaway database instead.
 if grep -q 'auth_webproof_smtp_sink' "${SCRIPT}"; then bad no-host-smtp-sink; else ok no-host-smtp-sink; fi

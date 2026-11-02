@@ -265,7 +265,7 @@ var lineBreakJoin = regexp.MustCompile(`[\r\n]+[ \t]*`)
 // punctuation mark, so a printable secret such as a service password is never one run. A value qualifies only when it
 // is printable ASCII with no whitespace, which keeps prose and decoded binary out.
 func scanWholeValue(name, value string) []string {
-	if len(value) < entropyScanThreshold {
+	if len(value) < entropyScanThreshold || isDerivedPublicValue(value) {
 		return nil
 	}
 	if _, embedded, _ := embeddedDocuments(value); embedded {
@@ -561,10 +561,39 @@ func scanPrefixesAndPatterns(name, content string) []string {
 	return findings
 }
 
+// derivedPublicIDs are the only high-entropy runs the scanner lets through: a signing_key aggregate id is the SHA-256 of
+// a public kid (provisioning-event.v1, CHAOS-11816), so the golden that proves the derivation must carry the real hash.
+// The closed list names the kid each hash is of; nothing else is exempt, and a secret does not hash to one of these.
+var derivedPublicIDs = map[string]string{
+	SigningKeyAggregateID("example.key-2026-09"): "the id of the public example kid example.key-2026-09",
+	SigningKeyAggregateID("other.key"):           "the id of the public example kid other.key",
+}
+
+// isDerivedPublicValue is true for a derived id of derivedPublicIDs and for the idempotency key built on it
+// (signing_key:<id>:<revision>).
+func isDerivedPublicValue(value string) bool {
+	if _, ok := derivedPublicIDs[value]; ok {
+		return true
+	}
+	rest, found := strings.CutPrefix(value, "signing_key:")
+	if !found {
+		return false
+	}
+	id, _, found := strings.Cut(rest, ":")
+	if !found {
+		return false
+	}
+	_, ok := derivedPublicIDs[id]
+	return ok
+}
+
 // scanEntropy applies the high-entropy rule.
 func scanEntropy(name, content string) []string {
 	var findings []string
 	for _, run := range tokenLikeRun.FindAllString(content, -1) {
+		if _, derived := derivedPublicIDs[run]; derived {
+			continue
+		}
 		bits := shannonEntropyBitsPerChar(run)
 		if bits <= maxFixtureEntropyBits || !hasAllCharacterClasses(run) {
 			continue

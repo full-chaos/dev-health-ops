@@ -106,6 +106,11 @@ func (t fakeDecisionTx) Snapshot(_ context.Context, principal uuid.UUID, org str
 	return &fakeSnapshot{now: authorizeNow}, nil
 }
 
+// StateVersion reads nothing the route without a cache asks for.
+func (t fakeDecisionTx) StateVersion(context.Context, uuid.UUID, string) (string, error) {
+	return "", nil
+}
+
 // Unfed reads nothing the route without a cache asks for.
 func (t fakeDecisionTx) Unfed(context.Context, uuid.UUID, string) (UnfedState, error) {
 	return UnfedState{NowUnixNano: authorizeNow}, nil

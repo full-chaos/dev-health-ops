@@ -3,7 +3,9 @@ package authapi
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -68,13 +70,14 @@ func (s depSnapshot) SetTypes() []string                       { return s.sets }
 // the transaction.
 type cacheState struct {
 	*fakeDecisionState
-	unfed      map[snapKey]UnfedState
-	unfedReads int
-	deps       []decisioncache.Dependency
-	sets       []string
-	order      []string
-	inside     func()
-	clock      *int64
+	unfed        map[snapKey]UnfedState
+	unfedReads   int
+	versionReads int
+	deps         []decisioncache.Dependency
+	sets         []string
+	order        []string
+	inside       func()
+	clock        *int64
 	// afterErr fails the transaction after fn returned: the decisions were made but the read did not commit cleanly.
 	afterErr error
 }
@@ -97,6 +100,21 @@ func (c *cacheState) Read(ctx context.Context, fn func(DecisionTx) error) error 
 type cacheTx struct {
 	fakeDecisionTx
 	c *cacheState
+}
+
+// StateVersion is the fake row-version digest: it changes whenever the pair's stored rows change, as the real one does
+// (decisionstate reads the rows' xmin in the same transaction).
+func (t cacheTx) StateVersion(_ context.Context, principal uuid.UUID, org string) (string, error) {
+	t.c.versionReads++
+	snap, ok := t.c.snapshots[snapKey{principal, org}]
+	if !ok {
+		return "absent", nil
+	}
+	m := "none"
+	if snap.membership != nil {
+		m = fmt.Sprintf("%+v", *snap.membership)
+	}
+	return fmt.Sprintf("%v|%v|%s|%+v", snap.principal, snap.orgStatus, m, snap.grants), nil
 }
 
 func (t cacheTx) Unfed(_ context.Context, principal uuid.UUID, org string) (UnfedState, error) {
@@ -421,6 +439,7 @@ func TestEveryDecisionReadIsMarked(t *testing.T) {
 		"DecisionTx.Session":          "gate: read every call before the cache",
 		"DecisionTx.Snapshot":         "dep and tag through DependencySnapshot; Begin before Read",
 		"DecisionTx.Unfed":            "key: decisioncache.Key.Unfed, read every call",
+		"DecisionTx.StateVersion":     "key: decisioncache.Key.State, the row versions (xmin) of the pair, read every call",
 	}
 	var seen []string
 	for name, typ := range map[string]reflect.Type{
@@ -451,5 +470,89 @@ func TestATransactionThatFailsAfterTheDecisionsStoresNothing(t *testing.T) {
 	}
 	if n := c.cache.Len(); n != 0 {
 		t.Fatalf("%d entries after a failed transaction, want 0", n)
+	}
+}
+
+// r1 P1 (round1397): a change committed in Postgres must not be served from the cache before its feed event arrives. No
+// feed event is sent in these cells: the row-version digest alone makes the next call miss. One cell per reviewer case,
+// single and batch.
+func TestACommittedChangeMissesBeforeItsFeedEvent(t *testing.T) {
+	const repoAction = "acr.context.read"
+	for _, tc := range []struct {
+		name   string
+		repo   bool
+		setup  func(c *cacheFixture, s *fakeSnapshot)
+		change func(c *cacheFixture, s *fakeSnapshot)
+	}{
+		{name: "principal", change: func(_ *cacheFixture, s *fakeSnapshot) { s.principal = authorization.StatusSuspended }},
+		{name: "organization", change: func(_ *cacheFixture, s *fakeSnapshot) { s.orgStatus = authorization.StatusSuspended }},
+		{name: "membership", change: func(_ *cacheFixture, s *fakeSnapshot) {
+			m := *s.membership
+			m.Status = authorization.StatusRemoved
+			s.membership = &m
+		}},
+		{name: "new nonmatching grant", repo: true, change: func(c *cacheFixture, s *fakeSnapshot) {
+			s.grants = append(s.grants, authorization.Grant{OrgID: c.org, Role: "viewer", ResourceKind: "repository", ResourceKey: "acme/other"})
+		}},
+		{name: "revoked grant", repo: true,
+			setup: func(c *cacheFixture, s *fakeSnapshot) {
+				s.grants = []authorization.Grant{{OrgID: c.org, Role: "viewer", ResourceKind: "repository", ResourceKey: "acme/api"}}
+			},
+			change: func(_ *cacheFixture, s *fakeSnapshot) {
+				g := s.grants[0]
+				g.Revoked = true
+				s.grants = []authorization.Grant{g}
+			}},
+	} {
+		for _, batch := range []bool{false, true} {
+			name := tc.name + "/single"
+			if batch {
+				name = tc.name + "/batch"
+			}
+			t.Run(name, func(t *testing.T) {
+				c := newCacheFixture(t)
+				snap := c.state.snapshots[snapKey{c.principal, c.org}]
+				if tc.setup != nil {
+					tc.setup(c, snap)
+				}
+				q := c.question(lowAction, "organization", "acme", c.org)
+				if tc.repo {
+					q = c.question(repoAction, "repository", "acme/api", c.org)
+				}
+				ask := func() bool {
+					t.Helper()
+					if !batch {
+						rec := c.one(q)
+						if rec.Code != http.StatusOK {
+							t.Fatalf("status %d body %s", rec.Code, rec.Body)
+						}
+						return decodeWire[wireDecision](t, rec).Allowed
+					}
+					rec := c.batch(q)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status %d body %s", rec.Code, rec.Body)
+					}
+					var doc struct {
+						Decisions []struct {
+							Decision wireDecision `json:"decision"`
+						} `json:"decisions"`
+					}
+					if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil || len(doc.Decisions) != 1 {
+						t.Fatalf("batch body %s: %v", rec.Body, err)
+					}
+					return doc.Decisions[0].Decision.Allowed
+				}
+				if !ask() || !ask() {
+					t.Fatal("the allow was not stored and served")
+				}
+				if c.counter(MetricDecisionCacheLookups, "hit") != 1 {
+					t.Fatalf("hits %d, want 1 before the change", c.counter(MetricDecisionCacheLookups, "hit"))
+				}
+				tc.change(c, snap)
+				if ask() {
+					t.Fatalf("%s: a committed change was served from the cache before its feed event", tc.name)
+				}
+			})
+		}
 	}
 }

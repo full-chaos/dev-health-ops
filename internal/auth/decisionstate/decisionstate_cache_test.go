@@ -4,6 +4,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,16 +77,17 @@ func TestOnlyACollectingReaderGivesDependencies(t *testing.T) {
 // acp condition 2 census, the SQL side: every table this package reads, and every read helper it calls, is marked.
 func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 	marks := map[string]string{
-		"table:sessions":            "gate: Session, every call before the cache",
-		"table:principals":          "dep principal (prn_)",
-		"table:organizations":       "dep organization (org_)",
-		"table:memberships":         "dep membership (mbr_) + tag membership",
-		"table:resource_grants":     "dep resource_grant (grt_) + tag resource_grant",
-		"table:aggregate_revisions": "the dependency revisions, same transaction",
-		"public:users":              "Unfed: is_active, is_superuser when the platform roles are not owned",
-		"public:memberships":        "Unfed: the public role",
-		"call:StateOn":              "public.users (is_active, superuser or the owned rule): dep user, Unfed, tag platform_role_assignment",
-		"call:EffectiveOn":          "public.memberships (Unfed) and auth.memberships (dep + tag)",
+		"table:sessions":                  "gate: Session, every call before the cache",
+		"table:principals":                "dep principal (prn_)",
+		"table:organizations":             "dep organization (org_)",
+		"table:memberships":               "dep membership (mbr_) + tag membership",
+		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
+		"table:aggregate_revisions":       "the dependency revisions, same transaction",
+		"table:platform_role_assignments": "StateVersion: the row versions of the principal's assignments while auth owns the platform roles",
+		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned",
+		"public:memberships":              "Unfed: the public role",
+		"call:StateOn":                    "public.users (is_active, superuser or the owned rule): dep user, Unfed, tag platform_role_assignment",
+		"call:EffectiveOn":                "public.memberships (Unfed) and auth.memberships (dep + tag)",
 	}
 	raw, err := os.ReadFile("decisionstate.go")
 	if err != nil {
@@ -114,5 +116,58 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		if !slices.Contains(found, key) {
 			t.Errorf("census row %s is read nowhere", key)
 		}
+	}
+}
+
+// r1 P1 (round1397), pm option C: the row-version digest reads the xmin of every row a decision of the pair depends on,
+// in the decision transaction: the principal, the organization, the pair's membership row, every grant row of the pair,
+// and the principal's platform role assignments while auth owns them.
+func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
+	const schema = `"auth"`
+	parts := map[string]string{
+		"principal":   `SELECT 'principals', id::text, xmin::text FROM "auth".principals WHERE id = $1`,
+		"org":         `SELECT 'organizations', id::text, xmin::text FROM "auth".organizations WHERE id = $2`,
+		"membership":  `SELECT 'memberships', id::text, xmin::text FROM "auth".memberships WHERE organization_id = $2 AND principal_id = $1`,
+		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
+	}
+	for _, tc := range []struct {
+		org, owned bool
+		want       []string
+	}{
+		{false, false, []string{"principal"}},
+		{false, true, []string{"principal", "assignments"}},
+		{true, false, []string{"principal", "org", "membership", "grants"}},
+		{true, true, []string{"principal", "org", "membership", "grants", "assignments"}},
+	} {
+		q := stateQuery(schema, tc.org, tc.owned)
+		for name, part := range parts {
+			has := strings.Contains(q, part)
+			if want := slices.Contains(tc.want, name); has != want {
+				t.Errorf("org %v owned %v: the %s rows read = %v, want %v\n%s", tc.org, tc.owned, name, has, want, q)
+			}
+		}
+	}
+}
+
+// The digest is the same for the same rows in any order, and differs when a row is added, removed or gets a new xmin.
+func TestTheStateDigestFollowsEveryRow(t *testing.T) {
+	rows := []stateRow{{"principals", "a", "10"}, {"resource_grants", "g1", "11"}, {"resource_grants", "g2", "12"}}
+	base := stateDigest(rows)
+	if got := stateDigest([]stateRow{rows[2], rows[0], rows[1]}); got != base {
+		t.Fatal("the digest depends on the row order")
+	}
+	for name, changed := range map[string][]stateRow{
+		"a row updated (new xmin)": {rows[0], {"resource_grants", "g1", "13"}, rows[2]},
+		"a row added":              append(slices.Clone(rows), stateRow{"resource_grants", "g3", "14"}),
+		"a row removed":            rows[:2],
+		"a row of another table":   {rows[0], {"memberships", "g1", "11"}, rows[2]},
+	} {
+		if stateDigest(changed) == base {
+			t.Errorf("%s: the digest did not change", name)
+		}
+	}
+	if stateDigest(nil) == base || stateDigest(nil) != stateDigest([]stateRow{}) {
+		t.Error("no rows is its own stable digest")
 	}
 }

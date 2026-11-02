@@ -211,7 +211,7 @@ func TestRoleUpdateThatChangesNothingReportsNothing(t *testing.T) {
 	if loser.RoleUpdated {
 		t.Fatalf("the update that changed no row: got role_updated=true, want false")
 	}
-	if got := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.membership.role_changed' AND attributes->>'target_id' = $1`, id.String()); got != 1 {
+	if got := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.membership.role_changed' AND attributes->>'target_id' = $1 AND attributes->>'reason_code' = 'membership_role_changed' AND attributes->>'new_role' IS NOT NULL`, id.String()); got != 1 {
 		t.Fatalf("role-changed audit rows: got %d, want 1", got)
 	}
 }

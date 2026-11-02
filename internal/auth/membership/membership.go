@@ -231,6 +231,8 @@ func auditFor(v verb, orgID, principalID, id uuid.UUID, a Actor, prev, next stat
 		ev.Attributes["reason_code"] = "membership_added"
 	case verbRemove:
 		ev.Attributes["reason_code"] = "membership_removed"
+	case verbChangeRole, verbTransfer:
+		ev.Attributes["reason_code"] = "membership_role_changed"
 	default:
 		ev.Attributes["reason_code"] = "membership_status_changed"
 	}
@@ -242,6 +244,12 @@ func auditFor(v verb, orgID, principalID, id uuid.UUID, a Actor, prev, next stat
 		ev.Attributes["changed_fields"] = []string{"status"}
 	} else if prev.role != next.role {
 		ev.Attributes["changed_fields"] = []string{"role_key"}
+		if prev.role != "" {
+			ev.Attributes["previous_role"] = prev.role
+		}
+		if next.role != "" {
+			ev.Attributes["new_role"] = next.role
+		}
 	}
 	return ev
 }

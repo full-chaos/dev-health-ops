@@ -24,6 +24,8 @@ var allowedAttributeKeys = map[string]struct{}{
 	"changed_fields":      {},
 	"previous_status":     {},
 	"new_status":          {},
+	"previous_role":       {},
+	"new_role":            {},
 	"membership_revision": {},
 	"policy_revision":     {},
 	"credential_class":    {},
@@ -162,7 +164,7 @@ func validateRequestID(v string) error {
 // id keys in attributeIDKeys) a UUID/registry id, or a number.
 var attributeVocabulary = map[string][]string{
 	"reason_code": {
-		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed",
+		"role_granted", "role_revoked", "membership_added", "membership_removed", "membership_status_changed", "membership_role_changed",
 		"grant_created", "grant_updated", "grant_revoked", "credential_issued", "credential_rotated", "credential_revoked",
 		"session_revoked", "organization_created", "organization_updated", "principal_disabled",
 		"principal_enabled", "principal_projected", "principal_provisioned", "email_verified", "password_changed", "password_reset", "password_reset_requested",
@@ -179,7 +181,10 @@ var attributeVocabulary = map[string][]string{
 		"session", "external_identity", "service_account", "workload", "policy_revision", "entitlement_snapshot",
 		"signing_key", "invite",
 	},
-	"resource_kind":   {"organization", "repository", "project", "team"},
+	"resource_kind": {"organization", "repository", "project", "team"},
+	// previous_role and new_role are the organization roles of roles.v1.json on a membership role change.
+	"previous_role":   {"viewer", "member", "admin", "owner"},
+	"new_role":        {"viewer", "member", "admin", "owner"},
 	"previous_status": {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
 	"new_status":      {"active", "disabled", "revoked", "pending", "expired", "suspended", "retiring", "retired", "compromised", "removed"},
 	// rotation_verb and rotation_refusal are the signing-key state machine's

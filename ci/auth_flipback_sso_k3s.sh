@@ -448,7 +448,7 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
   printf '%s\n' "${stdin}" | K run "${name}" --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic --overrides="${overrides}" -- "$@" >/dev/null
 }
 oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin
-oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --owner-email "${ADMIN_EMAIL}"
+oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}"
 pass "S1 admin user and organization created by the admin verbs"
 
 # ---- S2 provider rows through the go-api admin route --------------------------------------------------------------------------------------

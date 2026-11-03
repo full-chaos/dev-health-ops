@@ -20,7 +20,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 func birthContext(t *testing.T) context.Context {
@@ -140,50 +139,6 @@ func TestBirthEqualRowsProjectNothing(t *testing.T) {
 	}
 	if after := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE organization_id = $1`, born.ID); after != before {
 		t.Fatalf("the projection wrote %d audit rows on an equal organization", after-before)
-	}
-}
-
-// TestNewOrgSignsInWithOrgsOwned: with AUTH_ORGS_OWNED the projection creates
-// nothing, so each birth must leave the auth row. The public-only org is the control.
-func TestNewOrgSignsInWithOrgsOwned(t *testing.T) {
-	e, ctx := getEnv(t), birthContext(t)
-	schema, err := authschema.NewValidatedIdentifier("auth")
-	if err != nil {
-		t.Fatal(err)
-	}
-	orgsOwned, err := New(Config{Pool: e.runtime, Schema: schema, UsersOwnedByAuth: true, OrgsOwnedByAuth: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := orgsOwned.ProjectOrganization(ctx, e.seedOrg(t, ctx)); !errors.Is(err, ErrOrganizationNotFound) {
-		t.Fatalf("control, a public-only org: err = %v, want ErrOrganizationNotFound", err)
-	}
-	hash := testBcrypt
-	registered, err := e.owned.ProvisionLocal(ctx, LocalProvisionRequest{Email: registerEmail("signin"), PasswordHash: &hash, Organization: &NewOrganization{Name: "Signs In"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var registeredOrg uuid.UUID
-	if err := e.admin.QueryRow(ctx, `SELECT org_id FROM public.memberships WHERE user_id = $1`, registered).Scan(&registeredOrg); err != nil {
-		t.Fatal(err)
-	}
-	onboarded, err := e.owned.OnboardOrganization(ctx, OnboardOrganizationRequest{Principal: e.orgless(t, ctx), Name: "Signs In Too"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := e.orgless(t, ctx)
-	created, err := e.owned.CreateOrganization(ctx, CreateOrganizationRequest{Actor: e.orgless(t, ctx), Slug: "signs-in-" + owner.String()[:8], Name: "Admin Org",
-		Settings: []byte(`{}`), Tier: "community", ManagedBy: "stripe", Owner: &owner, LockRoles: platformrole.LockWritesShared, Authorize: allowCreate})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, id := range map[string]uuid.UUID{"register": registeredOrg, "onboard": onboarded.ID, "admin create": created.ID} {
-		if err := orgsOwned.ProjectOrganization(ctx, id); err != nil {
-			t.Errorf("%s: sign-in projection: %v", name, err)
-		}
-		if err := orgsOwned.EnsureOrganization(ctx, id); err != nil {
-			t.Errorf("%s: provisioning projection: %v", name, err)
-		}
 	}
 }
 

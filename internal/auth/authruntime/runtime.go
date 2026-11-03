@@ -51,6 +51,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -305,6 +306,8 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 			"guidance", "pass these as flags in the deployed command so the configuration is visible where it is deployed",
 		)
 	}
+
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()

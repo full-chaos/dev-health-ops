@@ -261,10 +261,6 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
 	},
 	{
-		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
-		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
-	},
-	{
 		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
 		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
 	},

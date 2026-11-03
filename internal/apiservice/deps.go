@@ -220,9 +220,6 @@ type Deps struct {
 	OrgSuspender orgreactivate.Suspender
 	// OrgState reads the organization's state in auth-service whose revision the two verbs above send; set with them.
 	OrgState orgreactivate.StateReader
-	// OrgRenamer renames an organization in auth-service: the name of both PATCH routes while AUTH_ORGS_OWNED is on;
-	// set with the three above.
-	OrgRenamer orgreactivate.Renamer
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool

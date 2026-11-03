@@ -12,7 +12,7 @@ import (
 
 // The removed switch has one reader, ObserveOrgsOwned. This census holds every other non-test Go file clear of the
 // key and of the names its readers and grants had.
-var removedNames = regexp.MustCompile(`AUTH_ORGS_OWNED|OrgsOwned|OwnsOrgs|ownsOrgs|OrgsOn\b|OrgsEnv|EnvOrgsOwned|orgsOwned|OrganizationWriteGrant|organizationWriteStatements|organizationWriteMissing|isOrganizationWriteColumn`)
+var removedNames = regexp.MustCompile(`AUTH_ORGS_OWNED|\bOrgsOwned|\bOwnsOrgs|\bownsOrgs|\bOrgsOn\b|\bOrgsEnv|\bEnvOrgsOwned|\borgsOwned|\bOrganizationWriteGrant|\borganizationWriteStatements|\borganizationWriteMissing|\bisOrganizationWriteColumn`)
 
 func TestNoOtherFileReadsTheRemovedOrgsOwnedKey(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)

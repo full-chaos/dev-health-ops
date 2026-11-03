@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -159,6 +160,9 @@ func execute(
 		return 0
 	}
 
+	logger := logging.NewJSON(stderr, slog.LevelInfo)
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
+
 	migrationURI, configured, err := secrets.ResolveDSNSetting(envMigrationURI, lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: could not resolve %s\n", envMigrationURI)
@@ -225,12 +229,6 @@ func execute(
 		return 1
 	}
 
-	orgsOwned, err := authconfig.OrgsOwnedFromLookup(lookup)
-	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: %v\n", err)
-		return 1
-	}
-
 	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -262,7 +260,6 @@ func execute(
 		return 1
 	}
 
-	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
 			Schema:                   schema,
@@ -273,7 +270,6 @@ func execute(
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
 			UsersOwned:               usersOwned,
-			OrgsOwned:                orgsOwned,
 			PlatformRolesOwned:       platformRolesOwned,
 			SchemaOwnerRole:          ownerRole,
 			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
@@ -296,7 +292,6 @@ func execute(
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
 		UsersOwned:               usersOwned,
-		OrgsOwned:                orgsOwned,
 		PlatformRolesOwned:       platformRolesOwned,
 		SchemaOwnerRole:          ownerRole,
 

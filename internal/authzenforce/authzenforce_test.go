@@ -14,7 +14,7 @@ import (
 )
 
 var catalogNamespaces = []string{
-	"acr", "admin", "analytics", "authz", "billing", "git", "integrations",
+	"acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations",
 	"license", "members", "metrics", "org", "settings", "teams", "work_items",
 }
 
@@ -29,7 +29,7 @@ func only(name, value string) func(string) (string, bool) {
 	}
 }
 
-func TestNamespacesAreTheCatalogsFourteen(t *testing.T) {
+func TestNamespacesAreTheCatalogs(t *testing.T) {
 	if got := Namespaces(); !slices.Equal(got, catalogNamespaces) {
 		t.Fatalf("Namespaces() = %v, want %v", got, catalogNamespaces)
 	}
@@ -59,8 +59,8 @@ func TestEveryCellIsOffByDefault(t *testing.T) {
 			}
 		}
 	}
-	if cells != 4*2*14 {
-		t.Fatalf("checked %d cells, want %d", cells, 4*2*14)
+	if cells != 4*2*len(catalogNamespaces) {
+		t.Fatalf("checked %d cells, want %d", cells, 4*2*len(catalogNamespaces))
 	}
 }
 
@@ -198,8 +198,8 @@ func points(rm metricdata.ResourceMetrics, name string) []metricdata.DataPoint[i
 func TestTheEnabledGaugeHasOneSeriesPerCellOfTheService(t *testing.T) {
 	rm := collect(t, Parse(GoAPI, "billing,teams,nope"))
 	pts := points(rm, "dev_health_authz_enforcement_enabled")
-	if len(pts) != 14 {
-		t.Fatalf("%d series, want 14 (one per namespace of go-api)", len(pts))
+	if len(pts) != len(catalogNamespaces) {
+		t.Fatalf("%d series, want %d (one per namespace of go-api)", len(pts), len(catalogNamespaces))
 	}
 	seen := map[string]int64{}
 	for _, p := range pts {

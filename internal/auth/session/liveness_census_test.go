@@ -38,10 +38,6 @@ var (
 // function changes the string and fails; reason says why it is not a liveness decision.
 type allowed struct{ predicates, reason string }
 
-// livenessOnMainOnly are allowlisted statements that live on main and not yet in a branch stacked below it:
-// absent from the tree they are not stale. Remove an entry here once the stack has merged main.
-var livenessOnMainOnly = map[string]bool{"internal/edgetokenmint/eddsa.go#sessionLiveSQL": true}
-
 var livenessAllowlist = map[string]allowed{
 	"internal/api/policy/session.go#sessionStateQuery":          {`revoked_at IS NOT NULL`, "CHAOS-12701: go-api and query-api reader on column grants; moves to sessionrule with its grant ruling"},
 	"internal/auth/session/delegation.go#lockBaseAndPriors":     {`s.revoked_at IS NULL`, "the prior-delegation lock set (own revoked_at); the base decision itself uses the rule"},
@@ -182,7 +178,7 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 		}
 	}
 	for k := range livenessAllowlist {
-		if _, ok := found[k]; !ok && !livenessOnMainOnly[k] {
+		if _, ok := found[k]; !ok {
 			t.Errorf("livenessAllowlist entry %s matches no statement; remove it", k)
 		}
 	}

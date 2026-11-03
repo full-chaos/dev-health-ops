@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushlifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
@@ -187,7 +187,7 @@ func (e *sweepEnv) outbox(t *testing.T, ctx context.Context, id uuid.UUID) []out
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
+	_, file, _, _ := moduleroot.Caller(0)
 	return filepath.Join(filepath.Dir(file), "..", "..", "..")
 }
 

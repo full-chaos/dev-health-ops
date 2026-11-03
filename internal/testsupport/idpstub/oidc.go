@@ -450,7 +450,14 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if override != nil {
-		writeJSON(w, http.StatusOK, override)
+		answer := make(map[string]any, len(override))
+		for k, v := range override {
+			answer[k] = v
+		}
+		if edit := o.currentOverride(); edit != nil {
+			edit(answer)
+		}
+		writeJSON(w, http.StatusOK, answer)
 		return
 	}
 	if !known {

@@ -39,6 +39,20 @@ The provisioning resources and request bodies `organization.v1`,
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
 
+The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
+has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
+`organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
+(an organization's principals, each with its membership), `organization-list.v1`
+(a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
+`*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
+(`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
+`next_cursor`). A principal read holds an id, a kind, a status and a revision and no personal field. A grant read
+carries the repository `resource_key`; an error body never does. A read holds a read scope (`principals:read`,
+`organizations:read`, `memberships:read`, `grants:read`, on `internal_svc_authsess_token`); a write scope never
+satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
+rules a schema cannot say (the answer is the one asked for, ascending ids, a cursor that is the last item's) are
+`ParseReadRequest` and `ParseReadResponse`; their cells run on `golden/read-api`.
+
 `oauth-clients.v1` is the OAuth authorization server's static client registry
 (ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with
 no per-environment overlay, and `oauth-authorization-server.v1` is its RFC 8414

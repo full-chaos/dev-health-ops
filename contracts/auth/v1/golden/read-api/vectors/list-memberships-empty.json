@@ -1,0 +1,17 @@
+{
+  "id": "list-memberships-empty",
+  "kind": "exchange",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001"
+  },
+  "response": {
+    "schema_version": "membership-list.v1",
+    "items": []
+  },
+  "response_schema": "accept",
+  "parse": "accept",
+  "rule": null,
+  "why": "No members."
+}

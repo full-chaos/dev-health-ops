@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "invalid_request"
+    "reason": "invalid_request",
+    "wire_reason_code": "invalid_request"
   },
   "id": "non-canonical-trailing-newline-action",
   "layer": "pdp",

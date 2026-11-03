@@ -136,7 +136,7 @@ type AuthOutcome struct {
 }
 
 // credentialCarryingSurfaces are the surfaces whose documents carry credentials.
-var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, RefreshResponseV2Surface: true, AccessTokenSurface: true, WorkloadTokenSurface: true}
+var credentialCarryingSurfaces = map[string]bool{RefreshRequestSurface: true, RefreshResponseSurface: true, RefreshResponseV2Surface: true, AccessTokenSurface: true, WorkloadTokenSurface: true, ServiceAccountTokenSurface: true}
 
 // decodeWire runs the shared order: duplicate members, schema, then decode.
 // Validation sees the decoded JSON value, not dest, so a field dest does not

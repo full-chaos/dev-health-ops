@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 10,
-    "reason": "repository_not_granted"
+    "reason": "repository_not_granted",
+    "wire_reason_code": "repository_not_granted"
   },
   "id": "repo-any-row-ends-the-default",
   "layer": "pdp",

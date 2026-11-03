@@ -223,6 +223,7 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 var sessionProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/refresh":             AuthSessions,
 	"POST /api/v1/auth/logout":              AuthSessions,
+	"POST /api/v1/auth/validate":            AuthSessions,
 	"POST /api/v1/auth/login":               AuthLocalLogin,
 	"POST /api/v1/auth/register":            AuthCredentials,
 	"GET /api/v1/auth/verify":               AuthCredentials,

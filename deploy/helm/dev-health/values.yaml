@@ -208,6 +208,14 @@ authService:
   #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
+  # -- Enforcement switch, per action namespace and service. goApi lists the namespaces whose routes the policy
+  #    decision point decides instead of go-api's legacy guard, rendered as GO_API_AUTHZ_ENFORCE (one comma list).
+  #    Empty renders nothing: every namespace is off. Dark: turning a namespace on is its own decision, after the shadow
+  #    harness shows no mismatch and the decision point holds a per-caller limit. Needs go-api to reach auth-service
+  #    (phase 2 or higher) and the workload credential inputs go-api's startup names. Rollback: remove the name from
+  #    the list and roll go-api; no policy data changes. goApi.extraEnv cannot set the variable.
+  enforce:
+    goApi: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
   #    known account to the provider's organization and create a new account. Refused unless orgs are owned
   #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.

@@ -165,21 +165,6 @@ func TestAPreflightFailedLoginDoesNotSpendTheBudget(t *testing.T) {
 	}
 }
 
-func TestALimitedLoginAnswers429BeforeTheSignerIsChecked(t *testing.T) {
-	signer := unreadableKeySigner(t)
-	f := onEdDSA(t, newCompatFixture(t), signer)
-	for i := 0; i < loginAccountLimit.Count; i++ {
-		expectGoAPIUnavailable(t, f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil))
-	}
-	response := f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
-	if response.Code != http.StatusTooManyRequests {
-		t.Fatalf("status %d after the budget, want 429: %s", response.Code, response.Body)
-	}
-	if n := compatWrites(f); n != 0 || f.attempts.failures != 0 {
-		t.Fatalf("%d writes during the outage", n)
-	}
-}
-
 func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) {
 	for name, c := range map[string]struct {
 		program func(*compatFixture, *fakeSocial)

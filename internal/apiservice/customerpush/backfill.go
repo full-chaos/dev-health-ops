@@ -40,6 +40,16 @@ type backfillCandidate struct {
 // run left and a token a route already wrote is skipped. A token that fails is
 // counted and the run goes on.
 func BackfillLifecycle(ctx context.Context, pool *pgxpool.Pool, schema string, apply bool, batch int) (BackfillReport, error) {
+	return backfillLifecycle(ctx, pool, schema, apply, batch)
+}
+
+// backfillDB is the part of a pool the backfill uses.
+type backfillDB interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func backfillLifecycle(ctx context.Context, pool backfillDB, schema string, apply bool, batch int) (BackfillReport, error) {
 	ident, err := authschema.NewValidatedIdentifier(schema)
 	if err != nil {
 		return BackfillReport{}, err
@@ -86,7 +96,7 @@ func BackfillLifecycle(ctx context.Context, pool *pgxpool.Pool, schema string, a
 	}
 }
 
-func backfillPage(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, after uuid.UUID, batch int) ([]backfillCandidate, error) {
+func backfillPage(ctx context.Context, pool backfillDB, schema authschema.ValidatedIdentifier, after uuid.UUID, batch int) ([]backfillCandidate, error) {
 	rows, err := pool.Query(ctx, `SELECT t.id, t.source_id IS NULL, t.revoked_at IS NOT NULL
 		FROM external_ingest_tokens t
 		WHERE t.id > $1 AND NOT EXISTS (SELECT 1 FROM `+authschema.Quote(schema)+`.aggregate_revisions a
@@ -109,7 +119,7 @@ func backfillPage(ctx context.Context, pool *pgxpool.Pool, schema authschema.Val
 
 // backfillOne writes one token's events in its own transaction. It reports
 // false when the token is gone or already has an aggregate once its row is locked.
-func backfillOne(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, id uuid.UUID) (bool, error) {
+func backfillOne(ctx context.Context, pool backfillDB, schema authschema.ValidatedIdentifier, id uuid.UUID) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -167,3 +177,5 @@ func storedLifecycleEvents(t tokenRow) ([]audit.PushLifecycleEvent, error) {
 	return []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
 		OrganizationID: organization, Binding: binding, SourceID: source, Change: pushevent.CreatedChange(t.ID, names, expires)}}, nil
 }
+
+func isExistingAggregate(err error) bool { return false }

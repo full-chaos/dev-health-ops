@@ -1087,6 +1087,90 @@ groups:
             stopped reporting is not the same as a fresh table).
 
   # ---------------------------------------------------------------------------
+  # Push credential projection (CHAOS-10897). The reconcile compares the push
+  # projection with the credential domain; drift and run series come from the
+  # worker probe (off until PUSH_RECONCILE_PROBE is on), the parked and final
+  # row gauges from the projection reader. Created in SigNoz by hand as builder
+  # threshold rules (PromQL does not evaluate there) and routed by the
+  # notification policy to accounts-email:
+  # docs/operate/runbooks/auth-push-projection-drift-alerts.md. Only the status
+  # and scopes rule is critical.
+  # ---------------------------------------------------------------------------
+  - name: auth_push_projection
+    interval: 1m
+    rules:
+      - alert: PushCredentialProjectionDrift
+        expr: |
+          max by (class) (devhealth_auth_push_reconcile_drift) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push credential projection differs from the domain"
+          description: |
+            Class {{ $labels.class }}: two confirmed reconcile passes ten
+            minutes apart saw the push projection differ from the credential
+            domain. Next: Step 3 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      - alert: PushCredentialProjectionDriftLive
+        expr: |
+          max by (class) (devhealth_auth_push_reconcile_drift{class=~"status|scopes"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Push projection holds a credential live or wider than the domain"
+          description: |
+            Class {{ $labels.class }}: the projection reads a credential as
+            live that the domain ended, or with wider scopes. Next: Step 3 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      # min over 1 h: the reader horizon is 1 h and its retry backoff tops out at 5 min
+      - alert: PushProjectionParkedGap
+        expr: |
+          min_over_time(devhealth_auth_push_projection_parked_rows[1h]) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection rows stayed parked for an hour"
+          description: |
+            Parked projection rows did not clear for an hour, longer than the
+            retry backoff allows. Next: Step 4 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      - alert: PushProjectionFinalRows
+        expr: |
+          max(devhealth_auth_push_projection_final_rows) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection has final rows that need a person"
+          description: |
+            Final projection rows (malformed, unknown organization or
+            conflict) stay for five minutes and are never retried. Next: Step
+            4 in docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      # A reconcile that stops cannot raise the drift rules; no sample is not zero.
+      - alert: PushReconcileNotRunning
+        expr: |
+          sum(increase(devhealth_auth_push_reconcile_runs_total{outcome="ok"}[3h])) == 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection reconcile has not completed for three hours"
+          description: |
+            No reconcile pass finished ok in three hours, so the drift rules
+            cannot fire. Next: Step 5 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

@@ -207,7 +207,7 @@ func pushEval(g *guard, expr string, set map[string][]pushSeries, t int) map[str
 		p := pushOverE.FindStringSubmatch(body)
 		w := pushWindow(p[4], p[5])
 		var vs []float64
-		for _, s := range set[p[1]] {
+		for _, s := range set[p[2]] {
 			if !pushMatches(p[3], s.labels) {
 				continue
 			}

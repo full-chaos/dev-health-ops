@@ -78,6 +78,12 @@ func TestTheInternalAddressRefusesAnotherSpellingOfAnotherListenersAddress(t *te
 		{"0.0.0.0:8095", "127.0.0.1:8095"},
 		{"127.0.0.1:8095", ":8095"},
 		{"127.0.0.1:8095", "127.0.0.1:08095"},
+		{"[0:0:0:0:0:0:0:1]:8095", "[::1]:08095"},
+		{"127.0.0.1:8095", "[0:0:0:0:0:0:0:0]:08095"},
+		{"127.0.0.1:8095", "[::ffff:127.0.0.1]:8095"},
+		{"127.0.0.1:8095", "localhost:8095"},
+		{"[::1]:8095", "localhost:8095"},
+		{"[fe80::1]:8095", "[fe80::1%eth0]:8095"},
 	}
 	for _, listener := range []string{EnvAPIAddress, EnvOperatorAddress} {
 		for _, p := range spellings {
@@ -105,6 +111,8 @@ func TestTheInternalAddressAcceptsWhatDoesNotShareAListener(t *testing.T) {
 		"port zero beside port zero":    {":0", ":8096", ":0"},
 		"port zero wildcard vs another": {"0.0.0.0:0", ":8096", ":0"},
 		"port zero in zero spelling":    {":8095", ":0", ":00"},
+		"port zero wildcard in v6 form": {":8095", ":0", "[::]:00"},
+		"two specific hosts, one port":  {"10.0.0.1:8095", "10.0.0.1:8096", "10.0.0.2:8095"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

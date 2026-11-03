@@ -70,6 +70,16 @@ func (e *env) resolve(t *testing.T, k IssuedKey) (ResolvedKey, string) {
 func (e *env) suspend(t *testing.T, orgID uuid.UUID) {
 	t.Helper()
 	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = clock_timestamp() WHERE id = $1`, orgID)
+	e.publicOrgActive(t, orgID, false)
+}
+
+// publicOrgActive is go-api's own suspension: public.organizations.is_active,
+// the row that decides a key's organization (D6651).
+func (e *env) publicOrgActive(t *testing.T, orgID uuid.UUID, active bool) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctxT(t), `UPDATE public.organizations SET is_active = $2 WHERE id = $1`, orgID, active); err != nil {
+		t.Fatalf("public.organizations is_active: %v", err)
+	}
 }
 
 func deprovisionAllowed(context.Context, audit.TxOps, uuid.UUID) error { return nil }
@@ -84,6 +94,7 @@ func (e *env) deprovision(t *testing.T, orgID uuid.UUID) {
 func (e *env) reactivate(t *testing.T, orgID uuid.UUID) {
 	t.Helper()
 	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = NULL WHERE id = $1`, orgID)
+	e.publicOrgActive(t, orgID, true)
 }
 
 func TestSAKeyIssueWritesRowAuditOutboxRevision(t *testing.T) {
@@ -848,5 +859,26 @@ func TestSAKeyByIDReadsAKeyAndFiltersTheClass(t *testing.T) {
 VALUES ($1, $2, 'workload_bootstrap_credential', $3, 'sha256', encode($4::bytea, 'hex'), now() + interval '1 hour')`, credential, id, other[:], other[:8])
 	if _, err := e.sa.KeyByID(ctxT(t), credential); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("a credential of another class: %v", err)
+	}
+}
+
+// D6651: ResolveKey decides the organization on public.organizations.is_active.
+// A suspended public row refuses the key whatever the auth copy says, and a
+// suspended auth copy of an active public organization does not.
+func TestSAResolveKeyDecidesTheOrganizationOnThePublicRow(t *testing.T) {
+	e := getEnv(t)
+	orgID, _, id := e.account(t)
+	k := e.issue(t, id)
+	if _, reason := e.resolve(t, k); reason != "" {
+		t.Fatalf("live key refused: %s", reason)
+	}
+	e.publicOrgActive(t, orgID, false)
+	if _, reason := e.resolve(t, k); reason != "org_suspended" {
+		t.Fatalf("public organization suspended, auth copy active: reason %q, want org_suspended", reason)
+	}
+	e.publicOrgActive(t, orgID, true)
+	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = clock_timestamp() WHERE id = $1`, orgID)
+	if _, reason := e.resolve(t, k); reason != "" {
+		t.Fatalf("auth copy suspended, public organization active: reason %q, want the key to resolve", reason)
 	}
 }

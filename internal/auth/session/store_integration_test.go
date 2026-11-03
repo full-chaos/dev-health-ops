@@ -119,7 +119,20 @@ func (e *env) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'session-test')`, id.String()); err != nil {
 		t.Fatalf("seed principal: %v", err)
 	}
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Session Test', 0)`,
+		id, "s-"+id.String()+"@example.test", "s-"+id.String()); err != nil {
+		t.Fatalf("seed public.users: %v", err)
+	}
 	return id
+}
+
+// deactivate is go-api's deactivation: public.users.is_active, the row that
+// decides (D6651). The auth copy is left as it is.
+func (e *env) deactivate(t *testing.T, ctx context.Context, id uuid.UUID) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, id.String()); err != nil {
+		t.Fatalf("deactivate public.users: %v", err)
+	}
 }
 
 func (e *env) create(t *testing.T, ctx context.Context, principal uuid.UUID) Issued {
@@ -586,7 +599,7 @@ func TestRefusalsWriteNothing(t *testing.T) {
 	e.guarded(t, ctx, `UPDATE auth.sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, expiredSession.Session.ID.String())
 	disabledPrincipal := e.principal(t, ctx)
 	disabled := e.create(t, ctx, disabledPrincipal)
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabledPrincipal.String())
+	e.deactivate(t, ctx, disabledPrincipal)
 	revoked := e.create(t, ctx, e.principal(t, ctx))
 	if ok, err := e.store.Revoke(ctx, revoked.Session.ID, Actor{}); !ok || err != nil {
 		t.Fatalf("Revoke: %v %v", ok, err)
@@ -653,7 +666,7 @@ func TestCreateRefusesDisabledPrincipalsAndBadAMR(t *testing.T) {
 	if _, err := e.store.Create(ctx, uuid.New(), nil, []string{"pwd"}); !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Errorf("unknown principal: %v", err)
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal.String())
+	e.deactivate(t, ctx, principal)
 	if _, err := e.store.Create(ctx, principal, nil, []string{"pwd"}); !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Errorf("disabled principal: %v", err)
 	}

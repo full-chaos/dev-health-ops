@@ -345,7 +345,7 @@ func testAClientSessionIsRefusedUnderASessionThatCannotConsent(t *testing.T, ctx
 			return c.web.Session.ID
 		}, ErrWebSessionNotLive},
 		{"a disabled principal", func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID {
-			c.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = clock_timestamp() WHERE id = $1`, c.person.String())
+			c.deactivate(t, ctx, c.person)
 			return c.web.Session.ID
 		}, ErrWebSessionNotLive},
 		{"a linked client session", func(t *testing.T, ctx context.Context, c *clientCase) uuid.UUID {

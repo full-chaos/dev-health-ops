@@ -13,8 +13,7 @@ import (
 
 func (e *env) publicUser(t *testing.T, ctx context.Context, id uuid.UUID) {
 	t.Helper()
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Last Login', 0)`,
-		id, id.String()+"@example.test", id.String()); err != nil {
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET full_name = 'Last Login', token_version = 0 WHERE id = $1`, id); err != nil {
 		t.Fatalf("seed public.users: %v", err)
 	}
 }
@@ -136,7 +135,7 @@ func TestSignInForADisabledPrincipalWritesNothingWhenUsersOwned(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET last_login_at = $2, updated_at = $2 WHERE id = $1`, principal, planted); err != nil {
 		t.Fatalf("plant last_login_at: %v", err)
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal.String())
+	e.deactivate(t, ctx, principal)
 
 	const sessions = `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`
 	const audits = `SELECT count(*) FROM auth.security_audit_events`

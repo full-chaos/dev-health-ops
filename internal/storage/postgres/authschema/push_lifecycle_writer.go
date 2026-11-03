@@ -176,30 +176,25 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	if err := aclguard.Lock(ctx, tx); err != nil {
 		return fmt.Errorf("%w: taking the privilege writer lock", ErrMigrationFailed)
 	}
-	run := func(list []string) error {
-		for _, statement := range list {
-			if _, err := tx.Exec(ctx, statement); err != nil {
-				return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
-			}
+	for _, statement := range preStatements {
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
 		}
-		return nil
-	}
-	if err := run(preStatements); err != nil {
-		return err
 	}
 	undeclared, err := undeclaredExecuteGrantees(ctx, tx, function, options.PushLifecycleCallerRoles)
 	if err != nil {
 		return err
 	}
-	revokes := make([]string, 0, len(undeclared))
-	for _, role := range undeclared {
-		revokes = append(revokes, fmt.Sprintf(`REVOKE ALL ON FUNCTION %s FROM %s`, function, pgx.Identifier{role}.Sanitize()))
+	for _, grant := range undeclared {
+		statement := grant.revoke
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
+		}
 	}
-	if err := run(revokes); err != nil {
-		return err
-	}
-	if err := run(statements); err != nil {
-		return err
+	for _, statement := range statements {
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the push lifecycle writer grants", ErrMigrationFailed)
@@ -211,7 +206,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 
 // executeGranteeQuery lists every named role (PUBLIC excluded) that holds a
 // direct EXECUTE entry in the function's ACL, with the function's owner.
-const executeGranteeQuery = `SELECT r.rolname, a.grantee = p.proowner
+const executeGranteeQuery = `SELECT r.rolname, a.grantee = p.proowner, format('REVOKE ALL ON FUNCTION %s FROM %I', $2::text, r.rolname)
 	FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
 	JOIN pg_roles r ON r.oid = a.grantee
 	WHERE p.oid = $1::regprocedure AND a.privilege_type = 'EXECUTE' ORDER BY r.rolname`
@@ -220,23 +215,26 @@ type queryer interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// undeclaredExecuteGrantees returns the roles that hold a direct EXECUTE grant
-// on the function and are neither a declared caller nor its owner.
-func undeclaredExecuteGrantees(ctx context.Context, q queryer, function string, callers []string) ([]string, error) {
-	rows, err := q.Query(ctx, executeGranteeQuery, function)
+// undeclaredExecuteGrantees returns, for each role that holds a direct EXECUTE
+// grant on the function and is neither a declared caller nor its owner, the
+// REVOKE statement the server formats (%I quotes any role name safely).
+type undeclaredGrant struct{ role, revoke string }
+
+func undeclaredExecuteGrantees(ctx context.Context, q queryer, function string, callers []string) ([]undeclaredGrant, error) {
+	rows, err := q.Query(ctx, executeGranteeQuery, function, function)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading the append function's ACL", ErrMigrationFailed)
 	}
 	defer rows.Close()
-	var out []string
+	var out []undeclaredGrant
 	for rows.Next() {
-		var name string
+		var name, revoke string
 		var owner bool
-		if err := rows.Scan(&name, &owner); err != nil {
+		if err := rows.Scan(&name, &owner, &revoke); err != nil {
 			return nil, fmt.Errorf("%w: reading an ACL entry of the append function", ErrMigrationFailed)
 		}
 		if !owner && !listContains(callers, name) {
-			out = append(out, name)
+			out = append(out, undeclaredGrant{name, revoke})
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -397,7 +395,8 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 	if err != nil {
 		return nil, err
 	}
-	for _, role := range undeclared {
+	for _, grant := range undeclared {
+		role := grant.role
 		add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", role+" holds a direct EXECUTE grant on the append function and is not a caller")
 	}
 	rows, err = conn.Query(ctx, `SELECT r.rolname, has_function_privilege(r.oid, $1::regprocedure, 'EXECUTE')

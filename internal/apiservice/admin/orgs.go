@@ -558,6 +558,10 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 			policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role, nil)
 			return nil
 		}
+		if err == errLastOwnerDemote {
+			policy.WriteDetail(w, http.StatusBadRequest, "Cannot remove the last owner of an organization", nil)
+			return nil
+		}
 		if err != nil {
 			h.logger.ErrorContext(ctx, "admin: update member role failed", "error", err)
 			policy.WriteInternal(w)

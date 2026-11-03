@@ -98,6 +98,14 @@ func neverRevives(t *testing.T) func(view) {
 	}
 }
 
+// refusedNeverParked fails when the widening (revision 3) is decided as refused_widen while a retry row still names the aggregate.
+func (e *env) refusedNeverParked(t *testing.T, id string) {
+	t.Helper()
+	if e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 3 AND outcome = 'refused_widen'`, id) == 1 && e.parkedFor(t, id) != 0 {
+		t.Fatal("a refused widening is decided and still parked: it is final, not a retry")
+	}
+}
+
 func (e *env) parkedFor(t *testing.T, aggregate string) int {
 	return e.count(t, `SELECT count(*) FROM auth.projection_retry WHERE stream = 'external_push' AND aggregate_id = $1`, aggregate)
 }
@@ -146,6 +154,7 @@ func TestDisorderWideningReadBeforeTheNarrowingIsRefusedNotApplied(t *testing.T)
 	e.moveLate(t, id, 2)
 	r := e.reader(t, time.Hour)
 	e.quiet(t, r, id, func(v view) {
+		e.refusedNeverParked(t, id)
 		if v.revision > 0 && !slices.Contains([]string{"{ingest:write,schema:read}", "{ingest:write}"}, v.scopes) {
 			t.Fatalf("unexpected scopes %+v", v)
 		}
@@ -267,6 +276,7 @@ func TestDisorderWideningReadInOrderIsRefusedAtOnceAndNeverParked(t *testing.T) 
 	e.quiet(t, r, id, func(view) {})
 	e.appendCommitted(t, scoped(c, "ingest:write", "schema:read"))
 	e.quiet(t, r, id, func(v view) {
+		e.refusedNeverParked(t, id)
 		if v.revision >= 3 {
 			t.Fatalf("the widening applied: %+v", v)
 		}

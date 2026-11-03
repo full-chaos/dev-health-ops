@@ -19,6 +19,7 @@ EOS
 cat >>"${T}/bin/kubectl" <<'EOS'
   *"auth can-i create clusterroles"*) echo "${FAKE_CAN_I_CLUSTERROLES:-no}" ;;
   *"get configmap rehearsal-owner"*) printf '%s' "${FAKE_OWNER_TOKEN-0123456789abcdef0123}" ;;
+  *"get namespace "*) printf '%s' "${FAKE_NS_LABEL-0123456789abcdef0123}" ;;
   *) exit 98 ;;
 esac
 EOS
@@ -102,9 +103,29 @@ if no_write_calls; then ok non-k3s-refused-before-any-write; else bad non-k3s-re
 refused admin-capable-refused 'can list nodes' FAKE_CAN_I_NODES=yes
 if no_write_calls; then ok admin-capable-refused-before-any-write; else bad admin-capable-refused-before-any-write; fi
 refused cluster-role-capable-refused 'can create clusterroles' FAKE_CAN_I_CLUSTERROLES=yes
-refused foreign-namespace-refused 'does not carry this run' FAKE_OWNER_TOKEN=ffffffffffffffffffff
-refused unowned-namespace-refused 'does not carry this run' FAKE_OWNER_TOKEN=
+# the ownership proof is the namespace's rehearsal-run label; a ConfigMap token (the fake still answers one) proves nothing
+refused foreign-namespace-refused 'does not carry this run' FAKE_NS_LABEL=ffffffffffffffffffff
 if no_write_calls; then ok foreign-namespace-refused-before-any-write; else bad foreign-namespace-refused-before-any-write; fi
+refused unlabelled-namespace-refused 'does not carry this run' FAKE_NS_LABEL=
+if no_write_calls; then ok unlabelled-namespace-refused-before-any-write; else bad unlabelled-namespace-refused-before-any-write; fi
+refused unlabelled-namespace-with-matching-configmap-refused 'does not carry this run' FAKE_NS_LABEL= FAKE_OWNER_TOKEN="${TOKEN}"
+if no_write_calls; then ok unlabelled-namespace-with-matching-configmap-refused-before-any-write; else bad unlabelled-namespace-with-matching-configmap-refused-before-any-write; fi
+if grep -qF 'metadata.labels.rehearsal-run' "${FAKE_LOG}"; then ok guard-reads-the-rehearsal-run-label; else bad guard-reads-the-rehearsal-run-label; fi
+# the label matches: the guard passes and the run reaches its first write, which the fake stops
+: >"${FAKE_LOG}"
+go FAKE_OWNER_TOKEN= REHEARSAL_DIR="${T}/labelled"
+if grep -qF 'step 1: postgres' <<<"${out}" && grep -qE ' create secret ' "${FAKE_LOG}"; then ok labelled-namespace-proceeds-to-the-first-write; else bad "labelled-namespace-proceeds-to-the-first-write (rc ${rc})"; fi
+
+# namespace names: the full Kubernetes label syntax (RFC 1123, 1 to 63 characters) passes the name guard; the fake stops each at the first write
+for ns in a qa "$(printf 'a%.0s' $(seq 1 63))" a-b; do
+  : >"${FAKE_LOG}"
+  go REHEARSAL_NAMESPACE="${ns}" REHEARSAL_DIR="${T}/ns-${#ns}-${ns:0:3}"
+  if grep -qF 'step 1: postgres' <<<"${out}" && ! grep -qF 'plain namespace name' <<<"${out}"; then ok "namespace-accepted-len-${#ns}-${ns:0:3}"; else bad "namespace-accepted-len-${#ns}-${ns:0:3}"; fi
+done
+for ns in "$(printf 'a%.0s' $(seq 1 64))" Upper -lead trail- 'a.b' a_b; do
+  refused "namespace-refused-len-${#ns}-${ns:0:3}" 'plain namespace name' REHEARSAL_NAMESPACE="${ns}"
+  if no_write_calls; then ok "namespace-refused-len-${#ns}-${ns:0:3}-before-any-write"; else bad "namespace-refused-len-${#ns}-${ns:0:3}-before-any-write"; fi
+done
 mkdir -p "${T}/full"
 echo x >"${T}/full/f"
 refused non-empty-dir-refused 'not empty' REHEARSAL_DIR="${T}/full"

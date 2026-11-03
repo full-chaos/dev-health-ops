@@ -66,11 +66,13 @@ var openers = map[string]struct {
 	"internal/pgmigrate/indexbuild.go":                          {kindBoundary, "migrate postgres build-index: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/pgmigrate/indexbuild_watch.go":                    {kindDiscarded, "migrate postgres build-index: the blocker watch copies the build connection's already-resolved config; a connect failure is logged as its SQLSTATE only, never its text, and never fails the build"},
 	"internal/pgmigrate/preflight.go":                           {kindBoundary, "migrate postgres preflight: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
+	"internal/pushlifecyclecli/command.go":                      {kindBoundary, "push-lifecycle backfill-created: the pool, with the pool-open error redacted"},
 	"internal/synccli/jira_stored_credential.go":                {kindBoundary, "sync teams --provider jira: resolves the org's stored jira credential from Postgres, the pool and the error redactor"},
 	"tools/record-provider-answers/main.go":                     {kindBoundary, "the one-off recorder of provider answers (CHAOS-9124): resolves an integration credential from Postgres, the pool and the error redactor"},
 	"internal/goapicli/restprove/main.go":                       {kindGeneric, "a failed connect is the fixed message"},
 	"internal/migrationmatrix/restproven.go":                    {kindGeneric, "a failed connect is the fixed message"},
 	"internal/storage/postgres/factory.go":                      {kindHelper, "Open and New: WithRedactedCauseAlso with the resolved credentials"},
+	"internal/storage/postgres/first_connect.go":                {kindHelper, "OpenWaiting: WithRedactedCauseAlso with the resolved credentials; ConnectWaiting returns pgx's error unchanged and each caller is scanned as an opener"},
 	"internal/synccli/dblookup.go":                              {kindDiscarded, "a connect or query error is swallowed into 'not found'"},
 	"internal/providersync/repository_postgres.go":              {kindDiscarded, "the lease renewal pool copies the running work pool's already-resolved config and dials lazily: the constructor's only failure is config validation, which carries no login, and a failed renewal is dropped into ErrLeaseLost, never printed (CHAOS-6889)"},
 	"internal/rivermigrate/roles.go":                            {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
@@ -153,7 +155,8 @@ func TestEveryPostgresOpenerIsClassified(t *testing.T) {
 			return nil
 		}
 		calls := fileCalls(t, path)
-		for _, opener := range []string{"pgx.Connect", "pgx.ConnectConfig", "pgxpool.New", "pgxpool.NewWithConfig"} {
+		// ConnectWaiting returns pgx's own error unchanged, so a caller is an opener like a pgx.Connect caller.
+		for _, opener := range []string{"pgx.Connect", "pgx.ConnectConfig", "pgxpool.New", "pgxpool.NewWithConfig", "pgstorage.ConnectWaiting", "postgres.ConnectWaiting", "postgresstore.ConnectWaiting"} {
 			if calls[opener] > 0 {
 				relative, _ := filepath.Rel(root, path)
 				opened[filepath.ToSlash(relative)] = true

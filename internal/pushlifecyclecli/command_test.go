@@ -1,0 +1,76 @@
+package pushlifecyclecli
+
+import (
+	"bytes"
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
+)
+
+type call struct {
+	apply  bool
+	schema string
+}
+
+func runVerb(t *testing.T, args []string, lookup map[string]string) (code int, out, errOut string, calls []call) {
+	t.Helper()
+	oldConnect, oldBackfill := connectFn, backfillFn
+	t.Cleanup(func() { connectFn, backfillFn = oldConnect, oldBackfill })
+	connectFn = func(context.Context, string) (*pgxpool.Pool, error) { return nil, nil }
+	backfillFn = func(_ context.Context, _ *pgxpool.Pool, schema string, apply bool, _ int) (customerpush.BackfillReport, error) {
+		calls = append(calls, call{apply, schema})
+		return customerpush.BackfillReport{Candidates: 3, SourceBound: 2, OrganizationWide: 1, Revoked: 1, Written: map[bool]int{true: 3}[apply]}, nil
+	}
+	var so, se bytes.Buffer
+	env := cli.Env{Args: args, Stdout: &so, Stderr: &se, Lookup: func(k string) (string, bool) { v, ok := lookup[k]; return v, ok }}
+	code = run(context.Background(), env)
+	return code, so.String(), se.String(), calls
+}
+
+func TestBackfillCreatedIsADryRunUnlessApplyIsGiven(t *testing.T) {
+	lookup := map[string]string{"POSTGRES_URI": "postgres://x"}
+	code, out, _, calls := runVerb(t, nil, lookup)
+	if code != cli.ExitOK || len(calls) != 1 || calls[0].apply || calls[0].schema != "auth" {
+		t.Fatalf("code %d calls %+v", code, calls)
+	}
+	if !strings.Contains(out, "candidates=3") || !strings.Contains(out, "written=0") || !strings.Contains(out, "dry-run") {
+		t.Fatalf("output %q", out)
+	}
+	code, out, _, calls = runVerb(t, []string{"-apply"}, lookup)
+	if code != cli.ExitOK || len(calls) != 1 || !calls[0].apply || !strings.Contains(out, "written=3") {
+		t.Fatalf("apply: code %d calls %+v out %q", code, calls, out)
+	}
+}
+
+func TestBackfillCreatedRefusesBadArgumentsBeforeConnecting(t *testing.T) {
+	lookup := map[string]string{"POSTGRES_URI": "postgres://x"}
+	for _, args := range [][]string{{"extra"}, {"-batch", "0"}, {"-batch", "100000"}} {
+		if code, _, _, calls := runVerb(t, args, lookup); code != cli.ExitUsage || len(calls) != 0 {
+			t.Errorf("args %v: code %d calls %d", args, code, len(calls))
+		}
+	}
+	if code, _, _, calls := runVerb(t, nil, nil); code != cli.ExitFailure || len(calls) != 0 {
+		t.Errorf("no DSN: code %d calls %d", code, len(calls))
+	}
+}
+
+func TestBackfillCreatedExitsNonZeroWhenATokenFailed(t *testing.T) {
+	oldBackfill := backfillFn
+	t.Cleanup(func() { backfillFn = oldBackfill })
+	oldConnect := connectFn
+	t.Cleanup(func() { connectFn = oldConnect })
+	connectFn = func(context.Context, string) (*pgxpool.Pool, error) { return nil, nil }
+	backfillFn = func(context.Context, *pgxpool.Pool, string, bool, int) (customerpush.BackfillReport, error) {
+		return customerpush.BackfillReport{Candidates: 2, Written: 1, Failed: 1}, nil
+	}
+	var so, se bytes.Buffer
+	env := cli.Env{Args: []string{"-apply"}, Stdout: &so, Stderr: &se, Lookup: func(k string) (string, bool) { return "postgres://x", k == "POSTGRES_URI" }}
+	if code := run(context.Background(), env); code != cli.ExitFailure {
+		t.Fatalf("code %d, want %d", code, cli.ExitFailure)
+	}
+}

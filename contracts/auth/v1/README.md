@@ -33,6 +33,8 @@ action a `risk_class` and a `cache_class` (a high-risk action is never cached), 
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
 `vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
+
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
 `invite.v1`, `invite-create-request.v1` and `invite-accept-request.v1`

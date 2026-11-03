@@ -100,12 +100,12 @@ type CompatDeps struct {
 	// IssueWorkload lets that route accept the go-api workload token, and
 	// mounts it alone when ServiceCredentials is nil; nil refuses the token.
 	IssueWorkload *SessionIssueWorkload
-	// Limits holds the login limits' windows and the digest key. Required
-	// while Login is set.
+	// Limits holds the limits' windows and the digest key; required while Login is set.
 	Limits *Limits
-	// Validate mounts POST /api/v1/auth/validate when the embedded
-	// endpoint-profile document holds its row; nil leaves it unmounted.
-	Validate *ValidateConfig
+	// Validate and SwitchOrg mount POST /api/v1/auth/validate and switch-org on
+	// their embedded endpoint-profile rows; nil leaves the route unmounted.
+	Validate  *ValidateConfig
+	SwitchOrg *SwitchOrgConfig
 }
 
 type compatHandlers struct {
@@ -172,7 +172,10 @@ func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 		routes = h.withSessionStateRoute(routes)
 		routes = h.withDelegatedRoutes(routes)
 	}
-	return h.withValidateRoute(routes, rows)
+	if routes, err = h.withValidateRoute(routes, rows); err != nil {
+		return nil, err
+	}
+	return h.withSwitchOrgRoute(routes, rows)
 }
 
 // auth-outcome.v1 operations of the compatibility routes.

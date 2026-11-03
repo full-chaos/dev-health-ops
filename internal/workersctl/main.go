@@ -73,6 +73,9 @@ func Command() cli.Command {
 }
 
 type operatorRuntime struct {
+	// ctx is the 30 s verb ctx; cancel ends it at close.
+	ctx                   context.Context
+	cancel                context.CancelFunc
 	service               *joboperator.Service
 	principal             joboperator.Principal
 	pools                 *postgresstore.RuntimePools
@@ -282,6 +285,9 @@ func (runtime *operatorRuntime) close() {
 	if runtime.pools != nil {
 		runtime.pools.Close()
 	}
+	if runtime.cancel != nil {
+		runtime.cancel()
+	}
 }
 
 func execute(parent context.Context, args []string, lookup platformsecrets.LookupEnv, stdout, stderr io.Writer) int {
@@ -308,9 +314,7 @@ func executeWithStdin(parent context.Context, args []string, lookup platformsecr
 	if code != 0 {
 		return code
 	}
-	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
-	defer cancel()
-	runtime, code := configureRuntime(ctx, lookup, stderr)
+	runtime, code := configureRuntime(parent, lookup, stderr)
 	if runtime == nil {
 		return code
 	}
@@ -320,7 +324,7 @@ func executeWithStdin(parent context.Context, args []string, lookup platformsecr
 		// The verb sets its own deadline; the 30 s verb ctx only covers setup.
 		return dispatch(parent, runtime, args, stdout, stderr)
 	}
-	return dispatch(ctx, runtime, args, stdout, stderr)
+	return dispatch(runtime.ctx, runtime, args, stdout, stderr)
 }
 
 // ownsItsBudget reports whether a verb bounds its own run time (flag
@@ -329,7 +333,10 @@ func ownsItsBudget(args []string) bool {
 	return len(args) >= 2 && args[0] == "metrics" && args[1] == "generation-repair"
 }
 
-func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, stderr io.Writer) (*operatorRuntime, int) {
+// configureRuntime waits for the first database connect under parent (its own
+// bound, firstConnect), then runs setup and the verb under one 30 s ctx that
+// starts after that connect.
+func configureRuntime(parent context.Context, lookup platformsecrets.LookupEnv, stderr io.Writer) (*operatorRuntime, int) {
 	domainURI, err := resolveDSNRequired("POSTGRES_URI", platformconfig.DomainDatabaseSpec, lookup)
 	if err != nil {
 		return nil, writeConfigError(stderr, err)
@@ -391,7 +398,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	// deploy/go-workers/deployment.json, the same way DomainMaxConns and
 	// QueueMaxConns above match their fields there.
 	runtimeConfig.CoordinatorMaxConns = 2
-	pools, err := postgresstore.OpenRuntimePools(ctx, runtimeConfig)
+	pools, err := postgresstore.OpenRuntimePoolsWaiting(parent, runtimeConfig, firstConnect.WithReport(jsonWaitReport(stderr)))
 	if err != nil {
 		return nil, writeError(stderr, "database_unavailable")
 	}
@@ -399,6 +406,12 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	defer func() {
 		if failed {
 			pools.Close()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(parent, operatorVerbTimeout)
+	defer func() {
+		if failed {
+			cancel()
 		}
 	}()
 	// All three postures are checked. Cross-role attribution is a distributed
@@ -549,6 +562,7 @@ func configureRuntime(ctx context.Context, lookup platformsecrets.LookupEnv, std
 	failed = false
 	lockHeld = false
 	runtime := &operatorRuntime{
+		ctx: ctx, cancel: cancel,
 		service: service, principal: joboperator.OperatorPrincipal, pools: pools, lockTx: lockTx,
 		streamDeploymentState: string(manifest.DeploymentState), streams: streams, queueControlMode: mode,
 		registry: registry, lookup: lookup,
@@ -613,6 +627,35 @@ func newJobRouteController(
 	return jobroute.NewControllerWithCeleryQuiescer(
 		coordinatorPool, registry, riverQuiescer, celeryQuiescer,
 	)
+}
+
+// operatorVerbTimeout bounds setup and the verb after the first connect.
+const operatorVerbTimeout = 30 * time.Second
+
+// firstConnect bounds the wait for the first database connect (a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed).
+var firstConnect = postgresstore.DefaultFirstConnect()
+
+// jsonWaitReport writes one JSON line per retried first connect, without the
+// DSN, the host or the error text.
+func jsonWaitReport(stderr io.Writer) func(postgresstore.FirstConnectRetry) {
+	return func(r postgresstore.FirstConnectRetry) {
+		var record struct {
+			Wait struct {
+				Store     string `json:"store"`
+				Attempt   int    `json:"attempt"`
+				ElapsedMS int64  `json:"elapsed_ms"`
+				Category  string `json:"category"`
+				NextMS    int64  `json:"next_ms"`
+			} `json:"database_wait"`
+		}
+		record.Wait.Store = "postgres"
+		record.Wait.Attempt = r.Attempt
+		record.Wait.ElapsedMS = r.Elapsed.Milliseconds()
+		record.Wait.Category = r.Category
+		record.Wait.NextMS = r.Wait.Milliseconds()
+		_ = json.NewEncoder(stderr).Encode(record)
+	}
 }
 
 func rollbackOperatorLock(lockTx pgx.Tx) {

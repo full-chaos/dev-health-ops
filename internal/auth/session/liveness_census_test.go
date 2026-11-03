@@ -38,6 +38,10 @@ var (
 // function changes the string and fails; reason says why it is not a liveness decision.
 type allowed struct{ predicates, reason string }
 
+// livenessOnMainOnly are allowlisted statements that live on main and not yet in a branch stacked below it:
+// absent from the tree they are not stale. Remove an entry here once the stack has merged main.
+var livenessOnMainOnly = map[string]bool{"internal/edgetokenmint/eddsa.go#sessionLiveSQL": true}
+
 var livenessAllowlist = map[string]allowed{
 	"internal/api/policy/session.go#sessionStateQuery":          {`revoked_at IS NOT NULL`, "CHAOS-12701: go-api and query-api reader on column grants; moves to sessionrule with its grant ruling"},
 	"internal/auth/session/delegation.go#lockBaseAndPriors":     {`s.revoked_at IS NULL`, "the prior-delegation lock set (own revoked_at); the base decision itself uses the rule"},
@@ -46,6 +50,7 @@ var livenessAllowlist = map[string]allowed{
 	"internal/auth/session/end_all.go#EndAllInTx":               {`revoked_at IS NULL`, "revokes by own revoked_at; the go-api refresh_tokens predicate shares the function"},
 	"internal/auth/session/end_org.go#EndOrgInTx":               {`revoked_at IS NULL | revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
 	"internal/auth/session/end_org.go#EndOrganizationInTx":      {`revoked_at IS NULL | revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
+	"internal/edgetokenmint/eddsa.go#sessionLiveSQL":            {`expires_at <= | revoked_at IS NOT NULL`, "CI-only mint pre-check that mirrors go-api policy.PGStore.SessionState plus expiry (CHAOS-12701 site); moves to sessionrule with it"},
 	"internal/auth/session/store.go#liveClientSessions":         {`revoked_at IS NULL`, "selects the live client sessions under a revoked web session to name them in session.revoked events (own revoked_at); the server read of each is the rule"},
 	"internal/auth/session/store.go#endSessions":                {`revoked_at IS NULL | revoked_at IS NULL`, "UPDATE writer: revokes the rows it was given"},
 	"internal/auth/session/unpinned.go#CountUnpinned":           {`revoked_at IS NULL`, "operator count of unpinned rows by own revoked_at, not a liveness decision"},
@@ -177,7 +182,7 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 		}
 	}
 	for k := range livenessAllowlist {
-		if _, ok := found[k]; !ok {
+		if _, ok := found[k]; !ok && !livenessOnMainOnly[k] {
 			t.Errorf("livenessAllowlist entry %s matches no statement; remove it", k)
 		}
 	}

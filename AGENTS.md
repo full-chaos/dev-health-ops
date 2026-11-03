@@ -191,6 +191,7 @@ Operational health is a SEPARATE claim; its Python comparator was retired
 
 ## PR and CI conventions
 
+- PR title: `<type>(<area>): CHAOS-<n> <description>`, type in feat|bug|enhancement|chore|fix|docs, exactly one id. The `pr-title` check (`.github/workflows/pr-title.yml`, pattern in `ci/pr_title_check.sh`) enforces it, in the merge queue too (it reads the queued PR by REST); `dependabot[bot]` is exempt by author. A PR body Part-of line names the parent, never the id in the title.
 - The `governance` check requires `TEST-EVIDENCE` and `RISK-NOTES` markers in the PR body when a change touches `src/dev_health_ops/workers/provider_unit_route.py`. This is a PR-body requirement, not a code requirement. Missing markers cost two lanes a CI round.
 
 ## Pre-push validation gate (REQUIRED for every ops change)

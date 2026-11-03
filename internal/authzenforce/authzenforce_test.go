@@ -141,6 +141,9 @@ func TestAnUnknownServiceIsOff(t *testing.T) {
 	if sw.On("billing") {
 		t.Fatal("an unknown service has a cell")
 	}
+	if Parse(Service("auth-service"), "billing").On("billing") || Parse("", "billing").On("billing") {
+		t.Fatal("Parse gave an unknown service a cell")
+	}
 }
 
 func TestABadValueLogsErrorAndNeverQuotesIt(t *testing.T) {

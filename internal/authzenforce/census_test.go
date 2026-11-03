@@ -1,8 +1,10 @@
 package authzenforce
 
 import (
+	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,41 +12,33 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// censusOffenders lists the production .go files outside this package that name an enforcement variable.
+// censusOffenders lists the tracked production .go files outside this package that name an enforcement variable.
+// It reads the tracked tree only: an untracked file (a build temp dir, a cover profile source) is not production code.
 func censusOffenders(t *testing.T, root string) []string {
 	t.Helper()
+	listing := exec.Command("git", "-C", root, "ls-files", "-z", "--", "*.go")
+	out, err := listing.Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
 	var offenders []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" || strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, "internal/authzenforce/") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "worktrees", "third_party":
-				return fs.SkipDir
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
 			}
-			if path == filepath.Join(root, "internal", "authzenforce") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
+			t.Fatal(err)
 		}
 		for _, name := range []string{"GO_API_AUTHZ_ENFORCE", "QUERY_API_AUTHZ_ENFORCE"} {
 			if strings.Contains(string(data), name) {
-				offenders = append(offenders, path)
+				offenders = append(offenders, rel)
 				break
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	return offenders
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,6 +193,46 @@ func TestSnapshotReadsAnActiveMemberFromBothSchemas(t *testing.T) {
 	}
 	if _, ok := snap.Membership(uuid.NewString()); ok {
 		t.Fatal("a membership of another organization was reported")
+	}
+}
+
+// TestSnapshotMembershipOrgIsTheAskedOrg pins the construction the router corpus
+// replay relies on (authruntime azMembershipOrgIsTheKey): the membership is read
+// keyed by the asked organization, so its OrgID is that organization on every
+// state. If this changes, the corpus exclusion is wrong and this cell goes red.
+func TestSnapshotMembershipOrgIsTheAskedOrg(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	user, orgA, orgB, orgC := e.user(t, ctx, true, false), e.org(t, ctx), e.org(t, ctx), e.org(t, ctx)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, orgA)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'viewer', now())`, uuid.New(), user, orgB)
+	// orgC: an auth row with no public row, the removed state.
+	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, orgC, user)
+	asked := []string{orgA.String(), orgB.String(), orgC.String(), uuid.NewString(), strings.ToUpper(orgA.String()), ""}
+	roles := map[string]string{orgA.String(): "admin", orgB.String(): "viewer"}
+	orgs := map[string]bool{orgA.String(): true, orgB.String(): true, orgC.String(): true}
+	for _, ask := range asked {
+		snap := e.snapshot(t, ctx, user, ask)
+		m, ok := snap.Membership(ask)
+		switch {
+		case orgs[ask]:
+			if !ok || m.OrgID != ask {
+				t.Fatalf("asked %s: membership %+v %v, want its OrgID to be the asked organization", ask, m, ok)
+			}
+			if role, held := roles[ask]; held && (m.Role != role || m.Status != authorization.StatusActive) {
+				t.Fatalf("asked %s: membership %+v, want active %s", ask, m, role)
+			}
+		case ok:
+			t.Fatalf("asked %q: a membership %+v for an organization the principal is not in", ask, m)
+		}
+		for other := range orgs {
+			if other == ask {
+				continue
+			}
+			if got, ok := snap.Membership(other); ok {
+				t.Fatalf("asked %q: the snapshot also reports a membership %+v for %s", ask, got, other)
+			}
+		}
 	}
 }
 

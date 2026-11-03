@@ -45,8 +45,10 @@ internal/atlassianteams	vendored_patch_chain_test.go
 internal/audit	drill_attempt_integration_test.go
 internal/audit	drill_password_integration_test.go
 internal/audit	drill_pitr_integration_test.go
+internal/auth/acrlisting	client.go
 internal/auth/acrmint	acrmint_test.go
 internal/auth/acrmint	census_test.go
+internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
 internal/auth/authapi	authorize_request_test.go
@@ -56,10 +58,12 @@ internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
+internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/contracts	access_token_goldens_test.go
+internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
@@ -86,6 +90,8 @@ internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
+internal/auth/contracts	read_api_grant_test.go
+internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
@@ -116,12 +122,15 @@ internal/auth/platformrole	superuser_literals_census_test.go
 internal/auth/platformrole	superuser_sites_census_test.go
 internal/auth/platformrole	superuser_writes_census_test.go
 internal/auth/pushlifecycle	acr_mapping_test.go
+internal/auth/pushprojection	import_guard_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
+internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
 internal/auth/workloadexchange	tokenreview.go
 internal/auth/writerinventory	membership_census_test.go
+internal/auth/writerinventory	organization_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
@@ -169,6 +178,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
+internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
@@ -228,6 +238,7 @@ internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/frozengoldens	reads.go
 internal/cigates/frozengoldens	reads_guard_test.go
+internal/cigates/gitleaksignore	gitleaksignore_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_run_tee_bound_test.go
@@ -240,6 +251,7 @@ internal/cigates/nopython	tests_python_test.go
 internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	queuerows_flow_test.go
 internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
@@ -415,6 +427,7 @@ internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/llmorgsettings	relation_test.go
+internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go

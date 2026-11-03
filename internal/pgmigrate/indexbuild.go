@@ -549,12 +549,15 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 		return cli.ExitFailure
 	}
 	boundary := pgstorage.Boundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	conn, err := pgstorage.ConnectWaiting(ctx, dsn.Reveal(), firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate postgres build-index", "PostgreSQL")))
 	if err != nil {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
 	defer conn.Close(context.Background())
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	if code, ok := verifyOwnerPin(ctx, conn, env, logger); !ok {
+		return code
+	}
 	result, err := buildUnitsIndex(ctx, conn, index, options, logger)
 	if errors.Is(err, ErrBuildLockHeld) {
 		return writeError(env.Stderr, "build_index_lock_held", err.Error())

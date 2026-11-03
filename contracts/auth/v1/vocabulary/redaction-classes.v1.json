@@ -1,0 +1,22 @@
+{
+  "schema_version": "redaction-classes.v1",
+  "description": "The closed registry of redaction classes of authorization_decision.v1 obligations.redaction, and the rules that say which role gets which class on which action. classes equals the decision schema enum and the class list compiled into the dev-health-go policy-enforcement client: a class is added in this order, schema enum, this file, client release; an old client denies on a class it does not know. A class no rule uses is reserved. rules ship empty: no policy is set until a ruling names (role, action) rows. Which response field is which class is the consumer's table, not this file.",
+  "classes": [
+    {
+      "id": "contact_details",
+      "description": "Fields that reach a person: an email address, a phone number, a chat handle.",
+      "reserved": true
+    },
+    {
+      "id": "free_text",
+      "description": "Fields that hold text a person typed: titles and bodies of pull requests and issues, commit messages, comments.",
+      "reserved": true
+    },
+    {
+      "id": "personal_identifiers",
+      "description": "Fields that name or identify a person: a display name, a login, an author id, an external user id.",
+      "reserved": true
+    }
+  ],
+  "rules": []
+}

@@ -1,0 +1,14 @@
+{
+  "id": "request-cursor-wrong-kind",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "cursor": "k1_b3JnX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+  },
+  "request_schema": "accept",
+  "parse": "reject",
+  "rule": "cursor_wrong_kind",
+  "why": "A cursor of an organization id sent to the membership list."
+}

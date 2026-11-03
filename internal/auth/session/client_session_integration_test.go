@@ -113,6 +113,7 @@ func TestClientSessions(t *testing.T) {
 		run  func(*testing.T, context.Context, *delegationEnv)
 	}{
 		{"WhatEndsWhatOverABrowserAndAnMCPClientSession", testWhatEndsWhatOverABrowserAndAnMCPClientSession},
+		{"RevokingAWebSessionTellsTheStreamOfItsLinkedClientSessions", testRevokingAWebSessionTellsTheStreamOfItsLinkedClientSessions},
 		{"AStampBetweenTheTwoCreationsEndsTheChild", testAStampBetweenTheTwoCreationsEndsTheChild},
 		{"ABrowserClientDoesNotMoveItsWebSession", testABrowserClientDoesNotMoveItsWebSession},
 		{"ALinkedSessionNeverOutlivesItsParentInAnyRead", testALinkedSessionNeverOutlivesItsParentInAnyRead},

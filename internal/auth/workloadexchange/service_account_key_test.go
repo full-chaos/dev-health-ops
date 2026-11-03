@@ -27,7 +27,7 @@ import (
 
 // saKeyMarker is planted in every key value a test presents, so a test can
 // prove the value reaches no answer, log line, metric or audit row.
-const saKeyMarker = "PLANTEDSAKEYq4Z"
+const saKeyMarker = "PLANTEDSAKEYq4Z" // gitleaks:allow planted test marker, not a credential
 
 // saKeyValue is a value of the key's shape, built at run time: the prefix, the
 // marker and padding to 43 characters.

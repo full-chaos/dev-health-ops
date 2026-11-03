@@ -1,0 +1,15 @@
+{
+  "id": "get-principal-revision-decimal",
+  "kind": "exchange",
+  "operation": "principals_get",
+  "request": {
+    "schema_version": "principal-get-request.v1",
+    "principal_id": "prn_EXAMPLE0000000000000001"
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "decode",
+  "why": "A decimal-form revision token is refused on the raw token.",
+  "response_raw": "{\"schema_version\": \"principal-read.v1\", \"principal_id\": \"prn_EXAMPLE0000000000000001\", \"kind\": \"user\", \"status\": \"active\", \"revision\": 3.0}",
+  "response": null
+}

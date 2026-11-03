@@ -70,6 +70,7 @@ internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/auth/workload
@@ -147,6 +148,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -178,6 +180,7 @@ internal/testsupport/valkeyreply
 internal/testsupport/venueoracle
 internal/token
 internal/workitemcontract
+~contracts/auth/v1/jsonschema
 ~internal/api/externalingest/testdata
 ~internal/api/recordvalidation/testdata
 ~internal/apiservice/customerpush/testdata

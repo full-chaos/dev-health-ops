@@ -234,9 +234,20 @@ var optionRegistry = []Option{
 			EnvTokenIssuerURL,
 	},
 	{
+		Env: EnvAcrEventsWorkloadSubject, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_ and 22 base64url characters) of acr-api whose workload token POST /internal/v1/acr/credential-events accepts. Unset leaves the route unmounted. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
 		Env: EnvValkeyURI, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "Valkey URI (redis:// or rediss://, database 1) of the shared rate-limit store; " + EnvValkeyURI +
 			"_FILE reads it from a mounted file instead. Required while the login, credential or social link routes mount",
+	},
+	{
+		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
+			"; needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -258,6 +269,10 @@ var optionRegistry = []Option{
 	{
 		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
+	},
+	{
+		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
 	},
 	{
 		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,

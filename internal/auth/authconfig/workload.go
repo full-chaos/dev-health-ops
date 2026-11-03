@@ -161,15 +161,24 @@ var sessionIssueWorkloadSubjectPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{
 // sessionIssueWorkloadSubject reads the session issue route's workload
 // subject. Errors name the variable, never its value.
 func sessionIssueWorkloadSubject(lookup secrets.LookupEnv, tokenIssuerURL string) (string, error) {
-	value, ok := lookup(EnvSessionIssueWorkloadSubject)
+	return workloadSubject(lookup, EnvSessionIssueWorkloadSubject, tokenIssuerURL)
+}
+
+// EnvAcrEventsWorkloadSubject is the acr-api workload principal (prn_) whose
+// workload token POST /internal/v1/acr/credential-events accepts. Unset leaves
+// the route unmounted. It needs AUTH_TOKEN_ISSUER_URL.
+const EnvAcrEventsWorkloadSubject = "AUTH_ACR_EVENTS_WORKLOAD_SUBJECT"
+
+func workloadSubject(lookup secrets.LookupEnv, env, tokenIssuerURL string) (string, error) {
+	value, ok := lookup(env)
 	if !ok || value == "" {
 		return "", nil
 	}
 	if !sessionIssueWorkloadSubjectPattern.MatchString(value) {
-		return "", fmt.Errorf("%s must be a workload principal id (prn_ and 22 base64url characters)", EnvSessionIssueWorkloadSubject)
+		return "", fmt.Errorf("%s must be a workload principal id (prn_ and 22 base64url characters)", env)
 	}
 	if tokenIssuerURL == "" {
-		return "", fmt.Errorf("%s needs %s", EnvSessionIssueWorkloadSubject, EnvTokenIssuerURL)
+		return "", fmt.Errorf("%s needs %s", env, EnvTokenIssuerURL)
 	}
 	return value, nil
 }

@@ -719,8 +719,8 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema, nil, nil)
-	if err != nil || len(dormant) != 2 {
-		t.Fatalf("without the session secrets: %d route(s), err %v; want the 2 refresh and logout stubs", len(dormant), err)
+	if err != nil || len(dormant) != 4 {
+		t.Fatalf("without the session secrets: %d route(s), err %v; want the 4 refresh, logout, validate and switch-org stubs", len(dormant), err)
 	}
 
 	load := func(env func(map[string]string) map[string]string) authconfig.Config {
@@ -746,12 +746,12 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return strings.Join(got, ",")
 	}
 	sessionRoutesText := "POST /v1/token/refresh,GET /v1/sessions/current,POST /v1/sessions/revoke,POST /v1/sessions/revoke-all"
-	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end,POST /api/v1/auth/login"
+	withLoginStub := sessionRoutesText + ",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org,POST /api/v1/auth/login"
 	if got := mountedBy(load(sessionEnvironment)); got != withLoginStub {
 		t.Fatalf("with the session secrets: mounted %s, want %s", got, withLoginStub)
 	}
 	withLogin := load(compatEnvironment)
-	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end"; got != want {
+	if got, want := mountedBy(withLogin), sessionRoutesText+",POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/login,POST /internal/v1/sessions,POST /api/v1/auth/social-login,POST /internal/v1/sessions/state,POST /internal/v1/sessions/delegated,POST /internal/v1/sessions/delegated/end,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org"; got != want {
 		t.Fatalf("with the lockout key: mounted %s, want %s", got, want)
 	}
 	withLink := load(func(env map[string]string) map[string]string {

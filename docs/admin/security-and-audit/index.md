@@ -10,6 +10,7 @@ lifecycle: active
 # Administration security and audit
 
 - [Credential responsibilities](credentials.md)
+- [Service accounts](service-accounts.md)
 - [Privacy and product telemetry](privacy.md)
 
 Use the product audit surfaces available to the workspace. Infrastructure logging, encryption, hardening, and incident response belong under **Install and operate**.

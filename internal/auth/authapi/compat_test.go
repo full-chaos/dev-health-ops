@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 // goldenAnswer is one answer of the recorded Python corpus
@@ -323,6 +324,7 @@ func (f *compatFixture) buildCompat() {
 		// The real writer (audit.Append) refuses an attribute outside the
 		// allowlist; so does this one.
 		AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+			auditwire.MustValidate(f.t, event)
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				return err
 			}
@@ -592,6 +594,7 @@ func TestARefusedSignInWhosePrincipalCannotBeProjectedIsAuditedLikeAnUnknownAddr
 	if !reflect.DeepEqual(u, k) {
 		t.Fatalf("the rows differ beyond principal_id:\nunknown %+v\nknown   %+v", u, k)
 	}
+	auditwire.MustValidate(t, known.appended[0])
 	if err := audit.ValidateAttributes(known.appended[0].Attributes); err != nil {
 		t.Fatal(err)
 	}
@@ -950,6 +953,7 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 				event.Attributes["reason_code"] != c.reason || event.Attributes["provider"] != c.provider {
 				t.Fatalf("audit row %+v", event)
 			}
+			auditwire.MustValidate(t, event)
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				t.Fatalf("the audit row's attributes are outside the allowlist: %v", err)
 			}
@@ -981,6 +985,7 @@ func TestEveryLoginRefusalIsAuditedWithAllowlistedAttributes(t *testing.T) {
 		if response.Code < 400 || response.Code >= 500 || len(f.appended) != before+1 {
 			t.Fatalf("answer %d with %d new audit rows, want a 4xx with one", response.Code, len(f.appended)-before)
 		}
+		auditwire.MustValidate(t, f.appended[len(f.appended)-1])
 		if err := audit.ValidateAttributes(f.appended[len(f.appended)-1].Attributes); err != nil {
 			t.Fatal(err)
 		}
@@ -1126,6 +1131,7 @@ func TestARefusedSignInBodyIsAudited(t *testing.T) {
 		if event.Attributes["reason_code"] != "malformed" || (c.provider == "" && named) || (c.provider != "" && provider != c.provider) {
 			t.Fatalf("%s %s: audit row %+v", c.path, c.body, event)
 		}
+		auditwire.MustValidate(t, event)
 		if err := audit.ValidateAttributes(event.Attributes); err != nil {
 			t.Fatal(err)
 		}

@@ -204,3 +204,25 @@ test("the row schema (strict ajv) rejects a row that omits accepted_credential_c
     assert.equal(validate(document), false, `selector row: ${withSelector}`);
   }
 });
+
+test("an audit attribute member dropped from the schema fails the approved key list", () => {
+  const result = withCopy((examples) => {
+    const file = path.join(examples, "..", "jsonschema", "audit-event.v1.schema.json");
+    const schema = JSON.parse(readFileSync(file, "utf8"));
+    delete schema.properties.attributes.properties.target_kind;
+    writeFileSync(file, JSON.stringify(schema));
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stdout + result.stderr, /approved attribute key list/);
+});
+
+test("an audit attribute member added to the schema fails the approved key list", () => {
+  const result = withCopy((examples) => {
+    const file = path.join(examples, "..", "jsonschema", "audit-event.v1.schema.json");
+    const schema = JSON.parse(readFileSync(file, "utf8"));
+    schema.properties.attributes.properties.zz_new_key = { type: "string", pattern: "^[a-z]+$" };
+    writeFileSync(file, JSON.stringify(schema));
+  });
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.match(result.stdout + result.stderr, /approved attribute key list/);
+});

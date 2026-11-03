@@ -129,7 +129,8 @@
                       {
                         "metricName": "dev_health_api_shadow_mismatch_total",
                         "timeAggregation": "increase",
-                        "spaceAggregation": "sum"
+                        "spaceAggregation": "sum",
+                        "reduceTo": "sum"
                       }
                     ],
                     "disabled": false,
@@ -402,7 +403,8 @@
                       {
                         "metricName": "dev_health_api_shadow_mismatch_total",
                         "timeAggregation": "increase",
-                        "spaceAggregation": "sum"
+                        "spaceAggregation": "sum",
+                        "reduceTo": "sum"
                       }
                     ],
                     "disabled": false,

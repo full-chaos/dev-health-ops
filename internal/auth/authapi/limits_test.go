@@ -829,9 +829,9 @@ func TestLoginSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T
 	}
 }
 
-// A trusted peer's forwarded value is believed only when it is exactly one address: a chain or a second header line
-// falls back to the socket address, so a client-controlled value cannot split the bucket.
-func TestATrustedPeerWithMoreThanOneForwardedValueIsKeyedByItsSocketAddress(t *testing.T) {
+// A trusted peer's X-Forwarded-For is one chain read from the right: the right-most untrusted hop is the client, so
+// whatever a client wrote left of it cannot split the bucket, and a second header line extends the same chain.
+func TestAForwardedChainIsKeyedByItsRightMostUntrustedHop(t *testing.T) {
 	h := trustedProxy(t, newCompatFixture(t).server)
 	body := `{"refresh_token":"` + credential() + `"}`
 	post := func(lines ...string) *httptest.ResponseRecorder {
@@ -850,13 +850,13 @@ func TestATrustedPeerWithMoreThanOneForwardedValueIsKeyedByItsSocketAddress(t *t
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.2"); r.Code != http.StatusUnauthorized {
+		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.1"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("two lines %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "the 11th request of the socket address", post("203.0.113.200, 198.51.100.3"))
-	assertRateLimited(t, "another chain", post("203.0.113.201, 198.51.100.4"))
-	if r := post("203.0.113.77"); r.Code != http.StatusUnauthorized {
-		t.Fatalf("one clean forwarded address = %d, want its own bucket (401)", r.Code)
+	assertRateLimited(t, "the 11th request of the right-most hop", post("203.0.113.200, 198.51.100.1"))
+	assertRateLimited(t, "a rotated left entry", post("203.0.113.201, 198.51.100.1"))
+	if r := post("203.0.113.77, 198.51.100.4"); r.Code != http.StatusUnauthorized {
+		t.Fatalf("another right-most hop = %d, want its own bucket (401)", r.Code)
 	}
 }

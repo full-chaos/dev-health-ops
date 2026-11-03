@@ -236,8 +236,10 @@ func TestDisorderARotationNeverWidensTheParentWhateverTheDelivery(t *testing.T) 
 	}
 }
 
-// Cell 6: every arrival order of created, narrowing, revoke and a duplicate of each ends in one state, and no step reactivates or widens.
-func TestDisorderEveryArrivalOrderEndsRevokedAndNarrow(t *testing.T) {
+// Cell 6: every arrival order of created, narrowing, revoke and a duplicate of each ends revoked at r3, and no step
+// reactivates or widens. A revoke that lands before the narrowing applies over the gap and the narrowing is then
+// stale, so the end scopes are the created or the narrowed ones; the credential permits nothing in either case.
+func TestDisorderEveryArrivalOrderEndsRevokedAndPermitsNothing(t *testing.T) {
 	events := []contracts.ExternalPushLifecycleEvent{
 		created(credA, "ingest:write", "schema:read"), scoped(credA, 2, "ingest:write"), revoked(credA, 3),
 	}
@@ -249,8 +251,8 @@ func TestDisorderEveryArrivalOrderEndsRevokedAndNarrow(t *testing.T) {
 		for _, e := range order {
 			d.deliver(e)
 		}
-		if d.state.Status != StatusRevoked || d.state.Revision != 3 || !slices.Equal(d.state.Scopes, []string{"ingest:write"}) {
-			t.Fatalf("order %v: ended %s r%d scopes %v, want revoked r3 [ingest:write]", describe(order), d.state.Status, d.state.Revision, d.state.Scopes)
+		if d.state.Status != StatusRevoked || d.state.Revision != 3 || !subset(d.state.Scopes, []string{"ingest:write", "schema:read"}) || len(d.parked) != 0 {
+			t.Fatalf("order %v: ended %s r%d scopes %v parked %d, want revoked r3 within the created scopes, none parked", describe(order), d.state.Status, d.state.Revision, d.state.Scopes, len(d.parked))
 		}
 		denies(t, "end state", d.state)
 	})
@@ -259,9 +261,9 @@ func TestDisorderEveryArrivalOrderEndsRevokedAndNarrow(t *testing.T) {
 	}
 }
 
-// Cell 6b: the same with a widening event in the mix; it never lands in any order.
-// Pins the CHAOS-12699 defect; the fix changes the expected end state to r4.
-func TestDisorderARefusedWideningParksLaterRevisionsToday(t *testing.T) {
+// Cell 6b: the same with a widening event in the mix; it never lands in any order, and the refused revision is
+// decided, so the later narrowing applies.
+func TestDisorderARefusedWideningNeverParksLaterRevisions(t *testing.T) {
 	events := []contracts.ExternalPushLifecycleEvent{
 		created(credA, "ingest:write", "schema:read"), scoped(credA, 2, "ingest:write"),
 		scoped(credA, 3, "ingest:write", "schema:read"), scoped(credA, 4, "ingest:write"),
@@ -271,9 +273,8 @@ func TestDisorderARefusedWideningParksLaterRevisionsToday(t *testing.T) {
 		for _, e := range order {
 			d.deliver(e)
 		}
-		// The refused widening is final and holds revision 3 unapplied, so revision 4 stays parked behind it.
-		if d.state.Revision != 2 || !slices.Equal(d.state.Scopes, []string{"ingest:write"}) {
-			t.Fatalf("order %v: ended r%d scopes %v, want r2 [ingest:write]", describe(order), d.state.Revision, d.state.Scopes)
+		if d.state.Status != StatusActive || d.state.Revision != 4 || !slices.Equal(d.state.Scopes, []string{"ingest:write"}) || len(d.parked) != 0 {
+			t.Fatalf("order %v: ended %s r%d scopes %v parked %d, want active r4 [ingest:write], none parked", describe(order), d.state.Status, d.state.Revision, d.state.Scopes, len(d.parked))
 		}
 	})
 }

@@ -52,10 +52,19 @@ func catalogImpersonation(t *testing.T) map[string]string {
 	return out
 }
 
-// guardBearerRow reports whether row takes a user bearer at the Guard: the
-// rows the deny reaches. POST /api/v1/auth/validate and /logout read the
-// bearer outside the Guard (the census names them) and carry no value.
+// outsideGuardDenyRows are the rows whose handler reads the user bearer
+// outside the Guard and applies the Guard's delegated refusal to it
+// (Guard.RefuseDelegated; the policy census holds the call). POST
+// /api/v1/auth/validate reads a token in the body, writes nothing and carries
+// no value.
+var outsideGuardDenyRows = map[string]bool{"POST /api/v1/auth/logout": true}
+
+// guardBearerRow reports whether row takes a user bearer at the Guard's
+// delegated refusal: the rows the Guard gates, and outsideGuardDenyRows.
 func guardBearerRow(row map[string]any) bool {
+	if outsideGuardDenyRows[profileOf(row)] {
+		return true
+	}
 	classes, _ := row["accepted_credential_classes"].([]any)
 	user := false
 	for _, class := range classes {
@@ -66,6 +75,12 @@ func guardBearerRow(row map[string]any) bool {
 	validator, _ := row["primary_validator"].(map[string]any)
 	anchor, _ := validator["anchor"].(map[string]any)
 	return user && anchor["note"] == guardAnchor
+}
+
+func profileOf(row map[string]any) string {
+	method, _ := row["method"].(string)
+	route, _ := row["route"].(string)
+	return method + " " + route
 }
 
 func underAdmin(route string) bool {
@@ -89,23 +104,28 @@ func delegatedRule(row map[string]any, catalog map[string]string) string {
 }
 
 // TestDelegatedBearerRowsFollowTheRule is the contract of delegated_bearer on
-// the go-api rows: every row the Guard gates for a user bearer has a value,
-// no other row has one, and each value is the rule's. An allowed row is never
-// under /api/v1/admin and never carries a catalog-denied action.
+// the go-api rows: every row the Guard's delegated refusal reaches for a user
+// bearer has a value, no other row has one, and each value is the rule's. An
+// allowed row is never under /api/v1/admin and never carries a catalog-denied
+// action; POST /api/v1/auth/logout is denied.
 func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 	catalog := catalogImpersonation(t)
 	counts := map[string]int{}
+	outside := map[string]string{}
 	for _, row := range loadGoAPIRows(t) {
 		key := rowKey(t, row)
+		if profile := profileOf(row); outsideGuardDenyRows[profile] {
+			outside[profile], _ = row["delegated_bearer"].(string)
+		}
 		value, has := row["delegated_bearer"].(string)
 		_, present := row["delegated_bearer"]
 		gated := guardBearerRow(row)
 		switch {
 		case gated && !has:
-			t.Errorf("%s: the Guard gates this row for a user bearer and it has no delegated_bearer", key)
+			t.Errorf("%s: the Guard's delegated refusal reaches this row for a user bearer and it has no delegated_bearer", key)
 			continue
 		case !gated && present:
-			t.Errorf("%s: the Guard does not gate this row for a user bearer and it has delegated_bearer %v", key, row["delegated_bearer"])
+			t.Errorf("%s: the Guard's delegated refusal does not reach this row for a user bearer and it has delegated_bearer %v", key, row["delegated_bearer"])
 			continue
 		case !gated:
 			continue
@@ -122,6 +142,11 @@ func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 	}
 	if counts["allowed"] == 0 || counts["denied"] < 150 {
 		t.Fatalf("delegated_bearer values %v: the table stopped being read", counts)
+	}
+	for profile := range outsideGuardDenyRows {
+		if outside[profile] != "denied" {
+			t.Errorf("%s: delegated_bearer %q, want denied (its handler applies the Guard's refusal)", profile, outside[profile])
+		}
 	}
 }
 

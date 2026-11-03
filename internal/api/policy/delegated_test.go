@@ -189,8 +189,9 @@ func TestAccessTokenActorIsImpersonatedBy(t *testing.T) {
 var bearerReaders = map[string]bool{"Authenticate": true, "AuthenticateLegacy": true, "CheckClaims": true, "BearerToken": true}
 
 // namedBearerReaders are the functions of go-api that may read a user bearer:
-// the Guard, the Authenticator itself, and the named sites outside the Guard
-// (none takes a delegated bearer to a domain write).
+// the Guard, the Authenticator itself, and the named sites outside the Guard.
+// A named site outside the Guard either takes no bearer to a write or is in
+// denyingBearerReaders.
 var namedBearerReaders = map[string]bool{
 	"internal/api/policy/guard.go:Guard.currentUser":  true,
 	"internal/api/policy/guard.go:Guard.optionalUser": true,
@@ -205,9 +206,17 @@ var namedBearerReaders = map[string]bool{
 	// POST /api/v1/auth/validate: the token is in the body; it answers validity and writes nothing.
 	"internal/api/session/routes.go:handlers.validate": true,
 	// POST /api/v1/auth/logout: the user names the audit line; it ends the refresh token in the body.
+	// It writes, so it applies the Guard's delegated refusal (denyingBearerReaders).
 	"internal/api/session/routes.go:handlers.optionalUser": true,
 	// The validator's HS256 leg, reached only from Authenticate.
 	"internal/apiservice/accessverify.go:buildAccessVerify": true,
+}
+
+// denyingBearerReaders are the named sites outside the Guard that take a
+// bearer to a write: each calls Guard.RefuseDelegated on the user it reads,
+// so a delegated bearer meets the Guard's refusal there too.
+var denyingBearerReaders = map[string]bool{
+	"internal/api/session/routes.go:handlers.optionalUser": true,
 }
 
 // TestEveryBearerReadOutsideTheGuardIsNamed is the census of the deny: a read
@@ -220,6 +229,7 @@ func TestEveryBearerReadOutsideTheGuardIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	found := map[string]bool{}
+	refuses := map[string]bool{}
 	var unnamed []string
 	for _, dir := range []string{"internal/api", "internal/apiservice"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, entry fs.DirEntry, err error) error {
@@ -244,6 +254,9 @@ func TestEveryBearerReadOutsideTheGuardIsNamed(t *testing.T) {
 							name = ident.Name
 						}
 					}
+					if name == "RefuseDelegated" {
+						refuses[site] = true
+					}
 					if bearerReaders[name] {
 						found[site] = true
 						if !namedBearerReaders[site] {
@@ -263,7 +276,12 @@ func TestEveryBearerReadOutsideTheGuardIsNamed(t *testing.T) {
 	for _, line := range unnamed {
 		t.Errorf("UNNAMED BEARER READ %s: route it through the Guard, or name it here with why it takes no delegated bearer to a write", line)
 	}
-	for _, site := range []string{"internal/api/policy/guard.go:Guard.currentUser", "internal/api/policy/guard.go:Guard.optionalUser", "internal/api/session/routes.go:handlers.validate"} {
+	for site := range denyingBearerReaders {
+		if !refuses[site] {
+			t.Errorf("DELEGATED BEARER NOT REFUSED %s reads a bearer to a write and does not call Guard.RefuseDelegated", site)
+		}
+	}
+	for _, site := range []string{"internal/api/policy/guard.go:Guard.currentUser", "internal/api/policy/guard.go:Guard.optionalUser", "internal/api/session/routes.go:handlers.validate", "internal/api/session/routes.go:handlers.optionalUser"} {
 		if !found[site] {
 			t.Errorf("the scan did not see %s: it stopped reading the sources", site)
 		}

@@ -68,6 +68,10 @@ type PGUsers struct {
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
 	// from the auth platform role assignments (rule.HoldsSQL).
 	PlatformRolesOwned bool
+	// UsersOwned is AUTH_USERS_OWNED: the runtime role then holds UPDATE on
+	// public.memberships (authschema.MembershipWriteGrants), which a row
+	// lock needs (MemberRoleLockedOn).
+	UsersOwned bool
 }
 
 // stateSQL is StateOn's statement: is_superuser is public users.is_superuser,

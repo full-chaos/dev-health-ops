@@ -49,7 +49,12 @@ func NormalizeRequest(r Request) (Request, bool) {
 // Evaluator decides requests under one catalog.
 type Evaluator struct {
 	cat catalogView
+	// redaction maps role and action to the field classes an allow of the pair must have removed
+	// (vocabulary/redaction-classes.v1.json rules).
+	redaction map[redactionKey][]string
 }
+
+type redactionKey struct{ role, action string }
 
 // catalogView is the read side of a catalog the evaluator needs; the
 // embedded *policycatalog.Catalog is the only one outside tests.

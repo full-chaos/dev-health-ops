@@ -179,9 +179,20 @@ func TestSessionReaderPostureNamesSetOnlyMembershipsAndRiskyAttributes(t *testin
 		t.Fatalf("grant membership: %v", err)
 	}
 	attributeRoles := map[string]string{}
-	for _, attribute := range []string{"CREATEROLE", "CREATEDB", "BYPASSRLS", "REPLICATION"} {
+	for attribute, alter := range map[string]func(string) string{
+		"CREATEROLE": func(r string) string {
+			return fmt.Sprintf("ALTER ROLE %s CREATEROLE", Quote(mustValidatedIdentifier(r)))
+		},
+		"CREATEDB": func(r string) string { return fmt.Sprintf("ALTER ROLE %s CREATEDB", Quote(mustValidatedIdentifier(r))) },
+		"BYPASSRLS": func(r string) string {
+			return fmt.Sprintf("ALTER ROLE %s BYPASSRLS", Quote(mustValidatedIdentifier(r)))
+		},
+		"REPLICATION": func(r string) string {
+			return fmt.Sprintf("ALTER ROLE %s REPLICATION", Quote(mustValidatedIdentifier(r)))
+		},
+	} {
 		role, _ := newSessionReader(t, ctx, env, "rdr_"+strings.ToLower(attribute))
-		if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %s %s", Quote(mustValidatedIdentifier(role)), attribute)); err != nil {
+		if _, err := env.admin.Exec(ctx, alter(role)); err != nil {
 			t.Fatalf("alter %s: %v", attribute, err)
 		}
 		attributeRoles[attribute] = role

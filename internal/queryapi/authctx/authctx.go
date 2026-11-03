@@ -32,6 +32,10 @@ type Claims struct {
 	// ImpersonationActive is copied from the verified envelope: true while the
 	// effective identity is an impersonated user.
 	ImpersonationActive bool
+	// Delegated is true for a delegated session's bearer: the token is the
+	// target's, issued to a real actor (policy.User.ImpersonatedBy). Every
+	// GraphQL operation but a query is refused for it.
+	Delegated bool
 	// Platform is the platform action set held when it is not the one
 	// IsSuperuser means; nil carries only the flag.
 	Platform *rule.Platform

@@ -29,6 +29,9 @@ type AccessTokenClaims struct {
 	Subject   string
 	SessionID string
 	OrgID     *string
+	// Actor is the act claim's sub (the principal id of the real actor) of a
+	// delegated session's token; nil on any other token.
+	Actor *string
 }
 
 type routedAccess struct {

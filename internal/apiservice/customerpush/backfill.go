@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -33,12 +34,15 @@ type backfillCandidate struct {
 	revoked bool
 }
 
-// BackfillLifecycle emits the lifecycle events of tokens that have no aggregate
-// (they predate the events). Without apply it only counts. With apply, each
-// token is written in its own transaction under the token row's lock, through
-// the same AppendPushLifecycle as the routes, so a rerun finishes what a failed
-// run left and a token a route already wrote is skipped. A token that fails is
-// counted and the run goes on.
+// BackfillLifecycle emits the lifecycle events of tokens that predate the
+// events. It reads only the token table and never reads the auth schema: the
+// writer function is the only statement that names it. Without apply it only
+// counts the tokens. With apply, each token is written in its own transaction
+// under the token row's lock, through the same AppendPushLifecycle as the
+// routes, inside a savepoint. The writer refuses a created event for a token
+// that has an aggregate (SQLSTATE 55000): that token is skipped, so a rerun
+// finishes what a failed run left and a token a route already wrote is
+// skipped. Any other error counts the token as failed and the run goes on.
 func BackfillLifecycle(ctx context.Context, pool *pgxpool.Pool, schema string, apply bool, batch int) (BackfillReport, error) {
 	return backfillLifecycle(ctx, pool, schema, apply, batch)
 }
@@ -60,7 +64,7 @@ func backfillLifecycle(ctx context.Context, pool backfillDB, schema string, appl
 	var report BackfillReport
 	var after uuid.UUID
 	for {
-		page, err := backfillPage(ctx, pool, ident, after, batch)
+		page, err := backfillPage(ctx, pool, after, batch)
 		if err != nil {
 			return report, err
 		}
@@ -80,28 +84,25 @@ func backfillLifecycle(ctx context.Context, pool backfillDB, schema string, appl
 			if !apply {
 				continue
 			}
-			wrote, err := backfillOne(ctx, pool, ident, c.id)
+			outcome := backfillOne(ctx, pool, ident, c.id)
 			switch {
 			case ctx.Err() != nil:
 				return report, ctx.Err()
-			case err != nil:
-				report.Failed++
-			case wrote:
+			case outcome == backfillWritten:
 				report.Written++
-			default:
+			case outcome == backfillSkipped:
 				report.Skipped++
+			default:
+				report.Failed++
 			}
 		}
 		after = page[len(page)-1].id
 	}
 }
 
-func backfillPage(ctx context.Context, pool backfillDB, schema authschema.ValidatedIdentifier, after uuid.UUID, batch int) ([]backfillCandidate, error) {
+func backfillPage(ctx context.Context, pool backfillDB, after uuid.UUID, batch int) ([]backfillCandidate, error) {
 	rows, err := pool.Query(ctx, `SELECT t.id, t.source_id IS NULL, t.revoked_at IS NOT NULL
-		FROM external_ingest_tokens t
-		WHERE t.id > $1 AND NOT EXISTS (SELECT 1 FROM `+authschema.Quote(schema)+`.aggregate_revisions a
-			WHERE a.aggregate_type = $2 AND a.aggregate_id = t.id::text)
-		ORDER BY t.id LIMIT $3`, after, externalpush.Aggregate, batch)
+		FROM external_ingest_tokens t WHERE t.id > $1 ORDER BY t.id LIMIT $2`, after, batch)
 	if err != nil {
 		return nil, fmt.Errorf("customerpush: reading backfill candidates: %w", err)
 	}
@@ -117,50 +118,65 @@ func backfillPage(ctx context.Context, pool backfillDB, schema authschema.Valida
 	return page, rows.Err()
 }
 
-// backfillOne writes one token's events in its own transaction. It reports
-// false when the token is gone or already has an aggregate once its row is locked.
-func backfillOne(ctx context.Context, pool backfillDB, schema authschema.ValidatedIdentifier, id uuid.UUID) (bool, error) {
+type backfillOutcome int
+
+const (
+	backfillFailed backfillOutcome = iota
+	backfillWritten
+	backfillSkipped
+)
+
+// isExistingAggregate reports the writer's refusal of a created event for a
+// credential that has an earlier event (SQLSTATE 55000).
+func isExistingAggregate(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "55000"
+}
+
+// backfillOne writes one token's events in its own transaction, in a
+// savepoint, under the token row's lock. It skips a token that is gone or that
+// has an aggregate (the writer refuses with 55000); any other error is failed
+// and the savepoint is rolled back.
+func backfillOne(ctx context.Context, pool backfillDB, schema authschema.ValidatedIdentifier, id uuid.UUID) backfillOutcome {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return backfillFailed
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	token, err := scanToken(tx.QueryRow(ctx, `SELECT `+tokenColumns+` FROM external_ingest_tokens WHERE id = $1 FOR UPDATE`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+		return backfillSkipped
 	}
 	if err != nil {
-		return false, err
-	}
-	var has bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+authschema.Quote(schema)+`.aggregate_revisions
-		WHERE aggregate_type = $1 AND aggregate_id = $2)`, externalpush.Aggregate, id.String()).Scan(&has); err != nil {
-		return false, err
-	}
-	if has {
-		return false, nil
+		return backfillFailed
 	}
 	events, err := storedLifecycleEvents(token)
 	if err != nil {
-		return false, err
+		return backfillFailed
+	}
+	if _, err := tx.Exec(ctx, `SAVEPOINT backfill_token`); err != nil {
+		return backfillFailed
 	}
 	if err := audit.AppendPushLifecycle(ctx, tx, schema, events); err != nil {
-		return false, err
+		_, _ = tx.Exec(ctx, `ROLLBACK TO SAVEPOINT backfill_token`)
+		if isExistingAggregate(err) {
+			return backfillSkipped
+		}
+		return backfillFailed
 	}
-	return true, tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT backfill_token`); err != nil {
+		return backfillFailed
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return backfillFailed
+	}
+	return backfillWritten
 }
 
 // storedLifecycleEvents are the events of a stored token that has none: the
-// created event, or for a revoked token the revoked event, whose snapshot makes
-// the writer emit created first. Expiry is not an event here.
+// created event first, so an existing aggregate is refused at the first event,
+// then for a revoked token the revoked event. Expiry is not an event here.
 func storedLifecycleEvents(t tokenRow) ([]audit.PushLifecycleEvent, error) {
-	if t.RevokedAt != nil {
-		event, err := revokedEvent(t)
-		if err != nil {
-			return nil, err
-		}
-		return []audit.PushLifecycleEvent{event}, nil
-	}
 	organization, binding, source, err := pushevent.WireIDs(t.OrgID, t.SourceID)
 	if err != nil {
 		return nil, err
@@ -174,8 +190,14 @@ func storedLifecycleEvents(t tokenRow) ([]audit.PushLifecycleEvent, error) {
 		at := t.ExpiresAt.UTC()
 		expires = &at
 	}
-	return []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
-		OrganizationID: organization, Binding: binding, SourceID: source, Change: pushevent.CreatedChange(t.ID, names, expires)}}, nil
+	events := []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
+		OrganizationID: organization, Binding: binding, SourceID: source, Change: pushevent.CreatedChange(t.ID, names, expires)}}
+	if t.RevokedAt != nil {
+		revoked, err := revokedEvent(t)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, revoked)
+	}
+	return events, nil
 }
-
-func isExistingAggregate(err error) bool { return false }

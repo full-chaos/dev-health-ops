@@ -60,7 +60,7 @@ func TestStoredLifecycleEventsAreTheCreatedEventOfTheStoredToken(t *testing.T) {
 	})
 }
 
-func TestStoredLifecycleEventsOfARevokedTokenAreTheRouteRevokedEvent(t *testing.T) {
+func TestStoredLifecycleEventsOfARevokedTokenAreCreatedThenTheRouteRevokedEvent(t *testing.T) {
 	source := uuid.New()
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	row := tokenRow{ID: uuid.New(), OrgID: "9f1c2b3a-0000-4000-8000-000000000001", SourceID: &source, Scopes: []byte(`["ingest:write"]`), RevokedAt: &at}
@@ -72,11 +72,11 @@ func TestStoredLifecycleEventsOfARevokedTokenAreTheRouteRevokedEvent(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, []audit.PushLifecycleEvent{want}) {
-		t.Fatalf("events = %+v, want the revoked event with its snapshot %+v", got, want)
+	if len(got) != 2 || got[0].EventType != externalpush.Created || !reflect.DeepEqual(got[1], want) {
+		t.Fatalf("events = %+v, want created then the revoked event with its snapshot %+v", got, want)
 	}
-	if got[0].Snapshot == nil || got[0].Snapshot.Status != "active" {
-		t.Fatalf("snapshot = %+v", got[0].Snapshot)
+	if got[1].Snapshot == nil || got[1].Snapshot.Status != "active" {
+		t.Fatalf("snapshot = %+v", got[1].Snapshot)
 	}
 }
 

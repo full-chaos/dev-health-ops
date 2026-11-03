@@ -63,7 +63,7 @@ Names are dotted and namespaced. A bare single segment is not an action (the pat
 | `authz.decide` | platform | platform | high | `none` |
 | `credentials.project` | platform | platform | high | `none` |
 
-Source: `contracts/auth/v1/vocabulary/actions.v1.json`. `resource_kind` equals `scope` for every action except `acr.context.read`, whose resource is a repository. The kind set is `platform`, `organization` and `repository`; a scope is `platform` or `organization` only.
+Source: `contracts/auth/v1/vocabulary/actions.v1.json`. `resource_kind` equals `scope` for every action except `acr.context.read` and `acr.evidence.read`, whose resource is a repository. The kind set is `platform`, `organization` and `repository`; a scope is `platform` or `organization` only.
 
 ### Risk class and cache class
 

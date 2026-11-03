@@ -167,7 +167,9 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 		_ = response.Body.Close()
 		return response.StatusCode, time.Since(start)
 	}
-	if status, _ := login(0); status != http.StatusUnauthorized {
+	// The first login is cold (pool connect, key-state read, the bcrypt dummy hash): under -race on a loaded host it can pass
+	// the 4 s request timeout and is answered with the retryable 503. A retry is warm. Only a 503 is retried.
+	if status := firstLoginAnswer(func() int { status, _ := login(0); return status }, time.Minute, time.Second, time.Sleep); status != http.StatusUnauthorized {
 		t.Fatalf("login before the fault = %d, want 401 through the proxy", status)
 	}
 

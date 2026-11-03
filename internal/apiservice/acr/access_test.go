@@ -766,3 +766,26 @@ func TestPrincipalAccessAgentContextRuntimeIsAskDevOrTheLegacyGrant(t *testing.T
 		})
 	}
 }
+
+// TestAccessStoreDelegatedSessionIsImpersonating: a sid that names a delegated
+// session (auth-service's state carries the actor) is an impersonation, though
+// the caller, the target, holds no admin-keyed row.
+func TestAccessStoreDelegatedSessionIsImpersonating(t *testing.T) {
+	f := newAccessFixture()
+	state := f.reads.sessions[accessSession]
+	actor := uuid.New()
+	state.ActorPrincipalID = &actor
+	f.reads.sessions[accessSession] = state
+	got, err := f.read(t, accessUser, sessionRef(accessSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Impersonating || got.Session == nil || !got.Session.Impersonating {
+		t.Fatalf("impersonating = %v, session %+v, want true for a delegated session", got.Impersonating, got.Session)
+	}
+	plain := newAccessFixture()
+	got, err = plain.read(t, accessUser, sessionRef(accessSession))
+	if err != nil || got.Impersonating || got.Session.Impersonating {
+		t.Fatalf("plain session: %+v %v, want not impersonating", got, err)
+	}
+}

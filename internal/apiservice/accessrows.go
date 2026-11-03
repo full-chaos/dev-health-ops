@@ -91,7 +91,7 @@ func (r routedAccessVerify) Validate(ctx context.Context, service, profile, bear
 		}
 	case result.Class == accessverify.ClassUser && result.Claims != nil:
 		claims := result.Claims
-		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}
 	return nil, errUnexpectedAccessResult
 }

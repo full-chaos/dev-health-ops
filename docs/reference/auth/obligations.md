@@ -22,7 +22,7 @@ An authorization decision answers one question: may this principal perform this 
 {: .fc-page-lede }
 
 !!! note "Delegated sessions only"
-    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841). The decision point puts obligations on the allow of a delegated (impersonation) session only: `tenant_scope`, `minimum_assurance` and, for a repository request, a one-key `repository_allowlist`. A plain session's allow carries none, and `redaction` is not sent yet (CHAOS-12656). No service enforces an obligation yet. See [Status](#status).
+    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841), and the decision document has an `obligations` member. The decision point puts obligations on the allow of a delegated (impersonation) session only: `tenant_scope`, `minimum_assurance` and, for a repository request, a one-key `repository_allowlist`. A plain session's allow carries none, and `redaction` is not set yet (CHAOS-12656). No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -94,8 +94,8 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | Part | State |
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
-| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). |
-| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and emits `tenant_scope`, `minimum_assurance` and `repository_allowlist` (CHAOS-12438). The decision point sends `redaction` on the wire: CHAOS-12656. The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
+| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny with obligations, a repeated or malformed key, more than 256 keys, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
+| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session (CHAOS-12438). The policy that sets `redaction`, and the obligations of an ordinary allow, is the next change of CHAOS-12656. The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10846 (TypeScript server-only decision client) and CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
 | Entitlement-derived obligation | Planned, CHAOS-10837 (entitlement adapter) and CHAOS-10862 (billing and licensing enforcement point). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |

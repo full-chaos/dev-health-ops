@@ -83,6 +83,7 @@ var openers = map[string]struct {
 	"internal/testsupport/pgschema/pgschema.go":                 {kindTest, "test schema helper"},
 	"internal/testsupport/pinrig/pinrig.go":                     {kindTest, "pin proof: pools as the runtime and session reader roles"},
 	"internal/testsupport/platformroleseam/platformroleseam.go": {kindTest, "platform role seam: the migrated schemas, a pool as the session reader role"},
+	"internal/testsupport/superuserwriter/superuserwriter.go":   {kindTest, "superuser-write proof: a pool as a role that may write every public column except users.is_superuser"},
 	"internal/testsupport/usertokens/usertokens.go":             {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":           {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":           {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},

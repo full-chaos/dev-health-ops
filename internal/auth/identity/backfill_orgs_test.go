@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestDecideOrg(t *testing.T) {
@@ -105,6 +106,7 @@ func TestRoleChangeAuditCarriesTheReasonAndBothRolesAndIsAccepted(t *testing.T) 
 	if ev.Attributes["previous_role"] != "member" || ev.Attributes["new_role"] != "owner" {
 		t.Fatalf("role slots = %v/%v", ev.Attributes["previous_role"], ev.Attributes["new_role"])
 	}
+	auditwire.MustValidate(t, ev)
 	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
 	}
@@ -118,6 +120,7 @@ func TestRoleChangeAuditWithNoStoredRoleHasNoPreviousRole(t *testing.T) {
 	if ev.Attributes["new_role"] != "admin" {
 		t.Fatalf("new_role = %v", ev.Attributes["new_role"])
 	}
+	auditwire.MustValidate(t, ev)
 	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
 	}
@@ -166,6 +169,7 @@ func TestFillAuditReusesTheProjectedEventAndNamesTheFields(t *testing.T) {
 	if !ok || len(fields) != 2 || fields[0] != "invited_by" || fields[1] != "joined_at" {
 		t.Fatalf("changed_fields = %v", ev.Attributes["changed_fields"])
 	}
+	auditwire.MustValidate(t, ev)
 	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 		t.Fatalf("the audit allowlist refuses the attributes: %v", err)
 	}

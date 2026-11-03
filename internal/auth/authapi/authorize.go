@@ -78,6 +78,38 @@ type ActorState struct {
 	Owner bool
 }
 
+// serviceAccountKeyClass is the credential class of a service-account key
+// (serviceaccount.KeyClass).
+const serviceAccountKeyClass = "service_account_key"
+
+// DecisionKey is the service-account key row a reference names, as the
+// decision transaction reads it.
+type DecisionKey struct {
+	Found       bool
+	PrincipalID uuid.UUID
+	// AccountOrgID is the organization of the key principal's service-account
+	// row; "" when the principal has none.
+	AccountOrgID string
+	Class        string
+	DomainOwner  string
+	Revoked      bool
+	// ExpiresAtUnixNano is 0 when the row has no expiry.
+	ExpiresAtUnixNano int64
+	// NowUnixNano is the transaction's clock.
+	NowUnixNano int64
+}
+
+// liveFor reports a key row that may stand for the reference: a platform
+// service-account key of the referenced principal, whose account is in the
+// organization the token names, neither revoked nor expired at the
+// transaction's clock. The account's own state is the decision's, not this
+// check's.
+func (k DecisionKey) liveFor(p ReferencedPrincipal) bool {
+	return k.Found && k.PrincipalID == p.ID && k.Class == serviceAccountKeyClass && k.DomainOwner == "platform" &&
+		k.AccountOrgID != "" && k.AccountOrgID == p.OrgID && !k.Revoked &&
+		k.NowUnixNano > 0 && k.ExpiresAtUnixNano != 0 && k.NowUnixNano < k.ExpiresAtUnixNano
+}
+
 // delegated reports an impersonation session: it is decided by the core's
 // delegation rules over the row's own columns, never as the plain target user.
 func (s DecisionSession) delegated() bool { return s.HasActor || s.HasDelegatedFrom }
@@ -99,6 +131,9 @@ type DecisionTx interface {
 	// Actor is the live state of the real actor of a delegated session; the
 	// zero ActorState for an unknown principal.
 	Actor(ctx context.Context, actor uuid.UUID) (ActorState, error)
+	// ServiceAccountKey reads the key row a service-account reference names,
+	// with the transaction's clock.
+	ServiceAccountKey(ctx context.Context, credentialID uuid.UUID) (DecisionKey, error)
 	// Snapshot is the principal's state for one organization ("" for a
 	// platform decision), with the transaction's clock.
 	Snapshot(ctx context.Context, principal uuid.UUID, orgID string) (authorization.GrantSnapshot, error)
@@ -143,6 +178,16 @@ type authorizeHandlers struct {
 	rec        recorder
 	cache      cacheMetrics
 	decisionID func() (string, error)
+	// resolve, when set, resolves a principal reference in place of
+	// References.Resolve; only tests set it.
+	resolve func(reference string) (ReferencedPrincipal, string, error)
+}
+
+func (h authorizeHandlers) resolveReference(reference string) (ReferencedPrincipal, string, error) {
+	if h.resolve != nil {
+		return h.resolve(reference)
+	}
+	return h.References.Resolve(reference)
 }
 
 // AuthorizeRoutes returns the routes whose endpoint-profile row admits the
@@ -305,7 +350,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		p, seen := resolved[q.PrincipalReference]
 		if !seen {
 			var why string
-			p, why, err = h.References.Resolve(q.PrincipalReference)
+			p, why, err = h.resolveReference(q.PrincipalReference)
 			if err != nil {
 				h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 				return nil, false
@@ -376,15 +421,29 @@ type referencedSession struct {
 }
 
 // evaluate checks each referenced session once (and reads the actor of a
-// delegated one once), then decides each item over its (principal,
-// organization, session) snapshot, read once per triple. A delegated session
-// is live only while its delegating session is. With the cache in use, an item
-// of a session that is not delegated reads its unfed values and asks the cache
-// first; a hit reads no snapshot. A delegated session is never cached.
+// delegated one once), or a service account's key row once, then decides each
+// item over its (principal, organization, session) snapshot, read once per
+// triple. A delegated session is live only while its delegating session is.
+// With the cache in use, an item of a user session that is not delegated reads
+// its unfed values and asks the cache first; a hit reads no snapshot. A
+// delegated session is never cached. A service account's decision never uses
+// the cache: its account row is in no cache key and no feed dependency.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem,
 	cached bool) error {
 	sessions := map[string]referencedSession{}
+	accountRefs := map[string]bool{}
 	for ref, p := range resolved {
+		if p.Kind == ReferenceServiceAccount {
+			k, err := tx.ServiceAccountKey(ctx, p.CredentialID)
+			if err != nil {
+				return err
+			}
+			if !k.liveFor(p) {
+				return errAuthorizeReferenceRefused
+			}
+			accountRefs[ref] = true
+			continue
+		}
 		sid, err := session.ParseWireSessionID(p.SessionID)
 		if err != nil {
 			return errAuthorizeReferenceRefused
@@ -408,6 +467,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		principal uuid.UUID
 		org       string
 		session   uuid.UUID
+		account   bool
 	}
 	snapshots := map[triple]authorization.GrantSnapshot{}
 	unfed := map[triple]UnfedState{}
@@ -416,12 +476,13 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		q := items[i].question
 		rs := sessions[q.PrincipalReference]
 		delegated := rs.row.delegated()
-		key := triple{principal: items[i].principal.ID, org: q.OrganizationID}
+		account := accountRefs[q.PrincipalReference]
+		key := triple{principal: items[i].principal.ID, org: q.OrganizationID, account: account}
 		if delegated {
 			key.session = rs.id
 		}
 		items[i].cache = cacheBypass
-		if cached && !delegated {
+		if cached && !delegated && !account {
 			u, ok := unfed[key]
 			if !ok {
 				var err error

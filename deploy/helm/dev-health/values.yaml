@@ -1393,6 +1393,19 @@ migrations:
         name: ""
         secretName: ""
         secretKey: "API_DATABASE_PASSWORD"
+      # -- CHAOS-12614: optional ops migration LOGIN (e.g. devhealth_migrator) that owns the database and the ops
+      #    schemas after `dho migrate owner-move`. EMPTY name = OFF. When set, `dho migrate roles` creates it if missing
+      #    (LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, CONNECT on the application database,
+      #    nothing else) with the password from an OPERATOR-CREATED Secret named by secretName / secretKey (the render
+      #    fails if name is set while either is empty). An existing login keeps its password.
+      migratorRole:
+        name: ""
+        secretName: ""
+        secretKey: "OPS_MIGRATOR_DATABASE_PASSWORD"
+      # -- CHAOS-12614: the Secret this Job envFroms when secrets.create=false. EMPTY MEANS
+      #    migrations.hook.externalSecretName. Set it to a Secret with the superuser DSN when the other ops hooks move
+      #    to the migration login: creating roles needs CREATEROLE.
+      externalSecretName: ""
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:
@@ -1549,6 +1562,12 @@ migrations:
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""
+    # -- CHAOS-12614: the owner pin of the ops migrators (MIGRATION_OWNER_ROLE on the migrate, open-units-index,
+    #    streak-index and river-migrate Jobs). EMPTY = OFF (today's behaviour). Set, dho refuses to run any DDL unless
+    #    it is connected AS this role, the role is NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, and it
+    #    owns the database, schema river and every object of public and river (`dho migrate owner-move` first). While
+    #    auth-service owns sessions, authService.migrate.sessionReaders.queryApi must name the query-api login.
+    ownerRole: ""
 
 # =============================================================================
 # Ingress

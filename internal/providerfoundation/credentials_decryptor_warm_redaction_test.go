@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	decryptorKeySentinel  = "KEYSENTINEL-4f1c9a"
+	decryptorKeySentinel  = "KEYSENTINEL-4f1c9a" // gitleaks:allow
 	decryptorSaltSentinel = "SALTSENTINEL-77be02"
 )
 

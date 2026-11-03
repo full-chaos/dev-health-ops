@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -65,13 +67,50 @@ func refreshResponse(access, refresh string, user *pyjson.Object) *pyjson.Object
 	return out
 }
 
-// refresh is POST /api/v1/auth/refresh (refresh.py).
-func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+// refreshAccepted counts each HS256 refresh token the refresh route accepts;
+// nil counts nothing. It is a variable of this package, not a Deps field,
+// because the endpoint-profile rows pin line numbers in session.go.
+var refreshAccepted atomic.Pointer[accessverify.RefreshCounter]
+
+// SetRefreshAccepted sets the counter the refresh route counts accepted HS256 refresh tokens with.
+func SetRefreshAccepted(counter *accessverify.RefreshCounter) { refreshAccepted.Store(counter) }
+
+// statusRecorder keeps the status the refresh route answers with, so the route
+// counts a refresh token only when it answered 200.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaims, error) {
+	claims, err := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	if err != nil {
+		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(err))
+		return nil, err
+	}
+	return claims, nil
+}
+
+// refreshClaims verifies a refresh token and reads the sub, org_id and jti the
+// route needs. It answers the refusal itself and returns false.
+func (h handlers) refreshClaims(w http.ResponseWriter, r *http.Request, token string) (userIDText, orgIDText, jti string, ok bool) {
 	ctx := r.Context()
-	token, _ := ctx.Value(refreshInputKey{}).(string)
-	claims, verifyErr := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	claims, verifyErr := h.verifyRefresh(ctx, token)
 	if verifyErr != nil {
-		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(verifyErr))
 		h.refuseInvalidRefresh(w, r, token)
 		return
 	}
@@ -80,7 +119,6 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "refresh sub", err)
 		return
 	}
-	orgIDText := ""
 	if raw, present := claims["org_id"]; present {
 		if orgIDText, err = pyStrClaim(raw); err != nil {
 			h.fail(w, r, "refresh org", err)
@@ -92,9 +130,26 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
-	jti, err := pyStrClaim(jtiRaw)
-	if err != nil {
+	if jti, err = pyStrClaim(jtiRaw); err != nil {
 		h.fail(w, r, "refresh jti", err)
+		return
+	}
+	return userIDText, orgIDText, jti, true
+}
+
+// refresh is POST /api/v1/auth/refresh (refresh.py).
+func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	recorder := &statusRecorder{ResponseWriter: w}
+	w = recorder
+	defer func() {
+		if recorder.status == http.StatusOK {
+			refreshAccepted.Load().Accepted(ctx)
+		}
+	}()
+	token, _ := ctx.Value(refreshInputKey{}).(string)
+	userIDText, orgIDText, jti, ok := h.refreshClaims(w, r, token)
+	if !ok {
 		return
 	}
 

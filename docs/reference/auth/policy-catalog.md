@@ -43,6 +43,7 @@ Names are dotted and namespaced. A bare single segment is not an action (the pat
 | `teams.write` | organization | organization | high | `none` |
 | `settings.read` | organization | organization | low | `decision_bound` |
 | `settings.write` | organization | organization | high | `none` |
+| `reports.write` | organization | organization | high | `none` |
 | `integrations.read` | organization | organization | low | `decision_bound` |
 | `integrations.write` | organization | organization | high | `none` |
 | `members.read` | organization | organization | low | `decision_bound` |
@@ -104,6 +105,7 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `teams.write` |  |  | yes | yes |  |
 | `settings.read` | yes | yes | yes | yes |  |
 | `settings.write` |  |  | yes | yes |  |
+| `reports.write` | yes | yes | yes | yes |  |
 | `integrations.read` |  |  | yes | yes |  |
 | `integrations.write` |  |  | yes | yes |  |
 | `members.read` | yes | yes | yes | yes |  |
@@ -200,6 +202,7 @@ From `contracts/auth/v1/README.md`:
 - Version 9: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read` (CHAOS-12347). `platform_admin` and `platform_owner` do not. No action row changed.
 - Version 10: `credentials.project` (platform, high, `none`, `denied`), the action the acr-api workload row lists for the acr credential events route. No role holds it, so no decision changes (CHAOS-11196).
 - Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.
+- Version 12: `reports.write` (organization scope, organization resource kind, high risk, `none`, impersonation `denied`), held by `viewer`, `member`, `admin` and `owner` (CHAOS-12657). It covers the five saved-report GraphQL writes. Those writes check only the caller's organization today, never a role (`requireMutationOrg`, `internal/queryapi/graph/reports_mutations.go`), so every organization role holds it. It is catalog-only: `/auth/me` does not serve it. Narrowing it to a smaller role set is a separate decision.
 
 ## Planned, not built
 

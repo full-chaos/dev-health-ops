@@ -4,6 +4,11 @@ package authorization
 // although the deny list would refuse it for anyone else.
 const AuditReasonOwnerExempt = "owner_exempt"
 
+// MaxRepositoryAllowlist is the largest repository allowlist a decision carries: the bound of
+// authorization_decision.v1 repository_allowlist (maxItems). A principal with more readable
+// repositories is denied with ReasonRepositoryAllowlistTooLarge; a list is never truncated.
+const MaxRepositoryAllowlist = 256
+
 // Obligations are the enforceable obligations of an allow
 // (authorization_decision.v1). Redaction and step_up are never set here.
 type Obligations struct {

@@ -34,6 +34,11 @@ const (
 	// exercise the action (G-51, ACP-ADR-10).
 	ImpersonationDenied  = "denied"
 	ImpersonationAllowed = "allowed"
+
+	// RepositoryScopeFiltered marks an action that reads repository-bound data: an allow carries the repositories
+	// the principal may read as an obligation. RepositoryScopeNone is the value of an action that does not.
+	RepositoryScopeFiltered = "filtered"
+	RepositoryScopeNone     = "none"
 )
 
 type Action struct {
@@ -44,6 +49,8 @@ type Action struct {
 	CacheClass   string
 	// Impersonation is ImpersonationDenied or ImpersonationAllowed.
 	Impersonation string
+	// RepositoryScope is RepositoryScopeFiltered or RepositoryScopeNone.
+	RepositoryScope string
 }
 
 type Role struct {

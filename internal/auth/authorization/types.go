@@ -91,6 +91,10 @@ const (
 	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
 	ReasonGrantReadFailed            Reason = "grant_read_failed"
 
+	// ReasonRepositoryAllowlistTooLarge denies an allow whose repository allowlist would hold more than
+	// MaxRepositoryAllowlist keys.
+	ReasonRepositoryAllowlistTooLarge Reason = "repository_allowlist_too_large"
+
 	ReasonImpersonationDenied Reason = "impersonation_denied"
 	ReasonDelegationInvalid   Reason = "delegation_invalid"
 )

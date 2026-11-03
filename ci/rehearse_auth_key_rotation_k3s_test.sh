@@ -14,7 +14,8 @@ cat >"${T}/bin/kubectl" <<'EOS'
 echo "kubectl $*" >> "${FAKE_LOG}"
 case "$*" in
   *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${FAKE_VERSION:-v1.30.2+k3s1}" ;;
-  *"auth can-i --list"*) printf '%s\n' 'Resources                                       Non-Resource URLs   Resource Names   Verbs' \
+  *"auth can-i --list"*) [ -z "${FAKE_CAN_I_EMPTY:-}" ] || exit 0
+    printf '%s\n' "${FAKE_CAN_I_HEADER:-Resources                                       Non-Resource URLs   Resource Names   Verbs}" \
     'selfsubjectreviews.authentication.k8s.io        []                  []               [create]' \
     'selfsubjectaccessreviews.authorization.k8s.io   []                  []               [create]' \
     'selfsubjectrulesreviews.authorization.k8s.io    []                  []               [create]' \
@@ -137,6 +138,15 @@ refused get-other-namespace-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA=
 refused cluster-secrets-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='secrets                                         []                  []               [get]'
 refused wildcard-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='*.*                                             []                  []               [*]'
 if no_write_calls; then ok wildcard-refused-before-any-write; else bad wildcard-refused-before-any-write; fi
+# fail closed: a table form or a row the parser does not know is refused, never skipped
+refused unparsable-row-refused 'cluster-scope permission list' FAKE_CAN_I_EXTRA='namespaces delete'
+if no_write_calls; then ok unparsable-row-refused-before-any-write; else bad unparsable-row-refused-before-any-write; fi
+refused extra-column-row-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='namespaces                                      []                  []               []               [delete]'
+refused reordered-header-refused 'cluster-scope permission list' FAKE_CAN_I_HEADER='Resources   Resource Names   Non-Resource URLs   Verbs'
+if no_write_calls; then ok reordered-header-refused-before-any-write; else bad reordered-header-refused-before-any-write; fi
+refused extra-header-column-refused 'cluster-scope permission list' FAKE_CAN_I_HEADER='Resources   Non-Resource URLs   Resource Names   Verbs   Extra'
+refused empty-list-refused 'cluster-scope permission list' FAKE_CAN_I_EMPTY=1
+if no_write_calls; then ok empty-list-refused-before-any-write; else bad empty-list-refused-before-any-write; fi
 # the ownership proof is the namespace's rehearsal-run label; a ConfigMap token (the fake still answers one) proves nothing
 refused foreign-namespace-refused 'does not carry this run' FAKE_NS_LABEL=ffffffffffffffffffff
 if no_write_calls; then ok foreign-namespace-refused-before-any-write; else bad foreign-namespace-refused-before-any-write; fi

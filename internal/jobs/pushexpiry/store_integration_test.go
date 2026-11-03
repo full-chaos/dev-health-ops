@@ -159,9 +159,9 @@ func (e *sweepEnv) sweep(t *testing.T, ctx context.Context, on bool) error {
 
 type outboxEvent struct {
 	eventType, wireType, key string
-	revision       int64
-	payload        []byte
-	createdAt      time.Time
+	revision                 int64
+	payload                  []byte
+	createdAt                time.Time
 }
 
 func (e *sweepEnv) outbox(t *testing.T, ctx context.Context, id uuid.UUID) []outboxEvent {

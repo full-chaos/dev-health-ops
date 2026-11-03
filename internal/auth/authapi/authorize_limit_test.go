@@ -221,8 +221,28 @@ func TestAuthorizeZeroCallerLimitSetsNoLimit(t *testing.T) {
 }
 
 func TestAuthorizeCallerRejectionSeriesExistAtZero(t *testing.T) {
+	// The process-wide counter is shared by every test, so the zero start is read on an id only this test uses.
+	const id = "auth_svc_pdp_test_zero_start"
+	if text := rejectionsText(t); strings.Contains(text, id) {
+		t.Fatalf("series %s exists before its limiter is built:\n%s", id, text)
+	}
+	limiter := newCallerLimiter(id, []string{"s"}, PDPCallerLimit{PerSecond: 1, Burst: 1})
+	if got := rejectionCount(t, id); got != 0 {
+		t.Fatalf("series %s starts at %d, want 0", id, got)
+	}
+	if ok, _ := limiter.take("s", 1); !ok {
+		t.Fatal("first token refused")
+	}
+	if ok, _ := limiter.take("s", 1); ok {
+		t.Fatal("second token granted")
+	}
+	// take does not count; the handler does, once per 429.
+	if got := rejectionCount(t, id); got != 0 {
+		t.Errorf("series %s = %d after take, want 0", id, got)
+	}
+
 	newLimitFixture(t, PDPCallerLimit{PerSecond: 1, Burst: 1})
-	for _, id := range []string{pdpAuthorizeCallerLimitID, pdpAuthorizeBatchCallerLimitID} {
-		rejectionCount(t, id)
+	for _, real := range []string{pdpAuthorizeCallerLimitID, pdpAuthorizeBatchCallerLimitID} {
+		rejectionCount(t, real)
 	}
 }

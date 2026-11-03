@@ -121,6 +121,7 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 	d.Obligations = &Obligations{TenantScope: r.OrganizationID, MinimumAssurance: del.Assurance}
 	if r.ResourceKind == resourceRepository {
 		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
+		d.Obligations.RepositoryRestricted = true
 	}
 	return d
 }

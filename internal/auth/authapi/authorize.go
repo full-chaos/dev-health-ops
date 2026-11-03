@@ -579,11 +579,11 @@ func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error
 		// A delegated allow is used once: the impersonation can end at any time.
 		doc.ExpiresAt = time.Unix(0, item.now).UTC().Format(expiresAtLayout)
 	}
-	if o := item.decision.Obligations; o != nil {
-		doc.Obligations = &wireObligations{TenantScope: o.TenantScope, MinimumAssurance: o.MinimumAssurance, RepositoryAllowlist: o.RepositoryAllowlist}
-	}
 	if org := item.question.OrganizationID; org != "" {
 		doc.OrganizationID = &org
+	}
+	if doc.Obligations, err = wireObligationsOf(item.decision, item.question.OrganizationID); err != nil {
+		return decisionDocument{}, err
 	}
 	return doc, nil
 }

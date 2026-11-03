@@ -79,7 +79,7 @@ auth-service route in the same row, and it writes only after auth-service answer
 Rules of the writes:
 
 - Add: an absent, invited or removed pair becomes `active` with the role. An active pair is refused. A suspended pair is refused.
-- Change of role: the pair must be active. The same role again is a no-op. These transition rules, and the refusal to change the last owner's role, apply only with `AUTH_PROXY_ORG_PROVISIONING=true` (the auth-service path). With the switch off, go-api updates the role and `updated_at` on every call, so a repeated role is written again, and it has no last-owner check on a role change.
+- Change of role: the pair must be active. The same role again is a no-op, and a change that would leave the organization with no owner is refused. Both hold with the switch on (auth-service) and off (go-api): a repeated role writes nothing and leaves `updated_at` as it was, and the last owner's role change is refused with 400 "Cannot remove the last owner of an organization". The other transition rules apply only with `AUTH_PROXY_ORG_PROVISIONING=true`.
 - Remove: an active or a suspended membership becomes `removed`.
 - Transfer: go-api takes the organization's current owner as the source. The source becomes `admin` and the target
   becomes `owner`. The target must be an active member.

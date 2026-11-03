@@ -20,6 +20,7 @@ deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
+internal/api/policy	delegated_test.go
 internal/api/policy	principalonce_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -620,6 +621,8 @@ internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/idpstub/cmd/idpstub	main.go
+internal/testsupport/issuerstub	issuerstub.go
+internal/testsupport/issuerstub	issuerstub_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
 internal/testsupport/providerstub	corpus_social_test.go

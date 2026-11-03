@@ -98,6 +98,9 @@ type Authenticator struct {
 	store    Store
 	logger   *slog.Logger
 	routed   *routedAccess
+	// delegated is the delegated_bearer lookup DelegatedRows set; nil
+	// admits a delegated session's bearer on no row.
+	delegated func(profile string) bool
 }
 
 // NewAuthenticator builds an Authenticator.

@@ -6,6 +6,14 @@
       "why": "TRD section 8's own request example shape."
     },
     {
+      "file": "request-valid-repository-nested.json",
+      "why": "A repository key nests groups: 2 to 20 segments (GitLab subgroups)."
+    },
+    {
+      "file": "request-valid-repository-twenty-segments.json",
+      "why": "20 segments is the deepest key."
+    },
+    {
       "file": "request-valid-organization-wide-star.json",
       "why": "The explicit organization-wide repository key `*` is legal for a repository."
     },
@@ -54,6 +62,36 @@
       "expect_instance_location": "/resource/key",
       "expect_keyword": "pattern",
       "why": "Repository keys are canonical lowercase owner/repo."
+    },
+    {
+      "file": "request-invalid-repository-key-21-segments.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "21 segments is one past the deepest key."
+    },
+    {
+      "file": "request-invalid-repository-key-256-bytes.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "maxLength",
+      "why": "256 bytes is one past the key bound (every segment is within 100 characters)."
+    },
+    {
+      "file": "request-invalid-repository-key-empty-segment.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "An empty segment is no segment."
+    },
+    {
+      "file": "request-invalid-repository-key-trailing-slash.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash leaves the last segment empty."
+    },
+    {
+      "file": "request-invalid-repository-key-leading-dot-group.json",
+      "expect_instance_location": "/resource/key",
+      "expect_keyword": "pattern",
+      "why": "A group segment never starts with a dot; only the last segment may."
     },
     {
       "file": "request-invalid-star-on-non-repository.json",

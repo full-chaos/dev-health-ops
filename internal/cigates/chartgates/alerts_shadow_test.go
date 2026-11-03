@@ -333,6 +333,36 @@ func shadowPanelFieldsAreV6(g *guard) {
 	}
 }
 
+// Scalar panels issue a scalar request, so each metric aggregation needs reduceTo; chart panels do not. Source: schema-notes-10849d-v2.md.
+var (
+	shadowScalarKinds = []string{"signoz/NumberPanel", "signoz/TablePanel", "signoz/PiePanel"}
+	shadowReduceTo    = []string{"sum", "count", "avg", "min", "max", "last", "median"}
+)
+
+func shadowScalarPanelsReduce(g *guard) {
+	root := shadowDashboard(g)
+	if root == nil {
+		return
+	}
+	for id, p := range mp(mp(root["spec"])["panels"]) {
+		spec := mp(mp(p)["spec"])
+		scalar := slices.Contains(shadowScalarKinds, str(mp(spec["plugin"])["kind"]))
+		for _, q := range list(spec["queries"]) {
+			for _, a := range list(mp(mp(mp(mp(q)["spec"])["plugin"])["spec"])["aggregations"]) {
+				if str(mp(a)["metricName"]) == "" {
+					continue
+				}
+				r, has := mp(a)["reduceTo"]
+				if scalar {
+					g.expect(has && slices.Contains(shadowReduceTo, str(r)), "panel %s is scalar: metric %s has reduceTo %v, want one of %v", id, str(mp(a)["metricName"]), r, shadowReduceTo)
+				} else {
+					g.expect(!has, "panel %s is a chart panel: metric %s must not set reduceTo", id, str(mp(a)["metricName"]))
+				}
+			}
+		}
+	}
+}
+
 func TestShadowAlertGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"shadow-alerts-are-the-group", shadowAlertsAreTheGroup},
@@ -343,5 +373,6 @@ func TestShadowAlertGuardsRealTree(t *testing.T) {
 		check{"shadow-class-value-is-in-the-closed-set", shadowClassValueIsInTheClosedSet},
 		check{"shadow-dashboard-panels", shadowDashboardPanels},
 		check{"shadow-panel-fields-are-v6", shadowPanelFieldsAreV6},
+		check{"shadow-scalar-panels-reduce", shadowScalarPanelsReduce},
 	)
 }

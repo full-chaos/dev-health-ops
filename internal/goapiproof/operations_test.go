@@ -39,7 +39,7 @@ var registeredOperations = []string{
 	"capacityForecast", "capacityCompletionDistribution", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "home", "hotspots",
 	"releaseImpact",
-	"investmentBreakdown", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
+	"investmentBreakdown", "investmentBreakdownTeam", "investmentBreakdownRepository", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
 	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "coverageScopeBaseline", "sourceHealth", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
@@ -371,14 +371,15 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 			sharedRoots++
 		}
 	}
-	// flowMatrix, investmentBreakdown, investmentEvidenceQuality and investmentFull all select
+	// flowMatrix, investmentBreakdown, investmentBreakdownTeam, investmentBreakdownRepository,
+	// investmentEvidenceQuality and investmentFull all select
 	// `analytics`; catalogValues and acrRepositoryScopes both select
 	// `catalog`; releaseImpact selects `workGraphEdges`; capacityCompletionDistribution selects `capacityForecast`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 16 {
-		t.Fatalf("expected 16 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 18 {
+		t.Fatalf("expected 18 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 

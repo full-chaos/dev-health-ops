@@ -66,7 +66,11 @@ type catalogView interface {
 }
 
 // NewEvaluator decides under the embedded catalog only; a caller cannot supply one.
-func NewEvaluator() *Evaluator { return newEvaluator(policycatalog.Default()) }
+func NewEvaluator() *Evaluator {
+	e := newEvaluator(policycatalog.Default())
+	e.redaction = embeddedRedactionRules(e.cat)
+	return e
+}
 
 func newEvaluator(c catalogView) *Evaluator { return &Evaluator{cat: c} }
 
@@ -82,6 +86,11 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 
 	r, ok := NormalizeRequest(r)
 	if !ok {
+		return deny(ReasonInvalidRequest)
+	}
+	// A repository decision names one repository; the wildcard key stays a valid request shape (the wire
+	// accepts it) and is refused here, so no allowlist ever holds it.
+	if r.ResourceKind == resourceRepository && r.ResourceKey == wildcardKey {
 		return deny(ReasonInvalidRequest)
 	}
 	act, err := e.cat.Action(r.Action)
@@ -139,5 +148,8 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 	if !e.cat.Allows(roleID, act.ID) {
 		return deny(ReasonRoleLacksAction)
 	}
-	return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev}
+	if act.Scope == policycatalog.ScopePlatform {
+		return Decision{Allowed: true, Reason: ReasonAllowedByRole, PolicyRevision: rev}
+	}
+	return e.organizationAllow(r, act, s, roleID, rev)
 }

@@ -109,7 +109,7 @@ func AllReasons() []Reason {
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
-		ReasonImpersonationDenied, ReasonDelegationInvalid,
+		ReasonImpersonationDenied, ReasonDelegationInvalid, ReasonRepositoryAllowlistTooLarge,
 	}
 }
 

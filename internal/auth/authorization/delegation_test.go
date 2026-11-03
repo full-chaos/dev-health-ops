@@ -3,6 +3,7 @@ package authorization
 import (
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"testing"
 
@@ -34,7 +35,7 @@ var deniedOrgActions = map[string]bool{
 var credentialShape = regexp.MustCompile(`^(credentials?|tokens?)\.(create|issue|rotate|revoke)$`)
 
 type delegatedSnapshot struct {
-	fakeSnapshot
+	grantFake
 	d  Delegation
 	on bool
 }
@@ -43,7 +44,7 @@ func (f delegatedSnapshot) Delegation() (Delegation, bool) { return f.d, f.on }
 
 func delegated(role string, permitted []string, actorRole string) delegatedSnapshot {
 	return delegatedSnapshot{
-		fakeSnapshot: orgSnapshot(role),
+		grantFake: repoSnapshot(role),
 		d: Delegation{
 			Chain:                []Hop{{ActorPrincipalID: testActor, PermittedActions: permitted}},
 			ActorPlatformRole:    actorRole,
@@ -391,15 +392,19 @@ func TestDelegation_NonDelegatedDecisionsAreUnchanged(t *testing.T) {
 			if a.Scope != "organization" || a.ResourceKind != "organization" {
 				continue
 			}
-			plain := e.Evaluate(orgRequest(a.Action), orgSnapshot(r.Role))
-			aware := e.Evaluate(orgRequest(a.Action), delegatedSnapshot{fakeSnapshot: orgSnapshot(r.Role)})
+			plain := e.Evaluate(orgRequest(a.Action), repoSnapshot(r.Role))
+			aware := e.Evaluate(orgRequest(a.Action), delegatedSnapshot{grantFake: repoSnapshot(r.Role)})
 			want := Decision{Allowed: held[r.Role][a.Action], Reason: ReasonRoleLacksAction, PolicyRevision: ver}
 			if want.Allowed {
 				want.Reason = ReasonAllowedByRole
+				want.Obligations = plain.Obligations
+				if plain.Obligations == nil || plain.Obligations.TenantScope != testOrg {
+					t.Errorf("%s %s: an allow carries its tenant scope: %+v", r.Role, a.Action, plain.Obligations)
+				}
 			} else {
 				want.CacheClass = CacheNone
 			}
-			if plain != want || aware != want {
+			if !reflect.DeepEqual(plain, want) || !reflect.DeepEqual(aware, want) {
 				t.Errorf("%s %s: plain %+v aware %+v want %+v", r.Role, a.Action, plain, aware, want)
 			}
 		}
@@ -538,7 +543,7 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 		}
 		rec := session.Record{Delegation: &session.Delegation{Actor: uuid.New(), Reason: "r", PermittedActions: permitted}}
 		for _, id := range allOrgActions(t) {
-			s := delegatedSnapshot{fakeSnapshot: orgSnapshot(role), on: true, d: Delegation{
+			s := delegatedSnapshot{grantFake: repoSnapshot(role), on: true, d: Delegation{
 				Chain:                []Hop{{ActorPrincipalID: rec.Delegation.Actor.String(), PermittedActions: rec.Delegation.PermittedActions}},
 				TargetOrganizationID: testOrg, Assurance: "aal1",
 			}}
@@ -560,7 +565,7 @@ func TestDelegation_PermittedActionsOfARealSessionRecord(t *testing.T) {
 				}
 			}
 			rec := session.Record{Delegation: &session.Delegation{Actor: uuid.New(), Reason: "r", PermittedActions: rest}}
-			s := delegatedSnapshot{fakeSnapshot: orgSnapshot(role), on: true, d: Delegation{
+			s := delegatedSnapshot{grantFake: repoSnapshot(role), on: true, d: Delegation{
 				Chain:                []Hop{{ActorPrincipalID: rec.Delegation.Actor.String(), PermittedActions: rec.Delegation.PermittedActions}},
 				TargetOrganizationID: testOrg, Assurance: "aal1",
 			}}

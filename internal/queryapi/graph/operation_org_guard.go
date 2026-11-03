@@ -209,3 +209,7 @@ func orgArgumentValue(value *ast.Value, variables map[string]any) (string, bool)
 	}
 	return "", false
 }
+
+// msgDelegatedOperation refuses every operation but a query to a delegated
+// session's caller.
+const msgDelegatedOperation = "Not allowed in an impersonation session"

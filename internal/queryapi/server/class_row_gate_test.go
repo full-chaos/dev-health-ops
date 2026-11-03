@@ -40,6 +40,8 @@ var classOperationDocuments = map[string]string{
 	"flowMatrix":                     registeredFlowMatrixDocument,
 	"hotspots":                       registeredHotspotsDocument,
 	"investmentBreakdown":            registeredInvestmentBreakdownDocument,
+	"investmentBreakdownTeam":        registeredInvestmentBreakdownTeamDocument,
+	"investmentBreakdownRepository":  registeredInvestmentBreakdownRepositoryDocument,
 	"investmentEvidenceQuality":      registeredInvestmentEvidenceQualityDocument,
 	"investmentFull":                 registeredInvestmentFullDocument,
 	"releaseImpact":                  registeredReleaseImpactDocument,

@@ -3,6 +3,7 @@ package pushexpiry
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,10 +17,11 @@ type Beginner interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
-// pageSQL is a plain read of the five columns the sweep needs: no lock clause,
+// pageSQL is a plain read of the five columns the sweep needs, bounded below by
+// the window ($4): no lock clause,
 // no write, no name, hash or prefix.
 const pageSQL = `SELECT id, org_id, source_id, scopes, expires_at FROM external_ingest_tokens
-WHERE revoked_at IS NULL AND expires_at <= now() AND (expires_at, id) > ($1, $2)
+WHERE revoked_at IS NULL AND expires_at <= now() AND expires_at > $4 AND (expires_at, id) > ($1, $2)
 ORDER BY expires_at, id LIMIT $3`
 
 type PgStore struct {
@@ -27,11 +29,11 @@ type PgStore struct {
 	Schema authschema.ValidatedIdentifier
 }
 
-func (store PgStore) Page(ctx context.Context, after Cursor, limit int) ([]Token, error) {
+func (store PgStore) Page(ctx context.Context, after Cursor, limit int, notBefore time.Time) ([]Token, error) {
 	if store.DB == nil {
 		return nil, errors.New("push expiry store has no database")
 	}
-	rows, err := store.DB.Query(ctx, pageSQL, after.ExpiresAt, after.ID, limit)
+	rows, err := store.DB.Query(ctx, pageSQL, after.ExpiresAt, after.ID, limit, notBefore)
 	if err != nil {
 		return nil, err
 	}

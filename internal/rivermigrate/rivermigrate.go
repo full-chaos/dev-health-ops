@@ -29,6 +29,7 @@ import (
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/ownermove"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 )
@@ -72,6 +73,7 @@ func Command() cli.Command {
 				},
 			},
 			rolesCommand(),
+			ownerMoveCommand(),
 			// The Python CLI's flat aliases of the Alembic verbs (dev-hops migrate
 			// current|heads|history|status|downgrade).
 		}, pgmigrate.Aliases(migrationDatabaseResolver)...),
@@ -272,6 +274,7 @@ func Execute(
 		QueryAPIGrants:          queryAPIGrants,
 		QueryAPIColumnGrants:    queryAPIColumnGrants,
 		QueryAPISessionRead:     queryAPISessionRead,
+		AuthSchema:              authSchemaOf(lookup),
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
@@ -304,6 +307,14 @@ func Execute(
 		return reportSchemaCheck(ctx, logger, stdout, stderr, current, err)
 	}
 
+	pinned, err := ownermove.VerifyPinFromEnv(ctx, pool, lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "migration refused: %v\n", err)
+		return 1
+	}
+	if pinned != "" {
+		infoLogger.InfoContext(ctx, ownermove.PinVerifiedMessage, "owner_role", pinned)
+	}
 	migrationOptions.Logger = logger
 	result, err := riverstore.ApplyPinnedMigrations(ctx, pool, migrationOptions)
 	if err != nil {
@@ -550,6 +561,18 @@ func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByA
 		grant.Also = append(grant.Also, riverstore.SessionReadTable{Table: table.Table, Columns: table.Columns})
 	}
 	return grant, nil
+}
+
+// authSchemaOf is AUTH_DATABASE_SCHEMA (default "auth") when it is a usable name, else "" (riverstore's default).
+func authSchemaOf(lookup func(string) (string, bool)) string {
+	schema := "auth"
+	if value, _ := lookup("AUTH_DATABASE_SCHEMA"); strings.TrimSpace(value) != "" {
+		schema = strings.TrimSpace(value)
+	}
+	if !riverstore.ValidIdentifier(schema) {
+		return ""
+	}
+	return schema
 }
 
 // postureGrants converts one role's declared posture into the migration's

@@ -344,6 +344,42 @@ func TestAcrEventsSameRevision(t *testing.T) {
 	}
 }
 
+func TestAcrEventsRevokeOrExpiryOverAGapEndsTheCredential(t *testing.T) {
+	l := newAcrLive(t, true)
+	id := acrID()
+	l.want(t, l.issued(id), http.StatusNoContent, "")
+	l.want(t, l.revoked(id, 3), http.StatusNoContent, "")
+	if revision, status := l.projected(t, id); revision != 3 || status != "revoked" {
+		t.Fatalf("projection = %d %s, want 3 revoked", revision, status)
+	}
+	if got := l.count(t, `SELECT count(*) FROM auth.credential_registry WHERE domain_owner = 'acr' AND external_reference = $1 AND revoked_at IS NOT NULL`, id); got != 1 {
+		t.Fatal("the registry row is not revoked")
+	}
+	l.want(t, l.revoked(id, 2), http.StatusNoContent, "")
+	l.want(t, l.expired(id, 4), http.StatusConflict, reasonProjectionRefused)
+	if revision, status := l.projected(t, id); revision != 3 || status != "revoked" {
+		t.Fatalf("projection = %d %s after later events, want 3 revoked", revision, status)
+	}
+
+	ended := acrID()
+	l.want(t, l.issued(ended), http.StatusNoContent, "")
+	l.want(t, l.expired(ended, 4), http.StatusNoContent, "")
+	if revision, status := l.projected(t, ended); revision != 4 || status != "expired" {
+		t.Fatalf("projection = %d %s, want 4 expired", revision, status)
+	}
+}
+
+func TestAcrEventsRefusedRotationRefusesTheChildsRevoke(t *testing.T) {
+	l := newAcrLive(t, true)
+	parent, child := acrID(), acrID()
+	l.want(t, l.issued(parent), http.StatusNoContent, "")
+	l.want(t, l.rotated(child, parent, `["context:read","evidence:read"]`), http.StatusConflict, reasonProjectionRefused)
+	l.want(t, l.revoked(child, 2), http.StatusConflict, reasonProjectionRefused)
+	if got := l.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, child); got != 0 {
+		t.Fatal("the refused child has a registry row")
+	}
+}
+
 func TestAcrEventsGapThenOrder(t *testing.T) {
 	l := newAcrLive(t, true)
 	id := acrID()

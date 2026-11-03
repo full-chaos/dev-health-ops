@@ -175,8 +175,8 @@ func TestChangePasswordKeepsGoAPIsChainWithTheCredentialsFlagOff(t *testing.T) {
 	env := allOn(stub.URL)
 	env[AuthProxyFlagEnv(AuthCredentials)] = "false"
 	cfg := mustProxyConfig(t, env)
-	if len(cfg.ScopeExemptRoutes()) != 0 {
-		t.Fatalf("scope-exempt routes %v with the credentials aggregate off", cfg.ScopeExemptRoutes())
+	if exempt := cfg.ScopeExemptRoutes(); len(exempt) != 1 || !exempt["POST /api/v1/auth/switch-org"] {
+		t.Fatalf("scope-exempt routes %v with the credentials aggregate off, want only the sessions route switch-org", exempt)
 	}
 	f := newOwnerFixture(t, cfg)
 	for name, bearer := range map[string]string{"no bearer": "", "session-route bearer": sessionRouteBearer} {
@@ -199,8 +199,11 @@ func TestChangePasswordKeepsGoAPIsChainWithTheCredentialsFlagOff(t *testing.T) {
 func TestScopeExemptRoutesAreExactAndFlagBound(t *testing.T) {
 	cfg := mustProxyConfig(t, allOn("http://127.0.0.1:1"))
 	exempt := cfg.ScopeExemptRoutes()
-	if len(exempt) != 1 || !exempt["POST /api/v1/auth/change-password"] {
-		t.Fatalf("scope-exempt routes %v, want only POST /api/v1/auth/change-password", exempt)
+	if len(exempt) != 2 || !exempt["POST /api/v1/auth/change-password"] || !exempt["POST /api/v1/auth/switch-org"] {
+		t.Fatalf("scope-exempt routes %v, want only POST /api/v1/auth/change-password and POST /api/v1/auth/switch-org", exempt)
+	}
+	if exempt := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://127.0.0.1:1"}).ScopeExemptRoutes(); len(exempt) != 0 {
+		t.Fatalf("scope-exempt routes %v with the sessions aggregate off", exempt)
 	}
 	marked := false
 	probe := markScopeExempt(exempt)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -208,6 +211,9 @@ func TestScopeExemptRoutesAreExactAndFlagBound(t *testing.T) {
 	}))
 	for target, want := range map[string]bool{
 		"POST /api/v1/auth/change-password":   true,
+		"POST /api/v1/auth/switch-org":        true,
+		"POST /api/v1/auth/switch-org/":       false,
+		"GET /api/v1/auth/switch-org":         false,
 		"GET /api/v1/auth/change-password":    false,
 		"POST /api/v1/auth/change-password/":  false,
 		"POST /api/v1/auth/change%2Dpassword": true,

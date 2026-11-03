@@ -84,7 +84,11 @@ func TestHelpDeclaresTheDocumentedEnvironmentHandful(t *testing.T) {
 	// 23 -> 25: LINK_TOKEN_SECRET, LINK_TOKEN_SECRET_PREVIOUS added -- the link
 	// signing key and its rotation-overlap key; neither is required (unset, links
 	// are signed with JWT_SECRET_KEY), both hold a real secret value.
-	if len(required) > 25 {
+	// 25 -> 27: SSO_STATE_SECRET, GITHUB_APP_STATE_SECRET added -- one key per
+	// purpose for the SSO login state and the GitHub App install state; neither
+	// is required (unset, both are keyed from JWT_SECRET_KEY), both hold a real
+	// secret value.
+	if len(required) > 27 {
 		t.Fatalf("required environment grew to %d settings: %v", len(required), required)
 	}
 	for _, name := range required {

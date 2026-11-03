@@ -24,7 +24,8 @@ import (
 //   - inside the secrets package, the same functions called unqualified;
 //   - a lookup passed in: a one-argument call of a parameter, variable or struct field whose declared type is
 //     func(string) string or func(string) (string, bool), or a named type or alias of one (secrets.LookupEnv), unless
-//     its name is in nonEnvLookupHolders. A same-named method or a call with other arguments is not a lookup.
+//     it is a non-env holder (nonEnvLookupHolders by package and identifier, or a redactor word of nonEnvLookupWords).
+//     A same-named method or a call with other arguments is not a lookup.
 //
 // A name that appears only in a comment, or in a file that never looks anything up, is not read.
 const (
@@ -32,27 +33,36 @@ const (
 	secretsDir        = "internal/platform/secrets"
 )
 
-// nonEnvLookupHolders are the name words of string-lookup-shaped holders and types that read no environment, each with
-// the reason. Every other func(string) string or func(string) (string, bool) holder counts as an environment lookup.
-var nonEnvLookupHolders = map[string]string{
-	"scrub":     "redacts a value",
-	"redact":    "redacts a value",
-	"mask":      "masks a value",
-	"sanitize":  "cleans a value",
-	"cookie":    "reads a request cookie (oidc Cookie, saml cookie)",
-	"documents": "reads a registered GraphQL document (websmoke Documents)",
-	"revision":  "reads a git revision (docsbuild Revision)",
-	"rewrite":   "rewrites a value (authrows Rewrite, exactsum rewrite)",
-	"team":      "resolves a team name (TeamResolver, TeamNames, resolveTeam)",
-	"names":     "lists team names (icfinalize namesOf)",
-	"find":      "matches a body (aidetection find)",
-	"build":     "builds an SQL predicate (claim_id_chunks build)",
-	"cut":       "cuts a value (logging RedactUserinfoLast cut)",
-	"digest":    "digests a document (goapiproof digestFn)",
-	"import":    "maps an import path (affected importPath)",
-	"label":     "labels a key (investmentexplain label)",
-	"read":      "reads a stored row field (deadletter replayFromRow read)",
-	"value":     "reads a stored setting value (llmorgsettings value)",
+// nonEnvLookupWords are the name words of string-lookup-shaped holders that redact a value and read no environment.
+var nonEnvLookupWords = map[string]string{
+	"scrub":    "redacts a value",
+	"redact":   "redacts a value",
+	"mask":     "masks a value",
+	"sanitize": "cleans a value",
+}
+
+type lookupHolder struct{ dir, name string }
+
+// nonEnvLookupHolders are the string-lookup-shaped holders and types of the tree that read no environment, each by its
+// package directory and identifier, with the reason. A holder of the same name in another package still counts. Every
+// other func(string) string or func(string) (string, bool) holder counts as an environment lookup.
+var nonEnvLookupHolders = map[lookupHolder]string{
+	{"internal/auth/identity/oidc", "Cookie"}:                  "reads a request cookie",
+	{"internal/auth/identity/saml", "cookie"}:                  "reads a request cookie",
+	{"internal/websmoke", "Documents"}:                         "reads a registered GraphQL document",
+	{"internal/cigates/docsbuild", "Revision"}:                 "reads a git revision",
+	{"internal/testsupport/authrows", "Rewrite"}:               "rewrites a recorded row value",
+	{"internal/queryapi/analytics", "rewrite"}:                 "rewrites an SQL expression",
+	{"internal/jobs/metrics/aiworkflow", "find"}:               "matches a body",
+	{"internal/syncdispatchruntime", "build"}:                  "builds an SQL predicate",
+	{"internal/platform/logging", "cut"}:                       "cuts a value",
+	{"internal/goapiproof", "digestFn"}:                        "digests a document",
+	{"internal/cigates/affected", "importPath"}:                "maps an import path",
+	{"internal/queryapi/investmentexplain", "label"}:           "labels a key",
+	{"internal/streamrunner", "read"}:                          "reads a stored row field",
+	{"internal/llmorgsettings", "value"}:                       "reads a stored setting value",
+	{"internal/jobs/metrics/daily/icfinalize", "TeamNames"}:    "lists team names",
+	{"internal/jobs/metrics/daily/icfinalize", "TeamResolver"}: "resolves a team name",
 }
 
 var envLookupFuncs = map[string]map[string]bool{
@@ -116,9 +126,10 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 	scan := &envScan{lookupTypes: map[string]bool{}, fields: map[string]bool{}, pkgValues: map[string]map[string]bool{}}
 	for changed := true; changed; {
 		changed = false
-		for _, file := range files {
+		for path, file := range files {
+			dir := filepath.ToSlash(filepath.Dir(path))
 			ast.Inspect(file, func(node ast.Node) bool {
-				if spec, ok := node.(*ast.TypeSpec); ok && !scan.lookupTypes[spec.Name.Name] && !nonEnvLookupHolder(spec.Name.Name) && scan.isLookupType(spec.Type) {
+				if spec, ok := node.(*ast.TypeSpec); ok && !scan.lookupTypes[spec.Name.Name] && !nonEnvLookupHolder(dir, spec.Name.Name) && scan.isLookupType(spec.Type) {
 					scan.lookupTypes[spec.Name.Name], changed = true, true
 				}
 				return true
@@ -132,7 +143,7 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 			if st, ok := node.(*ast.StructType); ok {
 				for _, field := range st.Fields.List {
 					for _, name := range field.Names {
-						if scan.isLookupHolder(name.Name, field.Type) {
+						if scan.isLookupHolder(dir, name.Name, field.Type) {
 							scan.fields[name.Name] = true
 						}
 					}
@@ -148,7 +159,7 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 			for _, spec := range gen.Specs {
 				value := spec.(*ast.ValueSpec)
 				for i, name := range value.Names {
-					if scan.isLookupValueSpec(value, i, imports) {
+					if scan.isLookupValueSpec(value, i, imports, dir) {
 						if scan.pkgValues[dir] == nil {
 							scan.pkgValues[dir] = map[string]bool{}
 						}
@@ -162,14 +173,17 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 }
 
 // isLookupHolder reports whether a parameter, variable or field holds an environment lookup: its type is a string lookup
-// (or a named type or alias of one) and its name is not in nonEnvLookupHolders. The scan errs toward counting a read.
-func (s *envScan) isLookupHolder(name string, typ ast.Expr) bool {
-	return s.isLookupType(typ) && !nonEnvLookupHolder(name)
+// (or a named type or alias of one) and it is not a non-env holder. The scan errs toward counting a read.
+func (s *envScan) isLookupHolder(dir, name string, typ ast.Expr) bool {
+	return s.isLookupType(typ) && !nonEnvLookupHolder(dir, name)
 }
 
-// nonEnvLookupHolder reports whether a holder or type name has a word of nonEnvLookupHolders and no word that names the
-// environment (env, getenv, environment, lookup): readEnv still counts, KeyScrub and resolveTeam do not.
-func nonEnvLookupHolder(name string) bool {
+// nonEnvLookupHolder reports whether a holder or type is in nonEnvLookupHolders, or its name has a word of
+// nonEnvLookupWords and no word that names the environment (env, getenv, environment, lookup): redactEnv still counts.
+func nonEnvLookupHolder(dir, name string) bool {
+	if _, ok := nonEnvLookupHolders[lookupHolder{dir, name}]; ok {
+		return true
+	}
 	exempt := false
 	for _, word := range nameWords.FindAllString(name, -1) {
 		word = strings.ToLower(word)
@@ -177,7 +191,7 @@ func nonEnvLookupHolder(name string) bool {
 		case "env", "getenv", "environment", "lookup":
 			return false
 		}
-		if _, ok := nonEnvLookupHolders[word]; ok {
+		if _, ok := nonEnvLookupWords[word]; ok {
 			exempt = true
 		}
 	}
@@ -212,9 +226,9 @@ func (s *envScan) isLookupType(expr ast.Expr) bool {
 	return false
 }
 
-func (s *envScan) isLookupValueSpec(value *ast.ValueSpec, i int, imports map[string]string) bool {
+func (s *envScan) isLookupValueSpec(value *ast.ValueSpec, i int, imports map[string]string, dir string) bool {
 	if value.Type != nil {
-		return s.isLookupHolder(value.Names[i].Name, value.Type)
+		return s.isLookupHolder(dir, value.Names[i].Name, value.Type)
 	}
 	return i < len(value.Values) && isEnvFuncRef(value.Values[i], imports)
 }
@@ -259,23 +273,23 @@ func (s *envScan) isEnvLookup(call *ast.CallExpr, imports map[string]string, dir
 			}
 			return len(call.Args) == 1 && s.pkgValues[dir][fun.Name]
 		}
-		return len(call.Args) == 1 && s.isLookupObject(fun.Obj, imports)
+		return len(call.Args) == 1 && s.isLookupObject(fun.Obj, imports, dir)
 	}
 	return false
 }
 
 // isLookupObject reports whether a local declaration (a parameter, a variable, an assignment) holds a string lookup.
-func (s *envScan) isLookupObject(obj *ast.Object, imports map[string]string) bool {
+func (s *envScan) isLookupObject(obj *ast.Object, imports map[string]string, dir string) bool {
 	if obj.Kind != ast.Var {
 		return false
 	}
 	switch decl := obj.Decl.(type) {
 	case *ast.Field:
-		return s.isLookupHolder(obj.Name, decl.Type)
+		return s.isLookupHolder(dir, obj.Name, decl.Type)
 	case *ast.ValueSpec:
 		for i, name := range decl.Names {
 			if name.Name == obj.Name {
-				return s.isLookupValueSpec(decl, i, imports)
+				return s.isLookupValueSpec(decl, i, imports, dir)
 			}
 		}
 	case *ast.AssignStmt:
@@ -375,7 +389,8 @@ func TestWorkerSecretKeyReaderScan(t *testing.T) {
 		{"E19-two-arg-method-named-like-a-lookup-field", "package x\ntype H struct{ Getenv func(string) string }\ntype M struct{}\nfunc (M) Getenv(ctx, key string) string { return key }\nfunc f(m M) string { return m.Getenv(\"ctx\", \"SOME_KEY\") }\n", false},
 		{"E20-parameter-shadows-an-import", "package x\nimport \"context\"\nvar _ context.Context\ntype H struct{ Getenv func(string) string }\nfunc g(context H) string { return context.Getenv(\"SOME_KEY\") }\n", true},
 		{"E21-neutral-names-hold-a-lookup", "package x\nfunc f(fn func(string) string, get func(string) (string, bool), g func(string) string) {\n_ = fn(\"SOME_KEY\")\n}\n", true},
-		{"E22-env-word-beats-an-exempt-word", "package x\ntype R struct{ readEnv func(string) string }\nfunc f(r R) string { return r.readEnv(\"SOME_KEY\") }\n", true},
+		{"E22-env-word-beats-an-exempt-word", "package x\ntype R struct{ redactEnv func(string) string }\nfunc f(r R) string { return r.redactEnv(\"SOME_KEY\") }\n", true},
+		{"E23-exempt-name-in-another-package", "package x\nfunc f(read func(string) string, value func(string) (string, bool)) string {\n_, _ = value(\"OTHER\")\nreturn read(\"SOME_KEY\")\n}\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

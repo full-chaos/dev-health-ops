@@ -154,8 +154,10 @@ func TestPlatformRoute_ImpersonationStopByAHolderOfAdminImpersonateOnly(t *testi
 		store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID, TargetRole: "owner"}
 		auth := authenticator(t, store)
 		scope := NewScope(auth, quiet())
-		handler := scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).WrapPlatform(rule.ActionAdminImpersonate, actingOrg))))
-		got := serve(handler, http.MethodPost, "/x", bearer(t, superClaims))
+		mux := http.NewServeMux()
+		mux.Handle("POST /api/v1/admin/impersonate/stop", NewGuard(auth, quiet()).WrapPlatform(rule.ActionAdminImpersonate, actingOrg))
+		handler := scope.Principal(scope.OrgScope(scope.Impersonation(mux)))
+		got := serve(handler, http.MethodPost, "/api/v1/admin/impersonate/stop", bearer(t, superClaims))
 		if got.status != c.status || (got.header.Get("X-Impersonating") == "true") != c.sessions {
 			t.Errorf("%s: %d %s, impersonating header %q; want %d, session %v", c.name, got.status, got.body, got.header.Get("X-Impersonating"), c.status, c.sessions)
 		}

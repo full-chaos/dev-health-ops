@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -173,15 +174,9 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !rep.AssertOK {
-				t.Fatalf("assertions failed: %+v", rep.Paths)
-			}
-			var sent int
-			for _, p := range rep.Paths {
-				if p.Count == 0 || p.Errors != 0 || p.Unexpected5xx != 0 || p.Forbidden != 0 || len(p.Statuses) != 1 || p.Statuses["200"] != p.Count {
-					t.Fatalf("%s: count %d errors %d 5xx %d forbidden %d statuses %v, want only 200", p.Name, p.Count, p.Errors, p.Unexpected5xx, p.Forbidden, p.Statuses)
-				}
-				sent += p.Count
+			sent, failure := pdpReportFailure(rep, raceEnabled)
+			if failure != "" {
+				t.Fatal(failure)
 			}
 			for _, a := range exp.allowed {
 				if tally.allowed[a] == 0 || tally.denied[a] != 0 {
@@ -205,4 +200,104 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// pdpReportFailure judges one load report. Under the race detector a request takes about a second, so the harness drops
+// requests and the max_error_rate assertion (errors plus drops) fails on speed alone; the real load budget is the k3s run.
+// This stub still judges every assertion in both builds.
+func pdpReportFailure(rep loadharness.Report, race bool) (int, string) {
+	for _, c := range rep.Assertions {
+		if !c.OK {
+			return 0, fmt.Sprintf("assertion %s/%s failed: %s", c.Path, c.Name, c.Detail)
+		}
+	}
+	var sent int
+	for _, p := range rep.Paths {
+		if p.Count == 0 || p.Errors != 0 || p.Unexpected5xx != 0 || p.Forbidden != 0 || len(p.Statuses) != 1 || p.Statuses["200"] != p.Count {
+			return 0, fmt.Sprintf("%s: count %d errors %d 5xx %d forbidden %d statuses %v, want only 200", p.Name, p.Count, p.Errors, p.Unexpected5xx, p.Forbidden, p.Statuses)
+		}
+		sent += p.Count
+	}
+	return sent, ""
+}
+
+func pdpGoodReport() loadharness.Report {
+	return loadharness.Report{
+		AssertOK: true,
+		Paths:    []loadharness.PathReport{{Name: "authorize-low", Count: 10, Statuses: map[string]int{"200": 10}}},
+		Assertions: []loadharness.AssertionCheck{
+			{Path: "authorize-low", Name: "forbid_5xx", OK: true},
+			{Path: "authorize-low", Name: "max_error_rate", OK: true},
+		},
+	}
+}
+
+func pdpFailCheck(rep loadharness.Report, name string) loadharness.Report {
+	for i := range rep.Assertions {
+		if rep.Assertions[i].Name == name {
+			rep.Assertions[i].OK = false
+		}
+	}
+	rep.AssertOK = false
+	return rep
+}
+
+func TestPDPAssertionGate(t *testing.T) {
+	dropped := func() loadharness.Report {
+		r := pdpFailCheck(pdpGoodReport(), "max_error_rate")
+		r.Paths[0].Dropped = 8
+		return r
+	}
+	t.Run("good_report_passes_in_both", func(t *testing.T) {
+		for _, race := range []bool{false, true} {
+			if _, f := pdpReportFailure(pdpGoodReport(), race); f != "" {
+				t.Fatalf("race=%v: %s", race, f)
+			}
+		}
+	})
+	t.Run("dropped_fails_without_race", func(t *testing.T) {
+		if _, f := pdpReportFailure(dropped(), false); f == "" {
+			t.Fatal("a report with dropped requests passed without the race detector")
+		}
+	})
+	t.Run("dropped_passes_with_race", func(t *testing.T) {
+		if _, f := pdpReportFailure(dropped(), true); f != "" {
+			t.Fatalf("dropped requests failed under race: %s", f)
+		}
+	})
+	t.Run("5xx_assertion_fails_with_race", func(t *testing.T) {
+		if _, f := pdpReportFailure(pdpFailCheck(pdpGoodReport(), "forbid_5xx"), true); f == "" {
+			t.Fatal("a failed forbid_5xx assertion passed under race")
+		}
+	})
+	t.Run("forbid_status_assertion_fails_with_race", func(t *testing.T) {
+		r := pdpGoodReport()
+		r.Assertions = append(r.Assertions, loadharness.AssertionCheck{Path: "authorize-low", Name: "forbid_status"})
+		if _, f := pdpReportFailure(r, true); f == "" {
+			t.Fatal("a failed forbid_status assertion passed under race")
+		}
+	})
+	t.Run("errors_fail_with_race_through_path_loop", func(t *testing.T) {
+		r := dropped()
+		r.Paths[0].Errors = 1
+		if _, f := pdpReportFailure(r, true); f == "" {
+			t.Fatal("a path with Errors>0 passed under race")
+		}
+	})
+	t.Run("unexpected_5xx_count_fails_with_race", func(t *testing.T) {
+		r := dropped()
+		r.Paths[0].Unexpected5xx = 1
+		if _, f := pdpReportFailure(r, true); f == "" {
+			t.Fatal("a path with Unexpected5xx>0 passed under race")
+		}
+	})
+	t.Run("build_tag_wiring", func(t *testing.T) {
+		_, f := pdpReportFailure(dropped(), raceEnabled)
+		if raceEnabled && f != "" {
+			t.Fatalf("race build failed on drops: %s", f)
+		}
+		if !raceEnabled && f == "" {
+			t.Fatal("non-race build passed a dropped report")
+		}
+	})
 }

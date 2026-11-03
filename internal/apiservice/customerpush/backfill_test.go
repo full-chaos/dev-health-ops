@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 )
 
 func TestStoredLifecycleEventsAreTheCreatedEventOfTheStoredToken(t *testing.T) {
@@ -27,7 +28,7 @@ func TestStoredLifecycleEventsAreTheCreatedEventOfTheStoredToken(t *testing.T) {
 			if err != nil || len(got) != 1 {
 				t.Fatalf("events = %+v, %v", got, err)
 			}
-			names, _ := scopeNames(row.Scopes)
+			names, _ := pushevent.ScopeNames(row.Scopes)
 			var at *pytime.DateTime
 			if row.ExpiresAt != nil {
 				at = &pytime.DateTime{Time: *row.ExpiresAt}

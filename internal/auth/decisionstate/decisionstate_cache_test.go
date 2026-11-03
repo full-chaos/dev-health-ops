@@ -16,22 +16,21 @@ import (
 // The aggregate ids are the writers' wire ids: provisioning.WireID(type, uuid.String()) (identity/store.go principalEvent
 // and userEvent, org/org.go, membership/membership.go eventFor, grantend/grantend.go EventFor).
 func TestTheDependenciesAreTheWritersWireIDs(t *testing.T) {
-	principal, org, mbr, g1, g2 := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	principal, org, g1, g2 := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	got := principalDependencies(principal)
 	want := []decisioncache.Dependency{{AggregateType: "principal", AggregateID: "prn_" + principal.String()},
 		{AggregateType: "user", AggregateID: "prn_" + principal.String()}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("principal dependencies %+v, want %+v", got, want)
 	}
-	got = organizationDependencies(org, &mbr, []uuid.UUID{g1, g2})
+	got = organizationDependencies(org, []uuid.UUID{g1, g2})
 	want = []decisioncache.Dependency{{AggregateType: "organization", AggregateID: "org_" + org.String()},
-		{AggregateType: "membership", AggregateID: "mbr_" + mbr.String()},
 		{AggregateType: "resource_grant", AggregateID: "grt_" + g1.String()}, {AggregateType: "resource_grant", AggregateID: "grt_" + g2.String()}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("organization dependencies %+v, want %+v", got, want)
 	}
-	if got := organizationDependencies(org, nil, nil); len(got) != 1 {
-		t.Fatalf("no membership row and no grant: %+v, want the organization only", got)
+	if got := organizationDependencies(org, nil); len(got) != 1 {
+		t.Fatalf("no grant: %+v, want the organization only", got)
 	}
 }
 

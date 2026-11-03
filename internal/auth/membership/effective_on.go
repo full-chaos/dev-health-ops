@@ -15,7 +15,7 @@ type RowQueryer interface {
 }
 
 // Effective is the effective membership of one (organization, principal)
-// pair. Found is false when neither table holds a row for the pair.
+// pair. Found is false when public.memberships holds no row for the pair.
 type Effective struct {
 	Status Status
 	Role   string
@@ -23,30 +23,20 @@ type Effective struct {
 }
 
 // EffectiveOn reads the pair's go-api row (public.memberships, unique on
-// user_id and org_id) and its auth row on q, the caller's transaction, and
-// applies effective(). A public row with a NULL role is no public row to
-// effective(): the auth row decides, and an active auth row reads as removed.
+// user_id and org_id) on q, the caller's transaction. public.memberships is the
+// authority (D6651): a row with a role is an active member with that role; no
+// row, or a row with a NULL role, is no membership. The auth.memberships copy is
+// not read.
 func EffectiveOn(ctx context.Context, q RowQueryer, orgID, principalID uuid.UUID) (Effective, error) {
-	var publicRole *string
-	err := q.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2`, principalID, orgID).Scan(&publicRole)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return Effective{}, fmt.Errorf("%w: read public membership: %w", ErrStore, err)
-	}
-	var (
-		authStatus *Status
-		authRole   *string
-		status     string
-	)
-	err = q.QueryRow(ctx, `SELECT status, role FROM "auth".memberships
-WHERE organization_id = $1 AND principal_id = $2`, orgID, principalID).Scan(&status, &authRole)
+	var role *string
+	err := q.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2`, principalID, orgID).Scan(&role)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
+		return Effective{}, nil
 	case err != nil:
-		return Effective{}, fmt.Errorf("%w: read auth membership: %w", ErrStore, err)
-	default:
-		s := Status(status)
-		authStatus = &s
+		return Effective{}, fmt.Errorf("%w: read public membership: %w", ErrStore, err)
+	case role == nil:
+		return Effective{}, nil
 	}
-	cur := effective(publicRole, authStatus, authRole)
-	return Effective{Status: cur.status, Role: cur.role, Found: cur.status != statusAbsent}, nil
+	return Effective{Status: StatusActive, Role: *role, Found: true}, nil
 }

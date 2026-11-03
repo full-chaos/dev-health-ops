@@ -68,10 +68,17 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 		` AND pra_held.role_key = ` + roleExpr + ` AND ` + ActiveRule("pra_held", "pra_holder") + `)`
 }
 
-// PublicActiveRule is a placeholder until the green commit.
-func PublicActiveRule(assignment, user string) string { return ActiveRule(assignment, user) }
+// PublicActiveRule is ActiveRule for a decision input: the holder is a public.users row that is active, in place of an
+// auth.principals row (D6651: public.users is the authority, auth.principals a copy). user is the alias of the
+// public.users row.
+func PublicActiveRule(assignment, user string) string {
+	return `(` + user + `.is_active IS TRUE AND (` + assignment + `.expires_at IS NULL OR ` + assignment +
+		`.expires_at > statement_timestamp()))`
+}
 
-// PublicHoldsSQL is a placeholder until the green commit.
+// PublicHoldsSQL is HoldsSQL under PublicActiveRule: the same assignments table of the auth schema, joined to
+// public.users.
 func PublicHoldsSQL(schema, principalExpr, roleExpr string) string {
-	return HoldsSQL(schema, principalExpr, roleExpr)
+	return `EXISTS (SELECT 1 FROM ` + schema + `.platform_role_assignments pra_held JOIN public.users pra_holder ON pra_holder.id = pra_held.principal_id WHERE pra_held.principal_id = ` + principalExpr +
+		` AND pra_held.role_key = ` + roleExpr + ` AND ` + PublicActiveRule("pra_held", "pra_holder") + `)`
 }

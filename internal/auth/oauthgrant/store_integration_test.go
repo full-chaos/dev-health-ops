@@ -28,13 +28,37 @@ import (
 const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 
 type actorStub struct {
+	mu     sync.Mutex
 	refuse bool
 	err    error
 	calls  int
 	got    [2]uuid.UUID
 }
 
+// set programs the answer under the lock.
+func (a *actorStub) set(refuse bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refuse, a.err = refuse, err
+}
+
+// reset clears the answer and the record under the lock.
+func (a *actorStub) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refuse, a.err, a.calls, a.got = false, nil, 0, [2]uuid.UUID{}
+}
+
+// lastGot is the arguments of the latest call, read under the lock.
+func (a *actorStub) lastGot() [2]uuid.UUID {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.got
+}
+
 func (a *actorStub) ImpersonatingActor(_ context.Context, principal, sessionID uuid.UUID) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.calls++
 	a.got = [2]uuid.UUID{principal, sessionID}
 	return a.refuse, a.err
@@ -520,19 +544,19 @@ func TestApproveHonoursTheActorCheck(t *testing.T) {
 			set  func()
 			want error
 		}{
-			"an actor":    {func() { e.actors.refuse = true }, ErrActorRefused},
-			"a read fail": {func() { e.actors.err = errors.New("read failed") }, ErrActorUnavailable},
+			"an actor":    {func() { e.actors.set(true, nil) }, ErrActorRefused},
+			"a read fail": {func() { e.actors.set(false, errors.New("read failed")) }, ErrActorUnavailable},
 		} {
 			t.Run(class+" "+name, func(t *testing.T) {
 				f := e.flow(t, ctx, class)
-				*e.actors = actorStub{}
+				e.actors.reset()
 				tc.set()
-				t.Cleanup(func() { *e.actors = actorStub{} })
+				t.Cleanup(func() { e.actors.reset() })
 				if _, err := e.store.Approve(ctx, f.decision()); !errors.Is(err, tc.want) {
 					t.Fatalf("Approve: %v, want %v", err, tc.want)
 				}
-				if e.actors.got != [2]uuid.UUID{f.principal, f.web} {
-					t.Fatalf("the check read %v", e.actors.got)
+				if e.actors.lastGot() != [2]uuid.UUID{f.principal, f.web} {
+					t.Fatalf("the check read %v", e.actors.lastGot())
 				}
 				e.nothingApproved(t, ctx, f)
 			})

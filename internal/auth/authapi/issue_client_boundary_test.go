@@ -58,8 +58,8 @@ func TestGoAPIsIssueClientAgainstTheIssueRoute(t *testing.T) {
 	if err != nil || bearer.SessionID != f.sessions.created[0].issued.Session.ID || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token %+v %v, want the created session", bearer, err)
 	}
-	if len(f.creds.seen) != 1 || f.creds.seen[0] != token {
-		t.Fatalf("the route checked %v, want the client's credential", f.creds.seen)
+	if len(f.creds.checked()) != 1 || f.creds.checked()[0] != token {
+		t.Fatalf("the route checked %v, want the client's credential", f.creds.checked())
 	}
 
 	for name, setup := range map[string]func(*compatFixture) string{

@@ -1,0 +1,14 @@
+{
+  "id": "request-limit-decimal-refused",
+  "kind": "request",
+  "operation": "grants_list",
+  "request": {
+    "schema_version": "grant-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 10.5
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "A limit is an integer."
+}

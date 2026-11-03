@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/membership-list.v1.schema.json",
+  "title": "Auth Control Plane membership list (v1 wire format)",
+  "description": "The memberships of one organization, as membership-read.v1 items. The list is PAGED by a keyset cursor on the item id: a response holds at most 100 items, in ascending id order, and when more remain an opaque `next_cursor` the caller sends back. The LAST page omits `next_cursor`: absent is the only form of 'no more pages', never null or empty. A page with no items has no cursor. The schema cannot compare items, so the Go parser (ParseReadResponse) refuses an out-of-order page, a repeated id, an item the request did not ask for, a cursor that is not the last item's, and a page over the requested limit.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "items"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "membership-list.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "membership-read.v1.schema.json"
+      }
+    },
+    "next_cursor": {
+      "type": "string",
+      "pattern": "^k1_[A-Za-z0-9_-]{4,120}$",
+      "description": "Opaque keyset cursor; absent on the last page."
+    }
+  }
+}

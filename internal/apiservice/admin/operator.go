@@ -538,6 +538,9 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 					if errors.Is(err, errInvalidRole) {
 						return refuse("Invalid role: %s", role)
 					}
+					if errors.Is(err, errLastOwnerDemote) {
+						return refuse("Cannot remove the last owner of an organization")
+					}
 					return err
 				}
 				changes = append(changes, fmt.Sprintf("org '%s' role -> %s", org.Slug, role))

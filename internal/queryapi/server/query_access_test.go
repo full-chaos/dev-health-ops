@@ -207,6 +207,14 @@ func (v corpusVector) compact() string {
 	return enc.EncodeToString([]byte(v.HeaderJSON)) + "." + enc.EncodeToString([]byte(v.PayloadJSON)) + "." + enc.EncodeToString(signature)
 }
 
+// corpusDelegatedAtQueryAPI are query-api's decisions of the corpus's
+// delegated tokens at its audience (CHAOS-10991): policy maps the canonical
+// act.sub to the caller's ImpersonatedBy and serves the token. The run must
+// reach each.
+var corpusDelegatedAtQueryAPI = map[string]string{
+	"valid-act-canonical.json": "accept",
+}
+
 // corpusAtAnotherAudience are the rows decided at another audience
 // (auth-service, acr-api, acr-mcp), with query-api's decision of the same token
 // at the same clock (query-api shares go-api's audience): the dev-health-api
@@ -266,10 +274,14 @@ func TestA2CorpusThroughQueryAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	accepted := map[string]int{}
+	delegated := map[string]bool{}
 	for _, row := range manifest.Vectors {
 		t.Run(strings.TrimSuffix(row.File, ".json"), func(t *testing.T) {
 			expect := row.Expect
-			if row.Audience != accessTokenAudienceAPI {
+			if decided, known := corpusDelegatedAtQueryAPI[row.File]; known {
+				expect = decided
+				delegated[row.File] = true
+			} else if row.Audience != accessTokenAudienceAPI {
 				var known bool
 				if expect, known = corpusAtAnotherAudience[row.File]; !known {
 					t.Fatalf("a corpus row decided at %s that this test does not place at query-api", row.Audience)
@@ -336,6 +348,51 @@ func TestA2CorpusThroughQueryAPI(t *testing.T) {
 		if len(manifest.Vectors) < 40 || accepted[path] < 8 {
 			t.Fatalf("%d vectors, %d accepted on %s: the corpus did not run", len(manifest.Vectors), accepted[path], path)
 		}
+	}
+	for file := range corpusDelegatedAtQueryAPI {
+		if !delegated[file] {
+			t.Errorf("the corpus has no %s", file)
+		}
+	}
+}
+
+// TestQueryAPIDelegatedTokenActorMustBeCanonical: query-api refuses a
+// delegated token whose act.sub is not a canonical principal id (non-zero
+// trailing bits) with each path's 401, as it refuses such a sub; a canonical
+// actor is served.
+func TestQueryAPIDelegatedTokenActorMustBeCanonical(t *testing.T) {
+	quietStdLog(t)
+	m := newAccessMinter(t)
+	refusals := map[string]answer{
+		"rest":    {http.StatusUnauthorized, restRefusal},
+		"query":   {http.StatusUnauthorized, queryRefusal},
+		"graphql": {http.StatusUnauthorized, graphQLRefusal},
+	}
+	for _, tc := range []struct {
+		name, actor string
+		accept      bool
+	}{
+		{"non-canonical actor", "prn_BBBBBBBBBBBBBBBBBBBBBB", false},
+		{"canonical actor", wirePrincipal(uuid.MustParse("22222222-2222-4222-8222-222222222222")), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := m.mint(ecUser, map[string]any{"act": map[string]any{"sub": tc.actor}}, nil)
+			store := newAccessStore()
+			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow), true)
+			answers := map[string]answer{
+				"rest":    newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow), true).do(http.MethodGet, token),
+				"query":   stack.send("query", http.MethodPost, "/query", "", token),
+				"graphql": stack.send("query", http.MethodPost, "/graphql", "", token),
+			}
+			for path, got := range answers {
+				switch {
+				case tc.accept && got.Status != http.StatusOK:
+					t.Errorf("%s: got %d %s, want served", path, got.Status, got.Body)
+				case !tc.accept && got != refusals[path]:
+					t.Errorf("%s: got %d %q, want the path's 401", path, got.Status, got.Body)
+				}
+			}
+		})
 	}
 }
 

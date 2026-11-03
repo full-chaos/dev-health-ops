@@ -10,6 +10,7 @@ runtime login. Defaults off with the service (authService.phase 0).
 {{- if and (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") .Values.authService.migrate.enabled }}
 {{- $a := .Values.authService }}
 {{- $m := $a.migrate }}
+{{- include "dev-health.authPushLifecycle" . }}
 {{- if not $m.secretName }}{{- fail "authService.migrate.secretName is required: the Secret holding the migration login's DSN (key authService.migrate.secretKey), distinct from the runtime login's" }}{{- end }}
 {{- if eq $m.secretName $a.database.secretName }}
 {{- if eq $m.secretKey $a.database.secretKey }}{{- fail "authService.migrate and authService.database name the same Secret key: the migration login and the runtime login must be distinct (ACP-ADR-04)" }}{{- end }}

@@ -13,6 +13,7 @@ the ops tables.
 {{- if and (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") .Values.authService.migrate.enabled .Values.authService.migrate.grantsHook.enabled .Values.migrations.hook.enabled }}
 {{- $a := .Values.authService }}
 {{- $m := $a.migrate }}
+{{- include "dev-health.authPushLifecycle" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:

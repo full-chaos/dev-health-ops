@@ -13,8 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/aclguard"
 )
 
-// PushLifecycleFunction is the one function go-api may execute in the auth
-// schema (migration 0044), and PushLifecycleFunctionSignature its argument
+// PushLifecycleFunction is the one function go-api and the expiry sweeper's
+// worker login may execute in the auth schema (migration 0044), and PushLifecycleFunctionSignature its argument
 // list. It runs as PushLifecycleWriterRole and appends one External Push
 // lifecycle event to the outbox under the commit guard.
 const (

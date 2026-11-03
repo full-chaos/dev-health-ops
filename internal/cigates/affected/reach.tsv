@@ -42,6 +42,7 @@ internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/auth/lockorder
 internal/api/credentials	probes.go	internal/billingcli
+internal/api/credentials	probes.go	internal/cigates/workflows
 internal/api/credentials	probes.go	internal/clicredentials
 internal/api/credentials	probes.go	internal/pushlifecyclecli
 internal/apiservice	githubapp_config.go	cmd/dho
@@ -68,6 +69,7 @@ internal/apiservice	githubapp_config.go	internal/apiservice/ownershipvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
 internal/apiservice	githubapp_config.go	internal/auth/authapi
 internal/apiservice	githubapp_config.go	internal/auth/authruntime
+internal/apiservice	githubapp_config.go	internal/cigates/workflows
 internal/apiservice	provisioning_credential.go	cmd/dho
 internal/apiservice	provisioning_credential.go	deploy/helm/dev-health
 internal/apiservice	provisioning_credential.go	internal/api/githubapp
@@ -92,6 +94,7 @@ internal/apiservice	provisioning_credential.go	internal/apiservice/ownershipvenu
 internal/apiservice	provisioning_credential.go	internal/apiservice/ssovenue
 internal/apiservice	provisioning_credential.go	internal/auth/authapi
 internal/apiservice	provisioning_credential.go	internal/auth/authruntime
+internal/apiservice	provisioning_credential.go	internal/cigates/workflows
 internal/auth/acrlisting	client.go	internal/auth/acrlisting
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
@@ -468,6 +471,7 @@ internal/jobcontract	registry.go	internal/apiservice/ssovenue
 internal/jobcontract	registry.go	internal/auth/authapi
 internal/jobcontract	registry.go	internal/auth/authruntime
 internal/jobcontract	registry.go	internal/cigates/queuecreds
+internal/jobcontract	registry.go	internal/cigates/workflows
 internal/jobcontract	registry.go	internal/clicredentials
 internal/jobcontract	registry.go	internal/contractcheck
 internal/jobcontract	registry.go	internal/deploymentcontract
@@ -537,6 +541,7 @@ internal/mail	sender.go	internal/apiservice/ownershipvenue
 internal/mail	sender.go	internal/apiservice/ssovenue
 internal/mail	sender.go	internal/auth/authapi
 internal/mail	sender.go	internal/auth/authruntime
+internal/mail	sender.go	internal/cigates/workflows
 internal/mail	sender.go	internal/fixturescli
 internal/mail	sender.go	internal/mail
 internal/mail	sender.go	internal/platform/logging
@@ -648,6 +653,7 @@ internal/providerfoundation	clients.go	internal/auth/lockorder
 internal/providerfoundation	clients.go	internal/backfillrun
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/cigates/queuecreds
+internal/providerfoundation	clients.go	internal/cigates/workflows
 internal/providerfoundation	clients.go	internal/clicredentials
 internal/providerfoundation	clients.go	internal/fixturescli
 internal/providerfoundation	clients.go	internal/goapicli/restprove

@@ -1,0 +1,18 @@
+# CHAOS-12702: the auth flags the web live e2e runs with. One row per flag. The source column is the prod line (dev-health-deploy values.prod.yaml read at d78e9109) or the chart rule that renders it.
+# deploy/helm/dev-health/live_e2e_auth_flags_test.go pins the AUTH_PROXY_ rows to the phase 3 chart render; internal/cigates/workflows/live_e2e_auth_stack_test.go pins the delta column.
+# delta is - for a flag equal to prod. A flag that differs names why. Only the three named deltas are allowed.
+scope	name	value	source	delta
+go-api	AUTH_PROXY_SESSIONS	true	chart authService.phase 3, templates/go-api-deployment.yaml:123; prod values.prod.yaml:1645	-
+go-api	AUTH_PROXY_LOCAL_LOGIN	true	chart phase 3 loginStage goApi, go-api-deployment.yaml:123; prod values.prod.yaml:1645,1650	-
+go-api	AUTH_PROXY_CREDENTIALS	false	chart phase 3 (credentials need phase 4), go-api-deployment.yaml:123; prod values.prod.yaml:1645	-
+go-api	AUTH_PROXY_SOCIAL	true	chart phase 3 loginStage goApi, go-api-deployment.yaml:123; prod values.prod.yaml:1645,1650	-
+go-api	AUTH_PROXY_OIDC	false	chart authSSOOn, go-api-deployment.yaml:123; prod values.prod.yaml sets no sso	-
+go-api	AUTH_PROXY_SAML	false	chart authSSOOn, go-api-deployment.yaml:123; prod values.prod.yaml sets no sso	-
+go-api	AUTH_SESSION_ISSUE_CREDENTIAL	workload	prod values.prod.yaml:1420-1421	-
+go-api	AUTH_PROVISIONING_CREDENTIAL	workload	prod values.prod.yaml:1416-1417	-
+query-api	AUTH_PROXY_SESSIONS	true	chart templates/query-api-deployment.yaml:181; prod phase values.prod.yaml:1645	-
+auth-service	AUTH_USERS_OWNED	false	chart authOn goApiUsersOwned needs phase 4; prod values.prod.yaml:1645	-
+auth-service	AUTH_DATABASE_SCHEMA	auth	chart default; prod values.prod.yaml sets no override	-
+auth-service	AUTH_ACCESS_TOKEN_CLASS	eddsa	prod class is empty = hs256_compat (values.prod.yaml:1646-1648); the e2e runs ahead of prod because web #1771 verifies EdDSA only	class eddsa ahead of prod
+auth-service	AUTH_JWT_AUDIENCE	dev-health-api	the chart renders this under eddsa only (deploy/helm/dev-health/auth_eddsa_audience_test.go); follows the class delta	follows the class delta
+auth-service	AUTH_WORKLOAD_BOOTSTRAP	true	prod uses the Kubernetes exchange (values.prod.yaml:1715-1721); a runner has no Kubernetes, so the Compose bootstrap subject of the same exchange (compose.yml:1637-1639)	bootstrap subject, no Kubernetes

@@ -94,6 +94,14 @@ docker compose --profile auth run --rm auth-workload-bootstrap
   login. Put the new file in place of `/run/workload/api.bootstrap` yourself, and deliver it before the overlap
   ends.
 
+## Web live e2e
+
+The web live e2e (dev-health-web `live-e2e.yml`) runs go-api and auth-service as bare processes on a runner and uses this
+credential: `ci/live_e2e_auth_stack.sh up STATE_DIR` seeds the registry, runs `bootstrap-create` for `api`, and starts
+auth-service with `AUTH_ACCESS_TOKEN_CLASS=eddsa`. The flags are the table `ci/live_e2e_auth_flags.tsv`; each row cites the prod
+line it copies, and three rows differ from prod and say why. `cigate live-e2e assert-login-token` checks the login token
+(EdDSA, issuer, audience, key id); `assert-audit` checks that every delegated session issue named the workload credential.
+
 ## Rotate
 
 ```sh

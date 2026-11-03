@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -44,10 +43,10 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "print-env", side, "/state")
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
-		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123",                       // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
-		"AUTH_SESSION_SUCCESSOR_KEY=c3VjY2Vzc29yLWtleS0zMi1ieXRlcy1sb25nLTEyMzQ1Ng", // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
-		"AUTH_LOGIN_LOCKOUT_KEY=bG9ja291dC1rZXktMzItYnl0ZXMtbG9uZy0xMjM0NTY3OA",     // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
-		"AUTH_RUNTIME_DATABASE_PASSWORD=rt",                                         // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
+		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123",                    // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
+		"AUTH_SESSION_SUCCESSOR_KEY=a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s", // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
+		"AUTH_LOGIN_LOCKOUT_KEY=a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s",     // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
+		"AUTH_RUNTIME_DATABASE_PASSWORD=runtime-password-for-test",               // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_hh9WycdvSHSM26P15yRmgA",
 	}
 	var out, errb bytes.Buffer
@@ -67,23 +66,30 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 }
 
 func TestLiveE2EAuthFlagTableDeltasAreTheNamedOnes(t *testing.T) {
-	var deltas []string
+	// The only flags that differ from prod, each with its reason (the delta column must say it). Any other delta fails.
+	want := map[string]string{
+		"auth-service AUTH_ACCESS_TOKEN_CLASS": "class eddsa ahead of prod",
+		"auth-service AUTH_JWT_AUDIENCE":       "follows the class delta",
+		"auth-service AUTH_WORKLOAD_BOOTSTRAP": "bootstrap subject, no Kubernetes",
+	}
+	got := map[string]string{}
 	for _, r := range liveFlagRows(t) {
 		if r.source == "" || r.source == "-" {
 			t.Errorf("FAIL: %s %s cites no prod source", r.scope, r.name)
 		}
 		if r.delta != "-" {
-			deltas = append(deltas, r.scope+" "+r.name)
+			got[r.scope+" "+r.name] = r.delta
 		}
 	}
-	sort.Strings(deltas)
-	want := []string{
-		"auth-service AUTH_ACCESS_TOKEN_CLASS",
-		"auth-service AUTH_JWT_AUDIENCE",
-		"auth-service AUTH_WORKLOAD_BOOTSTRAP",
+	for name, reason := range want {
+		if got[name] != reason {
+			t.Errorf("FAIL: delta %s has reason %q, want %q", name, got[name], reason)
+		}
 	}
-	if strings.Join(deltas, ",") != strings.Join(want, ",") {
-		t.Fatalf("FAIL: deltas from prod are %v, want exactly %v", deltas, want)
+	for name := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("FAIL: %s differs from prod and is not a named delta", name)
+		}
 	}
 }
 

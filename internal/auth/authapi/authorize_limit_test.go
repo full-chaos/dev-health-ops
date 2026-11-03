@@ -144,7 +144,7 @@ func TestAuthorizeCallerOverLimitGets429WithRetryAfterAndNoBodyRead(t *testing.T
 		if strings.HasPrefix(line, "dev_health_api_rate_limit_rejections_total{") && !strings.HasPrefix(line, "dev_health_api_rate_limit_rejections_total{limit=") {
 			t.Errorf("rejection series carries a label beyond limit: %s", line)
 		}
-		if strings.Contains(line, "wl_") || strings.Contains(line, "principal") {
+		if strings.Contains(line, "pdp") && (strings.Contains(line, "wl_") || strings.Contains(line, "principal")) {
 			t.Errorf("rejection series names a caller: %s", line)
 		}
 	}

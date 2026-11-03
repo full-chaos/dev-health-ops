@@ -25,6 +25,8 @@ const (
 	workloadRegistryPage   = "docs/reference/auth/workload-registry.md"
 	workloadFederationPage = "docs/operate/runbooks/auth-workload-kubernetes-federation.md"
 	workloadBootstrapPage  = "docs/operate/runbooks/auth-workload-bootstrap-credential.md"
+	workloadAssertionPage  = "docs/operate/runbooks/auth-workload-assertion-key-rotation.md"
+	assertionKeyGo         = "cmd/auth-migrate/assertionkey.go"
 	authConfigPage         = "docs/reference/auth/configuration.md"
 
 	workloadRegistryJSON  = "contracts/auth/v1/vocabulary/workload-registry.json"
@@ -151,6 +153,7 @@ func diffSets(label string, got, want []string) []string {
 type registryFile struct {
 	Workloads []struct {
 		Name           string   `json:"name"`
+		Owner          string   `json:"owner"`
 		Audiences      []string `json:"audiences"`
 		AllowedActions []string `json:"allowed_actions"`
 	} `json:"workloads"`
@@ -190,23 +193,23 @@ func workloadRegistryGuard(d docTree) []string {
 	}
 	var got, want []string
 	for _, r := range mdTableRows(section) {
-		if len(r) != 3 {
-			out = append(out, fmt.Sprintf("workloads table: a row has %d cells, want 3", len(r)))
+		if len(r) != 4 {
+			out = append(out, fmt.Sprintf("workloads table: a row has %d cells, want 4", len(r)))
 			continue
 		}
-		auds, acts := splitList(r[1]), splitList(r[2])
-		got = append(got, fmt.Sprintf("%s|%s|%s", r[0], strings.Join(auds, ","), strings.Join(acts, ",")))
+		auds, acts := splitList(r[2]), splitList(r[3])
+		got = append(got, fmt.Sprintf("%s|%s|%s|%s", r[0], r[1], strings.Join(auds, ","), strings.Join(acts, ",")))
 	}
 	for _, w := range reg.Workloads {
 		auds := append([]string(nil), w.Audiences...)
 		acts := append([]string(nil), w.AllowedActions...)
 		sort.Strings(auds)
 		sort.Strings(acts)
-		want = append(want, fmt.Sprintf("%s|%s|%s", w.Name, strings.Join(auds, ","), strings.Join(acts, ",")))
+		want = append(want, fmt.Sprintf("%s|%s|%s|%s", w.Name, w.Owner, strings.Join(auds, ","), strings.Join(acts, ",")))
 	}
 	out = append(out, diffSets("workloads table", got, want)...)
 	for _, r := range mdTableRows(section) {
-		if len(r) == 3 && strings.TrimSpace(r[2]) == "" {
+		if len(r) == 4 && strings.TrimSpace(r[3]) == "" {
 			out = append(out, "workloads table: an empty allowed-actions cell must read none: "+r[0])
 		}
 	}
@@ -515,7 +518,7 @@ var credentialPatterns = []struct {
 
 func workloadSecretGuard(d docTree) []string {
 	var out []string
-	for _, rel := range []string{workloadRegistryPage, workloadFederationPage, workloadBootstrapPage, authConfigPage} {
+	for _, rel := range []string{workloadRegistryPage, workloadFederationPage, workloadBootstrapPage, workloadAssertionPage, authConfigPage} {
 		page, ok := readOrNote(&out, d, rel)
 		if !ok {
 			continue
@@ -526,6 +529,105 @@ func workloadSecretGuard(d docTree) []string {
 					out = append(out, fmt.Sprintf("%s: a code block puts %s: %q", rel, p.why, strings.TrimSpace(line)))
 				}
 			}
+		}
+	}
+	return out
+}
+
+// ---- (d2) the web assertion key runbook --------------------------------------------------------------------------------
+
+var (
+	assertionVerbPattern = regexp.MustCompile(`^auth-migrate (workload-assertion-key-(?:set|list))\b(.*)$`)
+	assertionFlagPattern = regexp.MustCompile(`flags\.(?:String|Bool|Duration)\("([a-z-]+)"`)
+	assertionFlagInLine  = regexp.MustCompile(`\s-([a-z][a-z-]*)\b`)
+)
+
+// assertionKeyFlags returns the flag names each verb defines, read from the parse function of the verb in assertionkey.go.
+func assertionKeyFlags(src string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for verb, fn := range map[string]string{
+		"workload-assertion-key-set":  "func parseAssertionKeySetArgs",
+		"workload-assertion-key-list": "func parseAssertionKeyListArgs",
+	} {
+		i := strings.Index(src, fn)
+		if i < 0 {
+			continue
+		}
+		body := src[i:]
+		if j := strings.Index(body[len(fn):], "\nfunc "); j >= 0 {
+			body = body[:len(fn)+j]
+		}
+		out[verb] = map[string]bool{}
+		for _, m := range assertionFlagPattern.FindAllStringSubmatch(body, -1) {
+			out[verb][m[1]] = true
+		}
+	}
+	return out
+}
+
+var assertionSetRequired = []string{"workload", "issuer", "kid", "status", "rotated-at", "confirm"}
+
+// workloadAssertionKeyGuard pins the web assertion key runbook to the verbs: every command line names a verb that exists, every flag
+// it uses is a flag of that verb, a set line carries every required flag, and the audit event the page names is a string in the source.
+func workloadAssertionKeyGuard(d docTree) []string {
+	var out []string
+	page, ok := readOrNote(&out, d, workloadAssertionPage)
+	src, err := d.read(assertionKeyGo)
+	if err != nil {
+		return append(out, assertionKeyGo+": "+err.Error())
+	}
+	if !ok {
+		return out
+	}
+	flags := assertionKeyFlags(src)
+	if len(flags["workload-assertion-key-set"]) == 0 || len(flags["workload-assertion-key-list"]) == 0 {
+		return append(out, assertionKeyGo+": the guard finds no flag of a verb")
+	}
+	commands := 0
+	for _, line := range fencedBlocks(page) {
+		line = strings.TrimSpace(line)
+		m := assertionVerbPattern.FindStringSubmatch(line)
+		if m == nil {
+			if strings.Contains(line, "workload-assertion-key") {
+				out = append(out, workloadAssertionPage+": a code line names an unknown verb: "+line)
+			}
+			continue
+		}
+		commands++
+		verb, rest := m[1], " "+m[2]
+		used := map[string]bool{}
+		for _, f := range assertionFlagInLine.FindAllStringSubmatch(rest, -1) {
+			used[f[1]] = true
+			if !flags[verb][f[1]] {
+				out = append(out, fmt.Sprintf("%s: %s uses -%s, which the verb does not define", workloadAssertionPage, verb, f[1]))
+			}
+		}
+		if verb == "workload-assertion-key-set" {
+			for _, req := range assertionSetRequired {
+				if !used[req] {
+					out = append(out, fmt.Sprintf("%s: a %s line lacks -%s: %s", workloadAssertionPage, verb, req, line))
+				}
+			}
+		}
+	}
+	if commands < 3 {
+		out = append(out, fmt.Sprintf("%s: %d verb command lines, want at least 3 (list, set active, set retired)", workloadAssertionPage, commands))
+	}
+	source, err := workloadSourceStrings(d)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	if !strings.Contains(page, "auth.workload.assertion_key_set") {
+		out = append(out, workloadAssertionPage+": does not name the audit event auth.workload.assertion_key_set")
+	}
+	for _, e := range eventPattern.FindAllString(page, -1) {
+		if !source[e] {
+			out = append(out, fmt.Sprintf("%s: names %s, which is not a string in internal/auth/workload", workloadAssertionPage, e))
+		}
+	}
+	for _, h := range []string{"## Rules", "## Read the current state", "## Rotate", "## Recover"} {
+		if _, found := sectionOf(page, h); !found {
+			out = append(out, workloadAssertionPage+": no "+h+" section")
 		}
 	}
 	return out
@@ -610,13 +712,25 @@ func TestWorkloadRegistryPageMatchesTheRegistryJSON(t *testing.T) {
 		{"row-drift", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadRegistryJSON, `"name": "web",`, `"name": "webx",`)
 		}, `row "web|`},
+		{"owner-drift", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadRegistryJSON, `"name": "web",
+      "owner": "platform-operations",`, `"name": "web",
+      "owner": "growth",`)
+		}, `row "web|platform-operations|`},
+		{"owner-missing-in-json", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadRegistryJSON, `"name": "web",
+      "owner": "platform-operations",`, `"name": "web",
+      "owner": "",`)
+		}, `row "web|platform-operations|`},
 		{"audience-drift", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadRegistryJSON, `"audiences": ["auth-service"],`, `"audiences": ["auth-service", "dev-health-api"],`)
 		}, "workloads table"},
 		{"action-drift", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadRegistryJSON, `"name": "web",
+      "owner": "platform-operations",
       "audiences": [],
       "allowed_actions": []`, `"name": "web",
+      "owner": "platform-operations",
       "audiences": [],
       "allowed_actions": ["audit.read"]`)
 		}, "workloads table"},
@@ -666,6 +780,32 @@ func TestWorkloadPagesPutNoCredentialOnArgvOrOutput(t *testing.T) {
 		{"env-secret", plant(glue("AUTH_DATABASE_", "URI") + "=postgres://u:p@h/d dho api"), "secret environment value"},
 		{"prints-token", plant("kubectl create token SA"), "prints a token"},
 		{"cat-credential", plant("cat /secure/dir/NAME.bootstrap"), "prints a credential"},
+	})
+}
+
+func TestWorkloadAssertionKeyRunbookMatchesTheVerbs(t *testing.T) {
+	assertGuard(t, workloadAssertionKeyGuard, []plantCase{
+		{"unknown-flag", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadAssertionPage, "-retire-previous-after 2h -confirm", "-retire-previous-for 2h -confirm")
+		}, "-retire-previous-for"},
+		{"missing-confirm", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadAssertionPage, "-status retired -rotated-at OLD_ROTATED_AT -confirm", "-status retired -rotated-at OLD_ROTATED_AT")
+		}, "lacks -confirm"},
+		{"unknown-verb", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadAssertionPage, "auth-migrate workload-assertion-key-list -workload web", "auth-migrate workload-assertion-key-show -workload web")
+		}, "unknown verb"},
+		{"event-not-in-source", func(t *testing.T, d docTree) docTree {
+			return d.editAll(t, workloadAssertionPage, "auth.workload.assertion_key_set", "auth.workload.assertion_key_sett")
+		}, "auth.workload.assertion_key_sett"},
+		{"flag-renamed-in-source", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, assertionKeyGo, `flags.Duration("retire-previous-after"`, `flags.Duration("retire-previous-for"`)
+		}, "-retire-previous-after"},
+		{"section-removed", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, workloadAssertionPage, "## Recover", "## Fix")
+		}, "no ## Recover section"},
+		{"private-key-on-argv", func(t *testing.T, d docTree) docTree {
+			return d.appended(t, workloadAssertionPage, "\n```sh\nauth-migrate workload-assertion-key-set -workload web -token abcdefgh\n```\n")
+		}, "-token"},
 	})
 }
 

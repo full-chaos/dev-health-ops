@@ -1,0 +1,18 @@
+{
+  "id": "error-repositories-member",
+  "kind": "error",
+  "http_status": 404,
+  "body": {
+    "schema_version": "error.v1",
+    "status": 404,
+    "reason_code": "not_found",
+    "request_id": "req_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "occurred_at": "2026-11-02T11:30:00.123456Z",
+    "repositories": [
+      "acme/widgets"
+    ]
+  },
+  "parse": "reject",
+  "rule": "schema",
+  "why": "Repository candidates in an error body."
+}

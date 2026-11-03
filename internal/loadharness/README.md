@@ -103,3 +103,32 @@ name), offered rate and duration, `time_to_degrade_ms`, `time_to_recover_ms`,
 the status histogram per path, `unexpected_5xx`, `first_seen_ms` of the first
 429, the assertion lines, and for the refresh-storm run the verdict line. The report
 holds names, counts and timings only; keep it that way.
+
+## PDP load profiles (`POST /v1/authorize` and `:batch`)
+
+`testdata/pdp/` holds the profiles of the policy decision point. They need a config entry and no code. The cluster run is
+`ci/pdp_load_k3s.sh` (the lead runs it on bigboy k3s; `--print-plan` needs no cluster). The ticket line is p95 < 25 ms and
+p99 < 75 ms.
+
+| Profile | Request | Notes |
+|---|---|---|
+| `authorize-low.json` | `analytics.read`, key changes per request | low risk, misses the decision cache |
+| `authorize-low-hot.json` | `analytics.read`, one key | low risk, hits the decision cache when the revision feed is on |
+| `authorize-high.json` | `settings.write` | high risk: one audit INSERT per call, the likely p99 driver |
+| `authorize-deny.json` | `admin.users` on `platform` | deny (`platform_role_absent`) |
+| `authorize-mix.json` | the four above, weights 70/10/10/10 | each class keeps its own p95 and p99 (target names are the SLO names) |
+| `authorize-batch-10.json` | 7 low, 2 high, 1 deny in one call | gated at the same SLO |
+| `authorize-batch-100.json` | 70 low, 20 high, 10 deny in one call | recorded, not gated |
+| `authorize-knee.json` | `analytics.read` | recorded: expects 200 and 429, to show the route limiter knee |
+
+Every gated target expects exactly `200`, forbids 5xx and has `max_error_rate` 0, so a 401 from an expired workload token or a
+429 from the route limiter never passes as a fast answer.
+
+Inputs come from env names only: `AUTH_LOADTEST_WORKLOAD_TOKEN` (the bearer: a workload token, audience `auth-service`, at most
+300 s old, so mint it right before each run and keep each run under 240 s), `AUTH_LOADTEST_PRINCIPAL_REFERENCE` (the user's
+EdDSA access token, with a live session) and `AUTH_LOADTEST_ORG_ID` (an organization the user is an admin of). The caller's
+workload principal must be in `AUTH_AUTHORIZE_CALLER_SUBJECTS`.
+
+The default route limiter (20 rps, burst 40, one bucket per route per pod) binds `/v1/authorize`: above it the PDP answers 429
+and the run would measure the limiter, not the PDP. The gated run lifts it in its own namespace
+(`AUTH_SERVICE_RATE_LIMIT_PER_SECOND` and `_BURST`); the knee run keeps the default and is recorded only. A report says which.

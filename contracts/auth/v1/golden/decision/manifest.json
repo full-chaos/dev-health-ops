@@ -129,6 +129,11 @@
       "layer": "pdp"
     },
     {
+      "file": "org-action-service-account-is-no-membership.json",
+      "id": "org-action-service-account-is-no-membership",
+      "layer": "pdp"
+    },
+    {
       "file": "organization-absent.json",
       "id": "organization-absent",
       "layer": "pdp"
@@ -249,6 +254,11 @@
       "layer": "pep"
     },
     {
+      "file": "platform-action-service-account-is-platform-role-absent.json",
+      "id": "platform-action-service-account-is-platform-role-absent",
+      "layer": "pdp"
+    },
+    {
       "file": "platform-admin-asks-org-action-without-membership.json",
       "id": "platform-admin-asks-org-action-without-membership",
       "layer": "pdp"
@@ -364,6 +374,11 @@
       "layer": "pdp"
     },
     {
+      "file": "repo-service-account-expired-grant.json",
+      "id": "repo-service-account-expired-grant",
+      "layer": "pdp"
+    },
+    {
       "file": "repo-service-account-inactive.json",
       "id": "repo-service-account-inactive",
       "layer": "pdp"
@@ -376,6 +391,11 @@
     {
       "file": "repo-service-account-org-mismatch.json",
       "id": "repo-service-account-org-mismatch",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-service-account-revoked-grant.json",
+      "id": "repo-service-account-revoked-grant",
       "layer": "pdp"
     },
     {

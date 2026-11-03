@@ -1,0 +1,95 @@
+{
+  "description": "Golden corpus for organization-list-request.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-minimal.json",
+      "why": "Only the required member."
+    },
+    {
+      "file": "valid-page-size-cap.json",
+      "why": "The cap of 100 is allowed."
+    },
+    {
+      "file": "valid-limit-one.json",
+      "why": "A page of 1."
+    },
+    {
+      "file": "valid-filter-membership-status.json",
+      "why": "Filter membership_status."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-limit-zero.json",
+      "expect_instance_location": "/limit",
+      "expect_keyword": "minimum",
+      "why": "A page holds at least 1 item."
+    },
+    {
+      "file": "invalid-limit-101.json",
+      "expect_instance_location": "/limit",
+      "expect_keyword": "maximum",
+      "why": "Over the cap of 100: refused, never clamped."
+    },
+    {
+      "file": "invalid-limit-decimal.json",
+      "expect_instance_location": "/limit",
+      "expect_keyword": "type",
+      "why": "A limit is an integer."
+    },
+    {
+      "file": "invalid-limit-string.json",
+      "expect_instance_location": "/limit",
+      "expect_keyword": "type",
+      "why": "A limit is a number."
+    },
+    {
+      "file": "invalid-cursor-alphabet.json",
+      "expect_instance_location": "/cursor",
+      "expect_keyword": "pattern",
+      "why": "Cursor alphabet is base64url."
+    },
+    {
+      "file": "invalid-cursor-no-prefix.json",
+      "expect_instance_location": "/cursor",
+      "expect_keyword": "pattern",
+      "why": "A cursor carries its version prefix."
+    },
+    {
+      "file": "invalid-cursor-empty.json",
+      "expect_instance_location": "/cursor",
+      "expect_keyword": "pattern",
+      "why": "An empty cursor says nothing."
+    },
+    {
+      "file": "invalid-cursor-too-long.json",
+      "expect_instance_location": "/cursor",
+      "expect_keyword": "pattern",
+      "why": "A cursor is bounded."
+    },
+    {
+      "file": "invalid-membership-status-unknown.json",
+      "expect_instance_location": "/membership_status",
+      "expect_keyword": "enum",
+      "why": "Closed status set."
+    },
+    {
+      "file": "invalid-principal-id-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The principal is required."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    },
+    {
+      "file": "invalid-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "Unknown contract identifier."
+    }
+  ]
+}

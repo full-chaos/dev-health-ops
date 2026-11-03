@@ -12,31 +12,27 @@ import (
 // that writes it; nothing is allowed by default. Credential material, request
 // bodies, authorization codes, passwords and provider responses have no key.
 var allowedAttributeKeys = map[string]struct{}{
-	"reason_code":         {},
-	"target_kind":         {},
-	"target_id":           {},
-	"role_key":            {},
-	"action_key":          {},
-	"resource_kind":       {},
-	"resource_id":         {},
-	"provider":            {},
-	"client_service":      {},
-	"changed_fields":      {},
-	"previous_status":     {},
-	"new_status":          {},
-	"previous_role":       {},
-	"new_role":            {},
-	"membership_revision": {},
-	"policy_revision":     {},
-	"credential_class":    {},
-	"credential_id":       {},
-	"display_prefix":      {},
-	"source":              {},
-	"amr":                 {},
-	"key_id":              {},
-	"related_key_id":      {},
-	"rotation_verb":       {},
-	"rotation_refusal":    {},
+	"reason_code":      {},
+	"target_kind":      {},
+	"target_id":        {},
+	"action_key":       {},
+	"resource_kind":    {},
+	"resource_id":      {},
+	"provider":         {},
+	"changed_fields":   {},
+	"previous_status":  {},
+	"new_status":       {},
+	"previous_role":    {},
+	"new_role":         {},
+	"policy_revision":  {},
+	"credential_class": {},
+	"credential_id":    {},
+	"source":           {},
+	"amr":              {},
+	"key_id":           {},
+	"related_key_id":   {},
+	"rotation_verb":    {},
+	"rotation_refusal": {},
 	// The oauth.consent.* and oauth.client_session.created rows.
 	"client_class": {},
 	// The auth.workload.token_issued row: the token's jti and the registry
@@ -97,11 +93,12 @@ func ValidateAttributes(attributes map[string]any) error {
 
 func valueAllowed(key string, value any) bool {
 	if vocab, ok := attributeVocabulary[key]; ok {
+		_, isList := attributeListVocabularyKeys[key]
 		switch v := value.(type) {
 		case string:
-			return inVocabulary(vocab, v)
+			return !isList && inVocabulary(vocab, v)
 		case []string:
-			if len(v) == 0 {
+			if !isList || len(v) == 0 {
 				return false
 			}
 			for _, item := range v {
@@ -130,9 +127,13 @@ func valueAllowed(key string, value any) bool {
 		return true
 	}
 	if _, ok := attributeNumberKeys[key]; ok {
-		switch value.(type) {
-		case int, int32, int64:
-			return true
+		switch v := value.(type) {
+		case int:
+			return v >= 0 && int64(v) <= maxWholeNumber
+		case int32:
+			return v >= 0
+		case int64:
+			return v >= 0 && v <= maxWholeNumber
 		}
 	}
 	return false
@@ -215,8 +216,7 @@ var attributeVocabulary = map[string][]string{
 		"custody_not_one_active", "wrong_state", "floor_not_reached", "compromised_terminal",
 		"successor_ineligible", "unknown_verb", "state_changed",
 	},
-	"provider":       {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
-	"client_service": {"auth-service", "api", "web", "billing-edge", "worker", "acr-api", "acr-mcp"},
+	"provider": {"local", "github", "gitlab", "jira", "linear", "google", "microsoft", "saml", "oidc"},
 	// audience is a workload token's aud: a workload audience only.
 	// oauth.* rows carry the audience of the grant, an ACR audience.
 	"audience": {"auth-service", "dev-health-api", "acr-api", "acr-mcp"},
@@ -246,16 +246,55 @@ func AttributeVocabulary() map[string][]string {
 	return out
 }
 
+// AllowedAttributeKeys returns the allowlist's keys, sorted.
+func AllowedAttributeKeys() []string {
+	out := make([]string, 0, len(allowedAttributeKeys))
+	for k := range allowedAttributeKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// AttributeIDPatterns returns the regexp source of each id-valued key.
+func AttributeIDPatterns() map[string]string {
+	out := make(map[string]string, len(attributeIDRules))
+	for k, v := range attributeIDRules {
+		out[k] = v.String()
+	}
+	return out
+}
+
+// AttributeNumberKeys returns the whole-number keys, sorted.
+func AttributeNumberKeys() []string {
+	out := make([]string, 0, len(attributeNumberKeys))
+	for k := range attributeNumberKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// AttributeListPatterns returns the regexp source of each list-valued key's members.
+func AttributeListPatterns() map[string]string {
+	out := make(map[string]string, len(attributeListRules))
+	for k, v := range attributeListRules {
+		out[k] = v.String()
+	}
+	return out
+}
+
+// MaxAttributeListLength is the bound on a list-valued attribute.
+const MaxAttributeListLength = maxAttributeListLength
+
 // attributeIDRules are the id-valued keys and the rule each value must satisfy.
 var attributeIDRules = map[string]*regexp.Regexp{
 	"target_id": uuidPattern,
 	// decision_id is a server-minted authorize decision id.
-	"decision_id":    regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`),
-	"credential_id":  uuidPattern,
-	"resource_id":    regexp.MustCompile(`^(\*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$`),
-	"role_key":       regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
-	"action_key":     regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
-	"display_prefix": regexp.MustCompile(`^(fcacr|fcpush|svc|rt)_[A-Za-z0-9]{2,8}$`),
+	"decision_id":   regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`),
+	"credential_id": uuidPattern,
+	"resource_id":   regexp.MustCompile(`^(\*|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*)$`),
+	"action_key":    regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$`),
 	// A signing key's kid: public, the JWS header value (keystore.KeyIDPattern).
 	"key_id": regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`),
 	"jti":    uuidPattern,
@@ -272,9 +311,22 @@ var attributeIDRules = map[string]*regexp.Regexp{
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// attributeNumberKeys take a whole number.
+// maxWholeNumber is the largest integer a wire reader holds exactly (2^53-1).
+const maxWholeNumber = 9007199254740991
+
+// attributeListVocabularyKeys take a non-empty list of vocabulary members; every
+// other vocabulary key takes one member.
+var attributeListVocabularyKeys = map[string]struct{}{"changed_fields": {}, "amr": {}}
+
+// IsListVocabularyKey reports whether key takes a list of vocabulary members.
+func IsListVocabularyKey(key string) bool {
+	_, ok := attributeListVocabularyKeys[key]
+	return ok
+}
+
+// attributeNumberKeys take a whole number from 0 to maxWholeNumber.
 var attributeNumberKeys = map[string]struct{}{
-	"membership_revision": {}, "policy_revision": {}, "revision": {},
+	"policy_revision": {}, "revision": {},
 	"purged_email_verification_tokens": {}, "purged_password_reset_tokens": {},
 }
 

@@ -53,7 +53,7 @@ it is retired, and it is never listed again after a compromise.
   A request with a matching `If-None-Match` gets `304`.
 - When the key set cannot be read, the JWKS answers `503` with `Retry-After: 1`, a body with no key
   material, and no cache header.
-- The rotation floors are built on the 5 minutes: a new key is listed at least 5 minutes before it signs, so
+- The rotation floors ([planned rotation](../../operate/runbooks/auth-signing-key-planned-rotation.md), [emergency rotation and rollback](../../operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md)) are built on the 5 minutes: a new key is listed at least 5 minutes before it signs, so
   a verifier that follows `max-age` has the key before the first token that needs it.
 
 ## What a verifier does

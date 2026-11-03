@@ -203,7 +203,7 @@ func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 }
 
 // clientKey is the caller address the limits key on (clientaddr resolves it:
-// the socket peer, or the one forwarded address a trusted proxy sent).
+// the socket peer, or the right-most untrusted X-Forwarded-For hop a trusted proxy sent).
 //
 // An IPv6 client is keyed by its /64: a host holds a whole /64 and can rotate
 // through it, so the address alone would hand it a fresh bucket per request.

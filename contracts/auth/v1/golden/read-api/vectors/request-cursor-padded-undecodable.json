@@ -1,0 +1,14 @@
+{
+  "id": "request-cursor-padded-undecodable",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "cursor": "k1_bWJyX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDA1=="
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "Padding is not part of the cursor alphabet."
+}

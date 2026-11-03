@@ -17,12 +17,15 @@ follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
 `refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
+the service account token `service-account-token.v1` (CHAOS-12362: typ `sa+jwt`, audience
+`dev-health-api`, `org_id` and `cid`, no `sid`/`scope`, at most 300 s; its signed corpus is
+`golden/service-account-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
 transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -37,6 +40,20 @@ The provisioning resources and request bodies `organization.v1`,
 `invite.v1`, `invite-create-request.v1` and `invite-accept-request.v1`
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
+
+The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
+has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
+`organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
+(an organization's principals, each with its membership), `organization-list.v1`
+(a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
+`*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
+(`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
+`next_cursor`). A principal read holds an id, a kind, a status and a revision and no personal field. A grant read
+carries the repository `resource_key`; an error body never does. A read holds a read scope (`principals:read`,
+`organizations:read`, `memberships:read`, `grants:read`, on `internal_svc_authsess_token`); a write scope never
+satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
+rules a schema cannot say (the answer is the one asked for, ascending ids, a cursor that is the last item's) are
+`ParseReadRequest` and `ParseReadResponse`; their cells run on `golden/read-api`.
 
 `oauth-clients.v1` is the OAuth authorization server's static client registry
 (ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with

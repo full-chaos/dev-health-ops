@@ -1,0 +1,68 @@
+{
+  "id": "list-organizations-unordered",
+  "kind": "exchange",
+  "operation": "organizations_list",
+  "request": {
+    "schema_version": "organization-list-request.v1",
+    "principal_id": "prn_EXAMPLE0000000000000001",
+    "limit": 2
+  },
+  "response": {
+    "schema_version": "organization-list.v1",
+    "items": [
+      {
+        "organization": {
+          "schema_version": "organization-read.v1",
+          "organization_id": "org_EXAMPLE0000000000000002",
+          "slug": "beta",
+          "name": "Beta",
+          "status": "active",
+          "revision": 4,
+          "created_at": "2026-11-02T10:00:00Z",
+          "updated_at": "2026-11-02T11:30:00.123456Z"
+        },
+        "membership": {
+          "schema_version": "membership-read.v1",
+          "membership_id": "mbr_EXAMPLE0000000000000002",
+          "organization_id": "org_EXAMPLE0000000000000002",
+          "principal_id": "prn_EXAMPLE0000000000000001",
+          "role": "member",
+          "status": "active",
+          "revision": 2,
+          "created_at": "2026-11-02T10:00:00Z",
+          "updated_at": "2026-11-02T11:30:00.123456Z",
+          "joined_at": "2026-11-02T11:30:00.123456Z"
+        }
+      },
+      {
+        "organization": {
+          "schema_version": "organization-read.v1",
+          "organization_id": "org_EXAMPLE0000000000000001",
+          "slug": "acme",
+          "name": "Acme",
+          "status": "active",
+          "revision": 4,
+          "created_at": "2026-11-02T10:00:00Z",
+          "updated_at": "2026-11-02T11:30:00.123456Z"
+        },
+        "membership": {
+          "schema_version": "membership-read.v1",
+          "membership_id": "mbr_EXAMPLE0000000000000001",
+          "organization_id": "org_EXAMPLE0000000000000001",
+          "principal_id": "prn_EXAMPLE0000000000000001",
+          "role": "member",
+          "status": "active",
+          "revision": 2,
+          "created_at": "2026-11-02T10:00:00Z",
+          "updated_at": "2026-11-02T11:30:00.123456Z",
+          "joined_at": "2026-11-02T11:30:00.123456Z"
+        }
+      }
+    ],
+    "next_cursor": "k1_b3JnX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "items_not_ascending",
+  "why": "Ascending organization id order."
+}

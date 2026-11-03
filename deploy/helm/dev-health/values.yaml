@@ -443,6 +443,9 @@ authService:
   #    run by the service at startup.
   migrate:
     enabled: true
+    # -- The finished Job and its pod log stay this long (the next hook run replaces them sooner), so a roll readback
+    #    can read `kubectl logs job/<release>-auth-migrate` ("auth schema current at version N") without exec.
+    ttlSecondsAfterFinished: 86400
     image:
       # -- docker/go-worker.Dockerfile target `auth-migrate`.
       repository: ghcr.io/full-chaos/dev-health-go-auth-migrate
@@ -1510,13 +1513,14 @@ migrations:
     openUnitsIndex:
       enabled: false
       # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
-      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    streakIndex 2400 + openUnitsIndex 700 + the migrate Job 1800 + a 500 s rollout margin = 5400 s, the
       #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
-      activeDeadlineSeconds: 600
+      activeDeadlineSeconds: 700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      # -- window of the whole build in seconds; deadlineSeconds + 430 (the 70 s first-connect wait, startup and
+      #    cleanup) must not exceed activeDeadlineSeconds.
       deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15

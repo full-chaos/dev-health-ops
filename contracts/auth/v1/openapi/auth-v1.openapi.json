@@ -1036,6 +1036,9 @@
       "WorkloadToken": {
         "$ref": "../jsonschema/workload-token.v1.schema.json"
       },
+      "ServiceAccountToken": {
+        "$ref": "../jsonschema/service-account-token.v1.schema.json"
+      },
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
       },
@@ -1134,6 +1137,54 @@
       },
       "InviteAcceptRequest": {
         "$ref": "../jsonschema/invite-accept-request.v1.schema.json"
+      },
+      "PrincipalRead": {
+        "$ref": "../jsonschema/principal-read.v1.schema.json"
+      },
+      "PrincipalGetRequest": {
+        "$ref": "../jsonschema/principal-get-request.v1.schema.json"
+      },
+      "PrincipalListRequest": {
+        "$ref": "../jsonschema/principal-list-request.v1.schema.json"
+      },
+      "PrincipalList": {
+        "$ref": "../jsonschema/principal-list.v1.schema.json"
+      },
+      "OrganizationRead": {
+        "$ref": "../jsonschema/organization-read.v1.schema.json"
+      },
+      "OrganizationGetRequest": {
+        "$ref": "../jsonschema/organization-get-request.v1.schema.json"
+      },
+      "OrganizationListRequest": {
+        "$ref": "../jsonschema/organization-list-request.v1.schema.json"
+      },
+      "OrganizationList": {
+        "$ref": "../jsonschema/organization-list.v1.schema.json"
+      },
+      "MembershipRead": {
+        "$ref": "../jsonschema/membership-read.v1.schema.json"
+      },
+      "MembershipGetRequest": {
+        "$ref": "../jsonschema/membership-get-request.v1.schema.json"
+      },
+      "MembershipListRequest": {
+        "$ref": "../jsonschema/membership-list-request.v1.schema.json"
+      },
+      "MembershipList": {
+        "$ref": "../jsonschema/membership-list.v1.schema.json"
+      },
+      "GrantRead": {
+        "$ref": "../jsonschema/grant-read.v1.schema.json"
+      },
+      "GrantGetRequest": {
+        "$ref": "../jsonschema/grant-get-request.v1.schema.json"
+      },
+      "GrantListRequest": {
+        "$ref": "../jsonschema/grant-list-request.v1.schema.json"
+      },
+      "GrantList": {
+        "$ref": "../jsonschema/grant-list.v1.schema.json"
       }
     }
   }

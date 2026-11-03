@@ -822,30 +822,69 @@ func validateKeyFor(t *testing.T, token string) string {
 	return key
 }
 
-// c8: the route mounts only when the endpoint-profile document holds its row;
-// the embedded document has none yet (the row is PR-2's), so the route is a
-// 404 and the service builds.
-func TestValidateCompatC8UnmountedWithoutItsProfileRow(t *testing.T) {
-	f := newValidateFixture(t, false)
-	if r := f.post(f.server, tokenBody(f.hs256Token(nil)), nil); r.Code != http.StatusOK {
-		t.Fatalf("positive control: mounted on its row: %d %s", r.Code, r.Body)
-	}
-	f.logs.Reset()
-	routes, err := CompatRoutes(f.deps())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, route := range routes {
-		if route.Pattern == PatternCompatValidate {
-			t.Fatalf("mounted without its row: %s %s", route.Method, route.Pattern)
+// c8: the route mounts on its row of the embedded endpoint-profile document,
+// in HS256 mode and in EdDSA mode, and is a 404 on a document without it.
+func TestValidateCompatC8MountsOnItsEmbeddedProfileRow(t *testing.T) {
+	for _, eddsa := range []bool{false, true} {
+		f := newValidateFixture(t, eddsa)
+		f.logs.Reset()
+		routes, err := CompatRoutes(f.deps())
+		if err != nil {
+			t.Fatal(err)
+		}
+		mounted := 0
+		for _, route := range routes {
+			if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
+				mounted++
+			}
+		}
+		if mounted != 1 {
+			t.Fatalf("eddsa=%v: the embedded document mounts the validate route %d times, want 1", eddsa, mounted)
+		}
+		if strings.Contains(f.logs.String(), "auth validate route not mounted") {
+			t.Fatalf("eddsa=%v: a not-mounted line with the row embedded: %s", eddsa, f.logs)
+		}
+		f.document = []byte(`{"rows":[]}`)
+		f.build()
+		if r := f.post(f.server, tokenBody(f.hs256Token(nil)), nil); r.Code != http.StatusNotFound {
+			t.Fatalf("eddsa=%v: an empty document: %d %s", eddsa, r.Code, r.Body)
 		}
 	}
-	if !strings.Contains(f.logs.String(), `"msg":"auth validate route not mounted: no endpoint-profile row","route":"`+PatternCompatValidate+`"`) {
-		t.Fatalf("no not-mounted line: %s", f.logs)
-	}
-	f.document = []byte(`{"rows":[]}`)
-	f.build()
-	if r := f.post(f.server, tokenBody(f.hs256Token(nil)), nil); r.Code != http.StatusNotFound {
-		t.Fatalf("an empty document: %d %s", r.Code, r.Body)
+}
+
+// The route over the production flag table (MarkResponseModels on the
+// embedded document's route set) writes its valid and its refused answer
+// with no writer violation.
+func TestValidateCompatProductionResponseModelRaisesNoWriterViolation(t *testing.T) {
+	for _, eddsa := range []bool{false, true} {
+		f := newValidateFixture(t, eddsa)
+		routes, err := CompatRoutes(f.deps())
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		for _, route := range MarkResponseModels(routes) {
+			mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
+		}
+		tokens := map[string]string{"hs256": f.hs256Token(nil)}
+		if eddsa {
+			tokens["eddsa"] = f.eddsaToken(contracts.PlatformAPIAudience)
+		}
+		for name, token := range tokens {
+			expectNoViolation(t, fmt.Sprintf("eddsa=%v valid %s", eddsa, name), http.StatusOK, func() int {
+				r := f.post(mux, tokenBody(token), nil)
+				if !strings.Contains(r.Body.String(), `"valid":true`) {
+					t.Errorf("eddsa=%v %s: %s, want valid true", eddsa, name, r.Body)
+				}
+				return r.Code
+			})
+		}
+		expectNoViolation(t, fmt.Sprintf("eddsa=%v invalid", eddsa), http.StatusOK, func() int {
+			r := f.post(mux, tokenBody("garbage"), nil)
+			if !strings.Contains(r.Body.String(), `"valid":false`) {
+				t.Errorf("eddsa=%v garbage: %s, want valid false", eddsa, r.Body)
+			}
+			return r.Code
+		})
 	}
 }

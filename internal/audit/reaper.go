@@ -55,7 +55,8 @@ func Reap(
 	}
 
 	table := authschema.Quote(schema) + ".auth_outbox_events"
-	tag, err := tx.Exec(ctx, reapStatement(table), cutoff.UTC(), limit)
+	cursor := authschema.Quote(schema) + ".projection_cursor"
+	tag, err := tx.Exec(ctx, reapStatement(table, cursor), cutoff.UTC(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("%w: deleting published events: %w", ErrReapFailed, err)
 	}
@@ -67,20 +68,28 @@ func Reap(
 
 // reapSelection picks the oldest published rows past the cutoff. It is split
 // out so the plan test explains exactly the text Reap runs.
-func reapSelection(table string) string {
+//
+// A push lifecycle row is kept until the push projection reader's low-water
+// mark has passed it: the reader decides a row by its digest and a stopped
+// reader must lose none, whatever the row's age. The mark moves only over rows
+// older than the reader's horizon, and a push row with no cursor row at all is
+// kept. A parked row is safe above or below the mark: its body is in the retry
+// table.
+func reapSelection(table, cursorTable string) string {
 	return `SELECT e.id
 		    FROM ` + table + ` AS e
 		    WHERE e.published_at IS NOT NULL
 		      AND e.published_at < $1
+		      AND (e.aggregate_type <> 'external_push_credential' OR e.id <= COALESCE((SELECT c.low_water FROM ` + cursorTable + ` AS c WHERE c.stream = 'external_push'), 0))
 		    ORDER BY e.published_at, e.id
 		    FOR UPDATE SKIP LOCKED
 		    LIMIT $2`
 }
 
-func reapStatement(table string) string {
+func reapStatement(table, cursorTable string) string {
 	return `
 		WITH reapable AS (
-		    ` + reapSelection(table) + `
+		    ` + reapSelection(table, cursorTable) + `
 		)
 		DELETE FROM ` + table + ` AS e
 		USING reapable

@@ -260,6 +260,10 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
+		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
+	},
+	{
 		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,
 		Usage: "on gives the auth outbox publisher a Valkey sink and subscribes this replica to the revision feed channel; off (default) keeps publishing disabled. Needs " +
 			EnvValkeyURI + ". Mounts no route",

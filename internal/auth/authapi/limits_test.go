@@ -147,11 +147,13 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 		"social link":   {ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour},
 		"refresh":       {ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute},
 		"validate":      {ID: "auth_svc_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow},
+		"switch org":    {ID: "auth_svc_switch_org", Count: 30, Window: 15 * time.Minute},
 	}
 	got := map[string]httpapi.Limit{
 		"login ip": loginIPLimit, "login account": loginAccountLimit, "verify": verifyLimit, "resend": resendLimit,
 		"forgot": forgotLimit, "resend ip": resendIPLimit, "forgot ip": forgotIPLimit, "reset ip": resetIPLimit, "reset token": resetTokenLimit,
 		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit, "validate": validateLimit,
+		"switch org": switchOrgLimit,
 	}
 	for name, limit := range want {
 		if got[name] != limit {
@@ -165,8 +167,8 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 
 func TestLimitIDsListEveryLimiter(t *testing.T) {
 	got := LimitIDs()
-	if len(got) != 14 {
-		t.Fatalf("%d ids, want the table's 14", len(got))
+	if len(got) != 15 {
+		t.Fatalf("%d ids, want the table's 15", len(got))
 	}
 	if !slices.Contains(got, registerIPLimit.ID) {
 		t.Fatalf("LimitIDs lacks the register limiter %q", registerIPLimit.ID)
@@ -601,7 +603,7 @@ func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
 // names or abbreviates its route, and a route outside the set is refused with
 // the generic 500 and counts nothing.
 func TestCounterScopesAreAClosedSetOfNeutralCodes(t *testing.T) {
-	want := map[string]string{oauthAuthorizeScope: "s05", oauthDecideScope: "s06", PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04", PatternCompatValidate: "s07"}
+	want := map[string]string{oauthAuthorizeScope: "s05", oauthDecideScope: "s06", PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04", PatternCompatValidate: "s07", PatternCompatSwitchOrg: "s08"}
 	if !reflect.DeepEqual(scopeCodes, want) {
 		t.Fatalf("scope codes %v, pinned %v", scopeCodes, want)
 	}

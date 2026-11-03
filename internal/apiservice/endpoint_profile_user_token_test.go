@@ -89,8 +89,7 @@ func TestEveryHS256RowAlsoAcceptsTheUserAccessToken(t *testing.T) {
 }
 
 // The widened rows pass the profile selector gate. The logout row also
-// accepts ops_refresh_token, which has no request-head marker, so the gate
-// cannot pick it: a limit that predates this widening.
+// accepts ops_refresh_token, which the gate judges by its body_field marker.
 func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 	registry, err := contracts.LoadRegistryClasses("../..")
 	if err != nil {
@@ -102,19 +101,13 @@ func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 		if !slices.Contains(classes, classUserTok) || !slices.Contains(classes, classHS256) {
 			continue
 		}
-		if slices.Contains(classes, classRefresh) {
-			if rowProfile(row) != "POST /api/v1/auth/logout" {
-				t.Errorf("%s: unexpected refresh row", row["id"])
-			}
-			continue
-		}
 		if err := contracts.CheckClassSelector(row, registry); err != nil {
 			t.Errorf("%s: %v", row["id"], err)
 		}
 		checked++
 	}
-	if checked != 195 {
-		t.Errorf("checked %d rows, want 195", checked)
+	if checked != 196 {
+		t.Errorf("checked %d rows, want 196", checked)
 	}
 }
 

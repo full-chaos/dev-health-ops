@@ -415,6 +415,8 @@ jobs:
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
           bash ci/ghcr_login_test.sh
+          bash ci/auth_rotation_probe_test.sh
+          bash ci/rehearse_auth_key_rotation_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'

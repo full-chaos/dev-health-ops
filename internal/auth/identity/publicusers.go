@@ -53,8 +53,8 @@ func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO public.users
 	(id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, created_at, updated_at, sso_provider_id)
-VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, false, 0, now(), now(), $9)`,
+	 is_active, is_verified, token_version, created_at, updated_at, sso_provider_id)
+VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, 0, now(), now(), $9)`,
 		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified, u.SSOProviderID)
 	return err
 }

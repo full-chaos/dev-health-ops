@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -218,5 +219,131 @@ func TestPDPLoadK3sRunnerPodWritesTheBootstrapValueIntoItsOwnVolumeOnly(t *testi
 		if strings.Contains(text, banned) {
 			t.Errorf("the runner pod contains %q", banned)
 		}
+	}
+}
+
+// pdpFakeKubectl stands in for the cluster: the script runs for real against it. An exec of pod.sh run calls the fake
+// loadtest, which logs "profile load" and exits 1 for the one cell named in PDP_FAIL.
+const pdpFakeKubectl = `#!/usr/bin/env bash
+args=("$@")
+for i in "${!args[@]}"; do
+  if [ "${args[$i]##*/}" = "pod.sh" ] && [ "${args[$((i-1))]}" = sh ]; then
+    verb="${args[$((i+1))]}"
+    if [ "${verb}" = run ]; then exec loadtest "${args[@]:$((i+2))}"; fi
+    exit 0
+  fi
+done
+case "$*" in
+  *"get nodes"*) printf 'v1.30.2+k3s1'; exit 0 ;;
+  *"get namespace"*) exit 1 ;;
+  *" cp "*"pdp-runner:/work/"*.json*)
+    dest="${args[$((${#args[@]}-1))]}"; src="${args[$((${#args[@]}-2))]}"
+    cp "${PDP_FAKE_DIR}/$(basename "${src}")" "${dest}"; exit 0 ;;
+  *" psql "*) cat >/dev/null; printf 'prn_AAAAAAAAAAAAAAAAAAAAAA'; exit 0 ;;
+esac
+cat >/dev/null
+exit 0
+`
+
+const pdpFakeLoadtest = `#!/usr/bin/env bash
+cfg="" prof="" out="" rate=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config) cfg="$2"; shift ;;
+    --profile) prof="$2"; shift ;;
+    --out) out="$2"; shift ;;
+    --rate) rate="$2"; shift ;;
+  esac
+  shift
+done
+name="$(basename "${cfg}" .json)"
+load="${prof}"; [ -z "${rate}" ] || load="${prof}:${rate}"
+printf '%s %s\n' "${name}" "${load}" >>"${PDP_FAKE_DIR}/ran.log"
+printf '{"profile":"%s","load":"%s"}\n' "${name}" "${load}" >"${PDP_FAKE_DIR}/$(basename "${out}")"
+if [ "${name} ${load}" = "${PDP_FAIL}" ]; then
+  n=$(grep -c -x -F "${PDP_FAIL}" "${PDP_FAKE_DIR}/ran.log")
+  [ "${n}" -ne "${PDP_FAIL_N}" ] || exit 1
+fi
+exit 0
+`
+
+func pdpFakeRun(t *testing.T, fail string, extra ...string) (res cmdResult, ran []string, summary string) {
+	t.Helper()
+	root := rootOf(t)
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "fake")
+	if err := os.MkdirAll(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"kubectl": pdpFakeKubectl, "loadtest": pdpFakeLoadtest, "helm": "#!/usr/bin/env bash\nexit 0\n"} {
+		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kubeconfig := filepath.Join(dir, "k3s-fake.yaml")
+	if err := os.WriteFile(kubeconfig, []byte("apiVersion: v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	env := append([]string{
+		strings.Replace(shimBasePath(), "PATH=", "PATH="+fake+":", 1),
+		"TMPDIR=" + dir, "AUTH_PDP_KUBECONFIG=" + kubeconfig, "AUTH_PDP_LOADTEST_BIN=" + filepath.Join(fake, "loadtest"),
+		"AUTH_PDP_OUT_DIR=" + out, "PDP_FAKE_DIR=" + fake, "PDP_FAIL=" + fail, "PDP_FAIL_N=1",
+	}, pdpImages()...)
+	res = cmdSpec{dir: root, env: append(env, extra...)}.run("bash", filepath.Join(root, pdpScript))
+	if b, err := os.ReadFile(filepath.Join(fake, "ran.log")); err == nil {
+		ran = strings.Split(strings.TrimSpace(string(b)), "\n")
+	}
+	if b, err := os.ReadFile(filepath.Join(out, "summary.tsv")); err == nil {
+		summary = string(b)
+	}
+	return res, ran, summary
+}
+
+// The first breach is reported and the run stops: the failed run keeps its report and its summary row and no run follows it.
+func TestPDPLoadK3sStopsAtTheFirstBreachOfEveryRun(t *testing.T) {
+	profiles := []string{"authorize-low", "authorize-low-hot", "authorize-high", "authorize-deny", "authorize-mix", "authorize-batch-10", "authorize-batch-100"}
+	var order []string
+	for _, load := range []string{"normal", "peak"} {
+		for _, p := range profiles {
+			order = append(order, p+" "+load)
+		}
+	}
+	for i, cell := range order {
+		t.Run(strings.ReplaceAll(cell, " ", "_"), func(t *testing.T) {
+			res, ran, summary := pdpFakeRun(t, cell)
+			if res.code == 0 {
+				t.Fatalf("exit 0 after a breach\n%s", res.stdout)
+			}
+			if len(ran) != i+2 || ran[len(ran)-1] != cell {
+				t.Fatalf("ran %d runs %v; want the knee run and the first %d, ending at %q", len(ran), ran, i+1, cell)
+			}
+			parts := strings.Split(cell, " ")
+			row := fmt.Sprintf("\t%s\t%s\t", parts[0], parts[1])
+			if n := strings.Count(summary, row); n != 1 || !strings.Contains(summary, "FAILED(exit 1)") {
+				t.Errorf("summary rows for %q: %d, want 1 and a FAILED mark\n%s", cell, n, summary)
+			}
+			if want := "REPORT: a gated objective or assertion failed at " + parts[1] + " load"; !strings.Contains(res.stdout, want) {
+				t.Errorf("stdout lacks %q\n%s", want, res.stdout)
+			}
+		})
+	}
+	t.Run("knee", func(t *testing.T) {
+		res, ran, _ := pdpFakeRun(t, "authorize-knee peak:100")
+		if res.code == 0 || len(ran) != 1 {
+			t.Errorf("exit %d after %v; want a failure after the knee run alone", res.code, ran)
+		}
+	})
+	for _, load := range []string{"normal", "peak"} {
+		t.Run("cacheon_"+load, func(t *testing.T) {
+			res, ran, _ := pdpFakeRun(t, "authorize-mix "+load, "AUTH_PDP_CACHE_ON=1", "PDP_FAIL_N=2")
+			want := 16
+			if load == "peak" {
+				want = 17
+			}
+			if res.code == 0 || len(ran) != want {
+				t.Errorf("cache-on breach at %s: exit %d, %d runs; want a failure after %d runs\n%v", load, res.code, len(ran), want, ran)
+			}
+		})
 	}
 }

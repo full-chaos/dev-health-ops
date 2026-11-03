@@ -507,5 +507,8 @@ func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error
 	if org := item.question.OrganizationID; org != "" {
 		doc.OrganizationID = &org
 	}
+	if doc.Obligations, err = wireObligationsOf(item.decision, item.question.OrganizationID); err != nil {
+		return decisionDocument{}, err
+	}
 	return doc, nil
 }

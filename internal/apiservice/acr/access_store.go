@@ -171,6 +171,11 @@ func (s AccessStore) Access(ctx context.Context, query AccessQuery) (PrincipalAc
 	if err := group.Wait(); err != nil {
 		return PrincipalAccess{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	if stateFound && state.ActorPrincipalID != nil {
+		// A delegated session: the caller is the target, so no admin-keyed
+		// row names it; auth-service's state names the actor.
+		access.Impersonating = true
+	}
 	if query.SessionID != nil {
 		live, reason := sessionLive(query, state, stateFound, user, userFound)
 		access.Session = &SessionAccess{Live: live, Reason: reason, Impersonating: access.Impersonating}

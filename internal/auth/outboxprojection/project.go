@@ -119,7 +119,7 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 	// refuses to write under the wrong outcome and the call runs again under the right one, once.
 	var res Result
 	final, err := runTries(func(denied bool) (Result, error) {
-		attrs := map[string]any{"target_kind": "credential", "credential_class": auditClass(in.Domain), "revision": int64(in.Event.Payload.Revision)}
+		attrs := decisionAttributes(in)
 		outcome := audit.OutcomeAllowed
 		if denied {
 			outcome = audit.OutcomeDenied
@@ -131,7 +131,7 @@ func (e *Engine) Project(ctx context.Context, in Input) (Result, error) {
 				return err
 			},
 			// Commit reads the attributes after Apply, which sets the reason and status it decided.
-			Audit:     audit.AuditEvent{EventType: "auth.credential_projection.decided", Outcome: outcome, ActorPrincipalID: actor, OrganizationID: &orgText, Attributes: attrs},
+			Audit:     decisionRow(outcome, actor, &orgText, attrs),
 			OffStream: audit.OffStreamCredentialProjection,
 		})
 		if err != nil && !errors.Is(err, errOutcomeMismatch) && !errors.Is(err, audit.ErrNoStateChange) {
@@ -164,6 +164,14 @@ func runTries(try func(denied bool) (Result, error)) (Result, error) {
 		return Result{Outcome: OutcomeStateChanged, Class: ClassRetry}, nil
 	}
 	return res, err
+}
+
+func decisionAttributes(in Input) map[string]any {
+	return map[string]any{"target_kind": "credential", "credential_class": auditClass(in.Domain), "revision": int64(in.Event.Payload.Revision)}
+}
+
+func decisionRow(outcome audit.Outcome, actor, org *string, attrs map[string]any) audit.AuditEvent {
+	return audit.AuditEvent{EventType: "auth.credential_projection.decided", Outcome: outcome, ActorPrincipalID: actor, OrganizationID: org, Attributes: attrs}
 }
 
 func auditClass(d Domain) string {

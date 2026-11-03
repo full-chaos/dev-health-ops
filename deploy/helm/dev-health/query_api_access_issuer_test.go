@@ -11,7 +11,7 @@ func TestQueryAPIAccessTokenIssuerRendersWithGoAPIs(t *testing.T) {
 	envOf := func(docs []map[string]any, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, "Deployment", name), env)
 	}
-	docs := renderPhase(t, 2, "--set", "authService.accessToken.class=hs256_compat")
+	docs := renderPhase(t, 2, "--set", "authService.accessToken.class=hs256_compat") // gitleaks:allow
 	if authDoc(docs, "Deployment", "a-dev-health-query-api") == nil {
 		t.Fatal("the phase render holds no query-api Deployment: the check would measure nothing")
 	}

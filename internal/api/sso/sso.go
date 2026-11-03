@@ -75,12 +75,12 @@ type Deps struct {
 	Cipher credentials.Cipher
 	// StateSecret derives (via HKDF, state.go) the AES-256-GCM key that
 	// AEAD-encrypts the opaque OIDC state value (D2727-amended): the
-	// api's own JWT_SECRET_KEY -- the literal value
-	// apiservice/service.go passes is deps.GitHubStateSigner.Secret, no
-	// new secret material. Routes does not mount the real OIDC handlers
+	// SSO_STATE_SECRET, else the api's JWT_SECRET_KEY
+	// (apiservice.statePurposeSecrets), never the same key as any other
+	// purpose. Routes does not mount the real OIDC handlers
 	// without it, since an empty secret can mint no state a callback
 	// could ever verify.
-	StateSecret string
+	StateSecret, StateSecretFallback string // fallback: the key before the successor; verify only
 	// Signer mints the SSOLoginResponse token pair on a successful
 	// callback: the same edgetoken.Signer newProtection built from the
 	// api's own JWT_SECRET_KEY.

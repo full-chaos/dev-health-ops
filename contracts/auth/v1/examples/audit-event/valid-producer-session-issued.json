@@ -1,0 +1,18 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "auth.session.issued",
+  "occurred_at": "2026-11-02T10:00:00Z",
+  "outcome": "allowed",
+  "attributes": {
+    "reason_code": "accepted",
+    "target_kind": "session",
+    "source": "go-api-delegated",
+    "amr": [
+      "pwd",
+      "otp"
+    ],
+    "credential_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e",
+    "credential_class": "user_access_token"
+  },
+  "subject_principal_id": "prn_0b6f1c3e-8e4f-4b7a-9d2a-3c5e7f9a1b2d"
+}

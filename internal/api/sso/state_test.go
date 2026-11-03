@@ -196,3 +196,19 @@ func TestValidateOIDCRedirectURIHTTPS(t *testing.T) {
 		})
 	}
 }
+
+func TestStateMintedUnderTheFallbackKeyStillVerifiesAfterTheSuccessorIsSet(t *testing.T) {
+	now := time.Now()
+	providerID := "11111111-1111-4111-8111-111111111111"
+	old := mustMint(t, stateTestSecretA, providerID, stateTestOrg, now)
+	fresh := mustMint(t, stateTestSecretB, providerID, stateTestOrg, now)
+	keys := stateKeys{Primary: stateTestSecretB, Fallback: stateTestSecretA}
+	for name, token := range map[string]string{"old key": old, "successor": fresh} {
+		if _, err := verifyOIDCStateKeys(keys, token, providerID, now.Add(time.Minute)); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := verifyOIDCStateKeys(stateKeys{Primary: stateTestSecretB}, old, providerID, now); err == nil {
+		t.Fatal("a state under the old key verified with no fallback")
+	}
+}

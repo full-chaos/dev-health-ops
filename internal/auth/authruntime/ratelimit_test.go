@@ -265,3 +265,16 @@ func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
 		t.Error("a service with a limited route has no store component")
 	}
 }
+
+func TestRateLimitIsKeyedFromItsOwnKeyWhenSetAndFromTheSessionSecretWhenNot(t *testing.T) {
+	t.Parallel()
+	rateKey := strings.Repeat("r", 40)
+	fallback := limitConfig(t, sessionEnvironment(map[string]string{}))
+	if got := rateLimitSecret(fallback); got != testAccessSecret {
+		t.Fatal("unset, the rate-limit secret is not the session secret")
+	}
+	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey}))
+	if got := rateLimitSecret(own); got != rateKey || got == testAccessSecret {
+		t.Fatal("set, the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
+	}
+}

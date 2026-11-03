@@ -15,7 +15,7 @@ A `compromised` key is never `active`, `pending`, `retiring` or `retired` again:
 
 ## Emergency compromise
 
-1. Have a successor `pending` for at least 300 s before you need it. Without one, `compromise -kid K` leaves no signing key.
+1. Have a successor `pending` for at least 300 s before you need it. Without one, `compromise -kid K` on the `active` key leaves no signing key; on a key that is not `active`, it changes only K and the active key stays active.
 2. `compromise -kid K -successor S`, dry run first, then `-apply`, in one transaction. K leaves the JWKS, S signs, and the sessions that hold tokens signed under K are revoked (the command prints `sessions revoked: N`). A session that never held a K token is not revoked.
 3. Every verb on K afterwards answers `refused: compromised_terminal` (`register` answers `key_registered`). A manifest that names K `active` changes nothing.
 4. Close the verifier window. go-api and query-api read the JWKS through a client with a 5 min cache and a 30 s refresh floor, and do not check a kid denylist. Right after the key drop, restart go-api and then query-api, one service at a time. The rehearsal measures both windows (see below).

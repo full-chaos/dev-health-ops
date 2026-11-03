@@ -18,6 +18,8 @@ lifecycle: active
 
 Rotate a potentially exposed credential; do not paste it into diagnostic output.
 
+A `401` or `503` on a bearer access token has its own page: [Token verification problems](token-verification.md).
+
 ## Verify or reset link does not work
 
 After the e-mail link routes move to the auth service, a verify or reset link e-mailed before that change no longer works. Ask for a new link.

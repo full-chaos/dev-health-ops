@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "5d59315bf4f646d920ef852e7d237158af857ba4573870493e3c3423ed8b664d"
-	rolesSHA   = "c0b45a25270e835da254238d0f18362888fb892309850de6ab33791720137a2d"
+	actionsSHA = "0cbbb590cab09eedb93fda0f1ef12a4ebab3c3f5a8c12af6497edaea317f6a32"
+	rolesSHA   = "b882640884c42aec660fda0fab492a7ec71c1cc1da5f10fa32b0bbaab7de82bb"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "acr.evidence.read": true, "acr.credential.issue": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 	"credentials.project": true,
 }
@@ -469,11 +469,11 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "authz.decide": true, "credentials.project": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 35 {
-		t.Fatalf("%d actions, want 35", len(actions))
+	if len(actions) != 37 {
+		t.Fatalf("%d actions, want 37", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -525,9 +525,11 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 
 func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
 	want := map[string]string{
-		"acr.context.read": ImpersonationAllowed,
-		"authz.decide":     ImpersonationDenied,
-		"members.update":   ImpersonationDenied,
+		"acr.context.read":     ImpersonationAllowed,
+		"acr.evidence.read":    ImpersonationAllowed,
+		"acr.credential.issue": ImpersonationDenied,
+		"authz.decide":         ImpersonationDenied,
+		"members.update":       ImpersonationDenied,
 	}
 	for id, v := range want {
 		a, err := Default().Action(id)
@@ -605,6 +607,36 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 	for _, a := range want {
 		if !c.Allows("platform_admin", a) {
 			t.Errorf("platform_admin does not hold %s", a)
+		}
+	}
+}
+
+// acr.evidence.read reads evidence at a revision like acr.context.read; acr.credential.issue mints a credential and is never cached.
+func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
+	want := map[string]Action{
+		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+	}
+	for id, w := range want {
+		a, err := Default().Action(id)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+			t.Errorf("%s = %+v, want %+v", id, a, w)
+		}
+	}
+}
+
+// No role holds the two new actions until a roles change grants them.
+func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+	c := Default()
+	for _, r := range c.Roles() {
+		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
+			if c.Allows(r.ID, id) {
+				t.Errorf("role %s holds %s", r.ID, id)
+			}
 		}
 	}
 }

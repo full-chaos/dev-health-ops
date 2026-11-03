@@ -187,14 +187,7 @@ func (s *Store) RevokeByCredentialWith(ctx context.Context, credential contracts
 			}
 			return nil
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "session", "target_id": id,
-				"credential_class": "refresh_credential",
-			},
-		},
+		Audit:     revokedEvent(ctx, actor, principal, "session", id, true),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {

@@ -48,14 +48,7 @@ func (s *Store) RevokeLegacyWith(ctx context.Context, legacy LegacyRefresh, acto
 			}
 			return public(ctx, tx, legacy.PrincipalID, legacy.OrganizationID)
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal,
-				"credential_class": "refresh_credential",
-			},
-		},
+		Audit:     revokedEvent(ctx, actor, principal, "principal", principal, true),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {

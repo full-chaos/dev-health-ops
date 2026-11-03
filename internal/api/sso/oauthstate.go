@@ -111,6 +111,10 @@ func mintOAuthState(secret string, state oauthState, now time.Time) (token, flow
 // errInvalidOAuthState or errOAuthStateExpired -- both routed, at the
 // call site, to D2738's unauthenticated bucket (recordSSOUnauthenticated),
 // never a provider row mutation.
+func verifyOAuthStateKeys(keys stateKeys, token, providerID string, now time.Time) (oauthState, error) {
+	return verifyWithKeys(keys, func(secret string) (oauthState, error) { return verifyOAuthState(secret, token, providerID, now) })
+}
+
 func verifyOAuthState(secret, token, providerID string, now time.Time) (oauthState, error) {
 	gcm, err := newGCM(secret, oauthStateHKDFInfo)
 	if err != nil {

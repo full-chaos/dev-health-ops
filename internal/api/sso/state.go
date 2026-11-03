@@ -34,13 +34,9 @@ import (
 const oidcStateTTL = 10 * time.Minute
 
 // oidcStateHKDFInfo is the fixed HKDF info string deriving the state's
-// AES-256-GCM key from the api's own JWT_SECRET_KEY (Deps.StateSecret; the
-// literal value apiservice/service.go passes is
-// deps.GitHubStateSigner.Secret, the SAME cfg.APIJWTSecret.Reveal() every
-// other short-lived signed/encrypted token in this codebase derives from
-// -- no new env var). A fixed, distinct info string is what keeps this
-// derived key independent of the access/refresh token key and the
-// GitHub-App install-state key even though root secret is shared.
+// AES-256-GCM key from Deps.StateSecret (SSO_STATE_SECRET, else the api's
+// JWT_SECRET_KEY). A fixed, distinct info string keeps this derived key
+// independent of the OAuth and SAML state keys derived from the same root.
 const oidcStateHKDFInfo = "dev-health-ops:oidc-state-aead-v1"
 
 // Python's generate_oidc_authorization_request (services/sso.py:471-519)
@@ -192,6 +188,10 @@ func mintOIDCState(secret string, state oidcState, now time.Time) (token, flowID
 // authenticate, answers errOIDCStateExpired distinctly, so the recorded
 // reason (never the caller-visible response, which is fixed either way)
 // says which.
+func verifyOIDCStateKeys(keys stateKeys, token, providerID string, now time.Time) (oidcState, error) {
+	return verifyWithKeys(keys, func(secret string) (oidcState, error) { return verifyOIDCState(secret, token, providerID, now) })
+}
+
 func verifyOIDCState(secret, token, providerID string, now time.Time) (oidcState, error) {
 	gcm, err := newGCM(secret, oidcStateHKDFInfo)
 	if err != nil {
@@ -248,4 +248,18 @@ func newJTI() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(random[:]), nil
+}
+
+// stateKeys are the keys a state token is verified with: Primary first, then
+// Fallback (the key in use before the successor was set), when set and different.
+type stateKeys struct{ Primary, Fallback string }
+
+func (h handlers) stateKeys() stateKeys { return stateKeys{h.StateSecret, h.StateSecretFallback} }
+
+func verifyWithKeys[T any](keys stateKeys, verify func(secret string) (T, error)) (T, error) {
+	state, err := verify(keys.Primary)
+	if err != nil && keys.Fallback != "" && keys.Fallback != keys.Primary {
+		return verify(keys.Fallback)
+	}
+	return state, err
 }

@@ -1,0 +1,8 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "auth.membership.role_changed",
+  "occurred_at": "2026-11-02T10:00:00Z",
+  "outcome": "allowed",
+  "attributes": {},
+  "actor_principal_id": "6f1c2d3e-4a5b-4c6d-8e7f-901a2b3c4d5e"
+}

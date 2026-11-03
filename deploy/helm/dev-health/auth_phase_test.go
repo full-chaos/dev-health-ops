@@ -240,7 +240,7 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 5"},
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
-		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"},
+		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"}, // gitleaks:allow
 		"eddsa class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"), "authService.accessToken.class needs authService.phase >= 2"},
 		"token class unknown":     {phaseArgs(2, "--set", "authService.accessToken.class=rs256"), "must be empty, hs256_compat or eddsa"},
 		"token class not string":  {phaseArgs(2, "--set-json", "authService.accessToken.class=true"), "must be strings"},
@@ -293,7 +293,7 @@ func TestAuthPhaseNamedKeys(t *testing.T) {
 	envOf := func(docs []map[string]any, kind, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, kind, name), env)
 	}
-	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat")
+	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat") // gitleaks:allow
 	if v, _ := envOf(docs, "Deployment", "a-dev-health-auth-service", "AUTH_SOCIAL_LINK_ROUTES"); v != "true" {
 		t.Errorf("AUTH_SOCIAL_LINK_ROUTES = %q, want true", v)
 	}

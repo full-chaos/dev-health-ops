@@ -426,6 +426,7 @@ internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/llmorgsettings	relation_test.go
+internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go

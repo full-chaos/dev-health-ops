@@ -6,8 +6,9 @@ set -euo pipefail
 
 RE='^(feat|bug|enhancement|chore|fix|docs)\([a-z0-9][a-z0-9._/-]*\): CHAOS-[0-9]+ [^[:space:]].*$'
 
-# "Imperative" is not machine-checkable; the checkable part: the description must not open with an article, a determiner or a
-# pronoun (case-insensitive), so "the process exits" and "we need x" fail while "add", "make", "keep" pass.
+# The lint checks the pattern only: type from the closed list (feat|bug|enhancement|chore|fix|docs), an area, exactly one CHAOS id,
+# and a non-empty description. Imperative mood is a review rule, not a lint rule. The first-word stop list (a, an, the, this, it, we ...)
+# is a cheap guard against common non-imperative openings, not a proof of mood.
 STOP=' a an the this that these those it its we i our my there '
 DESC_RE=': CHAOS-[0-9]+ ([^[:space:]]+)'
 
@@ -44,7 +45,7 @@ fi
 [[ "$title" =~ $DESC_RE ]]
 first=${BASH_REMATCH[1],,}
 if [[ "$STOP" == *" $first "* ]]; then
-  echo "PR title description must start with an imperative verb, not '$first' (no article, determiner or pronoun first)" >&2
+  echo "PR title description opens with '$first' (article, determiner or pronoun): start it with the verb of the change" >&2
   exit 1
 fi
 echo "PR title ok"

@@ -691,3 +691,44 @@ func TestSelectorGateRefusesABodyMarkerWithoutAShape(t *testing.T) {
 		t.Fatal("gate accepted a body marker with no shape")
 	}
 }
+
+func bodyPairRegistry(first, second ClassMarker) map[string]RegistryClass {
+	return syntheticRegistry(
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "EdDSA"}}},
+		RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{first}},
+		RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{second}},
+	)
+}
+
+func bodyPairProfile(t *testing.T) map[string]any {
+	t.Helper()
+	return multiClassProfile(t, []any{"user_access_token", "ops_refresh_token", "refresh_credential"}, "jwt_header_alg", "EdDSA")
+}
+
+func TestSelectorGateRefusesJWTAndOverlappingPrefixOnOneField(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "prefix:eyJ"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted jwt and prefix:eyJ on one body field")
+	}
+}
+
+func TestSelectorGateRefusesJWTAndOtherPrefixOnOneField(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "prefix:dhr1_"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted jwt and prefix:dhr1_ on one body field: dhr1_.a.b matches both")
+	}
+}
+
+func TestSelectorGateAcceptsJWTAndPrefixOnDifferentFields(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_credential", "prefix:dhr1_"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err != nil {
+		t.Fatalf("gate refused jwt and prefix on different body fields: %v", err)
+	}
+}
+
+func TestSelectorGateRefusesPrefixWithForbiddenCharacter(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_credential", "prefix:bad!"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted prefix:bad!, which the registry schema forbids")
+	}
+}

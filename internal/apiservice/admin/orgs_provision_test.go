@@ -504,7 +504,6 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 		{errors.New("other"), 503, provUnavailable},
 		{refusedWith(409, "users_not_owned"), 503, provUnavailable},
 		{refusedWith(409, "state_changed"), 503, provUnavailable},
-		{refusedWith(409, "organization_suspended"), 503, provUnavailable},
 		{refusedWith(400, "malformed"), 503, provUnavailable},
 		{refusedWith(401, ""), 503, provUnavailable},
 	}
@@ -550,6 +549,63 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 			}
 		}
 	}
+}
+
+// CHAOS-11800 (pm 2026-11-03): a client error is never a 503. One cell per
+// refusal reason of each member route; a dependency failure stays 503.
+func TestProvisionClientRefusalsAre4xx(t *testing.T) {
+	type cell struct {
+		route  string
+		status int
+		reason string
+		code   int
+		text   string
+	}
+	cells := []cell{
+		{"add", 404, "principal_not_found", 404, "User not found"},
+		{"add", 404, "inviter_not_found", 404, "Inviter not found"},
+		{"add", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"add", 403, "deactivated", 403, "Account is deactivated"},
+		{"add", 409, "membership_suspended", 409, "Membership is suspended"},
+		{"role", 404, "principal_not_found", 404, "Membership not found"},
+		{"role", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"role", 403, "deactivated", 403, "Account is deactivated"},
+		{"role", 409, "membership_suspended", 404, "Membership not found"},
+		{"remove", 404, "principal_not_found", 404, "Membership not found"},
+		{"remove", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"remove", 403, "deactivated", 403, "Account is deactivated"},
+		{"transfer", 404, "principal_not_found", 400, "Target user is not a member"},
+		{"transfer", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"transfer", 403, "deactivated", 403, "Account is deactivated"},
+	}
+	for _, c := range cells {
+		t.Run(c.route+"_"+c.reason, func(t *testing.T) {
+			for _, route := range provisionRoutes {
+				if route.name != c.route {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(c.status, c.reason)}), route)
+				if code != c.code || body != provDetail(c.text) {
+					t.Errorf("%s %s: %d %s, want %d %s", c.route, c.reason, code, body, c.code, provDetail(c.text))
+				}
+			}
+		})
+	}
+	t.Run("dependency_failure_stays_503", func(t *testing.T) {
+		for _, err := range []error{authprovision.ErrUnavailable, refusedWith(503, "dependency_unavailable"), refusedWith(500, "principal_not_found"), refusedWith(502, "")} {
+			for _, route := range provisionRoutes {
+				if route.name == "invite" {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: err}), route)
+				if code != 503 || body != provUnavailable {
+					t.Errorf("%s %v: %d %s, want 503", route.name, err, code, body)
+				}
+			}
+		}
+	})
 }
 
 func indexOf(log []string, step string) int {

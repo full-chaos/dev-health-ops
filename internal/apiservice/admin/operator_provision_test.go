@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 )
 
 func strp(s string) *string { return &s }
@@ -281,5 +282,26 @@ func TestOperatorAddThenRemoveOfOneOrgCallsBoth(t *testing.T) {
 	result, err := Operator{db: db, Provisioner: fake}.UpdateUser(context.Background(), in)
 	if err != nil || !slices.Equal(fake.calls, []string{"add", "remove"}) || len(result.Changes) != 2 {
 		t.Fatalf("err %v calls %v changes %v, want add then remove", err, fake.calls, result)
+	}
+}
+
+// A real delete asks auth-service (as the actor) before it purges; a dry run asks nothing.
+func TestOperatorDeleteWiresTheDeprovisionCall(t *testing.T) {
+	db := &provisionDB{rows: operatorRows()}
+	fake := &fakeProvisioner{db: db}
+	operator := Operator{db: db, Provisioner: fake}
+	if h := operator.orgDeleteHandlers(DeleteOrgConfig{Actor: operatorActorFlag}, nil, true); h.orgProvision != nil {
+		t.Fatalf("a dry run holds a provisioner: %v", h.orgProvision)
+	}
+	h := operator.orgDeleteHandlers(DeleteOrgConfig{Actor: operatorActorFlag}, nil, false)
+	if h.orgProvision == nil {
+		t.Fatal("a real delete holds no provisioner")
+	}
+	ctx := policy.WithUser(context.Background(), &policy.User{})
+	if err := h.deprovisionInAuth(ctx, provOrg); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.calls) != 1 || fake.args[0][0] != provOrg || fake.args[0][1] != operatorActor {
+		t.Fatalf("calls %v args %v, want one deprovision of the org by the actor", fake.calls, fake.args)
 	}
 }

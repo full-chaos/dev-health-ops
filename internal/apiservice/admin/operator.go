@@ -661,6 +661,28 @@ type DeleteOrgConfig struct {
 	Actor string
 }
 
+// orgDeleteHandlers is the handler set one delete runs. A real delete asks
+// auth-service first, through the provisioner; a dry run asks nothing.
+func (o Operator) orgDeleteHandlers(config DeleteOrgConfig, httpDoer providerfoundation.HTTPDoer, dryRun bool) *handlers {
+	var db pgDB = o.Pool
+	if o.db != nil {
+		db = o.db
+	}
+	h := &handlers{
+		store:         o.store(db),
+		logger:        o.logger(),
+		clickHouseDSN: config.ClickHouseDSN,
+		decryptor:     config.Decryptor,
+		pagerDuty:     config.PagerDuty,
+		httpDoer:      httpDoer,
+		readGrants:    o.readGrants,
+	}
+	if !dryRun {
+		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}
+	}
+	return h
+}
+
 // DeleteOrg is OrganizationDeletionService.delete as `admin orgs delete` runs
 // it, and the same code as the DELETE /orgs/{id} route: the org's Postgres rows
 // and ClickHouse rows are counted and (not a dry run) deleted. A malformed id is
@@ -679,22 +701,7 @@ func (o Operator) DeleteOrg(ctx context.Context, orgID string, dryRun bool, conf
 		ctx = policy.WithUser(ctx, &policy.User{})
 	}
 	httpDoer := revokeDoer(config.HTTPDoer)
-	var db pgDB = o.Pool
-	if o.db != nil {
-		db = o.db
-	}
-	h := &handlers{
-		store:         o.store(db),
-		logger:        o.logger(),
-		clickHouseDSN: config.ClickHouseDSN,
-		decryptor:     config.Decryptor,
-		pagerDuty:     config.PagerDuty,
-		httpDoer:      httpDoer,
-		readGrants:    o.readGrants,
-	}
-	if !dryRun {
-		h.orgProvision = actorProvisioner{Provisioner: o.Provisioner, actor: config.Actor, resolve: o.resolveActor}
-	}
+	h := o.orgDeleteHandlers(config, httpDoer, dryRun)
 	result, err := h.deleteOrganizationData(ctx, orgUUID, dryRun)
 	if err != nil {
 		var refused *orgDeletionRefusedError

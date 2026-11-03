@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"

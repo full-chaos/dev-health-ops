@@ -57,7 +57,7 @@ When the new action makes the PDP and legacy disagree, the mismatch is `unresolv
 
 - `go test -count=1 ./internal/auth/...` and `./internal/api/policy/...`; `./internal/queryapi/graph` when a GraphQL field maps to the action.
 - `go test -count=1 -tags authhistory ./internal/storage/postgres/authschema/...` when the catalog data reaches the schema.
-- `-tags authhistory ./internal/auth/contracts/` when you edit a line an endpoint profile anchors.
+- `go test -count=1 -tags=authhistory ./internal/auth/contracts/...` when you edit a line an endpoint profile anchors.
 - `make docs:check` for the pages above.
 - A mutant per rule you add: remove the role from the action, lower the risk class, leave the map version stale. Each must fail a test.
 

@@ -10,19 +10,12 @@ import (
 	"testing"
 )
 
-// auditWireExempt names the producer packages whose unit tests cannot hold a
-// row to audit-event.v1 with auditwire.MustValidate, with the reason. Their
-// keys and values are still covered by the per-key parity tests of this
-// package; a real-PG read-back of their rows is the lead's integration cell.
+// auditWireExempt names the packages that hold an AuditEvent literal but are not
+// producers of a security_audit_events row, or cannot call auditwire, with the reason.
 var auditWireExempt = map[string]string{
-	"internal/audit":                 "auditwire imports audit; the package's own rows are pinned key by key in this package",
-	"internal/auth/contracts":        "the parsed audit-event.v1 type, not a producer",
-	"internal/auth/delegationend":    "the row is built inside the commit callback; no unit-level capture",
-	"internal/auth/oauthgrant":       "the row is built inside the commit callback; no unit-level capture",
-	"internal/auth/outboxprojection": "the row is built inside the commit callback; no unit-level capture",
-	"internal/auth/restorefence":     "the row is built inside the commit callback; no unit-level capture",
-	"internal/auth/session":          "the rows are built inside the commit callback; no unit-level capture",
-	"internal/joboperator":           "a different AuditEvent type (job operator log), not security_audit_events",
+	"internal/audit":          "auditwire imports audit; the package's own rows are pinned key by key in this package",
+	"internal/auth/contracts": "the parsed audit-event.v1 type, not a producer",
+	"internal/joboperator":    "a different AuditEvent type (job operator log), not security_audit_events",
 }
 
 var auditEventLiteral = regexp.MustCompile(`\bAuditEvent\{`)

@@ -630,16 +630,7 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 			}
 			return s.revokeSessions(ctx, tx, []string{sessionID}, revokedByReuse)
 		},
-		Audit: audit.AuditEvent{
-			EventType:          "auth.session.refresh_reuse_revoked",
-			Outcome:            audit.OutcomeDenied,
-			SubjectPrincipalID: &principal,
-			RequestID:          requestid.Audit(ctx),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "session", "target_id": sessionID,
-				"credential_class": "refresh_credential",
-			},
-		},
+		Audit:     reuseRevokedEvent(ctx, principal, "session", sessionID),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -728,11 +719,7 @@ func (s *Store) RevokeWith(ctx context.Context, sessionID uuid.UUID, actor Actor
 			}
 			return nil
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session", "target_id": id},
-		},
+		Audit:     revokedEvent(ctx, actor, principal, "session", id, false),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -759,11 +746,7 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 			revoked = n
 			return err
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal},
-		},
+		Audit:     revokedAllEvent(ctx, actor, principal),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -803,11 +786,7 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 				UPDATE `+s.q+`.sessions SET revision = revision + 1, updated_at = clock_timestamp()
 				WHERE id = $1 RETURNING revision`, id).Scan(&revision)
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revision_bumped", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"target_kind": "session", "target_id": id},
-		},
+		Audit:     revisionBumpedEvent(ctx, actor, principal, id),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {

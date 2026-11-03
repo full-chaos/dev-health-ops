@@ -2,7 +2,10 @@ package providerfoundation
 
 import (
 	"crypto/rand"
+	"encoding/json"
+	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,10 +27,18 @@ const (
 // v1 PBKDF2 ciphertext and the legacy SHA-256 derived ciphertext so migration
 // workers never need to mutate process-global credential environment values.
 type FernetDecryptor struct {
-	key  secrets.Value
-	salt string
+	// cipher holds the settings key and salt two pointers deep: fmt reflects
+	// over a nested unexported field, and a pointer inside a pointer prints only
+	// an address under every verb. Nil is the unconfigured decryptor.
+	cipher *cipherBox
 }
 
+type cipherBox struct{ inner *fernet.Cipher }
+
+func (d FernetDecryptor) open() *fernet.Cipher { return d.cipher.inner }
+
+// NewFernetDecryptor derives the settings key now, so no Encrypt or Decrypt is
+// the first to pay for it.
 func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error) {
 	if !key.Configured() {
 		return FernetDecryptor{}, credentialInvalid("encryption_key_not_configured")
@@ -35,13 +46,35 @@ func NewFernetDecryptor(key secrets.Value, salt string) (FernetDecryptor, error)
 	if salt == "" {
 		salt = defaultEncryptionSalt
 	}
-	return FernetDecryptor{key: key, salt: salt}, nil
+	cipher, err := fernet.New(key.Reveal(), salt)
+	if err != nil {
+		return FernetDecryptor{}, credentialInvalid("encryption_key_not_configured")
+	}
+	return FernetDecryptor{cipher: &cipherBox{inner: &cipher}}, nil
+}
+
+const fernetDecryptorRedacted = "providerfoundation.FernetDecryptor"
+
+// String, Format, LogValue and MarshalJSON keep the key and salt out of every
+// printed form (%v, %+v, %#v, slog, JSON).
+func (d FernetDecryptor) String() string { return fernetDecryptorRedacted }
+
+func (d FernetDecryptor) Format(state fmt.State, _ rune) {
+	_, _ = fmt.Fprint(state, fernetDecryptorRedacted)
+}
+
+func (d FernetDecryptor) LogValue() slog.Value {
+	return slog.GroupValue(slog.Bool("encryption_key_configured", d.Configured()))
+}
+
+func (d FernetDecryptor) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fernetDecryptorRedacted)
 }
 
 // Configured reports whether an encryption key is set: without one every
 // Encrypt and Decrypt is refused, which callers must tell apart from a wrong
 // key (Python raises RuntimeError for the first and ValueError for the second).
-func (d FernetDecryptor) Configured() bool { return d.key.Configured() }
+func (d FernetDecryptor) Configured() bool { return d.cipher != nil }
 
 // Decrypt returns the plaintext of ciphertext. Every decrypted integration
 // credential, client secret and key passes through here, so the plaintext is
@@ -57,14 +90,10 @@ func (d FernetDecryptor) Decrypt(ciphertext secrets.Value) ([]byte, error) {
 }
 
 func (d FernetDecryptor) decrypt(ciphertext secrets.Value) ([]byte, error) {
-	if !d.key.Configured() || !ciphertext.Configured() {
+	if d.cipher == nil || !ciphertext.Configured() {
 		return nil, ErrCredentialInvalid
 	}
-	cipher, err := fernet.New(d.key.Reveal(), d.salt)
-	if err != nil {
-		return nil, ErrCredentialInvalid
-	}
-	plain, err := cipher.Open(ciphertext.Reveal())
+	plain, err := d.open().Open(ciphertext.Reveal())
 	if err != nil {
 		return nil, ErrCredentialInvalid
 	}
@@ -74,14 +103,10 @@ func (d FernetDecryptor) decrypt(ciphertext secrets.Value) ([]byte, error) {
 // Encrypt emits the same versioned Fernet format as core/encryption.py. It is
 // used only when an OAuth refresh atomically replaces a short-lived token.
 func (d FernetDecryptor) Encrypt(plaintext []byte) (secrets.Value, error) {
-	if !d.key.Configured() {
+	if d.cipher == nil {
 		return secrets.Value{}, ErrCredentialInvalid
 	}
-	cipher, err := fernet.New(d.key.Reveal(), d.salt)
-	if err != nil {
-		return secrets.Value{}, ErrCredentialInvalid
-	}
-	sealed, err := cipher.Seal(plaintext, time.Now(), rand.Reader)
+	sealed, err := d.open().Seal(plaintext, time.Now(), rand.Reader)
 	if err != nil {
 		return secrets.Value{}, ErrCredentialInvalid
 	}

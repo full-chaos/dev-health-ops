@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "unknown_action"
+    "reason": "unknown_action",
+    "wire_reason_code": "unknown_action"
   },
   "id": "unknown-action-valid-syntax",
   "layer": "pdp",

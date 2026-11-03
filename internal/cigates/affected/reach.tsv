@@ -118,6 +118,7 @@ internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
 internal/auth/contracts	contracts.go	internal/auth/decisioncache
 internal/auth/contracts	contracts.go	internal/auth/decisionstate
+internal/auth/contracts	contracts.go	internal/auth/delegationend
 internal/auth/contracts	contracts.go	internal/auth/delegationinput
 internal/auth/contracts	contracts.go	internal/auth/grant
 internal/auth/contracts	contracts.go	internal/auth/grantend
@@ -141,6 +142,7 @@ internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/pushprojection
+internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred

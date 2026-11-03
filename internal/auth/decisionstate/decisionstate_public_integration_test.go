@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 )
 
@@ -119,5 +120,25 @@ func TestOwnedPlatformAdminReadsThePublicHolder(t *testing.T) {
 	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, copyOff)
 	if got := e.snapshotWith(t, ctx, r, copyOff, "").PlatformRole(); got != "platform_admin" {
 		t.Fatalf("a disabled auth copy of an active public user: %q, want platform_admin (public wins)", got)
+	}
+}
+
+// The kind decides before the users row: a non-user principal whose id also has an active users row is not a user,
+// and is not an actor.
+func TestANonUserKindWithAUsersRowIsNotAUser(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	for _, kind := range []string{"workload", "service_account", "external_source"} {
+		id := e.publicUser(t, ctx, true, true)
+		e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, $2)`, id, kind)
+		if kind != "service_account" {
+			if snap := e.snapshot(t, ctx, id, ""); snap.PrincipalStatus() != authorization.StatusUnknown || snap.PlatformRole() != "" {
+				t.Errorf("kind %s with a users row: %v %q, want unknown and no platform role", kind, snap.PrincipalStatus(), snap.PlatformRole())
+			}
+		}
+		e.role(t, ctx, id, "platform_admin")
+		if a := e.actor(t, ctx, id); a != (authapi.ActorState{}) {
+			t.Errorf("kind %s with a users row as actor: %+v, want the zero state", kind, a)
+		}
 	}
 }

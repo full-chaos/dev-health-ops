@@ -105,7 +105,7 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		{"table:", regexp.MustCompile(`table\("([a-z_]+)"\)`)},
 		{"public:", regexp.MustCompile(`public\.([a-z_]+)`)},
 		{"call:", regexp.MustCompile(`\.(StateOn|EffectiveOn)\(`)},
-		{"state:", regexp.MustCompile(`SELECT '([a-z_.]+)', [^\n]*xmin::text`)},
+		{"state:", regexp.MustCompile(`SELECT '([a-z_.]+)', `)},
 	} {
 		for _, m := range re.re.FindAllStringSubmatch(string(raw), -1) {
 			key := re.prefix + m[1]
@@ -130,9 +130,9 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 	const schema = `"auth"`
 	parts := map[string]string{
-		"principal":   `SELECT 'public.users', id::text, xmin::text FROM public.users WHERE id = $1`,
-		"org":         `SELECT 'public.organizations', id::text, xmin::text FROM public.organizations WHERE id = $2`,
-		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, xmin::text FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
+		"principal":   `SELECT 'public.users', id::text, COALESCE(is_active, false)::text || '/' || COALESCE(is_superuser, false)::text FROM public.users WHERE id = $1`,
+		"org":         `SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
+		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
 		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
 	}
@@ -150,6 +150,13 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 			has := strings.Contains(q, part)
 			if want := slices.Contains(tc.want, name); has != want {
 				t.Errorf("org %v owned %v: the %s rows read = %v, want %v\n%s", tc.org, tc.owned, name, has, want, q)
+			}
+		}
+		for _, publicTable := range []string{"public.users", "public.organizations", "public.memberships"} {
+			for _, line := range strings.Split(q, "\nUNION ALL ") {
+				if strings.Contains(line, "FROM "+publicTable+" ") && strings.Contains(line, "xmin") {
+					t.Errorf("org %v owned %v: %s is read through xmin, a system column the column-only grants do not cover:\n%s", tc.org, tc.owned, publicTable, line)
+				}
 			}
 		}
 		for _, copy := range []string{`"auth".principals`, `"auth".organizations`, `"auth".memberships`} {
@@ -179,5 +186,24 @@ func TestTheStateDigestFollowsEveryRow(t *testing.T) {
 	}
 	if stateDigest(nil) == base || stateDigest(nil) != stateDigest([]stateRow{}) {
 		t.Error("no rows is its own stable digest")
+	}
+}
+
+// A principal's kind decides before its public.users row does: a service account (or any other non-user kind) whose
+// id also has a users row is not a user. The kind is read first, in principal and in Actor.
+func TestTheKindIsReadBeforeThePublicUsersRow(t *testing.T) {
+	raw, err := os.ReadFile("decisionstate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fn := range []string{"principal", "Actor"} {
+		body, ok := funcBody(string(raw), fn)
+		if !ok {
+			t.Fatalf("no func %s", fn)
+		}
+		kind, user := strings.Index(body, "principalRow("), strings.Index(body, "StateOn(")
+		if kind < 0 || user < 0 || kind > user {
+			t.Errorf("%s: principalRow at %d, StateOn at %d; want the kind read first", fn, kind, user)
+		}
 	}
 }

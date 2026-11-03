@@ -79,11 +79,14 @@ func TestTerminalOverAGapEndsAPushCredentialAndTheSkippedRevisionIsStale(t *test
 		t.Fatalf("class %s status %s, want done and revoked", res.Class, res.State.Status)
 	}
 	e.togEnded(t, c.id, "revoked", 3)
-	before, audits := e.togSnapshot(t, c.id), e.count(t, togDecided)
+	before := e.togSnapshot(t, c.id)
 	late := c.next(contracts.ExternalPushScoped, contracts.ExternalPushLifecycleChange{Scopes: []string{"ingest:write"}})
 	mustOutcome(t, e.project(t, late.input()), pushlifecycle.Stale)
-	if after := e.togSnapshot(t, c.id); after != before || e.count(t, togDecided) != audits {
+	if after := e.togSnapshot(t, c.id); after != before {
 		t.Fatalf("the skipped revision wrote: %q -> %q", before, after)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 2 AND outcome = 'stale'`, c.id); n != 1 {
+		t.Fatal("the skipped revision is not decided as stale, so the reader would read it again")
 	}
 	mustOutcome(t, e.project(t, togAt(late, 4).input()), pushlifecycle.RefusedTerminal)
 	mustOutcome(t, e.project(t, togAt(late, 7).input()), pushlifecycle.RefusedTerminal)

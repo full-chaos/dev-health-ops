@@ -387,11 +387,11 @@ activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
 */}}
 {{- if .Values.migrations.hook.openUnitsIndex.enabled }}
 {{- /*
-The verb's whole run is startup (about 60 s) + the build window (deadlineSeconds) + the cleanup drop (300 s): it must end
-inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
+The verb's whole run is the first-connect wait (60 s budget + a 10 s last attempt) + startup (about 60 s) + the build window
+(deadlineSeconds) + the cleanup drop (300 s): 430 s beside the window. It must end inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
 */}}
-{{- if gt (add (int .Values.migrations.hook.openUnitsIndex.deadlineSeconds) 360) (int .Values.migrations.hook.openUnitsIndex.activeDeadlineSeconds) }}
-{{- fail "migrations.hook.openUnitsIndex.deadlineSeconds + 360 (startup and cleanup) must not exceed migrations.hook.openUnitsIndex.activeDeadlineSeconds" }}
+{{- if gt (add (int .Values.migrations.hook.openUnitsIndex.deadlineSeconds) 430) (int .Values.migrations.hook.openUnitsIndex.activeDeadlineSeconds) }}
+{{- fail "migrations.hook.openUnitsIndex.deadlineSeconds + 430 (first-connect wait, startup and cleanup) must not exceed migrations.hook.openUnitsIndex.activeDeadlineSeconds" }}
 {{- end }}
 {{- /*
 With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh

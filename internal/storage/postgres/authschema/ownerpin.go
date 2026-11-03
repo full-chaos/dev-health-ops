@@ -24,7 +24,7 @@ func (o Options) validateSchemaOwnerRole() error {
 	if o.SchemaOwnerRole == o.RuntimeRole {
 		return fmt.Errorf("%w: the pinned schema owner %q must differ from the runtime role", ErrInvalidOptions, o.SchemaOwnerRole)
 	}
-	for _, reader := range o.SessionReaderRoles {
+	for _, reader := range append(append([]string(nil), o.SessionReaderRoles...), o.ProjectionReaderRoles...) {
 		if reader == o.SchemaOwnerRole {
 			return fmt.Errorf("%w: the pinned schema owner %q must differ from every session reader role", ErrInvalidOptions, o.SchemaOwnerRole)
 		}

@@ -4,6 +4,10 @@
     {
       "file": "batch-response-valid-items-disagree.json",
       "why": "The case the surface exists for: item 0 allowed, item 1 denied, each bound by index to its own request."
+    },
+    {
+      "file": "batch-response-valid-items-carry-own-obligations.json",
+      "why": "Each item carries its own obligations by index: item 0 org-wide, item 1 an empty allowlist (none)."
     }
   ],
   "reject": [

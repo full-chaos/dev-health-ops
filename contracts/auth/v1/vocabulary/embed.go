@@ -24,3 +24,8 @@ var Audiences []byte
 //
 //go:embed workload-registry.json
 var WorkloadRegistryV1 []byte
+
+// RedactionClassesV1 is redaction-classes.v1.json's exact byte content.
+//
+//go:embed redaction-classes.v1.json
+var RedactionClassesV1 []byte

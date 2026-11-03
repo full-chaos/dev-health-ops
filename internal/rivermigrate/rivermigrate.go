@@ -41,6 +41,10 @@ const (
 	defaultAPIRole         = "devhealth_api"
 )
 
+// firstConnect bounds the wait for the first database connect: a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed.
+var firstConnect = postgresstore.DefaultFirstConnect()
+
 // Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
 // schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
 // verb that runs the migrate Job's steps in order, the `river` and `roles` verbs, and the flat
@@ -288,7 +292,7 @@ func Execute(
 	poolConfig.MaxConnIdleTime = time.Minute
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
-	pool, err := postgresstore.Open(ctx, poolConfig)
+	pool, err := postgresstore.OpenWaiting(ctx, poolConfig, firstConnect.WithReport(postgresstore.TextReport(stderr, "migrate river", "PostgreSQL migration")))
 	if err != nil {
 		fmt.Fprintln(stderr, "migration error: PostgreSQL migration endpoint unavailable")
 		return 1

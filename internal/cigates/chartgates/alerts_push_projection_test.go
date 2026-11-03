@@ -98,6 +98,34 @@ func pushRunbookHasNoPromQLRule(g *guard) {
 	}
 }
 
+// Step 2 must accept the healthy no-drift state: an absent drift gauge is
+// expected while the run counter advances, and only a series that must exist
+// (or an absent drift gauge with a stalled counter) is a stop.
+func pushRunbookStep2AllowsAbsentDrift(g *guard) {
+	text := g.read(pushRunbook)
+	start := strings.Index(text, "## Step 2")
+	if start < 0 {
+		g.failf("the runbook has no Step 2 section")
+		return
+	}
+	sec := text[start:]
+	if end := strings.Index(sec[len("## Step 2"):], "\n## "); end >= 0 {
+		sec = sec[:len("## Step 2")+end]
+	}
+	stops, allows := 0, 0
+	for _, line := range strings.Split(sec, "\n") {
+		if strings.Contains(line, "Stop and report") {
+			stops++
+			g.expect(strings.Contains(line, "run counter is not advancing"), "Step 2 stop rule %q does not limit the absent drift gauge to a run counter that is not advancing: the healthy no-drift state has no drift sample", strings.TrimSpace(line))
+		}
+		if strings.Contains(line, "absent drift gauge") && strings.Contains(line, "run counter is advancing") {
+			allows++
+		}
+	}
+	g.expect(stops > 0, "Step 2 has no stop rule")
+	g.expect(allows > 0, "Step 2 does not say that an absent drift gauge is expected while the run counter is advancing")
+}
+
 // C50b: the series of rules 3 and 4 are literal instrument names in the reader
 // code today. Rules 1, 2 and 5 name the series of the reconcile probe (plan
 // 6.1); their names are pinned here by pushRules, and the probe's own test
@@ -366,6 +394,7 @@ func TestPushProjectionAlertGuardsRealTree(t *testing.T) {
 		check{"push-alerts-are-the-group", pushAlertsAreTheGroup},
 		check{"push-runbook-matches-the-rules", pushRunbookMatchesTheRules},
 		check{"push-runbook-has-no-promql-rule-or-channel", pushRunbookHasNoPromQLRule},
+		check{"push-runbook-step2-allows-absent-drift", pushRunbookStep2AllowsAbsentDrift},
 		check{"push-metric-names-are-emitted", pushMetricNamesAreEmitted},
 		check{"push-alerts-fire-on-seeded-series", pushAlertsFireOnSeededSeries},
 	)
@@ -385,6 +414,7 @@ func TestPushProjectionAlertGuardsPlantedDefects(t *testing.T) {
 		pb("runbook-severity-differs", pushDriftLive, `"severity": "critical"`, `"severity": "warning"`, "import label severity"),
 		pb("runbook-names-a-channel", pushDrift, `"usePolicy": true`, `"usePolicy": false`, "usePolicy"),
 		pb("runbook-metric-differs", pushFinalRows, `"metricName": "`+pushFinalMetric+`"`, `"metricName": "devhealth_auth_push_projection_final"`, "metricName"),
+		{"runbook-step2-stops-on-any-no-data", both, mut(pushRunbook, "No data for the run counter, the parked rows or the final rows, or an absent drift gauge while the run counter is not advancing, means", `A query that returns "no data" means`), pushRunbookStep2AllowsAbsentDrift, "Step 2 stop rule"},
 		{"parked-rule-uses-max", both, mut(rulesRel, "min_over_time("+pushParkedMetric, "max_over_time("+pushParkedMetric), pushAlertsFireOnSeededSeries, "rule 3 fires although"},
 		{"parked-rule-window-shortened", both, mut(rulesRel, pushParkedMetric+"[1h]", pushParkedMetric+"[5m]"), pushAlertsFireOnSeededSeries, "rule 3 fires although"},
 		{"not-running-counts-failed-runs", both, mut(rulesRel, `{outcome="ok"}[3h]`, `[3h]`), pushAlertsFireOnSeededSeries, "rule 5 is silent"},

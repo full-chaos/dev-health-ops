@@ -264,7 +264,7 @@ var openerDrivers = map[string]openerDriver{
 	"internal/pgmigrate/downgrade.go":            {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "downgrade", "-1"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
 	"internal/pgmigrate/indexbuild.go":           {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "build-index", "failure-streak"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
 	"internal/pgmigrate/preflight.go":            {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "preflight"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
-	"internal/pushlifecyclecli/command.go":       {binary: "dho", runs: []openerRun{{args: []string{"push-lifecycle", "backfill-created"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/rivermigrate/ownermove.go":         {binary: "dho", runs: []openerRun{{args: []string{"migrate", "owner-move", "-schemas", "census", "-from", "a", "-to", "b", "-plan"}, env: []string{"MIGRATION_DATABASE_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
 	"internal/synccli/jira_stored_credential.go": {binary: "dho", runs: []openerRun{{args: []string{"sync", "teams", "--provider", "jira", "--org", "00000000-0000-0000-0000-000000000001"}, env: []string{"POSTGRES_URI={DSN}", censusClickHouse}}}},
 	"tools/record-provider-answers/main.go":      {binary: "recorder", runs: []openerRun{{args: []string{"-provider", "linear", "-dry"}, env: []string{"POSTGRES_URI={DSN}", "SETTINGS_ENCRYPTION_KEY=census-key-census-key-census-key-1"}}}},
 }

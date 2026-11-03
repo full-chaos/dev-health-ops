@@ -1,12 +1,15 @@
 package devhealth_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -31,6 +34,61 @@ func TestOrgsOwnedEnvIsRefusedInEveryExtraEnv(t *testing.T) {
 	_, out, err := renderAuth(t, phaseArgs(1, "--set-json", "goApi.extraEnv="+entry)...)
 	if err == nil || !strings.Contains(out, orgsOwnedRemoved) {
 		t.Fatalf("a secretKeyRef entry rendered: err=%v out=%.400s", err, out)
+	}
+}
+
+// Every default goWorkers group refuses AUTH_ORGS_OWNED in its own extraEnv: groups is a list of maps, not a map.
+func TestOrgsOwnedEnvIsRefusedInEveryWorkerGroup(t *testing.T) {
+	raw, err := os.ReadFile("values.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		GoWorkers struct {
+			Groups []map[string]any `yaml:"groups"`
+		} `yaml:"goWorkers"`
+	}
+	if err := yaml.Unmarshal(raw, &values); err != nil {
+		t.Fatal(err)
+	}
+	groups := values.GoWorkers.Groups
+	if len(groups) < 9 {
+		t.Fatalf("expected the default worker groups, got %d", len(groups))
+	}
+	entries := map[string]string{
+		"true":            `[{"name":"AUTH_ORGS_OWNED","value":"true"}]`,
+		"false":           `[{"name":"AUTH_ORGS_OWNED","value":"false"}]`,
+		"empty":           `[{"name":"AUTH_ORGS_OWNED","value":""}]`,
+		"secretKeyRef":    `[{"name":"AUTH_ORGS_OWNED","valueFrom":{"secretKeyRef":{"name":"s","key":"k"}}}]`,
+		"lowercase+space": `[{"name":" auth_orgs_owned ","value":"true"}]`,
+	}
+	for i, group := range groups {
+		for form, entry := range entries {
+			t.Run(fmt.Sprintf("group %v %s", group["name"], form), func(t *testing.T) {
+				var list []any
+				if err := json.Unmarshal([]byte(entry), &list); err != nil {
+					t.Fatal(err)
+				}
+				mutated := make([]map[string]any, len(groups))
+				for j, g := range groups {
+					mutated[j] = g
+				}
+				withEnv := map[string]any{}
+				for k, v := range group {
+					withEnv[k] = v
+				}
+				withEnv["extraEnv"] = list
+				mutated[i] = withEnv
+				encoded, err := json.Marshal(mutated)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, out, err := renderAuth(t, phaseArgs(1, "--set-json", "goWorkers.groups="+string(encoded))...)
+				if err == nil || !strings.Contains(out, orgsOwnedRemoved) || !strings.Contains(out, fmt.Sprintf("goWorkers.groups[%d].extraEnv", i)) {
+					t.Fatalf("rendered: err=%v out=%.400s", err, out)
+				}
+			})
+		}
 	}
 }
 

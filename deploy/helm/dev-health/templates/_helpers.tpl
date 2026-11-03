@@ -1059,7 +1059,7 @@ auth-service's issuerURLPattern (internal/auth/authconfig), so a value the servi
 {{- $class := $t.class | default "" -}}
 {{- $issuer := $t.issuerURL | default "" -}}
 {{- if $class -}}
-{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
+{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}{{- /* gitleaks:allow */ -}}
 {{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
 {{- end -}}
 {{- if or (eq $class "eddsa") $issuer -}}

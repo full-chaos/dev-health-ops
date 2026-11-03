@@ -18,7 +18,7 @@
 # Every run mints a fresh workload token in the pod (a token lives at most 300 s) and ends inside RUN_CAP_SECONDS.
 # Images are registry DIGEST references (repo@sha256:<64 hex>) from the CI Inspect image step of the PR head:
 #   AUTH_PDP_IMAGE_SERVICE  AUTH_PDP_IMAGE_MIGRATE  AUTH_PDP_IMAGE_DHO
-# AUTH_PDP_LOADTEST_BIN: a static linux/amd64 loadtest (CGO_ENABLED=0 go build -o <file> ./cmd/loadtest). AUTH_PDP_OUT_DIR: a new
+# AUTH_PDP_LOADTEST_BIN: a static linux loadtest for the node architecture (CGO_ENABLED=0 GOOS=linux GOARCH=<node arch> go build -o <file> ./cmd/loadtest). AUTH_PDP_OUT_DIR: a new
 # directory for the reports and the summary. Optional: AUTH_PDP_KUBECONFIG (default /etc/rancher/k3s/k3s.yaml).
 # Secrets travel on stdin or in files in the cluster only. Nothing here touches another namespace or prod.
 set -euo pipefail
@@ -285,7 +285,7 @@ SLO_FAILED=0
 run_one() {
   local leg=$1 profile=$2 load=$3 report out slo=() args=() name rc=0 sha
   shift 3
-  report="${leg}-${profile}-${load}.json"
+  report="${leg}-${profile}-${load//:/-}.json"
   for name in "$@"; do slo+=(--slo "${name}:p95=${SLO_P95},p99=${SLO_P99},err=${SLO_ERR}"); done
   args=(--config "/work/profiles/${profile}.json" --profile "${load%%:*}" --base-url "http://${SVC_HOST}:${SVC_PORT}" --allow-host "${SVC_HOST}" --out "/work/${report}")
   case "${load}" in *:*) args+=(--rate "${load#*:}" --duration "${KNEE_SECONDS}s") ;; esac

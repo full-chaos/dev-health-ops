@@ -25,6 +25,7 @@ lifecycle: active
 - [Workload bootstrap credential](auth-workload-bootstrap-credential.md)
 - [Service accounts](auth-service-accounts.md)
 - [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
+- [Auth client-address proof](auth-client-address-proof.md)
 - [Auth legacy compatibility and rollback](auth-legacy-compat-and-rollback.md)
 - [Legacy ingest retirement](legacy-ingest-retirement.md)
 

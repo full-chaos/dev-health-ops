@@ -36,7 +36,7 @@ Grants live in `auth.resource_grants`. They are auth-native data: there is no pu
 | Organization | A grant belongs to one organization. A grant of another organization never applies. |
 | Principal | The grantee. It must be an active member of the organization when the grant is made. |
 | Resource kind | `repository`. This is the only kind. |
-| Repository key | One repository, or the explicit organization-wide `*`. See [Repository key](#repository-key). |
+| Repository key | One repository path, or the explicit organization-wide `*`. See [Repository key](#repository-key). |
 | Role | One of the roles in [Roles](#roles). |
 | Expiry | Optional. It must lie in the future when it is set. |
 | Origin | `api` or `backfill`. An `api` grant names the principal that made it. |
@@ -123,12 +123,15 @@ There is no go-api `audit_logs` row for a grant write. The auth audit row and th
 
 ## Repository key
 
-The key is the lowercase `owner/repo`, or the literal `*` for every repository of the organization. The pattern is
-the same in the request contract, in the database check and in the code:
+The key is `*` for every repository of the organization, or a lowercase repository path of 2 to 20 segments, such as
+`owner/repo` or `group/subgroup/repo`, in at most 255 bytes. Every segment but the last is a group name of 1 to 100
+characters that starts and ends with a letter or a digit and never starts with a dot. The last segment is the
+repository name; it may start with a dot (`.github`), but `.` and `..` are refused. A segment holds lowercase letters,
+digits, `.`, `_` and `-`. The pattern is the same in the request contract, in the database check and in the code:
 
 ```text
-^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$
+^(?:[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?/(?:[a-z0-9]|[a-z0-9.][a-z0-9._-]{0,98}[a-z0-9])|\*)$
 ```
 
 A key that does not match is refused as `resource_key_invalid`. A grant is bound to its organization, so two
-organizations that hold the same slug never share a grant.
+organizations that hold the same path never share a grant.

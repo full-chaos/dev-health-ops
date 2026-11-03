@@ -35,7 +35,7 @@ Connecting a repository or syncing one never creates a grant. A credential rotat
 
 ## Give access to one repository
 
-1. Send `POST /internal/v1/grants/create` with the organization, your principal, the member's principal, a `role` of `viewer`, `member` or `admin`, and the key in lowercase `owner/repo`.
+1. Send `POST /internal/v1/grants/create` with the organization, your principal, the member's principal, a `role` of `viewer`, `member` or `admin`, and the key as a lowercase repository path (`owner/repo`, or `group/subgroup/repo` for nested groups).
 2. Keep the `grant_id` and the `revision` of the answer. The answer does not repeat the key.
 
 ```bash
@@ -76,7 +76,7 @@ back. Give a new grant when the member needs access again.
 
 | Status | Reason | What to do |
 | --- | --- | --- |
-| 400 | `resource_key_invalid` | Use lowercase `owner/repo` or `*`. |
+| 400 | `resource_key_invalid` | Use a lowercase repository path of 2 to 20 segments, or `*`. |
 | 400 | `role_invalid` | Use `viewer`, `member` or `admin`. |
 | 400 | `expiry_not_future` | Give a time after now. |
 | 400 | `nothing_to_change` | Name a role or an expiry, and not `expires_at` with `clear_expiry`. |

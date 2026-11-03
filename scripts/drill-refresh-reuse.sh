@@ -88,12 +88,13 @@ JOB
 gen_secrets() {
   mkdir -p "$sec" "$tok"
   local f
-  for f in pg-super pg-runtime pg-migrator user-pw; do [ -e "$sec/$f" ] || rand 24 >"$sec/$f"; done
+  for f in pg-super pg-runtime pg-migrator; do [ -e "$sec/$f" ] || rand 24 >"$sec/$f"; done
+  # The admin verb's password rule: 12+ characters with a letter and a digit.
+  [ -e "$sec/user-pw" ] || printf '%sA1' "$(rand 24)" >"$sec/user-pw"
   [ -e "$sec/hs256" ] || rand 48 >"$sec/hs256"
   [ -e "$sec/successor" ] || rand 32 >"$sec/successor"
   [ -e "$sec/lockout" ] || rand 32 >"$sec/lockout"
   [ -e "$sec/signing-key.pem" ] || openssl genpkey -algorithm ed25519 -out "$sec/signing-key.pem" 2>/dev/null
-  [ -e "$sec/user-hash" ] || python3 -I -c 'import bcrypt,sys; pw=open(sys.argv[1],"rb").read(); print(bcrypt.hashpw(pw, bcrypt.gensalt(12)).decode(), end="")' "$sec/user-pw" >"$sec/user-hash"
   local dsn="host=drill-postgres port=5432 dbname=postgres sslmode=disable"
   printf "%s user=postgres password='%s'" "$dsn" "$(cat "$sec/pg-super")" >"$sec/dsn-super"
   printf "%s user=devhealth_auth password='%s'" "$dsn" "$(cat "$sec/pg-runtime")" >"$sec/dsn-runtime"
@@ -182,17 +183,22 @@ SQL
   echo "helm release $RELEASE installed (auth-migrate hook complete)"
   job auth-grants "$AUTH_MIGRATE_IMAGE" drill-auth-oneshot grants
   job auth-fence "$AUTH_MIGRATE_IMAGE" drill-auth-oneshot restore-fence init -if-absent
-  # 5. One verified user, one organization, an owner membership.
-  {
-    printf "\\set h '%s'\n" "$(cat "$sec/user-hash")"
-    cat <<SQL
-WITH o AS (INSERT INTO organizations (id, name, slug) VALUES (gen_random_uuid(), 'Drill Org', 'drill-org') RETURNING id),
-     u AS (INSERT INTO users (id, email, password_hash, full_name, username, auth_provider, is_active, is_verified, is_superuser, token_version)
-           VALUES (gen_random_uuid(), '$EMAIL', :'h', 'Drill User', 'drill-user', 'local', true, true, false, 1) RETURNING id)
-INSERT INTO memberships (id, user_id, org_id, role) SELECT gen_random_uuid(), u.id, o.id, 'owner' FROM u, o;
+  # 5. One verified user through the operator verb (`dho admin users create`, password on stdin), then one
+  #    organization and an owner membership.
+  local overrides
+  overrides="$(jq -cn --arg img "$DHO_IMAGE" --arg e "$EMAIL" '{spec:{imagePullSecrets:[{name:"ghcr-pull"}],
+    securityContext:{runAsNonRoot:true,runAsUser:65532,runAsGroup:65532},
+    containers:[{name:"seed-user",image:$img,imagePullPolicy:"IfNotPresent",stdin:true,stdinOnce:true,
+      args:["admin","users","create","--email",$e,"--full-name","Drill User","--password-stdin"],
+      envFrom:[{secretRef:{name:"drill-super-dsn"}}],
+      securityContext:{allowPrivilegeEscalation:false,capabilities:{drop:["ALL"]},seccompProfile:{type:"RuntimeDefault"}}}]}}')"
+  k run seed-user -i --rm --quiet --restart=Never --image="$DHO_IMAGE" --overrides="$overrides" <"$sec/user-pw" \
+    >"$DRILL_DIR/seed-user.out" 2>&1 || { sed 's/^/  seed-user: /' "$DRILL_DIR/seed-user.out"; fail "admin users create failed"; }
+  psql_super >/dev/null <<SQL
+WITH o AS (INSERT INTO organizations (id, name, slug) VALUES (gen_random_uuid(), 'Drill Org', 'drill-org') RETURNING id)
+INSERT INTO memberships (id, user_id, org_id, role) SELECT gen_random_uuid(), u.id, o.id, 'owner' FROM users u, o WHERE u.email = '$EMAIL';
 SQL
-  } | psql_super >/dev/null
-  echo "user seeded: $(psql_super -c "SELECT count(*) FROM users WHERE email = '$EMAIL'") row"
+  echo "user seeded: $(psql_super -c "SELECT count(*) FROM users u JOIN memberships m ON m.user_id = u.id WHERE u.email = '$EMAIL' AND u.is_verified AND u.is_active") verified member row"
   k rollout status "deploy/$SVC" --timeout=300s >/dev/null || {
     k logs "deploy/$SVC" --tail=30 2>&1 | sed 's/^/  auth-service log: /' || true
     fail "auth-service not ready"

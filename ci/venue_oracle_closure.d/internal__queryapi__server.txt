@@ -47,6 +47,7 @@ internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/publicread
 internal/auth/pushlifecycle
 internal/auth/requestid
 internal/auth/restorefence

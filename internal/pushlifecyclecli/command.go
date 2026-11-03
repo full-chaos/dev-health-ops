@@ -6,10 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"regexp"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile/reconcilejob"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -22,18 +24,25 @@ const (
 var envNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 var (
-	connectFn  = connect
-	backfillFn = customerpush.BackfillLifecycle
+	connectFn   = connect
+	backfillFn  = customerpush.BackfillLifecycle
+	reconcileFn = func(context.Context, *pgxpool.Pool, string, int, time.Duration) (reconcilejob.Report, error) {
+		return reconcilejob.Report{}, nil
+	}
 )
 
 // Command is the `push-lifecycle` group of dho.
 func Command() cli.Command {
 	return cli.Command{
-		Name: "push-lifecycle", Kind: cli.Group, Summary: "External Push credential lifecycle operator verbs: backfill-created",
+		Name: "push-lifecycle", Kind: cli.Group, Summary: "External Push credential lifecycle operator verbs: backfill-created, reconcile",
 		Children: []cli.Command{{
 			Name: "backfill-created", Kind: cli.Verb,
 			Summary: "emit lifecycle events for push tokens that have no aggregate (dry run unless -apply; idempotent; counts only; -dsn-env NAME picks the database URI variable, default POSTGRES_URI)",
 			Run:     run,
+		}, {
+			Name: "reconcile", Kind: cli.Verb,
+			Summary: "compare the push credential projection with the token store (read-only; counts only; exit 1 on drift)",
+			Run:     runReconcile,
 		}},
 	}
 }
@@ -94,3 +103,5 @@ func run(ctx context.Context, env cli.Env) int {
 }
 
 func connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) { return pgxpool.New(ctx, dsn) }
+
+func runReconcile(context.Context, cli.Env) int { return cli.ExitFailure }

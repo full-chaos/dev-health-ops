@@ -137,6 +137,7 @@ nav:
       - Configure:
           - operate/configure/index.md
           - Environment and secrets: operate/configure/environment-and-secrets.md
+          - Auth signing-key custody: operate/configure/auth-signing-key-custody.md
           - Databases and storage: operate/configure/databases-and-storage.md
           - Network and TLS: operate/configure/network-and-tls.md
           - Workers and schedules: operate/configure/workers-and-schedules.md
@@ -175,7 +176,8 @@ nav:
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
-          - Auth signing-key rotation and rollback: operate/runbooks/auth-signing-key-rotation-and-rollback.md
+          - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
+          - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
           - Auth platform roles flip and rollback: operate/runbooks/auth-platform-roles-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md
@@ -183,6 +185,7 @@ nav:
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
           - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
+          - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
@@ -201,6 +204,7 @@ nav:
           - integrate/api/index.md
           - GraphQL: integrate/api/graphql.md
           - Authentication: integrate/api/authentication.md
+          - Verify access tokens in Go: integrate/api/verify-access-tokens-go.md
           - Automation: integrate/api/automation.md
       - Webhooks:
           - integrate/webhooks/index.md
@@ -215,6 +219,7 @@ nav:
       - Troubleshooting:
           - integrate/troubleshooting/index.md
           - Authentication: integrate/troubleshooting/authentication.md
+          - Token verification: integrate/troubleshooting/token-verification.md
           - Schema and validation: integrate/troubleshooting/schema-and-validation.md
           - Delivery and rate limits: integrate/troubleshooting/delivery-and-rate-limits.md
   - Reference:
@@ -235,6 +240,8 @@ nav:
       - Auth identity linking: reference/auth/identity-linking.md
       - Auth delegated sessions: reference/auth/delegated-sessions.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
+      - Auth access-token claims and validation: reference/auth/access-token-claims.md
+      - Auth JWKS and discovery: reference/auth/jwks-and-discovery.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md

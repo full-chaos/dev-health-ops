@@ -6,7 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 )
 
 type authorizeGoldenManifest struct {
@@ -107,5 +111,79 @@ func TestGoldenDecisionPEPRowsReachTheirVerdict(t *testing.T) {
 	}
 	if ran != want {
 		t.Fatalf("ran %d pep rows, manifest holds %d", ran, want)
+	}
+}
+
+type authorizeGoldenPDPVector struct {
+	ID     string `json:"id"`
+	Layer  string `json:"layer"`
+	Expect struct {
+		Reason         string          `json:"reason"`
+		WireReasonCode json.RawMessage `json:"wire_reason_code"`
+	} `json:"expect"`
+}
+
+// Every pdp row names its wire reason: the string wireReasonCode gives its
+// internal reason, or null when the reason is a state failure (a 503, no decision).
+func TestGoldenDecisionPDPRowsAssertTheirWireReason(t *testing.T) {
+	root := repoRoot(t)
+	dir := filepath.Join(root, "contracts/auth/v1/golden/decision")
+	var m authorizeGoldenManifest
+	authorizeGoldenStrict(t, filepath.Join(dir, "manifest.json"), &m)
+	var schema struct {
+		Properties struct {
+			ReasonCode struct {
+				Enum []string `json:"enum"`
+			} `json:"reason_code"`
+		} `json:"properties"`
+	}
+	readJSON(t, filepath.Join(contracts.ContractsDir(root), "jsonschema", "authorization_decision.v1.schema.json"), &schema)
+	covered := map[authorization.Reason]bool{}
+	rows := 0
+	for _, r := range m.Vectors {
+		if r.Layer != "pdp" {
+			continue
+		}
+		rows++
+		var v authorizeGoldenPDPVector
+		raw, err := os.ReadFile(filepath.Join(dir, "vectors", r.File))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			t.Fatalf("%s: %v", r.File, err)
+		}
+		reason := authorization.Reason(v.Expect.Reason)
+		covered[reason] = true
+		if v.Expect.WireReasonCode == nil {
+			t.Errorf("%s: expect.wire_reason_code is absent", v.ID)
+			continue
+		}
+		want, onWire := wireReasonCode(reason)
+		if !onWire {
+			if string(v.Expect.WireReasonCode) != "null" {
+				t.Errorf("%s: reason %s is a state failure, wire_reason_code %s, want null", v.ID, reason, v.Expect.WireReasonCode)
+			}
+			continue
+		}
+		var got string
+		if err := json.Unmarshal(v.Expect.WireReasonCode, &got); err != nil {
+			t.Errorf("%s: wire_reason_code %s is not a string; want %q", v.ID, v.Expect.WireReasonCode, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: wire_reason_code %q, want %q", v.ID, got, want)
+		}
+		if !slices.Contains(schema.Properties.ReasonCode.Enum, got) {
+			t.Errorf("%s: wire_reason_code %q is not in the decision schema enum", v.ID, got)
+		}
+	}
+	if rows == 0 {
+		t.Fatal("the manifest holds no pdp row")
+	}
+	for _, reason := range authorization.AllReasons() {
+		if !covered[reason] {
+			t.Errorf("reason %s has no pdp golden row asserting its wire reason", reason)
+		}
 	}
 }

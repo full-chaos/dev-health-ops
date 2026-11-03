@@ -86,11 +86,13 @@ func GridGoField(credential Credential, provider, field string) *string {
 // 1700000000 and the IV is bytes 0..15: the two inputs the frozen Python exchange pins (fernetExchangeProgram), so the
 // result is byte-comparable with the recorded Python ciphertext.
 func SealFernetAsPythonDoes(key, salt string, plaintext []byte) (string, error) {
-	decryptor, err := NewFernetDecryptor(secrets.NewValue(key), salt)
-	if err != nil {
+	if _, err := NewFernetDecryptor(secrets.NewValue(key), salt); err != nil {
 		return "", err
 	}
-	derived := pbkdf2.Key([]byte(decryptor.key.Reveal()), []byte(decryptor.salt), 600000, 32, sha256.New)
+	if salt == "" {
+		salt = defaultEncryptionSalt
+	}
+	derived := pbkdf2.Key([]byte(key), []byte(salt), 600000, 32, sha256.New)
 	iv := make([]byte, 16)
 	for index := range iv {
 		iv[index] = byte(index)

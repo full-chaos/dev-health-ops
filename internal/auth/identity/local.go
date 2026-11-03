@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // ErrInvalidPasswordHash reports a password verifier that is not a bcrypt
@@ -232,10 +233,17 @@ func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, has
 			if err := s.lockUser(ctx, tx, principal); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
+			// The stamp ends every older session of the principal with no session row written (session.Store reads it as
+			// their revoke), so the same transaction tells the stream: one scope event whose revoked_before is the stamp.
+			// A session created between the stamp and this UPDATE is decided by the server's row, not by the event.
+			var stamp time.Time
+			if err := tx.QueryRow(ctx, `UPDATE `+s.q+`.users
 SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
     legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
-WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
+WHERE principal_id = $1 RETURNING password_updated_at`, principal, hash, passwordAlgorithm).Scan(&stamp); err != nil {
+				return err
+			}
+			if err := tx.AddEvent(sessionevent.Principal(principal.String(), sessionevent.ReasonPasswordChange, stamp)); err != nil {
 				return err
 			}
 			var err error

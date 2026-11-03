@@ -24,7 +24,7 @@ func TestProviderAlreadyLinkedIsRefusedAsAnIdentityConflict(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 			Handlers{}.writeError(rec, httptest.NewRequest(http.MethodPost, "/acs", nil), mapped)
-			want := `More than one account carries this sign-in. Contact your organization administrator.`
+			want := `This sign-in could not be completed. Contact your administrator if this continues.`
 			if rec.Code != http.StatusConflict || !containsDetail(rec.Body.String(), want) {
 				t.Errorf("answer = %d %s; want 409 %q", rec.Code, rec.Body.String(), want)
 			}
@@ -34,7 +34,9 @@ func TestProviderAlreadyLinkedIsRefusedAsAnIdentityConflict(t *testing.T) {
 
 func containsDetail(body, detail string) bool {
 	var got struct {
-		Detail string `json:"detail"`
+		Detail struct {
+			Message string `json:"message"`
+		} `json:"detail"`
 	}
-	return json.Unmarshal([]byte(body), &got) == nil && got.Detail == detail
+	return json.Unmarshal([]byte(body), &got) == nil && got.Detail.Message == detail
 }

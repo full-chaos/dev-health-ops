@@ -18,13 +18,15 @@ case "$*" in
 EOS
 cat >>"${T}/bin/kubectl" <<'EOS'
   *"auth can-i create clusterroles"*) echo "${FAKE_CAN_I_CLUSTERROLES:-no}" ;;
+  *"config view"*) printf '%s' "${FAKE_SERVER:-https://127.0.0.1:6443}" ;;
+  *"--ignore-not-found -o name"*) printf '%s' "${FAKE_EXISTING:-}" ;;
   *"get configmap rehearsal-owner"*) printf '%s' "${FAKE_OWNER_TOKEN-0123456789abcdef0123}" ;;
   *"get namespace "*) if [ -n "${FAKE_NS_DENIED:-}" ]; then echo 'Error from server (Forbidden): namespaces is forbidden' >&2; exit 1; fi; printf '%s' "${FAKE_NS_LABEL-0123456789abcdef0123}" ;;
   *) exit 98 ;;
 esac
 EOS
 # shellcheck disable=SC2016
-printf '%s\n' '#!/usr/bin/env bash' 'echo "helm $*" >> "${FAKE_LOG}"' 'exit 99' >"${T}/binh/helm"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "helm $*" >> "${FAKE_LOG}"' 'case "$*" in *" list "*) printf "%s" "${FAKE_HELM_RELEASE:-}"; exit 0 ;; esac' 'exit 99' >"${T}/binh/helm"
 chmod +x "${T}/bin/kubectl" "${T}/binh/helm"
 export FAKE_LOG="${T}/calls.log"
 export KUBECONFIG=/dev/null
@@ -46,7 +48,7 @@ printf 'DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE=registry.invalid/m:latest\nDEV_HEALTH_G
 go() {
   rc=0
   out="$(env REHEARSAL_KUBECONFIG="${SA}" REHEARSAL_NAMESPACE=authrot-test REHEARSAL_RUN_TOKEN="${TOKEN}" \
-    REHEARSAL_DIR="${T}/d$((++n))" REHEARSAL_IMAGES_ENV="${T}/images.env" "$@" \
+    REHEARSAL_SERVER=https://127.0.0.1:6443 REHEARSAL_DIR="${T}/d$((++n))" REHEARSAL_IMAGES_ENV="${T}/images.env" "$@" \
     env PATH="${T}/bin:${T}/binh:${PATH}" bash "${SCRIPT}" --stage rollback 2>&1)" || rc=$?
 }
 n=0
@@ -89,6 +91,16 @@ chmod 0644 "${T}/open.kubeconfig"
 refused kubeconfig-mode-refused 'mode 0600' REHEARSAL_KUBECONFIG="${T}/open.kubeconfig"
 refused namespace-default-refused 'refusing the namespace' REHEARSAL_NAMESPACE=default
 refused namespace-kube-system-refused 'refusing the namespace' REHEARSAL_NAMESPACE=kube-system
+# an ALLOWLIST: only authrot-<suffix> passes; production-looking and bare names are refused with no cluster call at all
+for ns in prod production prod-auth staging authrot rehearsal-x; do
+  refused "namespace-${ns}-refused-allowlist" 'not a rehearsal namespace' REHEARSAL_NAMESPACE="${ns}"
+  if [ ! -s "${FAKE_LOG}" ]; then ok "namespace-${ns}-refused-before-any-call"; else bad "namespace-${ns}-refused-before-any-call"; fi
+done
+# the cluster target: the kubeconfig must point at the one API server the lead names (REHEARSAL_SERVER); no write before that
+refused wrong-server-refused 'is not the rehearsal target' FAKE_SERVER=https://10.9.9.9:6443
+if no_write_calls && ! grep -qE ' (version|auth|get) ' "${FAKE_LOG}"; then ok wrong-server-refused-before-any-cluster-call; else bad wrong-server-refused-before-any-cluster-call; fi
+refused no-server-env-refused 'REHEARSAL_SERVER' REHEARSAL_SERVER=
+if no_write_calls; then ok no-server-env-refused-before-any-write; else bad no-server-env-refused-before-any-write; fi
 refused namespace-odd-name-refused 'plain namespace name' 'REHEARSAL_NAMESPACE=Bad;ns'
 refused non-hex-token-refused 'hex token' REHEARSAL_RUN_TOKEN=nothex
 refused tag-image-refused 'not a registry digest reference' REHEARSAL_IMAGES_ENV="${T}/tag.env"
@@ -115,13 +127,21 @@ if grep -qF 'metadata.labels.rehearsal-run' "${FAKE_LOG}"; then ok guard-reads-t
 refused ns-read-denied-refused 'the namespace read of authrot-test was denied or failed' FAKE_NS_DENIED=1
 if no_write_calls; then ok ns-read-denied-refused-before-any-write; else bad ns-read-denied-refused-before-any-write; fi
 if ! grep -qF 'does not carry this run' <<<"${out}"; then ok ns-read-denied-message-is-not-the-label-message; else bad ns-read-denied-message-is-not-the-label-message; fi
+# fixed names: a pre-existing object (or the helm release) refuses the run before any write, and the run deletes nothing it did not create
+for existing in secret/auth-pg-superuser deployment/auth-postgres service/auth-valkey secret/rehearsal-db; do
+  refused "preexisting-${existing//\//-}-refused" 'already exists' FAKE_EXISTING="${existing}"
+  if no_write_calls; then ok "preexisting-${existing//\//-}-refused-before-any-write"; else bad "preexisting-${existing//\//-}-refused-before-any-write"; fi
+  if ! grep -qE ' delete |^helm (uninstall|rollback)' "${FAKE_LOG}"; then ok "preexisting-${existing//\//-}-not-deleted"; else bad "preexisting-${existing//\//-}-not-deleted"; fi
+done
+refused preexisting-helm-release-refused 'already exists' FAKE_HELM_RELEASE=rot
+if no_write_calls && ! grep -qE '^helm (uninstall|rollback|upgrade)' "${FAKE_LOG}"; then ok preexisting-helm-release-not-touched; else bad preexisting-helm-release-not-touched; fi
 # the label matches: the guard passes and the run reaches its first write, which the fake stops
 : >"${FAKE_LOG}"
 go FAKE_OWNER_TOKEN= REHEARSAL_DIR="${T}/labelled"
 if grep -qF 'step 1: postgres' <<<"${out}" && grep -qE ' create secret ' "${FAKE_LOG}"; then ok labelled-namespace-proceeds-to-the-first-write; else bad "labelled-namespace-proceeds-to-the-first-write (rc ${rc})"; fi
 
 # namespace names: the full Kubernetes label syntax (RFC 1123, 1 to 63 characters) passes the name guard; the fake stops each at the first write
-for ns in a qa "$(printf 'a%.0s' $(seq 1 63))" a-b; do
+for ns in authrot-a authrot-qa "authrot-$(printf 'a%.0s' $(seq 1 55))" authrot-a-b authrot-password; do
   : >"${FAKE_LOG}"
   go REHEARSAL_NAMESPACE="${ns}" REHEARSAL_DIR="${T}/ns-${#ns}-${ns:0:3}"
   if grep -qF 'step 1: postgres' <<<"${out}" && ! grep -qF 'plain namespace name' <<<"${out}"; then ok "namespace-accepted-len-${#ns}-${ns:0:3}"; else bad "namespace-accepted-len-${#ns}-${ns:0:3}"; fi

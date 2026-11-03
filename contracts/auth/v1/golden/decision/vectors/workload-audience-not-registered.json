@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "workload_audience_denied"
+    "reason": "workload_audience_denied",
+    "wire_reason_code": "workload_audience_denied"
   },
   "id": "workload-audience-not-registered",
   "layer": "pdp",

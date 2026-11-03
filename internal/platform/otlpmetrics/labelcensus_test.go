@@ -37,6 +37,8 @@ var manualInstruments = map[string]struct {
 	"workgraph_issue_pr_fallback_beside_native_issue_rows_total":        {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeIssueCounter", []string{}},
 	"workgraph_issue_pr_fallback_pull_request_issue_side_rows_total":    {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackPullRequestIssueSideCounter", []string{}},
 	"workgraph_issue_pr_fallback_invariant_checks_total":                {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackInvariantChecksCounter", []string{}},
+	// an observable gauge: its class label is set in the callback, not at an Add or Record site (CHAOS-10897)
+	"devhealth_auth_push_reconcile_drift": {"internal/auth/pushreconcile/reconcilejob/gauge.go", "DriftGaugeName", []string{"class"}},
 }
 
 type sourceFile struct {

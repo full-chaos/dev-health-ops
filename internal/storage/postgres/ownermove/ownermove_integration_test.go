@@ -114,37 +114,37 @@ func newMoveEnv(t *testing.T, ctx context.Context) *moveEnv {
 	exec(t, ctx, old,
 		`CREATE SCHEMA river`,
 		`CREATE EXTENSION citext SCHEMA public`,
-		`CREATE TABLE public.users (id serial PRIMARY KEY, email text, name text, secret text)`,
-		`CREATE INDEX users_email_idx ON public.users (email)`,
-		`CREATE TABLE public.orgs (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label citext)`,
+		`CREATE TABLE public.omv_users (id serial PRIMARY KEY, email text, name text, secret text)`,
+		`CREATE INDEX omv_users_email_idx ON public.omv_users (email)`,
+		`CREATE TABLE public.omv_orgs (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, label citext)`,
 		`CREATE SEQUENCE public.standalone_seq`,
-		`CREATE VIEW public.users_view AS SELECT id, email FROM public.users`,
+		`CREATE VIEW public.omv_users_view AS SELECT id, email FROM public.omv_users`,
 		`CREATE FUNCTION public.definer_fn(text) RETURNS boolean LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS 'SELECT true'`,
 		`CREATE FUNCTION public.plain_fn() RETURNS int LANGUAGE sql AS 'SELECT 1'`,
 		`CREATE TYPE river.job_state AS ENUM ('available', 'running')`,
-		`CREATE TABLE river.jobs (id bigserial PRIMARY KEY, state river.job_state NOT NULL DEFAULT 'available')`,
+		`CREATE TABLE river.omv_jobs (id bigserial PRIMARY KEY, state river.job_state NOT NULL DEFAULT 'available')`,
 		`CREATE FUNCTION river.notify_fn() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END'`,
 		`GRANT CONNECT ON DATABASE `+quote(env.database)+` TO `+env.rt1+`, `+env.mig+`, `+env.next,
 		`REVOKE TEMPORARY ON DATABASE `+quote(env.database)+` FROM PUBLIC`,
 		`GRANT USAGE ON SCHEMA public TO `+env.rt1+`, `+env.mig+`, `+env.rt2,
-		`GRANT SELECT, INSERT ON public.users TO `+env.rt1,
-		`GRANT UPDATE (name) ON public.users TO `+env.rt1,
-		`GRANT USAGE ON SEQUENCE public.users_id_seq TO `+env.rt1,
-		`GRANT SELECT ON public.users_view TO `+env.rt1,
+		`GRANT SELECT, INSERT ON public.omv_users TO `+env.rt1,
+		`GRANT UPDATE (name) ON public.omv_users TO `+env.rt1,
+		`GRANT USAGE ON SEQUENCE public.omv_users_id_seq TO `+env.rt1,
+		`GRANT SELECT ON public.omv_users_view TO `+env.rt1,
 		`REVOKE ALL ON FUNCTION public.definer_fn(text) FROM PUBLIC`,
 		`GRANT EXECUTE ON FUNCTION public.definer_fn(text) TO `+env.rt1,
-		`GRANT SELECT (id, email) ON public.users TO `+env.mig+` WITH GRANT OPTION`,
-		`GRANT REFERENCES ON public.users TO `+env.mig,
-		`GRANT DELETE ON public.orgs TO `+env.mig+` WITH GRANT OPTION`,
+		`GRANT SELECT (id, email) ON public.omv_users TO `+env.mig+` WITH GRANT OPTION`,
+		`GRANT REFERENCES ON public.omv_users TO `+env.mig,
+		`GRANT DELETE ON public.omv_orgs TO `+env.mig+` WITH GRANT OPTION`,
 		`GRANT USAGE ON SCHEMA river TO `+env.rt1,
-		`GRANT SELECT, UPDATE ON river.jobs TO `+env.rt1,
+		`GRANT SELECT, UPDATE ON river.omv_jobs TO `+env.rt1,
 		`GRANT USAGE ON TYPE river.job_state TO `+env.rt1,
 		`ALTER DEFAULT PRIVILEGES IN SCHEMA river GRANT SELECT ON TABLES TO `+env.rt1,
 	)
 	mig := dial(t, ctx, env.migURI)
 	exec(t, ctx, mig,
-		`GRANT SELECT (id, email) ON public.users TO `+env.rt2,
-		`GRANT DELETE ON public.orgs TO `+env.rt2,
+		`GRANT SELECT (id, email) ON public.omv_users TO `+env.rt2,
+		`GRANT DELETE ON public.omv_orgs TO `+env.rt2,
 	)
 	return env
 }
@@ -340,10 +340,10 @@ func TestMoveRewritesGrantorsAndKeepsEveryPrivilegeSet(t *testing.T) {
 	// The auth migrator still grants from its options: auth-grants as the migrator works after the move.
 	mig := dial(t, ctx, e.migURI)
 	exec(t, ctx, mig,
-		`REVOKE SELECT (id, email) ON public.users FROM `+e.rt2,
-		`GRANT SELECT (id, email) ON public.users TO `+e.rt2,
-		`REVOKE DELETE ON public.orgs FROM `+e.rt2,
-		`GRANT DELETE ON public.orgs TO `+e.rt2,
+		`REVOKE SELECT (id, email) ON public.omv_users FROM `+e.rt2,
+		`GRANT SELECT (id, email) ON public.omv_users TO `+e.rt2,
+		`REVOKE DELETE ON public.omv_orgs FROM `+e.rt2,
+		`GRANT DELETE ON public.omv_orgs TO `+e.rt2,
 	)
 
 	if n := ownedByRole(t, ctx, e.admin, e.old); n != 0 {
@@ -368,12 +368,12 @@ func TestMoveRewritesGrantorsAndKeepsEveryPrivilegeSet(t *testing.T) {
 	// The new owner runs DDL and grants in both schemas and at the database level as a NOSUPERUSER login.
 	next := dial(t, ctx, e.nextURI)
 	exec(t, ctx, next,
-		`CREATE TABLE public.after_move (id int)`,
-		`CREATE INDEX IF NOT EXISTS after_move_idx ON public.after_move (id)`,
+		`CREATE TABLE public.omv_after_move (id int)`,
+		`CREATE INDEX IF NOT EXISTS omv_after_move_idx ON public.omv_after_move (id)`,
 		`CREATE SCHEMA IF NOT EXISTS river`,
-		`CREATE TABLE river.after_move (id int)`,
+		`CREATE TABLE river.omv_after_move (id int)`,
 		`REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM `+e.rt1,
-		`GRANT SELECT, INSERT ON public.users TO `+e.rt1,
+		`GRANT SELECT, INSERT ON public.omv_users TO `+e.rt1,
 		`REVOKE CREATE ON SCHEMA public FROM `+e.rt1,
 		`DO $$ BEGIN EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database()); END $$`,
 		`DO $$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO `+e.rt2+`', current_database()); END $$`,
@@ -395,7 +395,7 @@ func TestPlanReadsOnlyAndPredictsTheApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `LOCK TABLE public.users IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err := tx.Exec(ctx, `LOCK TABLE public.omv_users IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1), pg_advisory_xact_lock($2)`, RiverMigrationLockKey, aclguard.WriterLockKey); err != nil {
@@ -460,7 +460,7 @@ func TestALockWaitPastTheTimeoutRollsBack(t *testing.T) {
 	e := newMoveEnv(t, ctx)
 	before := snapshot(t, ctx, e.admin)
 	holders := map[string]string{
-		"a reader of a public table": `LOCK TABLE public.users IN ACCESS SHARE MODE`,
+		"a reader of a public table": `LOCK TABLE public.omv_users IN ACCESS SHARE MODE`,
 		"the River migration lock":   `SELECT pg_advisory_xact_lock(30330037)`,
 		"the postgres walk lock":     `SELECT pg_advisory_xact_lock(110399707902055)`,
 		"the privilege writer lock":  `SELECT pg_advisory_xact_lock(71757299384321)`,
@@ -569,9 +569,9 @@ func TestPin(t *testing.T) {
 		t.Fatalf("a missing pinned role: %v", err)
 	}
 	for name, ddl := range map[string][]string{
-		"a river table of the old owner":    {`CREATE TABLE river.stray (id int)`, `DROP TABLE river.stray`},
-		"a public table of the old owner":   {`CREATE TABLE public.stray (id int)`, `DROP TABLE public.stray`},
-		"a river function of the old owner": {`CREATE FUNCTION river.stray() RETURNS int LANGUAGE sql AS 'SELECT 1'`, `DROP FUNCTION river.stray()`},
+		"a river table of the old owner":    {`CREATE TABLE river.omv_stray (id int)`, `DROP TABLE river.omv_stray`},
+		"a public table of the old owner":   {`CREATE TABLE public.omv_stray (id int)`, `DROP TABLE public.omv_stray`},
+		"a river function of the old owner": {`CREATE FUNCTION river.omv_stray() RETURNS int LANGUAGE sql AS 'SELECT 1'`, `DROP FUNCTION river.omv_stray()`},
 		"schema river of the old owner":     {`ALTER SCHEMA river OWNER TO ` + e.old, `ALTER SCHEMA river OWNER TO ` + e.next},
 		"the database of the old owner":     {`ALTER DATABASE ` + quote(e.database) + ` OWNER TO ` + e.old, `ALTER DATABASE ` + quote(e.database) + ` OWNER TO ` + e.next},
 	} {

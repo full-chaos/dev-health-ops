@@ -655,6 +655,7 @@ internal/testsupport/bigboydir	bigboydir.go	internal/cigates/routing
 internal/testsupport/bigboydir	bigboydir.go	internal/ingressplanes
 internal/testsupport/bigboydir	bigboydir.go	internal/testsupport/bigboydir
 internal/testsupport/corpusmatrix	matrix.go	internal/testsupport/corpusmatrix
+internal/testsupport/goldenscan	tree.go	internal/cigates/gitleaksignore
 internal/testsupport/goldenscan	tree.go	internal/testsupport/goldenscan/treegate
 internal/testsupport/goldenscan	tree.go	internal/testsupport/recordedfiles/manifest
 internal/testsupport/idpstub/cmd/idpstub	main.go	internal/testsupport/idpstub/cmd/idpstub

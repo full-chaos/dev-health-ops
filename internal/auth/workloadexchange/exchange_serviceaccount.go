@@ -80,7 +80,7 @@ func (h *handler) serveServiceAccountKey(w http.ResponseWriter, r *http.Request,
 	case req.audience != contracts.ServiceAccountTokenAudience:
 		refuse(reasonAudienceRefused)
 		return
-	case req.scope != nil:
+	case req.scopePresent:
 		refuse(reasonScopeRefused)
 		return
 	}

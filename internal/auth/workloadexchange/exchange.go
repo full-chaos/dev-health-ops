@@ -164,6 +164,7 @@ type exchangeRequest struct {
 	subjectToken string
 	audience     string
 	scope        []string
+	scopePresent bool
 }
 
 type issuedAnswer struct {
@@ -353,8 +354,11 @@ func (h *handler) parseRequest(r *http.Request) (exchangeRequest, bool) {
 	if err != nil {
 		return exchangeRequest{}, false
 	}
+	// A key holds no scope: any scope field on a key subject, well formed or
+	// not, is left to the key handler's one scope refusal.
+	keySubject := len(values["subject_token_type"]) == 1 && values.Get("subject_token_type") == TokenTypeServiceAccountKey
 	for name, list := range values {
-		if !requestFields[name] || len(list) != 1 {
+		if !requestFields[name] || len(list) != 1 && !(keySubject && name == "scope") {
 			return exchangeRequest{}, false
 		}
 	}
@@ -369,6 +373,10 @@ func (h *handler) parseRequest(r *http.Request) (exchangeRequest, bool) {
 		return exchangeRequest{}, false
 	}
 	if list, present := values["scope"]; present {
+		req.scopePresent = true
+		if keySubject {
+			return req, true
+		}
 		actions := strings.Split(list[0], " ")
 		if len(actions) > maxScopeActions {
 			return exchangeRequest{}, false

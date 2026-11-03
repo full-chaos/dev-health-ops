@@ -38,6 +38,10 @@ var ErrStore = errors.New("decisionstate: state unavailable")
 // A user is the principal that has a public.users row (D6651); every other kind denies until a leaf names its rule.
 const principalKindServiceAccount = "service_account"
 
+// principalKindUser is the auth copy's kind of a user. A principal whose copy names another kind is not a user, whatever
+// its id has in public.users.
+const principalKindUser = "user"
+
 // Config builds a Reader.
 type Config struct {
 	Pool   *pgxpool.Pool
@@ -140,6 +144,11 @@ FROM `+t.table("sessions")+` s WHERE s.id = $1`,
 // holds. A principal with no public.users row (a workload, a service account) is
 // the zero state.
 func (t *txReader) Actor(ctx context.Context, actor uuid.UUID) (authapi.ActorState, error) {
+	if kind, _, found, err := t.principalRow(ctx, actor); err != nil {
+		return authapi.ActorState{}, err
+	} else if found && kind != principalKindUser {
+		return authapi.ActorState{}, nil
+	}
 	user, found, err := t.r.users.StateOn(ctx, t.tx, actor)
 	if err != nil {
 		return authapi.ActorState{}, storeErr("user", err)
@@ -213,11 +222,12 @@ func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string)
 	return u, nil
 }
 
-// StateVersion is a digest of (table, id, xmin) of every row a decision of the pair depends on, in the transaction's
-// snapshot: the principal's public.users row, the organization's public.organizations row, the pair's public.memberships
-// row, every grant row of the pair, and the principal's platform role assignments while auth owns them. The auth copies
-// of the first three are not hashed: a write of a copy does not move the version. Any committed insert, update or delete of one of them is a new
-// digest, with or without an outbox event; VACUUM FREEZE keeps xmin.
+// StateVersion is a digest of every row a decision of the pair depends on, in the transaction's snapshot: the principal's
+// public.users row, the organization's public.organizations row, the pair's public.memberships row (each by the values a
+// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, and
+// the principal's platform role assignments while auth owns them (by xmin). The auth copies of the first three are not
+// hashed: a write of a copy does not move the version. A committed insert, delete, or change of a value a decision reads
+// is a new digest, with or without an outbox event; VACUUM FREEZE keeps it.
 func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID string) (string, error) {
 	org, err := uuid.Parse(orgID)
 	read := orgID != "" && err == nil && org.String() == orgID
@@ -233,7 +243,7 @@ func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID 
 	var found []stateRow
 	for rows.Next() {
 		var r stateRow
-		if err := rows.Scan(&r.table, &r.id, &r.xmin); err != nil {
+		if err := rows.Scan(&r.table, &r.id, &r.ver); err != nil {
 			return "", storeErr("state version", err)
 		}
 		found = append(found, r)
@@ -244,16 +254,17 @@ func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID 
 	return stateDigest(found), nil
 }
 
-// stateRow is one row version: its table, id and xmin.
-type stateRow struct{ table, id, xmin string }
+// stateRow is one row version: its table, id and version (xmin for an auth table; for a public table the decision-relevant
+// values, since the runtime role has column grants there and xmin is not readable through them).
+type stateRow struct{ table, id, ver string }
 
 // stateQuery reads the row versions of the pair: $1 is the principal, $2 the organization when org is set.
 func stateQuery(schema string, org, owned bool) string {
-	parts := []string{`SELECT 'public.users', id::text, xmin::text FROM public.users WHERE id = $1`}
+	parts := []string{`SELECT 'public.users', id::text, COALESCE(is_active, false)::text || '/' || COALESCE(is_superuser, false)::text FROM public.users WHERE id = $1`}
 	if org {
 		parts = append(parts,
-			`SELECT 'public.organizations', id::text, xmin::text FROM public.organizations WHERE id = $2`,
-			`SELECT 'public.memberships', user_id::text || '/' || org_id::text, xmin::text FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
+			`SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
+			`SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`)
 	}
 	if owned {
@@ -266,7 +277,7 @@ func stateQuery(schema string, org, owned bool) string {
 func stateDigest(rows []stateRow) string {
 	lines := make([]string, len(rows))
 	for i, r := range rows {
-		lines[i] = r.table + "\x00" + r.id + "\x00" + r.xmin
+		lines[i] = r.table + "\x00" + r.id + "\x00" + r.ver
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
@@ -361,15 +372,29 @@ func snapshotOut(s *snapshot, collect bool) authorization.GrantSnapshot {
 	return s
 }
 
-// principal reads the principal's public.users row: active when is_active, suspended when not. A principal with no
-// such row is not a user: only a service account has a rule (auth-native, no public twin), every other kind stays unknown.
+// principal decides by kind first: a service account has a rule of its own (auth-native), any other kind that is not a
+// user stays unknown, even when its id has a public.users row. Otherwise (a user, or no auth copy yet) the principal is its
+// public.users row: active when is_active, suspended when not, unknown when there is no row.
 func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapshot) error {
+	kind, enabled, found, err := t.principalRow(ctx, principal)
+	if err != nil {
+		return err
+	}
+	if found && kind != principalKindUser {
+		if t.r.collect {
+			s.deps = append(s.deps, principalDependencies(principal)...)
+		}
+		if kind == principalKindServiceAccount {
+			return t.serviceAccount(ctx, principal, enabled, s)
+		}
+		return nil
+	}
 	user, found, err := t.r.users.StateOn(ctx, t.tx, principal)
 	if err != nil {
 		return storeErr("user", err)
 	}
 	if !found {
-		return t.nonUser(ctx, principal, s)
+		return nil
 	}
 	if t.r.collect {
 		s.deps = append(s.deps, principalDependencies(principal)...)
@@ -385,22 +410,8 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 	return nil
 }
 
-// nonUser reads a principal that has no public.users row from auth.principals, the only record of a service account.
-func (t *txReader) nonUser(ctx context.Context, principal uuid.UUID, s *snapshot) error {
-	kind, enabled, found, err := t.principalRow(ctx, principal)
-	if err != nil || !found {
-		return err
-	}
-	if t.r.collect {
-		s.deps = append(s.deps, principalDependencies(principal)...)
-	}
-	if kind == principalKindServiceAccount {
-		return t.serviceAccount(ctx, principal, enabled, s)
-	}
-	return nil
-}
-
-// principalRow reads a non-user principal's kind and whether it is not disabled.
+// principalRow reads the kind and the disabled mark of the principal's auth row (found is false with none). Only the kind
+// of a user's copy is used; the disabled mark is read for a service account.
 func (t *txReader) principalRow(ctx context.Context, principal uuid.UUID) (kind string, enabled, found bool, err error) {
 	err = t.tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+t.table("principals")+` WHERE id = $1`, principal).Scan(&kind, &enabled)
 	switch {

@@ -27,7 +27,7 @@ var copyTable = regexp.MustCompile(`\.(principals|organizations|memberships)\b|t
 func TestNoPDPDecisionInputReadsAnAuthCopy(t *testing.T) {
 	scopes := []censusScope{
 		{file: "decisionstate.go", allow: map[string]string{
-			"`SELECT kind, disabled_at IS NULL FROM `+t.table(\"principals\")+` WHERE id = $1`": "non-user principal (service account): auth-native, no public twin; read only when there is no public.users row",
+			"`SELECT kind, disabled_at IS NULL FROM `+t.table(\"principals\")+` WHERE id = $1`": "the principal kind (a non-user kind decides before a users row) and a service account's disabled mark: auth-native, no public twin",
 		}},
 		{file: "../membership/effective_on.go"},
 		{file: "../platformrole/rule/rule.go", funcs: []string{"PublicActiveRule", "PublicHoldsSQL"}},

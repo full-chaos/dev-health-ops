@@ -80,3 +80,54 @@ func TestPushLifecycleRefusals(t *testing.T) {
 		})
 	}
 }
+
+// The refusals run on every render, not only when an auth Job renders: at the
+// default authService.phase (0) neither Job renders, and a values file that
+// sets the pair wrong must still fail.
+func TestPushLifecycleRefusalsAtEveryPhase(t *testing.T) {
+	const writer = "devhealth_auth_push_writer"
+	set := func(callers string) []string {
+		return []string{"--set", "authService.migrate.pushLifecycle.writerRole=" + writer,
+			"--set-json", "authService.migrate.pushLifecycle.callerRoles=" + callers}
+	}
+	cases := map[string][]string{
+		"callers without a writer":      {"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api","devhealth_domain"]`},
+		"a writer without callers":      {"--set", "authService.migrate.pushLifecycle.writerRole=" + writer},
+		"the writer as a caller":        set(`["devhealth_api","` + writer + `"]`),
+		"the runtime login as a caller": set(`["devhealth_api","devhealth_auth"]`),
+		"the runtime login as the writer": {"--set", "authService.migrate.pushLifecycle.writerRole=devhealth_auth",
+			"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api","devhealth_domain"]`},
+		"a repeated caller":      set(`["devhealth_api","devhealth_api"]`),
+		"one caller":             set(`["devhealth_api"]`),
+		"three callers":          set(`["devhealth_api","devhealth_domain","extra"]`),
+		"a blank caller":         set(`["devhealth_api",""]`),
+		"a spaces-only caller":   set(`["devhealth_api","   "]`),
+		"an invalid caller name": set(`["devhealth_api","bad;name"]`),
+	}
+	for name, extra := range cases {
+		for phase, base := range map[string][]string{"phase 0": nil, "phase 1": authBase} {
+			t.Run(name+" at "+phase, func(t *testing.T) {
+				args := append(append([]string{}, base...), extra...)
+				_, out, err := renderAuthRaw(t, args...)
+				if err == nil {
+					t.Fatal("the render succeeded; it must refuse")
+				}
+				if !strings.Contains(out, "authService.migrate.pushLifecycle") {
+					t.Fatalf("the refusal does not name authService.migrate.pushLifecycle: %.400s", out)
+				}
+			})
+		}
+	}
+}
+
+func TestPushLifecycleValidPairRendersAtPhaseZero(t *testing.T) {
+	_, out, err := renderAuthRaw(t,
+		"--set", "authService.migrate.pushLifecycle.writerRole=devhealth_auth_push_writer",
+		"--set-json", `authService.migrate.pushLifecycle.callerRoles=["devhealth_api","devhealth_domain"]`)
+	if err != nil {
+		t.Fatalf("a valid pair must render at phase 0: %v\n%.400s", err, out)
+	}
+	if _, out, err := renderAuthRaw(t); err != nil {
+		t.Fatalf("default values must render: %v\n%.400s", err, out)
+	}
+}

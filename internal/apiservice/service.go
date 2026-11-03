@@ -63,6 +63,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -77,6 +78,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -238,11 +240,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// route still ignores these three fields (sso.go's own doc
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
-			// in this process already uses. StateSecret reuses
-			// GitHubStateSigner's own APIJWTSecret.Reveal() (HKDF-derives
-			// a distinct key from it, state.go) -- no new secret material
-			// either way.
-			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
+			// in this process already uses. StateSecret is
+			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// HKDF derives one key per protocol from it (state.go).
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -505,7 +506,13 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
+	}
+	session.SetRefreshAccepted(refreshAccepted)
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)

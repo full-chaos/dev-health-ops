@@ -130,9 +130,13 @@ func TestAcrDisorderReplayAfterRevokeWritesNothingAndNeverReactivates(t *testing
 	if !e.acrdRegistryRevoked(t, c.id) || e.acrdStatus(t, c.id) != "revoked" {
 		t.Fatal("the credential is not revoked")
 	}
-	// refused_terminal is a decided refusal and may write its audit row; the other outcomes write none.
-	if n := e.count(t, acrdDecidedAudit); n-audits > 2 {
-		t.Fatalf("replays wrote %d audit rows, want at most the 2 refusals", n-audits)
+	// Only the refused_terminal replay (expired r3) decides something new and writes its denied audit row; the
+	// stale, duplicate and conflict deliveries write none.
+	if n := e.count(t, acrdDecidedAudit); n-audits != 1 {
+		t.Fatalf("replays wrote %d audit rows, want exactly 1 (the refused_terminal replay)", n-audits)
+	}
+	if n := e.count(t, acrdDecidedAudit+` AND outcome = 'denied'`); n < 1 {
+		t.Fatal("the refused_terminal replay wrote no denied audit row")
 	}
 }
 
@@ -142,6 +146,18 @@ func TestAcrDisorderEveryEventPairThroughTheEngineNeverReactivates(t *testing.T)
 	e := getEnv(t, true)
 	org := e.org(t)
 	pairs := 0
+	// The end state of each pair after both deliveries: a terminal event before the issue waits and then applies
+	// at revision 2; two terminal events with no issue never project anything.
+	type end struct {
+		status   string
+		revision int
+	}
+	want := map[string]end{
+		"issued then issued": {"active", 1}, "issued then " + contracts.ExternalPushRevoked: {"revoked", 2}, "issued then " + contracts.ExternalPushExpired: {"expired", 2},
+		contracts.ExternalPushRevoked + " then issued": {"revoked", 2}, contracts.ExternalPushExpired + " then issued": {"expired", 2},
+		contracts.ExternalPushRevoked + " then " + contracts.ExternalPushRevoked: {"none", 0}, contracts.ExternalPushRevoked + " then " + contracts.ExternalPushExpired: {"none", 0},
+		contracts.ExternalPushExpired + " then " + contracts.ExternalPushRevoked: {"none", 0}, contracts.ExternalPushExpired + " then " + contracts.ExternalPushExpired: {"none", 0},
+	}
 	for _, firstKind := range []string{"issued", contracts.ExternalPushRevoked, contracts.ExternalPushExpired} {
 		for _, secondKind := range []string{"issued", contracts.ExternalPushRevoked, contracts.ExternalPushExpired} {
 			pairs++
@@ -170,6 +186,17 @@ func TestAcrDisorderEveryEventPairThroughTheEngineNeverReactivates(t *testing.T)
 						t.Fatalf("%s: projection revoked but the registry row is live", label)
 					}
 				}
+			}
+			label := firstKind + " then " + secondKind
+			got := end{status: e.acrdStatus(t, c.id), revision: e.count(t, `SELECT coalesce(max(revision), 0) FROM auth.credential_projection WHERE external_reference = $1`, c.id)}
+			if got != want[label] {
+				t.Errorf("%s: ended %+v, want %+v", label, got, want[label])
+			}
+			if got.status == "revoked" && !e.acrdRegistryRevoked(t, c.id) {
+				t.Errorf("%s: projection revoked but the registry row is live", label)
+			}
+			if got.status == "none" && e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, c.id) != 0 {
+				t.Errorf("%s: a credential never issued has a registry row", label)
 			}
 		}
 	}
@@ -275,9 +302,9 @@ func TestAcrDisorderDelayedExpiredNeverRevivesOrExtends(t *testing.T) {
 	}
 }
 
-// Cell I6 (KnownDefect, pins today's behaviour): the later revision of a refused rotated child is a gap (retry, writes
-// nothing), so it waits for ever behind the final refusal. The child never becomes live.
-func TestAcrDisorderKnownDefectRefusedRotationLeavesTheChildsRevokeAGap(t *testing.T) {
+// Cell I6: the refused rotation decided revision 1, so the child's later revoke is refused for good (one denied
+// audit row), never a retry. The child never becomes live and has no registry row.
+func TestAcrDisorderRefusedRotationRefusesTheChildsRevoke(t *testing.T) {
 	e := getEnv(t, true)
 	parent := acrCreated(e.org(t))
 	mustOutcome(t, e.project(t, e.acr(t, parent, "sub-1", 1)), pushlifecycle.Applied)
@@ -285,9 +312,9 @@ func TestAcrDisorderKnownDefectRefusedRotationLeavesTheChildsRevokeAGap(t *testi
 	mustOutcome(t, e.project(t, e.acr(t, wide, "sub-1", 6)), pushlifecycle.RefusedWiden)
 	audits := e.count(t, acrdDecidedAudit)
 	res := e.project(t, e.acrdIn(t, acrdTerminal(wide, contracts.ExternalPushRevoked, 2, 2, wide.at.Add(time.Second))))
-	mustOutcome(t, res, pushlifecycle.Gap)
-	if res.Class != ClassRetry || e.count(t, acrdDecidedAudit) != audits {
-		t.Fatalf("class %s, or the gap wrote an audit row", res.Class)
+	mustOutcome(t, res, pushlifecycle.RefusedTransition)
+	if res.Class != ClassRefused || e.count(t, acrdDecidedAudit) != audits+1 {
+		t.Fatalf("class %s, or the refusal did not write exactly one audit row", res.Class)
 	}
 	if e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE external_reference = $1`, wide.id) != 0 {
 		t.Fatal("the refused child has a registry row")

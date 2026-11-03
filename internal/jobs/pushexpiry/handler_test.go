@@ -170,6 +170,9 @@ func TestSweepCountsAFailedTokenAndGoesOn(t *testing.T) {
 	if len(store.sent) != 2 {
 		t.Fatalf("a failed token stopped the run: sent %d", len(store.sent))
 	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=partial") || !strings.Contains(line, "failed=1") {
+		t.Fatalf("below the cap a failure is partial: %s", line)
+	}
 	if strings.Contains(logs.String(), "boom") {
 		t.Fatalf("the log holds the error text: %s", logs.String())
 	}
@@ -328,8 +331,8 @@ func TestSweepFailedTokenIsNotSkippedAndCountsTowardTheCap(t *testing.T) {
 	if err == nil || isPermanent(err) {
 		t.Fatalf("want a retryable error, got %v", err)
 	}
-	if line := infoLine(logs); !strings.Contains(line, "outcome=partial") || !strings.Contains(line, "failed=1") || !strings.Contains(line, "submitted=9999") {
-		t.Fatalf("run 1 line: %s (a failure must use one cap slot)", line)
+	if line := infoLine(logs); !strings.Contains(line, "outcome=capped") || !strings.Contains(line, "failed=1") || !strings.Contains(line, "submitted=9999") {
+		t.Fatalf("run 1 line: %s (a failure must use one cap slot; a run that ends on the cap is capped)", line)
 	}
 	if _, ok := handler.ended[bad]; ok {
 		t.Fatal("a failed token is in the skip set")
@@ -470,4 +473,19 @@ func TestScanSQLHasTheWindowBound(t *testing.T) {
 
 func isPermanent(err error) bool {
 	return strings.Contains(err.Error(), string(jobruntime.CategoryPermanent))
+}
+
+func TestSweepCappedRunWithEveryTokenFailedIsCappedAndRetryable(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(RunCap + 5), failIDs: map[uuid.UUID]bool{}}
+	for _, tok := range store.tokens {
+		store.failIDs[tok.ID] = true
+	}
+	handler, logs := newHandler(t, store, true)
+	err := handler.Work(context.Background(), execution(due))
+	if err == nil || isPermanent(err) {
+		t.Fatalf("want a retryable error, got %v", err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=capped") || !strings.Contains(line, "failed=10000") || !strings.Contains(line, "submitted=0") {
+		t.Fatalf("run line: %s", line)
+	}
 }

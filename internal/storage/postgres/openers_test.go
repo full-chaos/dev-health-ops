@@ -66,7 +66,7 @@ var openers = map[string]struct {
 	"internal/pgmigrate/indexbuild.go":                          {kindBoundary, "migrate postgres build-index: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/pgmigrate/indexbuild_watch.go":                    {kindDiscarded, "migrate postgres build-index: the blocker watch copies the build connection's already-resolved config; a connect failure is logged as its SQLSTATE only, never its text, and never fails the build"},
 	"internal/pgmigrate/preflight.go":                           {kindBoundary, "migrate postgres preflight: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
-	"internal/pushlifecyclecli/command.go":                      {kindBoundary, "push-lifecycle backfill-created: the pool, with the pool-open error redacted"},
+	"internal/pushlifecyclecli/command.go":                      {kindDiscarded, "push-lifecycle backfill-created: a failed pool open prints a fixed line naming only the variable; the driver error text is dropped"},
 	"internal/synccli/jira_stored_credential.go":                {kindBoundary, "sync teams --provider jira: resolves the org's stored jira credential from Postgres, the pool and the error redactor"},
 	"tools/record-provider-answers/main.go":                     {kindBoundary, "the one-off recorder of provider answers (CHAOS-9124): resolves an integration credential from Postgres, the pool and the error redactor"},
 	"internal/goapicli/restprove/main.go":                       {kindGeneric, "a failed connect is the fixed message"},

@@ -579,7 +579,7 @@ func assertLandscapeMatchesGolden(
 		case row.CycleP5030dHours == nil || want.CycleP5030dHours == nil:
 			t.Errorf("%s: CycleP5030dHours = %s, want %s", key, optionalFloat(row.CycleP5030dHours), optionalFloat(want.CycleP5030dHours))
 		default:
-			assertFloatEqual(t, key, "CycleP5030dHours", *row.CycleP5030dHours, *want.CycleP5030dHours)
+			assertFloatEqual(t, key, "CycleP5030dHours", *row.CycleP5030dHours, *want.CycleP5030dHours) // gitleaks:allow
 		}
 		if int64(row.WIPMax30d) != want.WIPMax30d {
 			t.Errorf("%s: WIPMax30d = %d, want %d", key, row.WIPMax30d, want.WIPMax30d)

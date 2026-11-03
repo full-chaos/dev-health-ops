@@ -6,7 +6,9 @@ goWorkers: {enabled: false}
 goApi: {enabled: false}
 valkey: {enabled: true}
 postgresql: {enabled: true}
-clickhouse: {enabled: false}
+# The migrate Job runs `dho migrate upgrade`, whose last step (the ClickHouse head) fails with "CLICKHOUSE_URI is required" when the
+# chart has no ClickHouse. The ClickHouse is for that step only; the PDP does not read it.
+clickhouse: {enabled: true}
 secrets: {create: true}
 authService:
   phase: 2

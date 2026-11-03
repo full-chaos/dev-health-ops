@@ -5,7 +5,7 @@
 #   ci/pdp_load_k3s.sh --print-plan   no cluster: print the plan and check that the chart renders what the run sets (needs helm)
 #   ci/pdp_load_k3s.sh                the legs below
 #
-# Leg 1 INSTALL   chart install (auth-service phase 2, eddsa, 2 replicas, the chart's own PostgreSQL and Valkey), one human
+# Leg 1 INSTALL   chart install (auth-service phase 2, eddsa, 2 replicas, the chart's own PostgreSQL, Valkey and ClickHouse; the migrate hook needs the ClickHouse), one human
 #                 with an admin membership, the api workload row and its bootstrap value (made in the runner pod, never copied out).
 # Leg 2 KNEE      RECORDED, not gated: the DEFAULT route limiter (20 rps, burst 40 per route per pod). It shows the 429 knee.
 # Leg 3 GATED     the route limiter LIFTED (AUTH_SERVICE_RATE_LIMIT_* = 100000, this namespace only, never a prod value): every
@@ -111,7 +111,7 @@ print_plan() {
   SECRETS_VALUES="${work}/secrets.yaml"
   write_secrets_values plan-placeholder plan-placeholder-plan-placeholder-plan "${SECRETS_VALUES}"
   printf 'plan: namespace %s on %s, release %s, runner image %s\n' "${NS}" "${KUBECONFIG_FILE}" "${RELEASE}" "${RUNNER_IMAGE##*/}"
-  printf 'plan: leg 1 INSTALL  chart phase 2, eddsa, 2 replicas, PostgreSQL and Valkey of the chart, one admin human, the api workload\n'
+  printf 'plan: leg 1 INSTALL  chart phase 2, eddsa, 2 replicas, PostgreSQL, Valkey and ClickHouse (migrate step) of the chart, one admin human, the api workload\n'
   printf 'plan: leg 2 KNEE     recorded, not gated: the default route limiter (20 rps, burst 40 per route per pod) at %s rps for %s s\n' "${KNEE_RATE}" "${KNEE_SECONDS}"
   printf 'plan: leg 3 GATED    route limiter lifted (AUTH_SERVICE_RATE_LIMIT_PER_SECOND and _BURST = 100000, this namespace only); cache OFF\n'
   printf 'plan: gated SLO      p95=%s,p99=%s,err=%s per class and for the mix, normal then peak; batch-10 gated, batch-100 recorded\n' "${SLO_P95}" "${SLO_P99}" "${SLO_ERR}"
@@ -132,6 +132,9 @@ print_plan() {
   rendered="$(helm template "${HELM_ARGS[@]}" --show-only templates/auth-service.yaml)"
   [ "$(grep -c 'AUTH_SERVICE_RATE_LIMIT_' <<<"${rendered}")" = 2 ] || die "the gated form does not render both route limiter variables"
   pass "plan: the gated form renders the lifted route limiter (per second and burst)"
+  rendered="$(helm template "${HELM_ARGS[@]}" --show-only templates/migrate-job.yaml)"
+  grep -q 'CLICKHOUSE_URI:' <<<"${rendered}" || die "the chart renders no CLICKHOUSE_URI for the migrate hook (dho migrate upgrade needs it)"
+  pass "plan: the migrate hook Secret carries CLICKHOUSE_URI (the ClickHouse step of dho migrate upgrade)"
   rm -rf "${work}"
 }
 
@@ -163,14 +166,30 @@ WORK="$(mktemp -d)"
 readonly WORK
 RUN_TOKEN="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 owned() { [ "$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.pdpload-run}' 2>/dev/null)" = "${RUN_TOKEN}" ]; }
+# Logs (all containers, the previous run too) of every pod that is not Succeeded or not Ready, and a describe of every failed Job.
+# Never a describe of a Secret or a Pod, never an env dump: the dho and auth logs redact their own DSNs.
+dump_failure() {
+  local name
+  printf '\n--- namespace state at failure ---\n' >&2
+  K get pods -o wide >&2 || true
+  K get events --sort-by=.lastTimestamp >&2 || true
+  while read -r name; do
+    [ -n "${name}" ] || continue
+    printf '\n--- describe job %s ---\n' "${name}" >&2
+    K describe job "${name}" >&2 || true
+  done < <(K get jobs -o json 2>/dev/null | jq -r '.items[] | select((.status.failed // 0) > 0) | .metadata.name' || true)
+  while read -r name; do
+    [ -n "${name}" ] || continue
+    printf '\n--- logs pod %s (all containers) ---\n' "${name}" >&2
+    K logs "${name}" --all-containers --tail 200 >&2 || true
+    printf '\n--- logs pod %s (all containers, previous) ---\n' "${name}" >&2
+    K logs "${name}" --all-containers --previous --tail 200 >&2 || true
+  done < <(K get pods -o json 2>/dev/null | jq -r '.items[] | select(.status.phase != "Succeeded") | select(.status.phase != "Running" or ([.status.containerStatuses[]?.ready] | all | not)) | .metadata.name' || true)
+}
 cleanup() {
   local status=$?
   if owned; then
-    if [ "${status}" -ne 0 ]; then
-      printf '\n--- namespace state at failure ---\n' >&2
-      K get pods -o wide >&2 || true
-      K logs --all-containers --tail 40 -l app.kubernetes.io/component=auth-service >&2 || true
-    fi
+    if [ "${status}" -ne 0 ]; then dump_failure; fi
     kc delete namespace "${NS}" --wait=false >/dev/null 2>&1 || true
   fi
   rm -rf "${WORK}"
@@ -209,6 +228,7 @@ write_extra "${WORK}/extra-first.yaml" "" keep
 helm_args "${WORK}/extra-first.yaml"
 helm install --kubeconfig "${KUBECONFIG_FILE}" "${HELM_ARGS[@]}" --no-hooks >/dev/null
 K rollout status "statefulset/${FULL}-postgresql" --timeout=240s >/dev/null
+K rollout status "statefulset/${FULL}-clickhouse" --timeout=240s >/dev/null
 K rollout status "deploy/${FULL}-valkey" --timeout=240s >/dev/null
 PSU() { K exec -i "${FULL}-postgresql-0" -- psql -U devhealth -d devhealth -At -v ON_ERROR_STOP=1 "$@"; }
 printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_query_api NOLOGIN;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \

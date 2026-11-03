@@ -61,6 +61,7 @@ func TestPDPLoadK3sPrintPlanStatesTheTicketNumbersAndRendersTheChart(t *testing.
 		"plan: the namespace is deleted on exit",
 		"PASS: plan: the knee form renders the caller subject and the eddsa class with the default route limiter",
 		"PASS: plan: the gated form renders the lifted route limiter (per second and burst)",
+		"PASS: plan: the migrate hook Secret carries CLICKHOUSE_URI (the ClickHouse step of dho migrate upgrade)",
 	} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("--print-plan lacks %q\n%s", want, res.stdout)
@@ -140,6 +141,10 @@ func TestPDPLoadK3sKeepsTheTicketNumbersTheCapAndTheReportEvidence(t *testing.T)
 		"authorize-batch-100",
 		"the run stops here, nothing is loosened",
 		"preflight",
+		"dump_failure",
+		"--all-containers --previous",
+		"describe job",
+		`K rollout status "statefulset/${FULL}-clickhouse"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the script lacks %q", want)

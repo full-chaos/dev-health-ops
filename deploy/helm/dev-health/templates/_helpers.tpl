@@ -1038,6 +1038,17 @@ refuses a mapped ipBlock.except entry, so one is refused at render.
 {{- end -}}
 
 {{/*
+"true" when ingress.enabled and a host routes a path to auth-service (CHAOS-12359: the issuer's two public documents). ingress.yaml checks the shape.
+*/}}
+{{- define "dev-health.authWellKnownRouted" -}}
+{{- $found := dict -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}{{- range .paths -}}{{- if eq .service "auth-service" -}}{{- $_ := set $found "yes" "true" -}}{{- end -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- get $found "yes" -}}
+{{- end -}}
+
+{{/*
 The access-token class (authService.accessToken). Checks it and renders the issuer URL when one is set (or the class is
 eddsa, which needs one): auth-service's AUTH_TOKEN_ISSUER_URL under any class. go-api's AUTH_ACCESS_TOKEN_ISSUER is the eddsa case alone (authEdDSAIssuer). The pattern is
 auth-service's issuerURLPattern (internal/auth/authconfig), so a value the service would refuse fails the render.

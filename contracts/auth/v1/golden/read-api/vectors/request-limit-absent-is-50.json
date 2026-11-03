@@ -1,0 +1,13 @@
+{
+  "id": "request-limit-absent-is-50",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001"
+  },
+  "request_schema": "accept",
+  "parse": "accept",
+  "rule": null,
+  "why": "An absent limit is 50."
+}

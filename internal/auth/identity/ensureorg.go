@@ -25,3 +25,13 @@ func (s *Store) EnsureOrganization(ctx context.Context, orgID uuid.UUID) error {
 	}
 	return s.ProjectOrganization(ctx, orgID)
 }
+
+// EnsureOrganizationFound is EnsureOrganization for a caller that decides on a
+// missing organization itself: found is false when neither schema holds it.
+func (s *Store) EnsureOrganizationFound(ctx context.Context, orgID uuid.UUID) (bool, error) {
+	err := s.EnsureOrganization(ctx, orgID)
+	if errors.Is(err, ErrOrganizationNotFound) {
+		return false, nil
+	}
+	return err == nil, err
+}

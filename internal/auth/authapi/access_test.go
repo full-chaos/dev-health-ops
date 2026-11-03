@@ -137,17 +137,29 @@ func TestSessionRoutesAcceptTheAuthServiceEdDSAToken(t *testing.T) {
 	}
 }
 
+// validateBodyTokenProfile is the one access row whose token is the JSON body
+// field token, not a bearer; the bearer censuses name it as their exemption.
+const validateBodyTokenProfile = "POST " + PatternCompatValidate
+
 func TestEveryAuthServiceBearerRowAcceptsTheUserTokenAndKeepsTheLegacyOptIn(t *testing.T) {
 	rows, err := AuthServiceAccessRows()
 	if err != nil {
 		t.Fatal(err)
 	}
 	byProfile := map[string]accessverify.Row{}
+	bodyToken := false
 	for _, row := range rows {
 		if row.Service != AccessService {
 			t.Errorf("row %s has service %q", row.Profile, row.Service)
 		}
+		if row.Profile == validateBodyTokenProfile {
+			bodyToken = true
+			continue
+		}
 		byProfile[row.Profile] = row
+	}
+	if !bodyToken {
+		t.Errorf("no access row %s", validateBodyTokenProfile)
 	}
 	want := []string{
 		"GET " + PatternCurrent, "POST " + PatternRevoke, "POST " + PatternRevokeAll,

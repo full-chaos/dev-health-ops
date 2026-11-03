@@ -147,6 +147,11 @@ FILES=(
   # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
   "${ROOT}/ci/lib/ghcr_login.sh"
   "${ROOT}/ci/ghcr_login_test.sh"
+  # the signing-key rotation rehearsal: its readers, its driver and their fixture suites.
+  "${ROOT}/ci/lib/auth_rotation_probe.sh"
+  "${ROOT}/ci/auth_rotation_probe_test.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

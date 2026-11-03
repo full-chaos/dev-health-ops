@@ -113,7 +113,7 @@ func ExecuteRoles(
 	poolConfig.MaxConnIdleTime = time.Minute
 	ctx, cancel := context.WithTimeout(parent, 2*time.Minute)
 	defer cancel()
-	pool, err := postgresstore.Open(ctx, poolConfig)
+	pool, err := postgresstore.OpenWaiting(ctx, poolConfig, firstConnect.WithReport(postgresstore.TextReport(stderr, "migrate roles", "PostgreSQL migration")))
 	if err != nil {
 		fmt.Fprintln(stderr, "migration error: PostgreSQL migration endpoint unavailable")
 		return 1

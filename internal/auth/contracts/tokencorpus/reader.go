@@ -78,9 +78,15 @@ func check(root string, c *Corpus, jwks Jwks, v Vector, now int64, audience stri
 		case ReasonContract:
 			document := `{"header":` + v.HeaderJSON + `,"claims":` + v.PayloadJSON + `}`
 			parse := contracts.ParseAccessToken
-			if c.Manifest.Surface == SurfaceWorkload {
+			switch c.Manifest.Surface {
+			case SurfaceWorkload:
 				parse = func(root string, raw []byte) (*contracts.AccessToken, error) {
 					_, err := contracts.ParseWorkloadToken(root, raw)
+					return nil, err
+				}
+			case SurfaceServiceAccount:
+				parse = func(root string, raw []byte) (*contracts.AccessToken, error) {
+					_, err := contracts.ParseServiceAccountToken(root, raw)
 					return nil, err
 				}
 			}

@@ -1,3 +1,4 @@
+contracts/auth/v1/vocabulary
 internal/api/policy
 internal/api/pybody
 internal/api/pyjson
@@ -8,6 +9,7 @@ internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule
+internal/auth/policycatalog
 internal/auth/sessionid
 internal/chmigrate
 internal/cli

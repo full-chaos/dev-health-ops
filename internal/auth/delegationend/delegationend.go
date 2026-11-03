@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // The audit events of a delegated session's life.
@@ -125,16 +126,14 @@ func End(ctx context.Context, tx audit.TxOps, q string, rows []Row, reason strin
 // Every end of a delegated row reaches this function.
 func Record(ctx context.Context, tx audit.TxOps, rows []Row, public PublicRows) error {
 	for _, r := range rows {
-		actor, target, org := r.Actor, r.Target, r.Organization
-		event := audit.AuditEvent{
-			EventType: EventEnded, Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: &actor, SubjectPrincipalID: &target, OrganizationID: &org,
-			RequestID: requestid.Audit(ctx),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "session", "target_id": r.ID,
-			},
+		if err := tx.AddAudit(endedEvent(ctx, r)); err != nil {
+			return err
 		}
-		if err := tx.AddAudit(event); err != nil {
+		revoked, err := sessionevent.Session(r.ID, sessionevent.ReasonDelegationEnd)
+		if err != nil {
+			return err
+		}
+		if err := tx.AddEvent(revoked); err != nil {
 			return err
 		}
 	}
@@ -142,6 +141,18 @@ func Record(ctx context.Context, tx audit.TxOps, rows []Row, public PublicRows) 
 		return nil
 	}
 	return endPublicRows(ctx, tx, rows)
+}
+
+func endedEvent(ctx context.Context, r Row) audit.AuditEvent {
+	actor, target, org := r.Actor, r.Target, r.Organization
+	return audit.AuditEvent{
+		EventType: EventEnded, Outcome: audit.OutcomeAllowed,
+		ActorPrincipalID: &actor, SubjectPrincipalID: &target, OrganizationID: &org,
+		RequestID: requestid.Audit(ctx),
+		Attributes: map[string]any{
+			"reason_code": "session_revoked", "target_kind": "session", "target_id": r.ID,
+		},
+	}
 }
 
 // endPublicRows ends the public rows of rows and writes one stop row for each it

@@ -36,6 +36,7 @@ type fakeSnapshot struct {
 	membership   *authorization.Membership
 	grants       []authorization.Grant
 	grantsErr    error
+	account      *authorization.ServiceAccount
 	now          int64
 }
 
@@ -57,8 +58,11 @@ func (s *fakeSnapshot) Grants(string) ([]authorization.Grant, error) { return s.
 func (s *fakeSnapshot) Workload() (authorization.WorkloadLimits, bool) {
 	return authorization.WorkloadLimits{}, false
 }
-func (s *fakeSnapshot) ServiceAccount(string) (authorization.ServiceAccount, bool) {
-	return authorization.ServiceAccount{}, false
+func (s *fakeSnapshot) ServiceAccount(org string) (authorization.ServiceAccount, bool) {
+	if org == "" || s.account == nil {
+		return authorization.ServiceAccount{}, false
+	}
+	return *s.account, true
 }
 func (s *fakeSnapshot) NowUnixNano() int64 { return s.now }
 
@@ -69,13 +73,17 @@ type snapKey struct {
 
 // fakeDecisionState counts transactions and reads, and can fail each step.
 type fakeDecisionState struct {
-	sessions   map[uuid.UUID]DecisionSession
-	snapshots  map[snapKey]*fakeSnapshot
-	beginErr   error
-	sessionErr error
-	snapErr    error
-	reads      int
-	snapReads  int
+	sessions     map[uuid.UUID]DecisionSession
+	keys         map[uuid.UUID]DecisionKey
+	snapshots    map[snapKey]*fakeSnapshot
+	beginErr     error
+	sessionErr   error
+	keyErr       error
+	snapErr      error
+	reads        int
+	sessionReads int
+	keyReads     int
+	snapReads    int
 }
 
 func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error) error {
@@ -89,10 +97,21 @@ func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error)
 type fakeDecisionTx struct{ f *fakeDecisionState }
 
 func (t fakeDecisionTx) Session(_ context.Context, id uuid.UUID) (DecisionSession, error) {
+	t.f.sessionReads++
 	if t.f.sessionErr != nil {
 		return DecisionSession{}, t.f.sessionErr
 	}
 	return t.f.sessions[id], nil
+}
+
+func (t fakeDecisionTx) ServiceAccountKey(_ context.Context, id uuid.UUID) (DecisionKey, error) {
+	t.f.keyReads++
+	if t.f.keyErr != nil {
+		return DecisionKey{}, t.f.keyErr
+	}
+	k := t.f.keys[id]
+	k.NowUnixNano = authorizeNow
+	return k, nil
 }
 
 func (t fakeDecisionTx) Snapshot(_ context.Context, principal uuid.UUID, org string) (authorization.GrantSnapshot, error) {
@@ -121,6 +140,7 @@ var authorizeNow = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC).UnixNano()
 type authorizeHandlerFixture struct {
 	*authorizeFixture
 	state     *fakeDecisionState
+	audit     *fakeAudit
 	principal uuid.UUID
 	org       string
 	reference string
@@ -165,8 +185,9 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 			{principal, ""}: {principal: authorization.StatusActive, now: authorizeNow},
 		},
 	}
+	sink := &fakeAudit{}
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(),
+		Callers: f.callers(), References: f.references(), State: state, Evaluator: authorization.NewEvaluator(), Audit: sink.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 	})
 	if err != nil {
@@ -180,7 +201,7 @@ func newAuthorizeHandlerFixture(t *testing.T) *authorizeHandlerFixture {
 		t.Fatal(err)
 	}
 	byPattern := map[string]http.Handler{PatternAuthorize: server.Handler(), PatternAuthorizeBatch: server.Handler()}
-	return &authorizeHandlerFixture{authorizeFixture: f, state: state, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
+	return &authorizeHandlerFixture{authorizeFixture: f, state: state, audit: sink, principal: principal, org: org, reference: reference, sid: sessionID, routes: byPattern}
 }
 
 func (h *authorizeHandlerFixture) question(action, kind, key, org string) map[string]any {
@@ -252,13 +273,17 @@ var decisionIDShape = regexp.MustCompile(`^dec_[A-Za-z0-9_-]{26}$`)
 
 func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	f := newAuthorizeFixture(t)
-	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator()}
+	deps := AuthorizeDeps{Callers: f.callers(), References: f.references(), State: &fakeDecisionState{}, Evaluator: authorization.NewEvaluator(), Audit: (&fakeAudit{}).write}
 	routes, err := AuthorizeRoutes(deps)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 0 {
-		t.Fatalf("the embedded document has no authorize row, yet %d route(s) mounted", len(routes))
+	if len(routes) != 2 {
+		t.Fatalf("the embedded document holds both authorize rows, yet %d route(s) mounted, want 2", len(routes))
+	}
+	deps.ProfileRows = authorizeProfileDoc(t)
+	if routes, _ = AuthorizeRoutes(deps); len(routes) != 0 {
+		t.Fatalf("a document with no authorize row mounted %d route(s)", len(routes))
 	}
 	deps.ProfileRows = authorizeProfileDoc(t, PatternAuthorizeBatch)
 	if routes, _ = AuthorizeRoutes(deps); len(routes) != 1 || routes[0].Pattern != PatternAuthorizeBatch {
@@ -408,9 +433,7 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, status int, reaso
 	if rec.Code != status {
 		t.Fatalf("status %d, want %d; body %s", rec.Code, status, rec.Body)
 	}
-	if status != http.StatusBadRequest {
-		validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
-	}
+	validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
 	var doc struct {
 		ReasonCode string `json:"reason_code"`
 	}

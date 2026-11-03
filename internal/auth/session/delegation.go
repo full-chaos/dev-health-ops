@@ -182,13 +182,7 @@ func (s *Store) startOnce(ctx context.Context, in StartInput, actor uuid.UUID, r
 			return s.insertDelegation(ctx, tx, delegationRow{id: idText, target: target, org: org, base: in.BaseSessionID.String(),
 				actor: actorText, reason: reason, role: role, permitted: permitted}, &out)
 		},
-		Audit: audit.AuditEvent{
-			EventType: delegationend.EventStarted, Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: &actorText, SubjectPrincipalID: &target, OrganizationID: &org, RequestID: requestid.Audit(ctx),
-			Attributes: map[string]any{
-				"reason_code": "accepted", "target_kind": "session", "target_id": idText, "action_key": ImpersonateAction,
-			},
-		},
+		Audit:     delegationStartedEvent(requestid.Audit(ctx), actorText, target, org, idText),
 		OffStream: audit.OffStreamSessionLifecycle,
 		Refusals:  append([]error{ErrBusy}, delegationRefusals...),
 	})

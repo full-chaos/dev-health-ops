@@ -178,7 +178,7 @@ func newCacheFixture(t *testing.T) *cacheFixture {
 func (c *cacheFixture) rebuild(t *testing.T, cache DecisionCache) {
 	t.Helper()
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: c.callers(), References: c.references(), State: c.cs, Evaluator: authorization.NewEvaluator(),
+		Callers: c.callers(), References: c.references(), State: c.cs, Evaluator: authorization.NewEvaluator(), Audit: c.audit.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 		Cache:       cache, Ready: func() bool { return c.ready },
 		Logger: slog.New(slog.NewJSONHandler(c.logs, nil)), Meter: sdkmetric.NewMeterProvider(sdkmetric.WithReader(c.reader)).Meter("test"),
@@ -428,18 +428,19 @@ func TestABatchMixesAHitAndAMissAndAFailedReadPutsNothing(t *testing.T) {
 // of the transaction fails this cell until it has a row.
 func TestEveryDecisionReadIsMarked(t *testing.T) {
 	marks := map[string]string{
-		"Snapshot.PrincipalStatus":    "dep principal + user; Unfed user active",
-		"Snapshot.PlatformRole":       "Unfed superuser, or tag platform_role_assignment when owned",
-		"Snapshot.OrganizationStatus": "dep organization",
-		"Snapshot.Membership":         "dep membership + tag membership; Unfed public role",
-		"Snapshot.Grants":             "dep resource_grant + tag resource_grant",
-		"Snapshot.Workload":           "never true on this route (decisionstate)",
-		"Snapshot.ServiceAccount":     "never true on this route (decisionstate)",
-		"Snapshot.NowUnixNano":        "gate: the tx clock, read every call",
-		"DecisionTx.Session":          "gate: read every call before the cache",
-		"DecisionTx.Snapshot":         "dep and tag through DependencySnapshot; Begin before Read",
-		"DecisionTx.Unfed":            "key: decisioncache.Key.Unfed, read every call",
-		"DecisionTx.StateVersion":     "key: decisioncache.Key.State, the row versions (xmin) of the pair, read every call",
+		"Snapshot.PrincipalStatus":     "dep principal + user; Unfed user active",
+		"Snapshot.PlatformRole":        "Unfed superuser, or tag platform_role_assignment when owned",
+		"Snapshot.OrganizationStatus":  "dep organization",
+		"Snapshot.Membership":          "dep membership + tag membership; Unfed public role",
+		"Snapshot.Grants":              "dep resource_grant + tag resource_grant",
+		"Snapshot.Workload":            "never true on this route (decisionstate)",
+		"Snapshot.ServiceAccount":      "bypass: true only for a service-account principal, whose decisions never use the cache",
+		"Snapshot.NowUnixNano":         "gate: the tx clock, read every call",
+		"DecisionTx.Session":           "gate: read every call before the cache",
+		"DecisionTx.ServiceAccountKey": "gate: read every call for a service-account reference; its decisions bypass the cache",
+		"DecisionTx.Snapshot":          "dep and tag through DependencySnapshot; Begin before Read",
+		"DecisionTx.Unfed":             "key: decisioncache.Key.Unfed, read every call",
+		"DecisionTx.StateVersion":      "key: decisioncache.Key.State, the row versions (xmin) of the pair, read every call",
 	}
 	var seen []string
 	for name, typ := range map[string]reflect.Type{

@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -53,6 +54,38 @@ type DecisionSession struct {
 	HasDelegatedFrom bool
 }
 
+// serviceAccountKeyClass is the credential class of a service-account key
+// (serviceaccount.KeyClass).
+const serviceAccountKeyClass = "service_account_key"
+
+// DecisionKey is the service-account key row a reference names, as the
+// decision transaction reads it.
+type DecisionKey struct {
+	Found       bool
+	PrincipalID uuid.UUID
+	// AccountOrgID is the organization of the key principal's service-account
+	// row; "" when the principal has none.
+	AccountOrgID string
+	Class        string
+	DomainOwner  string
+	Revoked      bool
+	// ExpiresAtUnixNano is 0 when the row has no expiry.
+	ExpiresAtUnixNano int64
+	// NowUnixNano is the transaction's clock.
+	NowUnixNano int64
+}
+
+// liveFor reports a key row that may stand for the reference: a platform
+// service-account key of the referenced principal, whose account is in the
+// organization the token names, neither revoked nor expired at the
+// transaction's clock. The account's own state is the decision's, not this
+// check's.
+func (k DecisionKey) liveFor(p ReferencedPrincipal) bool {
+	return k.Found && k.PrincipalID == p.ID && k.Class == serviceAccountKeyClass && k.DomainOwner == "platform" &&
+		k.AccountOrgID != "" && k.AccountOrgID == p.OrgID && !k.Revoked &&
+		k.NowUnixNano > 0 && k.ExpiresAtUnixNano != 0 && k.NowUnixNano < k.ExpiresAtUnixNano
+}
+
 // delegated reports an impersonation session. The decision core's delegation
 // rules are not wired to this route yet, so such a reference is denied with
 // delegation_invalid instead of being decided as the plain target user.
@@ -70,6 +103,9 @@ func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
 // error means the state could not be read.
 type DecisionTx interface {
 	Session(ctx context.Context, sessionID uuid.UUID) (DecisionSession, error)
+	// ServiceAccountKey reads the key row a service-account reference names,
+	// with the transaction's clock.
+	ServiceAccountKey(ctx context.Context, credentialID uuid.UUID) (DecisionKey, error)
 	// Snapshot is the principal's state for one organization ("" for a
 	// platform decision), with the transaction's clock.
 	Snapshot(ctx context.Context, principal uuid.UUID, orgID string) (authorization.GrantSnapshot, error)
@@ -95,6 +131,9 @@ type AuthorizeDeps struct {
 	References *PrincipalReferences
 	State      DecisionState
 	Evaluator  *authorization.Evaluator
+	// Audit writes the audit rows of one call's high-risk decisions in one
+	// transaction, all or none.
+	Audit func(ctx context.Context, events []audit.AuditEvent) error
 	// ProfileRows is the endpoint-profile document a route's row is looked up
 	// in; nil reads the embedded document.
 	ProfileRows []byte
@@ -111,6 +150,16 @@ type authorizeHandlers struct {
 	rec        recorder
 	cache      cacheMetrics
 	decisionID func() (string, error)
+	// resolve, when set, resolves a principal reference in place of
+	// References.Resolve; only tests set it.
+	resolve func(reference string) (ReferencedPrincipal, string, error)
+}
+
+func (h authorizeHandlers) resolveReference(reference string) (ReferencedPrincipal, string, error) {
+	if h.resolve != nil {
+		return h.resolve(reference)
+	}
+	return h.References.Resolve(reference)
 }
 
 // AuthorizeRoutes returns the routes whose endpoint-profile row admits the
@@ -119,6 +168,9 @@ type authorizeHandlers struct {
 func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if deps.State == nil || deps.Evaluator == nil {
 		return nil, errors.New("authapi: the authorize routes need decision state and an evaluator")
+	}
+	if deps.Audit == nil {
+		return nil, errors.New("authapi: the authorize routes need an audit sink for high-risk decisions")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -220,6 +272,9 @@ type authorizeItem struct {
 	principal ReferencedPrincipal
 	decision  authorization.Decision
 	now       int64
+	// orgKnown is true when the question's organization is a canonical uuid
+	// the decision transaction found.
+	orgKnown bool
 	// cache is the item's lookup result; key and read are set on a miss whose
 	// snapshot said what it read.
 	cache string
@@ -266,7 +321,7 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		p, seen := resolved[q.PrincipalReference]
 		if !seen {
 			var why string
-			p, why, err = h.References.Resolve(q.PrincipalReference)
+			p, why, err = h.resolveReference(q.PrincipalReference)
 			if err != nil {
 				h.rec.refuse(w, r, op, unavailable(reasonDependency), err)
 				return nil, false
@@ -314,17 +369,35 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 			"cache", item.cache)
 		out[i] = doc
 	}
+	if err := h.auditHighRisk(ctx, items, out); err != nil {
+		h.rec.refuse(w, r, op, unavailable(reasonStoreUnavailable), err)
+		return nil, false
+	}
 	return out, true
 }
 
-// evaluate checks each referenced session once, then decides each item over
-// its (principal, organization) snapshot, read once per pair. With the cache
-// in use, an item of a session that is not delegated reads its unfed values
-// and asks the cache first; a hit reads no snapshot.
+// evaluate checks each referenced session, or a service account's key row,
+// once, then decides each item over its (principal, organization) snapshot,
+// read once per pair. With the cache in use, an item of a user session that is
+// not delegated reads its unfed values and asks the cache first; a hit reads
+// no snapshot. A service account's decision never uses the cache: its
+// account row is in no cache key and no feed dependency.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem,
 	cached bool) error {
 	delegatedRefs := map[string]bool{}
+	accountRefs := map[string]bool{}
 	for ref, p := range resolved {
+		if p.Kind == ReferenceServiceAccount {
+			k, err := tx.ServiceAccountKey(ctx, p.CredentialID)
+			if err != nil {
+				return err
+			}
+			if !k.liveFor(p) {
+				return errAuthorizeReferenceRefused
+			}
+			accountRefs[ref] = true
+			continue
+		}
 		sid, err := session.ParseWireSessionID(p.SessionID)
 		if err != nil {
 			return errAuthorizeReferenceRefused
@@ -342,15 +415,16 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		principal uuid.UUID
 		org       string
 		delegated bool
+		account   bool
 	}
 	snapshots := map[pair]authorization.GrantSnapshot{}
 	unfed := map[pair]UnfedState{}
 	versions := map[pair]string{}
 	for i := range items {
 		q := items[i].question
-		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference]}
+		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference], accountRefs[q.PrincipalReference]}
 		items[i].cache = cacheBypass
-		if cached && !key.delegated {
+		if cached && !key.delegated && !key.account {
 			u, ok := unfed[key]
 			if !ok {
 				var err error
@@ -410,6 +484,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			}
 		}
 		items[i].decision, items[i].now = d, snap.NowUnixNano()
+		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
 }

@@ -1,0 +1,432 @@
+{
+  "description": "Golden corpus for service-account-token.v1 (the decoded header and claims of the service account token): accept, schema rejects and client-enforced rejects. The signed vectors are in golden/service-account-token.",
+  "accept": [
+    {
+      "file": "valid-dev-health-api.json",
+      "why": "The ordinary service account token: audience dev-health-api, typ sa+jwt, the account, its organization and the key row, five minutes."
+    },
+    {
+      "file": "valid-lifetime-at-the-ceiling.json",
+      "why": "exp - iat equals the 300 s ceiling: the longest lifetime a verifier accepts."
+    },
+    {
+      "file": "valid-lifetime-short-key-expiry.json",
+      "why": "exp - iat of 42 s: a key close to its expiry gets a shorter token, never a longer one."
+    },
+    {
+      "file": "valid-delayed-nbf.json",
+      "why": "nbf later than iat, inside the lifetime: iat <= nbf < exp."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-header-alg-hs256.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "HS256: a symmetric algorithm is never this token's."
+    },
+    {
+      "file": "invalid-header-alg-none.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "alg none: an unsigned token."
+    },
+    {
+      "file": "invalid-header-alg-lowercase.json",
+      "expect_instance_location": "/header/alg",
+      "expect_keyword": "const",
+      "why": "alg is case-sensitive."
+    },
+    {
+      "file": "invalid-header-typ-access-token.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ at+jwt is the user access token's type, never a service account token's."
+    },
+    {
+      "file": "invalid-header-typ-workload.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ workload+jwt is the workload token's type, never a service account token's."
+    },
+    {
+      "file": "invalid-header-typ-jwt.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ JWT is the HS256 token's type."
+    },
+    {
+      "file": "invalid-header-typ-lowercase-jwt.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ jwt is the envelope's type."
+    },
+    {
+      "file": "invalid-header-typ-uppercase.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ is case-sensitive."
+    },
+    {
+      "file": "invalid-header-typ-mixed-case.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "typ is case-sensitive: no mixed-case form."
+    },
+    {
+      "file": "invalid-header-typ-application-prefix.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "an application/-prefixed media type is not the typ."
+    },
+    {
+      "file": "invalid-header-typ-empty.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "an empty typ."
+    },
+    {
+      "file": "invalid-header-typ-trailing-space.json",
+      "expect_instance_location": "/header/typ",
+      "expect_keyword": "const",
+      "why": "a trailing space is not the typ."
+    },
+    {
+      "file": "invalid-header-typ-absent.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "required",
+      "why": "no typ member."
+    },
+    {
+      "file": "invalid-header-kid-absent.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "required",
+      "why": "no kid member."
+    },
+    {
+      "file": "invalid-header-kid-empty.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "an empty kid."
+    },
+    {
+      "file": "invalid-header-kid-trailing-newline.json",
+      "expect_instance_location": "/header/kid",
+      "expect_keyword": "pattern",
+      "why": "a kid with a trailing newline."
+    },
+    {
+      "file": "invalid-header-jku.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "jku: a verifier never reads a key URL from the token."
+    },
+    {
+      "file": "invalid-header-x5u.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "x5u: a verifier never reads a certificate URL from the token."
+    },
+    {
+      "file": "invalid-header-jwk.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "jwk: a verifier never reads a key from the token."
+    },
+    {
+      "file": "invalid-header-crit.json",
+      "expect_instance_location": "/header",
+      "expect_keyword": "additionalProperties",
+      "why": "crit: no critical extension is understood."
+    },
+    {
+      "file": "invalid-aud-auth-service.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "auth-service: a service account token has one audience, dev-health-api."
+    },
+    {
+      "file": "invalid-aud-acr-api.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "acr-api: carried by the user access token only."
+    },
+    {
+      "file": "invalid-aud-acr-mcp.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "acr-mcp: carried by the user access token only."
+    },
+    {
+      "file": "invalid-aud-query-api.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "query-api is carried only by the effective principal envelope."
+    },
+    {
+      "file": "invalid-aud-unknown.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "an audience no token carries."
+    },
+    {
+      "file": "invalid-aud-trailing-space.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "a trailing space is not the audience."
+    },
+    {
+      "file": "invalid-aud-array.json",
+      "expect_instance_location": "/claims/aud",
+      "expect_keyword": "const",
+      "why": "an array of one audience: the claim is one string."
+    },
+    {
+      "file": "invalid-aud-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no aud member."
+    },
+    {
+      "file": "invalid-principal-type-human.json",
+      "expect_instance_location": "/claims/principal_type",
+      "expect_keyword": "const",
+      "why": "principal_type human: a human holds a user access token."
+    },
+    {
+      "file": "invalid-principal-type-workload.json",
+      "expect_instance_location": "/claims/principal_type",
+      "expect_keyword": "const",
+      "why": "principal_type workload: a workload holds a workload token."
+    },
+    {
+      "file": "invalid-principal-type-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no principal_type member."
+    },
+    {
+      "file": "invalid-sub-user-prefix.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "pattern",
+      "why": "sub with the user-id prefix, not a principal id."
+    },
+    {
+      "file": "invalid-sub-integer.json",
+      "expect_instance_location": "/claims/sub",
+      "expect_keyword": "type",
+      "why": "sub as a JSON number."
+    },
+    {
+      "file": "invalid-sub-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no sub member."
+    },
+    {
+      "file": "invalid-org-id-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no org_id: a service account token names its organization."
+    },
+    {
+      "file": "invalid-org-id-uppercase.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "an upper-case UUID: the lowercase form only."
+    },
+    {
+      "file": "invalid-org-id-not-a-uuid.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "the organization wire id, not the UUID."
+    },
+    {
+      "file": "invalid-org-id-trailing-newline.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "pattern",
+      "why": "a UUID with a trailing newline."
+    },
+    {
+      "file": "invalid-org-id-null.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "type",
+      "why": "org_id null: there is no null form."
+    },
+    {
+      "file": "invalid-org-id-integer.json",
+      "expect_instance_location": "/claims/org_id",
+      "expect_keyword": "type",
+      "why": "org_id as a JSON number."
+    },
+    {
+      "file": "invalid-cid-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no cid: the key row the token came from is named."
+    },
+    {
+      "file": "invalid-cid-no-prefix.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "pattern",
+      "why": "a bare id without the crd_ prefix."
+    },
+    {
+      "file": "invalid-cid-principal-prefix.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "pattern",
+      "why": "a principal id in place of the key row id."
+    },
+    {
+      "file": "invalid-cid-over-length.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "pattern",
+      "why": "a key row id over 64 characters after the prefix."
+    },
+    {
+      "file": "invalid-cid-empty-after-prefix.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "pattern",
+      "why": "the prefix alone."
+    },
+    {
+      "file": "invalid-cid-trailing-newline.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "pattern",
+      "why": "a key row id with a trailing newline."
+    },
+    {
+      "file": "invalid-cid-integer.json",
+      "expect_instance_location": "/claims/cid",
+      "expect_keyword": "type",
+      "why": "cid as a JSON number."
+    },
+    {
+      "file": "invalid-iss-http.json",
+      "expect_instance_location": "/claims/iss",
+      "expect_keyword": "pattern",
+      "why": "an http issuer."
+    },
+    {
+      "file": "invalid-jti-short.json",
+      "expect_instance_location": "/claims/jti",
+      "expect_keyword": "pattern",
+      "why": "a jti under 22 characters."
+    },
+    {
+      "file": "invalid-jti-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no jti member."
+    },
+    {
+      "file": "invalid-iat-zero.json",
+      "expect_instance_location": "/claims/iat",
+      "expect_keyword": "minimum",
+      "why": "iat 0."
+    },
+    {
+      "file": "invalid-exp-string.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "type",
+      "why": "exp as a string."
+    },
+    {
+      "file": "invalid-exp-after-9999.json",
+      "expect_instance_location": "/claims/exp",
+      "expect_keyword": "maximum",
+      "why": "exp after 9999-12-31T23:59:59Z."
+    },
+    {
+      "file": "invalid-nbf-absent.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "required",
+      "why": "no nbf member."
+    },
+    {
+      "file": "invalid-claim-sid.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "sid: a service account has no session."
+    },
+    {
+      "file": "invalid-claim-scope.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "scope: nothing in a service account token grants a permission."
+    },
+    {
+      "file": "invalid-claim-audiences.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "audiences: a key's audience list is never carried; the token has one audience."
+    },
+    {
+      "file": "invalid-claim-act.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "act: no delegation."
+    },
+    {
+      "file": "invalid-claim-role.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "role: a service account has no membership role."
+    },
+    {
+      "file": "invalid-claim-email.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "email: a service account has no email."
+    },
+    {
+      "file": "invalid-claim-tv.json",
+      "expect_instance_location": "/claims",
+      "expect_keyword": "additionalProperties",
+      "why": "tv: no token version claim."
+    },
+    {
+      "file": "invalid-top-level-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "a member beside header and claims: the document is closed."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-lifetime-over-the-ceiling.json",
+      "why": "exp - iat one second over the 300 s ceiling."
+    },
+    {
+      "file": "client-rejected-lifetime-one-hour.json",
+      "why": "exp - iat of 3600 s, the user access token's ceiling: a service account token never lives that long."
+    },
+    {
+      "file": "client-rejected-exp-equals-nbf.json",
+      "why": "exp equals nbf: an empty validity window."
+    },
+    {
+      "file": "client-rejected-nbf-before-iat.json",
+      "why": "nbf one second before iat: the schema accepts it, only the client rule refuses it."
+    },
+    {
+      "file": "client-rejected-duplicate-claim-aud.json",
+      "why": "aud appears twice (acr-api, then dev-health-api): the schema sees the survivor.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-duplicate-claim-cid.json",
+      "why": "cid appears twice: the schema sees the survivor.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-duplicate-header-typ.json",
+      "why": "typ appears twice (at+jwt, then sa+jwt): the schema sees the survivor.",
+      "duplicate_member": true
+    },
+    {
+      "file": "client-rejected-exp-decimal-form.json",
+      "why": "exp in decimal form (a NumericDate is an integer token): the schema accepts 1760000300.0."
+    }
+  ]
+}

@@ -40,6 +40,8 @@ and are not repeated here.
 | `endpoint-auth-profile.v1` | `jsonschema/endpoint-auth-profile.v1.schema.json` | `endpoint_auth_profile.go` | `authclient/contracts.py` (schema validation) |
 | `access-token.v1` | `jsonschema/access-token.v1.schema.json` | `access_token.go` (`ParseAccessToken`) | none |
 | `workload-token.v1` | `jsonschema/workload-token.v1.schema.json` | `workload_token.go` (`ParseWorkloadToken`) | none |
+| `service-account-token.v1` | `jsonschema/service-account-token.v1.schema.json` | `service_account_token.go` (`ParseServiceAccountToken`) | none |
+| `principal-read.v1`, `organization-read.v1`, `membership-read.v1`, `grant-read.v1` and their list, get-request and list-request bodies (CHAOS-10995) | `jsonschema/<name>.v1.schema.json` | `read_api.go` (`ParseReadRequest`, `ParseReadResponse`, `ParseReadError`) | none |
 | `acr-credential-lifecycle-event.v1` | `jsonschema/acr-credential-lifecycle-event.v1.schema.json` | `acr_credential_lifecycle_event.go` (`ParseAcrCredentialLifecycleEvent`) | none |
 
 `openapi/auth-v1.openapi.json` references the schemas. The TypeScript half lives in

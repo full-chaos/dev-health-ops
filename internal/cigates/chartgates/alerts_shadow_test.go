@@ -3,6 +3,7 @@ package chartgates_test
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -258,6 +259,80 @@ func shadowDashboardPanels(g *guard) {
 	g.expect(len(seen) == len(panels), "layout places %d panels of %d", len(seen), len(panels))
 }
 
+// Allowed panel plugin fields per SigNoz v6 panel kind; source: schema-notes-10849d-v1.md (live prod dashboards and the SigNoz Number panel doc).
+// "*" marks a free-form map, a path absent from a kind is not allowed.
+var shadowPanelFields = map[string]map[string][]string{
+	"signoz/NumberPanel": {
+		"": {"formatting", "thresholds", "visualization"}, "formatting": {"decimalPrecision", "unit"},
+		"thresholds[]": {"color", "unit", "value"}, "visualization": {"timePreference"},
+	},
+	"signoz/TablePanel": {
+		"": {"formatting", "thresholds", "visualization"}, "formatting": {"columnUnits", "decimalPrecision"},
+		"formatting.columnUnits": {"*"}, "visualization": {"timePreference"},
+	},
+	"signoz/BarChartPanel": {
+		"": {"axes", "formatting", "legend", "thresholds", "visualization"}, "axes": {"isLogScale", "softMax", "softMin"},
+		"formatting": {"decimalPrecision", "unit"}, "legend": {"customColors", "mode", "position"},
+		"thresholds[]": {"color", "label", "unit", "value"}, "visualization": {"fillSpans", "stackedBarChart", "timePreference"},
+	},
+	"signoz/TimeSeriesPanel": {
+		"": {"axes", "chartAppearance", "formatting", "legend", "thresholds", "visualization"}, "axes": {"isLogScale", "softMax", "softMin"},
+		"chartAppearance":          {"fillMode", "lineInterpolation", "lineStyle", "showPoints", "spanGaps"},
+		"chartAppearance.spanGaps": {"fillLessThan", "fillOnlyBelow"}, "formatting": {"decimalPrecision", "unit"},
+		"legend": {"customColors", "mode", "position"}, "thresholds[]": {"color", "label", "unit", "value"},
+		"visualization": {"fillSpans", "timePreference"},
+	},
+}
+
+func shadowCheckPanelFields(g *guard, where, path string, v any, allowed map[string][]string) {
+	keys, ok := allowed[path]
+	if !ok {
+		g.failf("%s: object at %q is not in the allowed set for its panel kind", where, path)
+		return
+	}
+	m := mp(v)
+	for k, child := range m {
+		if len(keys) == 1 && keys[0] == "*" {
+			continue
+		}
+		if !slices.Contains(keys, k) {
+			g.failf("%s: key %q at %q is not in the SigNoz v6 field set %v", where, k, path, keys)
+			continue
+		}
+		sub := k
+		if path != "" {
+			sub = path + "." + k
+		}
+		switch c := child.(type) {
+		case map[string]any:
+			shadowCheckPanelFields(g, where, sub, c, allowed)
+		case []any:
+			for _, it := range c {
+				if _, isObj := it.(map[string]any); isObj {
+					shadowCheckPanelFields(g, where, sub+"[]", it, allowed)
+				}
+			}
+		}
+	}
+}
+
+func shadowPanelFieldsAreV6(g *guard) {
+	root := shadowDashboard(g)
+	if root == nil {
+		return
+	}
+	for id, p := range mp(mp(root["spec"])["panels"]) {
+		plugin := mp(mp(mp(p)["spec"])["plugin"])
+		kind := str(plugin["kind"])
+		allowed, ok := shadowPanelFields[kind]
+		if !ok {
+			g.failf("panel %s has kind %q, which is not in the allowed panel kinds", id, kind)
+			continue
+		}
+		shadowCheckPanelFields(g, "panel "+id, "", plugin["spec"], allowed)
+	}
+}
+
 func TestShadowAlertGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"shadow-alerts-are-the-group", shadowAlertsAreTheGroup},
@@ -267,5 +342,6 @@ func TestShadowAlertGuardsRealTree(t *testing.T) {
 		check{"shadow-labels-stay-in-allowlist", shadowLabelsStayInAllowlist},
 		check{"shadow-class-value-is-in-the-closed-set", shadowClassValueIsInTheClosedSet},
 		check{"shadow-dashboard-panels", shadowDashboardPanels},
+		check{"shadow-panel-fields-are-v6", shadowPanelFieldsAreV6},
 	)
 }

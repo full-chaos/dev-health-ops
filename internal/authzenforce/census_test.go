@@ -10,16 +10,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The variable names are read by this package alone: a second reader would be a
-// switch the gauge and the closed namespace set do not see.
-func TestNoOtherProductionFileNamesTheVariables(t *testing.T) {
-	root, err := moduleroot.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	own := filepath.Join(root, "internal", "authzenforce")
+// censusOffenders lists the production .go files outside this package that name an enforcement variable.
+func censusOffenders(t *testing.T, root string) []string {
+	t.Helper()
 	var offenders []string
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -28,7 +23,7 @@ func TestNoOtherProductionFileNamesTheVariables(t *testing.T) {
 			case ".git", "node_modules", "worktrees", "third_party":
 				return fs.SkipDir
 			}
-			if path == own {
+			if path == filepath.Join(root, "internal", "authzenforce") {
 				return fs.SkipDir
 			}
 			return nil
@@ -51,7 +46,17 @@ func TestNoOtherProductionFileNamesTheVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(offenders) != 0 {
+	return offenders
+}
+
+// The variable names are read by this package alone: a second reader would be a
+// switch the gauge and the closed namespace set do not see.
+func TestNoOtherProductionFileNamesTheVariables(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offenders := censusOffenders(t, root); len(offenders) != 0 {
 		t.Fatalf("production files name the enforcement variables outside internal/authzenforce: %v", offenders)
 	}
 }

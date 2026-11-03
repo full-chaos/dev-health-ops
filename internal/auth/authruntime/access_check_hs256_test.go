@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,10 +68,15 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bodyProbed := false
 	for _, row := range rows {
 		t.Run(row.Profile, func(t *testing.T) {
 			if !mounted[row.Profile] {
 				t.Fatalf("no route of the production sets matches the row %q: the row would be unchecked", row.Profile)
+			}
+			if row.Profile == validateBodyTokenProfile {
+				bodyProbed = probeValidateThroughTheBody(t, handler, valid, tampered)
+				return
 			}
 			method, path, _ := strings.Cut(row.Profile, " ")
 			path = strings.ReplaceAll(path, "{id}", uuid.NewString())
@@ -88,4 +94,30 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 			}
 		})
 	}
+	if !bodyProbed {
+		t.Errorf("the body-token row %s was not probed through the body", validateBodyTokenProfile)
+	}
+}
+
+// validateBodyTokenProfile is the one access row whose token is the JSON body
+// field token, not a bearer: the bearer probe above exempts it by name.
+const validateBodyTokenProfile = "POST " + authapi.PatternCompatValidate
+
+// probeValidateThroughTheBody sends the tokens in the body: the valid web token
+// passes verification and reaches the users store (unreachable here: 503), the
+// tampered one is go-api's refusal, 200 valid false.
+func probeValidateThroughTheBody(t *testing.T, handler http.Handler, valid, tampered string) bool {
+	t.Helper()
+	answer := func(token string) (int, string) {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, authapi.PatternCompatValidate, strings.NewReader(`{"token":"`+token+`"}`)))
+		return response.Code, response.Body.String()
+	}
+	if status, body := answer(valid); status != http.StatusServiceUnavailable {
+		t.Errorf("a valid HS256 web token in the body answers %d %s, want 503 from the unreachable users store", status, body)
+	}
+	if status, body := answer(tampered); status != http.StatusOK || !strings.Contains(body, `"valid":false`) {
+		t.Errorf("a tampered HS256 web token in the body answers %d %s, want 200 valid false", status, body)
+	}
+	return true
 }

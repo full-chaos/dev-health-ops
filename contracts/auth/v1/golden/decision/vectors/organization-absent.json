@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "organization_inactive"
+    "reason": "organization_inactive",
+    "wire_reason_code": "organization_inactive"
   },
   "id": "organization-absent",
   "layer": "pdp",

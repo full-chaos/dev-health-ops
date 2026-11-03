@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "org_mismatch"
+    "reason": "org_mismatch",
+    "wire_reason_code": "org_mismatch"
   },
   "id": "repo-membership-org-mismatch",
   "layer": "pdp",

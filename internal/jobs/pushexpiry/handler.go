@@ -207,15 +207,17 @@ func (handler *Handler) Work(
 			break
 		}
 	}
+	outcome := "swept"
+	switch {
+	case counts.submitted+counts.failed >= RunCap:
+		outcome = "capped"
+	case counts.failed > 0:
+		outcome = "partial"
+	}
+	handler.logRun(ctx, outcome, counts)
 	if counts.failed > 0 {
-		handler.logRun(ctx, "partial", counts)
 		return jobruntime.Retryable(fmt.Errorf("%d push tokens failed", counts.failed))
 	}
-	if counts.submitted+counts.failed >= RunCap {
-		handler.logRun(ctx, "capped", counts)
-		return nil
-	}
-	handler.logRun(ctx, "swept", counts)
 	return nil
 }
 

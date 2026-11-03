@@ -87,4 +87,14 @@ if grep -q '^PASS: one$' "${T}/rec1" && grep -q '^FAIL: two$' "${T}/rec1"; then 
 expect_rc record-no-overwrite 1 bash -c "source '${LIB}'; rec_open '${T}/rec1' again"
 expect_rc record-no-secret-line 1 bash -c "source '${LIB}'; rec_open '${T}/rec2' x; rec_line 'dsn=postgres://u:p@h/db'"
 
+# REHEARSAL_RUN_ID is the one operator-supplied value in a record: a numeric CI run id or nothing (r1 note: a token, a
+# passwordless DSN or an encoded key passed the pattern filter in rec_line).
+expect_rc run-id-numeric-passes 0 valid_run_id 12345
+expect_rc run-id-unset-passes 0 valid_run_id ""
+expect_rc run-id-session-token-fails 1 valid_run_id "svc_authsess_$(printf '%043d' 0)"
+expect_rc run-id-dsn-fails 1 valid_run_id "postgresql://db.internal:5432/ops"
+expect_rc run-id-base64-key-fails 1 valid_run_id "MC4CAQAwBQYDK2VwBCIEIGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJh"
+expect_rc run-id-too-long-fails 1 valid_run_id "$(printf '%030d' 1)"
+expect_rc run-id-newline-fails 1 valid_run_id "$(printf '12\n34')"
+
 exit "${failed}"

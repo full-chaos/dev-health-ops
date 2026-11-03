@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Cells for the argument, guard and wiring paths of ci/rehearse_auth_key_rotation_k3s.sh. Hermetic: no cluster. A fake kubectl
+# (and a fake helm for the cluster cells) on PATH records every call; KUBECONFIG points at /dev/null so no default
+# kubeconfig is ever read. Run: bash ci/rehearse_auth_key_rotation_k3s_test.sh
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT="${ROOT}/ci/rehearse_auth_key_rotation_k3s.sh"
+T="$(mktemp -d)"
+trap 'rm -rf "${T}"' EXIT
+mkdir -p "${T}/bin" "${T}/binh"
+cat >"${T}/bin/kubectl" <<'EOS'
+#!/usr/bin/env bash
+echo "kubectl $*" >> "${FAKE_LOG}"
+case "$*" in
+  *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${FAKE_VERSION:-v1.30.2+k3s1}" ;;
+  *"auth can-i list nodes"*) echo "${FAKE_CAN_I_NODES:-no}" ;;
+EOS
+cat >>"${T}/bin/kubectl" <<'EOS'
+  *"auth can-i create clusterroles"*) echo "${FAKE_CAN_I_CLUSTERROLES:-no}" ;;
+  *"get configmap rehearsal-owner"*) printf '%s' "${FAKE_OWNER_TOKEN-0123456789abcdef0123}" ;;
+  *) exit 98 ;;
+esac
+EOS
+# shellcheck disable=SC2016
+printf '%s\n' '#!/usr/bin/env bash' 'echo "helm $*" >> "${FAKE_LOG}"' 'exit 99' >"${T}/binh/helm"
+chmod +x "${T}/bin/kubectl" "${T}/binh/helm"
+export FAKE_LOG="${T}/calls.log"
+export KUBECONFIG=/dev/null
+: >"${FAKE_LOG}"
+failed=0
+ok() { printf 'PASS: %s\n' "$1"; }
+bad() { printf 'FAIL: %s\n' "$1"; failed=1; }
+run() { PATH="${T}/bin:${T}/binh:${PATH}" "$@"; }
+
+TOKEN=0123456789abcdef0123 # gitleaks:allow
+SA="${T}/sa.kubeconfig"
+printf 'apiVersion: v1\nkind: Config\n' >"${SA}"
+chmod 0600 "${SA}"
+z="$(printf '0%.0s' $(seq 1 64))"
+printf 'DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE=registry.invalid/m@sha256:%s\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "${z}" "${z}" >"${T}/images.env"
+printf 'DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE=registry.invalid/m:latest\nDEV_HEALTH_GO_AUTH_SERVICE_IMAGE=registry.invalid/s@sha256:%s\n' "${z}" >"${T}/tag.env"
+
+# go VAR=VALUE...: run the driver with a complete good environment, minus or plus the given overrides -> rc, out
+go() {
+  rc=0
+  out="$(env REHEARSAL_KUBECONFIG="${SA}" REHEARSAL_NAMESPACE=authrot-test REHEARSAL_RUN_TOKEN="${TOKEN}" \
+    REHEARSAL_DIR="${T}/d$((++n))" REHEARSAL_IMAGES_ENV="${T}/images.env" "$@" \
+    env PATH="${T}/bin:${T}/binh:${PATH}" bash "${SCRIPT}" --stage rollback 2>&1)" || rc=$?
+}
+n=0
+refused() { # refused NAME WANT_TEXT VAR=VALUE...
+  local name="$1" want="$2"
+  shift 2
+  : >"${FAKE_LOG}"
+  go "$@"
+  if [ "${rc}" = 1 ] && grep -qF -- "${want}" <<<"${out}"; then ok "${name}"; else bad "${name} (rc ${rc})"; fi
+}
+no_write_calls() { ! grep -v 'auth can-i' "${FAKE_LOG}" | grep -qE ' (create|apply|run|delete|port-forward|exec|rollout) |^helm '; }
+
+# plan: real helm template, no cluster call
+: >"${FAKE_LOG}"
+plan="$(PATH="${T}/bin:${PATH}" bash "${SCRIPT}" --print-plan 2>&1)" || plan="rc-failed: ${plan}"
+for needle in 'stage rollback' 'S3 chart' 'PASS: plan: the chart renders class eddsa' 'PASS: plan: the chart renders class hs256_compat' 'namespace-scoped ServiceAccount kubeconfig only'; do
+  if grep -qF -- "${needle}" <<<"${plan}"; then ok "plan-names-${needle// /-}"; else bad "plan-names-${needle// /-}"; fi
+done
+if [ ! -s "${FAKE_LOG}" ]; then ok plan-makes-no-cluster-call; else bad plan-makes-no-cluster-call; fi
+
+rc=0
+run bash "${SCRIPT}" --stage nonsense >/dev/null 2>&1 || rc=$?
+if [ "${rc}" = 1 ]; then ok unknown-stage-refused; else bad "unknown-stage-refused (rc ${rc})"; fi
+rc=0
+run bash -x "${SCRIPT}" --print-plan >/dev/null 2>&1 || rc=$?
+if [ "${rc}" = 2 ]; then ok xtrace-refused; else bad "xtrace-refused (rc ${rc})"; fi
+rc=0
+env -u REHEARSAL_KUBECONFIG run bash "${SCRIPT}" >/dev/null 2>&1 || rc=$?
+if [ "${rc}" != 0 ]; then ok no-kubeconfig-refused; else bad no-kubeconfig-refused; fi
+
+ADMIN="${T}/admin/k3s.yaml"
+mkdir -p "${T}/admin"
+cp "${SA}" "${ADMIN}"
+chmod 0600 "${ADMIN}"
+refused admin-kubeconfig-name-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG="${ADMIN}"
+if no_write_calls && [ ! -s "${FAKE_LOG}" ]; then ok admin-kubeconfig-refused-before-any-call; else bad admin-kubeconfig-refused-before-any-call; fi
+refused default-admin-path-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+cp "${SA}" "${T}/open.kubeconfig"
+chmod 0644 "${T}/open.kubeconfig"
+refused kubeconfig-mode-refused 'mode 0600' REHEARSAL_KUBECONFIG="${T}/open.kubeconfig"
+refused namespace-default-refused 'refusing the namespace' REHEARSAL_NAMESPACE=default
+refused namespace-kube-system-refused 'refusing the namespace' REHEARSAL_NAMESPACE=kube-system
+refused namespace-odd-name-refused 'plain namespace name' 'REHEARSAL_NAMESPACE=Bad;ns'
+refused non-hex-token-refused 'hex token' REHEARSAL_RUN_TOKEN=nothex
+refused tag-image-refused 'not a registry digest reference' REHEARSAL_IMAGES_ENV="${T}/tag.env"
+for bad_id in "svc_authsess_$(printf '%043d' 0)" "postgresql://db.internal:5432/ops"; do
+  refused run-id-refused 'REHEARSAL_RUN_ID' REHEARSAL_RUN_ID="${bad_id}"
+  if ! grep -qF -- "${bad_id}" <<<"${out}"; then ok run-id-value-not-echoed; else bad run-id-value-not-echoed; fi
+done
+
+# cluster guards: each refusal comes before any write call
+refused non-k3s-refused 'not k3s' FAKE_VERSION=v1.30.2
+if no_write_calls; then ok non-k3s-refused-before-any-write; else bad non-k3s-refused-before-any-write; fi
+refused admin-capable-refused 'can list nodes' FAKE_CAN_I_NODES=yes
+if no_write_calls; then ok admin-capable-refused-before-any-write; else bad admin-capable-refused-before-any-write; fi
+refused cluster-role-capable-refused 'can create clusterroles' FAKE_CAN_I_CLUSTERROLES=yes
+refused foreign-namespace-refused 'does not carry this run' FAKE_OWNER_TOKEN=ffffffffffffffffffff
+refused unowned-namespace-refused 'does not carry this run' FAKE_OWNER_TOKEN=
+if no_write_calls; then ok foreign-namespace-refused-before-any-write; else bad foreign-namespace-refused-before-any-write; fi
+mkdir -p "${T}/full"
+echo x >"${T}/full/f"
+refused non-empty-dir-refused 'not empty' REHEARSAL_DIR="${T}/full"
+if no_write_calls; then ok non-empty-dir-refused-before-any-write; else bad non-empty-dir-refused-before-any-write; fi
+if [ ! -e "${T}/helm.called" ] && ! grep -q '^helm ' "${FAKE_LOG}"; then ok no-helm-call-before-the-guards; else bad no-helm-call-before-the-guards; fi
+
+# wiring: read from the script text
+body="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"
+q="'"
+allowed="command -v|for tool in|^[0-9]+:(kc|hm)\(\)|die |needs:|usage|^[0-9]+:[[:space:]]*[${q}]|^[0-9]+:say |KUBECONFIG=/dev/null helm template"
+bare="$(grep -nE '(^|[^-a-zA-Z_./"])(kubectl|helm)[[:space:]]' <<<"${body}" | grep -vE "${allowed}" || true)"
+if [ -z "${bare}" ]; then ok every-cluster-call-goes-through-kc-or-hm; else bad "every-cluster-call-goes-through-kc-or-hm: ${bare}"; fi
+if grep -qE '^kc\(\) \{ kubectl --kubeconfig "\$\{KCFG\}"' <<<"${body}" && grep -qE '^hm\(\) \{ helm --kubeconfig "\$\{KCFG\}" --namespace "\$\{NS\}"' <<<"${body}"; then ok wrappers-carry-the-kubeconfig-flag; else bad wrappers-carry-the-kubeconfig-flag; fi
+if ! grep -qE '(create|delete) (namespace|ns)|namespace.*--create-namespace|--create-namespace' <<<"${body}"; then ok never-creates-or-deletes-a-namespace; else bad never-creates-or-deletes-a-namespace; fi
+if ! grep -q -- '--from-literal' <<<"${body}"; then ok no-secret-value-on-argv; else bad no-secret-value-on-argv; fi
+if grep -qF 'shred -u' <<<"${body}" && grep -qE 'trap cleanup EXIT' <<<"${body}"; then ok keys-shredded-on-exit; else bad keys-shredded-on-exit; fi
+# the compromise needs the publish floor: the dry-run activate of b gates it, and the floor is the real 300 s
+if grep -qE '^readonly PENDING_FLOOR=300$' <<<"${body}" && grep -q 'keys_cmd activate -kid b' <<<"${body}"; then ok real-publish-floor-gates-the-compromise; else bad real-publish-floor-gates-the-compromise; fi
+# the rollback is the chart's own: an upgrade to hs256_compat, then helm rollback to the eddsa revision; a stays absent and compromised after both
+for cell in rollback-a-still-absent-from-the-jwks rollback-a-still-compromised rollback-key-a-refused-terminal forward-a-still-absent-from-the-jwks forward-a-still-compromised; do
+  if grep -qE "^check ${cell} " <<<"${body}"; then ok "has-${cell}"; else bad "has-${cell}"; fi
+done
+if grep -qE '^hm rollback "\$\{RELEASE\}" "\$\{EVIDENCE_EDDSA_REVISION\}"' <<<"${body}"; then ok chart-rollback-targets-the-eddsa-revision; else bad chart-rollback-targets-the-eddsa-revision; fi
+
+# The ServiceAccount of the rehearsal gets one namespaced Role from a fixture the lead applies (pm 11-02): no cluster-scoped kind, no RBAC
+# resource in any rule, no wildcard resource or group; the only kinds are Role and RoleBinding. The driver's own manifests stay clear of RBAC kinds.
+ROLE="${ROOT}/ci/auth_k8s/rotation_rehearsal_role.yaml"
+if [ -f "${ROLE}" ]; then
+  role_kinds="$(sed -n 's/^kind: //p' "${ROLE}" | sort -u | tr '\n' ' ')"
+  if [ "${role_kinds}" = "Role RoleBinding " ]; then ok role-fixture-kinds-are-role-and-rolebinding; else bad "role-fixture-kinds-are-role-and-rolebinding (${role_kinds})"; fi
+  if ! grep -qiE 'clusterrole|clusterrolebinding' "${ROLE}"; then ok role-fixture-has-no-cluster-kind; else bad role-fixture-has-no-cluster-kind; fi
+  if ! grep -qE 'rbac\.authorization\.k8s\.io' <(sed -n '/^rules:/,/^---/p' "${ROLE}"); then ok role-fixture-rules-grant-no-rbac; else bad role-fixture-rules-grant-no-rbac; fi
+  if ! grep -qE 'resources: \[[^]]*\*|apiGroups: \[[^]]*\*|^ *- \*' <(sed -n '/^rules:/,/^---/p' "${ROLE}"); then ok role-fixture-has-no-wildcard-resource-or-group; else bad role-fixture-has-no-wildcard-resource-or-group; fi
+else
+  bad role-fixture-exists
+fi
+if ! grep -qE 'kind: (Cluster)?Role' "${SCRIPT}" "${ROOT}/ci/auth_k8s/postgres.yaml" "${ROOT}/ci/auth_k8s/valkey.yaml"; then ok driver-manifests-carry-no-rbac-kind; else bad driver-manifests-carry-no-rbac-kind; fi
+
+# A long-lived child must not hold the heavy-slot lock fd (fd 9): every port-forward line closes it.
+if grep -n 'port-forward' "${SCRIPT}" | grep -v '^[0-9]*:[[:space:]]*#\|printf' | grep -q .; then
+  if ! grep 'K port-forward' "${SCRIPT}" | grep -qv '9>&-'; then ok port-forward-closes-lock-fd; else bad port-forward-closes-lock-fd; fi
+else
+  bad port-forward-line-exists
+fi
+
+exit "${failed}"

@@ -91,6 +91,11 @@ keys_list_state() {
   printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { print $2; found = 1 } END { exit found ? 0 : 1 }'
 }
 
+# valid_run_id VALUE: the CI run id is digits only (1-20) or empty; the one operator-supplied value a record carries.
+valid_run_id() {
+  [[ -z "$1" || "$1" =~ ^[0-9]{1,20}$ ]]
+}
+
 # Records: noclobber, one file per scenario, PASS/FAIL lines.
 REC_FILE=""
 rec_open() {

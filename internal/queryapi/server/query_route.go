@@ -3169,6 +3169,72 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
   }
 }`
 
+// registeredInvestmentBreakdownTeamDocument and registeredInvestmentBreakdownRepositoryDocument are CHAOS-12698's
+// registered documents for acr's scoped investment breakdowns -- same contract as registeredInvestmentBreakdownDocument
+// above. Each body is that document's CURRENT text byte for byte; only the operation name differs
+// ("InvestmentBreakdownTeam", "InvestmentBreakdownRepository"). acr maps each operation it serves to ONE row of this
+// registry by name, and serves a team-scoped and a repository-scoped breakdown as separate policy entries (scope level
+// TEAM or REPO, exactly one id), so each needs its own name and therefore its own digest. Neither has a legacy text:
+// no client ever sent the V1 text under these names.
+//
+// Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
+// team's owner share (teamscope.RepoShare), REPO filters on repo_id. These documents add no resolver, schema, scope or
+// class-gate behaviour: the root is `analytics`, so the MCP class row is mcp:analytics, as for investmentBreakdown.
+//
+// Literal text, not built from the const above: cmd/registrydump reads every registered*Document const as a string
+// literal and refuses any other expression. TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName
+// pins the equality instead, so the three bodies cannot drift.
+const registeredInvestmentBreakdownTeamDocument = `query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredInvestmentBreakdownRepositoryDocument: see registeredInvestmentBreakdownTeamDocument above.
+const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentEvidenceQualityDocument is CHAOS-8104's registered
 // document for the Investment Evidence table's served mean-by-group column.
 // Its text is the captured wire document that CHAOS-8745's browser client
@@ -6383,6 +6449,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// never by GraphQL operation/field name, so this key only has to be
 	// internally consistent across this map and digestByOperation's reverse
 	// index -- it is never compared against request text.
+	// "investmentBreakdownTeam"/"investmentBreakdownRepository" (CHAOS-12698)
+	// are two more keys over `analytics`: the investmentBreakdown body under
+	// acr's own operation names, one registry row per acr policy entry.
 	//
 	// This is cmd/registrydump's parse target -- see
 	// mountedRouteLogMessage's doc comment above for why this literal's
@@ -6403,6 +6472,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
+		"investmentBreakdownTeam":           digestHex(registeredInvestmentBreakdownTeamDocument),
+		"investmentBreakdownRepository":     digestHex(registeredInvestmentBreakdownRepositoryDocument),
 		"investmentEvidenceQuality":         digestHex(registeredInvestmentEvidenceQualityDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),

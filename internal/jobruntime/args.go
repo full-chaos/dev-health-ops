@@ -111,6 +111,24 @@ func (args ProviderOAuthRevocationsArgs) ContractEnvelope() jobcontract.Envelope
 	return args.envelope()
 }
 
+// ExternalPushExpirySweepArgs is the River-facing typed form of
+// sync.external_push_expiry_sweep.v1.
+type ExternalPushExpirySweepArgs struct {
+	EnvelopeArgs[jobcontract.ExternalPushExpirySweepPayload]
+}
+
+func (ExternalPushExpirySweepArgs) Kind() string {
+	return jobcontract.KindExternalPushExpirySweep
+}
+
+func (ExternalPushExpirySweepArgs) SupportedContractVersions() []int {
+	return []int{jobcontract.ContractVersionV1}
+}
+
+func (args ExternalPushExpirySweepArgs) ContractEnvelope() jobcontract.Envelope {
+	return args.envelope()
+}
+
 // SyncCoverageRefreshArgs is the River-facing typed form of
 // system.sync_coverage_refresh.v1.
 type SyncCoverageRefreshArgs struct {

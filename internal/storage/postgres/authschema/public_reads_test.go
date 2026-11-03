@@ -78,7 +78,7 @@ func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
 func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id"}
+		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"}
 	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)

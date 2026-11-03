@@ -122,6 +122,10 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), asks []workloadAsk) (*workloadtoken.Client, error) {
 	parts := make([]string, 0, len(asks))
 	for _, ask := range asks {
+		if ask.selector == "" {
+			parts = append(parts, ask.flag)
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s is on and %s=%s", ask.flag, ask.selector, credentialWorkload))
 	}
 	fail := func(format string, args ...any) (*workloadtoken.Client, error) {

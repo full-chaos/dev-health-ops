@@ -189,8 +189,10 @@ Deployment of the build that has the verb (go-heavy below), not from a hand-writ
 - namespace `dev-health`;
 - image: the exact `ghcr.io/full-chaos/dev-health-go-operator@sha256:<digest>` of that Deployment
   (check that the digest is the build you need before you apply);
-- the Deployment's `serviceAccountName`, `env`, `envFrom`, `imagePullSecrets`, pod and container
-  `securityContext` and `resources`, copied unchanged;
+- the Deployment's `serviceAccountName`, `env`, `imagePullSecrets`, pod and container
+  `securityContext` and `resources`, copied unchanged; from `envFrom` only the `configMapRef` entries
+  (a `secretRef` entry, for example from `goWorkers.extraEnvFrom`, would pass a whole Secret into the Pod:
+  the generator refuses it, so add a needed key by `secretKeyRef` instead);
 - plus `COORDINATOR_DATABASE_URI` from Secret `dev-health-ops-go-pgbouncer`, key `COORDINATOR_DATABASE_URI`,
   by `secretKeyRef` (the key the coordinator groups use). Never put a DSN in args, flags or a file
   (Trap #121, R167);
@@ -206,6 +208,7 @@ python3 - heavy.json r4-org1 '["workers","metrics","finalize-redrive","--org","<
 import sys, json
 d = json.load(open(sys.argv[1])); name, args = sys.argv[2], json.loads(sys.argv[3])
 ps = d["spec"]["template"]["spec"]; c = ps["containers"][0]
+assert all(set(x) <= {"configMapRef", "prefix"} for x in c.get("envFrom", [])), "envFrom holds a non-ConfigMap source: refuse"
 env = [e for e in c.get("env", []) if e["name"] != "COORDINATOR_DATABASE_URI"]
 env.append({"name": "COORDINATOR_DATABASE_URI", "valueFrom": {"secretKeyRef": {"name": "dev-health-ops-go-pgbouncer", "key": "COORDINATOR_DATABASE_URI"}}})
 labels = {k: v for k, v in d["spec"]["template"]["metadata"]["labels"].items()
@@ -234,8 +237,9 @@ kubectl -n dev-health delete pod r4-org1
 Use the `dev-health-go-operator` image (the one prod pins for every dho service). Both the `operator`
 and the `dho` targets stage `contracts/jobs/v1`, `contracts/sync-dispatch/v1` and
 `deploy/go-workers/deployment.json` (`docker/go-worker.Dockerfile:62-98`); a target without them stops
-the CLI with `{"error":{"code":"contract_registry_invalid"}}` (`internal/workersctl/main.go:486-505`,
-CHAOS-5614). The runtime is distroless (no shell), so the Pod takes one verb: one Pod per verb, and
+the CLI: a missing job or sync-dispatch registry with `{"error":{"code":"contract_registry_invalid"}}` and a
+missing `deploy/go-workers/deployment.json` with `{"error":{"code":"deployment_contract_invalid"}}`
+(`internal/workersctl/main.go:486-501`, CHAOS-5614). The runtime is distroless (no shell), so the Pod takes one verb: one Pod per verb, and
 one org per Pod.
 
 **Required**: `--review-evidence` is REQUIRED on trigger verbs **even with `--dry-run`** (unlike `finalize-redrive` where dry-run omits it). Never use `--daily-redrive` on already-succeeded days.

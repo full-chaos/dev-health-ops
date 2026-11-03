@@ -17,7 +17,7 @@ import (
 
 // flagSecret is the stored provider secret of the fixture. It must never appear in a manifest, a report, the stored
 // operator actions or a log line.
-const flagSecret = "FENCE-SECRET-SENTINEL-6f1d"
+const flagSecret = "FENCE-SECRET-SENTINEL-6f1d" // gitleaks:allow
 
 func flagID(name string) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("fence-flag-"+name))

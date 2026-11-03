@@ -1,0 +1,5 @@
+{
+  "schema_version": "principal-get-request.v1",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "email": "a@example.invalid"
+}

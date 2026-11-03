@@ -1,0 +1,26 @@
+{
+  "id": "get-grant-other-organization",
+  "kind": "exchange",
+  "operation": "grants_get",
+  "request": {
+    "schema_version": "grant-get-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "grant_id": "grt_EXAMPLE0000000000000001"
+  },
+  "response": {
+    "schema_version": "grant-read.v1",
+    "grant_id": "grt_EXAMPLE0000000000000001",
+    "organization_id": "org_EXAMPLE0000000000000002",
+    "principal_id": "prn_EXAMPLE0000000000000001",
+    "role": "viewer",
+    "resource_key": "acme/widgets",
+    "expires_at": null,
+    "status": "active",
+    "revision": 1,
+    "created_at": "2026-11-02T10:00:00Z"
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "organization_mismatch",
+  "why": "A grant of another organization."
+}

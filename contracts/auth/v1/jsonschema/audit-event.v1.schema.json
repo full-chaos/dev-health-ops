@@ -177,6 +177,7 @@
             "acr_client",
             "external_push",
             "service_account_key",
+            "service_account_token",
             "workload_bootstrap_credential"
           ]
         },

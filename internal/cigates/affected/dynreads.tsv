@@ -48,6 +48,7 @@ internal/audit	drill_pitr_integration_test.go
 internal/auth/acrlisting	client.go
 internal/auth/acrmint	acrmint_test.go
 internal/auth/acrmint	census_test.go
+internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
 internal/auth/authapi	authorize_request_test.go

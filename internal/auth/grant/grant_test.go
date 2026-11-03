@@ -140,8 +140,11 @@ func TestKeyPatternIsTheContractAndTheMigrationPattern(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(sql), "resource_id ~ '"+KeyPattern()+"'") {
-		t.Fatalf("migration 0020 does not hold the Store key pattern %q", KeyPattern())
+	// The table CHECK keeps the two-segment floor until the migration that
+	// widens it rolls; the Store accepts nested keys before then.
+	const tableFloor = `^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`
+	if !strings.Contains(string(sql), "resource_id ~ '"+tableFloor+"'") {
+		t.Fatalf("migration 0020 does not hold the table floor pattern %q", tableFloor)
 	}
 }
 

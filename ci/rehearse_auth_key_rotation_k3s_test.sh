@@ -14,6 +14,14 @@ cat >"${T}/bin/kubectl" <<'EOS'
 echo "kubectl $*" >> "${FAKE_LOG}"
 case "$*" in
   *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${FAKE_VERSION:-v1.30.2+k3s1}" ;;
+  *"auth can-i --list"*) printf '%s\n' 'Resources                                       Non-Resource URLs   Resource Names   Verbs' \
+    'selfsubjectreviews.authentication.k8s.io        []                  []               [create]' \
+    'selfsubjectaccessreviews.authorization.k8s.io   []                  []               [create]' \
+    'selfsubjectrulesreviews.authorization.k8s.io    []                  []               [create]' \
+    '                                                [/api/*]            []               [get]' \
+    '                                                [/healthz]          []               [get]' \
+    'namespaces                                      []                  [authrot-test]   [get]'
+    [ -z "${FAKE_CAN_I_EXTRA:-}" ] || printf '%s\n' "${FAKE_CAN_I_EXTRA}" ;;
   *"auth can-i list nodes"*) echo "${FAKE_CAN_I_NODES:-no}" ;;
 EOS
 cat >>"${T}/bin/kubectl" <<'EOS'
@@ -83,8 +91,14 @@ ADMIN="${T}/admin/k3s.yaml"
 mkdir -p "${T}/admin"
 cp "${SA}" "${ADMIN}"
 chmod 0600 "${ADMIN}"
-refused admin-kubeconfig-name-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG="${ADMIN}"
-if no_write_calls && [ ! -s "${FAKE_LOG}" ]; then ok admin-kubeconfig-refused-before-any-call; else bad admin-kubeconfig-refused-before-any-call; fi
+# only the exact admin path (resolved) is refused, by name and before any call; a valid ServiceAccount file that happens to be named k3s.yaml is not
+: >"${FAKE_LOG}"
+go REHEARSAL_KUBECONFIG="${ADMIN}" REHEARSAL_DIR="${T}/named-k3s"
+if grep -qF 'step 1: postgres' <<<"${out}" && ! grep -qF 'k3s admin kubeconfig' <<<"${out}"; then ok sa-kubeconfig-named-k3s-yaml-accepted; else bad "sa-kubeconfig-named-k3s-yaml-accepted (rc ${rc})"; fi
+ln -s /etc/rancher/k3s/k3s.yaml "${T}/link-to-admin.yaml"
+refused symlink-to-admin-kubeconfig-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG="${T}/link-to-admin.yaml"
+if [ ! -s "${FAKE_LOG}" ]; then ok symlink-to-admin-kubeconfig-refused-before-any-call; else bad symlink-to-admin-kubeconfig-refused-before-any-call; fi
+refused dotdot-path-to-admin-kubeconfig-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG=/etc/rancher/k3s/../k3s/k3s.yaml
 refused default-admin-path-refused 'k3s admin kubeconfig' REHEARSAL_KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 cp "${SA}" "${T}/open.kubeconfig"
 chmod 0644 "${T}/open.kubeconfig"
@@ -115,6 +129,14 @@ if no_write_calls; then ok non-k3s-refused-before-any-write; else bad non-k3s-re
 refused admin-capable-refused 'can list nodes' FAKE_CAN_I_NODES=yes
 if no_write_calls; then ok admin-capable-refused-before-any-write; else bad admin-capable-refused-before-any-write; fi
 refused cluster-role-capable-refused 'can create clusterroles' FAKE_CAN_I_CLUSTERROLES=yes
+# the cluster-scope rule list: only get on the one Namespace object (resourceNames = the run namespace), the self-review creates and non-resource gets pass
+refused delete-namespaces-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='namespaces                                      []                  []               [delete]'
+if no_write_calls; then ok delete-namespaces-refused-before-any-write; else bad delete-namespaces-refused-before-any-write; fi
+refused get-all-namespaces-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='namespaces                                      []                  []               [get list]'
+refused get-other-namespace-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='namespaces                                      []                  [prod]           [get]'
+refused cluster-secrets-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='secrets                                         []                  []               [get]'
+refused wildcard-refused 'cluster-scope permission' FAKE_CAN_I_EXTRA='*.*                                             []                  []               [*]'
+if no_write_calls; then ok wildcard-refused-before-any-write; else bad wildcard-refused-before-any-write; fi
 # the ownership proof is the namespace's rehearsal-run label; a ConfigMap token (the fake still answers one) proves nothing
 refused foreign-namespace-refused 'does not carry this run' FAKE_NS_LABEL=ffffffffffffffffffff
 if no_write_calls; then ok foreign-namespace-refused-before-any-write; else bad foreign-namespace-refused-before-any-write; fi

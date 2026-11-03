@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	actionsSHA = "675fc94475732681650a10e5e7ea02d8da4c3870e2e6f5fa9e7a448daa781dc7"
+	actionsSHA = "5d59315bf4f646d920ef852e7d237158af857ba4573870493e3c3423ed8b664d"
 	rolesSHA   = "c0b45a25270e835da254238d0f18362888fb892309850de6ab33791720137a2d"
 )
 
@@ -224,6 +224,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // still equal a session permission.
 var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "acr.evidence.read": true, "acr.credential.issue": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+	"credentials.project": true,
 }
 
 type sessionEntry struct {
@@ -468,11 +469,11 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
 		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "authz.decide": true, "acr.credential.issue": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 36 {
-		t.Fatalf("%d actions, want 36", len(actions))
+	if len(actions) != 37 {
+		t.Fatalf("%d actions, want 37", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied

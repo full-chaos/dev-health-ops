@@ -284,6 +284,14 @@
       "impersonation": "denied"
     },
     {
+      "action": "credentials.project",
+      "scope": "platform",
+      "resource_kind": "platform",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
       "action": "admin.stats",
       "scope": "platform",
       "resource_kind": "platform",

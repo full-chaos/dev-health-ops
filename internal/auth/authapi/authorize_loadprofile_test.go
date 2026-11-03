@@ -204,10 +204,10 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 
 // pdpReportFailure judges one load report. Under the race detector a request takes about a second, so the harness drops
 // requests and the max_error_rate assertion (errors plus drops) fails on speed alone; the real load budget is the k3s run.
-// This stub still judges every assertion in both builds.
+// Under race only that assertion is skipped; every other assertion and the per-path checks (errors, 5xx, status) stay.
 func pdpReportFailure(rep loadharness.Report, race bool) (int, string) {
 	for _, c := range rep.Assertions {
-		if !c.OK {
+		if !c.OK && !(race && c.Name == "max_error_rate") {
 			return 0, fmt.Sprintf("assertion %s/%s failed: %s", c.Path, c.Name, c.Detail)
 		}
 	}

@@ -357,7 +357,9 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 //  2. operator-http  -- /healthz, /readyz, /metrics. Second so the operator
 //     surface answers while later components are still starting, and stops
 //     only after the API has drained.
-//  3. auth-api-http  -- the API listener.
+//  3. auth-api-http  -- the API listener, then the internal listener when
+//     AUTH_SERVICE_INTERNAL_HTTP_ADDR is set (it starts after the API and
+//     stops before it).
 //  4. readiness-gate -- opens admission only once every component above has
 //     started, and closes it FIRST on the way down so a load balancer sees
 //     not-ready before the API stops accepting.

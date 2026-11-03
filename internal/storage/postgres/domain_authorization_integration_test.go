@@ -215,6 +215,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
+		"GRANT SELECT (id, org_id, source_id, scopes, expires_at, revoked_at) ON TABLE public.external_ingest_tokens TO " + authorizedDomainRole,
 		"GRANT UPDATE (is_active, updated_at, last_test_at, last_test_success, last_test_error) ON TABLE public.integration_credentials TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {

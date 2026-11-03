@@ -34,10 +34,11 @@ func TestDomainPostureRefusesExcessTokenAccess(t *testing.T) {
 	admin, uri, roles := startGrantHarness(t, ctx)
 	domain := connectAs(t, ctx, uri, roles.domain, grantDomainPass)
 
-	for _, grant := range []struct{ name, grant, revoke string }{
-		{"hash column", "GRANT SELECT (token_hash) ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE SELECT (token_hash) ON TABLE public.external_ingest_tokens FROM " + roles.domain},
-		{"table-wide select", "GRANT SELECT ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE SELECT ON TABLE public.external_ingest_tokens FROM " + roles.domain},
-		{"revoked_at update", "GRANT UPDATE (revoked_at) ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE UPDATE (revoked_at) ON TABLE public.external_ingest_tokens FROM " + roles.domain},
+	const columnGrant = "GRANT SELECT (id, org_id, source_id, scopes, expires_at, revoked_at) ON TABLE public.external_ingest_tokens TO "
+	for _, grant := range []struct{ name, grant, revoke, restore string }{
+		{"hash column", "GRANT SELECT (token_hash) ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE SELECT (token_hash) ON TABLE public.external_ingest_tokens FROM " + roles.domain, ""},
+		{"table-wide select", "GRANT SELECT ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE SELECT ON TABLE public.external_ingest_tokens FROM " + roles.domain, columnGrant + roles.domain},
+		{"revoked_at update", "GRANT UPDATE (revoked_at) ON TABLE public.external_ingest_tokens TO " + roles.domain, "REVOKE UPDATE (revoked_at) ON TABLE public.external_ingest_tokens FROM " + roles.domain, ""},
 	} {
 		if _, err := admin.Exec(ctx, grant.grant); err != nil {
 			t.Fatalf("%s: %v", grant.name, err)
@@ -47,6 +48,11 @@ func TestDomainPostureRefusesExcessTokenAccess(t *testing.T) {
 		}
 		if _, err := admin.Exec(ctx, grant.revoke); err != nil {
 			t.Fatalf("%s: %v", grant.name, err)
+		}
+		if grant.restore != "" {
+			if _, err := admin.Exec(ctx, grant.restore); err != nil {
+				t.Fatalf("%s: %v", grant.name, err)
+			}
 		}
 		if err := CheckDomainAuthorization(ctx, domain, roles.domain, grantSchema); err != nil {
 			t.Fatalf("%s: posture did not recover: %v", grant.name, err)

@@ -320,41 +320,42 @@ func TestTheStateVersionChangesOnAGrantInsertUpdateAndDelete(t *testing.T) {
 	})
 }
 
-// r1 P1, pm option C: a raw write of the principal, organization, membership or platform role assignment rows, with no
-// outbox event, changes the state version.
+// D6651: a raw write of the public.users, public.organizations or public.memberships row of the pair, with no outbox
+// event, changes the state version; so does a write of the auth platform role assignments while auth owns them.
 func TestTheStateVersionChangesOnRawWritesWithNoEvent(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
-	t.Run("principals", func(t *testing.T) {
+	t.Run("public.users", func(t *testing.T) {
 		principal := uuid.New()
 		e.stepChanges(t, ctx, e.collecting(t, false), principal, "", []step{
-			{"insert", func() { e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, principal) }},
-			{"update", func() { e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal) }},
-			{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.principals WHERE id = $1`, principal) }},
-		})
-	})
-	t.Run("organizations", func(t *testing.T) {
-		user, org := e.user(t, ctx, true, false), uuid.New()
-		e.stepChanges(t, ctx, e.collecting(t, false), user, org.String(), []step{
 			{"insert", func() {
-				e.armed(t, ctx, `INSERT INTO auth.organizations (id, slug, name) VALUES ($1, $2, 'state-version')`, org, "sv-"+org.String()[:8])
+				e.exec(t, ctx, `INSERT INTO public.users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, NULL, 'local', true, true, false, 0, now(), now())`, principal, "sv-"+principal.String()[:8]+"@example.com")
 			}},
-			{"update", func() { e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org) }},
-			{"delete", func() { e.armed(t, ctx, `DELETE FROM auth.organizations WHERE id = $1`, org) }},
+			{"update", func() { e.exec(t, ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, principal) }},
+			{"delete", func() { e.exec(t, ctx, `DELETE FROM public.users WHERE id = $1`, principal) }},
 		})
 	})
-	t.Run("memberships", func(t *testing.T) {
-		user, org := e.user(t, ctx, true, false), e.org(t, ctx)
+	t.Run("public.organizations", func(t *testing.T) {
+		user, org := e.publicUser(t, ctx, true, false), uuid.New()
 		e.stepChanges(t, ctx, e.collecting(t, false), user, org.String(), []step{
 			{"insert", func() {
-				e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
+				e.exec(t, ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'state-version')`, org, "sv-"+org.String()[:8])
+			}},
+			{"update", func() { e.exec(t, ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, org) }},
+			{"delete", func() { e.exec(t, ctx, `DELETE FROM public.organizations WHERE id = $1`, org) }},
+		})
+	})
+	t.Run("public.memberships", func(t *testing.T) {
+		user, org := e.publicUser(t, ctx, true, false), e.publicOrg(t, ctx)
+		e.stepChanges(t, ctx, e.collecting(t, false), user, org.String(), []step{
+			{"insert", func() {
+				e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, org)
 			}},
 			{"update", func() {
-				e.armed(t, ctx, `UPDATE auth.memberships SET role = 'member' WHERE organization_id = $1 AND principal_id = $2`, org, user)
+				e.exec(t, ctx, `UPDATE public.memberships SET role = 'member' WHERE user_id = $1 AND org_id = $2`, user, org)
 			}},
-			{"delete", func() {
-				e.armed(t, ctx, `DELETE FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2`, org, user)
-			}},
+			{"delete", func() { e.exec(t, ctx, `DELETE FROM public.memberships WHERE user_id = $1 AND org_id = $2`, user, org) }},
 		})
 	})
 	t.Run("platform_role_assignments", func(t *testing.T) {
@@ -371,16 +372,51 @@ func TestTheStateVersionChangesOnRawWritesWithNoEvent(t *testing.T) {
 	})
 }
 
+// D6651: a write of the auth copy (principal, organization, membership) is not a decision input and does not move the
+// state version.
+func TestTheStateVersionIgnoresTheAuthCopies(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	user, org := e.user(t, ctx, true, false), e.org(t, ctx)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, org)
+	r := e.collecting(t, false)
+	before := e.stateVersion(t, ctx, r, user, org.String())
+	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user)
+	e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org)
+	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'suspended', 'admin', now())`, org, user)
+	e.armed(t, ctx, `UPDATE auth.memberships SET role = 'member' WHERE organization_id = $1 AND principal_id = $2`, org, user)
+	if after := e.stateVersion(t, ctx, r, user, org.String()); after != before {
+		t.Fatalf("an auth copy write moved the state version: %s -> %s", before, after)
+	}
+}
+
+// D6651, pm Q4: the decision reads no auth membership row, so it carries no membership row dependency; the set tag stays.
+func TestAPublicMembershipHasNoRowDependencyButTheSetTag(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	user, org := e.publicUser(t, ctx, true, false), e.publicOrg(t, ctx)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, org)
+	deps, sets := depsOf(t, e.snapshotWith(t, ctx, e.collecting(t, false), user, org.String()))
+	for _, d := range deps {
+		if d.AggregateType == "membership" {
+			t.Fatalf("a membership row dependency %+v with only a public membership row", d)
+		}
+	}
+	if !slices.Contains(sets, "membership") {
+		t.Fatalf("set types %q, want the membership tag", sets)
+	}
+}
+
 // pm option C: VACUUM FREEZE keeps xmin, so the state version of unchanged rows is stable across it.
 func TestTheStateVersionIsStableAcrossVacuumFreeze(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
-	user, org := e.user(t, ctx, true, false), e.org(t, ctx)
-	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
+	user, org := e.publicUser(t, ctx, true, false), e.publicOrg(t, ctx)
+	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, org)
 	e.armed(t, ctx, `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'viewer', 'repository', 'acme/frozen')`, user, org)
 	r := e.collecting(t, true)
 	before := e.stateVersion(t, ctx, r, user, org.String())
-	e.exec(t, ctx, `VACUUM (FREEZE) auth.principals, auth.organizations, auth.memberships, auth.resource_grants, auth.platform_role_assignments`)
+	e.exec(t, ctx, `VACUUM (FREEZE) public.users, public.organizations, public.memberships, auth.resource_grants, auth.platform_role_assignments`)
 	if after := e.stateVersion(t, ctx, r, user, org.String()); after != before {
 		t.Fatalf("the state version changed across VACUUM FREEZE: %s -> %s", before, after)
 	}

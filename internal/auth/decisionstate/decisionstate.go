@@ -422,7 +422,7 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 	default:
 		s.orgStatus = authorization.StatusSuspended
 	}
-	m, err := membership.EffectiveOn(ctx, t.tx, t.r.schema, org, principal)
+	m, err := membership.EffectiveOn(ctx, t.tx, org, principal)
 	if err != nil {
 		return storeErr("membership", err)
 	}

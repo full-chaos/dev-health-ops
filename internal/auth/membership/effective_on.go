@@ -7,8 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // RowQueryer is a connection or transaction that reads one row.
@@ -28,7 +26,7 @@ type Effective struct {
 // user_id and org_id) and its auth row on q, the caller's transaction, and
 // applies effective(). A public row with a NULL role is no public row to
 // effective(): the auth row decides, and an active auth row reads as removed.
-func EffectiveOn(ctx context.Context, q RowQueryer, schema authschema.ValidatedIdentifier, orgID, principalID uuid.UUID) (Effective, error) {
+func EffectiveOn(ctx context.Context, q RowQueryer, orgID, principalID uuid.UUID) (Effective, error) {
 	var publicRole *string
 	err := q.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2`, principalID, orgID).Scan(&publicRole)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
@@ -39,7 +37,7 @@ func EffectiveOn(ctx context.Context, q RowQueryer, schema authschema.ValidatedI
 		authRole   *string
 		status     string
 	)
-	err = q.QueryRow(ctx, `SELECT status, role FROM `+authschema.Quote(schema)+`.memberships
+	err = q.QueryRow(ctx, `SELECT status, role FROM "auth".memberships
 WHERE organization_id = $1 AND principal_id = $2`, orgID, principalID).Scan(&status, &authRole)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):

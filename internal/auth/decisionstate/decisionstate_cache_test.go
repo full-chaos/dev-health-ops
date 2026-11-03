@@ -78,20 +78,18 @@ func TestOnlyACollectingReaderGivesDependencies(t *testing.T) {
 func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 	marks := map[string]string{
 		"table:sessions":                  "gate: Session, every call before the cache",
-		"table:principals":                "dep principal (prn_)",
-		"table:organizations":             "dep organization (org_)",
-		"table:memberships":               "dep membership (mbr_) + tag membership",
 		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
 		"table:aggregate_revisions":       "the dependency revisions, same transaction",
-		"state:principals":                "StateVersion: the principal row's version",
-		"state:organizations":             "StateVersion: the organization row's version",
-		"state:memberships":               "StateVersion: the pair's membership row version",
+		"state:public.users":              "StateVersion: the principal's public.users row version",
+		"state:public.organizations":      "StateVersion: the organization's public.organizations row version",
+		"state:public.memberships":        "StateVersion: the pair's public.memberships row version",
 		"state:resource_grants":           "StateVersion: every grant row of the pair",
 		"state:platform_role_assignments": "StateVersion: the principal's assignments while auth owns the platform roles",
-		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned",
-		"public:memberships":              "Unfed: the public role",
+		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned; StateVersion",
+		"public:organizations":            "organization status; StateVersion",
+		"public:memberships":              "Unfed: the public role; StateVersion",
 		"call:StateOn":                    "public.users (is_active, superuser or the owned rule): dep user, Unfed, tag platform_role_assignment",
-		"call:EffectiveOn":                "public.memberships (Unfed) and auth.memberships (dep + tag)",
+		"call:EffectiveOn":                "public.memberships (the effective membership of the pair)",
 	}
 	raw, err := os.ReadFile("decisionstate.go")
 	if err != nil {
@@ -105,7 +103,7 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		{"table:", regexp.MustCompile(`table\("([a-z_]+)"\)`)},
 		{"public:", regexp.MustCompile(`public\.([a-z_]+)`)},
 		{"call:", regexp.MustCompile(`\.(StateOn|EffectiveOn)\(`)},
-		{"state:", regexp.MustCompile(`SELECT '([a-z_]+)', id::text, xmin::text`)},
+		{"state:", regexp.MustCompile(`SELECT '([a-z_.]+)', [^\n]*xmin::text`)},
 	} {
 		for _, m := range re.re.FindAllStringSubmatch(string(raw), -1) {
 			key := re.prefix + m[1]
@@ -130,9 +128,9 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 	const schema = `"auth"`
 	parts := map[string]string{
-		"principal":   `SELECT 'principals', id::text, xmin::text FROM "auth".principals WHERE id = $1`,
-		"org":         `SELECT 'organizations', id::text, xmin::text FROM "auth".organizations WHERE id = $2`,
-		"membership":  `SELECT 'memberships', id::text, xmin::text FROM "auth".memberships WHERE organization_id = $2 AND principal_id = $1`,
+		"principal":   `SELECT 'public.users', id::text, xmin::text FROM public.users WHERE id = $1`,
+		"org":         `SELECT 'public.organizations', id::text, xmin::text FROM public.organizations WHERE id = $2`,
+		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, xmin::text FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
 		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
 	}
@@ -150,6 +148,11 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 			has := strings.Contains(q, part)
 			if want := slices.Contains(tc.want, name); has != want {
 				t.Errorf("org %v owned %v: the %s rows read = %v, want %v\n%s", tc.org, tc.owned, name, has, want, q)
+			}
+		}
+		for _, copy := range []string{`"auth".principals`, `"auth".organizations`, `"auth".memberships`} {
+			if strings.Contains(q, copy) {
+				t.Errorf("org %v owned %v: the state query reads the auth copy %s\n%s", tc.org, tc.owned, copy, q)
 			}
 		}
 	}

@@ -67,3 +67,11 @@ func HoldsSQL(schema, principalExpr, roleExpr string) string {
 		`.principals pra_holder ON pra_holder.id = pra_held.principal_id WHERE pra_held.principal_id = ` + principalExpr +
 		` AND pra_held.role_key = ` + roleExpr + ` AND ` + ActiveRule("pra_held", "pra_holder") + `)`
 }
+
+// PublicActiveRule is a placeholder until the green commit.
+func PublicActiveRule(assignment, user string) string { return ActiveRule(assignment, user) }
+
+// PublicHoldsSQL is a placeholder until the green commit.
+func PublicHoldsSQL(schema, principalExpr, roleExpr string) string {
+	return HoldsSQL(schema, principalExpr, roleExpr)
+}

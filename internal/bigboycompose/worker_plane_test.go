@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 // CHAOS-7838: the bigboy cut recreated the worker plane from an override that was an untracked host file and
@@ -21,7 +23,8 @@ import (
 
 func opsRoot(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(toolsDir(t), "..", "..")
+	_, file, _, _ := moduleroot.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
 // queueServices returns service name -> queues selected by its `--queues=` command argument.

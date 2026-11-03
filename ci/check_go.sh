@@ -7,6 +7,78 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 GO_TOOLCHAIN="go1.27.3"
 export GOTOOLCHAIN="${GO_TOOLCHAIN}"
+
+# CHAOS-11794: the job deadline. A go test -timeout that is only a constant can sit past the end of the job: a call that starts
+# late in a 25 min job with a 22 min -timeout is cancelled by the job cap before its own timeout prints the goroutines. Every
+# integration go test call takes `job_go_test_timeout N` instead: min(N min, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min) in seconds.
+# CHECK_GO_JOB_CAP_MIN is the job's own timeout-minutes (a job-level env in the workflow; a test pins the two equal). The job
+# start is taken at the first check_go.sh call of the job (CHECK_GO_JOB_START, appended to GITHUB_ENV for the later steps); it
+# misses the checkout and setup steps, which the 3 min margin absorbs. No budget left: a named line and rc 2, never an unbounded
+# call. A hosted run without the cap refuses too; outside CI without the cap the constants apply. CHECK_GO_NOW_EPOCH(_FILE) is a
+# test clock, honoured only when GITHUB_ACTIONS is not true.
+job_budget_init() {
+  [ -n "${CHECK_GO_JOB_CAP_MIN:-}" ] || return 0
+  if [ -z "${CHECK_GO_JOB_START:-}" ]; then
+    CHECK_GO_JOB_START="$(job_budget_now)"
+    export CHECK_GO_JOB_START
+    [ -z "${GITHUB_ENV:-}" ] || printf 'CHECK_GO_JOB_START=%s\n' "${CHECK_GO_JOB_START}" >>"${GITHUB_ENV}"
+  fi
+}
+
+job_budget_now() {
+  if [ "${GITHUB_ACTIONS:-}" != true ]; then
+    if [ -n "${CHECK_GO_NOW_EPOCH_FILE:-}" ]; then cat "${CHECK_GO_NOW_EPOCH_FILE}"; return 0; fi
+    if [ -n "${CHECK_GO_NOW_EPOCH:-}" ]; then printf '%s\n' "${CHECK_GO_NOW_EPOCH}"; return 0; fi
+  fi
+  date +%s
+}
+
+# job_budget_remaining: the seconds of the job budget left after the 3 min margin, or "none" when no cap is set (outside CI).
+job_budget_remaining() {
+  local cap="${CHECK_GO_JOB_CAP_MIN:-}" now start
+  if [ -z "${cap}" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  case "${cap}" in *[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_CAP_MIN must be a whole number of minutes, got '${cap}'" >&2; return 2 ;; esac
+  job_budget_init
+  start="${CHECK_GO_JOB_START:-}"
+  case "${start}" in ''|*[!0-9]*) echo "check_go.sh: CHECK_GO_JOB_START is not a whole number of seconds ('${start}'); the go test is not started" >&2; return 2 ;; esac
+  now="$(job_budget_now)"
+  printf '%s\n' "$((cap * 60 - (now - start) - 180))"
+}
+
+job_go_test_timeout() {
+  local const_min="${1:-}" cap="${CHECK_GO_JOB_CAP_MIN:-}" remaining secs
+  case "${const_min}" in ''|*[!0-9]*) echo "check_go.sh: job_go_test_timeout needs a whole number of minutes" >&2; return 2 ;; esac
+  if [ -z "${cap}" ]; then
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "check_go.sh: CHECK_GO_JOB_CAP_MIN is not set for a guarded step; the job must carry its own timeout-minutes as that env value, so the go test is not started" >&2
+      return 2
+    fi
+    printf '%ss\n' "$((const_min * 60))"
+    return 0
+  fi
+  remaining="$(job_budget_remaining)" || return 2
+  if [ "${remaining}" -le 0 ]; then
+    echo "check_go.sh: job time budget exhausted before this go test call (its limit is ${const_min}m): cap ${cap}m, elapsed $((cap * 60 - 180 - remaining))s, 3 min kept back; the call is not started" >&2
+    return 2
+  fi
+  secs=$((const_min * 60))
+  [ "${remaining}" -ge "${secs}" ] || secs="${remaining}"
+  printf '%ss\n' "${secs}"
+}
+
+job_budget_init
+if [ "${1:-}" = "job-start" ]; then
+  printf '%s\n' "${CHECK_GO_JOB_START:-}"
+  exit 0
+fi
+if [ "${1:-}" = "job-timeout" ]; then
+  [ "$#" -eq 2 ] || { echo "usage: check_go.sh job-timeout MINUTES" >&2; exit 2; }
+  if job_go_test_timeout "$2"; then exit 0; fi
+  exit 2
+fi
 # CHAOS-5224 / CHAOS-5268: precedence is an explicit DEV_HEALTH_GO_CACHE first,
 # then an already-inherited GOCACHE, then a GOCACHE CONFIGURED on the machine
 # (`go env -changed GOCACHE`: the Go env file written by `go env -w`, which is
@@ -82,7 +154,9 @@ INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.g
 # turned `check_go.sh test` -- a verb CI declares container-free -- into a full
 # integration run that starts Testcontainers. A caller's environment must not be
 # able to change which suite a verb runs.
-GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH)
+# CHAOS-11745: GO_TEST_LEG_JSON_DIR and DEV_HEALTH_GO_FRESH_SECURITY belong to the leg: a test that starts check_go.sh as a child
+# must not empty the leg's -json file (its receipt reads it) or run in the leg's merge_group mode.
+GO_ENV_OFF=(env -u GO_PROVIDER_ROUTES -u DEV_HEALTH_ENV -u GOFLAGS -u GOEXPERIMENT -u CHECK_GO_FRESH -u GO_TEST_LEG_JSON_DIR -u DEV_HEALTH_GO_FRESH_SECURITY)
 
 # INTEGRATION_TEST_ENV (CHAOS-6634): environment for the MULTI-PACKAGE
 # `go test -tags=integration pkgA pkgB ...` invocations below (integration and
@@ -142,9 +216,10 @@ tc_trap() {
 }
 
 run_integration_go_test() {
-  local module_dir="$1" sid pid rc=0 i own_pgid
+  local module_dir="$1" sid pid rc=0 i own_pgid tmo
   local -a private_group=()
   shift
+  tmo="$(job_go_test_timeout 32)" || return 2
   sid="${TESTCONTAINERS_SESSION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
   [[ "${sid}" =~ ^[A-Za-z0-9._-]{8,64}$ ]] \
     || die "TESTCONTAINERS_SESSION_ID must match ^[A-Za-z0-9._-]{8,64}\$"
@@ -154,7 +229,7 @@ run_integration_go_test() {
   (
     cd "${ROOT}/${module_dir}"
     exec ${private_group[@]+"${private_group[@]}"} "${GO_ENV_OFF[@]}" GOWORK=off TESTCONTAINERS_SESSION_ID="${sid}" ${INTEGRATION_TEST_ENV[@]+"${INTEGRATION_TEST_ENV[@]}"} \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m "$@"
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" "$@"
   ) &
   pid=$!
   TC_TRAP_PID="${pid}"
@@ -177,10 +252,100 @@ run_integration_go_test() {
   return "${rc}"
 }
 
+# CHAOS-11794: the providersync shard pipeline (`go test -json | tee | jq`) runs in its own process group (setsid, only
+# inside the backgrounded subshell: this script is never exec-replaced) under a hard step bound. A child that holds
+# stdout open would keep `tee` alive after go test is gone and stall the step until the job cap with no log. The bound
+# sits above the 22 min go test -timeout (its dump wins when it can) and below the 25 min job cap. At the bound the
+# group's processes except tee/jq/bash get SIGQUIT (Go prints every goroutine; tee and jq stay up to carry the dump),
+# then KILL after 10 s. Leftover group members are reaped after go test exits. ps prints pid, pgid, ppid, etimes and
+# args only, never env. DEV_HEALTH_GO_STEP_BOUND_SECS overrides the bound for tests.
+PROVIDERSYNC_STEP_BOUND_SECS=1380
+
+group_ps_table() {
+  ps -eo pid,pgid,ppid,etimes,args 2>/dev/null | awk -v g="$1" 'NR == 1 || $2 == g' | cut -c1-300
+}
+
+providersync_bound_watchdog() {
+  local pid="$1" pgid="$2" bound="$3" marker="$4" s p
+  for ((s = 0; s < bound; s++)); do
+    sleep 1
+    kill -0 "${pid}" 2>/dev/null || return 0
+  done
+  echo hit >"${marker}"
+  printf 'check_go.sh: providersync step bound (%s s) hit; stopping the go test process group %s\n' "${bound}" "${pgid}" >&2
+  group_ps_table "${pgid}" >&2
+  for p in $(ps -eo pid=,pgid=,comm= | awk -v g="${pgid}" '$2 == g && $3 != "tee" && $3 != "jq" && $3 != "bash" { print $1 }'); do
+    kill -QUIT "${p}" 2>/dev/null || true
+  done
+  for ((s = 0; s < 100; s++)); do
+    kill -0 "${pid}" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  group_ps_table "${pgid}" >&2
+  kill -KILL -- "-${pgid}" 2>/dev/null || true
+}
+
+run_providersync_bounded() {
+  local test_regex="$1" json_file="$2"
+  local bound="${DEV_HEALTH_GO_STEP_BOUND_SECS:-${PROVIDERSYNC_STEP_BOUND_SECS}}"
+  local pid pgid own_pgid i rc=0 wd marker pidfile tmo remaining
+  case "${bound}" in ''|*[!0-9]*) die "DEV_HEALTH_GO_STEP_BOUND_SECS must be a whole number of seconds" ;; esac
+  if ! command -v setsid >/dev/null 2>&1; then
+    echo "check_go.sh: the bounded providersync step needs setsid (util-linux) on PATH; it is missing, so the step does not start. Install a setsid on PATH (Linux: util-linux) or run this shard on Linux." >&2
+    return 2
+  fi
+  tmo="$(job_go_test_timeout 22)" || return 2
+  remaining="$(job_budget_remaining)" || return 2
+  if [ "${remaining}" != none ] && [ "${remaining}" -lt "${bound}" ]; then bound="${remaining}"; fi
+  marker="$(mktemp)"
+  pidfile="$(mktemp)"
+  (
+    cd "${ROOT}"
+    # shellcheck disable=SC2016
+    exec setsid bash -c 'echo $$ >"$3"; set -o pipefail; out=$1; filter=$2; shift 3; "$@" | tee "${out}" | jq --unbuffered -rj "${filter}"' _ \
+      "${json_file}" 'select(.Action == "output") | .Output' "${pidfile}" \
+      "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -json -run "${test_regex}" ./internal/providersync
+  ) &
+  pid=$!
+  own_pgid="$(ps -o pgid= -p "$$" | tr -d ' ')"
+  for i in $(seq 1 600); do
+    [ -s "${pidfile}" ] && break
+    kill -0 "${pid}" 2>/dev/null || break
+    sleep 0.1
+  done
+  pgid="$(tr -d ' \n' <"${pidfile}")"
+  case "${pgid}" in
+    ''|*[!0-9]*|"${own_pgid}")
+      echo "check_go.sh: the providersync step has no process group of its own; stopping it" >&2
+      kill -KILL "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+      rm -f "${marker}" "${pidfile}"
+      return 2
+      ;;
+  esac
+  providersync_bound_watchdog "${pid}" "${pgid}" "${bound}" "${marker}" &
+  wd=$!
+  wait "${pid}" || rc=$?
+  wait "${wd}" 2>/dev/null || true
+  if pgrep -g "${pgid}" >/dev/null 2>&1; then
+    echo "check_go.sh: processes left in the go test process group ${pgid}; stopping them" >&2
+    group_ps_table "${pgid}" >&2
+    kill -TERM -- "-${pgid}" 2>/dev/null || true
+    for i in $(seq 1 50); do
+      pgrep -g "${pgid}" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -KILL -- "-${pgid}" 2>/dev/null || true
+  fi
+  [ ! -s "${marker}" ] || rc=124
+  rm -f "${marker}" "${pidfile}"
+  return "${rc}"
+}
+
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt LOGFILE|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -273,18 +438,29 @@ usage() {
          Log the wall seconds of a test shard and fail above 85% of the 30 min
          job cap (GO_TEST_SHARD_CAP_SECONDS), naming the shard and its three
          heaviest packages (measured in LOGFILE, else by weight).
-  security-fresh-receipt LOGFILE
-         The cache receipt of a test or race leg (CHAOS-11448): how many packages read "ok (cached)" (cached = NOT executed),
-         and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a failure when a package of
-         ci/security_fresh_packages.txt read "(cached)". security-fresh-split PKG... prints sec|plain per package.
+  security-fresh-receipt RAN JSON...
+         The cache receipt of a test or race leg (CHAOS-11448), read from the go test -json events of its stages: how many
+         packages read "ok (cached)" (cached = NOT executed), and, with DEV_HEALTH_GO_FRESH_SECURITY=1 (merge_group), a
+         failure when any package read "(cached)" or when a leg that ran RAN > 0 packages left no package summary
+         (CHAOS-11745). security-fresh-split PKG... prints sec|plain per package.
   test-shard-unweighted-guard SHARD COUNT LOGFILE
-         Fail when a package of the shard ran 30 s or more in LOGFILE (its go
+         Fail when a package of the shard ran 45 s or more in LOGFILE (its go
          test log) and has no row in ci/go_test_weights.tsv; prints the row.
+         From 30 s up to 45 s it only warns (::warning:: and a step-summary row).
          With DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (merge_group) it warns and exits 0; an unusable log still fails.
   build  Run go build ./... in every Go module.
   contract
          Validate the job contract tree and, when DEV_HEALTH_CONTRACT_BASE is
          set, reject breaking in-place changes against that directory.
+  job-start
+         Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
+         CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
+         line without a cap. ci/check_golden_drift.sh takes it once for its rows.
+  job-timeout MINUTES
+         Print the go test -timeout, in seconds, of one integration call whose
+         own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
+         Rc 2 and a named line when no budget is left, or when CI has no cap.
+         Does not need Go. ci/check_golden_drift.sh calls it for each row.
   multi-replica-workers
          Run the production ops-profile multi-replica claim, drain, and restart
          gate against real PostgreSQL with `-count=1`. Requires a non-zero
@@ -579,18 +755,39 @@ leg_json_file() {
 }
 
 # go_test_leg LOG LEGJSON ARG...: `go test -json ARG...` of one stage of a test or race leg (run it from the module directory).
-# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, in stream order (the -v form: more
+# The plain log, on stdout and in LOG, is every Output field of the event stream verbatim, whole lines per package (GO_TEST_LEG_JQ; the -v form: more
 # lines than plain go test, never fewer). A line that is not a JSON event passes through raw. The raw stream is kept in a stage
 # temp file and appended to LEGJSON (/dev/null when the leg keeps no timings) when the stage ends. Every element of the pipe is
 # read right after it: go test's own status is the stage status; a failed converter, a failed copy of the raw stream, a failed
 # write of the plain log or of LEGJSON is named on stderr and makes the stage fail (rc 70) when go test passed. A failed converter
 # drains its input (go test is never killed by a broken pipe) and the raw stream is printed into the plain log, so the log is
 # never empty.
+# CHAOS-12386: go test -json cuts a test line longer than 1024 bytes into several output events, and packages run in parallel, so an
+# event of another package (its "ok" summary line) can land between two chunks of one line. The filter keeps the unfinished tail of
+# each package apart (key: Package) and prints only whole lines: a line of one package is never mixed with another package's text.
+# The tail of a package is printed when its package-level pass/fail/skip event arrives, and every tail at the end of the stream, so no
+# byte is lost (a hung or killed package keeps its last words). A line that is not a JSON event is whole and is printed at once.
+# shellcheck disable=SC2016
 GO_TEST_LEG_JQ='
-inputs
-| ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "output", Output: (. + "\n")})
-| select(.Action == "output")
-| ((.Output // "") | tostring)'
+foreach ((inputs | ((fromjson? | select(type == "object" and ((.Action | type) == "string"))) // {Action: "raw", Output: (. + "\n")})), null) as $e (
+  {tails: {}, out: ""};
+    if $e == null then
+      {tails: {}, out: ([.tails[]] | join(""))}
+    elif $e.Action == "raw" then
+      .out = $e.Output
+    elif $e.Action == "output" then
+      (($e.Package // "") | tostring) as $p
+      | ((.tails[$p] // "") + (($e.Output // "") | tostring) | split("\n")) as $parts
+      | .out = ($parts[:-1] | map(. + "\n") | join(""))
+      | .tails[$p] = ($parts[-1] // "")
+    elif ($e.Action | IN("pass", "fail", "skip")) and (($e.Test // "") == "") then
+      (($e.Package // "") | tostring) as $p
+      | .out = (.tails[$p] // "")
+      | .tails[$p] = ""
+    else
+      .out = ""
+    end;
+    .out)'
 go_test_leg() {
   local log="$1" legjson="$2" rc raw problem=0
   local -a ps fb
@@ -598,7 +795,7 @@ go_test_leg() {
   command -v jq >/dev/null 2>&1 || die "the test and race legs need jq to read go test -json"
   raw="$(mktemp "${TMPDIR:-/tmp}/dev-health-leg-raw.XXXXXX")" || die "go_test_leg: no temp file for the raw go test -json stream"
   set +e
-  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json "$@" 2>&1 \
+  "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath ${MERGE_GROUP_FRESH:+-count=1} -json "$@" 2>&1 \
     | tee "${raw}" \
     | { jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}"; jqrc=$?; [ "${jqrc}" -eq 0 ] || cat >/dev/null; exit "${jqrc}"; } \
     | tee -a "${log}"
@@ -633,6 +830,20 @@ go_test_leg() {
   return "${rc}"
 }
 
+# cigates_go_test_timeout PKG...: the go test -timeout of one call (CHAOS-11787; interim, removed by CHAOS-11768 (widened)). The internal/cigates
+# packages run 485-757 s in a hosted test leg against the 10m default, so a call whose package list holds one gets 20m (a hang ceiling, no
+# time assert). COST: every other package of that call gets 20m too. The match is the exact import-path prefix with the slash: the bare
+# internal/cigates, internal/cigatesX and other modules give 10m. The timeout is an argument of the call, never read from the environment.
+cigates_go_test_timeout() {
+  local p
+  for p in "$@"; do
+    case "${p}" in
+      github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '20m\n'; return 0 ;;
+    esac
+  done
+  printf '10m\n'
+}
+
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
 go_test_json_run() {
   local json="$1" log="$2"
@@ -641,7 +852,7 @@ go_test_json_run() {
 }
 
 # go_test_json_run_t TIMEOUT JSON_FILE LOG_FILE PKG...: ONE fresh `go test -json` run of the packages (run it from the module directory).
-# The events are appended to JSON_FILE; jq turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
+# The events are appended to JSON_FILE; jq (GO_TEST_LEG_JQ, whole lines per package) turns them back into the plain go test log on stdout and in LOG_FILE (the ok lines
 # the wall and unweighted guards read). pipefail keeps go test's exit code. TIMEOUT is an argument, never read from the environment.
 go_test_json_run_t() {
   local timeout="$1" json="$2" log="$3"
@@ -649,7 +860,7 @@ go_test_json_run_t() {
   command -v jq >/dev/null 2>&1 || die "the race-excluded receipts need jq to read go test -json events"
   "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -json -count=1 -timeout "${timeout}" "$@" \
     | tee -a "${json}" \
-    | jq -rj 'select(.Action == "output") | .Output' \
+    | jq -nR --unbuffered -rj "${GO_TEST_LEG_JQ}" \
     | tee -a "${log}"
 }
 
@@ -714,7 +925,6 @@ check_race_excluded_ran() {
 # leg and ~213 s alone, with the default 600 s go test timeout as the only margin, so one slow runner timed it out
 # (run 38786639144). It now runs alone, after the rest, so its time no longer depends on what else is scheduled.
 SERIAL_HEAVY_TEST_PACKAGE="github.com/full-chaos/dev-health-ops/internal/gqlgenguard"
-CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"
 
 # GO_QUALITY_SELECTION_FILE: the verdict of `cmd/cigate plan-verdict --go-files-full` (the go-quality-plan job). Unset,
 # empty or a FULL first line runs every package. `AFFECTED <n>` and n root-module keys run only those packages: the test and
@@ -875,8 +1085,10 @@ check_test_shard_wall_guard() {
   die "test shard ${shard}/${count} took ${wall}s, over ${GO_TEST_SHARD_WALL_PERCENT}% (${limit}s) of the ${GO_TEST_SHARD_CAP_SECONDS}s job cap; heaviest packages by ${basis}: ${top} -- rebalance ci/go_test_weights.tsv or add a shard"
 }
 
-# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 30 s or more in
-# LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints the row to add. A package with no row weighs
+# check_test_shard_unweighted_guard SHARD COUNT LOGFILE [partial] (CHAOS-10498): fails when a package of the shard ran 45 s or more
+# (DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS) in LOGFILE (the leg's go test log) and has no row in ci/go_test_weights.tsv, and prints
+# the row to add; from 30 s (DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS) up to the fail threshold it only warns (::warning:: plus a
+# step-summary row, exit 0). A fail threshold below the warn threshold or not a whole number exits 2. A package with no row weighs
 # 1, so an unweighted heavy package unbalances the shards without anyone seeing it; this makes it red on the leg that ran it.
 # DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY=1 (go-quality.yml sets it on merge_group only, CHAOS-11682) turns a named package (awk exit 1) into a
 # ::warning:: plus a step-summary line and exit 0: a package the entry did not touch must not eject it. An unusable log (awk exit 2) fails always.
@@ -886,8 +1098,18 @@ check_test_shard_unweighted_guard() {
   { [ -f "${log}" ] && [ -r "${log}" ]; } || die "test-shard-unweighted-guard needs the shard's go test log as a readable file, got '${log}'"
   plan="$(check_test_shard_plan "${shard}" "${count}")"
   local out rc=0
-  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
+  out="$(awk -v weights="${GO_TEST_WEIGHTS}" -v thresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_SLOW_SECONDS:-30}" -v failthresh="${DEV_HEALTH_GO_TEST_UNWEIGHTED_FAIL_SECONDS:-45}" -v label="${GO_TEST_WEIGHTS#"${ROOT}/"}" -v partial="${partial:+1}" \
     -f "${GO_TEST_UNWEIGHTED_SLOW_AWK:-${ROOT}/ci/go_test_unweighted_slow.awk}" <(printf '%s\n' "${plan}") "${log}" 2>&1)" || rc=$?
+  local wline
+  while IFS= read -r wline; do
+    case "${wline}" in
+      unweighted-slow-warning:*|nested-module-slow-warning:*)
+        printf '::warning::%s\n' "${wline}" >&2
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          printf 'unweighted-slow warning (add the row in a pull request): %s\n' "${wline}" >> "${GITHUB_STEP_SUMMARY}" || true
+        fi ;;
+    esac
+  done <<< "${out}"
   if [ "${rc}" -ne 1 ] || [ "${DEV_HEALTH_GO_UNWEIGHTED_REPORT_ONLY:-}" != "1" ]; then
     [ -z "${out}" ] || printf '%s\n' "${out}" >&2
     return "${rc}"
@@ -898,12 +1120,18 @@ check_test_shard_unweighted_guard() {
   fi
 }
 
-# CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 (their tests always execute);
-# every other package may read "ok (cached)". DEV_HEALTH_GO_FRESH_SECURITY=1 turns it on (go-quality.yml sets it on merge_group only).
+# CHAOS-11448: merge_group runs the security packages of ci/security_fresh_packages.txt with -count=1 in their own call (their tests
+# always execute). DEV_HEALTH_GO_FRESH_SECURITY=1 turns it on (go-quality.yml sets it on merge_group only).
 SECURITY_FRESH_FILE="${DEV_HEALTH_GO_SECURITY_FRESH_LIST:-${ROOT}/ci/security_fresh_packages.txt}"
 SECURITY_FRESH_SET=""
 
 security_fresh_active() { [ "${DEV_HEALTH_GO_FRESH_SECURITY:-}" = "1" ]; }
+
+# CHAOS-11745: on merge_group EVERY go test of the test and race legs carries -count=1 (${MERGE_GROUP_FRESH:+-count=1}): the
+# restored build cache holds test results, and a test that reads a file through a child process (helm, bash, go, git) reads
+# "ok (cached)" after that file changed. The build cache stays; only the test results are not reused. A pull request keeps them.
+MERGE_GROUP_FRESH=""
+if security_fresh_active; then MERGE_GROUP_FRESH=1; fi
 
 # security_fresh_load: the import paths of the list (root module) in SECURITY_FRESH_SET; a path that does not exist is fatal.
 security_fresh_load() {
@@ -934,12 +1162,33 @@ security_split() {
   [ "${rc}" -le 1 ] || return "${rc}"
 }
 
-# check_security_fresh_receipt LOG: the cache receipt of a test or race leg (LOG = its go test output). Cached = NOT executed.
-# On merge_group a security package that reads "(cached)" fails the leg (a "[no tests to run]" package has nothing to execute).
+# check_security_fresh_receipt JSON...: the cache receipt of a test or race leg, read from the go test -json events of its stages.
+# A package's own summary event (an output event with no Test) that reads "ok ... (cached)" is cached = NOT executed; a line a
+# test prints carries its Test and is never read as a summary. On merge_group any cached package fails the leg (CHAOS-11745); a
+# "[no tests to run]" package has nothing to execute and is not counted. RAN is the number of packages the leg ran: on merge_group
+# a leg that ran packages and left no package summary (an empty or unreadable events file) fails, it never reads as 0 cached.
 check_security_fresh_receipt() {
-  local log="${1:-}" cached set_file result bad fresh summary
-  { [ -f "${log}" ] && [ -r "${log}" ]; } || die "security-fresh-receipt needs the leg's go test log as a readable file, got '${log}'"
-  cached="$(grep -cE '^ok[[:space:]].*\(cached\)' "${log}" || true)"
+  local ran="${1:-}" f events bad cached summaries set_file fresh sec_cached summary
+  case "${ran}" in ""|*[!0-9]*) die "security-fresh-receipt needs RAN, the number of packages the leg ran, got '${ran}'" ;; esac
+  shift
+  [ "$#" -gt 0 ] || die "security-fresh-receipt needs the -json event file(s) of the leg"
+  for f in "$@"; do
+    { [ -f "${f}" ] && [ -r "${f}" ]; } || die "security-fresh-receipt needs the -json events of the leg as readable files, got '${f}'"
+  done
+  command -v jq >/dev/null 2>&1 || die "security-fresh-receipt needs jq to read the -json events"
+  events="$(cat -- "$@" | jq -nR -r '
+    inputs
+    | fromjson?
+    | select(type == "object" and .Action == "output" and ((.Test // "") == "") and ((.Package // "") != ""))
+    | ((.Output // "") | tostring) as $o
+    | select($o | test("^(ok|FAIL|\\?)\\s"))
+    | ("S " + .Package),
+      (select(($o | test("^ok\\s")) and ($o | test("\\[no tests to run\\]") | not))
+       | (if ($o | test("\\(cached\\)")) then "C " else "R " end) + .Package)' | LC_ALL=C sort -u)" \
+    || die "security-fresh-receipt could not read the -json events"
+  bad="$(printf '%s\n' "${events}" | sed -n 's/^C //p')"
+  cached="$(printf '%s\n' "${bad}" | grep -c . || true)"
+  summaries="$(printf '%s\n' "${events}" | grep -c '^S ' || true)"
   summary="$(printf 'cache-receipt: %s package(s) reported "ok (cached)": cached = NOT executed by this leg\n' "${cached}")"
   if ! security_fresh_active; then
     summary="${summary}"$'\n'"security-fresh: off (event is not merge_group)"
@@ -950,16 +1199,25 @@ check_security_fresh_receipt() {
   security_fresh_load
   set_file="$(mktemp "${TMPDIR:-/tmp}/dev-health-security-set.XXXXXX")"
   printf '%s\n' "${SECURITY_FRESH_SET}" > "${set_file}"
-  result="$(awk -v setfile="${set_file}" 'BEGIN { while ((getline l < setfile) > 0) s[l] = 1 }
-    $1 == "ok" && ($2 in s) && $0 !~ /\[no tests to run\]/ { if ($0 ~ /\(cached\)/) print "C " $2; else n++ }
-    END { print "N " n + 0 }' "${log}")" || { rm -f -- "${set_file}"; die "security-fresh-receipt could not read ${log}"; }
+  fresh="$(printf '%s\n' "${events}" | sed -n 's/^R //p' | grep -Fxc -f "${set_file}" || true)"
+  sec_cached="$(printf '%s\n' "${bad}" | grep -Fxc -f "${set_file}" || true)"
   rm -f -- "${set_file}"
-  bad="$(printf '%s\n' "${result}" | sed -n 's/^C //p' | tr '\n' ' ')"
-  fresh="$(printf '%s\n' "${result}" | sed -n 's/^N //p')"
-  summary="${summary}"$'\n'"$(printf 'security-fresh: %s package(s) of ci/security_fresh_packages.txt executed with -count=1 on merge_group, %s cached' "${fresh}" "$(printf '%s\n' "${bad}" | wc -w | tr -d ' ')")"
+  summary="${summary}"$'\n'"$(printf 'security-fresh: %s package(s) of ci/security_fresh_packages.txt executed with -count=1 on merge_group, %s cached' "${fresh}" "${sec_cached}")"
+  summary="${summary}"$'\n'"$(printf 'merge-group-fresh: every go test of this leg ran with -count=1, %s package(s) cached' "${cached}")"
   printf '%s\n' "${summary}"
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || printf '%s\n' "${summary}" >> "${GITHUB_STEP_SUMMARY}"
-  [ -z "${bad}" ] || die "security package(s) read ok (cached) on merge_group: their tests were NOT executed: ${bad}"
+  [ "${ran}" -eq 0 ] || [ "${summaries}" -gt 0 ] \
+    || die "the -json events of this leg hold no package summary although it ran ${ran} package(s): the receipt cannot tell what ran"
+  [ "${cached}" -eq 0 ] || die "package(s) read ok (cached) on merge_group: their tests were NOT executed: $(printf '%s\n' "${bad}" | tr '\n' ' ')"
+}
+
+# LEG_EVENTS_TMP: the -json events of a test or race leg that keeps no timings (GO_TEST_LEG_JSON_DIR unset), for its cache
+# receipt; an EXIT trap removes it on every exit path.
+LEG_EVENTS_TMP=""
+remove_leg_events_tmp() { [ -z "${LEG_EVENTS_TMP}" ] || rm -f -- "${LEG_EVENTS_TMP}"; }
+leg_events_file() {
+  LEG_EVENTS_TMP="$(mktemp "${TMPDIR:-/tmp}/dev-health-$1-shard-events.XXXXXX")" || die "no temp file for the -json events of the $1 leg"
+  trap remove_leg_events_tmp EXIT
 }
 
 # check_test_shard SHARD COUNT: the SHARD-th of COUNT slices of the unit tests (what check_test runs as one). The slices
@@ -974,6 +1232,11 @@ check_test_shard() {
   log="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard.XXXXXX")"
   json="$(mktemp "${TMPDIR:-/tmp}/dev-health-test-shard-json.XXXXXX")"
   legjson="$(leg_json_file test "${shard}" "${count}")" || exit 2
+  # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
+  if [ "${legjson}" = /dev/null ]; then
+    leg_events_file test
+    legjson="${LEG_EVENTS_TMP}"
+  fi
   started="$(date +%s)"
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
@@ -983,21 +1246,20 @@ check_test_shard() {
     rest_rows="$(printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
       BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) if (k[i] != "") isrow[k[i]] = 1 }
       $1 == m && $2 != heavy && m == "." && ($3 in isrow) { print $2 }')"
-    # goes when the 11762 split lands
-    rows_timeout=10m
-    if [ "${module_dir}" = "." ] && printf '%s\n' "${rest_rows}" | grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi
+    # shellcheck disable=SC2086
+    rows_timeout="$(cigates_go_test_timeout ${rest_rows})"
     rest_sec=""
     if security_fresh_active && [ "${module_dir}" = "." ]; then
       rest_sec="$(printf '%s\n' "${rest}" | security_split in)"
       rest="$(printf '%s\n' "${rest}" | security_split out)"
     fi
-    printf 'go test (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${shard}" "${count}" "${module_dir}" \
+    printf 'go test%s (shard %s/%s): %s: %d package(s), %d with race-excluded rows\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" \
       "$(printf '%s\n%s\n' "${rest}" "${rest_rows}" | grep -c . || true)" "$(printf '%s\n' "${rest_rows}" | grep -c . || true)"
     if [ -n "${rest}" ]; then
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -timeout 10m ${rest}
+        go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest})" ${rest}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_sec}" ]; then
@@ -1005,7 +1267,7 @@ check_test_shard() {
       (
         cd "${ROOT}/${module_dir}"
         # shellcheck disable=SC2086
-        go_test_leg "${log}" "${legjson}" -count=1 -timeout 10m ${rest_sec}
+        go_test_leg "${log}" "${legjson}" -timeout "$(cigates_go_test_timeout ${rest_sec})" ${rest_sec}
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if [ -n "${rest_rows}" ]; then
@@ -1016,7 +1278,7 @@ check_test_shard() {
       ) || { (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}" partial) || true; rm -f -- "${log}" "${json}"; return 1; }
     fi
     if printf '%s\n' "${plan}" | awk -F'\t' -v m="${module_dir}" -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" '$1 == m && $2 == heavy { found = 1 } END { exit !found }'; then
-      printf 'go test (shard %s/%s, alone): %s\n' "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
+      printf 'go test%s (shard %s/%s, alone): %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${SERIAL_HEAVY_TEST_PACKAGE}"
       heavy_is_row=0
       if [ "${module_dir}" = "." ] && printf '%s\n' "${plan}" | awk -F'\t' -v heavy="${SERIAL_HEAVY_TEST_PACKAGE}" -v keys="${census_keys}" '
           BEGIN { n = split(keys, k, "\n"); for (i = 1; i <= n; i++) isrow[k[i]] = 1 }
@@ -1036,7 +1298,7 @@ check_test_shard() {
   done
   if [ "${legjson}" != /dev/null ]; then cat "${json}" >>"${legjson}"; fi
   check_race_excluded_receipts "${listing}" "${json}" || { rm -f -- "${log}" "${json}"; return 1; }
-  (check_security_fresh_receipt "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
+  (check_security_fresh_receipt "$(printf '%s\n' "${plan}" | grep -c . || true)" "${legjson}" "${json}") || { rm -f -- "${log}" "${json}"; return 1; }
   wall=$(($(date +%s) - started))
   (check_test_shard_unweighted_guard "${shard}" "${count}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
   (check_test_shard_wall_guard "${shard}" "${count}" "${wall}" "${log}") || { rm -f -- "${log}" "${json}"; return 1; }
@@ -1097,7 +1359,7 @@ check_providersync_race_shard() {
   [ -f "${weights}" ] || die "providersync race shards need ${weights}"
   # CHAOS-8275: list EVERY name of the RACE test binary (so a //go:build race file is seen too), not just ^Test of the plain build. A Fuzz*,
   # Example* or Benchmark* name would be selected by no `-run ^(Test...)$` shard and run in no race leg, so it fails here instead.
-  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -list '.*' ./internal/providersync)" \
+  listing="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -list '.*' ./internal/providersync)" \
     || die "go test -race -list failed for internal/providersync"
   listing="$(printf '%s\n' "${listing}" | grep -Ev '^(ok|FAIL|\?|---)[[:space:]]' | grep -v '^$' || true)"
   other="$(printf '%s\n' "${listing}" | grep -v '^Test' || true)"
@@ -1119,7 +1381,7 @@ check_providersync_race_shard() {
   [ "${total}" -eq "$(printf '%s\n' "${all}" | wc -l)" ] \
     && [ "$(printf '%s' "${names}" | LC_ALL=C sort)" = "$(printf '%s\n' "${all}" | LC_ALL=C sort)" ] \
     || die "providersync race shards are not an exact partition of the ${total} listed tests"
-  printf 'go test -race providersync shard %s/%s: %s of %s tests\n' "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
+  printf 'go test -race%s providersync shard %s/%s: %s of %s tests\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "$(printf '%s\n' "${regex}" | tr -cd '|' | wc -c | awk '{print $1 + 1}')" "${total}"
   # CHAOS-10481: -json goes to a per-leg file (the leg number is in the name); jq turns it back into the plain go test log, and
   # pipefail keeps go test's exit code. The guard runs after a failed run too, so a timeout names the test that never ended.
   command -v jq >/dev/null 2>&1 || die "providersync race shards need jq to print the go test -json log"
@@ -1129,7 +1391,7 @@ check_providersync_race_shard() {
   (
     set -o pipefail
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -race ${MERGE_GROUP_FRESH:+-count=1} -json -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" -run "${regex}" ./internal/providersync \
       | tee "${json}" \
       | jq -rj 'select(.Action == "output") | .Output'
   ) || run_rc=$?
@@ -1195,12 +1457,17 @@ check_race_shard_plan() {
 }
 
 check_race_shard() {
-  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson
+  local shard="${1:-}" count="${2:-}" module_dir modpath pkg selected=0 missing racelog legjson ps_json=""
   check_race_shard_args "${shard}" "${count}"
   load_quality_selection
   local -a pkgs solo_pkgs pkgs_sec pkgs_all
   racelog="$(mktemp "${TMPDIR:-/tmp}/dev-health-race-shard.XXXXXX")"
   legjson="$(leg_json_file race "${shard}" "${count}")" || exit 2
+  # The cache receipt reads the stages' -json events: a leg that keeps no timings keeps them in a temp file.
+  if [ "${legjson}" = /dev/null ]; then
+    leg_events_file race
+    legjson="${LEG_EVENTS_TMP}"
+  fi
   if security_fresh_active; then security_fresh_load; fi
   for module_dir in "${MODULE_DIRS[@]}"; do
     modpath="$(cd "${ROOT}/${module_dir}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)"
@@ -1232,11 +1499,12 @@ check_race_shard() {
         [ -n "${pkg}" ] && pkgs+=("${pkg}")
       done < <(printf '%s\n' "${pkgs_all[@]}" | security_split out)
     fi
-    printf 'go test -race (shard %s/%s): %s: %d package(s), %d solo\n' "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
+    printf 'go test -race%s (shard %s/%s): %s: %d package(s), %d solo\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${#pkgs[@]}" "${#solo_pkgs[@]}"
     if [ "${module_dir}" = "." ] && quality_selected . internal/providersync; then
       # CHAOS-8166: internal/providersync runs in EVERY race leg, one test-name shard each (it is not in pkgs above).
       selected=$((selected + 1))
       check_providersync_race_shard "${shard}" "${count}"
+      ps_json="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}/providersync-race-${shard}.json"
     fi
     if [ "${#pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#pkgs[@]}))
@@ -1250,21 +1518,21 @@ check_race_shard() {
       printf 'go test -race (shard %s/%s): %s: security -count=1: %d package(s)\n' "${shard}" "${count}" "${module_dir}" "${#pkgs_sec[@]}"
       (
         cd "${ROOT}/${module_dir}"
-        go_test_leg "${racelog}" "${legjson}" -race -count=1 -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
+        go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${pkgs_sec[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
     # CHAOS-10289: the solo packages run last and alone: the shard's packages and its providersync slice have finished, so
     # nothing else of this leg runs beside them.
     if [ "${#solo_pkgs[@]}" -gt 0 ]; then
       selected=$((selected + ${#solo_pkgs[@]}))
-      printf 'go test -race (shard %s/%s): %s: solo, alone: %s\n' "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
+      printf 'go test -race%s (shard %s/%s): %s: solo, alone: %s\n' "${MERGE_GROUP_FRESH:+ -count=1}" "${shard}" "${count}" "${module_dir}" "${solo_pkgs[*]}"
       (
         cd "${ROOT}/${module_dir}"
         go_test_leg "${racelog}" "${legjson}" -race -timeout "${DEV_HEALTH_GO_RACE_TEST_TIMEOUT:-10m}" "${solo_pkgs[@]}"
       ) || { rm -f -- "${racelog}"; return 1; }
     fi
   done
-  (check_security_fresh_receipt "${racelog}") || { rm -f -- "${racelog}"; return 1; }
+  (check_security_fresh_receipt "${selected}" "${legjson}" ${ps_json:+"${ps_json}"}) || { rm -f -- "${racelog}"; return 1; }
   rm -f -- "${racelog}"
   [ "${selected}" -gt 0 ] || [ "${QUALITY_FILTER_ACTIVE}" -eq 1 ] \
     || die "race shard ${shard}/${count} selected zero packages -- the matrix is wider than the package list, so this leg would read green while running nothing"
@@ -1371,7 +1639,7 @@ check_race_weights_rows() {
 # check_plan_reads: the declared-read guard of the plan verdict (`cmd/cigate plan-reads`) over the whole tree: every
 # package that names a path of a declared class in a string literal has a reads.tsv row, and --reach recomputes
 # reach.tsv (the programs that call each code-scope unbounded site: go/packages, SSA and RTA over the module; about
-# 3 min and an 8 GB live heap on 4 cores, so the GC holds it under GOMEMLIMIT) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
+# 3 min and a 6.5 GiB live heap on 4 cores under the tool's own 8 GiB soft limit; a peak RSS over the 10 GiB budget, reachBudgetMiB, fails: >= 30% under a 16 GiB scope, e.g. capped.sh's GOMEMLIMIT 85% of MemoryMax) and fails on any difference. It runs in the static leg, which runs on every change. With PLAN_READS_REACH_CACHE set (the
 # GitHub-hosted legs only, go-quality.yml) a pull request reuses a store of the same input hash; PLAN_READS_REACH_FRESH (every
 # other event) computes fresh and only stores (CHAOS-11421).
 check_plan_reads() {
@@ -1829,11 +2097,12 @@ check_venue_oracles() {
     printf 'venue-oracles: %d registered test(s) across %d package(s)\n' "${total}" "${#vo_dirs[@]}"
   fi
 
-  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0
+  local rel pattern pkg_proof_dir json_log stderr_log go_test_status proof failed=0 tmo
   local -a compared=() go_only=()
   for index in "${!vo_dirs[@]}"; do
     rel="./${vo_dirs[${index}]#"${ROOT}"/}"
     pattern="^(${vo_names[${index}]})\$"
+    tmo="$(job_go_test_timeout 37)" || return 2
     printf '  RUN  %s: %s\n' "${rel}" "${vo_names[${index}]//|/ }"
 
     pkg_proof_dir="${proof_dir}/${index}"
@@ -1848,7 +2117,7 @@ check_venue_oracles() {
         GOWORK=off \
         DEV_HEALTH_VENUE_ORACLES=1 \
         DEV_HEALTH_LIVE_PYTHON_ORACLE_PROOF_DIR="${pkg_proof_dir}" \
-        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=40m \
+        go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" \
           -run "${pattern}" -json "${rel}"
     ) >"${json_log}" 2>"${stderr_log}" || go_test_status=$?
 
@@ -2023,9 +2292,10 @@ REMAINING_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/remaining"
 # (CHAOS-11411: the arguments are now sorted longest weight first; an isolated package needs no order).
 # internal/jobs/metrics/remaining (CHAOS-9631) runs 1,053-1,164 s on its own and
 # sat in a shard with 20 other packages whose job took 22-25 of the 25 minutes.
-# internal/fixturescli (CHAOS-11411) runs 1,145-1,168 s of the 1,263 s test phase of its shard, next to three other
-# packages that run at the same time: it sets the Go workflow wall, so it gets a shard of its own as well.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining internal/fixturescli} "
+# internal/fixturescli (CHAOS-11411) was isolated while it ran 1,145-1,168 s; the shared servers (#5197) cut it to about
+# 493 s, so CHAOS-11658 took it out of this list. An isolated package needs an empty shard when its turn comes in the
+# longest-weight-first order: at its true weight it would find none and the plan would fail.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server internal/jobs/metrics/remaining} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -2316,6 +2586,31 @@ discover_integration_tagged_tests() {
 # <key> <name> per selected name, and per group SHARD-GROUP <module> <n> <key>... then SHARD-REGEX <module> <regex>; a
 # group after the first also gets, per earlier group <g>, SHARD-SPLIT <module> <n> <key> <g> collision <name> <member>
 # or SHARD-SPLIT <module> <n> <key> <g> budget <bytes>: why its first package <key> did not join group <g>.
+# warn_integration_weight_drift MODULE_DIR LOGFILE PKG...: reads the `ok <import path> <N>s` lines go test printed into
+# LOGFILE and prints one `::warning title=INTEGRATION WEIGHT DRIFT::` line for each package whose measured time is more than
+# 50% away from its weight in ci/go_integration_shards.d and at least 60 s on either side (CHAOS-11658). A weight is a
+# placement value and a measured time includes the packages that ran beside it, so this only tells a reader a row is stale:
+# it never fails, whatever the lines hold.
+warn_integration_weight_drift() {
+  local module_dir="$1" log="$2" pkg key weight line import_path seconds
+  shift 2
+  for pkg in "$@"; do
+    key="${module_dir}/${pkg#./}"
+    key="${key#./}"
+    weight="${INTEGRATION_SHARD_WEIGHTS[${key}]:-}"
+    [ -n "${weight}" ] || continue
+    while IFS=$'\t' read -r import_path seconds; do
+      [[ "${import_path}" == */"${pkg#./}" ]] || continue
+      awk -v key="${key}" -v n="${seconds%s}" -v w="${weight}" 'BEGIN {
+        d = n - w; if (d < 0) d = -d
+        m = (n > w) ? n : w
+        if (m >= 60 && d * 100 > 50 * w) printf "::warning title=INTEGRATION WEIGHT DRIFT::%s measured %.0fs, weight %ds (%+.0f%%)\n", key, n, w, (n - w) * 100 / w
+      }'
+    done < <(sed -n -E 's/^ok[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9.]+s).*$/\1\t\2/p' "${log}")
+  done
+  return 0
+}
+
 run_integration_packages() {
   local mode="$1" module_dir="$2" label="$3" pkg key name tests=0 result=0 status groups=0 group fits why split_why size names_len regex_max=60000
   local -a unfiltered=() run_pkgs=() group_pkgs=() group_keys=() group_regex=() group_size=() group_split=()
@@ -2423,11 +2718,38 @@ run_integration_packages() {
   done
   [ "${mode}" != "--dry-run" ] || return 0
   # Every go test goes through run_integration_go_test (one reaped testcontainers session per call); -run rides in run_pkgs.
+  # Its stdout also goes to a file (tee) for warn_integration_weight_drift. run_integration_go_test stays in this shell:
+  # its INT/TERM trap (CHAOS-10036) must be this shell's, so a TERM to this script still reaps the session. The tee is one
+  # process substitution on its own descriptor; closing the descriptor ends it, and wait makes the file complete before it
+  # is read. The status of go test comes straight from the function (CHAOS-11658).
+  local ok_log tee_fd tee_pid
+  ok_log="$(mktemp "${TMPDIR:-/tmp}/dev-health-ok.XXXXXX")"
+  exec {tee_fd}> >(tee -a "${ok_log}")
+  tee_pid=$!
   for ((group = 0; group < groups; group++)); do
     mapfile -t run_pkgs <<<"${group_pkgs[${group}]%$'\n'}"
     run_pkgs=(-run "${group_regex[${group}]}" "${run_pkgs[@]}")
-    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
+    run_integration_go_test "${module_dir}" "${run_pkgs[@]}" >&"${tee_fd}" || { status=$?; [ "${result}" -ne 0 ] || result="${status}"; }
   done
+  exec {tee_fd}>&-
+  # tee ends when every writer has closed the pipe; a process go test left behind that still holds it would stall this
+  # wait to the job cap (the CHAOS-11794 class). Bounded: past the bound only the tee is stopped (never the leftover
+  # writer, which is not ours to name) and the drift check reads the partial log. bash cannot mark tee_fd close-on-exec,
+  # so go test and its children inherit it next to their stdout: the same pipe, no new writer.
+  local tee_wait="${DEV_HEALTH_GO_TEE_WAIT_SECS:-30}" tee_tick
+  case "${tee_wait}" in ""|*[!0-9]*) tee_wait=30 ;; esac
+  tee_wait=$((10#${tee_wait}))
+  for ((tee_tick = 0; tee_tick < tee_wait * 5; tee_tick++)); do
+    kill -0 "${tee_pid}" 2>/dev/null || break
+    sleep 0.2
+  done
+  if kill -0 "${tee_pid}" 2>/dev/null; then
+    kill -TERM "${tee_pid}" 2>/dev/null || true
+    echo "check_go.sh: the drift check read a partial log: a process still holds go test's stdout ${tee_wait}s after go test ended" >&2
+  fi
+  wait "${tee_pid}" 2>/dev/null || true
+  warn_integration_weight_drift "${module_dir}" "${ok_log}" "${pkgs[@]}"
+  rm -f -- "${ok_log}"
   return "${result}"
 }
 
@@ -3211,9 +3533,11 @@ check_daily_test_shard() {
   fi
 
   printf 'go test daily test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3414,9 +3738,11 @@ check_workerservice_test_shard() {
   fi
 
   printf 'go test workerservice test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3617,9 +3943,11 @@ check_queryapiserver_test_shard() {
   fi
 
   printf 'go test queryapiserver test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -3820,9 +4148,11 @@ check_remaining_test_shard() {
   fi
 
   printf 'go test remaining test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  local tmo
+  tmo="$(job_go_test_timeout 22)" || return 2
   (
     cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" -run "${test_regex}" "./${REMAINING_INTEGRATION_PACKAGE_KEY}"
   )
 }
 
@@ -4247,13 +4577,7 @@ check_providersync_test_shard() {
   # and pipefail keeps go test's exit code.
   local json_dir="${GO_TEST_JSON_DIR:-${ROOT}/go-test-json}"
   mkdir -p "${json_dir}"
-  (
-    set -o pipefail
-    cd "${ROOT}"
-    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=22m -json -run "${test_regex}" ./internal/providersync \
-      | tee "${json_dir}/providersync-shard-${shard}.json" \
-      | jq -rj 'select(.Action == "output") | .Output'
-  )
+  run_providersync_bounded "${test_regex}" "${json_dir}/providersync-shard-${shard}.json"
 }
 
 check_integration_shard() {
@@ -4313,7 +4637,8 @@ check_integration() {
 }
 
 check_multi_replica_workers() {
-  local proof_dir proof_file measured result
+  local proof_dir proof_file measured result tmo
+  tmo="$(job_go_test_timeout 5)" || return 2
   proof_dir="$(mktemp -d "${TMPDIR:-/tmp}/dev-health-multi-replica.XXXXXX")"
   proof_file="${proof_dir}/measured-jobs"
   result=0
@@ -4322,7 +4647,7 @@ check_multi_replica_workers() {
     "${GO_ENV_OFF[@]}" \
       GOWORK=off \
       DEV_HEALTH_MULTI_REPLICA_PROOF="${proof_file}" \
-      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=5m \
+      go test -mod=readonly -trimpath -tags=integration -count=1 -timeout="${tmo}" \
         -run '^TestExplicitQueueMultiReplicaClaimDrainRestart$' \
         ./internal/workerservice
   ) || result=$?
@@ -4385,6 +4710,7 @@ AUTH_PACKAGES=(
 # exists in the tree without a row here, or a row names a function that does not.
 AUTH_FUZZ_TARGETS=(
   "./internal/auth/authapi FuzzParseRefreshRequest"
+  "./internal/auth/authapi FuzzDecodeAuthorizationRequest"
   "./internal/auth/contracts FuzzParseErrorEnvelope"
   "./internal/auth/contracts FuzzRevisionUnmarshal"
   "./internal/auth/contracts FuzzTimestampUnmarshal"
@@ -4406,6 +4732,10 @@ AUTH_FUZZ_TARGETS=(
   "./internal/auth/identity/oidc FuzzParseCallbackBody"
   "./internal/auth/identity/saml FuzzParseSAMLResponse"
   "./internal/auth/identity/saml FuzzSAMLSubject"
+  "./internal/auth/authorization FuzzNormalizeRequest"
+  "./internal/auth/authorization FuzzEvaluateRequest"
+  "./internal/auth/authorization FuzzEvaluateRepositoryGrant"
+  "./internal/auth/authorization FuzzEvaluateDelegated"
 )
 AUTH_FUZZTIME="${AUTH_FUZZTIME:-20s}"
 AUTH_GOVULNCHECK_VERSION="v1.9.0"
@@ -4480,13 +4810,14 @@ AUTH_RACE_PACKAGES=(
   ./internal/auth/keyrotation
 )
 check_auth_race_integration() {
-  local pkg output want got total=0
+  local pkg output want got total=0 tmo
   for pkg in "${AUTH_RACE_PACKAGES[@]}"; do
+    tmo="$(job_go_test_timeout 27)" || return 2
     want="$(cd "${ROOT}" && grep -hoE '^func TestRace[A-Za-z0-9_]+' "${pkg#./}"/*_test.go | sed 's/^func //' | LC_ALL=C sort -u || true)"
     [ -n "${want}" ] || die "auth race-integration: no TestRace* test found in ${pkg}"
     output="$(mktemp)"
     printf 'auth go test -race -tags=integration %s\n' "${pkg}"
-    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout=30m "${pkg}" >"${output}" 2>&1; then
+    if ! auth_go test -mod=readonly -trimpath -count=1 -race -tags=integration -v -timeout="${tmo}" "${pkg}" >"${output}" 2>&1; then
       cat "${output}" >&2
       rm -f "${output}"
       die "auth race-integration: ${pkg} failed"
@@ -4850,8 +5181,9 @@ case "${1:-all}" in
     check_test_shard_unweighted_guard "$2" "$3" "$4"
     ;;
   security-fresh-receipt)
-    [ "$#" -eq 2 ] || die "security-fresh-receipt accepts LOGFILE"
-    check_security_fresh_receipt "$2"
+    [ "$#" -ge 3 ] || die "security-fresh-receipt accepts RAN JSON..."
+    shift
+    check_security_fresh_receipt "$@"
     ;;
   security-fresh-split)
     shift

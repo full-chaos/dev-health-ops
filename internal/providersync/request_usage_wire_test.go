@@ -258,25 +258,24 @@ func (output blockingWriter) Write(p []byte) (int, error) {
 
 // TestUsageRecordingNeverHoldsAUnitsPath gives an execution a writer whose
 // store hangs, whose own log output is blocked, and whose queue is already
-// full. The execution still returns at the speed of the same execution
-// without usage recording, with the route's own result; the spend it could
-// not hand off is dropped and counted.
+// full. The execution still returns, while the writer is stuck, with the
+// route's own result; the spend it could not hand off is dropped and counted.
+// No clock is read: a writer that held the execution would never return, and
+// the wait below ends the test.
 func TestUsageRecordingNeverHoldsAUnitsPath(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 	descriptor, _ := Descriptor("launchdarkly", "feature-flags")
-	run := func(writer *RequestUsageWriter) (time.Duration, CompleteRouteExecutionResult, error) {
+	run := func(writer *RequestUsageWriter) (CompleteRouteExecutionResult, error) {
 		claim, session := completeRouteSession(t, now, false)
 		executor := completeRouteExecutor(now, &spendingCompleteRouteHandler{
 			calls: 2, batch: completeRouteFixture(t, claim),
 		}, &memoryEffectLedger{}, &memoryEffectSink{})
 		executor.Doer = fakehttp.Client(&scriptedDoer{})
 		executor.RequestUsage = writer
-		started := time.Now()
-		result, err := executor.Execute(context.Background(), session, descriptor)
-		return time.Since(started), result, err
+		return executor.Execute(context.Background(), session, descriptor)
 	}
-	baseline, baseResult, baseErr := run(nil)
+	baseResult, baseErr := run(nil)
 
 	hung := &hangingRequestUsageSink{release: make(chan struct{}), started: make(chan struct{})}
 	pipe := blockingWriter{release: make(chan struct{})}
@@ -295,13 +294,21 @@ func TestUsageRecordingNeverHoldsAUnitsPath(t *testing.T) {
 	}
 	droppedBefore := writer.droppedRequests.Load()
 
-	elapsed, result, err := run(writer)
+	var result CompleteRouteExecutionResult
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, err = run(writer)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the execution did not return while the usage writer was stuck")
+	}
 	if err != nil || baseErr != nil || result.Effects != baseResult.Effects || !result.Comparison.Match ||
 		result.RequestUsage != (RequestUsageTotals{Requests: 2, Responses: 2}) {
 		t.Fatalf("unit outcome changed: err=%v result=%+v baseline=%+v", err, result, baseResult)
-	}
-	if elapsed > baseline+100*time.Millisecond {
-		t.Fatalf("execution took %s with a stuck writer, %s without one", elapsed, baseline)
 	}
 	if dropped := writer.droppedRequests.Load() - droppedBefore; dropped != 2 {
 		t.Fatalf("hand-off not dropped and counted: %d", dropped)

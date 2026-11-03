@@ -45,16 +45,12 @@ func LoadBuild() (Build, error) {
 	if err != nil {
 		return Build{}, fmt.Errorf("load the chain: %w", err)
 	}
-	build := Build{known: map[string]bool{}}
+	build := Build{known: map[string]bool{}, head: chmigrate.HeadVersion(baseline, chain)}
 	for _, version := range baseline.Versions {
 		build.add(version)
 	}
 	for _, file := range chain {
 		build.add(file.Version)
-		build.head = file.Version
-	}
-	if build.head == "" && len(build.versions) > 0 {
-		build.head = build.versions[len(build.versions)-1]
 	}
 	return build, nil
 }
@@ -70,7 +66,7 @@ func (b *Build) add(version string) {
 // Versions lists every version the build needs.
 func (b Build) Versions() []string { return append([]string(nil), b.versions...) }
 
-// Head is the last chain version (the last baseline version for an empty chain).
+// Head is the migrator's head (chmigrate.HeadVersion): the last migration the build carries.
 func (b Build) Head() string { return b.head }
 
 // Compare classifies the applied versions. A version this build does not know is

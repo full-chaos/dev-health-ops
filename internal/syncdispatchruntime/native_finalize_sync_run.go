@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -340,13 +341,21 @@ func (service *NativeFinalizeSyncRunService) finalize(
 	}
 
 	newStatus := aggregateRunStatus(summary.total, aggregate.successCount, aggregate.failedCount)
+	terminal := zeroUnitTerminal{status: newStatus, stampConfig: true}
+	if isZeroUnit {
+		terminal = zeroUnitTerminalFor(zeroUnitReason)
+		newStatus = terminal.status
+		if terminal.clearError {
+			newError = nil
+		}
+	}
 	completedAt := run.completedAt
 	if completedAt == nil {
 		now := service.nowUTC()
 		completedAt = &now
 	}
 
-	if err := writeFinalizeRun(ctx, tx, run.id, aggregate.successCount, aggregate.failedCount, *completedAt, newStatus, resultPayload, newError); err != nil {
+	if err := writeFinalizeRun(ctx, tx, run.id, aggregate.successCount, aggregate.failedCount, *completedAt, newStatus, resultPayload, newError, terminal.startNow); err != nil {
 		return err
 	}
 
@@ -366,7 +375,12 @@ func (service *NativeFinalizeSyncRunService) finalize(
 		stampError = &sanitized
 	}
 
-	if err := stampCanonicalSyncConfig(ctx, tx, run.orgID, run.integrationID, *completedAt, runSuccess, stampError, resultPayload); err != nil {
+	if terminal.stampConfig {
+		if err := stampCanonicalSyncConfig(ctx, tx, run.orgID, run.integrationID, *completedAt, runSuccess, stampError, resultPayload); err != nil {
+			return err
+		}
+	}
+	if err := stampCredentialConnected(ctx, tx, run, *completedAt, aggregate.successCount); err != nil {
 		return err
 	}
 	if err := observeTerminalSyncRun(ctx, tx, run, *completedAt, newStatus, aggregate.successCount, aggregate.failedCount, resultPayload, stampError); err != nil {
@@ -778,6 +792,28 @@ func aggregateRunStatus(totalCount, successCount, failedCount int) string {
 	return syncRunStatusPartialFailed
 }
 
+// zeroUnitTerminal is how a run that planned zero units terminates.
+type zeroUnitTerminal struct {
+	status string
+	// clearError drops the run's error text (a no-op success has none).
+	clearError bool
+	// stampConfig stamps the canonical sync configuration's last-sync fields. A no-op success does not: the last
+	// sync of a configuration must keep describing a real sync.
+	stampConfig bool
+	// startNow sets started_at (to the completion time) when it is still NULL: a no-op run never started a unit.
+	startNow bool
+}
+
+// zeroUnitTerminalFor decides the terminal state from the planner's reason (D6467). Only the planner's capability
+// reason (the provider has no such dataset) is a success; every other reason, a planner error category included,
+// keeps the loud failure (CHAOS-4159).
+func zeroUnitTerminalFor(reason string) zeroUnitTerminal {
+	if reason == schedulersync.NoDatasetForProviderReason {
+		return zeroUnitTerminal{status: syncRunStatusSuccess, clearError: true, stampConfig: false, startNow: true}
+	}
+	return zeroUnitTerminal{status: syncRunStatusFailed, stampConfig: true}
+}
+
 // zeroUnitReasonFrom ports sync_units.py:_zero_unit_reason verbatim: prefers
 // an explicit "reason", falls back to "error_category", else the generic
 // residual. Python's predicate is `isinstance(value, str) and value.strip()`
@@ -815,6 +851,7 @@ func writeFinalizeRun(
 	status string,
 	result map[string]any,
 	errorText *string,
+	startNow bool,
 ) error {
 	encoded, err := json.Marshal(result)
 	if err != nil {
@@ -823,9 +860,10 @@ func writeFinalizeRun(
 	_, err = tx.Exec(ctx, `
 UPDATE public.sync_runs
 SET completed_units = $2, failed_units = $3, completed_at = $4, status = $5,
-    result = `+resultKeepingSkippedDatasets("$6")+`, error = $7
+    result = `+resultKeepingSkippedDatasets("$6")+`, error = $7,
+    started_at = CASE WHEN $8::boolean THEN COALESCE(started_at, $4) ELSE started_at END
 WHERE id = $1::uuid`,
-		runID, completedUnits, failedUnits, completedAt, status, encoded, errorText)
+		runID, completedUnits, failedUnits, completedAt, status, encoded, errorText, startNow)
 	if err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
@@ -873,6 +911,49 @@ WHERE id = $1::uuid`, configID, completedAt, success, errorText, encodedStats)
 	return nil
 }
 
+// credentialStampRefresh is how old a connected credential's last_test_at must
+// be before another successful run rewrites it.
+const credentialStampRefresh = "15 minutes"
+
+// stampCredentialConnected marks the run's credential connected (CHAOS-11881):
+// a run with at least one successful unit proves the credential authenticates.
+// A run with no successful unit never writes, so a failed run cannot turn a
+// connected credential back into "needs verification". A run that finished
+// before the credential's latest result (a late or repeated finalize) never
+// overwrites it. The run's own
+// credential wins over the integration's; no credential is a no-op, and a run
+// that authenticated from the environment, or that carries neither a credential
+// nor an auth source (a legacy run), stamps nothing, because the
+// integration may have gained a stored credential after the run started.
+func stampCredentialConnected(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun, completedAt time.Time, successCount int) error {
+	if successCount <= 0 {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `
+UPDATE public.integration_credentials AS credential
+SET last_test_at = $3, last_test_success = true, last_test_error = NULL
+FROM (
+  SELECT COALESCE(run.credential_id, integration.credential_id) AS credential_id
+  FROM public.sync_runs AS run
+  JOIN public.integrations AS integration
+    ON integration.id = run.integration_id
+  WHERE run.id = $1::uuid AND run.org_id = $2
+    AND (run.credential_id IS NOT NULL OR run.auth_source = 'integration_credential')
+) AS target
+WHERE credential.id = target.credential_id
+  AND credential.org_id = $2
+  AND credential.is_active
+  AND (credential.last_test_at IS NULL OR credential.last_test_at < $3)
+  AND (credential.last_test_success IS DISTINCT FROM true
+       OR credential.last_test_at IS NULL
+       OR credential.last_test_at < $3::timestamptz - interval '`+credentialStampRefresh+`')`,
+		run.id, run.orgID, completedAt)
+	if err != nil {
+		return ErrFinalizeSyncRunUnavailable
+	}
+	return nil
+}
+
 // observeTerminalSyncRun ports sync_units.py::sync_observers_for_terminal_sync_run.
 // Both satellite tables (backfill_jobs, job_runs) are updated by a filtered
 // UPDATE rather than Python's select-then-mutate-in-Python-then-flush loop --
@@ -894,13 +975,17 @@ func observeTerminalSyncRun(
 		backfillStatus = "failed"
 	}
 	marker := "sync_run:" + run.id
+	manualJobs, err := manualBackfillJobIDs(ctx, tx, run)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 UPDATE public.backfill_jobs
 SET status = $1, total_chunks = $2, completed_chunks = $3, failed_chunks = $4,
     completed_at = $5, error_message = $6
-WHERE org_id = $7 AND celery_task_id LIKE '%' || $8 || '%'`,
+WHERE org_id = $7 AND (celery_task_id LIKE '%' || $8 || '%' OR id = ANY($9::uuid[]))`,
 		backfillStatus, run.totalUnits, completedUnits, failedUnits, completedAt, errorText,
-		run.orgID, marker); err != nil {
+		run.orgID, marker, manualJobs); err != nil {
 		return ErrFinalizeSyncRunUnavailable
 	}
 
@@ -935,6 +1020,59 @@ WHERE status IN ($5, $6) AND result->>'sync_run_id' = $7`,
 		return ErrFinalizeSyncRunUnavailable
 	}
 	return nil
+}
+
+const backfillOccurrenceMarker = "occurrence:"
+
+// occurrenceOfBackfillTask is the occurrence id in a manual trigger's celery_task_id: "occurrence:<id>", or
+// "idem:<hash>;occurrence:<id>" for a keyed submit. "" when the task id names none.
+func occurrenceOfBackfillTask(task string) string {
+	index := strings.LastIndex(task, backfillOccurrenceMarker)
+	if index < 0 {
+		return ""
+	}
+	rest := task[index+len(backfillOccurrenceMarker):]
+	if end := strings.IndexByte(rest, ';'); end >= 0 {
+		rest = rest[:end]
+	}
+	return rest
+}
+
+// manualBackfillJobIDs returns the ids of the org's open backfill_jobs rows that an admin backfill (a manual trigger)
+// keyed by occurrence and that belong to this run. The row never carries "sync_run:<id>", and the domain role cannot read
+// scheduled_sync_occurrences, so the run is matched by deriving the materializer's deterministic run id from each open
+// row's occurrence id. One read; the rows are the org's pending or running manual jobs.
+func manualBackfillJobIDs(ctx context.Context, tx pgx.Tx, run *finalizeSyncRun) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+SELECT id::text, celery_task_id FROM public.backfill_jobs
+WHERE org_id = $1 AND status IN ('pending', 'running') AND celery_task_id LIKE '%' || $2 || '%'`,
+		run.orgID, backfillOccurrenceMarker)
+	if err != nil {
+		return nil, ErrFinalizeSyncRunUnavailable
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id, task string
+		if err := rows.Scan(&id, &task); err != nil {
+			return nil, ErrFinalizeSyncRunUnavailable
+		}
+		occurrence := occurrenceOfBackfillTask(task)
+		if occurrence == "" {
+			continue
+		}
+		derived, err := schedulersync.DeterministicSyncRunID(occurrence)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(derived, run.id) {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrFinalizeSyncRunUnavailable
+	}
+	return ids, nil
 }
 
 // checkpointSuccessfulComputeInputs ports

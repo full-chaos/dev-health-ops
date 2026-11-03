@@ -221,3 +221,46 @@ func TestSessionReadIsSkippedWhenTheAuthSessionsTableIsAbsent(t *testing.T) {
 		t.Fatal("the caller's options were mutated")
 	}
 }
+
+func platformReadOptions() MigrationOptions {
+	options := sessionReadOptions()
+	options.QueryAPISessionRead.Also = []SessionReadTable{
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+	}
+	return options
+}
+
+// The platform role read is granted table by table after the session read,
+// validated like it, and present only when the read carries it.
+func TestQueryAPIGrantStatementsCarryThePlatformReadOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+	platform := []string{
+		`GRANT SELECT ("principal_id", "role_key", "expires_at") ON TABLE "auth"."platform_role_assignments" TO "dev_health_query_api"`,
+		`GRANT SELECT ("id", "kind", "disabled_at") ON TABLE "auth"."principals" TO "dev_health_query_api"`,
+	}
+	session := strings.Join(queryAPIGrantStatements(sessionReadOptions()), "\n")
+	with := strings.Join(queryAPIGrantStatements(platformReadOptions()), "\n")
+	for _, want := range platform {
+		if strings.Contains(session, want) {
+			t.Errorf("the session read alone grants %s", want)
+		}
+		if !strings.Contains(with, want) {
+			t.Errorf("missing %s in:\n%s", want, with)
+		}
+	}
+	if err := ValidateMigrationOptions(platformReadOptions()); err != nil {
+		t.Fatalf("valid platform read refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*MigrationOptions){
+		"unsafe table":  func(o *MigrationOptions) { o.QueryAPISessionRead.Also[0].Table = "p;" },
+		"unsafe column": func(o *MigrationOptions) { o.QueryAPISessionRead.Also[1].Columns = []string{"id; x"} },
+		"no columns":    func(o *MigrationOptions) { o.QueryAPISessionRead.Also[1].Columns = nil },
+	} {
+		options := platformReadOptions()
+		mutate(&options)
+		if err := ValidateMigrationOptions(options); !errors.Is(err, ErrMigrationConfiguration) {
+			t.Errorf("%s: %v, want ErrMigrationConfiguration", name, err)
+		}
+	}
+}

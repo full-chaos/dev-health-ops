@@ -139,6 +139,9 @@ func TestReconcileEachGatedClassIsReported(t *testing.T) {
 		{DiffPasswordHash, func(r *Row, _ *AuthRow, _ *fakeTarget) { r.PasswordHash = nil }},
 		{DiffPlatformRole, func(r *Row, _ *AuthRow, _ *fakeTarget) { r.Superuser = true }},
 		{DiffPlatformRole, func(_ *Row, a *AuthRow, _ *fakeTarget) { a.RoleHeld, a.RoleBackfilled = true, true }},
+		{DiffPlatformRoleDisabled, func(r *Row, a *AuthRow, _ *fakeTarget) {
+			r.Active, r.Superuser, a.Active, a.RoleHeld, a.RoleBackfilled = false, true, false, false, true
+		}},
 		{DiffTokenVersion, func(_ *Row, a *AuthRow, _ *fakeTarget) { a.TokenVersion = 4 }},
 		{DiffIdentityMissing, func(r *Row, _ *AuthRow, tgt *fakeTarget) {
 			r.AuthProvider, r.AuthProviderID = str("github"), str("subject-1")
@@ -316,7 +319,8 @@ func TestReconcileLinesAreStableAndListEveryGatedClass(t *testing.T) {
 		want = append(want, "diff."+class+"=0")
 	}
 	want = append(want, "info.last_login_drift=0", "info.display_name_drift=0", "info.identity_not_carried=0", "info.sso_identity_unmatched=0",
-		"info.sso_identity_relink_pending=0", "info.sso_subject_unverifiable=0")
+		"info.sso_identity_relink_pending=0", "info.sso_subject_unverifiable=0",
+		"info.membership_public_missing=0", "info.membership_auth_missing=0", "info.membership_role_diff=0")
 	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("lines:\n%s", strings.Join(lines, "\n"))
 	}

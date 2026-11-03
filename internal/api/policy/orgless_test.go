@@ -50,7 +50,7 @@ func TestOrglessNonSuperuserReachesOnlyTheListedRoutes(t *testing.T) {
 			t.Run(level.String()+" "+tc.method+" "+tc.path, func(t *testing.T) {
 				store := newStore()
 				headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(func(c jwt.MapClaims) { orglessClaims(c); c["role"] = "admin" }))}
-				got := serve(NewGuard(authenticator(t, store), quiet()).Wrap(level, echo), tc.method, tc.path, headers)
+				got := serve(wrapLevel(NewGuard(authenticator(t, store), quiet()), level, echo), tc.method, tc.path, headers)
 				want := tc.want
 				if level == AdminOrg && want == 200 {
 					want = 403
@@ -94,7 +94,7 @@ func TestOrglessSuperuserAndOrgTokensAreUnchanged(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			headers := map[string]string{"Authorization": "Bearer " + sign(t, claims(tc.mutate))}
-			got := serve(NewGuard(authenticator(t, tc.store), quiet()).Wrap(tc.level, echo), http.MethodGet, tc.path, headers)
+			got := serve(wrapLevel(NewGuard(authenticator(t, tc.store), quiet()), tc.level, echo), http.MethodGet, tc.path, headers)
 			if got.status != tc.status || (tc.status == 200 && !strings.Contains(got.body, "user="+userID.String())) {
 				t.Fatalf("status %d %s, want %d", got.status, got.body, tc.status)
 			}

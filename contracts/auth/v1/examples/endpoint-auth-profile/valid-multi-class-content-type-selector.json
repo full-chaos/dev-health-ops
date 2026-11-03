@@ -4,7 +4,7 @@
     "acr_client_credential"
   ],
   "action": "acr.context.read",
-  "cache_class": "decision_bound",
+  "cache_class": "resource_revision_bound",
   "class_disambiguator": {
     "kind": "content_type",
     "name": "application/json"

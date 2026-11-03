@@ -3,6 +3,7 @@
 package ingressplanes
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -75,16 +76,29 @@ func (f *fatalRecorder) Fatalf(format string, args ...any) {
 	runtime.Goexit()
 }
 
-// whatItSaysWhenItGivesUp runs a helper that must fail and gives its message.
-func whatItSaysWhenItGivesUp(t *testing.T, run func(testing.TB)) string {
+// whatItSaysWhenItGivesUp runs a helper that must fail and gives its message. The helper gets a context: on the 60 s
+// failure-only guard (a wait with no bound of its own never gives up) the context is cancelled FIRST, the goroutine is
+// joined for at most 10 s, and only then the test fails, so no goroutine outlives the test.
+func whatItSaysWhenItGivesUp(t *testing.T, run func(context.Context, testing.TB)) string {
 	t.Helper()
 	recorder := &fatalRecorder{TB: t}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		run(recorder)
+		run(ctx, recorder)
 	}()
-	<-done
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatal("the helper is still waiting after the 60 s guard: its bound did not end the wait")
+	}
 	if recorder.fatal == "" {
 		t.Fatal("the helper did not give up")
 	}
@@ -107,7 +121,7 @@ func TestAnswersWithoutPlanes_WaitsForARouterWhosePortAcceptsFirst(t *testing.T)
 	}
 	t.Logf("one request before the router is up: %v", err)
 
-	answersWithoutPlanes(t, base, 30*time.Second, diagnoseSentinel)
+	answersWithoutPlanes(context.Background(), t, base, 30*time.Second, diagnoseSentinel)
 	if got := port.dropped.Load(); got != 3 {
 		t.Errorf("%d connections ended with no answer, want 3: the wait did not go through the phase it exists for", got)
 	}
@@ -121,7 +135,7 @@ func TestAnswersWithoutPlanes_ARouterThatIsUpIsAskedTwice(t *testing.T) {
 		requests.Add(1)
 		routerWithNoPlanes(w, r)
 	}))
-	answersWithoutPlanes(t, base, 30*time.Second, diagnoseSentinel)
+	answersWithoutPlanes(context.Background(), t, base, 30*time.Second, diagnoseSentinel)
 	if got := requests.Load(); got != 2 {
 		t.Errorf("%d requests, want 2 (the wait, then the 5xx read once)", got)
 	}
@@ -145,7 +159,9 @@ func TestAnswersWithoutPlanes_DoesNotWaitForTheRightAnswer(t *testing.T) {
 			requests.Add(1)
 			handler.ServeHTTP(w, r)
 		}))
-		said := whatItSaysWhenItGivesUp(t, func(tb testing.TB) { answersWithoutPlanes(tb, base, 30*time.Second, diagnoseSentinel) })
+		said := whatItSaysWhenItGivesUp(t, func(ctx context.Context, tb testing.TB) {
+			answersWithoutPlanes(ctx, tb, base, 30*time.Second, diagnoseSentinel)
+		})
 		if !strings.Contains(said, "want its own 5xx") || !strings.Contains(said, sentinelLog) {
 			t.Errorf("%s: it said %q, want the 5xx failure with the router log", name, said)
 		}
@@ -160,9 +176,12 @@ func TestAnswersWithoutPlanes_DoesNotWaitForTheRightAnswer(t *testing.T) {
 func TestWaitForRouter_IsLoudWhenTheBoundIsHit(t *testing.T) {
 	base, port := startEarlyPort(t, -1, routerWithNoPlanes)
 	started := time.Now()
-	said := whatItSaysWhenItGivesUp(t, func(tb testing.TB) { waitForRouter(tb, base, 700*time.Millisecond, diagnoseSentinel) })
-	if took := time.Since(started); took < 700*time.Millisecond || took > 20*time.Second {
-		t.Errorf("gave up after %s, want just above the bound of 700ms", took)
+	said := whatItSaysWhenItGivesUp(t, func(ctx context.Context, tb testing.TB) {
+		waitForRouter(ctx, tb, base, 700*time.Millisecond, diagnoseSentinel)
+	})
+	//abstime:allow lower bound: the wait gave up only after its 700ms bound; an upper limit is the 60 s guard of whatItSaysWhenItGivesUp
+	if took := time.Since(started); took < 700*time.Millisecond {
+		t.Errorf("gave up after %s, want after the bound of 700ms", took)
 	}
 	for _, want := range []string{"the router did not answer an HTTP request within 700ms", "attempts, last: ", sentinelLog} {
 		if !strings.Contains(said, want) {
@@ -213,7 +232,7 @@ func TestWaitForPlanes_WaitsForEveryPlaneNotForTheFirst(t *testing.T) {
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 
-	waitForPlanes(t, server.URL, 30*time.Second, diagnoseSentinel)
+	waitForPlanes(context.Background(), t, server.URL, 30*time.Second, diagnoseSentinel)
 	for _, probe := range planeProbes {
 		response, err := http.Get(server.URL + probe.path)
 		if err != nil {
@@ -235,7 +254,9 @@ func TestWaitForPlanes_NamesThePlaneThatDidNotAnswer(t *testing.T) {
 		late := map[string]int32{PlaneGoAPI: 0, PlaneQueryAPI: 0}
 		late[missing] = -1
 		server := httptest.NewServer(newLateRouter(late))
-		said := whatItSaysWhenItGivesUp(t, func(tb testing.TB) { waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel) })
+		said := whatItSaysWhenItGivesUp(t, func(ctx context.Context, tb testing.TB) {
+			waitForPlanes(ctx, tb, server.URL, 700*time.Millisecond, diagnoseSentinel)
+		})
 		server.Close()
 		for _, want := range []string{"the " + missing + " stub plane did not answer", "within 700ms", "last: status 502", sentinelLog} {
 			if !strings.Contains(said, want) {
@@ -250,7 +271,9 @@ func TestWaitForPlanes_NamesThePlaneThatDidNotAnswer(t *testing.T) {
 func TestWaitForPlanes_AnAnswerFromTheOtherPlaneIsNotTheAnswer(t *testing.T) {
 	server := httptest.NewServer(goStub(PlaneGoAPI))
 	t.Cleanup(server.Close)
-	said := whatItSaysWhenItGivesUp(t, func(tb testing.TB) { waitForPlanes(tb, server.URL, 700*time.Millisecond, diagnoseSentinel) })
+	said := whatItSaysWhenItGivesUp(t, func(ctx context.Context, tb testing.TB) {
+		waitForPlanes(ctx, tb, server.URL, 700*time.Millisecond, diagnoseSentinel)
+	})
 	for _, want := range []string{"the " + PlaneQueryAPI + " stub plane did not answer", "last: status 200, " + stubPlane + ` "` + PlaneGoAPI + `"`, sentinelLog} {
 		if !strings.Contains(said, want) {
 			t.Errorf("it said %q, want %q in it", said, want)

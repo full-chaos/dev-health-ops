@@ -57,6 +57,8 @@ func TestOwnershipCloseSkipsForAnyOtherActiveIntegrationEndToEnd(t *testing.T) {
 		w.Header()["X-Next-Page"] = []string{""}
 		var out any = []any{}
 		switch r.URL.EscapedPath() {
+		case "/api/v4/version":
+			out = map[string]any{"version": "17.0.0", "revision": "0000000"}
 		case "/api/v4/groups/org":
 			out = map[string]any{"id": 1, "full_path": "org", "name": "org", "description": nil}
 		case "/api/v4/groups/org/subgroups":

@@ -1,14 +1,27 @@
 instrument	labels	reason
+auth.acr.access_mints	audience,outcome	code: internal/auth/acrmint/acrmint.go
 auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
+auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
 auth.identity.projections	kind,outcome	code: internal/auth/identity/store.go
+auth.oauth.requests	audience,client_class,operation,outcome	code: internal/auth/authapi/oauth.go
 auth.identity.wire_slug_omitted		code: internal/auth/identity/store.go
 auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/service.go
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
+auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
+auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
+auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
+auth.local.reset_request_skipped	reason	code: internal/auth/identity/local/linkaudit.go
+auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
+auth.grant.mutations	outcome,verb	code: internal/auth/grant/store.go
+auth.session.delegations	outcome	code: internal/auth/session/delegation.go
+auth.session.issue_compat_uses	class	code: internal/auth/authapi/wire.go
 auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
+auth.serviceaccount.key_resolves	outcome	code: internal/auth/serviceaccount/keys.go
+auth.serviceaccount.mutations	outcome,verb	code: internal/auth/serviceaccount/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
-auth.workload.exchanges	audience,outcome,reason	code: internal/auth/workloadexchange/reasons.go
+auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go
 auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go
 auth.workload.resolves	outcome	code: internal/auth/workload/store.go
 credential_mapping_rejected_total	missing_field,provider	code: internal/providerfoundation/credential_mapping_metrics.go
@@ -25,16 +38,33 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
+dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
+dev_health_api_legacy_path_total	kind,surface	code: internal/api/policy/legacycounters.go
+dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
 devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
+devhealth_auth_credential_projection_total	domain,outcome	code: internal/auth/outboxprojection/project.go
+devhealth_auth_push_projection_final_rows		code: internal/auth/pushprojection/reader.go
+devhealth_auth_push_projection_lag		code: internal/auth/pushprojection/reader.go
+devhealth_auth_push_projection_parked_rows		code: internal/auth/pushprojection/reader.go
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_revision_feed_events_total	disposition	code: internal/auth/revisionfeed/consumer.go
+devhealth_auth_revision_feed_resync_total	cause	code: internal/auth/revisionfeed/consumer.go
+devhealth_auth_revision_feed_subscription_up		code: internal/auth/revisionfeed/subscriber.go
+devhealth_auth_decision_cache_lookups_total	result	code: internal/auth/authapi/authorize_cache.go
+devhealth_auth_decision_cache_puts_total	result	code: internal/auth/authapi/authorize_cache.go
+devhealth_auth_decision_cache_entries		code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
@@ -184,6 +214,8 @@ dev_health_jira_dev_status_total	outcome	code: internal/providerfoundation/budge
 dev_health_jira_search_pages_total	outcome	code: internal/providerfoundation/budget.go
 dev_health_metric_compat_retry_total	decision,worker_kind	code: internal/jobruntime/telemetry.go
 dev_health_metrics_finite_boundary_nonfinite_total	family,field,reason	code: internal/jobs/metrics/finite/finite.go
+dev_health_org_activity_refresh_age_read_failed_total		code: internal/orgactivity/refresh/age.go
+dev_health_org_activity_refresh_age_seconds		code: internal/orgactivity/refresh/age.go
 dev_health_otel_init_failures_total	attempt	code: internal/platform/tracing/initfailures.go
 dev_health_otel_spans_total	outcome	code: internal/platform/tracing/spancounters.go
 dev_health_otel_spans_unaccounted		code: internal/platform/tracing/spancounters.go
@@ -256,9 +288,6 @@ dev_health_work_item_prepared_retired_effects_skipped_total	provider	code: inter
 dev_health_work_item_team_attributions_written_total	provider,source	code: internal/providerfoundation/budget.go
 dev_health_work_items_outside_window_dropped_total	provider	code: internal/providerfoundation/budget.go
 dev_health_worker_posture_manifest_mismatch	service	code: internal/platform/postureguard/postureguard.go
-devhealth_ingest_legacy_accepted_total	mechanism	code: internal/api/legacyingest/auth.go
-devhealth_ingest_legacy_auth_rejected_total	reason	code: internal/api/legacyingest/auth.go
-devhealth_ingest_legacy_requests_total	key_class,outcome,route	code: internal/api/legacyingest/auth.go
 devhealth_scheduler_executed_proof_evidence_state		code: internal/scheduler/sync/materializer.go
 devhealth_scheduler_executed_proof_gate_degraded		code: internal/scheduler/sync/materializer.go
 devhealth_scheduler_executed_proof_refresh_failures_total		code: internal/scheduler/sync/materializer.go
@@ -280,6 +309,8 @@ fixed_scheduler_schedule_degraded	reason,schedule	code: internal/scheduler/fixed
 fixed_scheduler_up		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_windows_total		code: internal/scheduler/fixed/loop.go
 provider_source_discovery_total	outcome,provider	code: internal/scheduler/sync/source_discovery.go
+provider_oauth_revocations_exhausted		code: internal/jobs/providerrevocation/handler.go
+provider_oauth_revocations_total	outcome	code: internal/jobs/providerrevocation/handler.go
 reconciler_database_pool_saturation_ratio	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_acquired_conns	pool	code: internal/platform/poolstat/poolstat.go
 reconciler_database_pool_saturation_ratio_max_conns	pool	code: internal/platform/poolstat/poolstat.go

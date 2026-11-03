@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -19,95 +20,106 @@ func waitAnswered(t *testing.T, check *LazyProbeCheck) {
 }
 
 // CHAOS-6934: once a check has an answer, a probe is answered from it and never waits for the query,
-// the pool behind it, or a slow database.
+// the pool behind it, or a slow database. The check runs in a bubble on a virtual clock with in-memory run functions: a probe
+// that has an answer returns at the instant it was made.
 func TestLazyProbeCheckNeverMakesAProbeWaitOnceItHasAnAnswer(t *testing.T) {
-	block := make(chan struct{})
-	first := true
-	var check LazyProbeCheck
-	run := func(ctx context.Context) error {
-		if first {
-			first = false
-			return nil // the first execution answers at once
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		first := true
+		var check LazyProbeCheck
+		run := func(ctx context.Context) error {
+			if first {
+				first = false
+				return nil // the first execution answers at once
+			}
+			select {
+			case <-block: // every refresh after that is stuck behind a held work pool
+			case <-ctx.Done():
+			}
+			return nil
 		}
-		select {
-		case <-block: // every refresh after that is stuck behind a held work pool
-		case <-ctx.Done():
-		}
-		return nil
-	}
-	options := PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: time.Hour}
-	check.Warm("test", run, options)
-	waitAnswered(t, &check)
-	time.Sleep(50 * time.Millisecond) // older than TTL: a refresh starts and blocks
+		options := PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: time.Hour}
+		check.Warm("test", run, options)
+		waitAnswered(t, &check)
+		time.Sleep(50 * time.Millisecond) // older than TTL: a refresh starts and blocks
 
-	for i := 0; i < 5; i++ {
-		begun := time.Now()
-		if err := check.CheckWith(context.Background(), "test", run, options); err != nil {
-			t.Fatalf("probe %d = %v, want the cached pass", i, err)
+		for i := 0; i < 5; i++ {
+			begun := time.Now()
+			if err := check.CheckWith(context.Background(), "test", run, options); err != nil {
+				t.Fatalf("probe %d = %v, want the cached pass", i, err)
+			}
+			if returnedAt := time.Now(); !returnedAt.Equal(begun) {
+				t.Fatalf("probe %d returned at +%v of virtual time while the refresh was blocked, want an immediate answer", i, returnedAt.Sub(begun))
+			}
 		}
-		if elapsed := time.Since(begun); elapsed > 200*time.Millisecond {
-			t.Fatalf("probe %d took %s while the refresh was blocked, want an immediate answer", i, elapsed)
-		}
-	}
-	close(block)
+	})
 }
 
 // The one wait: a probe that arrives before the very first execution has completed waits for that
 // single execution, bounded by its own context, and reports a timeout, not a refusal.
 func TestLazyProbeCheckTheColdProbeIsBoundedByItsOwnContext(t *testing.T) {
-	block := make(chan struct{})
-	t.Cleanup(func() { close(block) })
-	var check LazyProbeCheck
-	run := func(ctx context.Context) error {
-		select {
-		case <-block:
-		case <-ctx.Done():
+	synctest.Test(t, func(t *testing.T) {
+		block := make(chan struct{})
+		defer close(block)
+		var check LazyProbeCheck
+		run := func(ctx context.Context) error {
+			select {
+			case <-block:
+			case <-ctx.Done():
+			}
+			return nil
 		}
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-	begun := time.Now()
-	err := check.Check(ctx, "test", run)
-	if elapsed := time.Since(begun); elapsed > time.Second {
-		t.Fatalf("the cold probe took %s, want it bounded by its 150 ms context", elapsed)
-	}
-	if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("a cold probe that ran out of budget = %v, want ErrUnavailable classified as a timeout", err)
-	}
+		const budget = 150 * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		defer cancel()
+		begun := time.Now()
+		err := check.Check(ctx, "test", run)
+		returnedAt := time.Now()
+		if !returnedAt.Equal(begun.Add(budget)) {
+			t.Fatalf("the cold probe returned at +%v of virtual time, want +%v (its own context)", returnedAt.Sub(begun), budget)
+		}
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("a cold probe that ran out of budget = %v, want ErrUnavailable classified as a timeout", err)
+		}
+	})
 }
 
 func TestLazyProbeCheckServesAPassWhileAnUnansweredRefreshRunsAndBoundsIt(t *testing.T) {
-	var check LazyProbeCheck
-	answers := make(chan error, 8)
-	run := func(ctx context.Context) error {
-		select {
-		case err := <-answers:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		var check LazyProbeCheck
+		answers := make(chan error, 8)
+		defer close(answers)
+		run := func(ctx context.Context) error {
+			select {
+			case err := <-answers:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-	}
-	options := PostureCheckOptions{TTL: 20 * time.Millisecond, MaxStale: 250 * time.Millisecond, RunTimeout: time.Minute}
+		options := PostureCheckOptions{TTL: 20 * time.Millisecond, MaxStale: 250 * time.Millisecond, RunTimeout: time.Minute}
 
-	answers <- nil
-	check.Warm("test", run, options)
-	waitAnswered(t, &check)
-	// Past TTL a refresh starts and blocks (no answer): the pass is still served inside MaxStale.
-	time.Sleep(60 * time.Millisecond)
-	if err := check.CheckWith(context.Background(), "test", run, options); err != nil {
-		t.Fatalf("a pass inside MaxStale with an unanswered refresh = %v, want a pass", err)
-	}
-	// Past MaxStale with no answer it REFUSES, at once, naming why (a dead database turns readiness red).
-	time.Sleep(300 * time.Millisecond)
-	begun := time.Now()
-	err := check.CheckWith(context.Background(), "test", run, options)
-	if err == nil || !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("a pass older than MaxStale with no answer = %v, want ErrUnavailable (absence of an answer is never a pass)", err)
-	}
-	if time.Since(begun) > 200*time.Millisecond {
-		t.Fatal("the fail-closed answer waited")
-	}
+		answers <- nil
+		check.Warm("test", run, options)
+		waitAnswered(t, &check)
+		// Past TTL a refresh starts and blocks (no answer): the pass is still served inside MaxStale.
+		time.Sleep(60 * time.Millisecond)
+		if err := check.CheckWith(context.Background(), "test", run, options); err != nil {
+			t.Fatalf("a pass inside MaxStale with an unanswered refresh = %v, want a pass", err)
+		}
+		// Past MaxStale with no answer it REFUSES, at once, naming why (a dead database turns readiness red).
+		time.Sleep(300 * time.Millisecond)
+		begun := time.Now()
+		err := check.CheckWith(context.Background(), "test", run, options)
+		returnedAt := time.Now()
+		if err == nil || !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("a pass older than MaxStale with no answer = %v, want ErrUnavailable (absence of an answer is never a pass)", err)
+		}
+		if !returnedAt.Equal(begun) {
+			t.Fatalf("the fail-closed answer returned at +%v of virtual time: it waited", returnedAt.Sub(begun))
+		}
+	})
 }
 
 func TestLazyProbeCheckSurfacesADefinitiveRefusalAndTheRealCauseOfAnUnansweredQuery(t *testing.T) {

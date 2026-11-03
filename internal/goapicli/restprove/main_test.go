@@ -2884,20 +2884,25 @@ func TestResolveBuilds_TimeoutZeroOrNegativeMeansNoDeadline(t *testing.T) {
 	}
 	f := proverLegsFlags(server)
 	f.buildInfoURL, f.timeout = server.URL+"/buildinfo?slow=1", 50*time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	start := time.Now()
-	_ = captureStdout(t, func() {
-		resolved, err := proverLegsPrepare(ctx, f, version.Info{Commit: candidate})
-		if err == nil {
-			t.Error("a positive -timeout must still bound the /buildinfo read")
-		}
-		if resolved != nil {
-			t.Errorf("prepareLegs returned builds %+v without a /buildinfo answer, want none", resolved)
-		}
-	})
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Errorf("the /buildinfo read took %s, want it bounded by -timeout (50ms)", elapsed)
+	// The slow leg is held until the test ends, so a positive -timeout that is not applied leaves the read on it: the
+	// call never returns. The 30 s guard is a failure-only ceiling and is never reached on a passing run.
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = captureStdout(t, func() {
+			resolved, err := proverLegsPrepare(context.Background(), f, version.Info{Commit: candidate})
+			if err == nil {
+				t.Error("a positive -timeout must still bound the /buildinfo read")
+			}
+			if resolved != nil {
+				t.Errorf("prepareLegs returned builds %+v without a /buildinfo answer, want none", resolved)
+			}
+		})
+	}()
+	select {
+	case <-finished:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the /buildinfo read is still running after the 30 s guard: a positive -timeout (50ms) was not applied to it")
 	}
 }
 

@@ -338,6 +338,7 @@ func linearWorldAnswers() []providerAnswer {
 	answers = append(answers, githubTeamCatalogAnswersFor(ledgerGitHubTeams, "")...)
 	answers = append(answers, githubRepoAnswers("ledger", githubLinearItems)...)
 	answers = append(answers, githubPRSocialAnswer("ledger", githubLinearItems))
+	answers = append(answers, gitlabVersionAnswer())
 	answers = append(answers, gitlabProjectAnswers("chaos-gl/billing-service", gitlabBillingItems)...)
 	return answers
 }

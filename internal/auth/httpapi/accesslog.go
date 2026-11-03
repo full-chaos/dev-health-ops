@@ -109,15 +109,45 @@ type accessObserver struct {
 	attrs func(r *http.Request, answer http.Header) []slog.Attr
 }
 
+// RequestSeed names one method and registered route pattern whose request series the server creates at 0 when it is built.
+type RequestSeed struct {
+	Method string
+	Route  string
+}
+
+// SeededStatusClasses are the status classes a seeded route gets a 0 series for.
+var SeededStatusClasses = []string{"2xx", "3xx", "4xx", "5xx"}
+
+// seedRequests records 0 for each seed x SeededStatusClasses, once, at construction. A cumulative counter creates a series on its first
+// Add, so without this the first export of a low-traffic route already holds its count and rate/increase has no earlier sample. Only the
+// static seed list is used, never request data.
+func (o *accessObserver) seedRequests(seeds []RequestSeed) {
+	for _, seed := range seeds {
+		method := seed.Method
+		if !knownMethods[method] {
+			method = "OTHER"
+		}
+		for _, class := range SeededStatusClasses {
+			o.requests.Add(context.Background(), 0, metric.WithAttributes(
+				attribute.String("route", seed.Route),
+				attribute.String("method", method),
+				attribute.String("status_class", class),
+				attribute.String("listener", o.listener),
+			))
+		}
+	}
+}
+
 // newAccessObserver builds the instruments from the process's current meter
 // provider. A failure to create one leaves that instrument off (the log line
 // still flows): observability never stops the server.
-func newAccessObserver(logger *slog.Logger, listener string, trustRemoteSampling bool) *accessObserver {
+func newAccessObserver(logger *slog.Logger, listener string, trustRemoteSampling bool, seeds []RequestSeed) *accessObserver {
 	observer := &accessObserver{logger: logger, listener: listener, spans: spanObserver{listener: listener, trustRemoteSampling: trustRemoteSampling}}
 	meter := otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/auth/httpapi")
 	if counter, err := meter.Int64Counter(requestsMetricName,
 		metric.WithDescription("HTTP requests served, by registered route pattern, method, status class and listener")); err == nil {
 		observer.requests = counter
+		observer.seedRequests(seeds)
 	} else {
 		logger.Warn("access metrics: request counter unavailable", "error", err)
 	}

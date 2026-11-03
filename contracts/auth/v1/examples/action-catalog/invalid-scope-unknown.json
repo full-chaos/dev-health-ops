@@ -8,7 +8,8 @@
       "scope": "galaxy",
       "resource_kind": "organization",
       "risk_class": "low",
-      "cache_class": "decision_bound"
+      "cache_class": "decision_bound",
+      "impersonation": "denied"
     }
   ]
 }

@@ -177,6 +177,9 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err := collect(sessionReaderViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}
+	if err := collect(projectionReaderViolations(ctx, conn, options)); err != nil {
+		return nil, err
+	}
 	if err := collect(defaultACLViolations(ctx, conn, options)); err != nil {
 		return nil, err
 	}
@@ -293,7 +296,7 @@ func relationViolations(
 			return nil, fmt.Errorf("%w: reading a relation privilege", ErrMigrationFailed)
 		}
 		if schema != options.Schema {
-			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && isLegacyLinkPurgeTable(object) {
+			if options.UsersOwned && schema == publicSchema && privilege == "DELETE" && (isLegacyLinkPurgeTable(object) || isMembershipWriteDelete(object)) {
 				continue
 			}
 			violations = append(violations, Violation{

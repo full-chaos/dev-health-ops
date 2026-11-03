@@ -140,10 +140,14 @@ func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose P
 	if err != nil {
 		return err
 	}
-	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); err != nil {
+	deliver := principal != uuid.Nil
+	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); errors.Is(err, ErrResetRequestNotRecorded) {
+		// Nothing was stored: the same mail work as a decoy, and the same answer.
+		deliver = false
+	} else if err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
-	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: principal != uuid.Nil}
+	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: deliver}
 	if err := f.mail.Send(ctx, msg); err != nil {
 		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), logging.ErrorAttr(err))
 	}
@@ -185,7 +189,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
 	}
-	email, err := identity.NormalizeEmail(req.Email)
+	email, err := identity.NormalizeLocalRegisterEmail(req.Email)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: %w", err)
 	}
@@ -206,6 +210,10 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash, OrganizationName: req.OrganizationName})
 	if errors.Is(err, identity.ErrEmailTaken) {
 		return f.noticeExisting(ctx, email), nil
+	}
+	if errors.Is(err, identity.ErrOrganizationSlugCollision) {
+		slog.WarnContext(ctx, "local: the organization slug is taken; the sign-up wrote nothing")
+		return FlowOutcome{Kind: FlowOK}, nil
 	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
@@ -230,14 +238,18 @@ func (f *Flows) Verify(ctx context.Context, secret string) (FlowOutcome, error) 
 	if err := f.gate(); err != nil {
 		return FlowOutcome{}, err
 	}
-	id, ok, err := f.links.Redeem(ctx, RedeemRequest{Purpose: PurposeEmailVerification, TokenHash: sha256.Sum256([]byte(secret))})
+	link := sha256.Sum256([]byte(secret))
+	id, ok, err := f.accounts.PeekVerificationLink(ctx, link)
 	if err != nil {
-		return FlowOutcome{}, fmt.Errorf("local: redeeming a verification link: %w", err)
+		return FlowOutcome{}, fmt.Errorf("local: reading a verification link: %w", err)
 	}
 	if !ok {
 		return FlowOutcome{Kind: FlowInvalidToken}, nil
 	}
-	if err := f.accounts.SetEmailVerified(ctx, id); err != nil {
+	if err := f.accounts.SetEmailVerifiedConsuming(ctx, id, link); err != nil {
+		if errors.Is(err, ErrVerificationLinkUnusable) {
+			return FlowOutcome{Kind: FlowInvalidToken}, nil
+		}
 		return FlowOutcome{}, fmt.Errorf("local: marking the e-mail verified: %w", err)
 	}
 	return FlowOutcome{Kind: FlowOK, PrincipalID: id}, nil

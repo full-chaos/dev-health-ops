@@ -161,6 +161,8 @@ func registerKind(workers *river.Workers, kind string, descriptor jobruntime.Des
 		return add[jobruntime.DimensionFoldArgs](workers, descriptor)
 	case jobcontract.KindLLMBudgetStaleReservations:
 		return add[jobruntime.LLMBudgetStaleReservationsArgs](workers, descriptor)
+	case jobcontract.KindProviderOAuthRevocations:
+		return add[jobruntime.ProviderOAuthRevocationsArgs](workers, descriptor)
 	case jobcontract.KindWorkGraphBuild:
 		return add[jobruntime.WorkGraphBuildArgs](workers, descriptor)
 	case syncdispatchcontract.KindDispatchSyncRun:

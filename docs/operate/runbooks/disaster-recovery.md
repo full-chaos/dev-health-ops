@@ -12,7 +12,7 @@ lifecycle: active
 1. Declare the incident, owner, recovery objectives, and communication path.
 2. Freeze destructive changes and preserve evidence.
 3. Select the recovery point and compatible application revision.
-4. Restore stores, configuration references, secret access, network, API, workers, and schedules in the approved order.
+4. Restore stores, configuration references, secret access, network, API, workers, and schedules in the approved order. For the auth database, run the [restore fence](../maintain/backup-and-restore.md#restoring-the-auth-schema-to-a-point-in-time-the-restore-fence) before auth-service takes traffic.
 5. Verify tenant isolation, schema, health, queue state, provider connectivity, data progress, and representative product results.
 6. Reconcile the outage interval and run required bounded backfills.
 7. Cut traffic only after the acceptance checklist passes.

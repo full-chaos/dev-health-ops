@@ -42,15 +42,20 @@ type hsResponse struct {
 	body    []byte
 }
 
-type hsIdleConn struct{ net.Conn }
+// hsIdleConn carries the timeout read when its conn was dialled: the transport closes a conn from its own goroutine
+// (closeNotify writes), which may run after the caller restored the package variable.
+type hsIdleConn struct {
+	net.Conn
+	timeout time.Duration
+}
 
 func (c hsIdleConn) Read(p []byte) (int, error) {
-	_ = c.Conn.SetReadDeadline(time.Now().Add(hsTimeout))
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Read(p)
 }
 
 func (c hsIdleConn) Write(p []byte) (int, error) {
-	_ = c.Conn.SetWriteDeadline(time.Now().Add(hsTimeout))
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(p)
 }
 

@@ -1,0 +1,168 @@
+0065 -> 0066 (river_cutover) (head), Move the checked-in worker job kinds to the River transport.
+0161 -> 0162 (head), Add org activity.
+0160 -> 0161, Add sync run post dispatches recorded at.
+0159 -> 0160, Add users saml nameid parts.
+0158 -> 0159, Add sync run units failure streak index.
+0157 -> 0158, Add categorize byo settings function.
+0156 -> 0157, Add internal service credential audits principal id.
+0155 -> 0156, Add categorize byo opted in function.
+0154 -> 0155, Add users sso provider scope.
+0153 -> 0154, Add worker job outbox job kind index.
+0152 -> 0153, Widen worker operator audits action marker backfill.
+0151 -> 0152 (application_schema), Add ``daily_metrics_runs.touched_checked_at`` -- when the touched-days drain checked the mark of a run.
+0150 -> 0151 (application_schema), Add ``integration_datasets.state_changed_at`` and ``state_changed_by`` -- when and by which code path a dataset was switched.
+0149 -> 0150 (application_schema), Let ``impersonation_sessions`` keep its row when a user is permanently deleted.
+0148 -> 0149 (application_schema), Add ``daily_metrics_runs.touched_take_at`` -- the take time of the touched days a run was started for.
+0147 -> 0148 (application_schema), Add ``daily_metrics_runs.full_org`` -- whether a run computes the whole organization.
+0146 -> 0147 (application_schema), Drop ``go_api_routing_state``.
+0145 -> 0146 (application_schema), Add ``go_api_class_decision`` -- the MCP class root decision, keyed by operation only.
+0144 -> 0145 (application_schema), Add ``go_api_proof_orgs`` -- the org allowlist for ``/query/proof-write``.
+0143 -> 0144 (application_schema), Add saml_assertion_replays (CHAOS-6659, D2744).
+0142 -> 0143 (application_schema), Add the single-plane write-proof receipt kind to ``go_api_proof_run``.
+0141 -> 0142 (application_schema), Add webhook_sync_requests (CHAOS-6695).
+0140 -> 0141 (application_schema), Let a failed OAuth setup keep a durable revocation record.
+0139 -> 0140 (application_schema), Invoices: record the Stripe time of the newest applied event.
+0138 -> 0139 (application_schema), Refunds: write the row before Stripe answers, and key client retries.
+0137 -> 0138 (application_schema), Audit the direct-write operator verbs in worker_operator_audits.
+0136 -> 0137 (application_schema), Allow every audited operator action in worker_operator_audits.
+0135 -> 0136 (application_schema), Allow the operator principal in worker_operator_audits.
+0134 -> 0135 (application_schema), Add go_api_rest_proof_run.baseline_defect_declared.
+0133 -> 0134 (application_schema), Add the REST live-prove receipt ledger, ``go_api_rest_proof_run``.
+0132 -> 0133 (application_schema), Seed the go-api-prove proof service principal users row.
+0131 -> 0132 (application_schema), Retire the Celery rollback route for the four sync-dispatch transport kinds.
+0130 -> 0131 (application_schema), Promote the ``sync.provider_unit`` route off canary AND off Celery.
+0129 -> 0130 (application_schema), Add ``go_api_routing_audits`` -- the append-only record of routing writes.
+0128 -> 0129 (application_schema), Add ``build_binding`` to ``go_api_proof_run``.
+0127 -> 0128 (application_schema), Add measurement provenance to ``go_api_proof_run``.
+0126 -> 0127 (application_schema), Add review_evidence / recorded_by to the Go-API registry tables.
+0125 -> 0126 (application_schema), Add work_item_attribution to the remaining_metric_runs family CHECK constraint.
+0124 -> 0125 (application_schema), Promote every checked-in worker job route off the Celery rollback route.
+0123 -> 0124 (application_schema), Add a blocked marker to daily_metrics_runs.
+0122 -> 0123 (application_schema), Seed the native work_item_attribution backstop route.
+0121 -> 0122 (application_schema), Add a durable claim/completion fence to billing_notifications.
+0120 -> 0121 (application_schema), Validate the NOT VALID scheduled_sync_occurrences.reconcile_error_code CHECK constraint added in 0120.
+0119 -> 0120 (application_schema), Widen scheduled_sync_occurrences.reconcile_error_code for invalid_plan (CHAOS-4602, install, NOT VALID).
+0118 -> 0119 (application_schema), Add sync_manual_triggers (CHAOS-4602).
+0117 -> 0118 (application_schema), Index sync_dispatch_outbox for the CHAOS-4583 terminal-close candidate scan.
+0116 -> 0117 (application_schema), Add the partition-recompute provenance ledger (CHAOS-4459).
+0115 -> 0116 (application_schema), Add the finalize-redrive provenance ledger (CHAOS-4405).
+0114 -> 0115 (application_schema), Seed the native team_repo_ownership-derivation route.
+0113 -> 0114 (application_schema), Add the Go API operation rollout registry and proof ledger (CHAOS-4366).
+0112 -> 0113 (application_schema), Add a durable failed_permanent terminal state to daily_metrics_partitions.
+0111 -> 0112 (application_schema), Split the single ``auto_import_teams`` flag into three independent
+categories: teams, projects, members (CHAOS-4323).
+0110 -> 0111 (application_schema), Index active sync runs for the materializer's finalize/dispatch candidate scan.
+0109 -> 0110 (application_schema), Retire the extra_metrics/team_metrics remaining-metric route rows and family values.
+0108 -> 0109 (application_schema), Add the durable executed-proof ledger and backfill it once (CHAOS-4114).
+0107 -> 0108 (application_schema), Repair ``integration_datasets`` rows that drifted out of agreement with the
+config's ``sync_targets`` (CHAOS-4106).
+0106 -> 0107 (application_schema), Move the fresh-install ``sync.provider_unit`` route off Celery, which no
+longer has an executor (CHAOS-4054 step 4).
+0105 -> 0106 (application_schema), Surface repeated provider_dataset_unavailable terminalizations on the
+IntegrationDataset row the owner-facing API already reads, instead of only
+per-unit failure rows nobody watches (CHAOS-4048).
+0104 -> 0105 (application_schema), Add the optional root trace_parent captured once when a sync run starts.
+0103 -> 0104 (application_schema), Add expiring Go worker-instance registrations.
+0102 -> 0103 (application_schema), Add durable cross-process Go worker concurrency leases.
+0101 -> 0102 (application_schema), Add fenced resumable provider-unit chunk persistence.
+0100 -> 0101 (application_schema), Index active sync runs for bounded River terminal-delivery repair.
+0099 -> 0100 (application_schema), Persist fixed-schedule degraded verdicts with their occurrence.
+0098 -> 0099 (application_schema), Retain minimal evidence for abandoned worker-job delivery.
+0097 -> 0098 (application_schema), Add the durable report execution lease and reclaim counter.
+0096 -> 0097 (application_schema), Backfill the durable recurring-report paging marker.
+0095 -> 0096 (application_schema), Enforce one saved report per recurring schedule.
+0094 -> 0095 (application_schema), Persist the explicit no-repository outcome for scheduled daily metrics.
+0093 -> 0094 (application_schema), Seed the native sync-coverage refresh route.
+0092 -> 0093 (application_schema), Fence prepared effect snapshots to their owning unit tenant.
+0091 -> 0092 (application_schema), Add bounded prepared effect snapshots for exact Go worker recovery.
+0090 -> 0091 (application_schema), Validate the NOT VALID dev_answer_frames.public_outcome CHECK constraint added in 0090.
+0089 -> 0090 (application_schema), Widen dev_answer_frames.public_outcome for CHAOS-3541 (install, NOT VALID).
+0088 -> 0089 (application_schema), Validate the NOT VALID dev_runs.public_outcome CHECK constraint added in 0088.
+0087 -> 0088 (application_schema), Widen dev_runs.public_outcome for CHAOS-3541 (install, NOT VALID).
+0086 -> 0087 (application_schema), Add dev_qua_shadow_budget_reservations (CHAOS-3452 isolated shadow quota).
+0085 -> 0086 (application_schema), Add dev_run_qua_shadow (CHAOS-3389 Question Understanding Agent shadow mode).
+0084 -> 0085 (application_schema), Add sync run unit deferral-exhaustion columns (CHAOS-3412).
+0083 -> 0084 (application_schema), Validate the NOT VALID dev_runs.narrative_failure_code CHECK constraint added in 0083.
+0082 -> 0083 (application_schema), DB-enforced closed vocabulary for dev_runs.narrative_failure_code (CHAOS-3297 codex NO-SHIP finding round 1, MEDIUM #3).
+0081 -> 0082 (application_schema), Validate the NOT VALID dev_run_source_observations CHECK constraint added in 0081.
+0080 -> 0081 (application_schema), Widen dev_run_source_observations.source_class for CHAOS-3297 stack #3 (install, NOT VALID).
+0079 -> 0080 (application_schema), DB-enforced payload contract + row-binding triggers (CHAOS-3297 Codex review round 9).
+0078 -> 0079 (application_schema), Persist the exact terminal v1 DevError payload on dev_runs (CHAOS-3297 Codex review HIGH #1).
+0077 -> 0078 (application_schema), Reserve narrative mode/failure-code columns on dev_runs (CHAOS-3297 stack #1).
+0076 -> 0077 (application_schema), Add CHAOS-3302 health rule governance persistence.
+0075 -> 0076 (application_schema), Add compact exact-history sync coverage projections.
+0074 -> 0075 (application_schema), Validate the NOT VALID dev_runs CHECK constraints added in 0074.
+0073 -> 0074 (application_schema), Add Ask Dev Wave 3.1 v2 persistence (intent, resolution, plans, frames, replay).
+0072 -> 0073 (application_schema), Seed the default-disabled Ask Dev Wave 3.1 entitlement.
+0071 -> 0072 (application_schema), Widen dev_runs.state for the CHAOS-3292 preflight and add run diagnostics.
+0070 -> 0071 (application_schema), Add durable reservations and usage for organization BYO LLM budgets.
+0069 -> 0070 (application_schema), Seed the default-disabled Ask Dev contextual-entrypoints entitlement.
+0068 -> 0069 (application_schema), Index Ask Dev user and organization admission windows.
+0067 -> 0068 (application_schema), Add Ask Dev conversation, run, feedback, retention, and audit persistence.
+0065 -> 0067 (application_schema), Seed the default-disabled Ask Dev entitlement.
+0064 -> 0065 (branchpoint), Add the durable fixed-schedule occurrence ledger.
+0063 -> 0064, Seed safe rollback routes for every checked-in worker job kind.
+0062 -> 0063, Add durable completion fences for ordered worker handoffs.
+0061 -> 0062, Index the bounded Celery canary-quiescence probe.
+0060 -> 0061, Seed the safe sync-provider route baseline and audit actions.
+0059 -> 0060, Add fenced work-graph and investment execution requests.
+0058 -> 0059, Add the metric compatibility execution ledger.
+0057 -> 0058, Add durable state for remaining metric family partitions.
+0056 -> 0057, Add durable daily-metrics run, partition, and finalize state.
+0055 -> 0056, Make report-ready notification claims recoverable after worker loss.
+0054 -> 0055, Add durable per-kind worker job route control.
+0053 -> 0054, Persist generic webhook and billing delivery references.
+0052 -> 0053, Add durable report occurrence and execution idempotency metadata.
+0051 -> 0052, Add durable execution idempotency state for Go worker jobs.
+0050 -> 0051, Add durable retry and quarantine state to scheduled sync occurrences.
+0049 -> 0050, Add durable scheduled sync occurrence identities.
+0048 -> 0049, Add the database-backed sync dispatch transport ownership fence.
+0047 -> 0048, Enable canonical incident ingestion by default.
+0046 -> 0047, Add durable payload-free worker operator audit records.
+0045 -> 0046, Add the language-neutral worker job outbox.
+0044 -> 0045, Retain only server-generated PagerDuty OAuth authorization state.
+0043 -> 0044, Add durable encrypted OAuth revocation retry records.
+0042 -> 0043, Add PagerDuty webhook binding lifecycle table.
+0041 -> 0042, 
+0040 -> 0041, Add PagerDuty OAuth setup: authorization-request state + token metadata.
+0039 -> 0040, 
+0038 -> 0039, Add encrypted, versioned OAuth credential storage.
+0037 -> 0038, Add dedicated internal service credentials for ACR entitlement lookups.
+0036 -> 0037, Seed the hosted Agent Context Runtime entitlement flag.
+0035 -> 0036, Seed the customer_push_ingest feature flag.
+0034 -> 0035, Add bounded-recompute visibility columns + job log (CHAOS-2699).
+0033 -> 0034, Add external_ingest_batches, external_ingest_rejections, and
+external_ingest_batch_payloads (CHAOS-2694).
+0032 -> 0033, Add external_ingest_sources and external_ingest_tokens (CHAOS-2696/2712).
+0031 -> 0032, Drop the legacy sync_configurations.credential_id auth surface (CHAOS-2762).
+0030 -> 0031, Add provider_rate_limit_observations table (CHAOS-2758).
+0029 -> 0030, Add run-auth freeze credential stamp columns to sync_runs (CHAOS-2755).
+0028 -> 0029, Add sync run reference discovery ledger.
+0027 -> 0028, Add sync unit expired-lease retry columns.
+0026 -> 0027, Allow orgless refresh-token records.
+0025 -> 0026, Add organizations.onboarding_integration_skipped_at.
+0024 -> 0025, Add sync compute checkpoints.
+0023 -> 0024, Add investment provider batch control-plane tables.
+0022 -> 0023, Rename sync_config integration links to canonical names.
+0021 -> 0022, Add sync run unit rate-limit deferral columns.
+0020 -> 0021, Drop the dead Postgres team/identity mapping tables.
+0019 -> 0020, Add sync dispatch outbox.
+0018 -> 0019, Add sync run unit lease columns.
+0017 -> 0018, Add explicit planner-managed sync config marker.
+0016 -> 0017, Seed the byo_llm feature flag.
+0015 -> 0016, Add sync configuration migration compatibility links.
+0014 -> 0015, Add integration source dataset sync run data model.
+0013 -> 0014, Add github_app_installations table for frictionless GitHub App install.
+0012 -> 0013, Add ScheduledJob unique constraint for sync dispatch markers.
+0011 -> 0012, Add token_version to users for JWT credential invalidation.
+0010 -> 0011, Add managed_by column to org_licenses and organizations for tier-source guard.
+0009 -> 0010, Add retry_count column to ci_pipeline_runs for TestOps rerun_rate.
+0008 -> 0009, Widen unique constraints on sync_configurations and scheduled_jobs to include provider.
+0007 -> 0008, Add successor_jti column to refresh_tokens for rotation grace window.
+0006 -> 0007, Seed feature_flags table from STANDARD_FEATURES registry.
+0005 -> 0006, Add updated_by to org_feature_overrides and ON DELETE CASCADE to billing_prices.plan_id.
+0004 -> 0005, Add saved_reports and report_runs tables.
+0003 -> 0004, Add parent_id self-referencing FK to sync_configurations.
+0002 -> 0003, Add tier_limits table with seed data.
+0001 -> 0002, Add backfill_jobs table.
+<base> -> 0001, Initial consolidated schema migration.

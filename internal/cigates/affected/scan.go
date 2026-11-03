@@ -232,13 +232,22 @@ func ScanReads(root string) ([]Read, error) {
 	}
 	module := modulePath(root)
 	programs := execProgramDirs(byDir, module)
+	world := map[string]*dirGroup{}
 	for _, d := range dirs {
-		g := newDirGroup(d, module, byDir[d])
+		world[d] = newDirGroup(d, module, byDir[d])
+		world[d].world = world
+	}
+	for _, d := range dirs {
+		g := world[d]
+		g.underProgram = programs[d]
+		g.prebind()
 		flow := newFlowGroup(byDir[d])
+		flow.execInTemp = g.execInTemp
+		flow.exprInTemp = g.exprInTemp
+		flow.modulePure = g.modulePure
 		for _, s := range byDir[d] {
 			reads = append(reads, scanFile(s.fset, s.file, s.rel, top, g.chdir, flow)...)
 		}
-		g.underProgram = programs[d]
 		reads = append(reads, g.analyze()...)
 	}
 	out := reads
@@ -340,7 +349,10 @@ func scanFile(fset *token.FileSet, f *ast.File, rel string, top map[string]bool,
 		name := callName(call.Fun)
 		join := name == "filepath.Join" || name == "path.Join"
 		if join {
-			joinLiterals(call, top, consumed, add)
+			joinLiterals(call, top, consumed, add, func(e ast.Expr) bool {
+				sf := flow.fileOf[f]
+				return flow.exprInTemp != nil && sf != nil && flow.exprInTemp(sf, e)
+			})
 		}
 		for _, a := range call.Args {
 			lit := strLit(a)
@@ -611,7 +623,9 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	checkCallGraph := fs.Bool("reach", false, "also recompute reach.tsv from the call graph (go/packages, SSA, RTA) and fail on any difference")
 	reachCache := fs.String("reach-cache", "", "with --reach: directory of a reach store; reuse the rows stored for an identical input hash, store them after a green computed run")
 	reachFresh := fs.Bool("reach-cache-fresh", false, "with --reach-cache: never read the store; compute, and store a green result (merge queue and main pushes)")
+	listSpreads := fs.Bool("list-unresolved-spreads", false, "print file:line of every exec whose spread arguments the scan cannot resolve, and exit")
 	printKey := fs.Bool("print-reach-key", false, "print the input hash of the call graph and exit")
+	budget := fs.Int64("reach-budget-mib", reachBudgetMiB, "fail when a reach computation's peak RSS is over this many MiB")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -643,6 +657,19 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if *listSpreads {
+		var sites []string
+		for _, r := range reads {
+			if r.Kind == ReadEdge && strings.HasSuffix(r.Literal, unresolvedSpreadLiteral) {
+				sites = append(sites, fmt.Sprintf("%s:%d", r.File, r.Line))
+			}
+		}
+		sort.Strings(sites)
+		for _, s := range sites {
+			fmt.Fprintln(stdout, s)
+		}
+		return 0
+	}
 	if *write {
 		if err := writeGenerated(dir, reads); err != nil {
 			fmt.Fprintln(stderr, err)
@@ -658,6 +685,10 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		printReachStats(stdout, st)
+		if err := checkReachBudget(st, *budget); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	t, err := loadTables(dir)
 	if err != nil {
@@ -666,7 +697,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 	}
 	g := checkReads(*root, t, reads)
 	if *checkCallGraph && !*write {
-		defects, err := checkReachStored(*root, *reachCache, *reachFresh, t, reads, len(g.defects) == 0, stdout)
+		defects, err := checkReachStored(*root, *reachCache, *reachFresh, *budget, t, reads, len(g.defects) == 0, stdout)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -700,7 +731,7 @@ func PlanReads(args []string, stdout, stderr io.Writer) int {
 
 // checkReachStored is checkReach with the reach store of --reach-cache: a store of the same input hash stands in for the
 // computation and is compared with reach.tsv like it; a green computed run stores its rows. Any doubt recomputes.
-func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
+func checkReachStored(root, cacheDir string, fresh bool, budgetMiB int64, t *tables, reads []Read, readsGreen bool, stdout io.Writer) ([]string, error) {
 	key := ""
 	if cacheDir != "" {
 		k, err := reachKey(root)
@@ -725,6 +756,9 @@ func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read
 		return nil, err
 	}
 	printReachStats(stdout, st)
+	if err := checkReachBudget(st, budgetMiB); err != nil {
+		return nil, err
+	}
 	defects := reachDefects(t, want)
 	if key != "" {
 		fmt.Fprintf(stdout, "plan-reads: reach: computed for input hash %s\n", key)
@@ -735,6 +769,19 @@ func checkReachStored(root, cacheDir string, fresh bool, t *tables, reads []Read
 		}
 	}
 	return defects, nil
+}
+
+// reachBudgetMiB is the peak RSS a reach computation may use (--reach-budget-mib). The static leg runs it in 16 GiB: a
+// hosted runner, or on bigboy the host's capped.sh scope (MemoryMax 16G, GOMEMLIMIT 85% of it); a 10 GiB peak keeps
+// >= 30% of that free for GC lag under host load. A run over it fails: cut the heap before raising the budget.
+const reachBudgetMiB = 10 << 10
+
+// checkReachBudget fails a reach computation whose own peak RSS is over budgetMiB.
+func checkReachBudget(st reachStats, budgetMiB int64) error {
+	if st.peakRSSMiB > budgetMiB {
+		return fmt.Errorf("plan-reads: reach: peak RSS %d MiB is over the reach memory budget of %d MiB (reachBudgetMiB, internal/cigates/affected/scan.go): cut the reach heap before raising the budget", st.peakRSSMiB, budgetMiB)
+	}
+	return nil
 }
 
 func printReachStats(w io.Writer, st reachStats) {
@@ -783,12 +830,17 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // joinLiterals reads a Join whose string-literal arguments, from one naming a first-level entry on, spell one path:
 // filepath.Join(root, "docs", "a.md") reads docs/a.md.
-func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string)) {
+func joinLiterals(call *ast.CallExpr, top map[string]bool, consumed map[*ast.BasicLit]bool, add func(token.Pos, string, string), inTemp func(ast.Expr) bool) {
 	var parts []string
 	var lits []*ast.BasicLit
 	var base ast.Expr // the argument before the literals, nil when they lead
 	flush := func() {
-		if len(parts) > 0 {
+		if len(parts) > 0 && base != nil && inTemp(base) {
+			// the parts name files of a temp directory
+			for _, l := range lits {
+				consumed[l] = true
+			}
+		} else if len(parts) > 0 {
 			p := normalizeRepoPath(path.Join(parts...))
 			// One bare name joined to a base that names no root (filepath.Join(ContractsDir(root), "README.md")) is a
 			// file of that base, not of the repository root: dynreads.go places it, or records it unbounded.

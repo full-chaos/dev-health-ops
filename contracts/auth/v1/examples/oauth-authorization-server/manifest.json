@@ -1,0 +1,59 @@
+{
+  "description": "The golden corpus for the oauth-authorization-server.v1 document (RFC 8414). A pure schema document: no rule is client-only.",
+  "accept": [
+    {
+      "file": "valid.json",
+      "why": "The whole document at the path issuer."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-plain-pkce.json",
+      "expect_instance_location": "/code_challenge_methods_supported",
+      "expect_keyword": "const",
+      "why": "S256 only."
+    },
+    {
+      "file": "invalid-implicit.json",
+      "expect_instance_location": "/response_types_supported",
+      "expect_keyword": "const",
+      "why": "Authorization code only."
+    },
+    {
+      "file": "invalid-password-grant.json",
+      "expect_instance_location": "/grant_types_supported",
+      "expect_keyword": "const",
+      "why": "No password grant."
+    },
+    {
+      "file": "invalid-client-secret.json",
+      "expect_instance_location": "/token_endpoint_auth_methods_supported",
+      "expect_keyword": "const",
+      "why": "Public clients only."
+    },
+    {
+      "file": "invalid-issuer-http.json",
+      "expect_instance_location": "/issuer",
+      "expect_keyword": "pattern",
+      "why": "An https issuer."
+    },
+    {
+      "file": "invalid-iss-parameter-off.json",
+      "expect_instance_location": "/authorization_response_iss_parameter_supported",
+      "expect_keyword": "const",
+      "why": "Every redirect carries iss."
+    },
+    {
+      "file": "invalid-registration-endpoint.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "No dynamic client registration in the first cut."
+    },
+    {
+      "file": "invalid-jwks-uri-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The key set location is required."
+    }
+  ]
+}

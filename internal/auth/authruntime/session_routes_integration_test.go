@@ -112,7 +112,9 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	// A test that turns AUTH_USERS_OWNED or AUTH_ORGS_OWNED on gets the switch-gated grants with it.
+	usersOwned, orgsOwned := extra[authconfig.EnvUsersOwned] == "true", extra[authconfig.EnvOrgsOwned] == "true"
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: usersOwned, OrgsOwned: orgsOwned}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 	for _, grant := range publicReadGrants() {

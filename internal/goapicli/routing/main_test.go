@@ -712,16 +712,23 @@ func TestStatusNeverEchoesADSNPasswordInItsReportField(t *testing.T) {
 // behaving in any particular way.
 func TestConnectPostgresBoundsTheDialAndSaysSo(t *testing.T) {
 	const password = "SUPERSECRET-NEVER-PRINT"
-	started := time.Now()
-	_, err := connectPostgres(t.Context(),
-		"postgres://u:"+password+"@192.0.2.1:5432/db", 2*time.Second)
-	elapsed := time.Since(started)
+	// The 2 s -timeout bounds the dial; a dial without that bound runs on for the operating system's connect timeout. The
+	// 30 s guard is a failure-only ceiling and is never reached on a passing run.
+	done := make(chan error, 1)
+	go func() {
+		_, err := connectPostgres(t.Context(),
+			"postgres://u:"+password+"@192.0.2.1:5432/db", 2*time.Second)
+		done <- err
+	}()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the dial is still running after the 30 s guard -- the -timeout flag must bound it, or `status` hangs forever on a dead database")
+	}
 
 	if err == nil {
 		t.Fatal("a blackholed address must not connect")
-	}
-	if elapsed > 15*time.Second {
-		t.Fatalf("the dial took %s -- the -timeout flag must bound it, or `status` hangs forever on a dead database", elapsed)
 	}
 	// Exit 1, matching
 	// Python's identical command (an unhandled ConnectionRefusedError,

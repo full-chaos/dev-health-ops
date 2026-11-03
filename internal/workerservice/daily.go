@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
+	"go.opentelemetry.io/otel"
 )
 
 const metricsQueue = "metrics"
@@ -377,6 +378,12 @@ func buildDailyWorker(
 				handler.SetOrgActivityRefresher(&refresh.Refresher{
 					CH: clickhouseConnection, DB: postgresDatabase.pools.Domain, Logger: logger,
 				})
+				// SigNoz cannot read Postgres: the worker that writes public.org_activity also exports how old its newest row is.
+				// Observability never stops the worker, so a failed registration is logged and the worker runs without it.
+				if _, ageErr := refresh.RegisterAgeProbe(otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/orgactivity/refresh"),
+					postgresDatabase.pools.Domain, logger, nil); ageErr != nil {
+					logger.Warn("org activity age gauge not registered", "error", ageErr)
+				}
 				drainTriggers.finalize = handler
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
 				// is a pure function (see the partition case's comment on why the

@@ -141,3 +141,24 @@ func TestAuthSchemaFromEnv(t *testing.T) {
 		}
 	}
 }
+
+// The principal carries the session its sid names, checked live, so a route
+// can name the caller's own session (switch-org supersedes it, CHAOS-12085);
+// a token without sid carries none.
+func TestTheCheckedSessionIsOnThePrincipal(t *testing.T) {
+	store := newSessionStore()
+	user, err := authenticator(t, store).Authenticate(context.Background(), sign(t, claims(withSID(liveSessionID))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.SessionID == nil || *user.SessionID != liveSessionID {
+		t.Fatalf("SessionID %v, want %s", user.SessionID, liveSessionID)
+	}
+	user, err = authenticator(t, newSessionStore()).Authenticate(context.Background(), sign(t, claims(nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.SessionID != nil {
+		t.Fatalf("a token without sid carries SessionID %s", *user.SessionID)
+	}
+}

@@ -19,7 +19,12 @@ type recordingPool struct {
 type valueRow struct{ value string }
 
 func (r valueRow) Scan(dest ...any) error {
-	*(dest[0].(*string)) = r.value
+	switch d := dest[0].(type) {
+	case *string:
+		*d = r.value
+	case *bool:
+		*d = false
+	}
 	return nil
 }
 

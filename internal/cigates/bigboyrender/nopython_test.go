@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 var portedScripts = []string{
@@ -44,7 +46,7 @@ func repoRoot(t *testing.T) string {
 func TestPortedPythonScriptsAreDeleted(t *testing.T) {
 	root := repoRoot(t)
 	for _, name := range portedScripts {
-		path := filepath.Join(root, "ci", "bigboy", name)
+		path := bigboydir.Path(t, root, name)
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("ci/bigboy/%s still exists (stat err: %v); its Go port is cigate bigboy", name, err)
 		}
@@ -54,7 +56,7 @@ func TestPortedPythonScriptsAreDeleted(t *testing.T) {
 func TestCallersRunNoPython(t *testing.T) {
 	root := repoRoot(t)
 	for _, name := range portedCallers {
-		raw, err := os.ReadFile(filepath.Join(root, "ci", "bigboy", name))
+		raw, err := os.ReadFile(bigboydir.Path(t, root, name))
 		if err != nil {
 			t.Fatal(err)
 		}

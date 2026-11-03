@@ -43,6 +43,8 @@ type gitlabGrantServer struct {
 	// searchStatus, when not 0, is the status every search for one project answers.
 	searchStatus int
 	searches     int
+	// versions counts GET /api/v4/version: one sync probes the GitLab version once.
+	versions int
 }
 
 func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
@@ -63,6 +65,9 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 		switch path := r.URL.EscapedPath(); path {
 		case "/api/v4/groups/org":
 			writeGitLabTeamCatalogJSON(t, w, map[string]any{"id": 1, "full_path": "org", "name": "org", "description": nil})
+		case "/api/v4/version":
+			fake.versions++
+			writeGitLabTeamCatalogJSON(t, w, map[string]any{"version": "17.0.0", "revision": "0000000"})
 		case "/api/v4/groups/org/subgroups", "/api/v4/groups/org/members":
 			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
 		case "/api/v4/groups/org/projects":
@@ -141,6 +146,8 @@ func newGitLabGrantServer(t *testing.T, projects []string) *gitlabGrantServer {
 			// test does not follow: the project reads as unread.
 			if !(strings.HasPrefix(r.URL.Path, "/api/v4/projects/") && strings.HasSuffix(r.URL.Path, "/milestones")) {
 				t.Errorf("unexpected GitLab request %s", r.URL)
+			} else if r.URL.Query().Get("include_ancestors") != "true" || r.URL.Query().Has("include_parent_milestones") {
+				t.Errorf("milestone read %s on GitLab 17.0.0 must send include_ancestors alone", r.URL)
 			}
 			http.NotFound(w, r)
 		}
@@ -169,7 +176,7 @@ func gitlabGrantRun(
 	ctx context.Context, t *testing.T, conn driver.Conn, orgID string, fake *gitlabGrantServer, at time.Time,
 ) (result TeamCatalogResult, searches int, warnings []map[string]any) {
 	t.Helper()
-	fake.set(func(fake *gitlabGrantServer) { fake.searches = 0 })
+	fake.set(func(fake *gitlabGrantServer) { fake.searches, fake.versions = 0, 0 })
 	seedCatalogTeams(ctx, t, conn, orgID, "gitlab", "gl:org")
 	var logged bytes.Buffer
 	previous := slog.Default()
@@ -191,7 +198,11 @@ func gitlabGrantRun(
 			warnings = append(warnings, entry)
 		}
 	}
-	fake.set(func(fake *gitlabGrantServer) { searches = fake.searches })
+	versions := 0
+	fake.set(func(fake *gitlabGrantServer) { searches, versions = fake.searches, fake.versions })
+	if versions != 1 {
+		t.Errorf("the sync made %d GitLab version probe(s), want exactly 1", versions)
+	}
 	return result, searches, warnings
 }
 

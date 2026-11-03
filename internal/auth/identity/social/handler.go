@@ -153,10 +153,14 @@ func writeError(w http.ResponseWriter, provider Provider, err error) {
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):
 		writeDetail(w, http.StatusServiceUnavailable, "Social login not configured for "+providerLabel(provider))
+	case errors.Is(err, ErrInvalidProviderID):
+		writeDetail(w, http.StatusBadRequest, "The provider returned an invalid user id")
 	case errors.Is(err, ErrProviderRefused):
 		writeDetail(w, http.StatusUnauthorized, "Invalid or expired provider token")
 	case errors.Is(err, ErrEmailUnverified):
 		writeDetail(w, http.StatusForbidden, "The provider has not verified this email address")
+	case errors.Is(err, ErrUnusableEmail):
+		writeDetail(w, http.StatusBadRequest, "The provider returned an unusable email address")
 	case errors.Is(err, ErrPrincipalDisabled):
 		writeDetail(w, http.StatusForbidden, "Account is disabled")
 	case errors.Is(err, identity.ErrSignupNotAvailable):
@@ -214,10 +218,14 @@ func Classify(err error) (int, Reason) {
 		return http.StatusInternalServerError, ReasonDependency
 	case errors.Is(err, ErrProviderNotConfigured):
 		return http.StatusServiceUnavailable, ReasonDependency
+	case errors.Is(err, ErrInvalidProviderID):
+		return http.StatusBadRequest, ReasonMalformed
 	case errors.Is(err, ErrProviderRefused):
 		return http.StatusUnauthorized, ReasonInvalidCredentials
 	case errors.Is(err, ErrEmailUnverified):
 		return http.StatusForbidden, ReasonEmailUnverified
+	case errors.Is(err, ErrUnusableEmail):
+		return http.StatusBadRequest, ReasonMalformed
 	case errors.Is(err, ErrPrincipalDisabled):
 		return http.StatusForbidden, ReasonPrincipalDeactivated
 	case errors.Is(err, identity.ErrSignupNotAvailable):

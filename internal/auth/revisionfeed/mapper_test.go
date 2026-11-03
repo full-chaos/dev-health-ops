@@ -1,0 +1,149 @@
+package revisionfeed
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+)
+
+func outboxEvent(key string, payload string) audit.Event {
+	return audit.Event{
+		ID: 7, AggregateType: "membership", AggregateID: "mbr_EXAMPLE0000000000000001", EventType: "membership.changed",
+		Payload: json.RawMessage(payload), IdempotencyKey: key, Attempts: 1,
+		CreatedAt: time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestFromOutboxMapsAnEventWhoseKeyAgreesWithItsRevision(t *testing.T) {
+	got, err := FromOutbox(outboxEvent("membership:mbr_EXAMPLE0000000000000001:4",
+		`{"revision":4,"organization_id":"org_1","actor_principal_id":"prn_1","request_id":"req_1","change":{"role":"admin"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SchemaVersion != contracts.ProvisioningEventSurface || got.AggregateType != "membership" ||
+		got.AggregateID != "mbr_EXAMPLE0000000000000001" || got.EventType != "membership.changed" ||
+		got.Payload.Revision != 4 || got.Payload.OrganizationID != "org_1" || got.DedupeKey() != got.IdempotencyKey {
+		t.Fatalf("mapped event %+v", got)
+	}
+	if !got.CreatedAt.Time.Equal(time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("created_at %v", got.CreatedAt.Time)
+	}
+}
+
+func TestFromOutboxRefusesAKeyThatDisagreesWithTheRevision(t *testing.T) {
+	for name, tc := range map[string]struct{ key, payload string }{
+		"revision differs":   {"membership:mbr_EXAMPLE0000000000000001:5", `{"revision":4,"change":{}}`},
+		"other aggregate id": {"membership:mbr_OTHER:4", `{"revision":4,"change":{}}`},
+		"other aggregate":    {"principal:mbr_EXAMPLE0000000000000001:4", `{"revision":4,"change":{}}`},
+		"empty key":          {"", `{"revision":4,"change":{}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := FromOutbox(outboxEvent(tc.key, tc.payload))
+			if !errors.Is(err, ErrKeyDisagrees) {
+				t.Fatalf("err = %v, want ErrKeyDisagrees", err)
+			}
+		})
+	}
+}
+
+func TestFromOutboxRefusesAPayloadThatIsNoRevision(t *testing.T) {
+	for name, payload := range map[string]string{
+		"not json":       `{`,
+		"no revision":    `{"change":{}}`,
+		"zero revision":  `{"revision":0,"change":{}}`,
+		"decimal form":   `{"revision":4.0,"change":{}}`,
+		"exponent form":  `{"revision":4e0,"change":{}}`,
+		"negative":       `{"revision":-1,"change":{}}`,
+		"string":         `{"revision":"4","change":{}}`,
+		"empty document": ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := FromOutbox(outboxEvent("membership:mbr_EXAMPLE0000000000000001:4", payload))
+			if !errors.Is(err, ErrNotAProvisioningEvent) {
+				t.Fatalf("err = %v, want ErrNotAProvisioningEvent", err)
+			}
+		})
+	}
+}
+
+func TestFromOutboxErrorsNeverQuoteThePayloadOrTheID(t *testing.T) {
+	e := outboxEvent("membership:mbr_EXAMPLE0000000000000001:9", `{"revision":4,"change":{"note":"SENTINEL_PAYLOAD_VALUE"}}`)
+	e.AggregateID = "mbr_SENTINEL_ID_0001"
+	_, err := FromOutbox(e)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, leak := range []string{"SENTINEL_PAYLOAD_VALUE", "SENTINEL_ID_0001", "EXAMPLE0000000000000001"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("the error holds %q: %v", leak, err)
+		}
+	}
+}
+
+func TestHandleOutboxAppliesAMappedEvent(t *testing.T) {
+	c, rec := newTestConsumer(t)
+	got, err := c.HandleOutbox(t.Context(), outboxEvent("membership:mbr_EXAMPLE0000000000000001:1", `{"revision":1,"change":{}}`))
+	if err != nil || got != contracts.Apply {
+		t.Fatalf("HandleOutbox = %q, %v", got, err)
+	}
+	if calls := rec.snapshot(); len(calls) != 1 || calls[0].typ != "membership" || calls[0].revision != 1 {
+		t.Fatalf("calls %+v", calls)
+	}
+	if _, err := c.HandleOutbox(t.Context(), outboxEvent("membership:mbr_EXAMPLE0000000000000001:2", `{"revision":1,"change":{}}`)); !errors.Is(err, ErrKeyDisagrees) {
+		t.Fatalf("a disagreeing key: err = %v", err)
+	}
+	if n := len(rec.snapshot()); n != 1 {
+		t.Fatalf("a refused event invalidated: %d calls", n)
+	}
+}
+
+func TestFromOutboxMapsTheRevocationEvents(t *testing.T) {
+	for _, tc := range []struct{ aggregate, id, event, change string }{
+		{"session", "ses_EXAMPLE0000000000001", "session.revoked", `{"status":"revoked","reason":"caller"}`},
+		{"signing_key", provisioning.SigningKeyID("example.key"), "signing_key.compromised", `{"kid":"example.key"}`},
+		{"principal", "prn_EXAMPLE0000000000000001", "principal.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"password_changed"}`},
+		{"organization", "org_EXAMPLE0000000000000001", "organization.sessions_revoked", `{"revoked_before":"2026-09-03T09:59:59Z","reason":"org_ended"}`},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			rev, wantRev := "3", int64(3)
+			if tc.aggregate == "session" {
+				rev, wantRev = "1", 1
+			}
+			e := outboxEvent(tc.aggregate+":"+tc.id+":"+rev, `{"revision":`+rev+`,"change":`+tc.change+`}`)
+			e.AggregateType, e.AggregateID, e.EventType = tc.aggregate, tc.id, tc.event
+			got, err := FromOutbox(e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.AggregateType != tc.aggregate || got.EventType != tc.event || int64(got.Payload.Revision) != wantRev || got.DedupeKey() != got.IdempotencyKey {
+				t.Fatalf("mapped event %+v", got)
+			}
+		})
+	}
+}
+
+func TestFromOutboxRefusesAOneShotEventPastRevisionOneAndAForgedSigningKeyID(t *testing.T) {
+	const ses = "ses_EXAMPLE0000000000001"
+	session := outboxEvent("session:"+ses+":2", `{"revision":2,"change":{"status":"revoked","reason":"caller"}}`)
+	session.AggregateType, session.AggregateID, session.EventType = "session", ses, "session.revoked"
+	if _, err := FromOutbox(session); !errors.Is(err, ErrOneShotRevision) {
+		t.Fatalf("session revision 2: err = %v, want ErrOneShotRevision", err)
+	}
+	forged := "key_" + strings.Repeat("a", 43)
+	key := outboxEvent("signing_key:"+forged+":1", `{"revision":1,"change":{"kid":"example.key"}}`)
+	key.AggregateType, key.AggregateID, key.EventType = "signing_key", forged, "signing_key.compromised"
+	if _, err := FromOutbox(key); !errors.Is(err, ErrSigningKeyID) {
+		t.Fatalf("forged signing key id: err = %v, want ErrSigningKeyID", err)
+	}
+	genuine := provisioning.SigningKeyID("example.key")
+	key.AggregateID, key.IdempotencyKey = genuine, "signing_key:"+genuine+":1"
+	if _, err := FromOutbox(key); err != nil {
+		t.Fatalf("genuine signing key id: %v", err)
+	}
+}

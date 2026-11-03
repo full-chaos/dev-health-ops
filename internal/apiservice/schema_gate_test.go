@@ -26,7 +26,7 @@ func buildWithRecordedDatabase(t *testing.T, database schemagatetest.Database) (
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, components, err := buildDeps(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}),
-		health.NewRegistry(time.Second), slog.New(slog.NewJSONHandler(&logs, nil)), AuthProxyConfig{})
+		health.NewRegistry(time.Second), slog.New(slog.NewJSONHandler(&logs, nil)), AuthProxyConfig{}, false)
 	closeComponents(components)
 	return logs.String(), err
 }

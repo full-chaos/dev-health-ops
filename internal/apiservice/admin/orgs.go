@@ -20,11 +20,11 @@ const orgsPrefix = "/api/v1/admin"
 
 func (h *handlers) orgRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.listOrganizations))},
-		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.getOrganization))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.createOrganization))},
-		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirst(policy.Superuser, http.HandlerFunc(h.updateOrganization))},
-		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.Wrap(policy.Superuser, http.HandlerFunc(h.deleteOrganization))},
+		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.listOrganizations))},
+		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.getOrganization))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.createOrganization))},
+		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.updateOrganization))},
+		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.deleteOrganization))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
 		// create_org_invite: authentication, then body validation, then the
@@ -32,7 +32,7 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		// run them in (see validateInviteBody).
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
 			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimit(validateInviteBody, h.inviteLimiter, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
+				httpapi.ValidateThenLimitDependency(validateInviteBody, h.inviteLimiter, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},
@@ -279,6 +279,15 @@ func (h *handlers) createOrganization(w http.ResponseWriter, r *http.Request) {
 		org.Description = &description
 	}
 
+	if h.orgProvision != nil {
+		var owner *uuid.UUID
+		if ownerUserID != "" {
+			owner = &ownerID
+		}
+		h.createOrganizationInAuth(ctx, w, org, owner)
+		return
+	}
+
 	// OrganizationService.create: the org row and its owner membership (if
 	// any) are one SQLAlchemy session, durable only when the router's
 	// commit runs -- a failed owner-membership insert must not leave a
@@ -330,7 +339,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	object, ok := errs.Object(body)
 	patch := orgUpdate{}
 	if ok {
-		if v, present := errs.OptionalString(object, "name", 0, 0); present {
+		if v, present := h.optionalName(&errs, object); present {
 			patch.Name = &v
 		}
 		if v, present := errs.OptionalString(object, "description", 0, 0); present {
@@ -357,7 +366,23 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	updated, err := h.store.updateOrganization(ctx, orgID, patch)
+	patch.authOwned = h.orgsOwned()
+	if h.renamesInAuth(patch) {
+		if !h.renamePrecheck(w, r, *patch.Name) || !h.renameInAuth(w, r, orgID, *patch.Name) {
+			return
+		}
+	}
+	var authActive orgAuthStateFunc
+	if patch.IsActive != nil {
+		accepted, ok := h.orgStatusInAuth(w, r, orgID, *patch.IsActive)
+		if !ok {
+			return
+		}
+		if accepted != nil {
+			authActive = h.authStateHook(orgID, *accepted)
+		}
+	}
+	updated, err := h.store.updateOrganization(ctx, orgID, patch, authActive)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update organization failed", "error", err)
 		policy.WriteInternal(w)
@@ -366,6 +391,9 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	if updated == nil {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return
+	}
+	if authActive != nil && updated.IsActive != *patch.IsActive {
+		h.logger.InfoContext(ctx, "admin: auth state moved after the call")
 	}
 	obj, err := organizationResponseObject(updated)
 	if err != nil {
@@ -463,8 +491,24 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		}
 		invitedByID = &id
 	}
+	if h.orgProvision != nil {
+		h.addMemberInAuth(ctx, w, user, orgID, targetUserID, role, invitedByID)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "add_member", func(g *superuserTx) func() {
+		// The auth lock order (internal/auth/membership readPairs): the
+		// inviter's users row FOR KEY SHARE (the INSERT's foreign key check)
+		// and the target's FOR UPDATE, one row per statement in id order
+		// (the text order of the lowercase uuid is Postgres's uuid order),
+		// before any other lock.
+		inviterFirst := invitedByID != nil && invitedByID.String() < targetUserID.String()
+		if inviterFirst && !g.keyShare(*invitedByID) {
+			return nil
+		}
 		if g.refuse(targetUserID) {
+			return nil
+		}
+		if invitedByID != nil && invitedByID.String() > targetUserID.String() && !g.keyShare(*invitedByID) {
 			return nil
 		}
 		created, err := g.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)
@@ -507,6 +551,10 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if h.orgProvision != nil {
+		h.updateMemberRoleInAuth(ctx, w, user, orgID, targetUserID, role)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "update_member_role", func(g *superuserTx) func() {
 		if g.refuse(targetUserID) {
 			return nil
@@ -542,6 +590,10 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	targetUserID, ok := pathUserID(w, r)
 	if !ok {
+		return
+	}
+	if h.orgProvision != nil {
+		h.removeMemberInAuth(ctx, w, user, orgID, targetUserID)
 		return
 	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "remove_member", func(g *superuserTx) func() {
@@ -606,6 +658,10 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.orgProvision != nil {
+		h.transferOwnershipInAuth(ctx, w, user, orgID, toUserID)
+		return
+	}
 	h.superuserGuardedWrite(ctx, w, user, nil, "transfer_ownership", func(g *superuserTx) func() {
 		fromUserID, err := h.store.currentOwner(ctx, g.tx, orgID)
 		if err != nil {

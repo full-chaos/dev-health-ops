@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -59,12 +60,16 @@ func TestWarmPoolPingsEveryIdleSlotAndSwallowsErrors(t *testing.T) {
 	WarmPool(context.Background(), func(context.Context) error { t.Error("pinged with idle 0"); return nil }, 0)
 }
 
+// The warm-up runs in a bubble on a virtual clock with an in-memory ping that waits for its context: it returns at exactly WarmBudget.
 func TestWarmPoolIsBounded(t *testing.T) {
-	start := time.Now()
-	WarmPool(context.Background(), func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, 2)
-	if elapsed := time.Since(start); elapsed > WarmBudget+2*time.Second {
-		t.Fatalf("warm-up took %v, budget %v", elapsed, WarmBudget)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		WarmPool(context.Background(), func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }, 2)
+		returnedAt := time.Now()
+		if !returnedAt.Equal(start.Add(WarmBudget)) {
+			t.Fatalf("warm-up returned at +%v of virtual time, want +%v (WarmBudget)", returnedAt.Sub(start), WarmBudget)
+		}
+	})
 }
 
 func TestDialTimeoutEnvOverrides(t *testing.T) {

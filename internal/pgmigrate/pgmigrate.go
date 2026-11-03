@@ -5,15 +5,17 @@
 // (src/dev_health_ops/alembic/versions) is Python, and many of its revisions
 // run SQL through the connection and read data, so alembic cannot render it
 // as SQL. So the migrator is a BASELINE plus a numbered SQL CHAIN: the baseline
-// is the end state of a fresh database at the baseline revision (0138, the
-// oldest revision a production database is upgraded from) after the real Python
-// upgrade has run, captured by executing it (baseline_integration_test.go) and
-// checked in as baseline/head.json -- the schema and the rows the chain seeds,
-// both as pg_dump SQL, and the alembic heads it records; every revision after it
-// is a sql/<revision>_<slug>.sql file, rendered from its Alembic revision and
-// verified by executing both. The baseline never moves: adding an Alembic
-// revision adds its .sql file (TestChainCoversEveryAlembicRevision fails until it
-// does), so a database at any revision from the baseline up reaches the head.
+// is the end state of a fresh database at the baseline revision, checked in as
+// baseline/head.json -- the schema and the rows the chain seeds, both as pg_dump
+// SQL, and the alembic heads it records; every revision after it is a
+// sql/<revision>_<slug>.sql file.
+//
+// The baseline moved ONCE, by decision D6430 (CHAOS-11743): from 0138 (the Python
+// upgrade to 0138, executed and captured) to 0162, the schema the 0138 baseline plus
+// the chain 0139..0162 builds (TestBaselineEqualsTheArchivedChain holds the two
+// equal). The 0138 baseline and the files 0139..0162 are history in archive/, which
+// nothing applies; the binary embeds only archive/chain_manifest.tsv, so it knows
+// those revisions and refuses a database that records one as below the baseline.
 //
 // The chain's end state depends on two settings, and the baseline is the
 // combination production runs (read from prod, 2026-09-24): revision 0066,
@@ -42,9 +44,10 @@
 //     many baseline heads it also records: refused as ahead of the build, naming the
 //     unknown revisions, before anything else is decided. A newer build migrated the
 //     database (an image was rolled back onto it), and dho never downgrades;
-//   - alembic_version without every baseline head (below the baseline revision):
-//     refused as below the head, naming what the database holds and what is
-//     required;
+//   - alembic_version without every baseline head: refused, naming what the database
+//     holds and what is required -- below the baseline (it records a revision before
+//     0162: bring it to 0162 with a build from before the squash first), or without the
+//     River cutover;
 //   - objects but no alembic_version: a database this migrator
 //     did not create, refused.
 package pgmigrate
@@ -78,6 +81,25 @@ var baselineFile []byte
 
 //go:embed sql
 var chainFiles embed.FS
+
+//go:embed archive/chain_manifest.tsv
+var archiveManifestFile []byte
+
+func mustParseArchive(data []byte) []ChainFile {
+	var out []ChainFile
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) != 3 || chainName.FindStringSubmatch(fields[2]) == nil || chainName.FindStringSubmatch(fields[2])[1] != fields[0] {
+			panic(fmt.Sprintf("pgmigrate: archive/chain_manifest.tsv line %q is not <revision><TAB><sha256><TAB><revision>_<slug>.sql", line))
+		}
+		out = append(out, ChainFile{Revision: fields[0], Name: fields[2]})
+	}
+	return out
+}
+
+// ArchivedChain is the chain revisions the baseline replaced (archive/chain_manifest.tsv), in order: revision and file
+// name, no SQL.
+func ArchivedChain() []ChainFile { return mustParseArchive(archiveManifestFile) }
 
 // FrozenHead is the last revision the Python-recorded goldens cover (CHAOS-10365 froze them; no tool can record
 // them again). The chain up to and including it equals those goldens byte for byte and is never edited. A revision
@@ -256,7 +278,11 @@ func checkChain(chain []ChainFile) error {
 	if err != nil {
 		return fmt.Errorf("load the baseline to check the chain: %w", err)
 	}
-	previous := applicationHead(baseline)
+	return checkChainAfter(chain, applicationHead(baseline))
+}
+
+// checkChainAfter checks chain as the continuation of previous.
+func checkChainAfter(chain []ChainFile, previous string) error {
 	for index, file := range chain {
 		if index > 0 && chain[index-1].Revision == file.Revision {
 			return fmt.Errorf("sql/: revision %s has more than one file (%s, %s)", file.Revision, chain[index-1].Name, file.Name)
@@ -456,6 +482,19 @@ func (e AheadOfBuildError) Error() string {
 		"or restore the database from a backup. Nothing was changed", e.Unknown, e.Recorded)
 }
 
+// BelowBaselineError is the refusal for a database that records the River cutover and a revision before the
+// baseline: the squashed baseline cannot be applied over it, and its pending revisions are history.
+type BelowBaselineError struct {
+	Recorded []string
+	Baseline string
+}
+
+func (e BelowBaselineError) Error() string {
+	return fmt.Sprintf("the PostgreSQL schema is below the squashed baseline %s: alembic_version holds %v. "+
+		"This build upgrades only an empty database or one at %s or later. Run `dho migrate postgres` from a build before the squash "+
+		"(CHAOS-11743) to reach %s first, or re-create the database. Nothing was changed", e.Baseline, e.Recorded, e.Baseline, e.Baseline)
+}
+
 // BelowHeadError is the refusal for a database below the head.
 type BelowHeadError struct {
 	Recorded []string
@@ -470,7 +509,7 @@ func (e BelowHeadError) Error() string {
 		}
 	}
 	return fmt.Sprintf("the PostgreSQL schema is below the head: alembic_version holds %v and lacks %v.%s "+
-		"dho upgrades an empty database and one at the baseline revision or later; run the Python upgrade (`dev-hops migrate postgres`) with production's settings first",
+		"dho upgrades an empty database and one at the baseline revision or later; bring the database to the baseline with production's settings first",
 		e.Recorded, e.Missing, detail)
 }
 

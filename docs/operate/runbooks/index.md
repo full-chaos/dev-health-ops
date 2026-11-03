@@ -19,7 +19,13 @@ lifecycle: active
 - [Disaster recovery](disaster-recovery.md)
 - [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
 - [Auth users-owned flip and rollback](auth-users-owned-flip-and-rollback.md)
+- [Auth platform roles flip and rollback](auth-platform-roles-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
+- [Workload bootstrap credential](auth-workload-bootstrap-credential.md)
+- [Service accounts](auth-service-accounts.md)
+- [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
+- [Auth legacy compatibility and rollback](auth-legacy-compat-and-rollback.md)
+- [Legacy ingest retirement](legacy-ingest-retirement.md)
 
 Retain the affected organization or workspace identifier, source, scope, time, job or request identifiers, sanitized logs, last known good checkpoint, and changes made during recovery.

@@ -10,31 +10,6 @@ import (
 	"time"
 )
 
-// guardedTables carry the audit_commit_guard trigger (migration 0006): a write
-// is refused unless it runs inside an internal/audit.Commit transaction.
-var guardedTables = []string{
-	"auth_outbox_events", "security_audit_events", "resource_grants", "memberships",
-	"platform_role_assignments", "policy_revisions", "entitlement_snapshots",
-	"credential_registry", "service_accounts", "workloads", "workload_bindings", "external_identities",
-	"organizations", "aggregate_revisions", "signing_keys",
-}
-
-// unguardedTables are deliberately outside the guard, each with its reason.
-var unguardedTables = map[string]string{
-	"sessions":            "high-rate session lifecycle rows; a per-write outbox event and audit row would be noise; a new row inside audit.Commit is counted by the 0014 create guard",
-	"refresh_credentials": "high-rate rotation lifecycle rows, same reason as sessions",
-	"users":               "profile and lifecycle columns written at high rate; identity linking is guarded on external_identities; a new row inside audit.Commit is counted by the 0013 create guard",
-	"principals":          "identity root row, created with its user or service account; carries no grant; a new row inside audit.Commit is counted by the 0013 create guard",
-	"actions":             "closed vocabulary; the runtime role has no write privilege, so only the migration role writes it",
-	"roles":               "closed vocabulary; the runtime role has no write privilege",
-	"role_actions":        "closed vocabulary; the runtime role has no write privilege",
-	"link_credentials":    "single-use link tokens swept on expiry and removed with their principal; consuming or retargeting one is guarded by column (security columns below)",
-	"login_attempts":      "high-rate lockout counters keyed by an identifier hash; rate limiting, not authority",
-	"sso_flow_states":     "short-lived SSO flow state, consumed once even when the callback is rejected, so its consume cannot require an audit transaction; consumed_at is write-once and every other column is immutable by trigger",
-	"saml_assertion_uses": "insert-only replay ledger swept after expiry; a row exists to be refused a second time",
-	versionTable:          "auth-migrate bookkeeping, unreachable by the runtime role",
-}
-
 // TestEveryAuthTableIsClassified makes a new table fail CI until someone says
 // whether security writes to it must go through audit.Commit.
 func TestEveryAuthTableIsClassified(t *testing.T) {
@@ -184,6 +159,11 @@ var unguardedColumns = map[string]map[string]string{
 		// Written once at insert; its own trigger (0016) refuses any change,
 		// inside audit.Commit or not, so it has no UPDATE OF guard.
 		"legacy_token_version": "lifecycle",
+		// The same: written at insert, and the delegated sessions trigger refuses any change.
+		"actor_principal_id": "lifecycle", "delegated_from_session_id": "lifecycle",
+		"delegation_reason": "lifecycle", "delegation_permitted_actions": "lifecycle",
+		// The same: written at insert, and 0042's trigger refuses any change.
+		"web_session_id": "lifecycle",
 		// Appended at every mint, outside audit.Commit: a key set, not a
 		// session decision.
 		"signing_kids": "lifecycle",
@@ -198,6 +178,17 @@ var unguardedColumns = map[string]map[string]string{
 		"id": "lifecycle", "created_at": "lifecycle",
 		"principal_id": "security", "purpose": "security", "token_hash": "security", "expires_at": "security", "consumed_at": "security",
 		"issued_token_version": "security",
+	},
+	// One authorization transaction, written by an unauthenticated GET. Its binding,
+	// decision and consume are write-once by 0042's trigger, and a decision commits
+	// inside audit.Commit with the rows it creates.
+	"oauth_authorization_requests": {
+		"id": "lifecycle", "client_id": "lifecycle", "client_class": "lifecycle", "redirect_uri": "lifecycle",
+		"resource": "lifecycle", "audience": "lifecycle", "scope": "lifecycle", "state": "lifecycle",
+		"code_challenge": "lifecycle", "code_challenge_method": "lifecycle", "web_session_id": "lifecycle",
+		"principal_id": "lifecycle", "organization_id": "lifecycle", "csrf_hash": "lifecycle", "decision": "lifecycle",
+		"grant_id": "lifecycle", "code_hash": "lifecycle", "code_expires_at": "lifecycle", "consumed_at": "lifecycle",
+		"expires_at": "lifecycle", "created_at": "lifecycle",
 	},
 	"sso_flow_states": {
 		"id": "lifecycle", "protocol": "lifecycle", "provider_id": "lifecycle", "flow_hash": "lifecycle", "binding_hash": "lifecycle",

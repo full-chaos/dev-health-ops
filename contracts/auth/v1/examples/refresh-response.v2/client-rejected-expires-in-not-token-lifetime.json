@@ -1,0 +1,10 @@
+{
+  "access_token": {"header_json": "{\"alg\":\"EdDSA\",\"typ\":\"at+jwt\",\"kid\":\"auth-example-2026-10\"}", "payload_json": "{\"iss\":\"https://auth.example.test\",\"aud\":\"dev-health-api\",\"sub\":\"prn_AAAAAAAAAAAAAAAAAAAAAA\",\"principal_type\":\"human\",\"sid\":\"ses_EXAMPLE000000000000000001\",\"jti\":\"000000000000000000000001\",\"iat\":1760000000,\"nbf\":1760000000,\"exp\":1760003600,\"org_id\":\"00000000-0000-4000-8000-000000000001\",\"scope\":\"api:access\"}", "signature": "EXAMPLESIGNATURE"},
+  "expires_in": 600,
+  "refresh_credential": "EXAMPLEROTATED00000000000000000000000000001",
+  "refresh_expires_in": 604800,
+  "schema_version": "refresh-response.v2",
+  "session_access_token": {"header_json": "{\"alg\":\"EdDSA\",\"typ\":\"at+jwt\",\"kid\":\"auth-example-2026-10\"}", "payload_json": "{\"iss\":\"https://auth.example.test\",\"aud\":\"auth-service\",\"sub\":\"prn_AAAAAAAAAAAAAAAAAAAAAA\",\"principal_type\":\"human\",\"sid\":\"ses_EXAMPLE000000000000000001\",\"jti\":\"000000000000000000000002\",\"iat\":1760000000,\"nbf\":1760000000,\"exp\":1760000600,\"org_id\":\"00000000-0000-4000-8000-000000000001\",\"scope\":\"auth:session\"}", "signature": "EXAMPLESIGNATURE"},
+  "session_id": "ses_EXAMPLE000000000000000001",
+  "token_type": "bearer"
+}

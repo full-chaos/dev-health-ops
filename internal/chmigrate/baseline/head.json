@@ -108,6 +108,50 @@
     "096_daily_family_tables_replacing_merge_tree.py",
     "097_work_item_team_attributions_producer.sql",
     "098_provider_request_usage.sql",
+    "099_team_project_ownership_last_synced.sql",
+    "100_project_membership_ingested_at.sql",
+    "101_capacity_forecast_distribution.sql",
+    "102_work_item_dependency_first_seen.sql",
+    "103_work_item_relation_writer_and_read.sql",
+    "104_work_item_blocked_durations.sql",
+    "105_daily_metrics_run_marker.sql",
+    "106_work_unit_investment_quote_count.sql",
+    "107_work_item_interactions_comment_id.sql",
+    "108_daily_metrics_touched_days.sql",
+    "109_work_unit_investment_shadow.sql",
+    "110_llm_categorization_attempts.sql",
+    "111_work_item_measure_capability.sql",
+    "112_change_failure_rate_incident_basis.sql",
+    "113_teams_created_at.sql",
+    "114_pr_rework_ratio_review_basis.sql",
+    "115_teams_deleted_at.sql",
+    "116_user_level_daily_retracted.sql",
+    "117_team_memberships_provider_user_id.sql",
+    "118_teams_drop_members.sql",
+    "119_work_item_completion_daily.sql",
+    "120_drop_retired_investment_daily_tables.sql",
+    "121_compounding_risk_review_window.sql",
+    "122_team_repo_ownership_share.sql",
+    "123_projects_state_source.sql",
+    "124_team_daily_counters_float64.sql",
+    "125_change_failure_deployment_status.sql",
+    "126_deployments_pull_request_tier.sql",
+    "127_projects_target_provenance.sql",
+    "128_ai_impact_counts_float64.sql",
+    "129_testops_test_flake_counts.sql",
+    "130_work_unit_issue_size.sql",
+    "131_deployment_incident_edges_repo_key.sql",
+    "132_pr_commit_native_wins.sql",
+    "134_repos_provider_repo_id.sql",
+    "135_work_item_metrics_nullable.sql",
+    "137_teams_provider_identity.sql",
+    "138_repos_identity_path.sql",
+    "139_llm_token_usage_credential_source.sql",
+    "140_work_unit_investment_effort_basis.sql",
+    "141_work_item_row_view.sql",
+    "142_llm_attempts_usage_reason.sql",
+    "143_llm_attempts_request_id_source.sql",
+    "144_llm_attempts_endpoint.sql",
     "__init__.py"
   ],
   "objects": [
@@ -129,7 +173,7 @@
     {
       "name": "ai_impact_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE ai_impact_metrics_daily (`org_id` String, `team_id` String, `repo_id` UUID, `work_type` LowCardinality(String), `day` Date, `attribution_bucket` LowCardinality(String), `prs_total` UInt32, `prs_merged` UInt32, `ai_assisted_prs` UInt32, `agent_created_prs` UInt32, `human_prs` UInt32, `unknown_prs` UInt32, `ai_assisted_pr_ratio` Nullable(Float64), `agent_created_pr_count` UInt32, `cycle_time_avg_hours` Nullable(Float64), `baseline_cycle_time_avg_hours` Nullable(Float64), `ai_cycle_time_delta_hours` Nullable(Float64), `reviews_per_pr` Nullable(Float64), `baseline_reviews_per_pr` Nullable(Float64), `ai_review_amplification` Nullable(Float64), `changes_requested_per_pr` Nullable(Float64), `rework_prs` UInt32, `rework_drag_rate` Nullable(Float64), `followup_commits_count` UInt32, `revert_prs` UInt32, `revert_rate` Nullable(Float64), `incidents_count` UInt32, `incident_drag_rate` Nullable(Float64), `test_gap_prs` UInt32, `test_gap_rate` Nullable(Float64), `leverage_prs_component` Float64, `leverage_cycle_time_component` Nullable(Float64), `leverage_review_component` Nullable(Float64), `leverage_rework_component` Nullable(Float64), `leverage_test_component` Nullable(Float64), `leverage_incident_component` Nullable(Float64), `computed_at` DateTime64(3, 'UTC') DEFAULT now64()) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE ai_impact_metrics_daily (`org_id` String, `team_id` String, `repo_id` UUID, `work_type` LowCardinality(String), `day` Date, `attribution_bucket` LowCardinality(String), `prs_total` Float64, `prs_merged` Float64, `ai_assisted_prs` Float64, `agent_created_prs` Float64, `human_prs` Float64, `unknown_prs` Float64, `ai_assisted_pr_ratio` Nullable(Float64), `agent_created_pr_count` Float64, `cycle_time_avg_hours` Nullable(Float64), `baseline_cycle_time_avg_hours` Nullable(Float64), `ai_cycle_time_delta_hours` Nullable(Float64), `reviews_per_pr` Nullable(Float64), `baseline_reviews_per_pr` Nullable(Float64), `ai_review_amplification` Nullable(Float64), `changes_requested_per_pr` Nullable(Float64), `rework_prs` Float64, `rework_drag_rate` Nullable(Float64), `followup_commits_count` Float64, `revert_prs` Float64, `revert_rate` Nullable(Float64), `incidents_count` Float64, `incident_drag_rate` Nullable(Float64), `test_gap_prs` Float64, `test_gap_rate` Nullable(Float64), `leverage_prs_component` Float64, `leverage_cycle_time_component` Nullable(Float64), `leverage_review_component` Nullable(Float64), `leverage_rework_component` Nullable(Float64), `leverage_test_component` Nullable(Float64), `leverage_incident_component` Nullable(Float64), `computed_at` DateTime64(3, 'UTC') DEFAULT now64()) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, repo_id, work_type, day, attribution_bucket) SETTINGS index_granularity = 8192"
     },
     {
       "name": "ai_policy_events",
@@ -179,7 +223,7 @@
     {
       "name": "capacity_forecasts",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE capacity_forecasts (`forecast_id` String, `computed_at` DateTime64(3, 'UTC'), `team_id` Nullable(String), `work_scope_id` Nullable(String), `backlog_size` UInt32, `target_items` Nullable(UInt32), `target_date` Nullable(Date), `history_days` UInt16, `simulation_count` UInt32, `p50_days` Nullable(UInt16), `p85_days` Nullable(UInt16), `p95_days` Nullable(UInt16), `p50_date` Nullable(Date), `p85_date` Nullable(Date), `p95_date` Nullable(Date), `p50_items` Nullable(UInt32), `p85_items` Nullable(UInt32), `p95_items` Nullable(UInt32), `throughput_mean` Float64, `throughput_stddev` Float64, `insufficient_history` UInt8 DEFAULT 0, `high_variance` UInt8 DEFAULT 0, `org_id` String DEFAULT 'default', INDEX idx_team_scope (team_id, work_scope_id) TYPE bloom_filter GRANULARITY 4) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE capacity_forecasts (`forecast_id` String, `computed_at` DateTime64(3, 'UTC'), `team_id` Nullable(String), `work_scope_id` Nullable(String), `backlog_size` UInt32, `target_items` Nullable(UInt32), `target_date` Nullable(Date), `history_days` UInt16, `simulation_count` UInt32, `p50_days` Nullable(UInt16), `p85_days` Nullable(UInt16), `p95_days` Nullable(UInt16), `p50_date` Nullable(Date), `p85_date` Nullable(Date), `p95_date` Nullable(Date), `p50_items` Nullable(UInt32), `p85_items` Nullable(UInt32), `p95_items` Nullable(UInt32), `throughput_mean` Float64, `throughput_stddev` Float64, `insufficient_history` UInt8 DEFAULT 0, `high_variance` UInt8 DEFAULT 0, `org_id` String DEFAULT 'default', `completion_days_values` Array(UInt16) DEFAULT [] COMMENT 'Distinct completion-day values of the fixed-scope Monte Carlo run, ascending. Parallel to completion_days_counts. Empty = no distribution (rows before migration 101, or the mode did not run).', `completion_days_counts` Array(UInt32) DEFAULT [] COMMENT 'How many simulation runs produced each completion_days_values entry. Sums to simulation_count when present.', `completion_items_values` Array(UInt32) DEFAULT [] COMMENT 'Distinct items-completed values of the fixed-date Monte Carlo run, ascending. Parallel to completion_items_counts. Empty = no distribution (rows before migration 101, or the mode did not run).', `completion_items_counts` Array(UInt32) DEFAULT [] COMMENT 'How many simulation runs produced each completion_items_values entry. Sums to simulation_count when present.', INDEX idx_team_scope (team_id, work_scope_id) TYPE bloom_filter GRANULARITY 4) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, forecast_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "ci_acceptance_checks",
@@ -209,12 +253,22 @@
     {
       "name": "compounding_risk_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE compounding_risk_daily (`org_id` String, `day` Date, `scope` Enum8('repo' = 1, 'team' = 2), `scope_id` String, `compounding_risk` Nullable(Float64), `severity` Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3), `churn_norm` Nullable(Float64), `complexity_norm` Nullable(Float64), `ownership_norm` Nullable(Float64), `review_norm` Nullable(Float64), `rework_churn` Nullable(Float64), `complexity_delta` Nullable(Float64), `bus_factor` Nullable(Float64), `ownership_gini` Nullable(Float64), `single_owner_ratio` Nullable(Float64), `review_latency_p90h` Nullable(Float64), `w_churn` Float64, `w_complexity` Float64, `w_ownership` Float64, `w_review` Float64, `threshold_elevated` Float64, `threshold_high` Float64, `computed_at` DateTime DEFAULT now()) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE compounding_risk_daily (`org_id` String, `day` Date, `scope` Enum8('repo' = 1, 'team' = 2), `scope_id` String, `compounding_risk` Nullable(Float64), `severity` Enum8('unknown' = 0, 'low' = 1, 'elevated' = 2, 'high' = 3), `churn_norm` Nullable(Float64), `complexity_norm` Nullable(Float64), `ownership_norm` Nullable(Float64), `review_norm` Nullable(Float64), `rework_churn` Nullable(Float64), `complexity_delta` Nullable(Float64), `bus_factor` Nullable(Float64), `ownership_gini` Nullable(Float64), `single_owner_ratio` Nullable(Float64), `review_latency_p90h` Nullable(Float64), `w_churn` Float64, `w_complexity` Float64, `w_ownership` Float64, `w_review` Float64, `threshold_elevated` Float64, `threshold_high` Float64, `computed_at` DateTime DEFAULT now(), `merged_prs_30d` Nullable(Float64), `reviewed_prs_30d` Nullable(Float64), `review_share_30d` Nullable(Float64)) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, scope, scope_id, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "coverage_snapshots",
       "engine": "ReplacingMergeTree",
       "create": "CREATE TABLE coverage_snapshots (`repo_id` UUID, `run_id` String, `snapshot_id` String, `report_format` Nullable(String), `lines_total` Nullable(UInt32), `lines_covered` Nullable(UInt32), `line_coverage_pct` Nullable(Float64), `branches_total` Nullable(UInt32), `branches_covered` Nullable(UInt32), `branch_coverage_pct` Nullable(Float64), `functions_total` Nullable(UInt32), `functions_covered` Nullable(UInt32), `commit_hash` Nullable(String), `branch` Nullable(String), `pr_number` Nullable(UInt32), `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `last_synced` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, run_id, snapshot_id) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "daily_metrics_run_marker",
+      "engine": "MergeTree",
+      "create": "CREATE TABLE daily_metrics_run_marker (`org_id` String, `target_day` Date, `generation` String, `state` LowCardinality(String), `finalized_at` DateTime64(3, 'UTC'), `version` UInt64) ENGINE = MergeTree PARTITION BY toYYYYMM(target_day) ORDER BY (org_id, target_day, version) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "daily_metrics_touched_days",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE daily_metrics_touched_days (`org_id` String, `day` Date, `repo_id` UUID, `kind` LowCardinality(String), `at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, repo_id, kind) SETTINGS index_granularity = 8192"
     },
     {
       "name": "deploy_metrics_daily",
@@ -224,7 +278,7 @@
     {
       "name": "deployments",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE deployments (`repo_id` UUID, `deployment_id` String, `status` Nullable(String), `environment` Nullable(String), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `deployed_at` Nullable(DateTime64(3, 'UTC')), `merged_at` Nullable(DateTime64(3, 'UTC')), `pull_request_number` Nullable(UInt32), `release_ref` String DEFAULT '', `release_ref_confidence` Float64 DEFAULT 0., `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE deployments (`repo_id` UUID, `deployment_id` String, `status` Nullable(String), `environment` Nullable(String), `started_at` Nullable(DateTime64(3, 'UTC')), `finished_at` Nullable(DateTime64(3, 'UTC')), `deployed_at` Nullable(DateTime64(3, 'UTC')), `merged_at` Nullable(DateTime64(3, 'UTC')), `pull_request_number` Nullable(UInt32), `pull_request_tier` LowCardinality(String) DEFAULT '', `release_ref` String DEFAULT '', `release_ref_confidence` Float64 DEFAULT 0., `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, deployment_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "dora_metrics_daily",
@@ -332,24 +386,14 @@
       "create": "CREATE TABLE incident_metrics_daily (`repo_id` UUID, `day` Date, `incidents_count` UInt32, `mttr_p50_hours` Nullable(Float64), `mttr_p90_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
     },
     {
-      "name": "investment_classifications_daily",
-      "engine": "MergeTree",
-      "create": "CREATE TABLE investment_classifications_daily (`repo_id` Nullable(UUID), `day` Date, `artifact_type` LowCardinality(String), `artifact_id` String, `provider` LowCardinality(String), `investment_area` LowCardinality(String), `project_stream` LowCardinality(String), `confidence` Float64, `rule_id` String, `computed_at` DateTime DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, artifact_type, investment_area, project_stream, artifact_id) SETTINGS index_granularity = 8192"
-    },
-    {
       "name": "investment_explanations",
       "engine": "ReplacingMergeTree",
       "create": "CREATE TABLE investment_explanations (`cache_key` String, `explanation_json` String, `llm_provider` String, `llm_model` Nullable(String), `computed_at` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, cache_key) SETTINGS index_granularity = 8192"
     },
     {
-      "name": "investment_metrics_daily",
-      "engine": "MergeTree",
-      "create": "CREATE TABLE investment_metrics_daily (`repo_id` Nullable(UUID), `day` Date, `team_id` LowCardinality(Nullable(String)), `investment_area` LowCardinality(String), `project_stream` LowCardinality(String), `delivery_units` UInt32, `work_items_completed` UInt32, `prs_merged` UInt32, `churn_loc` UInt64, `cycle_p50_hours` Float64, `computed_at` DateTime DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id, investment_area, project_stream) SETTINGS allow_nullable_key = 1, index_granularity = 8192"
-    },
-    {
       "name": "issue_type_metrics_daily",
       "engine": "MergeTree",
-      "create": "CREATE TABLE issue_type_metrics_daily (`repo_id` Nullable(UUID), `day` Date, `provider` LowCardinality(String), `team_id` LowCardinality(String), `issue_type_norm` LowCardinality(String), `created_count` UInt32, `completed_count` UInt32, `active_count` UInt32, `cycle_p50_hours` Float64, `cycle_p90_hours` Float64, `lead_p50_hours` Float64, `computed_at` DateTime DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, team_id, issue_type_norm) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE issue_type_metrics_daily (`repo_id` Nullable(UUID), `day` Date, `provider` LowCardinality(String), `team_id` LowCardinality(String), `issue_type_norm` LowCardinality(String), `created_count` UInt32, `completed_count` UInt32, `active_count` UInt32, `cycle_p50_hours` Float64, `cycle_p90_hours` Float64, `lead_p50_hours` Nullable(Float64), `computed_at` DateTime DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, team_id, issue_type_norm) SETTINGS index_granularity = 8192"
     },
     {
       "name": "jira_project_ops_team_links",
@@ -357,9 +401,14 @@
       "create": "CREATE TABLE jira_project_ops_team_links (`project_key` String, `ops_team_id` String, `project_name` String, `ops_team_name` String, `updated_at` DateTime64(6), `last_synced` DateTime64(6) DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, project_key, ops_team_id) SETTINGS index_granularity = 8192"
     },
     {
+      "name": "llm_categorization_attempts",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE llm_categorization_attempts (`org_id` String, `run_id` String, `work_unit_id` String, `role` LowCardinality(String), `config` String, `rubric_sha256` String, `provider` LowCardinality(String), `api_mode` LowCardinality(String), `model_requested` String, `model_returned` String, `attempt` UInt8, `kind` LowCardinality(String), `http_status` UInt16, `error_class` LowCardinality(String), `state` LowCardinality(String), `request_id` String, `input_tokens` UInt32, `output_tokens` UInt32, `cached_input_tokens` UInt32, `billed_cost_usd` Float64, `rates_version` LowCardinality(String), `latency_ms` UInt32, `retry_wait_ms` UInt32, `computed_at` DateTime64(3), `usage_reason` LowCardinality(String) DEFAULT '', `model_from_request` UInt8 DEFAULT 0, `request_id_source` LowCardinality(String) DEFAULT '', `endpoint_type` LowCardinality(String) DEFAULT '', `gateway_id` String DEFAULT '') ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, run_id, work_unit_id, role, config, kind, attempt) TTL toDateTime(computed_at) + toIntervalDay(400) SETTINGS index_granularity = 8192"
+    },
+    {
       "name": "llm_token_usage",
       "engine": "MergeTree",
-      "create": "CREATE TABLE llm_token_usage (`org_id` String, `run_id` String DEFAULT '', `provider` LowCardinality(String), `model` String, `source` LowCardinality(String), `use_case` LowCardinality(String) DEFAULT 'legacy', `input_tokens` UInt64, `output_tokens` UInt64, `calls` UInt64, `computed_at` DateTime) ENGINE = MergeTree PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, provider, model, source, computed_at) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE llm_token_usage (`org_id` String, `run_id` String DEFAULT '', `provider` LowCardinality(String), `model` String, `source` LowCardinality(String), `use_case` LowCardinality(String) DEFAULT 'legacy', `input_tokens` UInt64, `output_tokens` UInt64, `calls` UInt64, `computed_at` DateTime, `credential_source` LowCardinality(String) DEFAULT 'platform') ENGINE = MergeTree PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, provider, model, source, computed_at) SETTINGS index_granularity = 8192"
     },
     {
       "name": "manual_attribution_fallbacks",
@@ -439,17 +488,17 @@
     {
       "name": "project_membership_presence",
       "engine": "View",
-      "create": "CREATE VIEW project_membership_presence (`org_id` String, `subject_kind` String, `repo_id` UUID, `subject_id` String, `provider` String, `project_id` String, `project_key` String, `observed_at` DateTime64(3), `source` String) AS WITH touched AS (SELECT org_id, subject_kind, repo_id, subject_id, provider, occurred_at, event_id, to_project_id, arrayJoin(arrayFilter(pair -\u003e ((pair.1) != ''), if(from_project_id = to_project_id, [(to_project_id, to_project_key)], [(to_project_id, to_project_key), (from_project_id, from_project_key)]))) AS touch FROM project_membership_transitions FINAL), latest_membership AS (SELECT org_id, subject_kind, repo_id, subject_id, touch.1 AS project_id, argMax(touch.2, (occurred_at, event_id)) AS project_key, argMax(provider, (occurred_at, event_id)) AS provider, argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id, max(occurred_at) AS observed_at FROM touched GROUP BY org_id, subject_kind, repo_id, subject_id, project_id), subjects_with_history AS (SELECT DISTINCT org_id, subject_kind, repo_id, subject_id FROM project_membership_transitions FINAL) SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, project_key, observed_at, 'transition' AS source FROM latest_membership WHERE latest_to_project_id = project_id UNION ALL WITH touched AS (SELECT org_id, subject_kind, repo_id, subject_id, provider, occurred_at, event_id, to_project_id, arrayJoin(arrayFilter(pair -\u003e ((pair.1) != ''), if(from_project_id = to_project_id, [(to_project_id, to_project_key)], [(to_project_id, to_project_key), (from_project_id, from_project_key)]))) AS touch FROM project_membership_transitions FINAL), latest_membership AS (SELECT org_id, subject_kind, repo_id, subject_id, touch.1 AS project_id, argMax(touch.2, (occurred_at, event_id)) AS project_key, argMax(provider, (occurred_at, event_id)) AS provider, argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id, max(occurred_at) AS observed_at FROM touched GROUP BY org_id, subject_kind, repo_id, subject_id, project_id), subjects_with_history AS (SELECT DISTINCT org_id, subject_kind, repo_id, subject_id FROM project_membership_transitions FINAL) SELECT w.org_id AS org_id, 'work_item' AS subject_kind, w.repo_id AS repo_id, w.work_item_id AS subject_id, w.provider AS provider, w.project_id AS project_id, w.project_key AS project_key, w.updated_at AS observed_at, 'work_item_column' AS source FROM work_items AS w FINAL WHERE (w.project_id != '') AND (w.provider != 'gitlab') AND ((w.provider != 'github') OR startsWith(w.project_id, 'ghprojv2:')) AND ((w.org_id, 'work_item', w.repo_id, w.work_item_id) NOT IN (SELECT org_id, subject_kind, repo_id, subject_id FROM subjects_with_history))"
+      "create": "CREATE VIEW project_membership_presence (`org_id` String, `subject_kind` String, `repo_id` UUID, `subject_id` String, `provider` String, `project_id` String, `project_key` String, `observed_at` DateTime64(3), `last_synced` DateTime64(3, 'UTC'), `source` String) AS WITH touched AS (SELECT org_id, subject_kind, repo_id, subject_id, provider, occurred_at, ingested_at, event_id, to_project_id, arrayJoin(arrayFilter(pair -\u003e ((pair.1) != ''), if(from_project_id = to_project_id, [(to_project_id, to_project_key)], [(to_project_id, to_project_key), (from_project_id, from_project_key)]))) AS touch FROM project_membership_transitions FINAL), latest_membership AS (SELECT org_id, subject_kind, repo_id, subject_id, touch.1 AS project_id, argMax(touch.2, (occurred_at, event_id)) AS project_key, argMax(provider, (occurred_at, event_id)) AS provider, argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id, max(occurred_at) AS observed_at, max(ingested_at) AS max_ingested_at FROM touched GROUP BY org_id, subject_kind, repo_id, subject_id, project_id), subjects_with_history AS (SELECT DISTINCT org_id, subject_kind, repo_id, subject_id FROM project_membership_transitions FINAL) SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, project_key, observed_at, max_ingested_at AS last_synced, 'transition' AS source FROM latest_membership WHERE latest_to_project_id = project_id UNION ALL WITH touched AS (SELECT org_id, subject_kind, repo_id, subject_id, provider, occurred_at, ingested_at, event_id, to_project_id, arrayJoin(arrayFilter(pair -\u003e ((pair.1) != ''), if(from_project_id = to_project_id, [(to_project_id, to_project_key)], [(to_project_id, to_project_key), (from_project_id, from_project_key)]))) AS touch FROM project_membership_transitions FINAL), latest_membership AS (SELECT org_id, subject_kind, repo_id, subject_id, touch.1 AS project_id, argMax(touch.2, (occurred_at, event_id)) AS project_key, argMax(provider, (occurred_at, event_id)) AS provider, argMax(to_project_id, (occurred_at, event_id)) AS latest_to_project_id, max(occurred_at) AS observed_at, max(ingested_at) AS max_ingested_at FROM touched GROUP BY org_id, subject_kind, repo_id, subject_id, project_id), subjects_with_history AS (SELECT DISTINCT org_id, subject_kind, repo_id, subject_id FROM project_membership_transitions FINAL) SELECT w.org_id AS org_id, 'work_item' AS subject_kind, w.repo_id AS repo_id, w.work_item_id AS subject_id, w.provider AS provider, w.project_id AS project_id, w.project_key AS project_key, w.updated_at AS observed_at, w.ingested_at AS last_synced, 'work_item_column' AS source FROM work_items AS w FINAL WHERE (w.project_id != '') AND (w.provider != 'gitlab') AND ((w.provider != 'github') OR startsWith(w.project_id, 'ghprojv2:')) AND ((w.org_id, 'work_item', w.repo_id, w.work_item_id) NOT IN (SELECT org_id, subject_kind, repo_id, subject_id FROM subjects_with_history))"
     },
     {
       "name": "project_membership_transitions",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE project_membership_transitions (`org_id` String, `source_id` Nullable(UUID), `repo_id` UUID, `subject_kind` LowCardinality(String), `subject_id` String, `provider` LowCardinality(String), `from_project_id` String, `to_project_id` String, `from_project_key` String, `to_project_key` String, `actor` String, `occurred_at` DateTime64(3), `last_synced` DateTime64(3), `event_id` String) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE project_membership_transitions (`org_id` String, `source_id` Nullable(UUID), `repo_id` UUID, `subject_kind` LowCardinality(String), `subject_id` String, `provider` LowCardinality(String), `from_project_id` String, `to_project_id` String, `from_project_key` String, `to_project_key` String, `actor` String, `occurred_at` DateTime64(3), `last_synced` DateTime64(3), `event_id` String, `ingested_at` DateTime64(3, 'UTC') DEFAULT now64(3) COMMENT 'ingested_at = server insert time (DEFAULT now64(3), stamped when the server processes the insert). It is not commit order across concurrent inserts. A reader must re-read a window of at least 300 seconds behind its cursor (ingested_at \u003e cursor - 300s) and dedup by key with FINAL. Rows that existed before migration 100 carry the migration time.') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, subject_kind, repo_id, subject_id, occurred_at, event_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "projects",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE projects (`id` String, `org_id` String, `provider` String, `project_key` Nullable(String), `name` String, `is_active` UInt8 DEFAULT 1, `state` LowCardinality(String) DEFAULT '', `target_date` Nullable(Date), `url` String DEFAULT '', `team_ids` Array(String) DEFAULT [], `team_keys` Array(String) DEFAULT [], `lead_id` Nullable(String), `lead_name` Nullable(String), `lead_email` Nullable(String), `updated_at` DateTime64(3, 'UTC'), `last_synced` DateTime64(3, 'UTC') DEFAULT now64(3)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE projects (`id` String, `org_id` String, `provider` String, `project_key` Nullable(String), `name` String, `is_active` UInt8 DEFAULT 1, `state` LowCardinality(String) DEFAULT '', `state_source` LowCardinality(String) DEFAULT '', `target_date` Nullable(Date), `target_state` LowCardinality(String) DEFAULT if((provider = 'linear') AND (target_date IS NOT NULL), 'stated', 'unknown'), `target_kind` LowCardinality(String) DEFAULT if((provider = 'linear') AND (target_date IS NOT NULL), 'project', ''), `target_source` LowCardinality(String) DEFAULT if((provider = 'linear') AND (target_date IS NOT NULL), 'linear.project.targetDate', ''), `target_ref` String DEFAULT '', `target_ref_name` String DEFAULT '', `target_other_open` Nullable(UInt32), `target_fetched_at` Nullable(DateTime64(3, 'UTC')), `url` String DEFAULT '', `team_ids` Array(String) DEFAULT [], `team_keys` Array(String) DEFAULT [], `lead_id` Nullable(String), `lead_name` Nullable(String), `lead_email` Nullable(String), `updated_at` DateTime64(3, 'UTC'), `last_synced` DateTime64(3, 'UTC') DEFAULT now64(3)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "provider_request_usage",
@@ -467,6 +516,11 @@
       "create": "CREATE TABLE release_impact_daily (`org_id` String DEFAULT 'default', `day` Date, `release_ref` String, `environment` String, `repo_id` String, `release_user_friction_delta` Nullable(Float64), `release_post_friction_rate` Nullable(Float64), `release_error_rate_delta` Nullable(Float64), `release_post_error_rate` Nullable(Float64), `time_to_first_user_issue_after_release` Nullable(Float64), `release_impact_confidence_score` Float32, `release_impact_coverage_ratio` Float32, `flag_exposure_rate` Nullable(Float64), `flag_activation_rate` Nullable(Float64), `flag_reliability_guardrail` Nullable(Float64), `flag_friction_delta` Nullable(Float64), `flag_rollout_half_life` Nullable(Float64), `flag_churn_rate` Nullable(Float64), `issue_to_release_impact_link_rate` Nullable(Float64), `rollback_or_disable_after_impact_spike` UInt32, `coverage_ratio` Float32, `missing_required_fields_count` UInt32, `instrumentation_change_flag` UInt8 DEFAULT 0, `data_completeness` Float32, `concurrent_deploy_count` UInt32, `computed_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, release_ref, environment, day) TTL day + toIntervalDay(365) SETTINGS index_granularity = 8192"
     },
     {
+      "name": "repo_change_failure_daily",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE repo_change_failure_daily (`org_id` String, `repo_id` UUID, `day` Date, `deployments_count` UInt32 COMMENT 'Deployments of the day but a cancelled one: a cancelled deployment never reached its environment. This meaning holds from migration 125 on, and the recompute makes older days consistent.', `failed_deployments_native` UInt32, `failed_deployments_heuristic` UInt32, `incidents_direct` UInt32, `incidents_via_deployment` UInt32, `computed_at` DateTime64(3, 'UTC'), `failed_deployments_status` UInt32 DEFAULT 0 COMMENT 'Deployments whose own status is failed that no incident link names. Failed in total is native plus heuristic plus status.', `deployments_status_known` UInt32 DEFAULT 0 COMMENT 'Deployments with a final status, succeeded or failed. The status evidence and the base of a rate that only statuses state.') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
+    },
+    {
       "name": "repo_complexity_daily",
       "engine": "ReplacingMergeTree",
       "create": "CREATE TABLE repo_complexity_daily (`repo_id` UUID, `day` Date, `loc_total` UInt64, `cyclomatic_total` UInt64, `cyclomatic_per_kloc` Float64, `high_complexity_functions` UInt64, `very_high_complexity_functions` UInt64, `computed_at` DateTime DEFAULT now(), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
@@ -474,7 +528,7 @@
     {
       "name": "repo_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE repo_metrics_daily (`repo_id` UUID, `day` Date, `commits_count` UInt32, `total_loc_touched` UInt32, `avg_commit_size_loc` Float64, `large_commit_ratio` Float64, `prs_merged` UInt32, `median_pr_cycle_hours` Float64, `pr_cycle_p75_hours` Float64, `pr_cycle_p90_hours` Float64, `prs_with_first_review` UInt32, `pr_first_review_p50_hours` Nullable(Float64), `pr_first_review_p90_hours` Nullable(Float64), `pr_review_time_p50_hours` Nullable(Float64), `pr_pickup_time_p50_hours` Nullable(Float64), `large_pr_ratio` Float64, `pr_rework_ratio` Float64, `mttr_hours` Nullable(Float64), `change_failure_rate` Float64, `computed_at` DateTime('UTC'), `pr_size_p50_loc` Nullable(Float64), `pr_size_p90_loc` Nullable(Float64), `pr_comments_per_100_loc` Nullable(Float64), `pr_reviews_per_100_loc` Nullable(Float64), `rework_churn_ratio_30d` Float64, `single_owner_file_ratio_30d` Float64, `review_load_top_reviewer_ratio` Float64, `bus_factor` UInt32 DEFAULT 0, `code_ownership_gini` Float64 DEFAULT 0., `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE repo_metrics_daily (`repo_id` UUID, `day` Date, `commits_count` UInt32, `total_loc_touched` UInt32, `avg_commit_size_loc` Float64, `large_commit_ratio` Float64, `prs_merged` UInt32, `median_pr_cycle_hours` Float64, `pr_cycle_p75_hours` Float64, `pr_cycle_p90_hours` Float64, `prs_with_first_review` UInt32, `pr_first_review_p50_hours` Nullable(Float64), `pr_first_review_p90_hours` Nullable(Float64), `pr_review_time_p50_hours` Nullable(Float64), `pr_pickup_time_p50_hours` Nullable(Float64), `large_pr_ratio` Float64, `pr_rework_ratio` Float64, `mttr_hours` Nullable(Float64), `change_failure_rate` Float64, `computed_at` DateTime('UTC'), `pr_size_p50_loc` Nullable(Float64), `pr_size_p90_loc` Nullable(Float64), `pr_comments_per_100_loc` Nullable(Float64), `pr_reviews_per_100_loc` Nullable(Float64), `rework_churn_ratio_30d` Float64, `single_owner_file_ratio_30d` Float64, `review_load_top_reviewer_ratio` Float64, `bus_factor` UInt32 DEFAULT 0, `code_ownership_gini` Float64 DEFAULT 0., `org_id` String DEFAULT 'default', `change_failure_rate_incident` Nullable(Float64), `revert_rate` Nullable(Float64), `prs_merged_reviewed` Nullable(UInt32), `prs_merged_rework` Nullable(UInt32), `prs_merged_no_rework_signal` Nullable(UInt32), `pr_rework_ratio_reviewed` Nullable(Float64)) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "report_plans",
@@ -489,7 +543,7 @@
     {
       "name": "repos",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE repos (`id` UUID, `repo` String, `ref` Nullable(String), `created_at` DateTime64(3, 'UTC'), `settings` Nullable(String), `tags` Nullable(String), `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default', `provider` String DEFAULT 'unknown', `source_id` Nullable(UUID) DEFAULT NULL) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE repos (`id` UUID, `repo` String, `ref` Nullable(String), `created_at` DateTime64(3, 'UTC'), `settings` Nullable(String), `tags` Nullable(String), `last_synced` DateTime64(3, 'UTC'), `org_id` String DEFAULT 'default', `provider` String DEFAULT 'unknown', `source_id` Nullable(UUID) DEFAULT NULL, `provider_repo_id` String DEFAULT '', `identity_path` String DEFAULT '') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "review_edges_daily",
@@ -519,7 +573,7 @@
     {
       "name": "team_complexity_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE team_complexity_daily (`org_id` String, `team_id` String, `day` Date, `loc_total` UInt64, `cyclomatic_total` UInt64, `cyclomatic_per_kloc` Float64, `high_complexity_functions` UInt64, `very_high_complexity_functions` UInt64, `contributing_repo_count` UInt32, `computed_at` DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE team_complexity_daily (`org_id` String, `team_id` String, `day` Date, `loc_total` Float64, `cyclomatic_total` Float64, `cyclomatic_per_kloc` Float64, `high_complexity_functions` Float64, `very_high_complexity_functions` Float64, `contributing_repo_count` UInt32, `computed_at` DateTime64(6, 'UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "team_drift_changes",
@@ -529,17 +583,17 @@
     {
       "name": "team_memberships",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE team_memberships (`org_id` String, `provider` String, `team_id` String, `member_id` String, `raw_provider_user_id` Nullable(String), `raw_email` Nullable(String), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC'), `identity_facets` Array(String) DEFAULT []) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, team_id, member_id, source, valid_from) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE team_memberships (`org_id` String, `provider` String, `team_id` String, `member_id` String, `raw_provider_user_id` Nullable(String), `raw_email` Nullable(String), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC'), `identity_facets` Array(String) DEFAULT [], `provider_user_id` Nullable(String)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, team_id, member_id, source, valid_from) SETTINGS index_granularity = 8192"
     },
     {
       "name": "team_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE team_metrics_daily (`day` Date, `team_id` LowCardinality(String), `team_name` String, `commits_count` UInt32, `after_hours_commits_count` UInt32, `weekend_commits_count` UInt32, `after_hours_commit_ratio` Float64, `weekend_commit_ratio` Float64, `computed_at` DateTime64(6, 'UTC'), `org_id` String DEFAULT 'default', `repo_id` String DEFAULT '') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, repo_id, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE team_metrics_daily (`day` Date, `team_id` LowCardinality(String), `team_name` String, `commits_count` Float64, `after_hours_commits_count` Float64, `weekend_commits_count` Float64, `after_hours_commit_ratio` Float64, `weekend_commit_ratio` Float64, `computed_at` DateTime64(6, 'UTC'), `org_id` String DEFAULT 'default', `repo_id` String DEFAULT '') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, repo_id, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "team_project_ownership",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE team_project_ownership (`org_id` String, `provider` String, `team_id` String, `project_id` String, `project_key` Nullable(String), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE team_project_ownership (`org_id` String, `provider` String, `team_id` String, `project_id` String, `project_key` Nullable(String), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC'), `last_synced` DateTime64(3, 'UTC') DEFAULT now64(3) COMMENT 'last_synced = server insert time (DEFAULT now64(3), stamped when the server processes the insert). It is not commit order across concurrent inserts. A reader must re-read a window of at least 300 seconds behind its cursor (last_synced \u003e cursor - 300s) and dedup by key with FINAL.') ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, project_id, team_id, source, valid_from) SETTINGS index_granularity = 8192"
     },
     {
       "name": "team_provider_observations",
@@ -549,7 +603,7 @@
     {
       "name": "team_repo_ownership",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE team_repo_ownership (`org_id` String, `provider` String, `team_id` String, `repo_id` Nullable(UUID), `repo_full_name` String, `match_type` Enum8('exact' = 1, 'pattern' = 2), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE team_repo_ownership (`org_id` String, `provider` String, `team_id` String, `repo_id` Nullable(UUID), `repo_full_name` String, `match_type` Enum8('exact' = 1, 'pattern' = 2), `source` Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5), `is_primary` UInt8 DEFAULT 0, `specificity` UInt16 DEFAULT 0, `priority` Int32 DEFAULT 0, `valid_from` DateTime64(3, 'UTC'), `valid_to` Nullable(DateTime64(3, 'UTC')), `updated_at` DateTime64(3, 'UTC'), `share` Nullable(Float64)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from) SETTINGS index_granularity = 8192"
     },
     {
       "name": "team_sync_policies",
@@ -559,7 +613,7 @@
     {
       "name": "teams",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE teams (`id` String, `team_uuid` UUID, `name` String, `description` Nullable(String), `members` Array(String), `manual_members` Array(String) DEFAULT [], `updated_at` DateTime64(6), `last_synced` DateTime64(6) DEFAULT now(), `org_id` String DEFAULT 'default', `provider` String DEFAULT '', `native_team_key` Nullable(String), `parent_team_id` Nullable(String), `project_keys` Array(String) DEFAULT [], `repo_patterns` Array(String) DEFAULT [], `is_active` UInt8 DEFAULT 1, `source_id` Nullable(UUID) DEFAULT NULL) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE teams (`id` String, `team_uuid` UUID, `name` String, `description` Nullable(String), `manual_members` Array(String) DEFAULT [], `updated_at` DateTime64(6), `last_synced` DateTime64(6) DEFAULT now(), `org_id` String DEFAULT 'default', `provider` String DEFAULT '', `native_team_key` Nullable(String), `parent_team_id` Nullable(String), `project_keys` Array(String) DEFAULT [], `repo_patterns` Array(String) DEFAULT [], `is_active` UInt8 DEFAULT 1, `source_id` Nullable(UUID) DEFAULT NULL, `created_at` Nullable(DateTime64(6)), `deleted_at` Nullable(DateTime64(6)), `provider_team_id` String DEFAULT '', `provider_name` String DEFAULT '', `gone_at` Nullable(DateTime64(6))) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "telemetry_signal_bucket",
@@ -634,12 +688,12 @@
     {
       "name": "testops_test_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE testops_test_metrics_daily (`repo_id` UUID, `day` Date, `total_cases` UInt32, `passed_count` UInt32, `failed_count` UInt32, `skipped_count` UInt32, `quarantined_count` UInt32, `pass_rate` Float64, `failure_rate` Float64, `flake_rate` Float64, `retry_dependency_rate` Float64, `total_suites` UInt32, `suite_duration_p50_seconds` Nullable(Float64), `suite_duration_p95_seconds` Nullable(Float64), `failure_recurrence_score` Float64, `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE testops_test_metrics_daily (`repo_id` UUID, `day` Date, `total_cases` UInt32, `passed_count` UInt32, `failed_count` UInt32, `skipped_count` UInt32, `quarantined_count` UInt32, `pass_rate` Float64, `failure_rate` Float64, `flake_rate` Float64, `flake_cases` Nullable(UInt32), `distinct_cases` Nullable(UInt32), `retry_dependency_rate` Float64, `total_suites` UInt32, `suite_duration_p50_seconds` Nullable(Float64), `suite_duration_p95_seconds` Nullable(Float64), `failure_recurrence_score` Float64, `team_id` Nullable(String), `service_id` Nullable(String), `org_id` LowCardinality(String) DEFAULT '', `computed_at` DateTime('UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "user_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE user_metrics_daily (`repo_id` UUID, `day` Date, `author_email` String, `commits_count` UInt32, `loc_added` UInt32, `loc_deleted` UInt32, `files_changed` UInt32, `large_commits_count` UInt32, `avg_commit_size_loc` Float64, `prs_authored` UInt32, `prs_merged` UInt32, `avg_pr_cycle_hours` Float64, `median_pr_cycle_hours` Float64, `pr_cycle_p75_hours` Float64, `pr_cycle_p90_hours` Float64, `prs_with_first_review` UInt32, `pr_first_review_p50_hours` Nullable(Float64), `pr_first_review_p90_hours` Nullable(Float64), `pr_review_time_p50_hours` Nullable(Float64), `pr_pickup_time_p50_hours` Nullable(Float64), `reviews_given` UInt32, `changes_requested_given` UInt32, `reviews_received` UInt32, `review_reciprocity` Float64, `pr_interruption_load` UInt32 DEFAULT 0, `context_spread_count` UInt32 DEFAULT 0, `review_request_load` UInt32 DEFAULT 0, `team_id` Nullable(String), `team_name` Nullable(String), `computed_at` DateTime('UTC'), `active_hours` Float64 DEFAULT 0., `weekend_days` UInt8 DEFAULT 0, `identity_id` String DEFAULT author_email, `loc_touched` UInt32 DEFAULT 0, `prs_opened` UInt32 DEFAULT 0, `work_items_completed` UInt32 DEFAULT 0, `work_items_active` UInt32 DEFAULT 0, `delivery_units` UInt32 DEFAULT 0, `cycle_p50_hours` Float64 DEFAULT 0, `cycle_p90_hours` Float64 DEFAULT 0, `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, author_email, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE user_metrics_daily (`repo_id` UUID, `day` Date, `author_email` String, `commits_count` UInt32, `loc_added` UInt32, `loc_deleted` UInt32, `files_changed` UInt32, `large_commits_count` UInt32, `avg_commit_size_loc` Float64, `prs_authored` UInt32, `prs_merged` UInt32, `avg_pr_cycle_hours` Float64, `median_pr_cycle_hours` Float64, `pr_cycle_p75_hours` Float64, `pr_cycle_p90_hours` Float64, `prs_with_first_review` UInt32, `pr_first_review_p50_hours` Nullable(Float64), `pr_first_review_p90_hours` Nullable(Float64), `pr_review_time_p50_hours` Nullable(Float64), `pr_pickup_time_p50_hours` Nullable(Float64), `reviews_given` UInt32, `changes_requested_given` UInt32, `reviews_received` UInt32, `review_reciprocity` Float64, `pr_interruption_load` UInt32 DEFAULT 0, `context_spread_count` UInt32 DEFAULT 0, `review_request_load` UInt32 DEFAULT 0, `team_id` Nullable(String), `team_name` Nullable(String), `computed_at` DateTime('UTC'), `active_hours` Float64 DEFAULT 0., `weekend_days` UInt8 DEFAULT 0, `identity_id` String DEFAULT author_email, `loc_touched` UInt32 DEFAULT 0, `prs_opened` UInt32 DEFAULT 0, `work_items_completed` UInt32 DEFAULT 0, `work_items_active` UInt32 DEFAULT 0, `delivery_units` UInt32 DEFAULT 0, `cycle_p50_hours` Float64 DEFAULT 0, `cycle_p90_hours` Float64 DEFAULT 0, `org_id` String DEFAULT 'default', `retracted` UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, repo_id, author_email, day) SETTINGS index_granularity = 8192"
     },
     {
       "name": "v_file_hotspots_windowed",
@@ -652,11 +706,6 @@
       "create": "CREATE VIEW v_ic_landscape_points (`as_of_day` Date, `map_name` LowCardinality(String), `team_id` LowCardinality(String), `identity_id` String, `x_raw` Float64, `y_raw` Float64, `x_norm` Float64, `y_norm` Float64) AS SELECT as_of_day, map_name, team_id, identity_id, x_raw, y_raw, x_norm, y_norm FROM ic_landscape_rolling_30d"
     },
     {
-      "name": "v_investment_flow_edges",
-      "engine": "View",
-      "create": "CREATE VIEW v_investment_flow_edges (`day` Date, `team_id` LowCardinality(Nullable(String)), `source` LowCardinality(String), `target` LowCardinality(String), `delivery_units` UInt32, `churn_loc` UInt64, `work_items_completed` UInt32, `provider` String) AS SELECT day, toNullable(team_id) AS team_id, investment_area AS source, project_stream AS target, delivery_units, churn_loc, work_items_completed, '' AS provider FROM investment_metrics_daily"
-    },
-    {
       "name": "work_graph_commit_file",
       "engine": "View",
       "create": "CREATE VIEW work_graph_commit_file (`repo_id` UUID, `commit_hash` String, `file_path` String, `additions` Int32, `deletions` Int32) AS SELECT repo_id, commit_hash, file_path, additions, deletions FROM git_commit_stats"
@@ -664,7 +713,7 @@
     {
       "name": "work_graph_deployment_incident_edges",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_graph_deployment_incident_edges (`edge_id` String, `org_id` UUID, `deployment_id` String, `incident_id` String, `provider` LowCardinality(String), `repo_id` Nullable(UUID), `confidence` Float32, `source` LowCardinality(String), `evidence` String, `observed_at` DateTime64(3, 'UTC'), `computed_at` DateTime64(3, 'UTC') DEFAULT now64()) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(observed_at) ORDER BY (org_id, deployment_id, incident_id, source) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_graph_deployment_incident_edges (`edge_id` String, `org_id` UUID, `deployment_id` String, `incident_id` String, `provider` LowCardinality(String), `repo_id` Nullable(UUID), `confidence` Float32, `source` LowCardinality(String), `evidence` String, `observed_at` DateTime64(3, 'UTC'), `computed_at` DateTime64(3, 'UTC') DEFAULT now64(), `version_rank` UInt64 MATERIALIZED ((multiIf(source = 'native', 3, source = 'explicit_text', 2, source = 'heuristic', 1, 0) + 1) * 1125899906842624) + toUnixTimestamp64Milli(computed_at)) ENGINE = ReplacingMergeTree(version_rank) ORDER BY (org_id, ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')), deployment_id, incident_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_graph_edges",
@@ -679,7 +728,7 @@
     {
       "name": "work_graph_pr_commit",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_graph_pr_commit (`repo_id` UUID COMMENT 'Repository UUID', `pr_number` UInt32 COMMENT 'Pull request number', `commit_hash` String COMMENT 'Git commit SHA', `confidence` Float32 COMMENT 'Confidence score 0.0-1.0', `provenance` String COMMENT 'How link was discovered: native|explicit_text|heuristic', `evidence` String COMMENT 'Source of link (e.g., api_pr_commits)', `last_synced` DateTime64(3, 'UTC') COMMENT 'Last sync timestamp', `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, pr_number, commit_hash) SETTINGS index_granularity = 8192 COMMENT 'Fast path table for PR to commit relationships'"
+      "create": "CREATE TABLE work_graph_pr_commit (`repo_id` UUID COMMENT 'Repository UUID', `pr_number` UInt32 COMMENT 'Pull request number', `commit_hash` String COMMENT 'Git commit SHA', `confidence` Float32 COMMENT 'Confidence score 0.0-1.0', `provenance` String COMMENT 'How link was discovered: native|explicit_text|heuristic', `evidence` String COMMENT 'Source of link (e.g., api_pr_commits)', `last_synced` DateTime64(3, 'UTC') COMMENT 'Last sync timestamp', `org_id` String DEFAULT 'default', `version_rank` UInt64 MATERIALIZED ((multiIf(provenance = 'native', 3, provenance = 'explicit_text', 2, provenance = 'heuristic', 1, 0) + 1) * 1125899906842624) + toUnixTimestamp64Milli(last_synced)) ENGINE = ReplacingMergeTree(version_rank) ORDER BY (org_id, repo_id, pr_number, commit_hash) SETTINGS index_granularity = 8192 COMMENT 'Fast path table for PR to commit relationships'"
     },
     {
       "name": "work_graph_pr_deployment_edges",
@@ -707,6 +756,16 @@
       "create": "CREATE TABLE work_item_attribution_backstop_scoped_runs (`org_id` String, `scope_kind` LowCardinality(String), `scope_id` String, `run_id` String, `completed_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(completed_at) ORDER BY (org_id, scope_kind, scope_id, run_id) SETTINGS index_granularity = 8192"
     },
     {
+      "name": "work_item_blocked_durations_daily",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE work_item_blocked_durations_daily (`day` Date, `provider` String, `work_scope_id` String, `team_id` String, `team_name` String, `work_item_id` String, `duration_hours` Float64, `computed_at` DateTime64(3, 'UTC'), `org_id` String) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, provider, work_item_id) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_completion_daily",
+      "engine": "MergeTree",
+      "create": "CREATE TABLE work_item_completion_daily (`org_id` String, `repo_id` Nullable(UUID), `day` Date, `team_id` LowCardinality(String), `delivery_units` UInt32, `work_items_completed` UInt32, `prs_merged` UInt32, `churn_loc` Nullable(UInt64), `cycle_p50_hours` Float64, `computed_at` DateTime DEFAULT now()) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, day, team_id) SETTINGS allow_nullable_key = 1, index_granularity = 8192"
+    },
+    {
       "name": "work_item_cycle_times",
       "engine": "ReplacingMergeTree",
       "create": "CREATE TABLE work_item_cycle_times (`work_item_id` String, `provider` LowCardinality(String), `day` Date, `work_scope_id` LowCardinality(String), `team_id` Nullable(String), `team_name` Nullable(String), `assignee` Nullable(String), `type` LowCardinality(String), `status` LowCardinality(String), `created_at` DateTime('UTC'), `started_at` Nullable(DateTime('UTC')), `completed_at` Nullable(DateTime('UTC')), `cycle_time_hours` Nullable(Float64), `lead_time_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `active_time_hours` Float64 DEFAULT 0, `wait_time_hours` Float64 DEFAULT 0, `flow_efficiency` Float64 DEFAULT 0, `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_item_id) SETTINGS index_granularity = 8192"
@@ -714,17 +773,47 @@
     {
       "name": "work_item_dependencies",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_item_dependencies (`source_work_item_id` String, `target_work_item_id` String, `relationship_type` String, `relationship_type_raw` String, `last_synced` DateTime64(3), `org_id` String DEFAULT 'default', `source_id` Nullable(UUID) DEFAULT NULL, `relationship_semantics_version` String DEFAULT 'legacy.v1') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_item_dependencies (`source_work_item_id` String, `target_work_item_id` String, `relationship_type` String, `relationship_type_raw` String, `last_synced` DateTime64(3), `org_id` String DEFAULT 'default', `source_id` Nullable(UUID) DEFAULT NULL, `relationship_semantics_version` String DEFAULT 'legacy.v1', `relation_started_at` Nullable(DateTime64(3)) COMMENT 'Provider time of the link, when the synced payload carries one. NULL = not reported. See work_item_dependency_first_seen for the fallback.', `relation_writer` Nullable(String) COMMENT 'The items of the row that write it when they are synced: source, target or both. NULL = not stored, derive it from the row.') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_dependency_first_seen",
+      "engine": "AggregatingMergeTree",
+      "create": "CREATE TABLE work_item_dependency_first_seen (`org_id` String, `source_work_item_id` String, `target_work_item_id` String, `relationship_type` String, `first_seen_at` SimpleAggregateFunction(min, DateTime64(3)) COMMENT 'min(work_item_dependencies.last_synced) of the relation: the first time a sync wrote it. Read it as min(first_seen_at) grouped by the key.') ENGINE = AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_dependency_first_seen_mv",
+      "engine": "MaterializedView",
+      "create": "CREATE MATERIALIZED VIEW work_item_dependency_first_seen_mv TO work_item_dependency_first_seen (`org_id` String, `source_work_item_id` String, `target_work_item_id` String, `relationship_type` String, `first_seen_at` DateTime64(3)) AS SELECT org_id, source_work_item_id, target_work_item_id, relationship_type, min(last_synced) AS first_seen_at FROM work_item_dependencies GROUP BY org_id, source_work_item_id, target_work_item_id, relationship_type"
     },
     {
       "name": "work_item_interactions",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_item_interactions (`work_item_id` String, `provider` String, `interaction_type` String, `occurred_at` DateTime64(3), `actor` Nullable(String), `body_length` UInt32, `last_synced` DateTime64(3), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, work_item_id, occurred_at, interaction_type) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_item_interactions (`work_item_id` String, `provider` String, `interaction_type` String, `occurred_at` DateTime64(3), `actor` Nullable(String), `body_length` UInt32, `last_synced` DateTime64(3), `org_id` String DEFAULT 'default', `interaction_id` String) ENGINE = ReplacingMergeTree(last_synced) PRIMARY KEY (org_id, work_item_id, occurred_at, interaction_type) ORDER BY (org_id, work_item_id, occurred_at, interaction_type, interaction_id) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_interactions_current",
+      "engine": "View",
+      "create": "CREATE VIEW work_item_interactions_current (`work_item_id` String, `provider` String, `interaction_type` String, `occurred_at` DateTime64(3), `actor` Nullable(String), `body_length` UInt32, `last_synced` DateTime64(3), `org_id` String, `interaction_id` String, `is_legacy_id` UInt8) AS SELECT work_item_id, provider, interaction_type, occurred_at, actor, body_length, last_synced, org_id, interaction_id, interaction_id = '' AS is_legacy_id FROM work_item_interactions FINAL WHERE (interaction_id != '') OR ((org_id, work_item_id, occurred_at, interaction_type) NOT IN (SELECT org_id, work_item_id, occurred_at, interaction_type FROM work_item_interactions FINAL WHERE interaction_id != ''))"
+    },
+    {
+      "name": "work_item_measure_capability",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE work_item_measure_capability (`org_id` String, `provider` LowCardinality(String), `measure` LowCardinality(String), `tracked` UInt8, `evidence_count` UInt32, `item_count` UInt32, `window_start` Date, `window_end` Date, `computed_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, provider, measure, window_end) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_item_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_item_metrics_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `team_id` LowCardinality(String), `team_name` String, `items_started` UInt32, `items_completed` UInt32, `items_started_unassigned` UInt32, `items_completed_unassigned` UInt32, `wip_count_end_of_day` UInt32, `wip_unassigned_end_of_day` UInt32, `cycle_time_p50_hours` Nullable(Float64), `cycle_time_p90_hours` Nullable(Float64), `lead_time_p50_hours` Nullable(Float64), `lead_time_p90_hours` Nullable(Float64), `wip_age_p50_hours` Nullable(Float64), `wip_age_p90_hours` Nullable(Float64), `bug_completed_ratio` Float64, `story_points_completed` Float64, `computed_at` DateTime('UTC'), `new_bugs_count` UInt32 DEFAULT 0, `new_items_count` UInt32 DEFAULT 0, `defect_intro_rate` Float64 DEFAULT 0., `wip_congestion_ratio` Float64 DEFAULT 0., `predictability_score` Float64 DEFAULT 0., `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, day, work_scope_id, team_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_item_metrics_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `team_id` LowCardinality(String), `team_name` String, `items_started` UInt32, `items_completed` UInt32, `items_started_unassigned` UInt32, `items_completed_unassigned` UInt32, `wip_count_end_of_day` UInt32, `wip_unassigned_end_of_day` UInt32, `cycle_time_p50_hours` Nullable(Float64), `cycle_time_p90_hours` Nullable(Float64), `lead_time_p50_hours` Nullable(Float64), `lead_time_p90_hours` Nullable(Float64), `wip_age_p50_hours` Nullable(Float64), `wip_age_p90_hours` Nullable(Float64), `bug_completed_ratio` Float64, `story_points_completed` Float64, `computed_at` DateTime('UTC'), `new_bugs_count` UInt32 DEFAULT 0, `new_items_count` UInt32 DEFAULT 0, `defect_intro_rate` Float64 DEFAULT 0., `wip_congestion_ratio` Float64 DEFAULT 0., `predictability_score` Float64 DEFAULT 0., `org_id` String DEFAULT 'default', `row_view` LowCardinality(String)) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, day, work_scope_id, team_id) ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_relations_read",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE work_item_relations_read (`org_id` String, `provider` String, `work_item_id` String, `relations_read_at` DateTime64(3) COMMENT 'last_synced of a work_items row written by a pass that reads the item relations. Read it as max(relations_read_at) grouped by org_id and work_item_id.') ENGINE = ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_item_relations_read_mv",
+      "engine": "MaterializedView",
+      "create": "CREATE MATERIALIZED VIEW work_item_relations_read_mv TO work_item_relations_read (`org_id` String, `provider` String, `work_item_id` String, `relations_read_at` DateTime64(3)) AS SELECT org_id, provider, work_item_id, max(last_synced) AS relations_read_at FROM work_items WHERE NOT ((provider = 'github') AND startsWith(project_id, 'ghprojv2:')) GROUP BY org_id, provider, work_item_id"
     },
     {
       "name": "work_item_reopen_events",
@@ -734,7 +823,7 @@
     {
       "name": "work_item_state_durations_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_item_state_durations_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `team_id` LowCardinality(String), `team_name` String, `status` LowCardinality(String), `duration_hours` Float64, `items_touched` UInt32, `computed_at` DateTime('UTC'), `avg_wip` Float64 DEFAULT 0., `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, team_id, status, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_item_state_durations_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `team_id` LowCardinality(String), `team_name` String, `status` LowCardinality(String), `duration_hours` Float64, `items_touched` UInt32, `computed_at` DateTime('UTC'), `avg_wip` Float64 DEFAULT 0., `org_id` String DEFAULT 'default', `row_view` LowCardinality(String)) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, work_scope_id, team_id, status, day) ORDER BY (org_id, provider, work_scope_id, team_id, status, day, row_view) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_item_team_attributions",
@@ -749,12 +838,12 @@
     {
       "name": "work_item_user_metrics_daily",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_item_user_metrics_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `user_identity` String, `team_id` LowCardinality(String), `team_name` String, `items_started` UInt32, `items_completed` UInt32, `wip_count_end_of_day` UInt32, `cycle_time_p50_hours` Nullable(Float64), `cycle_time_p90_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) ORDER BY (org_id, provider, work_scope_id, user_identity, day) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_item_user_metrics_daily (`day` Date, `provider` LowCardinality(String), `work_scope_id` LowCardinality(String), `user_identity` String, `team_id` LowCardinality(String), `team_name` String, `items_started` UInt32, `items_completed` UInt32, `wip_count_end_of_day` UInt32, `cycle_time_p50_hours` Nullable(Float64), `cycle_time_p90_hours` Nullable(Float64), `computed_at` DateTime('UTC'), `org_id` String DEFAULT 'default', `retracted` UInt8 DEFAULT 0, `row_view` LowCardinality(String)) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(day) PRIMARY KEY (org_id, provider, work_scope_id, user_identity, day) ORDER BY (org_id, provider, work_scope_id, user_identity, day, row_view) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_items",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_items (`repo_id` UUID, `work_item_id` String, `provider` String, `title` String, `description` Nullable(String), `type` String, `status` String, `status_raw` String, `project_key` String, `project_id` String, `native_team_key` String, `project_name` String, `assignees` Array(String), `reporter` String, `created_at` DateTime64(3), `updated_at` DateTime64(3), `started_at` Nullable(DateTime64(3)), `completed_at` Nullable(DateTime64(3)), `closed_at` Nullable(DateTime64(3)), `labels` Array(String), `story_points` Nullable(Float64), `sprint_id` String, `sprint_name` String, `parent_id` String, `epic_id` String, `url` String, `last_synced` DateTime64(3), `priority_raw` Nullable(String), `service_class` Nullable(String), `due_at` Nullable(DateTime64(3)), `org_id` String DEFAULT 'default', `source_id` Nullable(UUID) DEFAULT NULL) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_items (`repo_id` UUID, `work_item_id` String, `provider` String, `title` String, `description` Nullable(String), `type` String, `status` String, `status_raw` String, `project_key` String, `project_id` String, `native_team_key` String, `project_name` String, `assignees` Array(String), `reporter` String, `created_at` DateTime64(3), `updated_at` DateTime64(3), `started_at` Nullable(DateTime64(3)), `completed_at` Nullable(DateTime64(3)), `closed_at` Nullable(DateTime64(3)), `labels` Array(String), `story_points` Nullable(Float64), `sprint_id` String, `sprint_name` String, `parent_id` String, `epic_id` String, `url` String, `last_synced` DateTime64(3), `priority_raw` Nullable(String), `service_class` Nullable(String), `due_at` Nullable(DateTime64(3)), `org_id` String DEFAULT 'default', `source_id` Nullable(UUID) DEFAULT NULL, `ingested_at` DateTime64(3, 'UTC') DEFAULT now64(3) COMMENT 'ingested_at = server insert time (DEFAULT now64(3), stamped when the server processes the insert). It is not commit order across concurrent inserts. A reader must re-read a window of at least 300 seconds behind its cursor (ingested_at \u003e cursor - 300s) and dedup by key with FINAL. Rows that existed before migration 100 carry the migration time.') ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_unit_investment_quotes",
@@ -762,9 +851,19 @@
       "create": "CREATE TABLE work_unit_investment_quotes (`work_unit_id` String, `quote` String, `source_type` String, `source_id` String, `computed_at` DateTime64(3, 'UTC'), `categorization_run_id` String, `org_id` String DEFAULT 'default') ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id, source_id, quote) SETTINGS index_granularity = 8192"
     },
     {
+      "name": "work_unit_investment_shadow",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE work_unit_investment_shadow (`org_id` String, `work_unit_id` String, `categorization_input_hash` String, `shadow_config` String, `rubric_sha256` String, `model_returned` String, `state` LowCardinality(String), `categorization_status` LowCardinality(String), `complete_strict` UInt8, `subcategory_distribution_json` Map(String, Float64), `theme_distribution_json` Map(String, Float64), `levels` Map(String, UInt8), `level_probabilities` Map(String, Array(Float32)), `sufficiency_level` Int8, `evidence_span_id` String, `evidence_handle` String, `evidence_source_type` LowCardinality(String), `evidence_source_id` String, `warnings` Array(String), `error_codes` Array(String), `served_run_id` String, `computed_at` DateTime64(3)) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id, categorization_input_hash, shadow_config) TTL toDateTime(computed_at) + toIntervalDay(90) SETTINGS index_granularity = 8192"
+    },
+    {
       "name": "work_unit_investments",
       "engine": "ReplacingMergeTree",
-      "create": "CREATE TABLE work_unit_investments (`work_unit_id` String, `from_ts` DateTime64(3, 'UTC'), `to_ts` DateTime64(3, 'UTC'), `repo_id` Nullable(UUID), `provider` Nullable(String), `effort_metric` String, `effort_value` Float64, `theme_distribution_json` Map(String, Float64), `subcategory_distribution_json` Map(String, Float64), `structural_evidence_json` String, `evidence_quality` Float64, `evidence_quality_band` String, `categorization_status` String, `categorization_errors_json` String, `categorization_model_version` String, `categorization_input_hash` String, `categorization_run_id` String, `computed_at` DateTime64(3, 'UTC'), `work_unit_type` Nullable(String), `work_unit_name` Nullable(String), `org_id` String DEFAULT 'default', `repo_source` Nullable(String)) ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192"
+      "create": "CREATE TABLE work_unit_investments (`work_unit_id` String, `from_ts` DateTime64(3, 'UTC'), `to_ts` DateTime64(3, 'UTC'), `repo_id` Nullable(UUID), `provider` Nullable(String), `effort_metric` String, `effort_value` Float64, `theme_distribution_json` Map(String, Float64), `subcategory_distribution_json` Map(String, Float64), `structural_evidence_json` String, `evidence_quality` Float64, `evidence_quality_band` String, `categorization_status` String, `categorization_errors_json` String, `categorization_model_version` String, `categorization_input_hash` String, `categorization_run_id` String, `computed_at` DateTime64(3, 'UTC'), `work_unit_type` Nullable(String), `work_unit_name` Nullable(String), `org_id` String DEFAULT 'default', `repo_source` Nullable(String), `evidence_quote_count` Nullable(UInt32) COMMENT 'Distinct (source_id, quote) the row\\'s run wrote to work_unit_investment_quotes. NULL = not recorded (rows written before migration 106, or a run that did not persist evidence snippets): treated as complete.', `effort_basis` LowCardinality(String) DEFAULT '' COMMENT 'measured | partial_capped | unmeasured. Empty = not recorded (rows written before migration 140): never read as measured.') ENGINE = ReplacingMergeTree(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192"
+    },
+    {
+      "name": "work_unit_issue_size",
+      "engine": "ReplacingMergeTree",
+      "create": "CREATE TABLE work_unit_issue_size (`org_id` String, `work_unit_id` String, `issue_size` Float64, `sized_issue_count` UInt32, `issue_count` UInt32, `categorization_run_id` String, `computed_at` DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(computed_at) PARTITION BY toYYYYMM(computed_at) ORDER BY (org_id, work_unit_id) SETTINGS index_granularity = 8192"
     },
     {
       "name": "work_unit_membership",

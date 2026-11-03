@@ -160,7 +160,7 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 	if _, err := sessionRoutes(cfg, discard(), pool, schema, nil, limits); err != nil {
 		t.Fatal(err)
 	}
-	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits)
+	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,5 +263,18 @@ func TestTheDormantMountSetBootsWithoutTheStoreSecret(t *testing.T) {
 	}
 	if !found {
 		t.Error("a service with a limited route has no store component")
+	}
+}
+
+func TestRateLimitIsKeyedFromItsOwnKeyWhenSetAndFromTheSessionSecretWhenNot(t *testing.T) {
+	t.Parallel()
+	rateKey := strings.Repeat("r", 40)
+	fallback := limitConfig(t, sessionEnvironment(map[string]string{}))
+	if got := rateLimitSecret(fallback); got != testAccessSecret {
+		t.Fatal("unset, the rate-limit secret is not the session secret")
+	}
+	own := limitConfig(t, sessionEnvironment(map[string]string{authconfig.EnvRateLimitKey: rateKey}))
+	if got := rateLimitSecret(own); got != rateKey || got == testAccessSecret {
+		t.Fatal("set, the rate-limit secret is not AUTH_RATE_LIMIT_KEY alone")
 	}
 }

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/grant-read.v1.schema.json",
+  "title": "Auth Control Plane resource grant read (v1 wire format)",
+  "description": "A repository grant as the versioned read API serves it. It carries the repository resource key (resource_key), the one place a read answers it; a key is never in an error body and a parser refusal never repeats it. A revoked grant is served only when the request asked for revoked grants.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "grant_id",
+    "organization_id",
+    "principal_id",
+    "role",
+    "resource_key",
+    "expires_at",
+    "status",
+    "revision",
+    "created_at"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "grant-read.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "grant_id": {
+      "type": "string",
+      "pattern": "^grt_[A-Za-z0-9_-]{1,64}$",
+      "description": "The grant."
+    },
+    "organization_id": {
+      "type": "string",
+      "pattern": "^org_[A-Za-z0-9_-]{1,64}$",
+      "description": "The organization."
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "The grantee principal."
+    },
+    "role": {
+      "enum": [
+        "viewer",
+        "member",
+        "admin"
+      ],
+      "description": "A role a grant may carry; owner is organization-wide and never repository-scoped."
+    },
+    "resource_key": {
+      "type": "string",
+      "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$",
+      "description": "Canonical lowercase owner/repo, or the literal * for every repository of the organization (the pattern of authorization_request.v1 and of resource_grants_repository_key_canonical)."
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "The grant's expiry; null for none."
+    },
+    "status": {
+      "enum": [
+        "active",
+        "expired",
+        "revoked"
+      ],
+      "description": "Revoked first, then expired, else active."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Aggregate revision. 0 means the aggregate has no revision row yet; a caller treats 0 as 'none' and never as a version to send back. Integer token only; a decimal-form token is refused by every client (README, integer guard)."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "Creation instant."
+    }
+  }
+}

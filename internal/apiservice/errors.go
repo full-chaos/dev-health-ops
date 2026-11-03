@@ -25,6 +25,8 @@ type pythonError struct {
 //     {"detail": "<reason phrase>"};
 //   - rate limited: src/dev_health_ops/api/_errors.py _rate_limit_handler;
 //   - internal: _errors.py _generic_exception_handler;
+//   - unavailable: a counter store that cannot answer, the retryable 503 auth-service
+//     answers on the same routes (authapi.goAPIRefusal), with Retry-After;
 //   - payload too large / invalid request: the Python api has no such bound, so
 //     the body uses the same {"detail": "<reason phrase>"} shape.
 var pythonErrors = map[httpapi.Code]pythonError{
@@ -36,6 +38,9 @@ var pythonErrors = map[httpapi.Code]pythonError{
 		"detail": map[string]string{"message": "Rate limit exceeded. Please try again later."},
 	}},
 	httpapi.CodeInternal: {http.StatusInternalServerError, map[string]string{"detail": "Internal Server Error"}},
+	httpapi.CodeUnavailable: {http.StatusServiceUnavailable, map[string]any{
+		"detail": map[string]string{"message": "Authentication service unavailable"},
+	}},
 }
 
 // WriteError is the api's httpapi.ErrorWriter. A code with no Python mapping
@@ -56,6 +61,9 @@ func WriteError(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 	if response.status == http.StatusInternalServerError {
 		w.Header().Set(policy.UnhandledErrorHeader, "1")
+	}
+	if response.status == http.StatusServiceUnavailable {
+		w.Header().Set("Retry-After", "1")
 	}
 	w.WriteHeader(response.status)
 	writeFixedBody(w, payload)

@@ -15,18 +15,14 @@ var (
 // check. The table is locked before the count, so no audit insert can commit between the two and make the swap fail
 // with a generic constraint error instead of the count.
 func TestMarkerBackfillDownLocksTheAuditTableBeforeItCounts(t *testing.T) {
-	down, err := LoadDownChain()
-	if err != nil {
-		t.Fatal(err)
-	}
 	var sql string
-	for _, file := range down {
+	for _, file := range archivedDownFiles(t) {
 		if strings.Contains(file.Name, "widen_worker_operator_audits_action_marker_backfill") {
 			sql = file.SQL
 		}
 	}
 	if sql == "" {
-		t.Fatal("the down file of the marker backfill audit action revision is not in the chain")
+		t.Fatal("the down file of the marker backfill audit action revision is not in the archive")
 	}
 	lock := auditTableLock.FindStringIndex(sql)
 	count := auditActionCount.FindStringIndex(sql)

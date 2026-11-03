@@ -12,6 +12,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,7 +21,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -45,6 +48,12 @@ var AuthAggregates = []AuthAggregate{AuthSessions, AuthLocalLogin, AuthCredentia
 // EnvAuthProxyURL is auth-service's base URL (scheme and host only).
 const EnvAuthProxyURL = "AUTH_PROXY_URL"
 
+// EnvAuthProxyOrgProvisioning is the switch that sends an organization
+// reactivation (PATCH is_active=true) to auth-service first (CHAOS-11858). It
+// is no aggregate: it moves no /api/v1/auth route, needs no sessions flag, and
+// is off by default.
+const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
+
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
 func AuthProxyFlagEnv(a AuthAggregate) string { return "AUTH_PROXY_" + strings.ToUpper(string(a)) }
 
@@ -62,10 +71,16 @@ type AuthProxyConfig struct {
 	On       map[AuthAggregate]bool
 	// Timeout bounds one upstream exchange; zero means defaultAuthProxyTimeout.
 	Timeout time.Duration
+	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING.
+	OrgProvisioning bool
 }
 
 // Enabled reports whether a's routes go to auth-service.
 func (c AuthProxyConfig) Enabled(a AuthAggregate) bool { return c.Upstream != nil && c.On[a] }
+
+// OrgProvisioningOn reports whether go-api reactivates organizations through
+// auth-service.
+func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && c.OrgProvisioning }
 
 // ParseAuthProxyConfig reads AUTH_PROXY_URL and the AUTH_PROXY_<aggregate>
 // flags. Every flag defaults off. It refuses a flag without a URL, a URL
@@ -86,6 +101,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", name)
 		}
 		cfg.On[aggregate] = on
+		anyOn = anyOn || on
+	}
+	if raw, ok := lookup(EnvAuthProxyOrgProvisioning); ok && strings.TrimSpace(raw) != "" {
+		on, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyOrgProvisioning)
+		}
+		cfg.OrgProvisioning = on
 		anyOn = anyOn || on
 	}
 	raw, _ := lookup(EnvAuthProxyURL)
@@ -114,17 +137,66 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 }
 
 // sessionIssuer is the client of auth-service's session issue route when
-// auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN; nil when
-// go-api owns them. Sessions on without a usable token is a start-up error:
-// every sign-in would answer 503.
-func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool)) (sessionissue.Issuer, error) {
+// auth-service owns sessions, built from AUTH_SESSION_ISSUE_TOKEN, or from the
+// workload token of cred when AUTH_SESSION_ISSUE_CREDENTIAL selects it; nil
+// when go-api owns them. Sessions on without a usable credential is a start-up
+// error: every sign-in would answer 503.
+func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool), cred sessionCredential) (sessionissue.Issuer, error) {
 	if !cfg.Enabled(AuthSessions) {
 		return nil, nil
 	}
-	token, _ := lookup(sessionissue.EnvToken)
-	client, err := sessionissue.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	var client *sessionissue.Client
+	var err error
+	if cred.workload != nil {
+		client, err = sessionissue.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
+	} else {
+		token, _ := lookup(sessionissue.EnvToken)
+		client, err = sessionissue.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
+	}
+	return client, nil
+}
+
+// orgLifecycleClient is the client of auth-service's organization reactivate and
+// suspend routes when AUTH_PROXY_ORG_PROVISIONING is on, built from
+// AUTH_SESSION_ISSUE_TOKEN, or from the workload token of cred when
+// AUTH_PROVISIONING_CREDENTIAL selects it; nil when off, so go-api's PATCH
+// never calls auth-service. On without a usable credential is a start-up
+// error: every change would answer 503.
+func orgLifecycleClient(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (*orgreactivate.Client, error) {
+	if !cfg.OrgProvisioningOn() {
+		return nil, nil
+	}
+	var client *orgreactivate.Client
+	var err error
+	if cred.workload != nil {
+		client, err = orgreactivate.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
+	} else {
+		token, _ := lookup(sessionissue.EnvToken)
+		client, err = orgreactivate.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
+	}
+	return client, nil
+}
+
+// orgReactivator is the reactivate side of orgLifecycleClient (nil when off).
+func orgReactivator(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Reactivator, error) {
+	client, err := orgLifecycleClient(cfg, lookup, cred)
+	if client == nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+// orgSuspender is the suspend side of orgLifecycleClient (nil when off).
+func orgSuspender(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (orgreactivate.Suspender, error) {
+	client, err := orgLifecycleClient(cfg, lookup, cred)
+	if client == nil {
+		return nil, err
 	}
 	return client, nil
 }
@@ -141,6 +213,7 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 	for _, aggregate := range AuthAggregates {
 		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
 	}
+	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()))
 	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
 }
 
@@ -150,6 +223,8 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 var sessionProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/refresh":             AuthSessions,
 	"POST /api/v1/auth/logout":              AuthSessions,
+	"POST /api/v1/auth/validate":            AuthSessions,
+	"POST /api/v1/auth/switch-org":          AuthSessions,
 	"POST /api/v1/auth/login":               AuthLocalLogin,
 	"POST /api/v1/auth/register":            AuthCredentials,
 	"GET /api/v1/auth/verify":               AuthCredentials,
@@ -168,6 +243,27 @@ var routeProxyRoutes = map[string]AuthAggregate{
 	"GET /api/v1/auth/saml/{provider_id}/metadata":   AuthSAML,
 	"POST /api/v1/auth/saml/{provider_id}/initiate":  AuthSAML,
 	"POST /api/v1/auth/saml/{provider_id}/acs":       AuthSAML,
+}
+
+// ownerAuthenticatedRoutes are the proxied routes that auth-service alone authenticates, validates and limits once
+// their aggregate is on: go-api forwards them unread, with no guard, body validator or rate limiter of its own, and
+// its scope layers skip them (ScopeExemptRoutes), so a token addressed to auth-service never reaches go-api's verifier
+// or stores (D6440). With the aggregate off the route keeps go-api's whole local chain.
+var ownerAuthenticatedRoutes = map[string]AuthAggregate{
+	"POST /api/v1/auth/change-password": AuthCredentials,
+	"POST /api/v1/auth/switch-org":      AuthSessions,
+}
+
+// ScopeExemptRoutes is the set of "METHOD path" routes the scope layers skip because auth-service authenticates
+// them: the owner-authenticated routes whose aggregate is on. Empty when every such aggregate is off.
+func (c AuthProxyConfig) ScopeExemptRoutes() map[string]bool {
+	out := map[string]bool{}
+	for route, aggregate := range ownerAuthenticatedRoutes {
+		if c.Enabled(aggregate) {
+			out[route] = true
+		}
+	}
+	return out
 }
 
 // patternAggregate is both maps by pattern alone: every mapped pattern has
@@ -249,6 +345,70 @@ func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
 	return &authProxy{cfg: cfg, logger: logger, transport: transport}
 }
 
+// proxiedRouteKeys maps "METHOD pattern" to the aggregate for every forwardable auth route. It is only a predicate over the route set the
+// listener is given; no series is seeded for a route that is not registered.
+var proxiedRouteKeys = func() map[string]AuthAggregate {
+	out := map[string]AuthAggregate{}
+	for _, routes := range []map[string]AuthAggregate{sessionProxyRoutes, routeProxyRoutes} {
+		for key, aggregate := range routes {
+			out[key] = aggregate
+		}
+	}
+	return out
+}()
+
+// seedSeries seeds the auth proxy counter for the aggregates that have at least one registered proxied route in routes.
+func (p *authProxy) seedSeries(routes []httpapi.Route) {
+	registered := map[AuthAggregate]bool{}
+	for _, route := range routes {
+		if aggregate, ok := proxiedRouteKeys[route.Method+" "+route.Pattern]; ok {
+			registered[aggregate] = true
+		}
+	}
+	seedAuthProxySeries(p.cfg, registered)
+}
+
+// seedAuthProxySeries records 0 for every label set the proxy can count for the registered aggregates, once, at construction: an OTel
+// counter creates a series on its first Add, so without this the first export of a low-traffic series already holds its count and a
+// rate/increase query has no earlier sample to subtract. local is always possible; forwarded and upstream_error only for an aggregate
+// whose flag is on. Only static values.
+func seedAuthProxySeries(cfg AuthProxyConfig, registered map[AuthAggregate]bool) {
+	for _, aggregate := range AuthAggregates {
+		if !registered[aggregate] {
+			continue
+		}
+		outcomes := []string{outcomeLocal}
+		if cfg.Enabled(aggregate) {
+			outcomes = []string{outcomeForwarded, outcomeLocal, outcomeUpstreamError}
+		}
+		for _, outcome := range outcomes {
+			authProxyRequests.Add(context.Background(), 0, metric.WithAttributes(
+				attribute.String("aggregate", string(aggregate)), attribute.String("outcome", outcome)))
+		}
+	}
+}
+
+// authProxyRequestSeeds are the registered proxied routes whose per-route request series the public listener seeds at 0
+// (httpapi.RequestSeed): routes (the set the mux is built from) filtered to the forwardable auth patterns, matched on method AND pattern.
+func authProxyRequestSeeds(routes []httpapi.Route) []httpapi.RequestSeed {
+	var seeds []httpapi.RequestSeed
+	seen := map[string]bool{}
+	for _, route := range routes {
+		key := route.Method + " " + route.Pattern
+		if _, ok := proxiedRouteKeys[key]; ok && !seen[key] {
+			seen[key] = true
+			seeds = append(seeds, httpapi.RequestSeed{Method: route.Method, Route: route.Pattern})
+		}
+	}
+	sort.Slice(seeds, func(i, j int) bool {
+		if seeds[i].Route != seeds[j].Route {
+			return seeds[i].Route < seeds[j].Route
+		}
+		return seeds[i].Method < seeds[j].Method
+	})
+	return seeds
+}
+
 // proxyState is one request's body as the client sent it and the outcome
 // the forwarder decided; it travels from the route wrapper to the innermost
 // handler through the context.
@@ -286,9 +446,15 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 		if !ok {
 			aggregate, ok = routeProxyRoutes[key]
 		}
-		if ok {
-			routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
+		if !ok {
+			continue
 		}
+		if owner, owned := ownerAuthenticatedRoutes[key]; owned && p.cfg.Enabled(owner) {
+			// go-api's guard, validator and limiter are dropped: the forward is the whole route.
+			routes[index].Handler = p.sessionRoute(aggregate, p.inner(routes[index].Pattern, nil))
+			continue
+		}
+		routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)
 	}
 	return routes
 }
@@ -509,4 +675,28 @@ func dropHop(header http.Header) {
 	for _, name := range hopHeaders {
 		header.Del(name)
 	}
+}
+
+// orgProvisioner is the client of auth-service's provisioning routes when
+// AUTH_PROXY_ORG_PROVISIONING is on, built from AUTH_SESSION_ISSUE_TOKEN, or
+// from the workload token of cred when AUTH_PROVISIONING_CREDENTIAL selects
+// it; nil when off, so the member, invite and delete routes never call
+// auth-service. On without a usable credential is a start-up error, as for
+// orgReactivator.
+func orgProvisioner(cfg AuthProxyConfig, lookup func(string) (string, bool), cred provisioningCredential) (authprovision.Provisioner, error) {
+	if !cfg.OrgProvisioningOn() {
+		return nil, nil
+	}
+	var client *authprovision.Client
+	var err error
+	if cred.workload != nil {
+		client, err = authprovision.NewWorkload(cfg.Upstream, cred.workload, cfg.Timeout)
+	} else {
+		token, _ := lookup(sessionissue.EnvToken)
+		client, err = authprovision.New(cfg.Upstream, strings.TrimSpace(token), cfg.Timeout)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s is on: %w", EnvAuthProxyOrgProvisioning, err)
+	}
+	return client, nil
 }

@@ -81,14 +81,15 @@ func TestEveryHS256RowAlsoAcceptsTheUserAccessToken(t *testing.T) {
 			t.Errorf("%s: class_disambiguator %v, want %v", row["id"], row["class_disambiguator"], wantSelector)
 		}
 	}
-	if hs != 196 || plain != 48 {
-		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 48", hs, plain)
+	// CHAOS-12128 added the principal access read, which has no HS256 opt-in (42 before); CHAOS-11813 retired the
+	// 6 legacy ingest rows, which had no HS256 opt-in (48 before).
+	if hs != 196 || plain != 43 {
+		t.Errorf("rows with the HS256 opt-in %d, without %d; want 196 and 43", hs, plain)
 	}
 }
 
 // The widened rows pass the profile selector gate. The logout row also
-// accepts ops_refresh_token, which has no request-head marker, so the gate
-// cannot pick it: a limit that predates this widening.
+// accepts ops_refresh_token, which the gate judges by its body_field marker.
 func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 	registry, err := contracts.LoadRegistryClasses("../..")
 	if err != nil {
@@ -100,19 +101,13 @@ func TestWidenedRowsPassTheClassSelectorGate(t *testing.T) {
 		if !slices.Contains(classes, classUserTok) || !slices.Contains(classes, classHS256) {
 			continue
 		}
-		if slices.Contains(classes, classRefresh) {
-			if rowProfile(row) != "POST /api/v1/auth/logout" {
-				t.Errorf("%s: unexpected refresh row", row["id"])
-			}
-			continue
-		}
 		if err := contracts.CheckClassSelector(row, registry); err != nil {
 			t.Errorf("%s: %v", row["id"], err)
 		}
 		checked++
 	}
-	if checked != 195 {
-		t.Errorf("checked %d rows, want 195", checked)
+	if checked != 196 {
+		t.Errorf("checked %d rows, want 196", checked)
 	}
 }
 
@@ -189,8 +184,8 @@ func TestRowsWithoutTheAccessTokenOptInStillRefuseAUserAccessToken(t *testing.T)
 		}
 		unchanged++
 	}
-	if unchanged != 51 {
-		t.Errorf("checked %d rows, want 51 (48 api + 3 billing-edge)", unchanged)
+	if unchanged != 46 {
+		t.Errorf("checked %d rows, want 46 (43 api + 3 billing-edge; CHAOS-12128 added the principal access read, CHAOS-11813 retired 6 legacy ingest rows)", unchanged)
 	}
 }
 

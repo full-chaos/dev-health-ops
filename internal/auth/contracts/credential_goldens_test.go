@@ -447,6 +447,10 @@ func TestCredentialClassEnumEqualsPrincipalV1sEnum(t *testing.T) {
 		var node map[string]any
 		_ = json.Unmarshal(raw, &node)
 		for _, step := range path {
+			if step == "[]" {
+				node = node["items"].(map[string]any)
+				continue
+			}
 			node = node["properties"].(map[string]any)[step].(map[string]any)
 		}
 		var out []string
@@ -466,6 +470,7 @@ func TestCredentialClassEnumEqualsPrincipalV1sEnum(t *testing.T) {
 	}{
 		{CredentialEntrySurface, enumOf(CredentialEntrySurface, "credential_class")},
 		{CredentialReceiptSurface, enumOf(CredentialReceiptSurface, "credential", "credential_class")},
+		{CredentialListSurface, enumOf(CredentialListSurface, "items", "[]", "credential_class")},
 	} {
 		if strings.Join(surface.got, ",") != strings.Join(principal, ",") {
 			t.Errorf("%s credential_class enum differs from principal.v1's", surface.name)
@@ -539,6 +544,35 @@ func TestEveryDisplayPrefixTheEntryAllowsCanBeginAValidReceiptSecret(t *testing.
 		encoded, _ := json.Marshal(document)
 		if _, err := ParseCredentialReceipt(root, encoded, now); err != nil {
 			t.Errorf("a secret beginning with the allowed prefix %q is refused by the client: %v", prefix, err)
+		}
+	}
+}
+
+// A receipt of the service-account key class parses for both verbs, and a
+// secret that does not begin with the prefix is refused. The values are built
+// at run time: no fixture holds a value of the key's shape.
+func TestAServiceAccountKeyReceiptParses(t *testing.T) {
+	r := credentialSurfaces[2]
+	root := testRoot(t)
+	now := clockOf(t, r.corpus(t))
+	value := "fcsak_" + strings.Repeat("Kq", 21) + "Z"
+	for _, file := range []string{"valid-issue.json", "valid-rotate.json"} {
+		var document map[string]any
+		if err := json.Unmarshal(r.read(t, file), &document); err != nil {
+			t.Fatal(err)
+		}
+		credential := document["credential"].(map[string]any)
+		credential["credential_class"] = "service_account_key"
+		credential["display_prefix"] = "fcsak_"
+		document["secret"] = value
+		encoded, _ := json.Marshal(document)
+		if _, err := ParseCredentialReceipt(root, encoded, now); err != nil {
+			t.Errorf("%s: a service-account key receipt is refused: %v", file, err)
+		}
+		document["secret"] = "fcwlb_" + strings.Repeat("Kq", 21) + "Z"
+		encoded, _ = json.Marshal(document)
+		if _, err := ParseCredentialReceipt(root, encoded, now); err == nil {
+			t.Errorf("%s: a secret outside the display_prefix was accepted", file)
 		}
 	}
 }

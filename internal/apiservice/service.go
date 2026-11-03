@@ -49,12 +49,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	healthroutes "github.com/full-chaos/dev-health-ops/internal/api/health"
 	"github.com/full-chaos/dev-health-ops/internal/api/integrationsadmin"
-	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgs"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/producttelemetry"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyheaders"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/api/syncadmin"
 	"github.com/full-chaos/dev-health-ops/internal/api/teamsidentity"
@@ -63,8 +63,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -75,6 +77,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -183,19 +186,6 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:   logger,
 		Counters: limits,
 	})...)
-	var legacyStore legacyingest.Store
-	if deps.Valkey != nil {
-		legacyStore = legacyingest.ValkeyStore{Client: deps.Valkey}
-	}
-	// The telemetry route writes ClickHouse with the api's own login; with
-	// none configured it accepts and skips, as the Python route does.
-	var legacyClickHouse legacyingest.ClickHouse
-	if deps.ClickHouse != nil {
-		legacyClickHouse = deps.ClickHouse
-	}
-	if deps.LegacyIngestEnabled {
-		routes = append(routes, legacyingest.Harden(legacyingest.Routes(legacyingest.Deps{Store: legacyStore, Metrics: deps.LegacyIngestMetrics, ClickHouse: legacyClickHouse, Logger: logger}), deps.LegacyIngestOptions)...)
-	}
 	routes = append(routes, healthroutes.Routes(healthroutes.Deps{
 		// deps.ClickHouse is the api's own dedicated ClickHouse login
 		// (CHAOS-6310), the SAME connection internal/api/teamsidentity's
@@ -217,11 +207,14 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		// The api's own ClickHouse login: organization activity.
 		ClickHouse: deps.ClickHouse, Limits: limits, Write: WriteError, OAuth: deps.SessionOAuth, Logger: logger,
 		Mail: deps.Invites, RegisterLimit: deps.RegisterLimit, Inner: proxy.inner, Issuer: deps.SessionIssuer,
+		PlatformRoles: deps.platformRoles(),
+		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
-		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor})...)
+		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
+			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
 		routes = append(routes, syncadmin.Routes(syncadmin.Deps{Pool: deps.Pool, ClickHouse: deps.ClickHouse, Guard: deps.Guard, Logger: logger, Decryptor: deps.Decryptor, Now: deps.Now, JiraHTTP: deps.SyncJiraHTTP})...)
 		routes = append(routes, credentials.Routes(credentials.Deps{Pool: deps.Pool, Guard: deps.Guard, Cipher: deps.Decryptor, Logger: logger, Now: deps.Now,
 			HTTPClient: credentialProbeClient, HostLookup: credentialHostLookup})...)
@@ -246,12 +239,11 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// route still ignores these three fields (sso.go's own doc
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
-			// in this process already uses. StateSecret reuses
-			// GitHubStateSigner's own APIJWTSecret.Reveal() (HKDF-derives
-			// a distinct key from it, state.go) -- no new secret material
-			// either way.
-			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
-			Issuer: deps.SessionIssuer,
+			// in this process already uses. StateSecret is
+			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// HKDF derives one key per protocol from it (state.go).
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
+			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
 		routes = append(routes, billing.Routes(billing.Deps{
@@ -263,23 +255,29 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// first caller that actually injects a fixed clock, so the Stripe
 			// signature timestamp check judges a replay at the instant it was
 			// recorded for, not the instant it happens to replay at.
-			Now: deps.Now,
+			Now: deps.Now, PlatformRoles: deps.platformRoles(),
 		})...)
 		routes = append(routes, admin.Routes(admin.Deps{
-			Pool:          deps.Pool,
-			Valkey:        deps.Valkey,
-			Guard:         deps.Guard,
-			Logger:        logger,
-			ClickHouseDSN: deps.ClickHouseDSN,
-			ClickHouse:    deps.ClickHouse,
-			Decryptor:     deps.Decryptor,
-			PagerDuty:     deps.PagerDuty,
-			HTTPDoer:      deps.HTTPDoer,
-			Now:           deps.Now,
-			Write:         WriteError,
-			Limits:        limits,
-			Invites:       deps.Invites,
-			UsersOwned:    deps.UsersOwned,
+			Pool:               deps.Pool,
+			Valkey:             deps.Valkey,
+			Guard:              deps.Guard,
+			Logger:             logger,
+			ClickHouseDSN:      deps.ClickHouseDSN,
+			ClickHouse:         deps.ClickHouse,
+			Decryptor:          deps.Decryptor,
+			PagerDuty:          deps.PagerDuty,
+			HTTPDoer:           deps.HTTPDoer,
+			Now:                deps.Now,
+			Write:              WriteError,
+			Limits:             limits,
+			Invites:            deps.Invites,
+			UsersOwned:         deps.UsersOwned,
+			PlatformRolesOwned: deps.PlatformRolesOwned,
+			AuthSchema:         deps.AuthSchema,
+			OrgReactivator:     deps.OrgReactivator,
+			OrgProvisioner:     deps.OrgProvisioner,
+			OrgSuspender:       deps.OrgSuspender,
+			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -291,6 +289,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Logger:    logger,
 		Counters:  limits,
 	})...)
+	proxy.seedSeries(routes)
 	return markResponseModels(proxy.wrap(routes))
 }
 
@@ -330,6 +329,15 @@ func configure(
 	return configureWith(ctx, cfg, registry, logger, nil)
 }
 
+// orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
+// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
+func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
+	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
+		return nil
+	}
+	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
+}
+
 // orgDeletionPreflightTimeout bounds the start-time ClickHouse preflight (Open
 // dials and pings; the grant read and discovery are two small queries).
 const orgDeletionPreflightTimeout = 15 * time.Second
@@ -350,14 +358,9 @@ func logOrgDeletionPreflight(ctx context.Context, logger *slog.Logger, dsn strin
 // RegisterOperatorMetrics puts the api's counters on the operator
 // /metrics, the Go api's scrape surface (the Python api served its
 // prometheus_client counters on /metrics): the OTel instruments, each
-// declared under the Python counter name, as one fragment, and the
-// legacy-ingest refusal counter, which it sets on deps, as another.
+// declared under the Python counter name, as one fragment.
 func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := apimetrics.Register(registry); err != nil {
-		return err
-	}
-	deps.LegacyIngestMetrics = legacyingest.NewMetrics()
-	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
 		return err
 	}
 	// CHAOS-8816: what PATCH /sync-configs/{id} does to dataset rows (rows
@@ -397,7 +400,11 @@ func configureWith(
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 	}
-	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy)
+	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
+	if err != nil {
+		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)
+	}
+	deps, depComponents, err := buildDeps(ctx, cfg, registry, logger, authProxy, acrProjectScope)
 	if err != nil {
 		return nil, err
 	}
@@ -406,21 +413,52 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_users_owned", "api_users_owned_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup)
+	deps.PlatformRolesOwned, err = rule.OwnedFromLookup(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
+	}
+	deps.PushLifecycleEvents, err = ParsePushLifecycleEvents(envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_push_lifecycle_events", "api_push_lifecycle_events_config_invalid", err)
+	}
+	provisioningCred, sessionCred, err := newCredentials(authProxy, envsecrets.ProcessLookup)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
+	}
+	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
+	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
+	}
+	if orgClient != nil {
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
+	}
+	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
+	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
+	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
-		deps.Auth, deps.Guard = protected.auth, protected.guard
+		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
-		scope = []func(http.Handler) http.Handler{protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
+		// ReadOnce first: the org scope and the route's guard read the token
+		// org's membership once per request.
+		scope = []func(http.Handler) http.Handler{protected.auth.ReadOnce, protected.scope.Principal, protected.scope.OrgScope, protected.scope.Impersonation}
 	}
 	var accessKeys authverify.KeySource
 	deps.AccessVerify, accessKeys, err = buildAccessVerify(envsecrets.ProcessLookup, deps.Auth, logger)
@@ -467,7 +505,13 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
+	}
+	session.SetRefreshAccepted(refreshAccepted)
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -479,7 +523,7 @@ func configureWith(
 	}
 	logOrgDeletionPreflight(ctx, logger, deps.ClickHouseDSN)
 	gate := NewIntakeGate(&deps, logger)
-	server, err := NewServerWithGate(cfg, logger, Routes(deps, logger), gate, scope...)
+	server, err := newServer(cfg, logger, Routes(deps, logger), gate, deps.AuthProxy.ScopeExemptRoutes(), scope...)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_server", "api_server_config_failed", err)
 	}
@@ -489,6 +533,7 @@ func configureWith(
 		edge, err := NewEdgeServer(cfg, logger, billing.EdgeRoutes(billing.Deps{
 			Pool: deps.Pool, Stripe: deps.Stripe, Config: deps.BillingConfig, Logger: logger.With(slog.String("listener", "billing-edge")),
 			WebhookSecret: deps.StripeWebhookSecret, LicensePrivateKey: deps.LicensePrivateKey, StripeKey: deps.StripeSecretKey, Producer: deps.Producer,
+			PlatformRoles: deps.platformRoles(),
 		}))
 		if err != nil {
 			return nil, dependencyFailure(ctx, logger, "api_server", "api_billing_edge_server_config_failed", err)
@@ -549,11 +594,34 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	var llmConfig acr.LLMConfigSource
 	var credentials acr.CredentialVerifier
 	var auth acr.CredentialStore
+	var access acr.PrincipalAccessStore
 	if deps.Pool != nil {
 		store = acr.PostgresEntitlementStore{Pool: deps.Pool}
 		llmConfig = llmorgsettings.Store{Pool: deps.Pool, Decryptor: deps.Decryptor}.ForPurpose(llmorgsettings.PurposeInvestigate)
 		credentials = acr.PostgresCredentialVerifier{Pool: deps.Pool}
 		auth = acr.PostgresCredentialStore{Pool: deps.Pool, Now: deps.Now}
+		// The users, membership and impersonation reads run on go-api's pool
+		// (policy.PGStore with the auth schema, as the authenticator reads it).
+		// Without a ClickHouse connection the inventory read fails, so the
+		// access read answers 503, never a partial answer.
+		// The session a sid names is auth-service's to answer, read on the
+		// client and credential of go-api's session issue route. Without that
+		// client (go-api owns sessions, or no auth-service URL or credential) a
+		// read with a sid answers 503; start-up does not fail (D6465).
+		var sessions acr.SessionStates
+		if states, ok := deps.SessionIssuer.(sessionissue.StateReader); ok {
+			sessions = states
+		}
+		store := acr.NewPostgresAccessStore(deps.Pool,
+			policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned},
+			acr.ClickHouseRepositoryInventory{Conn: deps.ClickHouse}, sessions)
+		// project_scope (CHAOS-12224) only with ACR_ACCESS_PROJECT_SCOPE on: an
+		// acr that does not know the field refuses every answer that carries it.
+		if deps.ACRAccessProjectScope {
+			store.Projects = acr.ClickHouseProjectInventory{Conn: deps.ClickHouse}
+			logger.Info("acr principal access: project_scope on", "env", EnvACRAccessProjectScope)
+		}
+		access = store
 	}
 	counters, err := limitStore(deps)
 	if err != nil {
@@ -564,6 +632,7 @@ func InternalRoutes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Store: store, Logger: logger, LLMConfig: llmConfig, Credentials: credentials,
 		Auth: auth, Limiter: httpapi.NewKeyedLimiter(counters, acr.AuthAttemptLimit),
 		Workload: deps.ACRWorkload,
+		Access:   access, AccessLimiter: httpapi.NewKeyedLimiter(counters, acr.AccessAttemptLimit),
 	})
 }
 
@@ -607,12 +676,14 @@ type protection struct {
 	guard    *policy.Guard
 	verifier *edgetoken.Verifier
 	signer   *edgetoken.Signer
+	// authSchema is AUTH_DATABASE_SCHEMA, as the users store reads it.
+	authSchema string
 }
 
 // newProtection builds the principal service. The api verifies the access
 // token the Python api mints, so with a database it needs the same key:
 // JWT_SECRET_KEY is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}
@@ -628,7 +699,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema}, logger)
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}
@@ -638,7 +709,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, logger *slog.Logger) (
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
-	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger),
+	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
 		verifier: verifier, signer: signer}, nil
 }
 
@@ -678,9 +749,21 @@ func NewServerWithGate(
 	gate *webhookintake.Gate,
 	scope ...func(http.Handler) http.Handler,
 ) (*httpapi.Server, error) {
+	return newServer(cfg, logger, routes, gate, nil, scope...)
+}
+
+// newServer is NewServerWithGate whose scope layers also skip the exact routes of scopeExempt
+// (AuthProxyConfig.ScopeExemptRoutes): the proxied routes auth-service authenticates.
+func newServer(
+	cfg config.Config,
+	logger *slog.Logger,
+	routes []httpapi.Route,
+	gate *webhookintake.Gate,
+	scopeExempt map[string]bool,
+	scope ...func(http.Handler) http.Handler,
+) (*httpapi.Server, error) {
 	noStore := httpapi.NewNoStoreRoutes(httpapi.AdminRoutes)
-	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, MarkSignatureOnly, DecodedPathRouting, noStore.Middleware}
-	middleware = append(middleware, legacyingest.HeaderLayers(routes)...)
+	middleware := []func(http.Handler) http.Handler{buildinfo.Stamp(version.Current("api")), pyheaders.UnhandledErrorShape, CloseHTTP10, markScopeExempt(scopeExempt), DecodedPathRouting, noStore.Middleware}
 	if gate != nil {
 		middleware = append(middleware, intakeGate(gate, cfg.CORSAllowedOrigins))
 	}
@@ -696,15 +779,17 @@ func NewServerWithGate(
 	}
 	middleware = append(middleware, NewOriginValidation(cfg.CORSAllowedOrigins).Wrap, pyheaders.SecurityHeaders, pyheaders.NewCORS(cfg.CORSAllowedOrigins).Wrap)
 	return httpapi.NewServer(httpapi.ServerOptions{
-		Name:           "api-http",
-		Listener:       "public",
-		Address:        cfg.APIAddress,
-		Logger:         logger,
-		Routes:         routes,
-		RequestTimeout: requestTimeout,
-		MaxBodyBytes:   maxBodyBytes,
-		ErrorWriter:    WriteError,
-		NoStore:        noStore,
+		Name:     "api-http",
+		Listener: "public",
+		// The proxied auth routes' request series exist at 0 before the first request.
+		SeedRequestSeries: authProxyRequestSeeds(routes),
+		Address:           cfg.APIAddress,
+		Logger:            logger,
+		Routes:            routes,
+		RequestTimeout:    requestTimeout,
+		MaxBodyBytes:      maxBodyBytes,
+		ErrorWriter:       WriteError,
+		NoStore:           noStore,
 		// The Python api echoes any non-empty X-Request-ID
 		// (api/middleware/correlation_id.py) and routes the raw path, never
 		// redirecting one.

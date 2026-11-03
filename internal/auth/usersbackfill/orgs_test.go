@@ -43,6 +43,18 @@ func TestMapOrg(t *testing.T) {
 	}
 }
 
+func TestMapMembershipCarriesTheInviterUnchanged(t *testing.T) {
+	inviter := uuid.New()
+	target, class := MapMembership(MemberRow{Role: str("member"), CreatedAt: &testTime, InvitedByID: &inviter, Copies: 1})
+	if class != "" || target.InvitedBy == nil || *target.InvitedBy != inviter {
+		t.Fatalf("target = %+v class %q", target, class)
+	}
+	target, _ = MapMembership(MemberRow{Role: str("member"), CreatedAt: &testTime, Copies: 1})
+	if target.InvitedBy != nil {
+		t.Fatalf("a row without an inviter gained one: %v", target.InvitedBy)
+	}
+}
+
 func TestMapMembership(t *testing.T) {
 	joined := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	created := joined.Add(-time.Hour)
@@ -82,10 +94,12 @@ func TestMapMembership(t *testing.T) {
 }
 
 type fakeOrgSource struct {
-	orgs    []OrgRow
-	members []MemberRow
-	pages   int
-	failOrg bool
+	orgs        []OrgRow
+	members     []MemberRow
+	pages       int
+	failOrg     bool
+	failMembers bool
+	memberReads int
 }
 
 func (f *fakeOrgSource) PageOrgs(_ context.Context, after *uuid.UUID, limit int) ([]OrgRow, error) {
@@ -109,6 +123,10 @@ func (f *fakeOrgSource) PageOrgs(_ context.Context, after *uuid.UUID, limit int)
 }
 
 func (f *fakeOrgSource) PageMemberships(_ context.Context, after *MemberKey, limit int) ([]MemberRow, error) {
+	f.memberReads++
+	if f.failMembers {
+		return nil, errors.New("permission denied for table memberships")
+	}
 	var out []MemberRow
 	skipping := after != nil
 	for _, m := range f.members {
@@ -507,5 +525,72 @@ func TestOrgsVerbPassesTheGateWhenNeitherSwitchIsOn(t *testing.T) {
 		if code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure || !reached {
 			t.Fatalf("value %q: exit %d reached=%v; want the gate passed", v, code, reached)
 		}
+	}
+}
+
+func TestRunOrgsCountsInviterAndJoinFills(t *testing.T) {
+	orgs := orgRows(1)
+	src := &fakeOrgSource{orgs: orgs, members: []MemberRow{
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime},
+		{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime},
+	}}
+	n := 0
+	sink := &fakeOrgSink{
+		org: func(identity.OrgBackfillTarget) (identity.OrgBackfillResult, error) {
+			return identity.OrgBackfillResult{}, nil
+		},
+		member: func(identity.MembershipBackfillTarget) (identity.MembershipBackfillResult, error) {
+			n++
+			switch n {
+			case 1:
+				return identity.MembershipBackfillResult{Inserted: true, InviterSet: true}, nil
+			case 2:
+				return identity.MembershipBackfillResult{InviterSet: true, JoinedSet: true}, nil
+			case 3:
+				return identity.MembershipBackfillResult{InviterUnresolved: true}, nil
+			}
+			return identity.MembershipBackfillResult{}, nil
+		},
+	}
+	rep, err := RunOrgs(context.Background(), src, sink, nil, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.InvitersSet != 2 || rep.JoinedSet != 1 || rep.InviterUnresolved != 1 || rep.MembershipsInserted != 1 || rep.MembershipsUnchanged != 2 || rep.SkippedTotal() != 0 {
+		t.Fatalf("report = %+v", rep)
+	}
+	lines := strings.Join(rep.Lines(), "\n")
+	for _, l := range []string{"memberships_inviter_set=2", "memberships_joined_set=1", "memberships_inviter_unresolved=1"} {
+		if !strings.Contains(lines, l) {
+			t.Errorf("report lacks %q", l)
+		}
+	}
+	for _, l := range rep.Lines() {
+		if strings.Contains(l, "-") && strings.Count(l, "-") >= 4 {
+			t.Errorf("a line carries an id: %q", l)
+		}
+	}
+}
+
+// A missing grant on the membership source fails before any write: the same read the run uses is tried first.
+func TestRunOrgsPreflightsTheMembershipReadBeforeAnyWrite(t *testing.T) {
+	orgs := orgRows(2)
+	src := &fakeOrgSource{orgs: orgs, failMembers: true, members: []MemberRow{{OrgID: orgs[0].ID, UserID: uuid.New(), Role: str("member"), Copies: 1, CreatedAt: &testTime}}}
+	sink := &fakeOrgSink{
+		org: func(identity.OrgBackfillTarget) (identity.OrgBackfillResult, error) {
+			return identity.OrgBackfillResult{Inserted: true}, nil
+		},
+		member: func(identity.MembershipBackfillTarget) (identity.MembershipBackfillResult, error) {
+			return identity.MembershipBackfillResult{}, nil
+		},
+	}
+	rep, err := RunOrgs(context.Background(), src, sink, nil, Options{})
+	if err == nil || err.Error() != "usersbackfill: reading public.memberships failed" {
+		t.Fatalf("error: got %v, want the membership read failure", err)
+	}
+	if sink.orgCalls != 0 || sink.memberCalls != 0 || rep.OrgsSeen != 0 || rep.OrgsInserted != 0 {
+		t.Fatalf("writes before the refused read: got org calls %d, member calls %d, report %+v; want none", sink.orgCalls, sink.memberCalls, rep)
 	}
 }

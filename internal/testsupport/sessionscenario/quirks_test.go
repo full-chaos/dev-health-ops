@@ -110,3 +110,31 @@ func TestQuirkClassesArePinned(t *testing.T) {
 		}
 	}
 }
+
+// Every validate step the frozen Python golden refused with 429 is a step the Go budget (httpapi.ValidateLimitCount,
+// larger than Python's 30) admits, so each needs its replay expectation in validateLimitAdmitted. The container-backed replay
+// finds a missing one only in CI; this finds it in the unit run.
+func TestEveryGoldenValidateRefusalHasAReplayExpectation(t *testing.T) {
+	seen := 0
+	for _, answer := range LoadGolden(t).Answers {
+		if !strings.Contains(answer.Name, "validate") || answer.Status != 429 {
+			continue
+		}
+		seen++
+		if _, ok := validateLimitAdmitted[answer.Name]; !ok {
+			t.Errorf("golden step %q answered 429 for Python and has no entry in validateLimitAdmitted", answer.Name)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("the golden holds no validate step refused with 429: the table would check nothing")
+	}
+	for name := range validateLimitAdmitted {
+		found := false
+		for _, answer := range LoadGolden(t).Answers {
+			found = found || answer.Name == name
+		}
+		if !found {
+			t.Errorf("validateLimitAdmitted names %q, which is no golden step", name)
+		}
+	}
+}

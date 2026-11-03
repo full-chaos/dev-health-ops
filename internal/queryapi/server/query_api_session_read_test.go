@@ -37,3 +37,24 @@ func TestQueryAPIPostureCheckFailsClosedOnAnUnreadableSessionsFlag(t *testing.T)
 		t.Fatal("an unreadable flag must not pass")
 	}
 }
+
+// The platform role read follows AUTH_PLATFORM_ROLES_OWNED (parsed by
+// platformrole.OwnedFromLookup) and rides on the session read.
+func TestQueryAPIPlatformReadFollowsTheSwitch(t *testing.T) {
+	t.Parallel()
+	env := func(values map[string]string) getenvFunc { return func(k string) string { return values[k] } }
+	read, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": " TRUE "}))
+	if err != nil || read == nil || len(read.Tables()) != 3 || read.Tables()[1].Table != "platform_role_assignments" {
+		t.Fatalf("owned: %+v %v", read, err)
+	}
+	read, err = queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": "false"}))
+	if err != nil || read == nil || len(read.Tables()) != 1 {
+		t.Fatalf("not owned: %+v %v", read, err)
+	}
+	if _, err := queryAPISessionRead(env(map[string]string{"AUTH_PROXY_SESSIONS": "true", "AUTH_PLATFORM_ROLES_OWNED": "yes"})); err == nil {
+		t.Error("a malformed switch must be an error")
+	}
+	if _, err := queryAPISessionRead(env(map[string]string{"AUTH_PLATFORM_ROLES_OWNED": "true"})); err == nil {
+		t.Error("platform roles owned with the session read off must be an error")
+	}
+}

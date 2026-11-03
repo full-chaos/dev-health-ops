@@ -44,6 +44,10 @@ exec "` + filepath.Join(fake.dir, "docker") + `" "$@"
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The registry class waits 10 s then 30 s between tries; no wall time is spent or asserted.
+	if err := os.WriteFile(filepath.Join(dir, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return dir
 }
 

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,9 +65,8 @@ func linesWith(lines []map[string]any, msg string) []map[string]any {
 // An INVALID leftover plus a writer transaction older than lock_timeout that ends inside the build window: the verb waits
 // it out and ends with a VALID index (action rebuilt). Before the change every attempt failed 55P03.
 func TestBuildIndexOutlastsALongTransactionOverAnInvalidLeftover(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	release := holdWriter(t, uri)
 	timer := time.AfterFunc(12*time.Second, release)
@@ -85,19 +85,20 @@ func TestBuildIndexOutlastsALongTransactionOverAnInvalidLeftover(t *testing.T) {
 // A holder that outlives the window: the build ends inside the window plus the cleanup budget with the leftover key and
 // the blocker row, and the writers behind the build never wait on it.
 func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	release := holdWriter(t, uri)
 
 	writer := connect(t, uri)
+	writerCtx, cancelWriters := context.WithCancel(context.Background())
+	defer cancelWriters()
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var maxLatency time.Duration
-	var writes int
+	var writes, writesInsideTheBuild int
 	var writeErr error
+	var building atomic.Bool
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -107,16 +108,16 @@ func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t
 				return
 			default:
 			}
-			began := time.Now()
-			_, err := writer.Exec(context.Background(), "UPDATE public.sync_run_units SET updated_at = updated_at WHERE false")
-			took := time.Since(began)
+			startedInside := building.Load()
+			_, err := writer.Exec(writerCtx, "UPDATE public.sync_run_units SET updated_at = updated_at WHERE false")
+			finishedInside := building.Load()
 			mu.Lock()
 			writes++
+			if startedInside && finishedInside {
+				writesInsideTheBuild++
+			}
 			if err != nil && writeErr == nil {
 				writeErr = err
-			}
-			if took > maxLatency {
-				maxLatency = took
 			}
 			mu.Unlock()
 			time.Sleep(20 * time.Millisecond)
@@ -125,24 +126,34 @@ func TestBuildIndexHolderLongerThanTheWindowLeavesTheLeftoverAndBlocksNoWriter(t
 
 	logs := &syncBuffer{}
 	conn := connect(t, uri)
-	began := time.Now()
-	_, err := pgmigrate.BuildFailureStreakIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{
-		LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: 0, Deadline: 12 * time.Second, CleanupBudget: 3 * time.Second,
-		SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
-	}, slog.New(slog.NewJSONHandler(logs, nil)))
-	elapsed := time.Since(began)
+	// A failure-only guard (window 12 s + cleanup 3 s + 60 s): a build that does not end with its window never returns.
+	// On the guard the build is cancelled first, then the writers are stopped, cancelled and joined, then the test fails.
+	building.Store(true)
+	_, err := runBuildGuarded(t, 75*time.Second, "the build must end with its window plus the cleanup budget",
+		func() {
+			building.Store(false)
+			close(stop)
+			cancelWriters()
+			wg.Wait()
+		},
+		func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
+				LockTimeout: 2 * time.Second, Attempts: 2, RetryDelay: 0, Deadline: 12 * time.Second, CleanupBudget: 3 * time.Second,
+				SampleEvery: 200 * time.Millisecond, HeartbeatEvery: time.Second,
+			}, slog.New(slog.NewJSONHandler(logs, nil)))
+		})
+	building.Store(false)
 	close(stop)
 	wg.Wait()
 	if err == nil {
 		t.Fatal("the build succeeded under a holder that never ended")
 	}
-	if elapsed > 12*time.Second+3*time.Second+10*time.Second {
-		t.Fatalf("took %s, want the window (12s) plus the cleanup budget (3s)", elapsed)
-	}
 	mu.Lock()
 	defer mu.Unlock()
-	if writeErr != nil || writes < 50 || maxLatency > time.Second {
-		t.Fatalf("writers: %d writes, max latency %s, error %v", writes, maxLatency, writeErr)
+	// "Blocks no writer" as an operation count, not a latency: writes that started AND finished while the build was
+	// running. A writer held behind the build lands only after it, so it never counts here.
+	if writeErr != nil || writesInsideTheBuild < 50 {
+		t.Fatalf("writers: %d writes, %d of them finished while the build ran (want >= 50), error %v", writes, writesInsideTheBuild, writeErr)
 	}
 	lines := logLines(t, logs.String())
 	for _, msg := range []string{"build-index: drop of the invalid index failed", "build-index: invalid index left; the next run drops it"} {
@@ -196,9 +207,8 @@ func assertBlockerLinesAreAllowlisted(t *testing.T, lines []map[string]any, raw 
 
 // While a build waits for an older transaction, the heartbeat names the blocker with the allowlisted fields only.
 func TestBuildIndexHeartbeatLogsTheBlockerWithAllowlistedFieldsOnly(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	release := holdWriter(t, uri)
 	timer := time.AfterFunc(6*time.Second, release)
 	defer timer.Stop()
@@ -222,9 +232,8 @@ func TestBuildIndexHeartbeatLogsTheBlockerWithAllowlistedFieldsOnly(t *testing.T
 // A holder of SHARE UPDATE EXCLUSIVE (a long VACUUM, DDL) ends the attempt at lock_timeout, not at the window: the table-lock
 // wait stays short.
 func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	holder := connect(t, uri)
 	tx, err := holder.Begin(context.Background())
 	if err != nil {
@@ -236,12 +245,17 @@ func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
 	}
 	logs := &syncBuffer{}
 	conn := connect(t, uri)
-	began := time.Now()
-	_, err = pgmigrate.BuildFailureStreakIndex(context.Background(), conn, pgmigrate.IndexBuildOptions{
-		LockTimeout: time.Second, Attempts: 1, Deadline: 5 * time.Minute, SampleEvery: 100 * time.Millisecond,
-	}, slog.New(slog.NewJSONHandler(logs, nil)))
-	if err == nil || time.Since(began) > 20*time.Second {
-		t.Fatalf("err %v after %s: the attempt must end near lock_timeout, not the window", err, time.Since(began))
+	// The attempt ends with the 1 s lock_timeout; one that waited for the 5 min window never returns inside the 60 s
+	// failure-only guard. On the guard the build is cancelled first and the holder transaction is rolled back.
+	_, err = runBuildGuarded(t, 60*time.Second, "the attempt must end at lock_timeout",
+		func() { _ = tx.Rollback(context.Background()) },
+		func(ctx context.Context) (pgmigrate.IndexBuildResult, error) {
+			return pgmigrate.BuildFailureStreakIndex(ctx, conn, pgmigrate.IndexBuildOptions{
+				LockTimeout: time.Second, Attempts: 1, Deadline: 5 * time.Minute, SampleEvery: 100 * time.Millisecond,
+			}, slog.New(slog.NewJSONHandler(logs, nil)))
+		})
+	if err == nil {
+		t.Fatal("the attempt must fail at lock_timeout, not succeed")
 	}
 	lines := logLines(t, logs.String())
 	failed := linesWith(lines, "build-index: attempt failed")
@@ -255,7 +269,6 @@ func TestBuildIndexTableLockWaitStaysUnderLockTimeout(t *testing.T) {
 
 // The start line and the line after each failed attempt report the index state.
 func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	for name, tc := range map[string]struct {
 		prepare func(t *testing.T, uri string)
 		want    string
@@ -266,7 +279,7 @@ func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
-			uri := d.at(t, position)
+			uri := d.withoutIndex(t, "0159")
 			tc.prepare(t, uri)
 			logs := &syncBuffer{}
 			conn := connect(t, uri)
@@ -292,7 +305,6 @@ func TestBuildIndexLogsTheExistingIndexState(t *testing.T) {
 // With an INVALID leftover planted, the build waits for the holder, ends "rebuilt" and VALID, and the heartbeat names the
 // holder's pid.
 func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	for name, start := range map[string]func(t *testing.T, uri string) (pid uint32){
 		"E3 repeatable-read snapshot on another table": func(t *testing.T, uri string) uint32 {
 			conn := connect(t, uri)
@@ -328,7 +340,7 @@ func TestBuildIndexOutlastsSnapshotHoldersOnOtherTablesAndLongStatements(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := newDownInstance(t)
-			uri := d.at(t, position)
+			uri := d.withoutIndex(t, "0159")
 			plantInvalidIndex(t, uri)
 			holderPID := start(t, uri)
 			time.Sleep(500 * time.Millisecond)

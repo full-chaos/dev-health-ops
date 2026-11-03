@@ -37,6 +37,14 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
+		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterTables[table], ", ")`,
+		reason: "privilege keywords from the closed pushWriterTables map, not an identifier",
+	},
+	{
+		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterSequences[sequence], ", ")`,
+		reason: "privilege keywords from the closed pushWriterSequences map, not an identifier",
+	},
+	{
 		file: "catalog_integration_test.go", fn: "TestPredefinedRoleReachableThroughAnIntermediaryIsDetected", operand: "testCase.grantOptions",
 		reason: "GRANT option keywords (WITH ADMIN OPTION and the like) from the test's own table, not an identifier",
 	},
@@ -61,8 +69,56 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "columns holds only quoteIdentifier results of the validated LegacyLinkPurgeGrants names",
 	},
 	{
-		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,
-		reason: "columns holds only quoteIdentifier results of the validated SessionReaderColumns names",
+		file: "memberwrite_grants.go", fn: "membershipWriteStatements", operand: `strings.Join(selectColumns, ", ")`,
+		reason: "selectColumns holds only quoteIdentifier results of the validated MembershipWriteGrants names",
+	},
+	{
+		file: "memberwrite_grants.go", fn: "membershipWriteStatements", operand: `strings.Join(updateColumns, ", ")`,
+		reason: "updateColumns holds only quoteIdentifier results of the validated MembershipWriteGrants names",
+	},
+	{
+		file: "memberwrite_grants.go", fn: "membershipWriteStatements", operand: `strings.Join(insertColumns, ", ")`,
+		reason: "insertColumns holds only quoteIdentifier results of the validated MembershipWriteGrants names",
+	},
+	{
+		file: "invitewrite_grants.go", fn: "inviteWriteStatements", operand: `strings.Join(selectColumns, ", ")`,
+		reason: "selectColumns holds only quoteIdentifier results of the validated InviteWriteGrants names",
+	},
+	{
+		file: "invitewrite_grants.go", fn: "inviteWriteStatements", operand: `strings.Join(insertColumns, ", ")`,
+		reason: "insertColumns holds only quoteIdentifier results of the validated InviteWriteGrants names",
+	},
+	{
+		file: "invitewrite_grants.go", fn: "inviteWriteStatements", operand: `strings.Join(updateColumns, ", ")`,
+		reason: "updateColumns holds only quoteIdentifier results of the validated InviteWriteGrants names",
+	},
+	{
+		file: "orgwrite_grants.go", fn: "organizationWriteStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated OrganizationWriteGrants names",
+	},
+	{
+		file: "publicaudit_grant.go", fn: "publicAuditWriteStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated PublicAuditWriteColumns names",
+	},
+	{
+		file: "ssoproviderwrite_grant.go", fn: "ssoProviderWriteStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated SSOProviderWriteColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(end, ", ")`,
+		reason: "end holds only quoteIdentifier results of the validated ImpersonationEndColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(start, ", ")`,
+		reason: "start holds only quoteIdentifier results of the validated ImpersonationStartColumns names",
+	},
+	{
+		file: "impersonationwrite_grant.go", fn: "impersonationWriteStatements", operand: `strings.Join(read, ", ")`,
+		reason: "read holds only quoteIdentifier results of the validated ImpersonationLegacyReadColumns names",
+	},
+	{
+		file: "session_readers.go", fn: "readerStatements", operand: `strings.Join(columns, ", ")`,
+		reason: "columns holds only quoteIdentifier results of the validated SessionReaderReads names",
 	},
 	{
 		file: "public_reads_integration_test.go", fn: "TestPublicReadsRuntimeReadsExactlyTheManifestColumns", operand: `strings.Join(quoted, ", ")`,

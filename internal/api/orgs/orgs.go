@@ -24,8 +24,8 @@ import (
 // Routes returns the area's routes. The Python router registers GET before
 // PATCH on /api/v1/orgs/me, so a 405 there says "Allow: GET" (Starlette
 // reports the first matching route's methods).
-func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger) []httpapi.Route {
-	h := handlers{pool: pool, logger: logger, now: time.Now}
+func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger, renamer Renamer) []httpapi.Route {
+	h := handlers{pool: pool, logger: logger, now: time.Now, renamer: renamer}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/orgs/me", Allow: http.MethodGet,
 			Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.getOwnOrg))},
@@ -37,9 +37,10 @@ func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger) []http
 }
 
 type handlers struct {
-	pool   *pgxpool.Pool
-	logger *slog.Logger
-	now    func() time.Time
+	pool    *pgxpool.Pool
+	logger  *slog.Logger
+	now     func() time.Time
+	renamer Renamer
 }
 
 // internal logs err with the route's fields and writes the generic 500.
@@ -140,14 +141,13 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 	var name, description string
 	var hasName, hasDescription bool
 	if object, ok := problems.Object(body); ok {
-		name, hasName = problems.OptionalString(object, "name", 1, 255)
+		name, hasName = problems.OptionalString(object, "name", 1, h.nameMax())
 		description, hasDescription = problems.OptionalString(object, "description", 0, 0)
 	}
 	if len(problems) > 0 {
 		writeJSON(w, http.StatusUnprocessableEntity, pybody.Detail(problems))
 		return
 	}
-
 	user := policy.UserFrom(r.Context())
 	if user.OrgID == "" {
 		policy.WriteDetail(w, http.StatusBadRequest, "No organization context", nil)
@@ -171,9 +171,9 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.pool.Begin(r.Context())
+	tx, err := h.beginAfterRename(w, r, orgID, user.ID, name, hasName)
 	if err != nil {
-		h.internal(w, r, "begin", err)
+		h.failBegin(w, r, err)
 		return
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(r.Context())) }()
@@ -186,14 +186,14 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return
 	}
-	if hasName {
+	if hasName && !h.orgsOwned() {
 		profile.name = name
 	}
 	if hasDescription {
 		profile.description = &description
 	}
 	if _, err := tx.Exec(r.Context(),
-		`UPDATE organizations SET name = $2, description = $3, updated_at = $4 WHERE id = $1`,
+		h.ownUpdateSQL(),
 		orgID, profile.name, profile.description, h.now().UTC()); err != nil {
 		h.internal(w, r, "update organization", err)
 		return
@@ -209,7 +209,7 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 func (h handlers) entitlements(w http.ResponseWriter, r *http.Request) {
 	user := policy.UserFrom(r.Context())
 	orgIDText := r.PathValue("org_id")
-	if !user.IsSuperuser && user.OrgID != orgIDText {
+	if !user.Holds(policy.ActionAdminBilling) && user.OrgID != orgIDText {
 		policy.WriteDetail(w, http.StatusForbidden, "Access forbidden", nil)
 		return
 	}

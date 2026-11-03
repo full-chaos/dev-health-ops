@@ -67,14 +67,14 @@ func parseSetPasswordBody(body pybody.Body) (setPasswordInput, pybody.Errors) {
 
 func (h *handlers) userRoutes() []httpapi.Route {
 	return []httpapi.Route{
-		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listUsers))},
-		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.getUser))},
-		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.createUser))},
-		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateUser))},
+		{Method: http.MethodGet, Pattern: usersPrefix + "/users", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.listUsers))},
+		{Method: http.MethodGet, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.getUser))},
+		{Method: http.MethodPost, Pattern: usersPrefix + "/users", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.createUser))},
+		{Method: http.MethodPatch, Pattern: usersPrefix + "/users/{user_id}", Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.updateUser))},
 		{Method: http.MethodPost, Pattern: usersPrefix + "/users/{user_id}/password",
-			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimit(validateSetPasswordBody, h.passwordLimiter, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
-		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.deleteUser))},
+			Handler: h.bodyFirstAdminOr(policy.ActionAdminUsers,
+				httpapi.ValidateThenLimitDependency(validateSetPasswordBody, h.passwordLimiter, adminUserKey, h.write)(http.HandlerFunc(h.setUserPassword)))},
+		{Method: http.MethodDelete, Pattern: usersPrefix + "/users/{user_id}", Handler: h.guard.WrapAdminOr(policy.ActionAdminUsers, http.HandlerFunc(h.deleteUser))},
 	}
 }
 
@@ -166,7 +166,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		users, err = h.store.listUsersByOrg(ctx, orgID, filter)
-	case user.IsSuperuser:
+	case user.Holds(policy.ActionAdminUsers):
 		users, err = h.store.listAllUsers(ctx, filter)
 	default:
 		orgIDRaw, ok := orgIDForNonSuperuser(w, user)
@@ -249,10 +249,12 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
 	role, rolePresent := "member", false
 	if ok {
-		email, _ = errs.RequiredString(object, "email", 1, 0)
+		if value, present := errs.RequiredString(object, "email", 1, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", value) {
+			email = value
+		}
 		password, _ = errs.OptionalString(object, "password", 8, 128)
 		username, _ = errs.OptionalString(object, "username", 0, 0)
-		fullName, fullNamePresent = errs.OptionalString(object, "full_name", 0, 0)
+		fullName, fullNamePresent = errs.OptionalDisplayText(object, "full_name")
 		// auth_provider/is_verified/is_superuser are pydantic fields with a
 		// DEFAULT, not `| None` -- DefaultedString/DefaultedBool: present is
 		// false only when the key is absent (apply the same default Python
@@ -269,6 +271,10 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return
+	}
+	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, isSuperuser) != nil {
+		writePlatformRolesOwned(w)
 		return
 	}
 	if password != "" && refusePasswordPolicy(w, password) {
@@ -341,6 +347,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		case err == ErrUsersOwned:
 			writeUsersOwned(w)
 			return nil
+		case err == ErrPlatformRolesOwned:
+			writePlatformRolesOwned(w)
+			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
 			return nil
@@ -362,7 +371,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
 	raw := requestedOrgHeader(r)
 	if raw == "" {
-		if caller.IsSuperuser {
+		if caller.Holds(policy.ActionAdminUsers) {
 			return uuid.Nil, true
 		}
 		claim, ok := orgIDForNonSuperuser(w, caller)
@@ -428,6 +437,16 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var errs pybody.Errors
+	patch := parseUserUpdate(&errs, bodyFromContext(ctx))
+	if len(errs) > 0 {
+		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return
+	}
+	if refuseSuperuserWhileOwned(h.store.PlatformRolesOwned, patch.IsSuperuser != nil) != nil {
+		writePlatformRolesOwned(w)
+		return
+	}
 	existing, err := h.store.fullUserByID(ctx, targetID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: update user lookup failed", "error", err)
@@ -447,37 +466,6 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := bodyFromContext(ctx)
-	var errs pybody.Errors
-	object, ok := errs.Object(body)
-	patch := userUpdate{}
-	if ok {
-		if v, present := errs.OptionalString(object, "email", 0, 0); present {
-			patch.Email = &v
-		}
-		if v, present := errs.OptionalString(object, "username", 0, 0); present {
-			patch.Username = &v
-		}
-		if v, present := errs.OptionalString(object, "full_name", 0, 0); present {
-			patch.FullName = &v
-		}
-		if v, present := errs.OptionalString(object, "avatar_url", 0, 0); present {
-			patch.AvatarURL = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_active"); present {
-			patch.IsActive = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_verified"); present {
-			patch.IsVerified = &v
-		}
-		if v, present := errs.OptionalBool(object, "is_superuser"); present {
-			patch.IsSuperuser = &v
-		}
-	}
-	if len(errs) > 0 {
-		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
-		return
-	}
 	h.superuserGuardedWrite(ctx, w, user, patch.IsSuperuser, "update_user", func(g *superuserTx) func() {
 		if g.refuse(targetID) {
 			return nil
@@ -486,6 +474,9 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case err == ErrUsersOwned:
 			writeUsersOwned(w)
+			return nil
+		case err == ErrPlatformRolesOwned:
+			writePlatformRolesOwned(w)
 			return nil
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "Email "+deref(patch.Email)+" already in use", nil)
@@ -530,7 +521,7 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	input, _ := ctx.Value(setPasswordInputKey{}).(setPasswordInput)
 	adminPassword, newPassword := input.AdminPassword, input.Password
 
-	if violations := passwordpolicy.Validate(newPassword); len(violations) > 0 {
+	if violations := passwordpolicy.ValidateForHash(newPassword); len(violations) > 0 {
 		detail := pyjson.NewObject()
 		list := make([]pyjson.Value, len(violations))
 		for i, v := range violations {
@@ -752,4 +743,34 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 			policy.WriteModel(w, http.StatusOK, out, nil)
 		}
 	})
+}
+
+// parseUserUpdate reads the optional fields of a user update body.
+func parseUserUpdate(errs *pybody.Errors, body pybody.Body) userUpdate {
+	object, ok := errs.Object(body)
+	patch := userUpdate{}
+	if ok {
+		if v, present := errs.OptionalString(object, "email", 0, 0); present && !errs.RefuseTextForm(pyjson.ClassEmail, "email", v) {
+			patch.Email = &v
+		}
+		if v, present := errs.OptionalString(object, "username", 0, 0); present {
+			patch.Username = &v
+		}
+		if v, present := errs.OptionalDisplayText(object, "full_name"); present {
+			patch.FullName = &v
+		}
+		if v, present := errs.OptionalURLString(object, "avatar_url"); present {
+			patch.AvatarURL = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_active"); present {
+			patch.IsActive = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_verified"); present {
+			patch.IsVerified = &v
+		}
+		if v, present := errs.OptionalBool(object, "is_superuser"); present {
+			patch.IsSuperuser = &v
+		}
+	}
+	return patch
 }

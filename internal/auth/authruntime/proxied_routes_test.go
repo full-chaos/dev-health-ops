@@ -38,6 +38,8 @@ type proxiedAuthRoute struct {
 var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"POST /api/v1/auth/refresh", "AuthSessions", 2},
 	{"POST /api/v1/auth/logout", "AuthSessions", 2},
+	{"POST /api/v1/auth/validate", "AuthSessions", 2},
+	{"POST /api/v1/auth/switch-org", "AuthSessions", 2},
 	{"POST /api/v1/auth/login", "AuthLocalLogin", 3},
 	{"POST /api/v1/auth/register", "AuthCredentials", 4},
 	{"GET /api/v1/auth/verify", "AuthCredentials", 4},
@@ -212,7 +214,7 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +258,7 @@ func TestEveryGoAPIProxiedAuthRouteIsMountedInEveryAuthServicePhase(t *testing.T
 
 func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 	stubbed := map[int][]string{
-		1: {"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout"},
+		1: {"POST /api/v1/auth/refresh", "POST /api/v1/auth/logout", "POST /api/v1/auth/validate"},
 		2: {"GET /api/v1/auth/verify", "POST /api/v1/auth/login", "POST /api/v1/auth/register"},
 		3: {"GET /api/v1/auth/verify", "POST /api/v1/auth/register"},
 	}
@@ -283,7 +285,7 @@ func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

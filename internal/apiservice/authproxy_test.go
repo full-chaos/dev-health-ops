@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,6 +44,8 @@ var (
 	wantSessionProxyRoutes = map[string]AuthAggregate{
 		"POST /api/v1/auth/refresh":             AuthSessions,
 		"POST /api/v1/auth/logout":              AuthSessions,
+		"POST /api/v1/auth/validate":            AuthSessions,
+		"POST /api/v1/auth/switch-org":          AuthSessions,
 		"POST /api/v1/auth/login":               AuthLocalLogin,
 		"POST /api/v1/auth/register":            AuthCredentials,
 		"GET /api/v1/auth/verify":               AuthCredentials,
@@ -351,6 +354,8 @@ var proxyCalls = []proxyCall{
 	{http.MethodGet, "/api/v1/auth/saml/p-1/metadata", "", false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/initiate", `{"relay_state": "/x"}`, false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/acs", `{"SAMLResponse": "PHNhbWw+", "RelayState": "r"}`, false, AuthSAML},
+	{http.MethodPost, "/api/v1/auth/validate", `{"token":  "opaque-access-1"}`, false, AuthSessions},
+	{http.MethodPost, "/api/v1/auth/switch-org", `{"org_id":  "3a6f0c52-9b0e-4d7a-8f3b-2c1d5e6f7a8b"}`, true, AuthSessions},
 }
 
 func (c proxyCall) request(t *testing.T) *http.Request {
@@ -472,8 +477,6 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 	for _, call := range []proxyCall{
 		{method: http.MethodGet, target: "/api/v1/auth/me", bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/me/organizations", bearer: true},
-		{method: http.MethodPost, target: "/api/v1/auth/switch-org", body: `{"org_id": "x"}`, bearer: true},
-		{method: http.MethodPost, target: "/api/v1/auth/validate", body: `{"token": "x"}`},
 		{method: http.MethodPost, target: "/api/v1/auth/accept-invite", body: `{"token": "x"}`, bearer: true},
 		{method: http.MethodPost, target: "/api/v1/auth/onboard", body: `{}`, bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/onboarding/state", bearer: true},
@@ -546,6 +549,30 @@ func TestAuthProxyFlagsOffServeEveryRouteLocally(t *testing.T) {
 	}
 }
 
+// With the sessions flag off, POST /api/v1/auth/validate is go-api's own
+// answer, byte for byte the answer of a go-api with no proxy configured.
+func TestAuthProxyValidateFlagOffIsGoAPIsUnchangedAnswer(t *testing.T) {
+	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	off := proxyFixture(t, mustProxyConfig(t, map[string]string{EnvAuthProxyURL: stub.URL}))
+	none := proxyFixture(t, AuthProxyConfig{})
+	for _, body := range []string{
+		`{"token": "` + proxyBearer(t) + `"}`, `{"token": "garbage"}`, `{"token": ""}`, `{}`, `{"token": 5}`, `not json`,
+	} {
+		answers := [2]string{}
+		for i, handler := range []http.Handler{off, none} {
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, proxyCall{method: http.MethodPost, target: "/api/v1/auth/validate", body: body}.request(t))
+			answers[i] = fmt.Sprintf("%d %s %s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
+		}
+		if answers[0] != answers[1] {
+			t.Errorf("validate %s: flag off %q, no proxy %q", body, answers[0], answers[1])
+		}
+	}
+	if seen := stub.requests(); len(seen) != 0 {
+		t.Errorf("upstream saw %d validate requests with the sessions flag off", len(seen))
+	}
+}
+
 // One flag forwards its own aggregate only.
 func TestAuthProxyOneFlagMovesOnlyItsAggregate(t *testing.T) {
 	stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
@@ -603,7 +630,6 @@ func TestAuthProxyKeepsGoAPIFrontChecks(t *testing.T) {
 	for _, call := range []proxyCall{
 		{method: http.MethodPost, target: "/api/v1/auth/login", body: `{"email": `},
 		{method: http.MethodPost, target: "/api/v1/auth/login", body: `{"email": "not-an-email", "password": "x"}`},
-		{method: http.MethodPost, target: "/api/v1/auth/change-password", body: `{"current_password": "a", "new_password": "long-enough-1"}`},
 		{method: http.MethodGet, target: "/api/v1/auth/verify"},
 		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/authorize", body: `{"redirect_uri": `},
 		{method: http.MethodPost, target: "/api/v1/auth/oidc/p-1/callback", body: "not-json"},
@@ -662,8 +688,8 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 			}
 			after := proxyMetrics(t)
 			series := proxySeries(AuthSessions, "upstream_error")
-			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 2 {
-				t.Errorf("%s moved by %v, want 2", series, delta)
+			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 4 {
+				t.Errorf("%s moved by %v, want 4", series, delta)
 			}
 		})
 	}

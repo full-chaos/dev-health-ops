@@ -19,6 +19,7 @@ import (
 
 	jobsv1 "github.com/full-chaos/dev-health-ops/contracts/jobs/v1"
 	syncdispatchv1 "github.com/full-chaos/dev-health-ops/contracts/sync-dispatch/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -28,6 +29,7 @@ import (
 	platformsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/ownermove"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 )
@@ -39,6 +41,10 @@ const (
 	defaultCoordinatorRole = "devhealth_coordinator"
 	defaultAPIRole         = "devhealth_api"
 )
+
+// firstConnect bounds the wait for the first database connect: a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed.
+var firstConnect = postgresstore.DefaultFirstConnect()
 
 // Command is `dho migrate`: the `postgres` and `clickhouse` groups (each
 // schema's head, internal/pgmigrate and internal/chmigrate), the `upgrade`
@@ -67,6 +73,7 @@ func Command() cli.Command {
 				},
 			},
 			rolesCommand(),
+			ownerMoveCommand(),
 			// The Python CLI's flat aliases of the Alembic verbs (dev-hops migrate
 			// current|heads|history|status|downgrade).
 		}, pgmigrate.Aliases(migrationDatabaseResolver)...),
@@ -267,6 +274,7 @@ func Execute(
 		QueryAPIGrants:          queryAPIGrants,
 		QueryAPIColumnGrants:    queryAPIColumnGrants,
 		QueryAPISessionRead:     queryAPISessionRead,
+		AuthSchema:              authSchemaOf(lookup),
 		PostureManifestDigest:   postureManifestDigest,
 		PostureManifestBuildID:  migrateBuildID,
 		NativeRiverRoutes:       nativeRoutes,
@@ -286,7 +294,7 @@ func Execute(
 	poolConfig.MaxConnIdleTime = time.Minute
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
-	pool, err := postgresstore.Open(ctx, poolConfig)
+	pool, err := postgresstore.OpenWaiting(ctx, poolConfig, firstConnect.WithReport(postgresstore.TextReport(stderr, "migrate river", "PostgreSQL migration")))
 	if err != nil {
 		fmt.Fprintln(stderr, "migration error: PostgreSQL migration endpoint unavailable")
 		return 1
@@ -299,6 +307,14 @@ func Execute(
 		return reportSchemaCheck(ctx, logger, stdout, stderr, current, err)
 	}
 
+	pinned, err := ownermove.VerifyPinFromEnv(ctx, pool, lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "migration refused: %v\n", err)
+		return 1
+	}
+	if pinned != "" {
+		infoLogger.InfoContext(ctx, ownermove.PinVerifiedMessage, "owner_role", pinned)
+	}
 	migrationOptions.Logger = logger
 	result, err := riverstore.ApplyPinnedMigrations(ctx, pool, migrationOptions)
 	if err != nil {
@@ -515,12 +531,21 @@ func queryAPILeg(lookup func(string) (string, bool)) (string, []riverstore.Table
 	return value, grants, columns
 }
 
-// queryAPISessionReadFor is the auth session read the query-api role holds while
-// auth-service owns sessions (AUTH_PROXY_SESSIONS): nil when the flag is off. The
-// schema is AUTH_DATABASE_SCHEMA (default "auth"), the same value go-api and
-// query-api read sessions in.
+// queryAPISessionReadFor is the auth read the query-api role holds while
+// auth-service owns sessions (AUTH_PROXY_SESSIONS): nil when the flag is off.
+// While auth-service also owns the platform roles (AUTH_PLATFORM_ROLES_OWNED,
+// rule.OwnedFromLookup, the parse rule.OwnedFromLookup is) it carries the platform role read, which needs
+// the session read. The schema is AUTH_DATABASE_SCHEMA (default "auth"), the
+// same value go-api and query-api read in.
 func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByAuth bool) (*riverstore.SessionReadGrant, error) {
+	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
+	if err != nil {
+		return nil, err
+	}
 	if !sessionsOwnedByAuth {
+		if platformRolesOwned {
+			return nil, fmt.Errorf("%s is on: %s must be on too", rule.OwnedEnv, envAuthProxySessions)
+		}
 		return nil, nil
 	}
 	schema := "auth"
@@ -530,8 +555,24 @@ func queryAPISessionReadFor(lookup func(string) (string, bool), sessionsOwnedByA
 	if !riverstore.ValidIdentifier(schema) {
 		return nil, fmt.Errorf("AUTH_DATABASE_SCHEMA holds an unusable schema name")
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
-	return &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}, nil
+	read := postgresstore.QueryAPISessionReadFor(schema, platformRolesOwned)
+	grant := &riverstore.SessionReadGrant{Schema: read.Schema, Table: read.Table, Columns: read.Columns}
+	for _, table := range read.Also {
+		grant.Also = append(grant.Also, riverstore.SessionReadTable{Table: table.Table, Columns: table.Columns})
+	}
+	return grant, nil
+}
+
+// authSchemaOf is AUTH_DATABASE_SCHEMA (default "auth") when it is a usable name, else "" (riverstore's default).
+func authSchemaOf(lookup func(string) (string, bool)) string {
+	schema := "auth"
+	if value, _ := lookup("AUTH_DATABASE_SCHEMA"); strings.TrimSpace(value) != "" {
+		schema = strings.TrimSpace(value)
+	}
+	if !riverstore.ValidIdentifier(schema) {
+		return ""
+	}
+	return schema
 }
 
 // postureGrants converts one role's declared posture into the migration's

@@ -178,7 +178,7 @@ func TestGitLabNativeResyncRestoresALinkTheOldEngineLostToTheTextTier(t *testing
 	if err := conn.Exec(ctx, `OPTIMIZE TABLE work_graph_pr_commit FINAL`); err != nil {
 		t.Fatal(err)
 	}
-	run("../chmigrate/sql/132_pr_commit_native_wins.sql")
+	run("../chmigrate/archive/sql/132_pr_commit_native_wins.sql")
 	if got := served(); got != "explicit_text" {
 		t.Fatalf("after the migration the lost pair serves %s, want explicit_text", got)
 	}

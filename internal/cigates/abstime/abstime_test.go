@@ -238,3 +238,378 @@ func TestRepositoryTestsHaveNoUnlistedAbsoluteTimeAssertion(t *testing.T) {
 		t.Fatalf("%d absolute time assertion problem(s):\n%s", len(got), strings.Join(got, "\n"))
 	}
 }
+
+// A duration measured in a child process and carried to the parent as KEY=<number> is still a measurement: the parent
+// compares it with a constant the same way a same-process time.Since is compared (CHAOS-11757).
+const carriedHelper = "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"STOP_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \" CODE=\" + strconv.Itoa(0) + \"\\n\")\n}\n\n"
+
+func TestPlantedChildEncodedMillisecondsAgainstAConstantIsRefused(t *testing.T) {
+	body := carriedHelper + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &ms, &code)\n\tif stop := time.Duration(ms) * time.Millisecond; stop >= 4*time.Second {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "p/x_test.go", "TestStop", "D6418", "child process")
+}
+
+func TestPlantedChildMillisecondsAgainstALimitVariableIsRefused(t *testing.T) {
+	body := carriedHelper + "func TestOtlp(t *testing.T) {\n\tvar millis int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &millis, &code)\n\tif limit := (time.Second + 1500*time.Millisecond).Milliseconds(); millis > limit {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestOtlp")
+}
+
+func TestPlantedFprintfEmittedMillisecondsAreRefused(t *testing.T) {
+	helper := "func helper() {\n\ts := time.Now()\n\tfmt.Fprintf(os.Stderr, \"SHUTDOWN_MS=%d CODE=%d\\n\", time.Since(s).Milliseconds(), 0)\n}\n\n"
+	body := helper + "func TestFprintf(t *testing.T) {\n\tvar millis int64\n\tvar code int\n\tfmt.Sscanf(text, \"SHUTDOWN_MS=%d CODE=%d\", &millis, &code)\n\tif millis > 2500 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestFprintf")
+}
+
+func TestPlantedShellSecondsParsedByAHelperAreRefused(t *testing.T) {
+	body := "const script = \"start=$SECONDS\\nstop_service x\\necho \\\"A_ELAPSED=$((SECONDS - start))\\\"\\n\"\n\nfunc elapsedOf(stdout, key string) (int, bool) {\n\tn, err := strconv.Atoi(stdout)\n\treturn n, err == nil\n}\n\nfunc TestTeardown(t *testing.T) {\n\tprompt, ok := elapsedOf(out, \"A_ELAPSED\")\n\tif !ok {\n\t\treturn\n\t}\n\tif prompt <= 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestTeardown")
+}
+
+func TestCarriedMeasurementTakesTheSameMarkerAndAllowlistRow(t *testing.T) {
+	test := "func TestStop(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\t%s\n\tif time.Duration(ms)*time.Millisecond > time.Minute {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	src := carriedHelper + strings.Replace(test, "%s", "//abstime:allow hang ceiling, never a budget", 1)
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), nil))
+	src = carriedHelper + strings.Replace(test, "%s", "", 1)
+	rows := []abstime.Row{{File: "p/x_test.go", Func: "TestStop", Reason: "pending", Line: 2}}
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), nil), "TestStop")
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + src}), rows))
+	stale := writeTree(t, map[string]string{"p/x_test.go": head + carriedHelper + "func TestStop(t *testing.T) {}\n"})
+	wantOne(t, check(t, stale, rows), "stale allowlist row")
+}
+
+// Limits of the carried-measurement rule: each is stated in the findAssertions doc comment and pinned here, so a
+// change of the rule shows in a test.
+
+func TestCarriedHangCeilingAndExitCodeAreNotAssertions(t *testing.T) {
+	body := carriedHelper + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"STOP_MS=%d CODE=%d\", &ms, &code)\n\tselect {\n\tcase <-done:\n\tcase <-time.After(30 * time.Second):\n\t\tt.Fatal(\"hang\")\n\t}\n\tif code > 1 || code < 0 {\n\t\tt.Fatal(code)\n\t}\n\tt.Log(ms)\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestRatioOfTwoCarriedValuesIsNotAnAbsoluteBudget(t *testing.T) {
+	helper := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"FAST_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n\tos.Stderr.WriteString(\"SLOW_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n}\n\n"
+	body := helper + "func TestRatio(t *testing.T) {\n\tvar fast, slow int64\n\tfmt.Sscanf(text, \"FAST_MS=%d\", &fast)\n\tfmt.Sscanf(text, \"SLOW_MS=%d\", &slow)\n\tif 2*fast >= slow {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestAKeyThatCarriesNoMeasurementIsNotTracked(t *testing.T) {
+	helper := "func helper(port int) {\n\tos.Stderr.WriteString(\"PORT=\" + strconv.Itoa(port) + \"\\n\")\n}\n\n"
+	body := helper + "func TestPort(t *testing.T) {\n\tvar port int\n\tfmt.Sscanf(text, \"PORT=%d\", &port)\n\tif port > 1024 {\n\t\tt.Log(port)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestStringsIndexOfAKeyIsNotACarriedValue(t *testing.T) {
+	body := carriedHelper + "func TestIndex(t *testing.T) {\n\tindex := strings.Index(text, \"STOP_MS=\")\n\tif index < 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestEmitterInAnotherFileIsOutOfScope(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"p/helper_test.go": head + carriedHelper,
+		"p/x_test.go":      head + "func TestStop(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n",
+	})
+	wantClean(t, check(t, root, nil))
+}
+
+func TestDurationCarriedAsJSONIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tjson.NewEncoder(os.Stderr).Encode(map[string]int64{\"ms\": time.Since(s).Milliseconds()})\n}\n\nfunc TestJSON(t *testing.T) {\n\tvar got map[string]int64\n\tjson.Unmarshal(raw, &got)\n\tif got[\"ms\"] > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// Reviewer probes of the carried-measurement rule (CHAOS-11757): each is a planted shape the rule must refuse, or a
+// legal shape it must leave alone.
+
+func TestPlantedIndexedPrintfVerbsAreFollowedToTheirArgument(t *testing.T) {
+	helper := "func helper() {\n\tstart := time.Now()\n\ts := fmt.Sprintf(\"DURATION_MS=%[2]d CODE=%[1]d\", 0, time.Since(start).Milliseconds())\n\tos.Stderr.WriteString(s)\n}\n\n"
+	body := helper + "func TestIndexed(t *testing.T) {\n\tvar ms int64\n\tvar code int\n\tfmt.Sscanf(text, \"DURATION_MS=%d CODE=%d\", &ms, &code)\n\tif ms > 5000 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestIndexed")
+}
+
+func TestIndexedVerbOnTheOtherArgumentIsNotAnEmitter(t *testing.T) {
+	helper := "func helper() {\n\tstart := time.Now()\n\ts := fmt.Sprintf(\"CODE=%[1]d DURATION_MS=%[1]d\", 0, time.Since(start).Milliseconds())\n\tos.Stderr.WriteString(s)\n}\n\n"
+	body := helper + "func TestIndexed(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"DURATION_MS=%d\", &ms)\n\tif ms > 5000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestPlantedPrintFamilyKeyAsItsOwnArgumentIsRefused(t *testing.T) {
+	for name, emit := range map[string]string{
+		"Fprintln": "fmt.Fprintln(os.Stderr, \"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Println":  "fmt.Println(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Fprint":   "fmt.Fprint(os.Stderr, \"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Sprint":   "_ = fmt.Sprint(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Print":    "fmt.Print(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+		"Sprintln": "_ = fmt.Sprintln(\"DURATION_MS=\", time.Since(s).Milliseconds())",
+	} {
+		body := "func helper() {\n\ts := time.Now()\n\t" + emit + "\n}\n\nfunc TestPrint(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"DURATION_MS=%d\", &ms)\n\tif ms > 5000 {\n\t\tt.Fatal(\"slow\")\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestPrint") {
+			t.Fatalf("%s: want one violation naming TestPrint, got %q", name, got)
+		}
+	}
+}
+
+func TestPrintFamilyKeyBeforeAnUnmeasuredArgumentIsNotAnEmitter(t *testing.T) {
+	body := "func helper(port int) {\n\tfmt.Fprintln(os.Stderr, \"PORT=\", port)\n}\n\nfunc TestPort(t *testing.T) {\n\tvar port int\n\tfmt.Sscanf(text, \"PORT=%d\", &port)\n\tif port > 1024 {\n\t\tt.Log(port)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestQuotientOfTwoMeasuredValuesIsARatioEvenThroughAVariable(t *testing.T) {
+	direct := "func TestRatioVar(t *testing.T) {\n\ta := time.Now()\n\tfast := time.Since(a)\n\tb := time.Now()\n\tslow := time.Since(b)\n\tratio := float64(slow) / float64(fast)\n\tif ratio > 2 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + direct}), nil))
+	helper := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"A_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n\tos.Stderr.WriteString(\"B_MS=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10) + \"\\n\")\n}\n\n"
+	carried := helper + "func TestCarriedRatioVar(t *testing.T) {\n\tvar a, b int64\n\tfmt.Sscanf(text, \"A_MS=%d\", &a)\n\tfmt.Sscanf(text, \"B_MS=%d\", &b)\n\tratio := float64(b) / float64(a)\n\tif ratio > 2 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + carried}), nil))
+}
+
+func TestQuotientOfAMeasuredValueByAConstantIsStillMeasured(t *testing.T) {
+	body := "func TestPerOp(t *testing.T) {\n\ta := time.Now()\n\tper := time.Since(a) / 100\n\tif per > time.Millisecond {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestPerOp")
+}
+
+func TestALoggingHelperIsNotAReaderOfACarriedKey(t *testing.T) {
+	body := carriedHelper + "func logKey(key string) int {\n\tfmt.Println(\"key\", key)\n\treturn 2\n}\n\nfunc TestLogged(t *testing.T) {\n\tcode := logKey(\"STOP_MS\")\n\tif code > 1 {\n\t\tt.Fatal(code)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestHelpersThatParseAreReadersWhateverTheParser(t *testing.T) {
+	for name, parse := range map[string]string{
+		"Atoi":          "n, err := strconv.Atoi(out)\n\treturn n, err == nil",
+		"ParseInt":      "n, err := strconv.ParseInt(out, 10, 64)\n\treturn int(n), err == nil",
+		"ParseFloat":    "f, err := strconv.ParseFloat(out, 64)\n\treturn int(f), err == nil",
+		"Sscanf":        "var n int\n\t_, err := fmt.Sscanf(out, \"%d\", &n)\n\treturn n, err == nil",
+		"ParseDuration": "d, err := time.ParseDuration(out)\n\treturn int(d), err == nil",
+		"Unmarshal":     "var n int\n\terr := json.Unmarshal([]byte(out), &n)\n\treturn n, err == nil",
+	} {
+		body := carriedHelper + "func readKey(out, key string) (int, bool) {\n\t" + parse + "\n}\n\nfunc TestHelper(t *testing.T) {\n\tms, ok := readKey(text, \"STOP_MS\")\n\tif ok && ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestHelper") {
+			t.Fatalf("%s: want one violation naming TestHelper, got %q", name, got)
+		}
+	}
+}
+
+func TestAHelperDeclaredInAnotherFileIsNotAReader(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"p/helper_test.go": head + "func readKey(out, key string) (int, bool) {\n\tn, err := strconv.Atoi(out)\n\treturn n, err == nil\n}\n",
+		"p/x_test.go":      head + carriedHelper + "func TestHelper(t *testing.T) {\n\tms, _ := readKey(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n",
+	})
+	wantClean(t, check(t, root, nil))
+}
+
+func TestAComputedKeyIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tkey := \"STOP\" + \"_MS\"\n\tos.Stderr.WriteString(key + \"=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10))\n}\n\nfunc TestComputed(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"STOP_MS=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestALowercaseKeyIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tos.Stderr.WriteString(\"stop_ms=\" + strconv.FormatInt(time.Since(s).Milliseconds(), 10))\n}\n\nfunc TestLower(t *testing.T) {\n\tvar ms int64\n\tfmt.Sscanf(text, \"stop_ms=%d\", &ms)\n\tif ms > 4000 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// A reader helper may wrap one parsing helper: one level of call depth is followed, two are not (stated limit).
+const nestedParser = "func parseMillis(out string) int {\n\tn, _ := strconv.Atoi(out)\n\treturn n\n}\n\n"
+
+func TestAHelperThatCallsAParsingHelperIsAReader(t *testing.T) {
+	body := carriedHelper + nestedParser + "func readKey(out, key string) int {\n\treturn parseMillis(out)\n}\n\nfunc TestNested(t *testing.T) {\n\tms := readKey(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestNested")
+}
+
+func TestTwoLevelsOfHelperCallsAreOutOfScope(t *testing.T) {
+	body := carriedHelper + nestedParser + "func readKey(out, key string) int {\n\treturn parseMillis(out)\n}\n\nfunc readKeyTwice(out, key string) int {\n\treturn readKey(out, key)\n}\n\nfunc TestDeep(t *testing.T) {\n\tms := readKeyTwice(text, \"STOP_MS\")\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// Round-2 reviewer probes (CHAOS-11757, ACP-RULING-r2-fixscope): shell reports through a variable or printf, and fixed
+// literal inputs that must not count as a child's report.
+
+const shellElapsedOf = `
+func elapsedOf(stdout, key string) (int, bool) {
+	n, err := strconv.Atoi(stdout)
+	return n, err == nil
+}
+
+func TestShell(t *testing.T) {
+	prompt, ok := elapsedOf(out, "A_ELAPSED")
+	if ok && prompt <= 3 {
+		t.Fatal("x")
+	}
+}
+`
+
+func TestPlantedShellAssignedThenEchoedKeyIsRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"dollar": `"start=$SECONDS\nelapsed=$((SECONDS - start))\necho \"A_ELAPSED=$elapsed\"\n"`,
+		"braces": `"elapsed=${SECONDS}\necho \"A_ELAPSED=${elapsed}\"\n"`,
+		"epoch":  `"t=$EPOCHREALTIME\necho A_ELAPSED=$t\n"`,
+		"upper":  `"ELAPSED=$((SECONDS - start))\necho \"A_ELAPSED=$ELAPSED\"\n"`,
+		"date":   `"d=$(date +%s)\necho \"A_ELAPSED=$d\"\n"`,
+		"quoted": `"elapsed=$((SECONDS - start))\necho 'A_ELAPSED='\"$elapsed\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+			t.Fatalf("%s: want one violation naming TestShell, got %q", name, got)
+		}
+	}
+}
+
+func TestPlantedShellPrintfKeyIsRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"arith":    `"printf 'A_ELAPSED=%s\\n' \"$((SECONDS - start))\"\n"`,
+		"seconds":  `"printf 'A_ELAPSED=%d\\n' $SECONDS\n"`,
+		"variable": `"elapsed=$((SECONDS - start))\nprintf 'A_ELAPSED=%s\\n' \"$elapsed\"\n"`,
+		"second":   `"printf 'CODE=%s A_ELAPSED=%s\\n' 0 \"$((SECONDS - start))\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+			t.Fatalf("%s: want one violation naming TestShell, got %q", name, got)
+		}
+	}
+}
+
+func TestShellEchoOfAnUnmeasuredVariableIsNotAnEmitter(t *testing.T) {
+	for name, script := range map[string]string{
+		"echo":   `"name=x\necho \"A_ELAPSED=$name\"\n"`,
+		"printf": `"printf 'A_ELAPSED=%s\\n' \"$port\"\n"`,
+		"first":  `"printf 'CODE=%s A_ELAPSED=%s\\n' \"$((SECONDS - start))\" 0\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+		_ = name
+	}
+}
+
+const logKeyDiagnostic = `
+func diag() {
+	s := time.Now()
+	log.Printf("STOP_MS=%d", time.Since(s).Milliseconds())
+}
+
+`
+
+func TestFixedLiteralInputIsNotAChildReport(t *testing.T) {
+	for name, test := range map[string]string{
+		"literal":    "var ms int\n\tfmt.Sscanf(\"STOP_MS=2\", \"STOP_MS=%d\", &ms)",
+		"identifier": "var ms int\n\tin := \"STOP_MS=2\"\n\tfmt.Sscanf(in, \"STOP_MS=%d\", &ms)",
+		"helper":     "ms, _ := readKey(\"STOP_MS=2\", \"STOP_MS\")",
+	} {
+		body := logKeyDiagnostic + "func readKey(out, key string) (int, bool) {\n\tn, err := strconv.Atoi(out)\n\treturn n, err == nil\n}\n\nfunc TestFixed(t *testing.T) {\n\t" + test + "\n\tif ms > 1 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 0 {
+			t.Fatalf("%s: a fixed literal input is not a child's report, got %q", name, got)
+		}
+	}
+}
+
+func TestAReassignedIdentifierIsNotALiteralSource(t *testing.T) {
+	body := logKeyDiagnostic + "func TestReassigned(t *testing.T) {\n\tvar ms int\n\tin := \"STOP_MS=2\"\n\tin = readOutput()\n\tfmt.Sscanf(in, \"STOP_MS=%d\", &ms)\n\tif ms > 1 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantOne(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil), "TestReassigned")
+}
+
+func TestStringsContainsAndCutOfAKeyCarryNothing(t *testing.T) {
+	body := carriedHelper + "func TestContains(t *testing.T) {\n\tn := strings.Count(text, \"STOP_MS=\")\n\thas := strings.Contains(text, \"STOP_MS=\")\n\tbefore, _, _ := strings.Cut(text, \"STOP_MS=\")\n\tif n > 1 || len(before) > 4 || !has {\n\t\tt.Fatal(n)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+func TestAFileChannelIsOutOfScope(t *testing.T) {
+	body := "func helper() {\n\ts := time.Now()\n\tos.WriteFile(path, []byte(strconv.FormatInt(time.Since(s).Milliseconds(), 10)), 0o644)\n}\n\nfunc TestFile(t *testing.T) {\n\traw, _ := os.ReadFile(path)\n\tms, _ := strconv.Atoi(string(raw))\n\tif ms > 4000 {\n\t\tt.Fatal(ms)\n\t}\n}\n"
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// Round-2 verifier probes (CHAOS-11757, ACP-RULING-delta-e-verify): an assign counts as measured when its right-hand side
+// CONTAINS a measured word or a variable already measured, followed to a fixpoint.
+
+func shellRefused(t *testing.T, script string) {
+	t.Helper()
+	body := "const script = " + script + "\n" + shellElapsedOf
+	got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+	if len(got) != 1 || !strings.Contains(got[0], "TestShell") {
+		t.Fatalf("want one violation naming TestShell, got %q", got)
+	}
+}
+
+// Form (1): the repo's own idiom, a date inside the arithmetic (ci/check_go.sh).
+func TestPlantedShellDateInsideArithmeticAssignIsRefused(t *testing.T) {
+	shellRefused(t, `"start=3\nelapsed=$(( $(date +%s) - start ))\necho \"A_ELAPSED=$elapsed\"\n"`)
+}
+
+// Form (2): two hops, the measured word is assigned first and used by the next assign.
+func TestPlantedShellTwoHopAssignIsRefused(t *testing.T) {
+	shellRefused(t, `"end=$(date +%s)\nelapsed=$((end - start))\necho \"A_ELAPSED=$elapsed\"\n"`)
+}
+
+// Form (3): the key itself is assigned from arithmetic that holds the measured word.
+func TestPlantedShellKeyAssignedFromArithmeticIsRefused(t *testing.T) {
+	shellRefused(t, `"A_ELAPSED=$(($(date +%s) - started))\n"`)
+}
+
+func TestPlantedShellOtherAssignSpellingsAreRefused(t *testing.T) {
+	for name, script := range map[string]string{
+		"seconds in sum":  `"d=$((SECONDS + 1))\necho \"A_ELAPSED=$d\"\n"`,
+		"three hops":      `"a=$SECONDS\nb=$((a - 1))\nc=$((b * 2))\necho \"A_ELAPSED=$c\"\n"`,
+		"printf of a hop": `"end=$(date +%s)\nelapsed=$((end - start))\nprintf 'A_ELAPSED=%s\\n' \"$elapsed\"\n"`,
+	} {
+		t.Run(name, func(t *testing.T) { shellRefused(t, script) })
+	}
+}
+
+func TestShellArithmeticWithoutAMeasuredWordIsNotAnEmitter(t *testing.T) {
+	for name, script := range map[string]string{
+		"plain arithmetic": `"a=$((b - c))\necho \"A_X=$a\"\n"`,
+		"command output":   `"name=$(basename x)\necho \"A_NAME=$name\"\n"`,
+		"bare word":        `"seconds=3\nelapsed=$((seconds * 2))\necho \"A_ELAPSED=$elapsed\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellElapsedOf
+		wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+		_ = name
+	}
+}
+
+func TestScriptKeysAreReadInsideOneLiteral(t *testing.T) {
+	body := "const first = \"elapsed=$SECONDS\\n\"\n\nconst second = \"echo \\\"A_ELAPSED=$elapsed\\\"\\n\"\n" + shellElapsedOf
+	wantClean(t, check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil))
+}
+
+// The fixpoint does not depend on the order of the assigns in the literal.
+func TestPlantedShellAssignOrderDoesNotMatter(t *testing.T) {
+	shellRefused(t, `"elapsed=$((end - start))\nend=$(date +%s)\necho \"A_ELAPSED=$elapsed\"\n"`)
+}
+
+// Round-3 verifier probes (CHAOS-11757, ACP-RULING-delta-f-verify): each NAME= is scanned on its own, so a second key on
+// the same line is not swallowed by the first assign.
+
+const shellCodeOf = `
+func codeOf(stdout, key string) (int, bool) {
+	n, err := strconv.Atoi(stdout)
+	return n, err == nil
+}
+
+func TestShellCode(t *testing.T) {
+	code, ok := codeOf(out, "CODE")
+	if ok && code <= 3 {
+		t.Fatal("x")
+	}
+}
+`
+
+func TestPlantedTwoKeysOnOneEchoLineCatchTheMeasuredOne(t *testing.T) {
+	shellRefused(t, `"elapsed=$((SECONDS - start)); echo \"CODE=$code A_ELAPSED=$elapsed\"\n"`)
+	shellRefused(t, `"elapsed=$((SECONDS - start))\necho \"CODE=$code A_ELAPSED=$elapsed\"\n"`)
+}
+
+func TestTheUnmeasuredKeyOnTheSameLineStaysClean(t *testing.T) {
+	for name, script := range map[string]string{
+		"assign then echo": `"elapsed=$((SECONDS - start)); echo \"CODE=$code A_ELAPSED=$elapsed\"\n"`,
+		"inline":           `"echo \"CODE=0 A_ELAPSED=$((SECONDS - start))\"\n"`,
+		"printf":           `"printf 'CODE=%s A_ELAPSED=%s\\n' 0 \"$((SECONDS - start))\"\n"`,
+	} {
+		body := "const script = " + script + "\n" + shellCodeOf
+		got := check(t, writeTree(t, map[string]string{"p/x_test.go": head + body}), nil)
+		if len(got) != 0 {
+			t.Fatalf("%s: the CODE reader must stay clean, got %q", name, got)
+		}
+	}
+}
+
+func TestTwoMeasuredKeysOnOneLineAreBothKeys(t *testing.T) {
+	shellRefused(t, `"echo \"A_ELAPSED=$((SECONDS - start)) B_ELAPSED=$((SECONDS - begin))\"\n"`)
+}

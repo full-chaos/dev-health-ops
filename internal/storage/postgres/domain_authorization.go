@@ -573,7 +573,7 @@ type TablePrivilege struct {
 // A table may also appear in RequiredTables (CHAOS-6747). It is then mixed:
 // RequiredTables states its table-wide privileges and ColumnScoped adds
 // column privileges on top of them (integration_credentials: table-wide
-// SELECT, column-scoped UPDATE of is_active and updated_at). Any column
+// SELECT, column-scoped UPDATE of is_active, updated_at and the last_test_* result). Any column
 // privilege not declared there, and any table-wide privilege beyond the
 // flags, is refused.
 type ColumnPrivilege struct {
@@ -743,6 +743,10 @@ func domainPosture() RolePosture {
 			// through this encrypted token row and atomically rotate an expiring
 			// token. They need no INSERT or DELETE authority.
 			{"provider_oauth_credentials", false, true, false},
+			// CHAOS-12010: the revocation worker claims a pending row (SELECT ...
+			// FOR UPDATE), then deletes it once sent or records a refused attempt
+			// (UPDATE attempts/last_error/updated_at). It never queues one: no INSERT.
+			{"provider_oauth_revocations", false, true, true},
 			// The daily metrics finalize upserts one row per organization (the activity
 			// projection the auth plane reads for the login organization choice):
 			// INSERT ... ON CONFLICT DO UPDATE, never DELETE (the row goes with its
@@ -929,6 +933,10 @@ func domainPosture() RolePosture {
 		ColumnScoped: []ColumnPrivilege{
 			{"integration_credentials", "is_active", "UPDATE"},
 			{"integration_credentials", "updated_at", "UPDATE"},
+			// CHAOS-11881: finalize stamps a credential connected after a run with a successful unit.
+			{"integration_credentials", "last_test_at", "UPDATE"},
+			{"integration_credentials", "last_test_success", "UPDATE"},
+			{"integration_credentials", "last_test_error", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
 			// The columns llmbudget.PgStore.Settle writes, and no other.

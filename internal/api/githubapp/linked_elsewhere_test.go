@@ -3,10 +3,12 @@ package githubapp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -35,7 +37,7 @@ func notAccessibleAnswer(t *testing.T) *httptest.ResponseRecorder {
 func TestLinkedElsewhereAnswersLikeAnInstallationTheInstallerCannotAccess(t *testing.T) {
 	want := notAccessibleAnswer(t)
 	var logs bytes.Buffer
-	h := handlers{Deps: Deps{Logger: slog.New(slog.NewTextHandler(&logs, nil))}}
+	h := handlers{Deps: Deps{Logger: slog.New(slog.NewJSONHandler(&logs, nil))}}
 	got := httptest.NewRecorder()
 	h.refuseLinkedElsewhere(context.Background(), got)
 
@@ -59,11 +61,17 @@ func TestLinkedElsewhereAnswersLikeAnInstallationTheInstallerCannotAccess(t *tes
 	if got.Header().Get("Location") != "" {
 		t.Fatal("the answer carries a Location header")
 	}
-	line := strings.TrimSpace(logs.String())
-	if strings.Count(line, "\n") != 0 || !strings.Contains(line, "class=linked_elsewhere") {
-		t.Fatalf("expected one log line carrying only the class, got %q", line)
+	var record map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+		t.Fatalf("expected exactly one JSON log record, got %q: %v", logs.String(), err)
 	}
-	if strings.Contains(line, "installation_id") || strings.Contains(line, "org_id") {
-		t.Fatalf("the log line carries an identifier: %q", line)
+	want2 := map[string]any{
+		"msg":   "install callback refused: installation not linkable",
+		"class": "linked_elsewhere",
+	}
+	delete(record, "time")
+	delete(record, "level")
+	if !reflect.DeepEqual(record, want2) {
+		t.Fatalf("log attributes %v, want exactly %v", record, want2)
 	}
 }

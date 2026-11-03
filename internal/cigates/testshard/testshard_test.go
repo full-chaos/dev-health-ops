@@ -17,7 +17,7 @@ import (
 // real ci/check_go.sh, ci/go_race_shard.awk and ci/go_test_weights.tsv; the leg-count pin is the Go port of the workflow
 // matrix check of tests/tooling/test_go_quality_legs.py.
 
-const shardCount = 3
+const shardCount = 4
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -337,7 +337,7 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 		}
 		return plan[i] < plan[j]
 	})
-	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "1", "3", "1600", writeLog(t, ""))
+	_, errs, err := checkGo(t, nil, "test-shard-wall-guard", "1", fmt.Sprint(shardCount), "1600", writeLog(t, ""))
 	if err == nil {
 		t.Fatal("a shard over the bound must fail even when no package time was measured")
 	}

@@ -372,3 +372,25 @@ func TestOracleShardsRealRegistry(t *testing.T) {
 		}
 	}
 }
+
+// The venue loop runs one go test per package in ONE check_go.sh process: its job start is taken once, so a slow first package shrinks the next -timeout.
+func TestOracleLoopShrinksTheNextTimeout(t *testing.T) {
+	const t0 = 1700000000
+	o := scratchOTree(t, []pkgTests{{"internal/a", []string{"TestVenueOracleA"}}, {"internal/b", []string{"TestVenueOracleB"}}})
+	clock := filepath.Join(o.dir, "clock")
+	o.write("clock", strconv.Itoa(t0))
+	argsLog := filepath.Join(o.dir, "go_args.log")
+	o.write("go_args.log", "")
+	r := o.venueOracles([]string{"CHECK_GO_JOB_CAP_MIN=40", "CHECK_GO_NOW_EPOCH_FILE=" + clock, "FAKE_ADVANCE=1500", "FAKE_GO_ARGS_LOG=" + argsLog})
+	var got []string
+	for _, line := range strings.Split(readText(t, argsLog), "\n") {
+		for _, f := range strings.Fields(line) {
+			if v, ok := strings.CutPrefix(f, "-timeout="); ok {
+				got = append(got, v)
+			}
+		}
+	}
+	if len(got) != 2 || got[0] != "2220s" || got[1] != "720s" {
+		t.Errorf("-timeout of the two package calls = %v, want [2220s 720s] (cap 40 min, 1500 s used by the first); rc %d stderr %s", got, r.res.code, r.res.stderr)
+	}
+}

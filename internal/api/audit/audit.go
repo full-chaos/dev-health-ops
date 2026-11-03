@@ -40,6 +40,7 @@ const (
 	ActionFeatureEnabled     Action = "feature_enabled"
 	ActionFeatureDisabled    Action = "feature_disabled"
 	ActionSettingsUpdated    Action = "settings_updated"
+	ActionIngestAuthFailed   Action = "ingest_auth_failed"
 )
 
 // ResourceType is models/audit.py AuditResourceType's value.
@@ -53,6 +54,8 @@ const (
 	ResourceSSOProvider  ResourceType = "sso_provider"
 	ResourceFeatureFlag  ResourceType = "feature_flag"
 	ResourceSetting      ResourceType = "setting"
+
+	ResourceExternalIngestToken ResourceType = "external_ingest_token"
 )
 
 // Entry is one audit_logs row, in the column order and nullability of

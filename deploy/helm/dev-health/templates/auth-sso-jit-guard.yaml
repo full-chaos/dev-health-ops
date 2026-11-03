@@ -1,0 +1,5 @@
+{{- /*
+Runs the authService.ssoJit checks on every render, so a values file that sets the value fails even when auth-service does
+not render. Renders nothing.
+*/ -}}
+{{- $_ := include "dev-health.ssoJit" . }}

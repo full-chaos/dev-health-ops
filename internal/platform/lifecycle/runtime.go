@@ -97,6 +97,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return errors.Join(startErr, r.shutdown(ctx, started))
 		}
 		started = append(started, component)
+		if bound, ok := component.(interface{ Address() string }); ok && bound.Address() != "" {
+			r.logger.InfoContext(ctx, "runtime component listening", "component", component.Name(), "address", bound.Address())
+		}
 	}
 
 	watchCtx, stopWatching := context.WithCancel(context.Background())

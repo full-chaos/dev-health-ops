@@ -102,3 +102,64 @@ func TestMetricsFlushNeverOutlivesItsBudgetEvenWhenTheSourceIgnoresTheContext(t 
 		}
 	})
 }
+
+// deadlineProbe records whether the context its Shutdown received carries a deadline, and which.
+type deadlineProbe struct{ got chan time.Time }
+
+func (p deadlineProbe) Shutdown(ctx context.Context) error {
+	deadline, _ := ctx.Deadline()
+	p.got <- deadline
+	return nil
+}
+
+// flushBoundContract is the flush bound the stop budget is built on: the 2 s tracing bound and this 1 s fit the 4 s stop
+// budget (stop_bound_test.go). It is a literal on purpose: a change of metricsFlushTimeout alone turns this file red.
+const flushBoundContract = time.Second
+
+func TestFlushBoundContract(t *testing.T) {
+	if metricsFlushTimeout != flushBoundContract {
+		t.Fatalf("metricsFlushTimeout = %v, want the contract %v: change both on purpose, with the stop budget", metricsFlushTimeout, flushBoundContract)
+	}
+}
+
+// TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout pins what the shell tests that stop the whole process
+// cannot see: the push stop receives the flush context, and its deadline is exactly the flush bound after the call, not
+// the shutdown budget. It runs in a synctest bubble: the clock is fake, so nothing is measured and nothing can race.
+func TestMetricsFlushHandsTheSourceAContextBoundedByTheFlushTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		probe := deadlineProbe{got: make(chan time.Time, 1)}
+		flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+		defer cancel()
+		start := time.Now()
+		if err := flush.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown error = %v, want nil", err)
+		}
+		deadline := <-probe.got
+		if deadline.IsZero() {
+			t.Fatal("the source got a context with no deadline: the flush bound never reaches the push stop")
+		}
+		if !deadline.Equal(start.Add(flushBoundContract)) {
+			t.Errorf("the source's deadline is %v after the call, want %v", deadline.Sub(start), flushBoundContract)
+		}
+	})
+}
+
+// TestMetricsFlushTakesHalfOfWhatIsLeftWhenThatIsLessThanTheFlushBound pins the half-budget rule: the components that
+// stop after the flush still need their share.
+func TestMetricsFlushTakesHalfOfWhatIsLeftWhenThatIsLessThanTheFlushBound(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		probe := deadlineProbe{got: make(chan time.Time, 1)}
+		flush := metricsFlush{source: probe, logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		if err := flush.Shutdown(ctx); err != nil {
+			t.Fatalf("Shutdown error = %v, want nil", err)
+		}
+		deadline := <-probe.got
+		if !deadline.Equal(start.Add(750 * time.Millisecond)) {
+			t.Errorf("the source's deadline is %v after the call, want 750ms (half of the 1.5 s left)", deadline.Sub(start))
+		}
+	})
+}

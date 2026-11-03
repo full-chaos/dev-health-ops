@@ -32,7 +32,23 @@ var authNetworkPolicy = []string{
 	"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
 }
 
+// renderAuth renders the chart with the given args. A phase 3 render that names no authService.loginStage gets
+// stage goApi (CHAOS-12532: phase 3 needs a stage, and goApi is the form every phase 3 test before the stage existed
+// pinned), so those tests keep their meaning. renderAuthRaw adds nothing: the refusal tests use it.
 func renderAuth(t *testing.T, args ...string) ([]map[string]any, string, error) {
+	t.Helper()
+	phase3, staged := false, false
+	for _, arg := range args {
+		phase3 = phase3 || arg == "authService.phase=3"
+		staged = staged || strings.HasPrefix(arg, "authService.loginStage")
+	}
+	if phase3 && !staged {
+		args = append(append([]string{}, args...), "--set", "authService.loginStage=goApi")
+	}
+	return renderAuthRaw(t, args...)
+}
+
+func renderAuthRaw(t *testing.T, args ...string) ([]map[string]any, string, error) {
 	t.Helper()
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
@@ -192,6 +208,25 @@ func TestAuthServiceDeployment(t *testing.T) {
 		if !strings.Contains(args, want) {
 			t.Errorf("args lack %s: %s", want, args)
 		}
+	}
+}
+
+// The roll readback reads the migrate Job's pod log after the roll (CHAOS-10812): the Job is kept
+// after success, reaped by its TTL, and still replaced by the next hook run.
+func TestAuthMigrateJobIsKeptForTheReadbackAndReplacedOnTheNextHook(t *testing.T) {
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.600s", err, out)
+	}
+	job := authDoc(docs, "Job", "a-dev-health-auth-migrate")
+	if job == nil {
+		t.Fatal("no auth-migrate Job")
+	}
+	if policy := at(job, "metadata", "annotations", "helm.sh/hook-delete-policy"); policy != "before-hook-creation" {
+		t.Errorf("hook-delete-policy = %v, want before-hook-creation only (kept after success, replaced on the next hook)", policy)
+	}
+	if ttl := at(job, "spec", "ttlSecondsAfterFinished"); ttl != 86400 {
+		t.Errorf("ttlSecondsAfterFinished = %v, want 86400", ttl)
 	}
 }
 

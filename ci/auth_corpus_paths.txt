@@ -31,6 +31,7 @@ ci/auth_corpus_set.sh
 ci/auth_corpus_external.override.yml
 ci/auth_corpus_external.acp.override.yml
 ci/auth_corpus_set_env.sh
+ci/check_go.sh
 ci/auth_corpus_acp_routes.tsv
 ci/auth_corpus_stub/*
 ci/auth_corpus_paths.txt

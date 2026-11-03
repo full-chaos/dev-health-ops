@@ -500,6 +500,9 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if refused, ok := socialLinkRefusals[p.name]; ok {
 				want = RecordedAnswer{Name: p.name, Status: refused.status, Body: refused.body}
 			}
+			if admitted, ok := validateLimitAdmitted[p.name]; ok {
+				want = RecordedAnswer{Name: p.name, Status: admitted.status, Body: admitted.body}
+			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
 			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == goBody
@@ -987,6 +990,16 @@ var socialLinkRefusals = map[string]socialRefusal{
 	"social: gitlab email of a github user":                 {http.StatusConflict, socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
 	"social: github no id": {http.StatusBadRequest, `{"detail":{"message":"The provider returned an invalid user id"}}`,
 		"Python raised on a profile without an id and answered 500; Go refuses with 400 (CHAOS-11619)"},
+}
+
+// validateLimitAdmitted are the golden steps past Python's 30 validate checks per token: Python refused the 31st with
+// 429, Go admits it because the validate budget is httpapi.ValidateLimitCount (100), sized for web's session checks
+// (internal/api/session python_divergence_test.go). The step answers as the 30th does.
+var validateLimitAdmitted = map[string]socialRefusal{
+	"rate limit: validate 31": {http.StatusOK, `{"valid":false,"user_id":null,"email":null,"org_id":null,"role":null,"expires_at":null}`,
+		"Python refused the 31st check of one token with 429; the Go budget is 100 per 15 minutes"},
+	"burst: validate valid 31": {http.StatusOK, `{"valid":false,"user_id":null,"email":null,"org_id":null,"role":null,"expires_at":null}`,
+		"the same 31st check in the burst cells, after 32 refused bodies that cost nothing; the Go budget is 100 per 15 minutes"},
 }
 
 // socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing

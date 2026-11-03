@@ -35,9 +35,18 @@ import (
 // encryptionKey is SETTINGS_ENCRYPTION_KEY on both planes.
 const encryptionKey = "venue-metrics-settings-encryption-key"
 
-// ingestAPIKey is INGEST_API_KEYS on both planes: the legacy ingest routes
-// refuse any other key (reason invalid_api_key).
+// ingestAPIKey is INGEST_API_KEYS on the frozen Python plane: its legacy
+// ingest routes refuse any other key (reason invalid_api_key). The dho api
+// retired those routes (CHAOS-11813) and reads no such setting.
 const ingestAPIKey = "venue-metrics-ingest-key"
+
+// retiredLegacyIngestRuling retires the Python answer to the legacy ingest
+// request: the dho api serves no POST /api/v1/ingest/* route, so the request
+// is a 404, pinned in the Go pin, and its counter is not compared.
+// counterParityPinSHA256 is the digest of testdata/counter_parity.go-pin.json.
+const counterParityPinSHA256 = "795c3bc417a929c7fe226c32c5f81c67c28e4a10bedf1dd2555dbc38464c01ee"
+
+const retiredLegacyIngestRuling = "CHAOS-11813: the legacy POST /api/v1/ingest/* routes are retired (pm, acp step 1: no caller); the dho api answers 404"
 
 // TestCounterParityVenueOracle sends the same requests to the real Python
 // api and to the dho api (both on the venue's seeded database), then reads
@@ -190,9 +199,10 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		t.Fatalf("python /metrics answered %d", pythonMetrics.Status)
 	}
 
-	t.Setenv("INGEST_API_KEYS", ingestAPIKey)
 	goBase, operator := startGoAPI(t, ctx, venue, jwtKey)
-	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/counter_parity.go-pin.json", SHA256: counterParityPinSHA256, Ruling: retiredLegacyIngestRuling})
+	receipt := venueoracle.Diff(t, goBase, requests, python[:len(requests)], venueoracle.DiffOptions{Golden: golden,
+		Retire: func(request venueoracle.Request) bool { return request.Name == "legacy ingest with a wrong key" }, Pin: pin})
 	t.Log("\n" + receipt)
 	goMetrics := operator()
 
@@ -216,6 +226,7 @@ VALUES ($1, $2, 'odd},"x', 'garbled', true, 'gAAAAABnot-a-fernet-token', '{}'::j
 		}
 		t.Logf("%s (%s): SAME %v", counter.metric, counter.route, goSamples)
 	}
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -225,7 +236,6 @@ var routeCounters = []struct{ metric, route string }{
 	{"devhealth_integration_credential_decrypt_failed_total", "POST /api/v1/admin/credentials/test"},
 	{"credential_mapping_rejected_total", "POST /api/v1/admin/credentials/test"},
 	{"devhealth_telemetry_org_id_rejected_total", "POST /api/v1/telemetry/report"},
-	{"devhealth_ingest_legacy_auth_rejected_total", "POST /api/v1/ingest/commits"},
 	{"jira_project_discovery_total", "PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}"},
 }
 
@@ -412,9 +422,9 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, key
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Decryptor: decryptor, LegacyIngestEnabled: true}
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), Verifier: verifier, Decryptor: decryptor}
 	// The operator endpoint as dho api's configure builds it, before the
-	// routes (it sets the legacy-ingest counter on deps).
+	// routes.
 	registry := health.NewRegistry(0)
 	if err := apiservice.RegisterOperatorMetrics(registry, &deps); err != nil {
 		t.Fatal(err)

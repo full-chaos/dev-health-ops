@@ -137,7 +137,10 @@ func (q *sendQueue) startReporter(logger *slog.Logger, every time.Duration) {
 	})
 }
 
-// waitReporter waits for the reporter to finish its final report, until ctx ends.
+// finalReportGrace is how long the drain still waits for the reporter's final report after its own context has ended.
+const finalReportGrace = 250 * time.Millisecond
+
+// waitReporter waits for the reporter to finish its final report until ctx ends, then for at most finalReportGrace more.
 func (q *sendQueue) waitReporter(ctx context.Context) {
 	q.mu.Lock()
 	done := q.reporterDone
@@ -147,7 +150,14 @@ func (q *sendQueue) waitReporter(ctx context.Context) {
 	}
 	select {
 	case <-done:
+		return
 	case <-ctx.Done():
+	}
+	grace := time.NewTimer(finalReportGrace)
+	defer grace.Stop()
+	select {
+	case <-done:
+	case <-grace.C:
 	}
 }
 

@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-const usage = "usage: cigate bigboy render-ch-users|grants-compare|pg-posture api|domain|bump-swap-values [args]"
+const usage = "usage: cigate bigboy render-ch-users|grants-compare|go-api-project-scope|pg-posture api|domain|bump-swap-values [args]"
 
 // Run dispatches one verb of `cigate bigboy` and returns the exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -28,6 +28,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		return renderCHUsers(args[1:], stdout, stderr)
 	case "grants-compare":
 		return grantsCompare(args[1:], stdout, stderr)
+	case "go-api-project-scope":
+		return goAPIProjectScope(args[1:], stdout, stderr)
 	case "pg-posture":
 		return pgPosture(args[1:], stdout, stderr)
 	case "bump-swap-values":
@@ -118,7 +120,12 @@ type chGrant struct{ privilege, table string }
 // chManifest returns the privilege/table pairs of func APIPosture in manifest order, per table in privilege order.
 // ok is false when the source has no func APIPosture (Python raised IndexError there, or yielded nothing).
 func chManifest(source string) (grants []chGrant, ok bool) {
-	rest, ok := afterFirst(source, "func APIPosture(")
+	return chFuncGrants(source, "func APIPosture(")
+}
+
+// chFuncGrants is chManifest for the manifest function that marker opens.
+func chFuncGrants(source, marker string) (grants []chGrant, ok bool) {
+	rest, ok := afterFirst(source, marker)
 	if !ok {
 		return nil, false
 	}

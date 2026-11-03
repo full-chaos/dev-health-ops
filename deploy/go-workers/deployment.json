@@ -310,6 +310,7 @@
         }
       ],
       "job_kinds": [
+        "sync.provider_oauth_revocations",
         "sync.team_autoimport",
         "sync.team_repo_ownership_derivation"
       ],

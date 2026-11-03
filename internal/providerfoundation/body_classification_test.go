@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -111,28 +112,31 @@ func (b *blockingBody) Close() error {
 // the reader goroutine has ended.
 func TestDoUnauthenticatedStalledErrorBodyReturnsWithinBoundAndIsClosed(t *testing.T) {
 	t.Parallel()
-	body := &blockingBody{closed: make(chan struct{}), readEnded: make(chan struct{})}
-	started := time.Now()
-	response, err := unauthenticatedWithBody(t, http.StatusForbidden, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(started); elapsed > bodyPeekTimeout+2*time.Second {
-		t.Fatalf("DoUnauthenticated took %s, bound is %s", elapsed, bodyPeekTimeout)
-	}
-	select {
-	case <-body.closed:
-	case <-time.After(time.Second):
-		t.Fatal("the stalled body was not closed")
-	}
-	select {
-	case <-body.readEnded:
-	case <-time.After(time.Second):
-		t.Fatal("the reader goroutine did not end")
-	}
-	if _, readErr := io.ReadAll(response.Body); readErr == nil {
-		t.Fatal("a read of the closed body returned no error")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		body := &blockingBody{closed: make(chan struct{}), readEnded: make(chan struct{})}
+		started := time.Now()
+		response, err := unauthenticatedWithBody(t, http.StatusForbidden, body)
+		returnedAt := time.Now()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !returnedAt.Equal(started.Add(bodyPeekTimeout)) {
+			t.Fatalf("DoUnauthenticated returned at +%v of virtual time, want +%v (the peek bound)", returnedAt.Sub(started), bodyPeekTimeout)
+		}
+		select {
+		case <-body.closed:
+		case <-time.After(time.Second):
+			t.Fatal("the stalled body was not closed")
+		}
+		select {
+		case <-body.readEnded:
+		case <-time.After(time.Second):
+			t.Fatal("the reader goroutine did not end")
+		}
+		if _, readErr := io.ReadAll(response.Body); readErr == nil {
+			t.Fatal("a read of the closed body returned no error")
+		}
+	})
 }
 
 // A read error on the body reaches the caller as before the peek.

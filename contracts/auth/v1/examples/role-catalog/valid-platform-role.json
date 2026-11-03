@@ -16,6 +16,11 @@
       "actions": [
         "admin.users"
       ]
+    },
+    {
+      "role": "platform_owner",
+      "scope": "platform",
+      "actions": []
     }
   ]
 }

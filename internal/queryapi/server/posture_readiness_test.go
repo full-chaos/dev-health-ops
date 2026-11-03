@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 func TestQueryAPIPostureCheckIsOptIn(t *testing.T) {
@@ -228,13 +230,53 @@ func TestReadyzAnswersWithinTheProbeBudgetWhileThePostureQueryIsSlow(t *testing.
 	}
 	probes := readinessProbes(fakePinger{}, fakePinger{}, fakeJWKS{}, queryAPIPostureCheck(env, pool))
 
-	const budget = 500 * time.Millisecond
+	// A probe that does not wait on the live posture check answers at once from the background run's state ("not yet
+	// proven"). One that waits stays on the context handed to it: the check is called directly with a 30 s context, far
+	// above the 10 s failure-only guard, so a wait is seen as "still running after the guard" (the readyz handler's own 3 s
+	// bound would end it with the same 503 body, which is why the check is called here and not only through /readyz).
+	// No time bound sits on the passing path. On the guard the call is cancelled FIRST, then joined for at most 10 s.
+	check := queryAPIPostureCheck(env, pool)
+	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCheck()
 	for probe := 1; probe <= 3; probe++ {
-		started := time.Now()
-		code, body := operatorReadyz(t, probes...)
-		if elapsed := time.Since(started); elapsed > budget {
-			t.Fatalf("probe %d took %v (> %v): /readyz waited on the posture query", probe, elapsed, budget)
+		checked := make(chan error, 1)
+		go func() { checked <- check(checkCtx) }()
+		select {
+		case err := <-checked:
+			if !errors.Is(err, postgresstore.ErrUnavailable) || !strings.Contains(err.Error(), "role posture not yet proven") {
+				t.Fatalf("probe %d: posture check = %v, want ErrUnavailable naming 'role posture not yet proven' (an unproven role is not ready)", probe, err)
+			}
+		case <-time.After(10 * time.Second):
+			cancelCheck()
+			select {
+			case <-checked:
+			case <-time.After(10 * time.Second):
+			}
+			t.Fatalf("probe %d: the posture check is still waiting after the 10 s guard: it must not wait on the live check", probe)
 		}
+	}
+	for probe := 1; probe <= 3; probe++ {
+		type answer struct {
+			code int
+			body string
+		}
+		done := make(chan answer, 1)
+		go func() {
+			code, body := operatorReadyz(t, probes...)
+			done <- answer{code, body}
+		}()
+		var got answer
+		select {
+		case got = <-done:
+		case <-time.After(10 * time.Second):
+			// operatorReadyz takes no context; its registry ends the check at its own bound, so the join below is short.
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+			}
+			t.Fatalf("probe %d: /readyz is still running after the 10 s guard", probe)
+		}
+		code, body := got.code, got.body
 		if code != http.StatusServiceUnavailable || body != `{"failed_checks":["query_role_posture"],"status":"not_ready"}` {
 			t.Fatalf("probe %d: status %d body %q, want 503 naming query_role_posture only (an unproven role is not ready)",
 				probe, code, body)

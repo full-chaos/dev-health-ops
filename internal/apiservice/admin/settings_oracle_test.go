@@ -65,7 +65,7 @@ func runSettingsOracle(t *testing.T, withKey bool, mode, digest string) {
 		Root:      root,
 		JWTKey:    jwtKey,
 		PythonEnv: pythonEnv,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -118,7 +118,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 				"memberA": {"user_id": memberA.String(), "email": "set-membera@example.com", "org_id": orgA.String(), "role": "member"},
 				"super":   {"user_id": superID.String(), "email": "set-super@example.com", "is_superuser": true},
 			}
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

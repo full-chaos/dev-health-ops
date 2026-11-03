@@ -16,6 +16,8 @@ type SystemOne interface {
 	Stamp() string
 	// Identity is the provider and model of the llm_token_usage row.
 	Identity() (provider, model string)
+	// CredentialSource is chwrite.CredentialSourceOrg when the backend calls the org's own model, else platform.
+	CredentialSource() string
 	keepsLastRow(index int) bool
 	isLowQuality(index int) bool
 	noteSkippedTerminal(count int)

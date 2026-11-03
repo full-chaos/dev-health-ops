@@ -41,7 +41,7 @@ call() {
   [ "${mode}" = hosted ] && base+=("${HOSTED[@]}")
   set +e
   # shellcheck disable=SC2016
-  env -i "${base[@]}" "${extra[@]}" bash -c 'source "$1"; shift; retry_named "$@"' _ "${LIB}" "$@" >"${d}/out" 2>"${d}/err"
+  env -i "${base[@]}" "${extra[@]}" bash -c 'source "$1"; shift; never() { return 1; }; always() { return 0; }; rc7only() { [ "$1" = 7 ]; }; retry_named "$@"' _ "${LIB}" "$@" >"${d}/out" 2>"${d}/err"
   RC=$?
   set -e
   OUT="$(cat "${d}/out")"; ERR="$(cat "${d}/err")"
@@ -96,6 +96,18 @@ for mode in plain hosted; do
   call "${mode}" b9 -- job 3 1 --
   if [ "${RC}" = 2 ]; then ok "${mode} b9 no command: rc 2"; else bad "${mode} b9 rc=${RC}"; fi
   if printf '%s\n' "${ERR}" | grep -q '^retry: usage'; then ok "${mode} b9 usage line"; else bad "${mode} b9 usage: ${ERR}"; fi
+
+  # CHAOS-12372: RETRY_WHEN=FUNCTION decides, after each failed try, whether another try follows.
+  call "${mode}" d1 FAKE_FAILS=99 FAKE_RC=7 RETRY_WHEN=never -- job 3 "2" -- flaky
+  if [ "${RC}" = 7 ] && [ "${RUNS}" = 1 ] && [ -z "${SLEEPS}" ]; then ok "${mode} d1 RETRY_WHEN says no: 1 run, rc 7, no sleep"; else bad "${mode} d1 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
+  call "${mode}" d2 FAKE_FAILS=99 FAKE_RC=7 RETRY_WHEN=always -- job 3 "2" -- flaky
+  if [ "${RC}" = 7 ] && [ "${RUNS}" = 3 ] && [ "${SLEEPS}" = "2 2" ]; then ok "${mode} d2 RETRY_WHEN says yes: bounded at 3 runs"; else bad "${mode} d2 rc=${RC} runs=${RUNS} sleeps=${SLEEPS}"; fi
+  call "${mode}" d3 FAKE_FAILS=99 FAKE_RC=7 RETRY_WHEN=rc7only -- job 3 "2" -- flaky
+  if [ "${RUNS}" = 3 ]; then ok "${mode} d3 RETRY_WHEN gets the try's rc (7: retried)"; else bad "${mode} d3 runs=${RUNS}"; fi
+  call "${mode}" d4 FAKE_FAILS=99 FAKE_RC=8 RETRY_WHEN=rc7only -- job 3 "2" -- flaky
+  if [ "${RC}" = 8 ] && [ "${RUNS}" = 1 ]; then ok "${mode} d4 RETRY_WHEN gets the try's rc (8: stop, rc kept)"; else bad "${mode} d4 rc=${RC} runs=${RUNS}"; fi
+  call "${mode}" d6 FAKE_FAILS=0 RETRY_WHEN=never -- job 3 "2" -- flaky
+  if [ "${RC}" = 0 ] && [ "${RUNS}" = 1 ]; then ok "${mode} d6 RETRY_WHEN is not asked after a success"; else bad "${mode} d6 rc=${RC} runs=${RUNS}"; fi
 done
 
 # A caller with `set -e` is not killed by a failing attempt, and sees the last rc.

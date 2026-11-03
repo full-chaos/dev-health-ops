@@ -30,7 +30,7 @@ const apiRolePassword = "policy_integration_api_password"
 // schemaDDL is the slice of the Alembic schema the policy reads, with the
 // column types of src/dev_health_ops/models (GUID is a native uuid).
 var schemaDDL = []string{
-	`CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL)`,
+	`CREATE TABLE public.organizations (id uuid PRIMARY KEY, name text NOT NULL, is_active boolean NOT NULL DEFAULT true)`,
 	// The rest of APIPosture(): readiness requires every declared table.
 	`CREATE TABLE public.feature_flags (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.org_feature_overrides (id uuid PRIMARY KEY)`,
@@ -284,7 +284,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	// guard, over HTTP, as the api role.
 	auth := authenticator(t, store)
 	scope := NewScope(auth, quiet())
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(Superuser, echo)))))
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Superuser, echo)))))
 	t.Cleanup(server.Close)
 	token := sign(t, claims(func(c jwt.MapClaims) {
 		c["sub"] = admUser.String()

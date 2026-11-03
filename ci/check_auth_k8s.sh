@@ -192,15 +192,23 @@ helm template "${HELM_ARGS[@]}" --show-only templates/auth-migrate-job.yaml | gr
 printf 'migration Job carries helm.sh/hook: pre-install,pre-upgrade\n'
 kinds="$(helm template "${HELM_ARGS[@]}" | grep -c '^kind:')"
 printf 'the render holds %s objects\n' "${kinds}"
-helm upgrade --install "${HELM_ARGS[@]}" --wait --timeout 8m
+# No --wait here: a database nobody initialised is NOT ready (restore-fence), so the Deployment cannot be
+# Ready until the explicit init step below has run. The migration hook Job still runs before the install.
+helm upgrade --install "${HELM_ARGS[@]}" --timeout 8m
+printf 'step 3b: restore-fence init (explicit, once, on a database that is not a restore)\n'
+K run auth-fence-init --restart=Never --image="${LOCAL_MIG}" --image-pull-policy=Never --override-type=strategic --overrides='{"spec":{"containers":[{"name":"auth-fence-init","image":"'"${LOCAL_MIG}"'","args":["restore-fence","init"],"env":[{"name":"AUTH_MIGRATION_DATABASE_URI","valueFrom":{"secretKeyRef":{"name":"auth-migrate-db","key":"AUTH_MIGRATION_DATABASE_URI"}}},{"name":"AUTH_RUNTIME_DATABASE_ROLE","value":"devhealth_auth"}]}]}}' >/dev/null
+K wait --for=jsonpath='{.status.phase}'=Succeeded pod/auth-fence-init --timeout=120s || { K logs auth-fence-init >&2 || true; die "restore-fence init did not succeed"; }
+K logs auth-fence-init | grep -q 'restore-fence init timeline=[0-9]* written=true' || die "restore-fence init did not write the row"
+K rollout status deploy/"${RELEASE}-dev-health-auth-service" --timeout=480s
 
 # --- 1. the migration Job ran as a real pre-install hook -----------------------------
-printf 'step 4: the pre-install hook ran, left the schema at its head and was garbage-collected\n'
+printf 'step 4: the pre-install hook ran, left the schema at its head and its Job log stays readable\n'
 helm status "${RELEASE}" -n "${NS}" | grep -E '^(STATUS|REVISION)'
 [ "$(helm status "${RELEASE}" -n "${NS}" -o json | jq -r .info.status)" = deployed ] || die "the release is not deployed"
-if K get job "${RELEASE}-dev-health-auth-migrate" >/dev/null 2>&1; then
-  die "the hook Job survived its hook-succeeded delete policy"
-fi
+K get job "${RELEASE}-dev-health-auth-migrate" >/dev/null 2>&1 \
+  || die "the hook Job was deleted after success: the roll readback reads its log"
+K logs "job/${RELEASE}-dev-health-auth-migrate" | grep -E '^auth schema current at version [0-9]+ ' \
+  || die "the kept hook Job log has no 'auth schema current at version' line"
 applied="$(K exec deploy/auth-postgres -- psql -U postgres -At -c 'SELECT version FROM auth.schema_migrations ORDER BY version' | tr '\n' ' ')"
 embedded="$(find "${ROOT}/internal/storage/postgres/authschema/migrations" -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort | cut -c1-4 | sed 's/^0*//' | tr '\n' ' ')"
 printf 'auth.schema_migrations applied: %s\nembedded lineage:               %s\n' "${applied}" "${embedded}"
@@ -414,6 +422,8 @@ grep -q 'rc=' <<<"${other_out}" || die "the egress probe produced no result"
 printf 'step 9: helm uninstall leaves no object of the release behind\n'
 K delete pod trap-direct-0400 trap-direct-0440-fsgroup trap-subpath-0400 trap-subpath-0400-fsgroup --ignore-not-found --wait=true >/dev/null
 helm uninstall "${RELEASE}" -n "${NS}" --wait
+# The kept hook Job is not a release resource (a hook): helm leaves it to its TTL; reap it here.
+K delete "job/${RELEASE}-dev-health-auth-migrate" --ignore-not-found --wait=true >/dev/null
 left="$(K get deploy,svc,job,networkpolicy,serviceaccount,configmap,endpoints -l "app.kubernetes.io/instance=${RELEASE}" -o name || true)"
 printf 'objects labelled app.kubernetes.io/instance=%s left: [%s]\n' "${RELEASE}" "${left}"
 [ -z "${left}" ] || die "objects of the release remain after uninstall: ${left}"

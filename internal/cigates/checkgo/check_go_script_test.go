@@ -21,7 +21,7 @@ import (
 //   test_check_go_integration_coverage.py (3092 .. 6926)         -> TestCheckGoIntegrationCoverage
 
 var publicVerbs = []string{
-	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "integration-vet", "integration-coverage",
+	"fmt", "vet", "test", "race", "build", "contract", "multi-replica-workers", "job-timeout", "job-start", "integration-vet", "integration-coverage",
 	"integration-shard-plan", "integration-images", "integration-prepull", "integration-shard", "integration", "fast", "ci", "all",
 }
 
@@ -177,7 +177,7 @@ func TestCheckGoStaticContract(t *testing.T) {
 	})
 	plants := []struct{ name, old, repl, want string }{
 		{"ci drops the race detector", "    check_test\n    check_race\n    check_build\n", "    check_test\n    check_build\n", "`ci` case block runs"},
-		{"multi-replica gate loses the cold flag", "-tags=integration -count=1 -timeout=5m", "-tags=integration -timeout=5m", "check_multi_replica_workers lacks"},
+		{"multi-replica gate loses the cold flag", "-count=1 -timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica", "-timeout=\"${tmo}\" \\\n        -run '^TestExplicitQueueMultiReplica", "check_multi_replica_workers lacks"},
 		{"multi-replica proof not required", "measured zero jobs", "measured nothing", "check_multi_replica_workers lacks"},
 		{"a multi-package call site outside the reap helper", `run_integration_go_test "${module_dir}" "${run_pkgs[@]}"`, `go test -tags=integration "${run_pkgs[@]}"`, "outside run_integration_go_test"},
 	}
@@ -481,7 +481,7 @@ func recordedGoTest(work, script string, env []string, verb ...string) ([]string
 		return nil, err
 	}
 	if res.code != 0 {
-		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, tail(res.stderr+res.stdout, 2000))
+		return nil, fmt.Errorf("check_go.sh %v exited %d: %s", verb, res.code, failureTail(res))
 	}
 	return lines, nil
 }
@@ -504,11 +504,16 @@ func recordedGoTestRaw(work, script string, env []string, verb ...string) ([]str
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
 		return nil, cmdResult{}, err
 	}
+	// A stand-in docker answers the reap step's `docker ps` with no containers, so a run never reaches a docker of the host.
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte("#!/bin/sh\n[ \"$1\" = ps ] && exit 0\nexit 127\n"), 0o755); err != nil {
+		return nil, cmdResult{}, err
+	}
 	logPath := filepath.Join(work, "go_test.log")
 	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
 		return nil, cmdResult{}, err
 	}
-	full := inheritedEnv([]string{"CI", "TESTCONTAINERS_RYUK_DISABLED", "PATH", "FAKE_GO_LOG", "FAKE_PROOF", "TMPDIR"},
+	// GITHUB_ACTIONS and the job-deadline variables are pinned to "unset" (the local mode) so a hosted run of this test behaves as a local one.
+	full := inheritedEnv([]string{"CI", "GITHUB_ACTIONS", "CHECK_GO_JOB_CAP_MIN", "CHECK_GO_JOB_START", "CHECK_GO_NOW_EPOCH", "CHECK_GO_NOW_EPOCH_FILE", "TESTCONTAINERS_RYUK_DISABLED", "PATH", "FAKE_GO_LOG", "FAKE_PROOF", "TMPDIR"},
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_GO_LOG="+logPath, "TMPDIR="+work)
 	full = append(full, env...)
 	res := cmdSpec{dir: filepath.Dir(filepath.Dir(script)), env: full}.run("bash", append([]string{script}, verb...)...)
@@ -546,7 +551,7 @@ func multiPackageShard(script string) (string, error) {
 		real := filepath.Join(repoRootNoT(), "ci", "check_go.sh")
 		res := cmdSpec{dir: filepath.Dir(filepath.Dir(real)), env: inheritedEnv(nil)}.run("bash", real, "integration-shard-plan")
 		if res.code != 0 {
-			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 2000))
+			multiShardErr = fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 			return
 		}
 		re := regexp.MustCompile(`(?m)^integration shard (\d+): estimated \d+s, (\d+) package\(s\)$`)
@@ -895,7 +900,7 @@ func discoveryScenarios() []scenario {
 			return withDiscoveryTree(script, "zzsentinel_discovery_test.go", func(tree string) error {
 				res := cmdSpec{dir: tree, env: inheritedEnv(nil)}.run("bash", filepath.Join(tree, "ci", "check_go.sh"), "integration-shard-plan")
 				if res.code != 0 {
-					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, tail(res.stderr+res.stdout, 1500))
+					return fmt.Errorf("integration-shard-plan exited %d: %s", res.code, failureTail(res))
 				}
 				rows := 0
 				for _, l := range strings.Split(res.stdout, "\n") {

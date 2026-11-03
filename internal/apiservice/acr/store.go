@@ -54,6 +54,9 @@ type Entitlement struct {
 	// which trivially holds by construction on both planes.
 	OrgID               string
 	AgentContextRuntime bool
+	// ACRBasis names the grant behind AgentContextRuntime (licensing.ACRBasis*);
+	// logged, never served (CHAOS-3695).
+	ACRBasis string
 	// ACRServiceModel is the effective acr_service_model: the org's explicit
 	// override, else true for an org with a saved BYO LLM configuration, else
 	// the plan decision (false for an unregistered feature row).
@@ -110,6 +113,13 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+	// CHAOS-3695 (chris 2026-08-10, "ACR = Ask Dev"): the entitlement is ask_dev
+	// OR the legacy agent_context_runtime grant, so no org loses ACR while the
+	// legacy grants retire (CHAOS-12292). The wire field keeps its name.
+	askDev, err := decisionStore.Decide(ctx, parsedOrgID.String(), askDevFeatureKey)
+	if err != nil {
+		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
 	serviceModel, err := decisionStore.Decide(ctx, parsedOrgID.String(), acrServiceModelFeatureKey)
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
@@ -122,7 +132,8 @@ func (store PostgresEntitlementStore) Lookup(ctx context.Context, orgID string) 
 	if err != nil {
 		return Entitlement{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	return Entitlement{OrgID: orgID, AgentContextRuntime: decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed}, nil
+	return Entitlement{OrgID: orgID, AgentContextRuntime: askDev.Allowed || decision.Allowed, ACRServiceModel: serviceModelOn, PlatformModelFallback: fallback.Allowed,
+		ACRBasis: licensing.ACREntitlementBasis(askDev.Allowed, decision.Allowed)}, nil
 }
 
 // readyTimeout bounds the health route's ping, so an unreachable store is a

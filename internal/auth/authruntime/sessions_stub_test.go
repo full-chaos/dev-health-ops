@@ -17,9 +17,11 @@ import (
 )
 
 const (
-	refreshPattern = "/api/v1/auth/refresh"
-	logoutPattern  = "/api/v1/auth/logout"
-	issuePattern   = "/internal/v1/sessions"
+	refreshPattern  = "/api/v1/auth/refresh"
+	logoutPattern   = "/api/v1/auth/logout"
+	validatePattern = "/api/v1/auth/validate"
+	switchPattern   = "/api/v1/auth/switch-org"
+	issuePattern    = "/internal/v1/sessions"
 )
 
 func routesNamed(routes []httpapi.Route, pattern string) []httpapi.Route {
@@ -32,7 +34,7 @@ func routesNamed(routes []httpapi.Route, pattern string) []httpapi.Route {
 	return out
 }
 
-func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutStubs(t *testing.T) {
+func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutValidateSwitchOrgStubs(t *testing.T) {
 	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -44,11 +46,11 @@ func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutStubs(t *testing.T) {
 		}
 		got = append(got, route.Method+" "+route.Pattern)
 	}
-	if want := "POST " + refreshPattern + ",POST " + logoutPattern; strings.Join(got, ",") != want {
+	if want := "POST " + refreshPattern + ",POST " + logoutPattern + ",POST " + validatePattern + ",POST " + switchPattern; strings.Join(got, ",") != want {
 		t.Fatalf("mounted %v; want exactly %s", got, want)
 	}
-	if credentials, _, err := credentialRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil); err != nil || len(credentials) != 0 {
-		t.Fatalf("keyless credential routes %d err %v; want none, so the unthrottled set is exactly the 2 stubs", len(credentials), err)
+	if credentials, _, err := credentialRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil); err != nil || len(credentials) != 0 {
+		t.Fatalf("keyless credential routes %d err %v; want none, so the unthrottled set is exactly the 4 stubs", len(credentials), err)
 	}
 	if len(routesNamed(routes, issuePattern)) != 0 {
 		t.Fatal("a stub is mounted on the session issue route, which must keep its service-credential check")

@@ -750,7 +750,10 @@ func TestRoutePgbouncerGuardsPlantedDefects(t *testing.T) {
 			mut(route, `{{- $operatorPullPolicy := .Values.migrations.hook.routeActivate.pullPolicy | default "IfNotPresent" }}`, `{{- $operatorPullPolicy := "IfNotPresent" }}`),
 			routePullPolicyOverrideWins, "did not win"},
 		{"route-accepts-an-empty-bundled-database", chartOnly,
-			mut(chartRel+"/"+helpersTpl, `{{- required "postgresql.credentials.database must not be empty when postgresql.enabled=true" .Values.postgresql.credentials.database }}`, `{{- .Values.postgresql.credentials.database }}`),
+			all(
+				mut(chartRel+"/"+helpersTpl, `{{- required "postgresql.credentials.database must not be empty when postgresql.enabled=true" .Values.postgresql.credentials.database }}`, `{{- .Values.postgresql.credentials.database }}`),
+				mut(chartRel+"/"+helpersTpl, `{{- if not (regexMatch "^[A-Za-z0-9_]+$" $db) -}}`, `{{- if false -}}`),
+			),
 			routeRefusesEmptyBundledDatabase, "rendered"},
 		{"pgbouncer-topology-not-required", chartAndManifest,
 			mut(chartFile("values.schema.json"), `"pgbouncer": {
@@ -761,7 +764,7 @@ func TestRoutePgbouncerGuardsPlantedDefects(t *testing.T) {
 			mut(pgb, "  COORDINATOR_DATABASE_URI: {{ printf", "  MIGRATION_DATABASE_URI: \"postgresql://x\"\n  COORDINATOR_DATABASE_URI: {{ printf"),
 			pgScopesRoleDSNsAndPreservesDirectMigrations, "migration DSN"},
 		{"pgbouncer-transaction-pool-points-at-the-queue-port", chartAndManifest,
-			mut(pgb, ".Values.goWorkers.pgbouncer.transaction.port $postgresDatabase | quote }}", ".Values.goWorkers.pgbouncer.queueSession.port $postgresDatabase | quote }}"),
+			mut(pgb, ".Values.goWorkers.pgbouncer.transaction.port $uriDatabase | quote }}", ".Values.goWorkers.pgbouncer.queueSession.port $uriDatabase | quote }}"),
 			pgScopesRoleDSNsAndPreservesDirectMigrations, "endpoint"},
 		{"pgbouncer-pool-size-ignores-the-value", chartAndManifest,
 			mut(pgb, "\"poolSize\" .Values.goWorkers.pgbouncer.transaction.poolSize", "\"poolSize\" 5"),

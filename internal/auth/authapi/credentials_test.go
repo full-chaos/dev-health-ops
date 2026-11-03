@@ -45,6 +45,8 @@ type credFakes struct {
 	provisioned []local.ProvisionLocalRequest
 	principal   uuid.UUID
 	org         *uuid.UUID
+	// rowNoOrg makes the new session row carry no organization whatever the request names.
+	rowNoOrg bool
 }
 
 func (c *credFakes) ByEmail(_ context.Context, email string) (*local.User, error) {
@@ -69,9 +71,20 @@ func (c *credFakes) ProvisionLocal(_ context.Context, req local.ProvisionLocalRe
 	c.provisioned = append(c.provisioned, req)
 	return uuid.New(), nil
 }
-func (c *credFakes) SetEmailVerified(_ context.Context, id uuid.UUID) error {
+func (c *credFakes) PeekVerificationLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	id, ok := c.links[credLinkKey{local.PurposeEmailVerification, hash}]
+	return id, ok, nil
+}
+func (c *credFakes) SetEmailVerifiedConsuming(_ context.Context, _ uuid.UUID, link [32]byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := credLinkKey{local.PurposeEmailVerification, link}
+	if _, ok := c.links[key]; !ok {
+		return local.ErrVerificationLinkUnusable
+	}
+	delete(c.links, key)
 	c.user.IsVerified = true
 	return nil
 }
@@ -100,7 +113,11 @@ func (c *credFakes) SetPasswordEndingSessions(_ context.Context, req local.Passw
 	var res local.PasswordEndResult
 	if req.NewSession != nil {
 		c.created++
-		res.Issued = &session.Issued{Session: session.Record{ID: uuid.New(), PrincipalID: req.ID, OrganizationID: req.NewSession.OrganizationID}}
+		org := req.NewSession.OrganizationID
+		if c.rowNoOrg {
+			org = nil
+		}
+		res.Issued = &session.Issued{Session: session.Record{ID: uuid.New(), PrincipalID: req.ID, OrganizationID: org}}
 	}
 	return res, nil
 }

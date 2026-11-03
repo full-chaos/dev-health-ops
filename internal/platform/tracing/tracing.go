@@ -66,6 +66,9 @@ type Component struct {
 // container smoke gives a stopping container five seconds, the binaries ten.
 const shutdownFlushTimeout = 2 * time.Second
 
+// ShutdownFlushTimeout exposes shutdownFlushTimeout so the shell stop-bound test can sum it with the other final-flush bounds.
+const ShutdownFlushTimeout = shutdownFlushTimeout
+
 func (Component) Name() string { return "otel-tracing" }
 
 // Start is a no-op: the provider is already installed by Init before any

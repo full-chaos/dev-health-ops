@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -58,12 +56,11 @@ func tableColumns(t *testing.T, ctx context.Context, conn driver.Conn, table str
 	return columns
 }
 
-// The reached state, from the real migration chain: both tables exist with the
-// designed columns, engine, version column, sorting key (org_id first) and
-// retention, and running the two migration files again is not an error and
-// loses no row.
-func TestShadowTablesHaveTheDesignedShapeAndMigrationsAreRerunnable(t *testing.T) {
-	writer, conn, ctx := newTestWriter(t)
+// The reached state, from the head: both tables exist with the designed columns,
+// engine, version column, sorting key (org_id first) and retention. (The rerun of
+// migrations 109 and 110 is archived with them, CHAOS-11751.)
+func TestShadowTablesHaveTheDesignedShape(t *testing.T) {
+	_, conn, ctx := newTestWriter(t)
 
 	for _, want := range []struct {
 		table, sortingKey, ttlDays string
@@ -90,37 +87,6 @@ func TestShadowTablesHaveTheDesignedShapeAndMigrationsAreRerunnable(t *testing.T
 		if got := tableColumns(t, ctx, conn, want.table); !reflect.DeepEqual(got, want.columns) {
 			t.Errorf("%s columns =\n%v\nwant\n%v", want.table, got, want.columns)
 		}
-	}
-
-	// A row written before the second run of the migrations must survive it.
-	if _, err := writer.WriteShadowInvestments(ctx, testOrgID, []ShadowRecord{{WorkUnitID: "wu-1", InputHash: "h", ShadowConfig: "c", ComputedAt: time.Now()}}); err != nil {
-		t.Fatal(err)
-	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rerun := 0
-	for _, file := range chain {
-		if file.Version != "109_work_unit_investment_shadow.sql" && file.Version != "110_llm_categorization_attempts.sql" {
-			continue
-		}
-		statements := chmigrate.SplitStatements(file.SQL)
-		if len(statements) != 1 || !strings.Contains(statements[0], "CREATE TABLE IF NOT EXISTS") {
-			t.Fatalf("%s must be exactly one CREATE TABLE IF NOT EXISTS statement, got %d", file.Version, len(statements))
-		}
-		for pass := 0; pass < 2; pass++ {
-			if err := conn.Exec(ctx, statements[0]); err != nil {
-				t.Fatalf("re-running %s (pass %d): %v", file.Version, pass+1, err)
-			}
-		}
-		rerun++
-	}
-	if rerun != 2 {
-		t.Fatalf("re-ran %d of the 2 migrations: the chain does not hold them", rerun)
-	}
-	if got := scanUint64(t, ctx, conn, `SELECT count() FROM work_unit_investment_shadow WHERE org_id = ?`, testOrgID); got != 1 {
-		t.Fatalf("a re-run of the migrations changed the row count to %d", got)
 	}
 }
 
@@ -403,25 +369,12 @@ func TestTheSevenColumnAttemptReaderCountsSevenDistinctAttempts(t *testing.T) {
 	}
 }
 
-// Migration 142 adds its two columns to a table that already holds rows: the old
-// row reads the defaults, and a row the real writer appends reads back what it
-// carried (UInt8 for the flag).
-func TestAttemptColumnsAddedToATableWithRowsAreWrittenAndReadBack(t *testing.T) {
+// The two columns of migration 142 on the head: a row an older writer inserts
+// without them reads the defaults, and a row the real writer appends reads back
+// what it carried (UInt8 for the flag). (The rehearsal of 142 over a table that
+// already held rows, through its rollback, is archived with it, CHAOS-11751.)
+func TestAttemptColumnsReadTheirDefaultsAndWhatTheWriterCarried(t *testing.T) {
 	writer, conn, ctx := newTestWriter(t)
-	down, err := os.ReadFile("../../../chmigrate/rollback/142_llm_attempts_usage_reason.down.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range chmigrate.SplitStatements(string(down)) {
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("rollback of 142: %s: %v", statement, err)
-		}
-	}
-	for _, column := range tableColumns(t, ctx, conn, "llm_categorization_attempts") {
-		if strings.HasPrefix(column, "usage_reason ") || strings.HasPrefix(column, "model_from_request ") {
-			t.Fatalf("the rollback left %s", column)
-		}
-	}
 	if err := conn.Exec(ctx, `INSERT INTO llm_categorization_attempts (
 		org_id, run_id, work_unit_id, role, config, rubric_sha256, provider, api_mode, model_requested, model_returned,
 		attempt, kind, http_status, error_class, state, request_id, input_tokens, output_tokens, cached_input_tokens,
@@ -429,26 +382,6 @@ func TestAttemptColumnsAddedToATableWithRowsAreWrittenAndReadBack(t *testing.T) 
 	) VALUES (?, 'run-old', 'wu-old', 'served', 'cfg', 'r', 'byo-clef', 'systemone', 'clef', 'clef',
 		1, 'first', 200, '', 'ok', '', 10, 2, 0, 0.5, 'v', 7, 0, now64(3))`, testOrgID); err != nil {
 		t.Fatalf("a row of the old shape: %v", err)
-	}
-
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	applied := false
-	for _, file := range chain {
-		if file.Version != "142_llm_attempts_usage_reason.sql" {
-			continue
-		}
-		for _, statement := range chmigrate.SplitStatements(file.SQL) {
-			if err := conn.Exec(ctx, statement); err != nil {
-				t.Fatalf("142 on a table with rows: %s: %v", statement, err)
-			}
-		}
-		applied = true
-	}
-	if !applied {
-		t.Fatal("the chain does not hold migration 142")
 	}
 
 	fresh := attemptRow("wu-new")

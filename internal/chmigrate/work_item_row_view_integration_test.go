@@ -4,17 +4,16 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 )
 
-// INVARIANT (CHAOS-8863): the real chain, applied to a fresh database, leaves the three aggregate work-item daily
+// INVARIANT (CHAOS-8863): the head, applied to a fresh database, leaves the three aggregate work-item daily
 // tables with row_view as the LAST part of the sorting key, so a legacy row, an 'org' row and a 'scope' row of one
-// key are three rows; a writer that does not name the column still inserts, as a legacy row with the empty view;
-// and migration 141 is re-runnable: a second run of every statement is a no-op.
-func TestWorkItemRowViewMigration(t *testing.T) {
+// key are three rows; and a writer that does not name the column still inserts, as a legacy row with the empty
+// view. (The rerun of migration 141 is archived with it, CHAOS-11751.)
+func TestWorkItemRowView(t *testing.T) {
 	ctx := context.Background()
 	scratch := scratchDatabase(t)
 	conn := openDatabase(t, scratch.URI, "")
@@ -69,20 +68,6 @@ func TestWorkItemRowViewMigration(t *testing.T) {
 		"ORDER BY (org_id, provider, day, work_scope_id, team_id, row_view) SETTINGS index_granularity = 8192"
 	if got := str("SELECT engine_full FROM system.tables WHERE database = currentDatabase() AND name = 'work_item_metrics_daily'"); got != wantEngineFull {
 		t.Fatalf("work_item_metrics_daily engine_full = %q, want %q", got, wantEngineFull)
-	}
-
-	file, err := os.ReadFile("sql/141_work_item_row_view.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := chmigrate.SplitStatements(string(file))
-	if len(statements) != 3 {
-		t.Fatalf("migration 141 has %d statements, want one ALTER for each of the three tables", len(statements))
-	}
-	for _, statement := range statements {
-		if err := db.Exec(ctx, statement); err != nil {
-			t.Fatalf("re-run: %v", err)
-		}
 	}
 
 	// The old writer's column list (no row_view) still inserts: a legacy row.

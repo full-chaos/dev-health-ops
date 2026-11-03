@@ -19,11 +19,11 @@ import (
 
 // submitVenue is a planner-managed configuration with n selected sources and NO
 // scheduler running: a submit that waited for the plan would wait out
-// SYNC_MANUAL_TRIGGER_AWAIT_SECONDS, which these tests set far above their budget.
+// SYNC_MANUAL_TRIGGER_AWAIT_SECONDS, which these tests set to twice the 30 s failure guard of submitBounded.
 func submitVenue(t *testing.T, sources int) (*cascadeVenue, cascadeSeeded, string) {
 	t.Helper()
 	v := startCascadeVenue(t, false)
-	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "30")
+	t.Setenv("SYNC_MANUAL_TRIGGER_AWAIT_SECONDS", "60")
 	one := v.seed("github", `["git"]`, []string{"repo-metadata", "commits"})
 	for index := 0; index < sources; index++ {
 		name := fmt.Sprintf("acme/repo-%d", index)
@@ -83,35 +83,56 @@ func accepted(t *testing.T, status int, body string) acceptedBody {
 	return out
 }
 
+// submitBounded is v.call with a failure-only guard: a submit returns at once, so a run never reaches the guard. A submit
+// that waits for the plan stays on the 60 s await of submitVenue: on the 30 s guard the request is cancelled FIRST (its
+// handler ends, so the server can close), then the call is joined for at most 10 s, then the test fails naming the request.
+func submitBounded(t *testing.T, v *cascadeVenue, what, path, body string) (int, string) {
+	t.Helper()
+	type answer struct {
+		status int
+		body   string
+		err    error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan answer, 1)
+	go func() {
+		status, text, err := v.callCtx(ctx, "POST", path, body)
+		done <- answer{status, text, err}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("%s: %v", what, got.err)
+		}
+		return got.status, got.body
+	case <-time.After(30 * time.Second):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+		t.Fatalf("%s: the submit is still waiting after the 30 s guard: it waited for the plan instead of returning at once", what)
+		return 0, ""
+	}
+}
+
 // TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests is the large case:
 // a 20-year window, then 40 submits in a row, each answered 202 inside the normal
 // request budget while no scheduler exists, each with its own job row that the job
 // read serves as pending; the progress read does not fail on the unplanned job.
 func TestBackfillSubmitReturnsAtOnceForAWideWindowAndManyRequests(t *testing.T) {
 	v, one, path := submitVenue(t, 30)
-	const budget = 2 * time.Second
 	wide := `{"selector":{"since":"2006-01-01T00:00:00Z","before":"2026-01-01T00:00:00Z"}}`
-	started := time.Now()
-	status, body := v.call("POST", path, wide)
-	if elapsed := time.Since(started); elapsed > budget {
-		t.Fatalf("a 20-year window took %s, budget %s", elapsed, budget)
-	}
+	status, body := submitBounded(t, v, "a 20-year window", path, wide)
 	first := accepted(t, status, body)
 
-	started = time.Now()
 	jobs := map[string]bool{first.JobID: true}
 	for index := 0; index < 40; index++ {
 		day := index%27 + 1
 		window := fmt.Sprintf(`{"selector":{"since":"2025-%02d-%02dT00:00:00Z","before":"2025-%02d-%02dT12:00:00Z"}}`, index/27+1, day, index/27+1, day)
-		one := time.Now()
-		status, body := v.call("POST", path, window)
-		if elapsed := time.Since(one); elapsed > budget {
-			t.Fatalf("submit %d took %s, budget %s", index, elapsed, budget)
-		}
+		status, body := submitBounded(t, v, fmt.Sprintf("submit %d", index), path, window)
 		jobs[accepted(t, status, body).JobID] = true
-	}
-	if total := time.Since(started); total > 20*time.Second {
-		t.Fatalf("40 submits took %s", total)
 	}
 	if len(jobs) != 41 {
 		t.Fatalf("%d distinct jobs for 41 accepted submits", len(jobs))

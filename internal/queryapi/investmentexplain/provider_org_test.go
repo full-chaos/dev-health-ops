@@ -227,7 +227,7 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 // just newProviderForOrg's own unit tests above): a BYO OpenAI org with
 // NO stored model and no explicit request-level model must construct
 // with ResolveModelNameForOrg's own provider-default fallback
-// ("gpt-5-mini" for openai, defaultModelByProvider in provider.go) --
+// ("gpt-6-luna" for openai, defaultModelByProvider in provider.go) --
 // not categorize's OWN, DIFFERENT default (the since-deleted ops OpenAI
 // client's "gpt-5-nano"), which is what construction silently fell back to when
 // CompleteInvestmentMixExplanationForOrg passed the RAW (empty)
@@ -253,16 +253,16 @@ func TestCompleteInvestmentMixExplanationForOrg_DefaultModelReachesConstruction(
 		if resolvedProvider != "openai" {
 			t.Fatalf("resolvedProvider = %q, want openai", resolvedProvider)
 		}
-		if resolvedModel != "gpt-5-mini" {
-			t.Fatalf("resolvedModel = %q, want gpt-5-mini (the reported/resolved value)", resolvedModel)
+		if resolvedModel != "gpt-6-luna" {
+			t.Fatalf("resolvedModel = %q, want gpt-6-luna (the reported/resolved value)", resolvedModel)
 		}
 	})
 
 	if !captured.credentialsCalled {
 		t.Fatal("expected newProviderFromCredentials to be called for a matched BYO org")
 	}
-	if captured.credentialsModel != "gpt-5-mini" {
-		t.Errorf("constructed with Model = %q, want gpt-5-mini (ResolveModelNameForOrg's own resolved value) -- "+
+	if captured.credentialsModel != "gpt-6-luna" {
+		t.Errorf("constructed with Model = %q, want gpt-6-luna (ResolveModelNameForOrg's own resolved value) -- "+
 			"NOT categorize's own, different provider default", captured.credentialsModel)
 	}
 }

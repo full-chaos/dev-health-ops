@@ -20,6 +20,14 @@
     {
       "file": "valid-nbf-after-iat.json",
       "why": "nbf later than iat and before exp."
+    },
+    {
+      "file": "valid-acr-api.json",
+      "why": "The token for acr-api: audience acr-api, scope acr:api. go-api, query-api and auth-service refuse it."
+    },
+    {
+      "file": "valid-acr-mcp.json",
+      "why": "The token for acr-mcp: audience acr-mcp, scope acr:mcp. go-api, query-api and auth-service refuse it."
     }
   ],
   "reject": [
@@ -106,6 +114,24 @@
       "expect_instance_location": "/claims/scope",
       "expect_keyword": "const",
       "why": "auth:session with audience dev-health-api: the scope belongs to the other audience."
+    },
+    {
+      "file": "invalid-scope-acr-api-with-api-access.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "api:access with audience acr-api: a platform scope on an ACR audience."
+    },
+    {
+      "file": "invalid-scope-api-with-acr-api.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "acr:api with audience dev-health-api: an ACR scope on the platform audience."
+    },
+    {
+      "file": "invalid-scope-acr-mcp-with-acr-api.json",
+      "expect_instance_location": "/claims/scope",
+      "expect_keyword": "const",
+      "why": "acr:api with audience acr-mcp: the scope of the other ACR audience."
     },
     {
       "file": "invalid-scope-list.json",

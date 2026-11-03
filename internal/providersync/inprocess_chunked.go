@@ -277,22 +277,18 @@ func (state *inProcessChunkState) loadRow(claim Claim, ordinal int) (PreparedPro
 		return PreparedProviderChunk{}, ErrPreparedChunkNotFound
 	}
 	var chunk PreparedProviderChunk
-	if json.Unmarshal(row.payloadRaw, &chunk) != nil || json.Unmarshal(row.ledgerRaw, &chunk.Ledger) != nil ||
-		(row.status != "pending" && row.status != "writing" && row.status != "committed") ||
-		chunk.SchemaVersion != row.schemaVersion || chunk.RouteVersion != row.routeVersion ||
-		chunk.Ordinal != row.ordinal || chunk.CursorBefore != row.cursorBefore ||
-		chunk.CursorAfter != row.cursorAfter || chunk.InventoryComplete != row.inventoryComplete ||
-		chunk.PayloadBytes != row.payloadBytes || chunk.ManifestDigest != row.manifestDigest {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+	if json.Unmarshal(row.payloadRaw, &chunk) != nil {
+		return PreparedProviderChunk{}, chunkConflictBecause("payload_decode")
 	}
-	// The relational column is the canonical count (see loadPreparedChunkRow).
-	chunk.TotalChunks = row.totalChunks
-	if chunk.TotalChunks < 0 || (chunk.TotalChunks > 0 && chunk.Ordinal >= chunk.TotalChunks) ||
-		chunk.ManifestDigest == "" || chunk.Ledger.validate() != nil {
-		return PreparedProviderChunk{}, ErrChunkCheckpointConflict
+	if json.Unmarshal(row.ledgerRaw, &chunk.Ledger) != nil {
+		return PreparedProviderChunk{}, chunkConflictBecause("ledger_decode")
 	}
 	_ = claim
-	return chunk, nil
+	return verifyStoredChunk(chunk, storedChunkRow{
+		schemaVersion: row.schemaVersion, routeVersion: row.routeVersion, ordinal: row.ordinal, totalChunks: row.totalChunks,
+		cursorBefore: row.cursorBefore, cursorAfter: row.cursorAfter, inventoryComplete: row.inventoryComplete,
+		payloadBytes: row.payloadBytes, manifestDigest: row.manifestDigest, status: row.status,
+	})
 }
 
 func (store *InProcessChunkLedger) LoadPreparedChunk(

@@ -88,7 +88,7 @@ func TestLLMSettingsStatusRouteVenueOracle(t *testing.T) {
 		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -213,7 +213,7 @@ VALUES ($1, $2, 'other', 'setting', 'llm.base_url', $3::json, '{}'::json, 'failu
 				tokens[slug] = map[string]any{"user_id": adminID.String(), "email": "llmstatus-admin@example.com", "org_id": org.id.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

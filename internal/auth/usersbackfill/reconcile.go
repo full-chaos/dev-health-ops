@@ -28,7 +28,9 @@ type AuthRow struct {
 	TokenVersion int64
 	LastLoginAt  *time.Time
 	DisplayName  string
-	// RoleHeld is any platform_admin assignment; RoleBackfilled one with no granter.
+	// RoleHeld is the platform role store's rule (platformrole.HoldsSQL): an
+	// assignment that has not expired, of a principal that is not disabled;
+	// RoleBackfilled is one with no granter, expired or not.
 	RoleHeld       bool
 	RoleBackfilled bool
 	// Identities are every auth.external_identities row of the principal.
@@ -56,6 +58,17 @@ const (
 	DiffIdentityMissing  = "identity_missing"
 	DiffIdentityConflict = "identity_conflict"
 	DiffExtraIdentity    = "extra_identity_in_auth"
+	// DiffMembershipInactiveInPublic counts auth memberships that are not
+	// active while public.memberships holds the member: go-api would still
+	// grant the membership.
+	DiffMembershipInactiveInPublic = "membership_inactive_in_public"
+	// DiffPlatformRoleDisabled counts public superusers whose auth principal
+	// is disabled: the backfill's assignment of such a principal gives no
+	// platform authority, so the platform roles switch would take it away.
+	DiffPlatformRoleDisabled = "platform_role_disabled_superuser"
+	// DiffNoActivePlatformAdmin is 1 when no principal holds platform_admin now.
+	// It is gated only with PlatformRolesGate (-platform-roles-gate).
+	DiffNoActivePlatformAdmin = "no_active_platform_admin"
 )
 
 // GatedClasses lists every class the gate counts, in report order: the diff
@@ -63,7 +76,7 @@ const (
 var GatedClasses = []string{
 	DiffMissingInAuth, DiffExtraInAuth, DiffPrincipalKind, DiffEmail, DiffActive, DiffVerified,
 	DiffPasswordHash, DiffPlatformRole, DiffTokenVersion, DiffIdentityMissing, DiffIdentityConflict, DiffExtraIdentity,
-	SkipUnknownHashFormat, SkipInvalidIdentity,
+	SkipUnknownHashFormat, SkipInvalidIdentity, DiffMembershipInactiveInPublic, DiffPlatformRoleDisabled,
 }
 
 // Reconciliation is the outcome of a read-only comparison of public.users with
@@ -91,6 +104,24 @@ type Reconciliation struct {
 	// SSOSubjectUnverifiable counts the not-carried accounts of the sso_subject_unverifiable bucket
 	// (SubjectUnverifiable). Printed, never gated.
 	SSOSubjectUnverifiable int
+
+	// Membership counts of the auth principals of kind user, printed and never
+	// gated: an active auth membership with no public row (go-api removes a
+	// member in public.memberships only), a public membership with no auth row,
+	// and an active pair whose roles differ (go-api changes a role in public
+	// only).
+	MembershipPublicMissing int
+	MembershipAuthMissing   int
+	MembershipRoleDiff      int
+
+	// NoActivePlatformAdmin is 1 when no principal holds platform_admin by the
+	// store's rule, else 0. PlatformRolesGate says whether it is gated: without
+	// it the class prints as an info line, because the reconcile also runs
+	// before the users flip.
+	NoActivePlatformAdmin int
+	PlatformRolesGate     bool
+	// platformAdminRead is set only after a good read: a failed read prints no line.
+	platformAdminRead bool
 }
 
 // GatedTotal is the number of gated diffs: zero is the gate.
@@ -98,6 +129,9 @@ func (r Reconciliation) GatedTotal() int {
 	n := 0
 	for _, c := range r.Diffs {
 		n += c
+	}
+	if r.PlatformRolesGate {
+		n += r.NoActivePlatformAdmin
 	}
 	return n
 }
@@ -114,6 +148,9 @@ func (r Reconciliation) Lines() []string {
 	for _, class := range GatedClasses {
 		lines = append(lines, fmt.Sprintf("diff.%s=%d", class, r.Diffs[class]))
 	}
+	if r.PlatformRolesGate && r.platformAdminRead {
+		lines = append(lines, fmt.Sprintf("diff.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
+	}
 	lines = append(lines,
 		fmt.Sprintf("info.last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("info.display_name_drift=%d", r.DisplayNameDrift),
@@ -121,7 +158,13 @@ func (r Reconciliation) Lines() []string {
 		fmt.Sprintf("info.sso_identity_unmatched=%d", r.SSOIdentityUnmatched),
 		fmt.Sprintf("info.sso_identity_relink_pending=%d", r.SSORelinkPending),
 		fmt.Sprintf("info.sso_subject_unverifiable=%d", r.SSOSubjectUnverifiable),
+		fmt.Sprintf("info.membership_public_missing=%d", r.MembershipPublicMissing),
+		fmt.Sprintf("info.membership_auth_missing=%d", r.MembershipAuthMissing),
+		fmt.Sprintf("info.membership_role_diff=%d", r.MembershipRoleDiff),
 	)
+	if !r.PlatformRolesGate && r.platformAdminRead {
+		lines = append(lines, fmt.Sprintf("info.%s=%d", DiffNoActivePlatformAdmin, r.NoActivePlatformAdmin))
+	}
 	return lines
 }
 
@@ -236,7 +279,10 @@ func compareOne(ctx context.Context, tgt Target, row Row, a AuthRow, rep *Reconc
 		if !contains(skips, SkipUnknownHashFormat) && differsString(a.PasswordHash, target.PasswordHash) {
 			classes = append(classes, DiffPasswordHash)
 		}
-		if (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled) {
+		switch {
+		case row.Superuser && !a.RoleHeld && !a.Active:
+			classes = append(classes, DiffPlatformRoleDisabled)
+		case (row.Superuser && !a.RoleHeld) || (!row.Superuser && a.RoleBackfilled):
 			classes = append(classes, DiffPlatformRole)
 		}
 		if a.TokenVersion != row.TokenVersion {

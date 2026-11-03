@@ -71,6 +71,11 @@ established for GraphQL platform-admin checks. A new counter
 
 ## Legacy ingest: fail-open when auth env vars were unset (CHAOS-4720)
 
+**Retired (CHAOS-11813):** the six legacy `/api/v1/ingest/*` routes are gone
+from go-api (each answers 404) and their settings are unread, so this path,
+and the cross-tenant write its organization-less key allowed, no longer
+exists.
+
 **Fixed in `512c4e77b`, "fix(ingest): fail closed on missing
 INGEST_API_KEYS/INGEST_SIGNING_SECRET."**
 

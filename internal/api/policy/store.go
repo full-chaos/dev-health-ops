@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Impersonation is an active impersonation_sessions row
@@ -33,6 +36,73 @@ type PGStore struct {
 	// AuthSchema is the auth-service schema the sessions live in
 	// (AUTH_DATABASE_SCHEMA); empty means "auth".
 	AuthSchema string
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments (rule.HoldsSQL), not from
+	// public users.is_superuser.
+	PlatformRolesOwned bool
+}
+
+// PlatformRoleRead is how a go-api read of public.users decides is_superuser:
+// the public column while not Owned (AUTH_PLATFORM_ROLES_OWNED off), else the
+// auth platform role rule (rule.HoldsSQL) over AuthSchema (empty: "auth") in
+// the same statement, so a failed auth read fails the read.
+type PlatformRoleRead struct {
+	Owned      bool
+	AuthSchema string
+}
+
+// Superuser is the is_superuser expression of a users read: offExpr (the
+// caller's own public column expression, byte-equal to the read before the
+// switch) while not Owned, else whether the users row idExpr holds
+// platform_admin now.
+func (p PlatformRoleRead) Superuser(offExpr, idExpr string) (string, error) {
+	if !p.Owned {
+		return offExpr, nil
+	}
+	name := p.AuthSchema
+	if name == "" {
+		name = defaultAuthSchema
+	}
+	if err := checkSchemaName(name); err != nil {
+		return "", fmt.Errorf("policy: auth schema: %w", err)
+	}
+	return rule.HoldsSQL(pgx.Identifier{name}.Sanitize(), idExpr, "'"+rule.PlatformAdmin+"'"), nil
+}
+
+// superuserColumn is the is_superuser column of the users reads: public
+// users.is_superuser, or while PlatformRolesOwned the platform role rule over
+// the auth schema in the same statement (a failure of it fails the read).
+func (s PGStore) superuserColumn() (string, error) {
+	return PlatformRoleRead{Owned: s.PlatformRolesOwned, AuthSchema: s.AuthSchema}.Superuser("is_superuser", "users.id")
+}
+
+// ReadsPlatformRoles implements Store.
+func (s PGStore) ReadsPlatformRoles() bool { return s.PlatformRolesOwned }
+
+// superuserGrant names, in a grant error, what the superuser read needs.
+func (s PGStore) superuserGrant() string {
+	if s.PlatformRolesOwned {
+		return ", and SELECT on <auth schema>.platform_role_assignments (principal_id, role_key, expires_at) and <auth schema>.principals (id, kind, disabled_at)"
+	}
+	return ""
+}
+
+// userStateSQL is UserState's statement.
+func (s PGStore) userStateSQL() (string, error) {
+	superuser, err := s.superuserColumn()
+	if err != nil {
+		return "", err
+	}
+	return `SELECT is_active, ` + superuser + `, token_version FROM users WHERE id = $1`, nil
+}
+
+// accessUserSQL is AccessUser's statement.
+func (s PGStore) accessUserSQL() (string, error) {
+	superuser, err := s.superuserColumn()
+	if err != nil {
+		return "", err
+	}
+	return `SELECT is_active, ` + superuser + `, token_version, email, username, full_name FROM users WHERE id = $1`, nil
 }
 
 func (s PGStore) now() time.Time {
@@ -46,16 +116,19 @@ func (s PGStore) now() time.Time {
 // is_active and is_superuser read as false and NULL token_version as 0, as
 // authenticate_access_token's truthiness does.
 func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, error) {
+	countDirectRead(ctx, kindReadUsers)
 	var active, superuser *bool
 	var version *int64
-	err := s.Pool.QueryRow(ctx,
-		`SELECT is_active, is_superuser, token_version FROM users WHERE id = $1`, id,
-	).Scan(&active, &superuser, &version)
+	query, err := s.userStateSQL()
+	if err != nil {
+		return UserState{}, false, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&active, &superuser, &version)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil
 	}
 	if err != nil {
-		return UserState{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version)")
+		return UserState{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version)"+s.superuserGrant())
 	}
 	state := UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {
@@ -64,19 +137,24 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 	return state, true, nil
 }
 
+// membershipSQL reads the row of an active organization only (is_active is
+// true, as orgMembershipSQL and the login read take it): a suspend keeps the
+// members' rows.
+const membershipSQL = `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id
+WHERE m.user_id = $1 AND m.org_id = $2 AND o.is_active IS true LIMIT 1`
+
 // Membership is user_is_member_of_org's query, reading the row's role too:
 // the existence answers the membership check, the role is the user's role in
 // that org. A NULL role reads as "".
 func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, error) {
+	countDirectRead(ctx, kindReadMemberships)
 	var role *string
-	err := s.Pool.QueryRow(ctx,
-		`SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, userID, orgID,
-	).Scan(&role)
+	err := s.Pool.QueryRow(ctx, membershipSQL, userID, orgID).Scan(&role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role)")
+		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id, is_active)")
 	}
 	if role == nil {
 		return "", true, nil
@@ -84,10 +162,35 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 	return *role, true, nil
 }
 
+// orgMembershipSQL is membershipSQL with the org's existence: one row
+// whatever is stored, the membership columns NULL when there is no row. A row
+// of an organization that is not active (is_active is not true, as the login
+// read takes it) is no membership: a suspend keeps the members' rows.
+const orgMembershipSQL = `SELECT o.id IS NOT NULL, m.user_id IS NOT NULL AND o.is_active IS true, CASE WHEN o.is_active IS true THEN m.role END
+FROM (SELECT 1) AS one
+LEFT JOIN organizations o ON o.id = $2
+LEFT JOIN (SELECT user_id, role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1) AS m ON true`
+
+// OrgMembership is Membership with whether the org exists. A NULL role
+// reads as "".
+func (s PGStore) OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (string, bool, bool, error) {
+	countDirectRead(ctx, kindReadOrgMemberships)
+	var orgFound, member bool
+	var role *string
+	if err := s.Pool.QueryRow(ctx, orgMembershipSQL, userID, orgID).Scan(&orgFound, &member, &role); err != nil {
+		return "", false, false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id, is_active)")
+	}
+	if role == nil {
+		return "", member, orgFound, nil
+	}
+	return *role, member, orgFound, nil
+}
+
 // ActiveImpersonation is impersonation_cache._load_from_db: the admin's
 // session that has not ended and expires in the future, joined to the
 // target's users row.
 func (s PGStore) ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error) {
+	countDirectRead(ctx, kindReadImpersonation)
 	var session Impersonation
 	err := s.Pool.QueryRow(ctx, `
 SELECT s.id, s.admin_user_id, s.target_user_id, s.target_org_id, s.target_role, u.email, s.expires_at

@@ -117,10 +117,13 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 			ordinal: ordinal, name: name, content: text,
 		})
 	}
-	if len(migrations) == 0 {
-		t.Fatalf("no migrations found under %s", root)
+	// The live chain is empty while no migration follows the head baseline (CHAOS-11751 moved it to 144); the
+	// baseline's tables are the schema then.
+	baseline := readBaselineObjects(t, chmigrateDir)
+	if len(baseline) == 0 {
+		t.Fatalf("no table read from the baseline under %s", chmigrateDir)
 	}
-	migrations = append(readBaselineObjects(t, chmigrateDir), migrations...)
+	migrations = append(baseline, migrations...)
 	sort.Slice(migrations, func(i, j int) bool {
 		if migrations[i].ordinal != migrations[j].ordinal {
 			return migrations[i].ordinal < migrations[j].ordinal
@@ -131,7 +134,7 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 }
 
 // readBaselineObjects turns each table of baseline/head.json (the schema as of
-// the frozen pre-099 chain) into one pseudo migration that sorts before every
+// the chain head the baseline holds) into one pseudo migration that sorts before every
 // chain file, so the chronological scan starts from the baseline.
 func readBaselineObjects(t *testing.T, chmigrateDir string) []clickHouseMigration {
 	t.Helper()

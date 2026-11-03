@@ -21,6 +21,8 @@ import (
 	valkeygo "github.com/valkey-io/valkey-go"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
@@ -78,6 +80,28 @@ type Deps struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the routes
 	// that write public.users answer the moved operation.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: a write of
+	// is_superuser answers the moved operation, and the users reads take
+	// is_superuser from the auth platform roles in AuthSchema.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA (empty: "auth").
+	AuthSchema string
+	// OrgReactivator is the client of auth-service's organization reactivate
+	// route (AUTH_PROXY_ORG_PROVISIONING). Nil leaves PATCH is_active as it
+	// was: public.organizations only, no auth call.
+	OrgReactivator orgreactivate.Reactivator
+	// OrgProvisioner is the client of auth-service's provisioning routes
+	// (AUTH_PROXY_ORG_PROVISIONING). Nil leaves the member, invite and delete
+	// routes as they were: go-api writes, no auth call.
+	OrgProvisioner authprovision.Provisioner
+	// OrgSuspender is the client of auth-service's organization suspend route, from the same switch; nil leaves PATCH
+	// is_active=false as it was.
+	OrgSuspender orgreactivate.Suspender
+	// OrgState reads the organization's state in auth-service; set with the two verbs above, nil with them.
+	OrgState orgreactivate.StateReader
+	// OrgRenamer is the client of auth-service's organization rename route, from the same switch. While
+	// AUTH_ORGS_OWNED is on, a PATCH name goes to it first; nil then refuses the name with a 503.
+	OrgRenamer orgreactivate.Renamer
 }
 
 // Routes is the admin area's route set.
@@ -86,7 +110,7 @@ func Routes(deps Deps) []httpapi.Route {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned}
+	store := pgStore{Pool: deps.Pool, Now: deps.Now, UsersOwned: deps.UsersOwned, PlatformRolesOwned: deps.PlatformRolesOwned, AuthSchema: deps.AuthSchema}
 	auditWriter := audit.PGWriter{Now: deps.Now}
 	cache := newImpersonationCache(deps.Valkey, store, logger)
 	if deps.Now != nil {
@@ -117,6 +141,11 @@ func Routes(deps Deps) []httpapi.Route {
 		passwordLimiter: httpapi.NewKeyedLimiter(limits, passwordLimit),
 		inviteLimiter:   httpapi.NewKeyedLimiter(limits, inviteLimit),
 		invites:         deps.Invites,
+		orgReactivator:  deps.OrgReactivator,
+		orgProvision:    deps.OrgProvisioner,
+		orgSuspender:    deps.OrgSuspender,
+		orgState:        deps.OrgState,
+		orgRenamer:      deps.OrgRenamer,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -174,6 +203,18 @@ type handlers struct {
 	passwordLimiter *httpapi.KeyedLimiter
 	inviteLimiter   *httpapi.KeyedLimiter
 	invites         InviteConfig
+	// orgReactivator is Deps.OrgReactivator: when set, a PATCH that turns an
+	// inactive organization active reaches auth-service before any write.
+	orgReactivator orgreactivate.Reactivator
+	// orgProvision is Deps.OrgProvisioner: when set, the member, invite and
+	// delete routes ask auth-service and write nothing of their own.
+	orgProvision authprovision.Provisioner
+	// orgSuspender is Deps.OrgSuspender, the PATCH is_active=false counterpart.
+	orgSuspender orgreactivate.Suspender
+	// orgState is Deps.OrgState: the read whose revision the is_active call sends.
+	orgState orgreactivate.StateReader
+	// orgRenamer is Deps.OrgRenamer: the PATCH name while AUTH_ORGS_OWNED is on.
+	orgRenamer orgreactivate.Renamer
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

@@ -37,6 +37,10 @@ type Route struct {
 	// MaxBodyBytes overrides the server default body bound for this route.
 	// Zero means the server default.
 	MaxBodyBytes int64
+	// EmptyBody refuses any request body on this route, declared or not. It is
+	// the explicit form of "this route takes no body": a zero MaxBodyBytes means
+	// the server default, which on go-api is 50 MiB.
+	EmptyBody bool
 	// Allow, set on the first route registered for a pattern, is the Allow
 	// header of that pattern's 405. Empty means every registered method of
 	// the pattern, sorted.
@@ -64,6 +68,13 @@ type Route struct {
 	// shared one, so a stalled dependency behind other routes cannot refuse
 	// it. Only a route that does no dependency I/O belongs here.
 	PublicClass bool
+	// Admit, when set, is an admission gate that runs after the rate limit and
+	// the in-flight cap and BEFORE the body bound, so a request it refuses is
+	// answered without a single body byte read, whatever the framing. It
+	// returns the request to serve (which may carry what the gate attached to
+	// its context) and true, or false after writing the refusal itself. Nil, the
+	// default, leaves the chain as it was.
+	Admit func(http.ResponseWriter, *http.Request) (*http.Request, bool)
 	// Unthrottled skips the server's body bound, in-flight cap and rate limit
 	// for this route; recovery, the deadline and the route record stay. Only a
 	// constant handler that reads no body and does no I/O belongs here.
@@ -196,6 +207,8 @@ type ServerOptions struct {
 	// metrics carry for this server ("public", "internal", ...). Empty means
 	// Name.
 	Listener string
+	// SeedRequestSeries are the routes whose per-route request series exist at 0 from the moment the server is built (RequestSeed).
+	SeedRequestSeries []RequestSeed
 	// ErrorWriter renders every error this server emits. Nil means WriteError
 	// (the ACP envelope).
 	ErrorWriter ErrorWriter
@@ -521,7 +534,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 	if listener == "" {
 		listener = "auth-api-http"
 	}
-	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling)
+	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling, options.SeedRequestSeries)
 	observer.attrs = options.AccessAttrs
 	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
 }
@@ -547,11 +560,17 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	if maxBody <= 0 {
 		maxBody = options.MaxBodyBytes
 	}
+	if route.EmptyBody {
+		maxBody = 0
+	}
 
 	handler := RecoverWith(logger, route.Method+" "+route.Pattern, write)(markRoute(route))
 	handler = Deadline(options.RequestTimeout)(handler)
 	if !route.Unthrottled {
 		handler = MaxBodyWith(maxBody, write)(handler)
+		if route.Admit != nil {
+			handler = admitBeforeBody(route.Admit)(handler)
+		}
 		handler = inFlightLimit(inFlight, logger, write)(handler)
 		handler = RateLimitWith(NewBucket(perSecond, burst, options.Now), write)(handler)
 	}

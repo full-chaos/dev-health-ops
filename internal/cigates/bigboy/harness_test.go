@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // Every guard in this package is a function of a repo root. One test runs it on the real tree; a table-driven
@@ -43,11 +45,34 @@ type guard struct {
 	root string
 	tmp  string
 	v    []string
+	// bigboy is the tree that stands in for root/ci/bigboy on a real-root run (BIGBOY_DIR); t skips the run
+	// when a check reads that tree and none is present.
+	bigboy string
+	t      *testing.T
+}
+
+const bigboyRel = "ci/bigboy"
+
+// underBigboy splits rel at the in-repo bigboy tree: the part below it, and whether rel is in it.
+func underBigboy(rel string) (string, bool) {
+	rel = filepath.ToSlash(rel)
+	if rel == bigboyRel {
+		return "", true
+	}
+	return strings.CutPrefix(rel, bigboyRel+"/")
 }
 
 func (g *guard) failf(format string, args ...any) { g.v = append(g.v, fmt.Sprintf(format, args...)) }
 
-func (g *guard) path(rel string) string { return filepath.Join(g.root, filepath.FromSlash(rel)) }
+func (g *guard) path(rel string) string {
+	if below, ok := underBigboy(rel); ok && g.t != nil {
+		if g.bigboy == "" {
+			g.t.Skip("bigboy tree absent: set " + bigboydir.Env + " to the deploy repo's docker/bigboy")
+		}
+		return filepath.Join(g.bigboy, filepath.FromSlash(below))
+	}
+	return filepath.Join(g.root, filepath.FromSlash(rel))
+}
 
 func (g *guard) read(rel string) string {
 	b, err := os.ReadFile(g.path(rel))
@@ -135,10 +160,14 @@ type check struct {
 func runReal(t *testing.T, checks ...check) {
 	t.Helper()
 	root := realRoot(t)
+	bb, ok := bigboydir.Lookup(root)
+	if !ok {
+		bb = ""
+	}
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			g := &guard{root: root, tmp: t.TempDir()}
+			g := &guard{root: root, tmp: t.TempDir(), bigboy: bb, t: t}
 			c.run(g)
 			if len(g.v) > 0 {
 				t.Fatalf("%d violation(s):\n  %s", len(g.v), strings.Join(g.v, "\n  "))
@@ -188,6 +217,13 @@ func runPlanted(t *testing.T, cases []planted) {
 func copyPath(t *testing.T, from, to, rel string) {
 	t.Helper()
 	src := filepath.Join(from, filepath.FromSlash(rel))
+	if below, ok := underBigboy(rel); ok {
+		dir, found := bigboydir.Lookup(from)
+		if !found {
+			t.Skip("bigboy tree absent: set " + bigboydir.Env + " to the deploy repo's docker/bigboy")
+		}
+		src = filepath.Join(dir, filepath.FromSlash(below))
+	}
 	info, err := os.Stat(src)
 	if err != nil {
 		t.Fatalf("copy %s: %v", rel, err)
@@ -203,8 +239,8 @@ func copyPath(t *testing.T, from, to, rel string) {
 		if d.IsDir() || strings.HasSuffix(p, "_test.go") {
 			return nil
 		}
-		r, _ := filepath.Rel(from, p)
-		copyOne(t, p, filepath.Join(to, r))
+		r, _ := filepath.Rel(src, p)
+		copyOne(t, p, filepath.Join(to, filepath.FromSlash(rel), r))
 		return nil
 	})
 	if err != nil {

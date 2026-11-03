@@ -3,11 +3,13 @@ package queryapiservice
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,40 +26,77 @@ func lookupOf(values map[string]string) func(string) (string, bool) {
 	}
 }
 
-// freeAddr returns a loopback address nothing listens on right now.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	return freeAddrs(t, 1)[0]
+// syncBuffer is a bytes.Buffer a test can read while the service still writes to it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
-// freeAddrs returns n DISTINCT loopback addresses nothing listens on right now. Every listener is held
-// open until all n addresses are known: closing each one before asking for the next lets the kernel
-// hand the same ephemeral port out twice (measured: about 4 collisions per 10000 triples), and two
-// configured listeners on one address make the service exit "must differ" before it ever serves.
-func freeAddrs(t *testing.T, n int) []string {
-	t.Helper()
-	held := make([]net.Listener, 0, n)
-	addrs := make([]string, 0, n)
-	for range n {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		held = append(held, listener)
-		addrs = append(addrs, listener.Addr().String())
-	}
-	for _, listener := range held {
-		if err := listener.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return addrs
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 type running struct {
 	done           <-chan int
-	stdout, stderr *bytes.Buffer
+	stdout, stderr *syncBuffer
 	cancel         context.CancelFunc
+}
+
+// anyPort asks the kernel for a free port at bind time: the service reports the address it bound (startBound), so a
+// test never frees a port and binds it later.
+const anyPort = "127.0.0.1:0"
+
+// Components that listen, as the runtime names them in its "runtime component listening" line.
+const (
+	operatorComponent = "operator-http"
+	queryComponent    = "query-http"
+	internalComponent = "query-internal-http"
+	mcpComponent      = "query-mcp-http"
+)
+
+// startBound starts the service and returns the addresses the named components bound, read from the runtime's
+// "runtime component listening" lines. It fails when the service exits or a line is missing within 15 s.
+func startBound(t *testing.T, args []string, env map[string]string, components ...string) (running, map[string]string) {
+	t.Helper()
+	r := start(t, args, env)
+	bound := map[string]string{}
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(r.stdout.String(), "\n") {
+			var entry struct {
+				Msg       string `json:"msg"`
+				Component string `json:"component"`
+				Address   string `json:"address"`
+			}
+			if strings.HasPrefix(line, "{") && json.Unmarshal([]byte(line), &entry) == nil && entry.Msg == "runtime component listening" {
+				bound[entry.Component] = entry.Address
+			}
+		}
+		missing := false
+		for _, component := range components {
+			if bound[component] == "" {
+				missing = true
+			}
+		}
+		if !missing {
+			return r, bound
+		}
+		select {
+		case code := <-r.done:
+			t.Fatalf("the service returned %d before it reported %v bound\nstdout: %s\nstderr: %s", code, components, r.stdout.String(), r.stderr.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	t.Fatalf("the service did not report %v bound within 15 s\nstdout: %s", components, r.stdout.String())
+	return r, nil
 }
 
 // defaultedAddrs names the listeners a start would leave on their DEFAULT address: the query listener (:8090) unless
@@ -84,11 +123,11 @@ func defaultedAddrs(args []string, env map[string]string) []string {
 }
 
 // start runs the real service through the shell, as `dho query-api` does. It refuses to run a service that would bind a
-// default port: the test must own free addresses (freeAddr, freeAddrs).
+// default port: the test binds port 0 (anyPort) and reads the bound addresses (startBound).
 func start(t *testing.T, args []string, env map[string]string) running {
 	t.Helper()
 	if defaulted := defaultedAddrs(args, env); len(defaulted) > 0 {
-		t.Fatalf("this test would start the service on the default address(es) %v: pass explicit free addresses (freeAddrs), never a fixed default port", defaulted)
+		t.Fatalf("this test would start the service on the default address(es) %v: pass explicit addresses (anyPort), never a fixed default port", defaulted)
 	}
 	return launch(t, args, env)
 }
@@ -104,7 +143,7 @@ func launch(t *testing.T, args []string, env map[string]string) running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr syncBuffer
 	done := make(chan int, 1)
 	go func() {
 		done <- shell.Execute(ctx, Spec, args, lookupOf(env), shell.IO{Stdout: &stdout, Stderr: &stderr})
@@ -165,9 +204,8 @@ func stop(t *testing.T, r running) {
 // (health.NewServer's route, independent of this split) is the real, always-on scrape
 // target throughout, unaffected -- see TestOperatorMetricsCarryTheReadinessOutcomeCounter.
 func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t *testing.T) {
-	addrs := freeAddrs(t, 2)
-	query, operator := addrs[0], addrs[1]
-	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
+	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--http-addr", anyPort}, nil, queryComponent, operatorComponent)
+	query, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/healthz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	if strings.TrimSpace(body) != `{"status":"ok"}` {
@@ -213,9 +251,8 @@ func TestServesTheQueryRoutesAndTheOperatorSurfaceOnBothListenersForOneRelease(t
 // The operator /metrics carries what the query code records: the readiness outcome
 // counter, with the "no /query configured" mode countable apart from a healthy one.
 func TestOperatorMetricsCarryTheReadinessOutcomeCounter(t *testing.T) {
-	addrs := freeAddrs(t, 2)
-	query, operator := addrs[0], addrs[1]
-	r := start(t, []string{"--query-addr", query, "--http-addr", operator}, nil)
+	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--http-addr", anyPort}, nil, operatorComponent)
+	operator := addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	body := waitFor(t, r, "http://"+operator+"/metrics", http.StatusOK)
 	if !strings.Contains(body, "devhealth_query_api_readyz_total") || !strings.Contains(body, `outcome="not_configured"`) {
@@ -276,7 +313,7 @@ func TestATakenQueryAddressFailsTheStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
-	r := start(t, []string{"--query-addr", occupied.Addr().String(), "--http-addr", freeAddr(t)}, nil)
+	r := start(t, []string{"--query-addr", occupied.Addr().String(), "--http-addr", anyPort}, nil)
 	select {
 	case code := <-r.done:
 		if code != 1 {
@@ -290,18 +327,20 @@ func TestATakenQueryAddressFailsTheStart(t *testing.T) {
 // The environment names the same settings as the flags (the chart's declared-only
 // contract): QUERY_API_ADDR alone moves the query listener; a flag beats it.
 func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
-	addrs := freeAddrs(t, 3)
-	envQuery, flagQuery, operator := addrs[0], addrs[1], addrs[2]
-	r := start(t, []string{"--http-addr", operator}, map[string]string{"QUERY_API_ADDR": envQuery})
+	r, addrs := startBound(t, []string{"--http-addr", anyPort}, map[string]string{"QUERY_API_ADDR": anyPort}, queryComponent, operatorComponent)
+	envQuery, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+envQuery+"/registry", http.StatusNotFound)
 	stop(t, r)
 
-	r = start(t, []string{"--http-addr", operator, "--query-addr", flagQuery}, map[string]string{"QUERY_API_ADDR": envQuery})
+	// The flag names port 0; the environment names a fixed address nothing may serve: a start that honoured the
+	// environment would bind it (or fail), and never report a query listener on the flag's address.
+	const envLoser = "127.0.0.1:1"
+	r, addrs = startBound(t, []string{"--http-addr", anyPort, "--query-addr", anyPort}, map[string]string{"QUERY_API_ADDR": envLoser}, queryComponent, operatorComponent)
+	flagQuery, operator := addrs[queryComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+flagQuery+"/registry", http.StatusNotFound)
-	if connection, err := net.DialTimeout("tcp", envQuery, time.Second); err == nil {
-		_ = connection.Close()
+	if flagQuery == envLoser {
 		t.Fatal("the environment address is served although a flag names another: the flag must win")
 	}
 	stop(t, r)
@@ -314,9 +353,8 @@ func TestSettingsComeFromTheFlagsThenTheEnvironment(t *testing.T) {
 // -- reachable on the internal address, absent on the public query address, the exact
 // pairing CHAOS-7097's route-set split exists to make structural.
 func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
-	addrs := freeAddrs(t, 3)
-	query, internal, operator := addrs[0], addrs[1], addrs[2]
-	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--http-addr", operator}, nil)
+	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--internal-addr", anyPort, "--http-addr", anyPort}, nil, queryComponent, internalComponent, operatorComponent)
+	query, internal, operator := addrs[queryComponent], addrs[internalComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+query+"/registry", http.StatusNotFound)
 	waitFor(t, r, "http://"+internal+"/registry", http.StatusNotFound)
@@ -340,9 +378,8 @@ func TestOpensTheInternalListenerWhenItsAddressIsSet(t *testing.T) {
 // no /registry, /buildinfo or /metrics fallthrough (here /query itself is not
 // configured, so every path answers 404), and it closes on shutdown.
 func TestOpensTheMCPListenerWhenItsAddressIsSet(t *testing.T) {
-	addrs := freeAddrs(t, 4)
-	query, internal, mcp, operator := addrs[0], addrs[1], addrs[2], addrs[3]
-	r := start(t, []string{"--query-addr", query, "--internal-addr", internal, "--mcp-addr", mcp, "--mcp-boundary", "networkpolicy", "--http-addr", operator}, nil)
+	r, addrs := startBound(t, []string{"--query-addr", anyPort, "--internal-addr", anyPort, "--mcp-addr", anyPort, "--mcp-boundary", "networkpolicy", "--http-addr", anyPort}, nil, internalComponent, mcpComponent, operatorComponent)
+	internal, mcp, operator := addrs[internalComponent], addrs[mcpComponent], addrs[operatorComponent]
 	waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
 	waitFor(t, r, "http://"+internal+"/metrics", http.StatusOK)
 	for _, path := range []string{"/metrics", "/healthz", "/readyz", "/registry", "/buildinfo", "/query"} {
@@ -377,10 +414,10 @@ func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
 		"neither":                           {func(string) []string { return nil }, false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			addrs := freeAddrs(t, 3)
-			mcp, operator, query := addrs[0], addrs[1], addrs[2]
-			r := start(t, append([]string{"--http-addr", operator, "--query-addr", query}, tc.extra(mcp)...), nil)
+			args := append([]string{"--http-addr", anyPort, "--query-addr", anyPort}, tc.extra(anyPort)...)
+			wantListening := strings.Contains(strings.Join(args, " "), "--mcp-addr")
 			if tc.refuse {
+				r := start(t, args, nil)
 				select {
 				case code := <-r.done:
 					if code == 0 || !strings.Contains(r.stderr.String(), tc.wantMessage) {
@@ -391,15 +428,20 @@ func TestTheMCPListenerStartsOnlyWithItsBoundaryMarker(t *testing.T) {
 				}
 				return
 			}
-			waitFor(t, r, "http://"+operator+"/readyz", http.StatusOK)
-			listening := false
-			if connection, err := net.DialTimeout("tcp", mcp, time.Second); err == nil {
-				_ = connection.Close()
-				listening = true
+			components := []string{operatorComponent}
+			if wantListening {
+				components = append(components, mcpComponent)
 			}
-			wantListening := strings.Contains(strings.Join(tc.extra(mcp), " "), "--mcp-addr")
-			if listening != wantListening {
-				t.Fatalf("MCP listener listening=%v, want %v", listening, wantListening)
+			r, addrs := startBound(t, args, nil, components...)
+			waitFor(t, r, "http://"+addrs[operatorComponent]+"/readyz", http.StatusOK)
+			if mcp := addrs[mcpComponent]; wantListening {
+				connection, err := net.DialTimeout("tcp", mcp, time.Second)
+				if err != nil {
+					t.Fatalf("the MCP listener reported %s but does not accept: %v", mcp, err)
+				}
+				_ = connection.Close()
+			} else if mcp != "" {
+				t.Fatalf("an MCP listener is reported bound at %s without an MCP address", mcp)
 			}
 			stop(t, r)
 		})
@@ -421,8 +463,7 @@ func TestTheMCPListenerMustNotShareAnAddress(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			addrs := freeAddrs(t, 3)
-			r := start(t, args(addrs[0], addrs[1:]), nil)
+			r := start(t, args("127.0.0.1:3", []string{"127.0.0.1:1", "127.0.0.1:2"}), nil)
 			select {
 			case code := <-r.done:
 				if code != 1 || !strings.Contains(r.stderr.String(), "must differ") {
@@ -436,8 +477,7 @@ func TestTheMCPListenerMustNotShareAnAddress(t *testing.T) {
 }
 
 func TestTwoListenersOnOneAddressAreRefusedBeforeServing(t *testing.T) {
-	addr := freeAddr(t)
-	r := start(t, []string{"--query-addr", addr, "--http-addr", addr}, nil)
+	r := start(t, []string{"--query-addr", "127.0.0.1:3", "--http-addr", "127.0.0.1:3"}, nil)
 	select {
 	case code := <-r.done:
 		if code != 1 || !strings.Contains(r.stderr.String(), "must differ") {
@@ -497,18 +537,6 @@ func TestTheListenerCheckFailsUntilTheListenerIsBound(t *testing.T) {
 	}
 }
 
-// The three addresses a test hands to three listeners must never coincide. 100000 draws of
-// three is far past the point where a helper that closes each listener before asking for
-// the next one (about 4 collisions per 10000 triples on Linux) reliably returns a duplicate.
-func TestFreeAddrsAreAlwaysDistinct(t *testing.T) {
-	for i := range 100000 {
-		addrs := freeAddrs(t, 3)
-		if addrs[0] == addrs[1] || addrs[1] == addrs[2] || addrs[0] == addrs[2] {
-			t.Fatalf("draw %d returned a repeated address: %v", i, addrs)
-		}
-	}
-}
-
 // The guard is red on a start without explicit addresses, and says which default it would have bound.
 func TestTheStartGuardNamesTheDefaultPortsAStartWouldBind(t *testing.T) {
 	for name, test := range map[string]struct {
@@ -528,5 +556,52 @@ func TestTheStartGuardNamesTheDefaultPortsAStartWouldBind(t *testing.T) {
 				t.Fatalf("defaultedAddrs = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+// CHAOS-11839: the service binds port 0 and reports the address it got, so no port is freed and bound later. A
+// neighbour that churns ephemeral ports the whole time (a busy runner) cannot make a start fail, and every reported
+// address is the one the listener really accepts on.
+func TestAStartOnPortZeroReportsTheAddressItBoundWhileNeighboursChurnPorts(t *testing.T) {
+	stopChurn := make(chan struct{})
+	churned := make(chan struct{})
+	go func() {
+		defer close(churned)
+		for {
+			select {
+			case <-stopChurn:
+				return
+			default:
+			}
+			var held []net.Listener
+			for range 64 {
+				if l, err := net.Listen("tcp", anyPort); err == nil {
+					held = append(held, l)
+				}
+			}
+			for _, l := range held {
+				_ = l.Close()
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stopChurn); <-churned })
+
+	for range 10 {
+		r, addrs := startBound(t, []string{"--query-addr", anyPort, "--internal-addr", anyPort, "--mcp-addr", anyPort, "--mcp-boundary", "networkpolicy", "--http-addr", anyPort}, nil,
+			queryComponent, internalComponent, mcpComponent, operatorComponent)
+		seen := map[string]bool{}
+		for component, addr := range addrs {
+			if strings.HasSuffix(addr, ":0") || seen[addr] {
+				t.Fatalf("%s reported %q: want a distinct, real port (%v)", component, addr, addrs)
+			}
+			seen[addr] = true
+			connection, err := net.DialTimeout("tcp", addr, time.Second)
+			if err != nil {
+				t.Fatalf("%s reported %s but nothing accepts there: %v", component, addr, err)
+			}
+			_ = connection.Close()
+		}
+		waitFor(t, r, "http://"+addrs[operatorComponent]+"/readyz", http.StatusOK)
+		stop(t, r)
 	}
 }

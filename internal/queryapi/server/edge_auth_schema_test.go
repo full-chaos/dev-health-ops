@@ -24,14 +24,14 @@ func TestEdgeStoresReadSessionsInTheConfiguredAuthSchema(t *testing.T) {
 		if err != nil {
 			t.Fatalf("newEdgeUserStore(%q): %v", value, err)
 		}
-		if pg, ok := store.(policy.PGStore); !ok || pg.AuthSchema != want {
+		if pg, ok := pgStoreOf(store); !ok || pg.AuthSchema != want {
 			t.Errorf("newEdgeUserStore(%q) = %#v, want AuthSchema %q", value, store, want)
 		}
 		_, queryStore, err := buildQueryEdgeAuthenticatorFromEnv(settings, pool)
 		if err != nil {
 			t.Fatalf("buildQueryEdgeAuthenticatorFromEnv(%q): %v", value, err)
 		}
-		if pg, ok := queryStore.(policy.PGStore); !ok || pg.AuthSchema != want {
+		if pg, ok := pgStoreOf(queryStore); !ok || pg.AuthSchema != want {
 			t.Errorf("buildQueryEdgeAuthenticatorFromEnv(%q) store = %#v, want AuthSchema %q", value, queryStore, want)
 		}
 	}

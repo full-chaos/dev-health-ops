@@ -24,7 +24,7 @@ type recordingStore struct {
 }
 
 type recordingEnder struct {
-	consumed, created, recorded int
+	consumed, created, recorded, consumedVerification int
 }
 
 func (r *recordingEnder) RecordEnded(_ context.Context, ended session.Ended) {
@@ -42,6 +42,15 @@ func (r *recordingEnder) CreateInTx(context.Context, audit.TxOps, uuid.UUID, *uu
 
 func (r *recordingEnder) PeekResetLink(context.Context, [32]byte) (uuid.UUID, bool, error) {
 	return uuid.Nil, false, nil
+}
+
+func (r *recordingEnder) PeekVerificationLink(context.Context, [32]byte) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
+}
+
+func (r *recordingEnder) ConsumeVerificationLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
+	r.consumedVerification++
+	return nil
 }
 
 func (r *recordingEnder) ConsumeBoundResetLinkInTx(context.Context, audit.TxOps, uuid.UUID, [32]byte) error {
@@ -64,10 +73,15 @@ func (s *recordingStore) ProvisionLocal(_ context.Context, r identity.LocalProvi
 	s.actors = append(s.actors, r.Actor)
 	return uuid.New(), nil
 }
-func (s *recordingStore) SetEmailVerified(_ context.Context, _ uuid.UUID, at time.Time, a identity.Actor) error {
+func (s *recordingStore) SetEmailVerifiedWith(ctx context.Context, _ uuid.UUID, at time.Time, a identity.Actor, end func(context.Context, audit.TxOps) error) error {
 	s.verifiedAt = at
 	s.actors = append(s.actors, a)
-	return nil
+	if end != nil {
+		if err := end(ctx, audit.TxOps{}); err != nil {
+			return err
+		}
+	}
+	return s.endErr
 }
 func (s *recordingStore) SetPasswordHashFor(ctx context.Context, _ uuid.UUID, _ string, a identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) (int64, error) {
 	s.actors = append(s.actors, a)
@@ -89,7 +103,12 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	fixed := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	store := &recordingStore{principal: &identity.Principal{ID: uuid.New(), IsActive: true, IsVerified: true}}
 	ender := &recordingEnder{}
-	acc := IdentityAccounts{Store: store, Sessions: ender, Links: ender, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed }}
+	var rows []PasswordEnd
+	acc := IdentityAccounts{Store: store, Sessions: ender, Links: ender, RequestID: func(context.Context) *string { return &rid }, Now: func() time.Time { return fixed },
+		PasswordRow: func(_ context.Context, _ audit.TxOps, req PasswordEnd, _ *uuid.UUID) error {
+			rows = append(rows, req)
+			return nil
+		}}
 	ctx := context.Background()
 	name := "Ada"
 	if _, err := acc.ProvisionLocal(ctx, ProvisionLocalRequest{Email: "a@example.com", FullName: &name, PasswordHash: "$2b$12$hash"}); err != nil {
@@ -98,8 +117,8 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	if store.provisioned.PasswordHash == nil || *store.provisioned.PasswordHash != "$2b$12$hash" || store.provisioned.FullName == nil || *store.provisioned.FullName != "Ada" {
 		t.Errorf("provisioned %+v", store.provisioned)
 	}
-	if err := acc.SetEmailVerified(ctx, uuid.New()); err != nil || !store.verifiedAt.Equal(fixed) {
-		t.Errorf("verified at %v, err %v", store.verifiedAt, err)
+	if err := acc.SetEmailVerifiedConsuming(ctx, uuid.New(), [32]byte{2}); err != nil || !store.verifiedAt.Equal(fixed) || ender.consumedVerification != 1 {
+		t.Errorf("verified at %v, consumed %d, err %v", store.verifiedAt, ender.consumedVerification, err)
 	}
 	if _, err := acc.SetPasswordEndingSessions(ctx, PasswordEnd{ID: uuid.New(), Hash: "$2b$12$h"}); err != nil || !store.ended || store.cause != identity.PasswordChanged {
 		t.Fatalf("set password: err %v, ending hook passed %v, cause %v", err, store.ended, store.cause)
@@ -111,6 +130,9 @@ func TestIdentityAccountsPassesTheHashNotThePasswordAndOneRequestID(t *testing.T
 	}
 	if ender.recorded != 4 {
 		t.Fatalf("revocations recorded = %d after two committed writes of 2 sessions, want 4", ender.recorded)
+	}
+	if len(rows) != 2 || rows[0].ResetLink != nil || rows[1].ResetLink == nil {
+		t.Fatalf("public rows written in the password transaction = %d (%+v), want one per write: the change's, then the reset's", len(rows), rows)
 	}
 	store.endErr = identity.ErrLinkUnusable
 	if _, err := acc.SetPasswordEndingSessions(ctx, PasswordEnd{ID: uuid.New(), Hash: "$2b$12$h", ResetLink: &link}); !errors.Is(err, ErrResetLinkUnusable) {
@@ -147,5 +169,13 @@ func TestIdentityAccountsCopiesThePrincipalFullNameToTheUser(t *testing.T) {
 	byID, err := acc.ByID(ctx, uuid.New())
 	if err != nil || byID == nil || byID.FullName == nil || *byID.FullName != name {
 		t.Errorf("ByID user = %+v, %v; want the full name", byID, err)
+	}
+}
+
+func TestIdentityAccountsMapsAnUnusableVerificationLink(t *testing.T) {
+	store := &recordingStore{principal: &identity.Principal{ID: uuid.New()}, endErr: identity.ErrLinkUnusable}
+	acc := IdentityAccounts{Store: store, Links: &recordingEnder{}}
+	if err := acc.SetEmailVerifiedConsuming(context.Background(), uuid.New(), [32]byte{3}); !errors.Is(err, ErrVerificationLinkUnusable) {
+		t.Fatalf("an unusable link = %v, want ErrVerificationLinkUnusable", err)
 	}
 }

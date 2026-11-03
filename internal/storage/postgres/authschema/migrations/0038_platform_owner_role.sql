@@ -1,0 +1,51 @@
+-- 0038 platform_role_assignments.role_key admits platform_owner.
+-- NOT ADDITIVE in one place, on purpose (additiveExemptions): it REDEFINES the
+-- role CHECK and only WIDENS it (platform_admin stays; platform_owner is the one
+-- new value, the second platform role of contracts/auth/v1/vocabulary/roles.v1.json).
+--
+-- platform_owner is a marker role with NO action (roles.v1): an owner acts only
+-- through a platform_admin row it also holds. It is granted and revoked only by
+-- auth-migrate (platform-owner-grant, platform-owner-revoke, run on the migration
+-- role, the table owner), never through the API. The new list can refuse no
+-- stored row, so there is no pre-flight. A unit test holds the list equal to the
+-- catalog's platform roles.
+--
+-- The trigger below enforces that at write time: any INSERT, UPDATE or DELETE of
+-- a row whose role_key is platform_owner (old or new) is refused unless
+-- current_user is the table owner. The runtime role is not the owner. A
+-- referential action runs as the table owner, so it is not refused.
+--
+-- The CHECK is added NOT VALID and validated in a statement of its own, so the
+-- table scan of the validation does not run under the ACCESS EXCLUSIVE lock of
+-- the ALTER. Both run in the migration's one transaction.
+ALTER TABLE platform_role_assignments
+    DROP CONSTRAINT platform_role_assignments_role_closed,
+    ADD CONSTRAINT platform_role_assignments_role_closed
+    CHECK (role_key IN ('platform_admin', 'platform_owner')) NOT VALID;
+
+ALTER TABLE platform_role_assignments
+    VALIDATE CONSTRAINT platform_role_assignments_role_closed;
+
+CREATE FUNCTION platform_role_assignments_owner_guard() RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    IF (TG_OP <> 'INSERT' AND OLD.role_key = 'platform_owner')
+       OR (TG_OP <> 'DELETE' AND NEW.role_key = 'platform_owner') THEN
+        IF current_user::name IS DISTINCT FROM
+           (SELECT pg_catalog.pg_get_userbyid(c.relowner) FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID) THEN
+            RAISE EXCEPTION 'platform_owner rows are written only by auth-migrate'
+                USING ERRCODE = 'insufficient_privilege';
+        END IF;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE TRIGGER platform_role_assignments_owner_guard
+    BEFORE INSERT OR UPDATE OR DELETE ON platform_role_assignments
+    FOR EACH ROW EXECUTE FUNCTION platform_role_assignments_owner_guard();

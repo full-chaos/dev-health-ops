@@ -257,9 +257,16 @@ func diffIsAdditive(before, after schemaShape) []string {
 // cause, keyed by version and the exact regression text. An exemption that
 // matches nothing fails the test, so a fixed or removed one cannot linger.
 type additiveExemption struct {
-	version    int
+	version int
+	// name keys an exemption of a migration whose number is not final yet:
+	// it matches by migration name, so a renumber is a file rename only.
+	name       string
 	regression string
 	reason     string
+}
+
+func (e additiveExemption) covers(m Migration) bool {
+	return (e.version != 0 && e.version == m.Version) || (e.name != "" && e.name == m.Name)
 }
 
 var additiveExemptions = []additiveExemption{
@@ -395,6 +402,85 @@ var additiveExemptions = []additiveExemption{
 		reason: "credential_class admits kubernetes_sa_token_exchange; the redefined list is the old list plus " +
 			"that one value, so it only widens",
 	},
+	{
+		version:    32,
+		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'legacy_ingest_api_key'::text, 'legacy_ingest_hmac_signature'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'legacy_ingest_api_key'::text, 'legacy_ingest_hmac_signature'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))"`,
+		reason: "credential_class admits workload_bootstrap_credential; the redefined list is the old list plus " +
+			"that one value, so it only widens",
+	},
+	{
+		version:    33,
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text])))"`,
+		reason:     "aggregate_revisions admits the invite aggregate; the redefined list is the 0013 list plus that one value, so it only widens (CHAOS-10981)",
+	},
+	{
+		version:    44,
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text])))"`,
+		reason:     "aggregate_revisions admits the external_push_credential aggregate; the redefined list is the 0033 list plus that one value, so it only widens (CHAOS-10895)",
+	},
+	{
+		version:    44,
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_id_check redefined "CHECK ((aggregate_id ~ '^[a-z]{3}_[A-Za-z0-9_-]{1,64}$'::text))" -> "CHECK (((aggregate_id ~ '^[a-z]{3}_[A-Za-z0-9_-]{1,64}$'::text) OR ((aggregate_type = 'external_push_credential'::text) AND (aggregate_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'::text))))"`,
+		reason:     "aggregate_revisions admits a bare UUID id for the external_push_credential aggregate; the redefined pattern is the 0013 pattern or that one shape for that one type, so it only widens (CHAOS-10895)",
+	},
+	{
+		name:       "aggregate_revisions_signing_key",
+		regression: `constraint aggregate_revisions.aggregate_revisions_aggregate_type_check redefined "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text])))" -> "CHECK ((aggregate_type = ANY (ARRAY['principal'::text, 'user'::text, 'external_identity'::text, 'organization'::text, 'membership'::text, 'platform_role_assignment'::text, 'service_account'::text, 'workload'::text, 'resource_grant'::text, 'invite'::text, 'external_push_credential'::text, 'signing_key'::text])))"`,
+		reason:     "aggregate_revisions admits the signing_key aggregate; the redefined list is the 0044 list plus that one value, so it only widens (CHAOS-11816)",
+	},
+	{
+		version:    34,
+		regression: `constraint platform_role_assignments.platform_role_assignments_principal_id_fkey redefined "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE CASCADE" -> "FOREIGN KEY (principal_id) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting a principal that holds a platform role is refused instead of deleting the role",
+	},
+	{
+		version:    34,
+		regression: `constraint platform_role_assignments.platform_role_assignments_granted_by_fkey redefined "FOREIGN KEY (granted_by) REFERENCES auth.principals(id) ON DELETE SET NULL" -> "FOREIGN KEY (granted_by) REFERENCES auth.principals(id) ON DELETE RESTRICT"`,
+		reason:     "deleting the granter of a platform role is refused, so a granted row never loses its granter",
+	},
+	{
+		version:    36,
+		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'legacy_ingest_api_key'::text, 'legacy_ingest_hmac_signature'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))"`,
+		reason: "credential_class closes the two retired legacy ingest classes; the redefined list is the old list " +
+			"without those two values (no writer since CHAOS-11813; the migration refuses while a row of either exists) " +
+			"(CHAOS-11820, ruled by acp)",
+	},
+	{
+		version:    37,
+		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_browser_refresh_token'::text, 'acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))"`,
+		reason: "credential_class admits acr_browser_refresh_token; the redefined list is the 0036 list plus " +
+			"that one value, so it only widens (CHAOS-12141)",
+	},
+	{
+		name:       "platform_owner_role",
+		regression: `constraint platform_role_assignments.platform_role_assignments_role_closed redefined "CHECK ((role_key = 'platform_admin'::text))" -> "CHECK ((role_key = ANY (ARRAY['platform_admin'::text, 'platform_owner'::text])))"`,
+		reason: "platform_role_assignments.role_key admits platform_owner; the redefined list is the old list plus " +
+			"that one value, so it only widens (CHAOS-12294)",
+	},
+	{
+		name:       "credential_class_service_account_key",
+		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_browser_refresh_token'::text, 'acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_browser_refresh_token'::text, 'acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'service_account_key'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))"`,
+		reason: "credential_class admits service_account_key; the redefined list is the 0037 list plus " +
+			"that one value, so it only widens (CHAOS-12273)",
+	},
+	{
+		name:       "principal_kind_external_source",
+		regression: `constraint principals.principals_kind_check redefined "CHECK ((kind = ANY (ARRAY['user'::text, 'service_account'::text, 'workload'::text])))" -> "CHECK ((kind = ANY (ARRAY['user'::text, 'service_account'::text, 'workload'::text, 'external_source'::text])))"`,
+		reason: "principals.kind admits external_source; the redefined list is the 0001 list plus " +
+			"that one value, so it only widens (CHAOS-10896)",
+	},
+	{
+		name:       "credential_projection",
+		regression: `constraint credential_registry.credential_registry_revoked_reason_code redefined "CHECK (((revoked_reason IS NULL) OR (revoked_reason = ANY (ARRAY['compromised'::text, 'owner_request'::text]))))" -> "CHECK (((revoked_reason IS NULL) OR (revoked_reason = ANY (ARRAY['compromised'::text, 'domain_revoked'::text, 'owner_request'::text]))))"`,
+		reason: "revoked_reason admits domain_revoked; the redefined list is the 0011 list plus " +
+			"that one value, so it only widens (CHAOS-10896)",
+	},
+	{
+		name:       "credential_class_service_account_token",
+		regression: `constraint credential_registry.credential_registry_credential_class_closed redefined "CHECK ((credential_class = ANY (ARRAY['acr_browser_refresh_token'::text, 'acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'service_account_key'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))" -> "CHECK ((credential_class = ANY (ARRAY['acr_browser_refresh_token'::text, 'acr_client_credential'::text, 'acr_device_flow_code'::text, 'acr_web_assertion'::text, 'acr_workload_identity_exchange'::text, 'auth_js_browser_session'::text, 'effective_principal_envelope'::text, 'email_verification_token'::text, 'external_push_ingest_token'::text, 'github_app_installation_token'::text, 'github_webhook_signature'::text, 'gitlab_webhook_signature'::text, 'impersonation_session'::text, 'infrastructure_deployment_credentials'::text, 'internal_svc_acr_token'::text, 'internal_svc_authsess_token'::text, 'internal_svc_worker_token'::text, 'jira_webhook_signature'::text, 'kubernetes_sa_token_exchange'::text, 'license_key'::text, 'link_credential'::text, 'llm_api_keys'::text, 'ops_access_token_hs256'::text, 'ops_refresh_token'::text, 'org_context_header'::text, 'org_invite_token'::text, 'pagerduty_oauth_credential'::text, 'pagerduty_webhook_signature'::text, 'password_reset_token'::text, 'refresh_credential'::text, 'service_account_key'::text, 'service_account_token'::text, 'social_oauth_exchange'::text, 'sso_oidc_exchange'::text, 'sso_saml_exchange'::text, 'stripe_webhook_signature'::text, 'user_access_token'::text, 'worker_operational_bridge_token'::text, 'workload_bootstrap_credential'::text, 'workload_token'::text])))"`,
+		reason: "credential_class admits service_account_token; the redefined list is the 0040 list plus " +
+			"that one value, so it only widens (CHAOS-12362)",
+	},
 }
 
 // TestEveryMigrationStepIsAdditive applies the lineage ONE MIGRATION AT A TIME
@@ -432,7 +518,7 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 		before.constraints = acceptValidation(migration.Version, before.constraints)
 		regressions := diffIsAdditive(before, after)
 		for _, exemption := range additiveExemptions {
-			if exemption.version != migration.Version {
+			if !exemption.covers(migration) {
 				continue
 			}
 			var kept []string
@@ -455,8 +541,8 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 	}
 	for _, exemption := range additiveExemptions {
 		if !exemptionUsed[exemption.regression] {
-			t.Errorf("stale additive exemption, remove it: migration %04d %q (%s)",
-				exemption.version, exemption.regression, exemption.reason)
+			t.Errorf("stale additive exemption, remove it: migration %04d %q %q (%s)",
+				exemption.version, exemption.name, exemption.regression, exemption.reason)
 		}
 	}
 	if steps != len(migrations) {

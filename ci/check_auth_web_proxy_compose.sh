@@ -19,6 +19,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
+# shellcheck source=ci/lib/registry_retry.sh
+source "${SCRIPT_DIR}/lib/registry_retry.sh"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_WEB_PROXY_PROOF_PROJECT:-authwebproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -122,7 +124,7 @@ printf 'SMTP sink pid %s on port %s\n' "${SINK_PID}" "${AUTH_PROOF_SMTP_PORT}"
 BUILD_FLAG=--build
 [ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || BUILD_FLAG=--no-build
 printf 'step 1: up %s --wait go-api auth-service\n' "${BUILD_FLAG}"
-compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 900 go-api auth-service
+registry_retry_run auth-web-proxy-up -- compose --profile auth up "${BUILD_FLAG}" --detach --wait --wait-timeout 900 go-api auth-service
 assert_project_prefixed
 compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
   < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'

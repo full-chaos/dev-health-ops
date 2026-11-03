@@ -54,7 +54,7 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 		t.Fatal(err)
 	}
 	baseDir := t.TempDir()
-	tarball, err := exec.Command("git", "-C", "../../..", "archive", goldenBaseSha, "deploy/helm/dev-health").Output()
+	tarball, err := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", "../../..", "archive", goldenBaseSha, "deploy/helm/dev-health").Output()
 	if err != nil {
 		t.Fatalf("git archive %s: %v", goldenBaseSha, err)
 	}
@@ -91,6 +91,19 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d keep annotations on the PgBouncer Secret, want one per Secret", name, n)
 		}
 		tip = strings.ReplaceAll(tip, keepAnn, "type: Opaque\n")
+		// The auth-migrate Job is kept after success (CHAOS-10812): its hook-succeeded delete policy and the
+		// ttlSecondsAfterFinished line are restored to the base's, exactly once where the Job renders.
+		keptJob := "    helm.sh/hook-delete-policy: before-hook-creation\nspec:\n  ttlSecondsAfterFinished: 86400\n  backoffLimit:"
+		if n := strings.Count(tip, keptJob); n != strings.Count(tip, "kind: Job\nmetadata:\n  name: a-dev-health-auth-migrate\n") {
+			t.Errorf("%s render: %d kept-Job policy blocks, want one per auth-migrate Job", name, n)
+		}
+		tip = strings.ReplaceAll(tip, keptJob, "    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\nspec:\n  backoffLimit:")
+		// The Valkey args gained a pinned --appendfsync after the base: that one pair is left out of the tip, exactly once.
+		fsyncArgs := "            - --appendfsync\n            - everysec\n"
+		if n := strings.Count(tipValkey, fsyncArgs); n != 1 {
+			t.Errorf("%s render: %d pinned appendfsync pairs on the Valkey Deployment, want 1", name, n)
+		}
+		tipValkey = strings.ReplaceAll(tipValkey, fsyncArgs, "")
 		if b, c := withoutSpecStrategy(t, baseValkey, false), withoutSpecStrategy(t, tipValkey, true); b != c {
 			t.Errorf("%s render: the Valkey Deployment differs from base %s beyond spec.strategy:\n  base: %q\n  tip:  %q", name, goldenBaseSha[:10], b, c)
 		}
@@ -321,7 +334,7 @@ func TestGoldenBaseCheckFailsOnAbsentShaAndNonAncestorAndSkipsOnlyWithoutGit(t *
 	repo := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
-		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+		out, err := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v %s", args, err, out)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -12,13 +13,18 @@ import (
 )
 
 // The workload-token exchange settings. The exchange is off unless
-// EnvWorkloadExchange is "true"; on, every other setting is required and
-// startup refuses without it. No setting has a default: the chart that turns
-// the exchange on supplies each value.
+// EnvWorkloadExchange or EnvWorkloadBootstrap is "true". EnvWorkloadExchange
+// on requires every Kubernetes setting below and startup refuses without it.
+// No setting has a default: the chart or Compose file that turns a subject on
+// supplies each value.
 const (
 	// EnvWorkloadExchange ("true" or "false", default false) mounts the
-	// workload-token exchange route.
+	// workload-token exchange route with the Kubernetes TokenReview subject.
 	EnvWorkloadExchange = "AUTH_WORKLOAD_EXCHANGE"
+	// EnvWorkloadBootstrap ("true" or "false", default false) mounts the
+	// workload-token exchange route with the Compose bootstrap credential
+	// subject.
+	EnvWorkloadBootstrap = "AUTH_WORKLOAD_BOOTSTRAP"
 	// EnvWorkloadTrustDomain names this cluster in the workload bindings.
 	EnvWorkloadTrustDomain = "AUTH_WORKLOAD_TRUST_DOMAIN"
 	// EnvWorkloadClusterIssuer is the ServiceAccount token issuer of the
@@ -33,10 +39,12 @@ const (
 	EnvWorkloadReviewerTokenFile = "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE"
 )
 
-// WorkloadExchange is the exchange's configuration; Enabled false leaves every
-// other field empty.
+// WorkloadExchange is the exchange's configuration. Enabled is the Kubernetes
+// subject; false leaves its settings empty. Bootstrap is the Compose
+// bootstrap credential subject. The route is mounted when either is on.
 type WorkloadExchange struct {
 	Enabled           bool
+	Bootstrap         bool
 	TrustDomain       string
 	ClusterIssuer     string
 	KubeAPIURL        string
@@ -47,14 +55,21 @@ type WorkloadExchange struct {
 // workloadExchange reads the exchange settings. Errors name the variable,
 // never its value.
 func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (WorkloadExchange, error) {
+	bootstrap, err := strictBool(lookup, EnvWorkloadBootstrap)
+	if err != nil {
+		return WorkloadExchange{}, err
+	}
+	if bootstrap && tokenIssuerURL == "" {
+		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvWorkloadBootstrap, EnvTokenIssuerURL)
+	}
 	enabled, err := strictBool(lookup, EnvWorkloadExchange)
 	if err != nil || !enabled {
-		return WorkloadExchange{}, err
+		return WorkloadExchange{Bootstrap: bootstrap}, err
 	}
 	if tokenIssuerURL == "" {
 		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvWorkloadExchange, EnvTokenIssuerURL)
 	}
-	out := WorkloadExchange{Enabled: true}
+	out := WorkloadExchange{Enabled: true, Bootstrap: bootstrap}
 	for _, field := range []struct {
 		name string
 		max  int
@@ -119,3 +134,69 @@ func HTTPSOrigin(raw string) error {
 }
 
 var errNotHTTPSOrigin = errors.New("not an https origin")
+
+// Mounted reports whether the exchange route is mounted: either subject is on.
+func (w WorkloadExchange) Mounted() bool { return w.Enabled || w.Bootstrap }
+
+// EnvSessionIssueWorkloadSubject is the go-api workload principal (prn_) whose
+// workload token the session issue route accepts. Unset, the route accepts no
+// workload token. Set, it needs EnvTokenIssuerURL.
+const EnvSessionIssueWorkloadSubject = "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"
+
+// sessionIssueWorkloadSubjectPattern is the session.v1 principal id: prn_ and
+// 16 bytes as unpadded base64url.
+var sessionIssueWorkloadSubjectPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{22}$`)
+
+// sessionIssueWorkloadSubject reads the session issue route's workload
+// subject. Errors name the variable, never its value.
+func sessionIssueWorkloadSubject(lookup secrets.LookupEnv, tokenIssuerURL string) (string, error) {
+	return workloadSubject(lookup, EnvSessionIssueWorkloadSubject, tokenIssuerURL)
+}
+
+// EnvAcrEventsWorkloadSubject is the acr-api workload principal (prn_) whose
+// workload token POST /internal/v1/acr/credential-events accepts. Unset leaves
+// the route unmounted. It needs AUTH_TOKEN_ISSUER_URL.
+const EnvAcrEventsWorkloadSubject = "AUTH_ACR_EVENTS_WORKLOAD_SUBJECT"
+
+func workloadSubject(lookup secrets.LookupEnv, env, tokenIssuerURL string) (string, error) {
+	value, ok := lookup(env)
+	if !ok || value == "" {
+		return "", nil
+	}
+	if !sessionIssueWorkloadSubjectPattern.MatchString(value) {
+		return "", fmt.Errorf("%s must be a workload principal id (prn_ and 22 base64url characters)", env)
+	}
+	if tokenIssuerURL == "" {
+		return "", fmt.Errorf("%s needs %s", env, EnvTokenIssuerURL)
+	}
+	return value, nil
+}
+
+// EnvAuthorizeCallerSubjects is the comma-separated list of the workload
+// principals (prn_) whose workload token the authorize routes accept. Unset,
+// the routes accept no caller. Set, it needs EnvTokenIssuerURL.
+const EnvAuthorizeCallerSubjects = "AUTH_AUTHORIZE_CALLER_SUBJECTS"
+
+// authorizeCallerSubjects reads the authorize routes' caller subjects. Errors
+// name the variable and an item's position, never a value.
+func authorizeCallerSubjects(lookup secrets.LookupEnv, tokenIssuerURL string) ([]string, error) {
+	value, ok := lookup(EnvAuthorizeCallerSubjects)
+	if !ok || value == "" {
+		return nil, nil
+	}
+	items := strings.Split(value, ",")
+	seen := make(map[string]bool, len(items))
+	for i, item := range items {
+		if !sessionIssueWorkloadSubjectPattern.MatchString(item) {
+			return nil, fmt.Errorf("%s item %d must be a workload principal id (prn_ and 22 base64url characters)", EnvAuthorizeCallerSubjects, i)
+		}
+		if seen[item] {
+			return nil, fmt.Errorf("%s item %d is repeated", EnvAuthorizeCallerSubjects, i)
+		}
+		seen[item] = true
+	}
+	if tokenIssuerURL == "" {
+		return nil, fmt.Errorf("%s needs %s", EnvAuthorizeCallerSubjects, EnvTokenIssuerURL)
+	}
+	return items, nil
+}

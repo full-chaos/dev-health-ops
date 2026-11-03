@@ -77,6 +77,7 @@ var wlRoutesUnderTest = []wlRoute{
 	{routeHealth, healthPath},
 	{routeEntitlement, entitlementPath + someOrg},
 	{routeLLMConfig, "/api/v1/internal/acr/orgs/" + someOrg + "/llm-config"},
+	{routePrincipalAccess, accessPath(someOrg, accessUser.String(), "")},
 }
 
 type wlHarness struct {
@@ -90,10 +91,10 @@ func newWLHarness(t *testing.T, workload *WorkloadAuth) wlHarness {
 	t.Helper()
 	acrMetricReader()
 	creds, llm, logs := credsFor(), &fakeVerifier{}, &bytes.Buffer{}
-	creds.creds[entToken] = Credential{ID: "cred-ent", ServiceName: "acr", Scopes: []string{EntitlementScope}}
+	creds.creds[entToken] = Credential{ID: "cred-ent", ServiceName: "acr", Scopes: []string{EntitlementScope, PrincipalAccessScope}}
 	mux := http.NewServeMux()
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	for _, route := range Routes(Deps{Store: &fakeStore{}, Auth: creds, LLMConfig: configured(), Credentials: llm, Logger: logger, Workload: workload}) {
+	for _, route := range Routes(Deps{Store: &fakeStore{}, Auth: creds, LLMConfig: configured(), Credentials: llm, Logger: logger, Workload: workload, Access: &fakeAccessStore{}}) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	return wlHarness{handler: mux, creds: creds, llm: llm, logs: logs}
@@ -121,7 +122,7 @@ func wlDelta(before, after map[string]int64) map[string]int64 {
 	return out
 }
 
-func TestWorkloadTokenAcceptedOnAllThreeRoutes(t *testing.T) {
+func TestWorkloadTokenAcceptedOnEveryRoute(t *testing.T) {
 	signer := newWLSigner(t)
 	token := signer.sign(wlHeader(), wlClaims())
 	for _, route := range wlRoutesUnderTest {

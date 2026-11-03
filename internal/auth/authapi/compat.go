@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
@@ -21,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -41,9 +43,9 @@ const (
 type CompatSessions interface {
 	GuardedSessions
 	RevokeByCredential(ctx context.Context, credential contracts.SecretString, actor session.Actor) (bool, error)
-	ExchangeLegacy(ctx context.Context, legacy session.LegacyRefresh) (session.Result, error)
+	ExchangeLegacyGuarded(ctx context.Context, legacy session.LegacyRefresh, guard session.Guard) (session.Result, error)
 	RevokeLegacy(ctx context.Context, legacy session.LegacyRefresh, actor session.Actor) (bool, error)
-	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
+	IssueSessions
 }
 
 // SocialExchange is the social sign-in domain (*social.Service).
@@ -80,6 +82,14 @@ type CompatDeps struct {
 	Projector Projector
 	// AppendAudit writes an append-only audit row (audit.Append).
 	AppendAudit func(ctx context.Context, event audit.AuditEvent) error
+	// AppendAuditWith writes an append-only audit row with apply's writes in the
+	// same transaction (audit.AppendWith): a refused password sign-in's
+	// go-api public.audit_logs row. nil writes the audit row alone.
+	AppendAuditWith func(ctx context.Context, event audit.AuditEvent, apply func(ctx context.Context, tx audit.TxOps) error) error
+	// PublicAuditTx runs fn in a transaction of its own: a refused refresh's
+	// go-api public.audit_logs row when no auth state changes with it. nil
+	// writes no such row.
+	PublicAuditTx func(ctx context.Context, fn func(ctx context.Context, tx publicaudit.Tx) error) error
 	// Login mounts POST /api/v1/auth/login; nil leaves it unmounted.
 	Login *LoginConfig
 	// Social mounts POST /api/v1/auth/social-login; nil leaves it unmounted.
@@ -87,9 +97,15 @@ type CompatDeps struct {
 	// ServiceCredentials mounts POST /internal/v1/sessions, the session issue
 	// route go-api calls; nil leaves it unmounted.
 	ServiceCredentials ServiceCredentials
-	// Limits holds the login limits' windows and the digest key. Required
-	// while Login is set.
+	// IssueWorkload lets that route accept the go-api workload token, and
+	// mounts it alone when ServiceCredentials is nil; nil refuses the token.
+	IssueWorkload *SessionIssueWorkload
+	// Limits holds the limits' windows and the digest key; required while Login is set.
 	Limits *Limits
+	// Validate and SwitchOrg mount POST /api/v1/auth/validate and switch-org on
+	// their embedded endpoint-profile rows; nil leaves the route unmounted.
+	Validate  *ValidateConfig
+	SwitchOrg *SwitchOrgConfig
 }
 
 type compatHandlers struct {
@@ -104,6 +120,12 @@ type compatHandlers struct {
 // social-login when they are configured. Each registration is on a line of
 // its own.
 func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
+	return compatRoutes(deps, authv1.AuthServiceEndpointProfiles)
+}
+
+// compatRoutes is CompatRoutes over a given endpoint-profile document: the
+// validate route mounts only on its row there.
+func compatRoutes(deps CompatDeps, rows []byte) ([]httpapi.Route, error) {
 	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil {
 		return nil, errors.New("authapi: compatibility routes need sessions, users, an issuer, a projector and an audit appender")
 	}
@@ -139,14 +161,21 @@ func CompatRoutes(deps CompatDeps) ([]httpapi.Route, error) {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatLogin, Handler: http.HandlerFunc(h.compatLogin),
 			ErrorWriter: h.signInTransportRefusal(providerLocal)})
 	}
-	if deps.ServiceCredentials != nil {
+	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternIssueSession, Handler: http.HandlerFunc(h.issueSession)})
 	}
 	if deps.Social != nil {
 		routes = append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternCompatSocialLogin, Handler: http.HandlerFunc(h.compatSocialLogin),
 			ErrorWriter: h.signInTransportRefusal("")})
 	}
-	return routes, nil
+	if deps.ServiceCredentials != nil || deps.IssueWorkload != nil {
+		routes = h.withSessionStateRoute(routes)
+		routes = h.withDelegatedRoutes(routes)
+	}
+	if routes, err = h.withValidateRoute(routes, rows); err != nil {
+		return nil, err
+	}
+	return h.withSwitchOrgRoute(routes, rows)
 }
 
 // auth-outcome.v1 operations of the compatibility routes.
@@ -327,6 +356,8 @@ func compatRefreshMessage(reason session.Reason) string {
 // for a new session (session.Store.ExchangeLegacy); the answer then carries
 // the session's opaque credential.
 func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
+	// go-api's refresh row commits with the rotation and its auth.session.refreshed row.
+	r = r.WithContext(session.WithPublicRow(r.Context(), compatRefreshRow))
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatRefresh)
 	if !ok {
@@ -341,10 +372,11 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	var (
 		result session.Result
+		legacy *session.LegacyRefresh
 		err    error
 	)
 	if isJWT(token) {
-		if result, ok, err = h.exchangeLegacy(w, r, token); !ok {
+		if result, legacy, ok, err = h.exchangeLegacy(w, r, token); !ok {
 			return
 		}
 	} else {
@@ -356,6 +388,21 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !guardRefused && !result.Reason.Success() {
+		if result.Reason == session.ReasonPrincipalDeactivated {
+			// go-api's deactivated row (refresh.go:265), in a transaction of its own: for a go-api refresh token the
+			// store revoked its family in its own transaction; for an auth-service credential the store refused
+			// under the session lock and changed nothing, naming the locked session's user and organization.
+			principal, org := result.Session.PrincipalID, result.Session.OrganizationID
+			if legacy != nil {
+				principal, org = legacy.PrincipalID, legacy.OrganizationID
+			}
+			if org != nil {
+				row := refreshRefusal{description: "Token refresh failed: user deactivated", message: textDisabled, withUser: true}
+				if !h.writeRefusalAlone(w, r, principal, *org, row) {
+					return
+				}
+			}
+		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(result.Reason), compatRefreshMessage(result.Reason))
 		return
 	}
@@ -366,8 +413,11 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found || !user.IsActive {
-		if _, err := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); err != nil {
-			h.fail(w, r, opCompatRefresh, err)
+		row := refreshRefusal{description: "Token refresh failed: user deactivated", message: textDisabled, withUser: true}
+		if !found {
+			row = refreshRefusal{description: "Token refresh failed: user not found", message: textUserNotFound}
+		}
+		if !h.revokeRefused(w, r, record, legacy, &row) {
 			return
 		}
 		if !found {
@@ -382,12 +432,29 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return
 	case pinStale:
-		if _, err := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); err != nil {
-			h.fail(w, r, opCompatRefresh, err)
+		if !h.revokeRefused(w, r, record, legacy, nil) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textRefreshReused)
 		return
+	}
+	if record.OrganizationID != nil && !user.Holds(actionAdminOrgs) {
+		_, member, err := h.Users.Role(ctx, record.PrincipalID, *record.OrganizationID)
+		if err != nil {
+			h.fail(w, r, opCompatRefresh, err)
+			return
+		}
+		if !member {
+			// The membership the session was minted for is gone (the member
+			// was removed or left, D6507): end the session, never re-mint
+			// org-scoped access for it.
+			row := refreshRefusal{description: "Token refresh failed: not a member", message: "Not a member of the organization", withUser: true}
+			if !h.revokeRefused(w, r, record, legacy, &row) {
+				return
+			}
+			h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonNotEntitled, textInvalidRefresh)
+			return
+		}
 	}
 	if guardRefused {
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
@@ -403,7 +470,7 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		}
 		role, orgText = roleText(value, member), record.OrganizationID.String()
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{
+	tokens, err := h.Issuer.Tokens(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,
 		SessionID: record.ID, User: user,
 	})
@@ -411,13 +478,17 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.failMint(w, r, opCompatRefresh, err)
 		return
 	}
+	if legacy != nil {
+		legacyRefreshAccepted.Load().Accepted(ctx)
+	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)
 	out := pyjson.NewObject()
-	out.Set("access_token", access)
+	out.Set("access_token", tokens.Access)
 	out.Set("refresh_token", result.Credential.Reveal())
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
+	out.Set("expires_in", pyjson.IntOf(int64(h.Issuer.ExpiresIn())))
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
+	setSessionAccessToken(out, tokens)
 	writeCompatModel(w, out)
 }
 
@@ -428,13 +499,17 @@ func isJWT(token string) bool { return strings.Count(token, ".") == 2 }
 // exchangeLegacy verifies a go-api refresh JWT, projects its principal and
 // organization into the auth schema, and exchanges it once. It returns false
 // when it answered.
-func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, token string) (session.Result, bool, error) {
+func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, token string) (session.Result, *session.LegacyRefresh, bool, error) {
 	ctx := r.Context()
 	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
 	if err != nil {
 		h.rec.logger.DebugContext(ctx, "legacy refresh token refused", "reason", edgetoken.ReasonOf(err))
+		if err := h.invalidRefreshRow(ctx, token); err != nil {
+			h.fail(w, r, opCompatRefresh, err)
+			return session.Result{}, nil, false, nil
+		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
-		return session.Result{}, false, nil
+		return session.Result{}, nil, false, nil
 	}
 	err = h.Projector.Project(ctx, legacy.PrincipalID)
 	if err == nil && legacy.OrganizationID != nil {
@@ -443,13 +518,15 @@ func (h compatHandlers) exchangeLegacy(w http.ResponseWriter, r *http.Request, t
 	switch {
 	case errors.Is(err, identity.ErrUserNotFound), errors.Is(err, identity.ErrOrganizationNotFound):
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, string(session.ReasonRefreshUnknown), textInvalidRefresh)
-		return session.Result{}, false, nil
+		return session.Result{}, nil, false, nil
 	case err != nil:
 		h.fail(w, r, opCompatRefresh, err)
-		return session.Result{}, false, nil
+		return session.Result{}, nil, false, nil
 	}
-	result, err := h.Sessions.ExchangeLegacy(ctx, legacy)
-	return result, true, err
+	// The same guard as a native credential's exchange: a refused refresh stops
+	// before the exchange creates its session (acp answers-11400-impl-1 G1).
+	result, err := h.Sessions.ExchangeLegacyGuarded(ctx, legacy, h.refreshGuard)
+	return result, &legacy, true, err
 }
 
 // refreshUserInfo is go-api's refresh UserInfo: username and full_name stay
@@ -475,6 +552,10 @@ func refreshUserInfo(id uuid.UUID, user UserState, orgID, role string) *pyjson.O
 // refresh rows of its family and the sessions exchanged from it), which is
 // stricter than go-api's logout, so a refresh after sign-out is refused.
 func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
+	// go-api's logout row commits with the revocation and its auth.session.revoked
+	// row, with the user and organization of the revoked session; a credential that
+	// revokes nothing writes neither.
+	r = r.WithContext(session.WithPublicRow(r.Context(), compatLogoutRow))
 	ctx := r.Context()
 	token, ok := h.readRefreshToken(w, r, opCompatLogout)
 	if !ok {

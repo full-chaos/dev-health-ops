@@ -217,8 +217,8 @@ func (e *env) auditRows(t *testing.T, ctx context.Context, eventType, target str
 }
 
 // outboxRows counts every outbox row naming the aggregate, raw or as a wire
-// id, of any event type. Session lifecycle is off the provisioning stream
-// (audit.OffStreamSessionLifecycle), so every session commit must leave 0.
+// id, of any event type. A session's own events name it as ses_ + base64url,
+// which this does not match (see sessionEvents); a bulk end names its principal.
 func (e *env) outboxRows(t *testing.T, ctx context.Context, aggregate string) int {
 	return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events
 		WHERE aggregate_id IN ($1, 'prn_' || $1)`, aggregate)
@@ -280,8 +280,12 @@ func TestRaceParallelExchangeOfOneCredentialRotatesOnce(t *testing.T) {
 	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 1 {
 		t.Fatalf("%d live credentials, want 1", live)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != 0 {
+	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none.
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
 		t.Fatalf("%d audit rows after a clean rotation, want 0", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
+		t.Fatalf("%d refreshed rows after one rotation and its grace replays, want 1", n)
 	}
 	if next := e.exchange(t, ctx, e.store, results[0].Credential); next.Reason != ReasonAccepted {
 		t.Fatalf("the successor's own exchange = %s, want accepted", next.Reason)
@@ -452,8 +456,8 @@ func TestRaceRevokeAllAgainstRotations(t *testing.T) {
 		t.Fatalf("%d live sessions after RevokeAll", n)
 	}
 	if a, o := e.auditRows(t, ctx, "auth.session.revoked_all", principal.String()),
-		e.outboxRows(t, ctx, principal.String()); a != 1 || o != 0 {
-		t.Fatalf("audit rows %d, outbox events %d; want 1 and 0", a, o)
+		e.outboxRows(t, ctx, principal.String()); a != 1 || o != 1 {
+		t.Fatalf("audit rows %d, outbox events %d; want 1 and 1 (the one principal.sessions_revoked scope event)", a, o)
 	}
 	if e.sessionRevoked(t, ctx, other.Session.ID) {
 		t.Fatal("RevokeAll revoked another principal's session")
@@ -548,8 +552,12 @@ func TestGraceWithAChangedKeyIsRetryableAndRevokesNothing(t *testing.T) {
 	if e.sessionRevoked(t, ctx, issued.Session.ID) || e.liveCredentials(t, ctx, issued.Session.ID) != 1 {
 		t.Fatal("a key mismatch revoked the session or its successor")
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != 0 {
+	// The first exchange's accepted rotation wrote its auth.session.refreshed row (CHAOS-11400); the mismatch adds none.
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
 		t.Fatalf("%d audit rows after a key mismatch, want 0", n)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
+		t.Fatalf("%d refreshed rows after one accepted exchange and a key mismatch, want 1", n)
 	}
 	if next := e.exchange(t, ctx, e.store, child.Credential); next.Reason != ReasonAccepted {
 		t.Fatalf("the successor no longer exchanges: %s", next.Reason)

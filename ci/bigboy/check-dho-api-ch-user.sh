@@ -21,7 +21,8 @@
 # canonical render (checked before any live check, so a stale hand-made live user cannot mask a wrong file).
 # ClickHouse is reached with `docker compose exec` on the service `clickhouse` (the one compose file and env files of bigboy-cut.sh, from
 # BIGBOY_ROOT), never by container name. DHO_API_CH_POSTURE_GO overrides the manifest
-# (default: this checkout's authorization.go).
+# (default: this checkout's authorization.go). The render follows go-api's ACR_ACCESS_PROJECT_SCOPE, read from
+# $BIGBOY_ROOT/.go-api-dev/go-api.env (CHAOS-12268): on, the file must also grant SELECT on default.projects.
 set -u
 FILE=${1:-${DHO_API_CH_USERS_XML:-}}
 CREDS=${2:-${DHO_API_CH_CREDS:-}}
@@ -73,13 +74,28 @@ CIGATE_SRC=${BIGBOY_CIGATE_SRC:-$HERE/../..}
 CGBIN=$canon_dir/cigate
 built=0
 if [ -x "${BIGBOY_CIGATE:-}" ]; then CGBIN=$BIGBOY_CIGATE; built=1; else go build -C "$CIGATE_SRC" -buildvcs=false -trimpath -mod=readonly -o "$CGBIN" ./cmd/cigate 2>"$canon_dir/render.err" && built=1; fi
-if [ "$built" != 1 ] || ! API_CH_PASSWORD="$PLACEHOLDER" "$CGBIN" bigboy render-ch-users "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>>"$canon_dir/render.err"; then
+# CHAOS-12268: the canonical render follows the project-scope flag go-api runs with. With ACR_ACCESS_PROJECT_SCOPE on,
+# go-api's ClickHouse readiness requires the projects grant too (APIPostureFor(db, true)), so the render is then the
+# --project-scope one. cigate reads the flag from go-api's one env file in compose.bigboy.yml (never sourced; an
+# ambiguous or invalid line is refused), and a flag that cannot be read fails the check: it is never taken as off.
+GOAPI_ENV="$R/.go-api-dev/go-api.env"
+project_scope=""
+render_opt=()
+if [ "$built" = 1 ]; then
+  project_scope=$("$CGBIN" bigboy go-api-project-scope "$GOAPI_ENV" 2>>"$canon_dir/render.err") || project_scope=""
+  case "$project_scope" in
+    true) render_opt=(--project-scope) ;;
+    false) ;;
+    *) echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: go-api's project-scope flag (ACR_ACCESS_PROJECT_SCOPE) cannot be read from $GOAPI_ENV: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1 ;;
+  esac
+fi
+if [ "$built" != 1 ] || ! API_CH_PASSWORD="$PLACEHOLDER" "$CGBIN" bigboy render-ch-users ${render_opt[@]+"${render_opt[@]}"} "$POSTURE" "$canon_dir/placeholder.xml" >/dev/null 2>>"$canon_dir/render.err"; then
   echo "CH_API_USER_FILE_FAIL: the canonical render could not be computed: $(head -c 300 "$canon_dir/render.err")" >&2; exit 1
 fi
 api_password | sha256sum | cut -d' ' -f1 > "$canon_dir/real.hash"
 awk -v ph="$placeholder_hash" 'NR==FNR { h=$1; next } { gsub(ph, h); print }' "$canon_dir/real.hash" "$canon_dir/placeholder.xml" > "$canon_dir/canonical.xml"
-cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and the API password (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with cigate bigboy render-ch-users (go run ./cmd/cigate bigboy render-ch-users <authorization.go> <out-file>, API_CH_PASSWORD in the environment). ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
-echo "ch_api_user_file=ok path=$FILE mode=$mode canonical=yes"
+cmp -s "$FILE" "$canon_dir/canonical.xml" || { echo "CH_API_USER_FILE_MISMATCH: $FILE is not the canonical render of the posture manifest and the API password (a comment, an edit, a malformed grant or a hash for another password all differ); regenerate it with cigate bigboy render-ch-users (go run ./cmd/cigate bigboy render-ch-users ${render_opt[@]+"${render_opt[@]} "}<authorization.go> <out-file>, API_CH_PASSWORD in the environment; go-api's project_scope=$project_scope). ClickHouse would load whatever is mounted, and exits on a file it cannot parse" >&2; exit 4; }
+echo "ch_api_user_file=ok path=$FILE mode=$mode canonical=yes project_scope=$project_scope"
 count=$(cd "$R" && "${DC[@]}" exec -T "$CH" clickhouse-client -q "SELECT count() FROM system.users WHERE name='dho_api_ch'" 2>/dev/null) || count=""
 [ "$count" = "1" ] || { echo "CH_API_USER_LIVE_FAIL: dho_api_ch is not in system.users of service $CH (count=${count:-unreadable}); go-api would fail every ClickHouse call with code 516" >&2; exit 2; }
 echo "ch_api_user_live=ok service=$CH"

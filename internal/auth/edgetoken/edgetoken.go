@@ -13,6 +13,8 @@ import (
 	"fmt"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 )
 
 const (
@@ -71,6 +73,9 @@ func New(secret, issuer, audience string) (*Verifier, error) {
 	}
 	if audience == "" {
 		return nil, errors.New("edgetoken: audience must not be empty")
+	}
+	if err := acraudience.Refuse("edgetoken", audience); err != nil {
+		return nil, err
 	}
 	return &Verifier{secret: []byte(secret), issuer: issuer, audience: audience}, nil
 }

@@ -1,6 +1,7 @@
 package local
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +9,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 )
 
 const registerAcceptedBody = `{"message":"Check your email to continue"}`
@@ -72,4 +77,24 @@ func TestRegisterHTTPAnswerBytesAreEqualAndTheWorkMatches(t *testing.T) {
 	if newRig.mail.sent[0].Purpose != PurposeEmailVerification || oldRig.mail.sent[0].Purpose != PurposeAccountExists {
 		t.Errorf("purposes %q and %q", newRig.mail.sent[0].Purpose, oldRig.mail.sent[0].Purpose)
 	}
+}
+
+// A slug collision that survives the free-slug read rolls the sign-up back. The
+// answer is the accepted one, for any address: no mail, nothing to tell apart.
+func TestRegisterSlugCollisionAnswersTheUniformAnswer(t *testing.T) {
+	rig := newFlowRig(t, true)
+	rig.f.accounts = collidingAccounts{Accounts: rig.f.accounts}
+	status, body, _ := registerOver(t, registerHandler(rig.f, nil), "fresh@example.com")
+	if status != http.StatusAccepted || body != registerAcceptedBody {
+		t.Fatalf("answer %d %q, want the accepted bytes", status, body)
+	}
+	if len(rig.mail.sent) != 0 {
+		t.Fatalf("mails %d, want none: no account exists", len(rig.mail.sent))
+	}
+}
+
+type collidingAccounts struct{ Accounts }
+
+func (collidingAccounts) ProvisionLocal(context.Context, ProvisionLocalRequest) (uuid.UUID, error) {
+	return uuid.Nil, identity.ErrOrganizationSlugCollision
 }

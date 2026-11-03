@@ -81,6 +81,8 @@
 #   CHANGES_CODE       needs.changes.outputs.code (selector gates only)
 #   HEAVY_ON_PR        "true" or "false": the PR carries ci:full (queue-heavy only)
 #   GATED_JOB_1..N     "<job name>|<policy>|<needs.<job>.result>", consecutive
+#   GATE_TIMEOUT_NOTE_n  optional "<job name>|<names of the shards that ran to the job time limit>" (CHAOS-11331); a
+#                      failure or cancelled result of that job then reads JOB TIMEOUT (a slow runner or a hung test, no assertion failed); the verdict is unchanged
 #
 # internal/cigates/workflows/aggregate_gate_results_test.go pins both halves: it drives this
 # script through the result matrix for every gate, and it parses all three
@@ -273,7 +275,18 @@ while true; do
       fi
       ;;
     *)
-      add_failure "${job_name} reported '${result:-<empty>}'"
+      timeout_note=""
+      for note_var in ${!GATE_TIMEOUT_NOTE_@}; do
+        note_spec="${!note_var}"
+        if [[ "${note_spec}" == *"|"* && "${note_spec%%|*}" == "${job_name}" && -n "${note_spec#*|}" ]]; then
+          timeout_note="${note_spec#*|}"
+        fi
+      done
+      if [[ -n "${timeout_note}" && ( "${result}" == "failure" || "${result}" == "cancelled" ) ]]; then
+        add_failure "${job_name} reported '${result}': JOB TIMEOUT (time limit reached: slow runner or hung test), not a test assertion failure: ${timeout_note}"
+      else
+        add_failure "${job_name} reported '${result:-<empty>}'"
+      fi
       ;;
   esac
 

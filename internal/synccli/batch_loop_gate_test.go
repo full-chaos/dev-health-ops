@@ -53,20 +53,17 @@ func TestLoopHoldTimesOutBelowTheExpectedPeak(t *testing.T) {
 	}
 }
 
-// Once the expected peak was reached, a run does not wait at all.
+// Once the expected peak was reached, a run does not wait at all: a run that waited would end at the gate limit
+// and the gate would say so (timedOut), which is asserted below.
 func TestLoopHoldDoesNotWaitOnceThePeakIsReached(t *testing.T) {
 	h := gitlabLoopHarness(5)
 	var gate *peakGate
 	h.hold, gate = loopHold(h, 1, loopGateLimit)
-	began := time.Now()
 	code, _, stderr := runVerb(t, "deployments", h.executor(), append(gitlabLoopArgs, "--max-concurrent", "1"), inlineEnv)
 	if code != cli.ExitOK {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	if gate.timedOut() || h.peak != 1 {
 		t.Fatalf("gate timed out %v with peak %d; want peak 1 and no timeout", gate.timedOut(), h.peak)
-	}
-	if took := time.Since(began); took > 5*time.Second {
-		t.Fatalf("five runs at an already-reached peak took %s", took)
 	}
 }

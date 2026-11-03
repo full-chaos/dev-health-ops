@@ -39,7 +39,7 @@ func TestLoadBuildHoldsBaselineAndChainInOrder(t *testing.T) {
 	build := buildVersions(t)
 	versions := build.Versions()
 	chain, err := chmigrate.LoadChain()
-	if err != nil || len(chain) == 0 {
+	if err != nil {
 		t.Fatalf("chain: %v", err)
 	}
 	baseline, err := chmigrate.LoadBaseline()
@@ -49,8 +49,15 @@ func TestLoadBuildHoldsBaselineAndChainInOrder(t *testing.T) {
 	if len(versions) != len(baseline.Versions)+len(chain) {
 		t.Fatalf("got %d versions, want %d", len(versions), len(baseline.Versions)+len(chain))
 	}
-	if build.Head() != chain[len(chain)-1].Version {
-		t.Fatalf("head = %q, want last chain file %q", build.Head(), chain[len(chain)-1].Version)
+	for index, version := range baseline.Versions {
+		if versions[index] != version {
+			t.Fatalf("version %d = %q, want the baseline's %q", index, versions[index], version)
+		}
+	}
+	for index, file := range chain {
+		if versions[len(baseline.Versions)+index] != file.Version {
+			t.Fatalf("version %d = %q, want chain file %q", len(baseline.Versions)+index, versions[len(baseline.Versions)+index], file.Version)
+		}
 	}
 	seen := map[string]bool{}
 	for _, v := range versions {
@@ -156,5 +163,21 @@ func TestReadClass(t *testing.T) {
 		if got := chgate.ReadClass(tc.err); got != tc.want {
 			t.Errorf("%s: got %q want %q", name, got, tc.want)
 		}
+	}
+}
+
+// The build's head is the migrator's head (chmigrate.HeadVersion): the last migration, never the "__init__.py" row
+// the Python runner recorded, also when the chain after the baseline is empty.
+func TestBuildHeadIsTheMigratorsHead(t *testing.T) {
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := chmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buildVersions(t).Head(), chmigrate.HeadVersion(baseline, chain); got != want {
+		t.Fatalf("build head %q, the migrator's head %q", got, want)
 	}
 }

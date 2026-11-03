@@ -61,7 +61,7 @@ type CredentialFlows interface {
 // CredentialDeps are the credentials routes' collaborators.
 type CredentialDeps struct {
 	Flows    CredentialFlows
-	Sessions Sessions
+	Sessions GuardedSessions
 	Users    Users
 	Issuer   *Issuer
 	Logger   *slog.Logger
@@ -316,7 +316,7 @@ func (h credentialHandlers) authenticatedChange() http.Handler {
 		if !ok {
 			return
 		}
-		bearer, record, ok := h.authenticate(w, r, opChangePassword)
+		bearer, record, ok := h.authenticateWith(w, r, opChangePassword, h.goAPIBearerRefusal)
 		if !ok {
 			return
 		}
@@ -324,6 +324,42 @@ func (h credentialHandlers) authenticatedChange() http.Handler {
 		ctx = context.WithValue(ctx, changeBodyKey{}, body)
 		h.change.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// goAPIBearerRefusal answers a refused change-password bearer as go-api's guard does (policy.Guard currentUser):
+// no Authorization header is "Not authenticated", a header that is not a bearer is "Invalid authorization header",
+// any other refusal "Invalid or expired token", each a 401 with WWW-Authenticate: Bearer; a delegated bearer is go-api's
+// 403 for an impersonated caller; an unavailable dependency is go-api's 503 and anything else its 500. go-api forwards this route unread while AUTH_PROXY_CREDENTIALS is on,
+// so these are the bytes its clients got from go-api's guard before.
+func (h credentialHandlers) goAPIBearerRefusal(w http.ResponseWriter, r *http.Request, operation string, answer refusal, err error) {
+	result := "denied"
+	if answer.status != http.StatusUnauthorized && answer.status != http.StatusForbidden {
+		result = "error"
+	}
+	h.compat.rec.record(r.Context(), operation, result, answer.reason, err)
+	writeGoAPIBearerRefusal(w, r, answer, textChangeNotAllowed)
+}
+
+// writeGoAPIBearerRefusal writes go-api's guard answer to a refused bearer:
+// 401 with the guard's text, forbidden as the 403 text, 503 or 500.
+func writeGoAPIBearerRefusal(w http.ResponseWriter, r *http.Request, answer refusal, forbidden string) {
+	switch answer.status {
+	case http.StatusForbidden:
+		policy.WriteDetail(w, http.StatusForbidden, policy.ErrorDetail(forbidden), nil)
+	case http.StatusUnauthorized:
+		text := "Invalid or expired token"
+		header := r.Header.Get("Authorization")
+		if header == "" {
+			text = "Not authenticated"
+		} else if _, ok := policy.BearerToken(header); !ok {
+			text = "Invalid authorization header"
+		}
+		policy.WriteAuthFailure(w, text, nil)
+	case http.StatusServiceUnavailable:
+		policy.WriteAuthFailure(w, "", policy.ErrUnavailable)
+	default:
+		policy.WriteInternal(w)
+	}
 }
 
 // validateChange is the request model: a current password of 1 to 128
@@ -384,7 +420,8 @@ func (h credentialHandlers) changePassword(w http.ResponseWriter, r *http.Reques
 }
 
 // changed answers go-api's LoginResponse for the caller's new session, in the
-// organization it signed in with while that membership stands.
+// organization the issued row carries: the password write bound it only to a
+// live membership.
 func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, caller changeCaller, outcome local.FlowOutcome) {
 	ctx := r.Context()
 	principal := caller.bearer.PrincipalID
@@ -401,24 +438,24 @@ func (h credentialHandlers) changed(w http.ResponseWriter, r *http.Request, call
 		org        *uuid.UUID
 	)
 	role := roleText(nil, false)
-	if caller.record.OrganizationID != nil {
-		value, member, err := h.Users.Role(ctx, principal, *caller.record.OrganizationID)
+	if issuedOrg := outcome.Issued.Session.OrganizationID; issuedOrg != nil {
+		value, member, err := h.Users.Role(ctx, principal, *issuedOrg)
 		if err != nil {
 			h.compat.fail(w, r, opChangePassword, err)
 			return
 		}
 		if member {
-			membership = &Membership{OrgID: *caller.record.OrganizationID, Role: value}
+			membership = &Membership{OrgID: *issuedOrg, Role: value}
 			org, role = &membership.OrgID, roleText(value, true)
 		}
 	}
 	issued := outcome.Issued
-	access, err := h.Issuer.Access(Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
+	tokens, err := h.Issuer.Tokens(ctx, Grant{PrincipalID: principal, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: user})
 	if err != nil {
 		h.compat.failMint(w, r, opChangePassword, err)
 		return
 	}
 	h.compat.rec.record(ctx, opChangePassword, "success", reasonAccepted, nil)
-	writeCompatModel(w, loginResponse(access, issued.Credential, membership == nil && !user.IsSuperuser,
+	writeCompatModel(w, loginResponse(tokens, h.Issuer.ExpiresIn(), issued.Credential, membership == nil && !user.IsSuperuser,
 		userInfo(principal, user, membership), nil))
 }

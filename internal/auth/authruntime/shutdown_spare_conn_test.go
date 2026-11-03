@@ -12,13 +12,12 @@ import (
 // http.Server.Shutdown waits up to 5 s for such a connection, longer than the operator's share of the shutdown
 // timeout, and Execute would exit 1.
 func TestAConnectionThatSentNoRequestDoesNotHoldTheOperatorStop(t *testing.T) {
-	ports := reservePorts(t, 2)
-	logs, stop := runService(t, brokenEnvironment(t, ports[0], ports[1]))
+	logs, stop, _, operatorAddress := startOnAnyPort(t, brokenEnvironment(t, anyAPIAddress, anyOperatorAddress))
 	client := serviceClient(10 * time.Second)
-	operator := "http://" + ports[1] + "/healthz"
+	operator := "http://" + operatorAddress + "/healthz"
 	awaitResponse(t, client, operator).Body.Close()
 
-	held, err := net.Dial("tcp", ports[1])
+	held, err := net.Dial("tcp", operatorAddress)
 	if err != nil {
 		t.Fatalf("dial the operator listener: %v", err)
 	}

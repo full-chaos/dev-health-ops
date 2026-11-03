@@ -35,9 +35,9 @@ func PublicReadColumns() []ColumnGrant {
 			"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier",
 		}},
-		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at"}},
+		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"}},
 		{Table: "sso_providers", Columns: []string{
-			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
+			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
 		}},
 		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
@@ -47,6 +47,10 @@ func PublicReadColumns() []ColumnGrant {
 		// activity; the metrics finalize job projects it here (computed_at is its
 		// freshness), so auth-service never reads ClickHouse.
 		{Table: "org_activity", Columns: []string{"org_id", "has_data", "computed_at"}},
+		// The OAuth actor check (acrmint.PGImpersonation): the actor side of a live
+		// impersonation. Its reader arrives in O3b (CHAOS-12399), the grant first.
+		// id: a delegated session's end finds its row by id (ImpersonationEndColumns).
+		{Table: "impersonation_sessions", Columns: []string{"id", "admin_user_id", "ended_at", "expires_at"}},
 		// The session issue route checks go-api's auth-session-issuer
 		// service credential by its hash (last_used_at is not read or
 		// stamped).
@@ -58,6 +62,32 @@ func PublicReadColumns() []ColumnGrant {
 // schema: column-level, on the sessions table only.
 func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
+}
+
+// ProjectionReaderReads is everything a projection reader role reads in the auth schema.
+func ProjectionReaderReads() []ColumnGrant {
+	return []ColumnGrant{{Table: "credential_projection", Columns: []string{
+		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at"}}}
+}
+
+// PlatformRoleReaderColumns is what a session reader role also reads while the
+// platform roles switch is on: the columns platformrole.HoldsSQL reads.
+func PlatformRoleReaderColumns() []ColumnGrant {
+	return []ColumnGrant{
+		{Table: "platform_role_assignments", Columns: []string{"principal_id", "role_key", "expires_at"}},
+		{Table: "principals", Columns: []string{"id", "kind", "disabled_at"}},
+	}
+}
+
+// SessionReaderReads is everything a session reader role reads in the auth
+// schema: SessionReaderColumns, then PlatformRoleReaderColumns while
+// platformRolesOwned.
+func SessionReaderReads(platformRolesOwned bool) []ColumnGrant {
+	reads := []ColumnGrant{SessionReaderColumns()}
+	if platformRolesOwned {
+		reads = append(reads, PlatformRoleReaderColumns()...)
+	}
+	return reads
 }
 
 // TableWriteGrant is a column-level SELECT and UPDATE grant on one ops-schema
@@ -108,14 +138,16 @@ type InsertGrant struct {
 }
 
 // RegisterOrganizationGrants is the switch-gated INSERT access the auth
-// runtime role needs so a sign-up writes go-api's organization and owner
-// membership in the transaction of the user it creates (AUTH_USERS_OWNED).
+// runtime role needs so an organization birth writes go-api's organization and
+// owner membership in the transaction of its auth rows, and a join writes
+// go-api's membership row in the transaction of its auth membership
+// (AUTH_USERS_OWNED).
 // INSERT on exactly these columns of these two tables: no UPDATE, no DELETE,
 // no TRUNCATE, and no SELECT beyond PublicReadColumns. go-api keeps every
 // update of an organization or a membership.
 func RegisterOrganizationGrants() []InsertGrant {
 	return []InsertGrant{
-		{Table: "organizations", Columns: []string{"id", "slug", "name", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"}},
+		{Table: "organizations", Columns: []string{"id", "slug", "name", "description", "settings", "tier", "managed_by", "is_active", "created_at", "updated_at"}},
 		{Table: "memberships", Columns: []string{"id", "user_id", "org_id", "role", "joined_at", "created_at", "updated_at"}},
 	}
 }
@@ -729,6 +761,24 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 				continue
 			}
 		}
+		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isMembershipWriteColumn(table, privilege, column) {
+			continue
+		}
+		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
+			continue
+		}
+		if options.OrgsOwned && schema == publicSchema && (kind == "r" || kind == "p") && isOrganizationWriteColumn(table, privilege, column) {
+			continue
+		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
+			continue
+		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isSSOProviderWriteColumn(table, privilege, column) {
+			continue
+		}
+		if schema == publicSchema && (kind == "r" || kind == "p") && isImpersonationWriteColumn(options.UsersOwned, table, privilege, column) {
+			continue
+		}
 		violations = append(violations, Violation{
 			Kind: "column", Schema: schema, Object: table + "." + column, Privilege: privilege,
 			Detail: "not declared in PublicReadColumns",
@@ -737,5 +787,30 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("%w: reading effective column privileges", ErrMigrationFailed)
 	}
-	return violations, nil
+	missing, err := membershipWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	inviteMissing, err := inviteWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	auditMissing, err := publicAuditWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	providerWriteMissing, err := ssoProviderWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	impersonationMissing, err := impersonationWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	organizationMissing, err := organizationWriteMissing(ctx, conn, options)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), organizationMissing...), nil
 }

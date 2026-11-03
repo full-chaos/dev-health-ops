@@ -10,7 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchcontract"
 	"github.com/full-chaos/dev-health-ops/internal/syncreconciler"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -73,10 +73,7 @@ func newReadyFinalizeRegistry() readyFinalizeRegistry {
 func TestReadyFinalizeRecoveryDrivesTheRunToTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	t.Cleanup(func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer closeCancel()
@@ -90,7 +87,6 @@ func TestReadyFinalizeRecoveryDrivesTheRunToTerminal(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	createFinalizeTables(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `CREATE SCHEMA river`); err != nil {
 		t.Fatal(err)
 	}

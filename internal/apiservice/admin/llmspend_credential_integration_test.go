@@ -50,7 +50,7 @@ func TestSpendServesOnlyOrganizationCredentialRows(t *testing.T) {
 	const legacyRow = `INSERT INTO llm_token_usage (org_id, run_id, provider, model, source, input_tokens, output_tokens, calls, computed_at)
 VALUES ('org-1', 'run-before-column', 'openai', 'jev-1.13.0', 'investment_materialize', 5, 5, 5, now())`
 	exec(legacyRow)
-	body, err := os.ReadFile("../../chmigrate/sql/139_llm_token_usage_credential_source.sql")
+	body, err := os.ReadFile("../../chmigrate/archive/sql/139_llm_token_usage_credential_source.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,10 +40,11 @@ var keepExternalSameName = []string{
 }
 
 type keepRender struct {
-	label string
-	raw   string
-	rc    int
-	docs  []map[string]any
+	label  string
+	raw    string
+	stderr string
+	rc     int
+	docs   []map[string]any
 }
 
 func keepHelm(t *testing.T, label string, args ...string) keepRender {
@@ -52,8 +53,9 @@ func keepHelm(t *testing.T, label string, args ...string) keepRender {
 		t.Skip("helm is not installed")
 	}
 	cmd := exec.Command("helm", append([]string{"template", "a", "."}, args...)...)
-	var stdout strings.Builder
+	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 	rc := 0
 	if err := cmd.Run(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
@@ -62,7 +64,7 @@ func keepHelm(t *testing.T, label string, args ...string) keepRender {
 			t.Fatalf("%s: helm did not run: %v", label, err)
 		}
 	}
-	r := keepRender{label: label, raw: stdout.String(), rc: rc}
+	r := keepRender{label: label, raw: stdout.String(), stderr: stderr.String(), rc: rc}
 	dec := yaml.NewDecoder(strings.NewReader(r.raw))
 	for {
 		var doc map[string]any

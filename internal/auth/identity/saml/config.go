@@ -49,6 +49,7 @@ type Provider struct {
 	Status            string
 	AllowIdPInitiated bool
 	AutoProvision     bool
+	DefaultRole       string
 	Config            Config
 	AllowedDomains    []string
 }

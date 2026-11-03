@@ -70,11 +70,12 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token without a session", slog.String("user_id", id.String()))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion); err != nil {
+	sessionID, err := a.checkSession(ctx, map[string]any{"sid": claims.SessionID}, id, row.State.TokenVersion)
+	if err != nil {
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
-		IsSuperuser: row.State.IsSuperuser, TokenVersion: int(row.State.TokenVersion), accessToken: true}
+		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
 		if err != nil {
@@ -95,18 +96,21 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 // is_active and is_superuser read as false, NULL token_version as 0, NULL
 // email as "".
 func (s PGStore) AccessUser(ctx context.Context, id uuid.UUID) (AccessUserRow, bool, error) {
+	countDirectRead(ctx, kindReadUsers)
 	var active, superuser *bool
 	var version *int64
 	var email *string
 	var row AccessUserRow
-	err := s.Pool.QueryRow(ctx,
-		`SELECT is_active, is_superuser, token_version, email, username, full_name FROM users WHERE id = $1`, id,
-	).Scan(&active, &superuser, &version, &email, &row.Username, &row.FullName)
+	query, err := s.accessUserSQL()
+	if err != nil {
+		return AccessUserRow{}, false, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&active, &superuser, &version, &email, &row.Username, &row.FullName)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AccessUserRow{}, false, nil
 	}
 	if err != nil {
-		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)")
+		return AccessUserRow{}, false, storeError(err, "SELECT on users (id, is_active, is_superuser, token_version, email, username, full_name)"+s.superuserGrant())
 	}
 	row.State = UserState{IsActive: active != nil && *active, IsSuperuser: superuser != nil && *superuser}
 	if version != nil {

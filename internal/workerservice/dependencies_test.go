@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -350,6 +351,11 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if !ok {
 		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
 	}
+	// sync.provider_oauth_revocations (CHAOS-12010) is on queue "sync" too.
+	providerRevocationsSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindProviderOAuthRevocations)
+	if !ok {
+		t.Fatal("sync.provider_oauth_revocations descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -362,7 +368,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		jobruntime.Observer, *slog.Logger, *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec},
+			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec},
 			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
 		}, nil
 	}
@@ -2800,6 +2806,11 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.team_repo_ownership_derivation descriptor missing")
 	}
+	// sync.provider_oauth_revocations (CHAOS-12010) is on queue "sync" too.
+	providerRevocationsSpec, ok := runtimeRegistry.Descriptor(jobcontract.KindProviderOAuthRevocations)
+	if !ok {
+		t.Fatal("sync.provider_oauth_revocations descriptor missing")
+	}
 
 	syncConfig := config.Config{
 		Queues:                 []string{"sync", "sync_provider"},
@@ -2850,7 +2861,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			) (workerFamily, error) {
 				family := workerFamily{}
 				if test.reported {
-					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec}
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec}
 					family.queues = []jobruntime.QueueBudget{
 						{Queue: "sync", MaxWorkers: 4},
 					}
@@ -3656,41 +3667,43 @@ func TestDORARefusalRemedyNamesTheMigrateVerb(t *testing.T) {
 // blocked (the queue-control work pool held by other work) queuedContractVersionsReady still answers at
 // once from the cached pass, and refuses once that pass is older than the bound.
 func TestQueuedContractVersionsReadyDoesNotWaitOnTheCensusOnceProven(t *testing.T) {
-	telemetry := &fakeQueueTelemetry{}
-	dependencies := &workerDependencies{
-		queueTelemetry:          telemetry,
-		queueTelemetryRequired:  true,
-		logger:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		contractVersionsOptions: postgres.PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: 400 * time.Millisecond, RunTimeout: time.Minute},
-	}
-	dependencies.contractVersionsProbe.Warm("queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions)
-	deadline := time.Now().Add(5 * time.Second)
-	for dependencies.queuedContractVersionsReady(context.Background()) != nil {
-		if time.Now().After(deadline) {
-			t.Fatal("the warmed census never proved the queue")
+	synctest.Test(t, func(t *testing.T) {
+		telemetry := &fakeQueueTelemetry{}
+		dependencies := &workerDependencies{
+			queueTelemetry:          telemetry,
+			queueTelemetryRequired:  true,
+			logger:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+			contractVersionsOptions: postgres.PostureCheckOptions{TTL: 10 * time.Millisecond, MaxStale: 400 * time.Millisecond, RunTimeout: time.Minute},
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		dependencies.contractVersionsProbe.Warm("queued_contract_versions", dependencies.contractVersionsRun, dependencies.contractVersionsOptions)
+		deadline := time.Now().Add(5 * time.Second)
+		for dependencies.queuedContractVersionsReady(context.Background()) != nil {
+			if time.Now().After(deadline) {
+				t.Fatal("the warmed census never proved the queue")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 
-	gate := make(chan struct{})
-	telemetry.setCheckGate(gate) // every later census run is now stuck
-	t.Cleanup(func() { close(gate) })
-	time.Sleep(40 * time.Millisecond) // older than TTL: a blocked refresh starts
-	begun := time.Now()
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
-		t.Fatalf("a pass inside the bound with a blocked census = %v, want a pass", err)
-	}
-	if time.Since(begun) > 200*time.Millisecond {
-		t.Fatalf("the probe waited %s on a blocked census", time.Since(begun))
-	}
-	time.Sleep(450 * time.Millisecond) // past the bound with no new answer: readiness refuses
-	begun = time.Now()
-	if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
-		t.Fatal("a pass older than the bound with no answer was accepted: a dead queue database must turn readiness red")
-	}
-	if time.Since(begun) > 200*time.Millisecond {
-		t.Fatalf("the refusal waited %s", time.Since(begun))
-	}
+		gate := make(chan struct{})
+		telemetry.setCheckGate(gate) // every later census run is now stuck
+		defer close(gate)
+		time.Sleep(40 * time.Millisecond) // older than TTL: a blocked refresh starts
+		begun := time.Now()
+		if err := dependencies.queuedContractVersionsReady(context.Background()); err != nil {
+			t.Fatalf("a pass inside the bound with a blocked census = %v, want a pass", err)
+		}
+		if returnedAt := time.Now(); !returnedAt.Equal(begun) {
+			t.Fatalf("the probe waited +%v of virtual time on a blocked census", returnedAt.Sub(begun))
+		}
+		time.Sleep(450 * time.Millisecond) // past the bound with no new answer: readiness refuses
+		begun = time.Now()
+		if err := dependencies.queuedContractVersionsReady(context.Background()); err == nil {
+			t.Fatal("a pass older than the bound with no answer was accepted: a dead queue database must turn readiness red")
+		}
+		if returnedAt := time.Now(); !returnedAt.Equal(begun) {
+			t.Fatalf("the refusal waited +%v of virtual time", returnedAt.Sub(begun))
+		}
+	})
 }
 
 // selfprobeBeginFn adapts a function to selfprobe.TxOpener.

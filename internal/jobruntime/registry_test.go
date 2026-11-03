@@ -190,7 +190,7 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	descriptors := registry.Descriptors()
-	if len(descriptors) != 24 || descriptors[0].Kind != jobcontract.KindInvestmentMaterialize ||
+	if len(descriptors) != 25 || descriptors[0].Kind != jobcontract.KindInvestmentMaterialize ||
 		descriptors[1].Kind != jobcontract.KindDailyMetricsDispatch ||
 		descriptors[2].Kind != jobcontract.KindDailyMetricsFinalize ||
 		descriptors[3].Kind != jobcontract.KindDailyMetricsPartition ||
@@ -205,15 +205,16 @@ func TestRegistryDescriptorsAreCompleteSortedDefensiveCopies(t *testing.T) {
 		descriptors[12].Kind != jobcontract.KindWebhookDelivery ||
 		descriptors[13].Kind != jobcontract.KindReportExecuteOnDemand ||
 		descriptors[14].Kind != jobcontract.KindReportExecuteScheduled ||
-		descriptors[15].Kind != jobcontract.KindSyncProviderUnit ||
-		descriptors[16].Kind != jobcontract.KindTeamAutoimport ||
-		descriptors[17].Kind != jobcontract.KindTeamRepoOwnershipDerivation ||
-		descriptors[18].Kind != jobcontract.KindDimensionFold ||
-		descriptors[19].Kind != jobcontract.KindHeartbeat ||
-		descriptors[20].Kind != jobcontract.KindLLMBudgetStaleReservations ||
-		descriptors[21].Kind != jobcontract.KindRetentionCleanup ||
-		descriptors[22].Kind != jobcontract.KindSyncCoverageRefresh ||
-		descriptors[23].Kind != jobcontract.KindWorkGraphBuild {
+		descriptors[15].Kind != jobcontract.KindProviderOAuthRevocations ||
+		descriptors[16].Kind != jobcontract.KindSyncProviderUnit ||
+		descriptors[17].Kind != jobcontract.KindTeamAutoimport ||
+		descriptors[18].Kind != jobcontract.KindTeamRepoOwnershipDerivation ||
+		descriptors[19].Kind != jobcontract.KindDimensionFold ||
+		descriptors[20].Kind != jobcontract.KindHeartbeat ||
+		descriptors[21].Kind != jobcontract.KindLLMBudgetStaleReservations ||
+		descriptors[22].Kind != jobcontract.KindRetentionCleanup ||
+		descriptors[23].Kind != jobcontract.KindSyncCoverageRefresh ||
+		descriptors[24].Kind != jobcontract.KindWorkGraphBuild {
 		t.Fatalf("Descriptors() = %#v", descriptors)
 	}
 	// Every checked-in kind is executable, and no kind is Celery-routed any

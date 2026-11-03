@@ -30,6 +30,8 @@ spec:
           args:
             - --appendonly
             - "yes"
+            - --appendfsync
+            - {{ .Values.valkey.appendfsync }}
             - --maxmemory
             - {{ .Values.valkey.maxmemory | quote }}
             - --maxmemory-policy

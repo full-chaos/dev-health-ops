@@ -9,13 +9,16 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -183,19 +186,53 @@ func usersOwnedFromEnv(env cli.Env) (bool, error) {
 }
 
 // usersWriteOperator is accountOperator for a verb that may write public.users:
-// with the switch on and a users write ahead, the refusal answers before a DSN
+// with the users switch on and a users write ahead, or the platform roles
+// switch on and an is_superuser write ahead, the refusal answers before a DSN
 // is resolved or a pool is built.
-func usersWriteOperator(ctx context.Context, env cli.Env, writesUsers bool) (admin.Operator, func(), int) {
+func usersWriteOperator(ctx context.Context, env cli.Env, writesUsers, writesSuperuser bool) (admin.Operator, func(), int) {
 	if owned, err := usersOwnedFromEnv(env); err == nil && owned && writesUsers {
 		return admin.Operator{}, func() {}, report(env, nil, admin.ErrUsersOwned)
 	}
+	platformRolesOwned, err := rule.OwnedFromLookup(env.Lookup)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "platform_roles_owned_invalid", err.Error())
+	}
+	if platformRolesOwned && writesSuperuser {
+		return admin.Operator{}, func() {}, report(env, nil, admin.ErrPlatformRolesOwned)
+	}
 	return accountOperator(ctx, env)
+}
+
+// orgProvisioningFromEnv reads AUTH_PROXY_ORG_PROVISIONING as go-api does: a
+// strict bool, off when unset or blank.
+func orgProvisioningFromEnv(env cli.Env) (bool, error) {
+	raw, ok := env.Lookup("AUTH_PROXY_ORG_PROVISIONING")
+	if !ok || strings.TrimSpace(raw) == "" {
+		return false, nil
+	}
+	on, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, errors.New("AUTH_PROXY_ORG_PROVISIONING must be true or false")
+	}
+	return on, nil
 }
 
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
 	owned, err := usersOwnedFromEnv(env)
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "users_owned_invalid", err.Error())
+	}
+	platformRolesOwned, err := rule.OwnedFromLookup(env.Lookup)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "platform_roles_owned_invalid", err.Error())
+	}
+	authSchema, err := policy.AuthSchemaFromEnv(func(name string) string { value, _ := env.Lookup(name); return value })
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "auth_schema_invalid", err.Error())
+	}
+	provisioning, err := orgProvisioningFromEnv(env)
+	if err != nil {
+		return admin.Operator{}, func() {}, writeError(env.Stderr, "org_provisioning_invalid", err.Error())
 	}
 	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
@@ -206,7 +243,7 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 	if err != nil {
 		return admin.Operator{}, func() {}, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
-	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned}, pool.Close, 0
+	return admin.Operator{Pool: pool, Now: time.Now, UsersOwned: owned, PlatformRolesOwned: platformRolesOwned, AuthSchema: authSchema, OrgProvisioning: provisioning}, pool.Close, 0
 }
 
 // report prints an operator-facing refusal the way the Python verbs did
@@ -214,6 +251,10 @@ func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.O
 func report(env cli.Env, boundary func(error) error, err error) int {
 	if errors.Is(err, admin.ErrUsersOwned) {
 		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.Message)
+		return cli.ExitRefused
+	}
+	if errors.Is(err, admin.ErrPlatformRolesOwned) {
+		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.PlatformRolesMessage)
 		return cli.ExitRefused
 	}
 	var refusal *admin.OperatorError
@@ -264,7 +305,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --email and --password (or --password-stdin) are required")
 		return cli.ExitUsage
 	}
-	op, closePool, code := usersWriteOperator(ctx, env, true)
+	op, closePool, code := usersWriteOperator(ctx, env, true, *superuser)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -421,7 +462,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 		Active: active.ptr(), Verified: verified.ptr(), Superuser: superuser.ptr(),
 		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
 	}
-	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers())
+	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers(), update.Superuser != nil)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -452,7 +493,7 @@ func runUsersDelete(ctx context.Context, env cli.Env) int {
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := usersWriteOperator(ctx, env, true)
+	op, closePool, code := usersWriteOperator(ctx, env, true, false)
 	defer closePool()
 	if code != 0 {
 		return code

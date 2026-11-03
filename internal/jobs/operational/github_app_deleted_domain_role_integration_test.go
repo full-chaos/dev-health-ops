@@ -18,8 +18,8 @@ import (
 
 // CHAOS-6747: the installation "deleted" event deactivates the org's
 // github-app credential on the domain pool. The domain role must hold a
-// column-scoped UPDATE (is_active, updated_at) on integration_credentials and
-// nothing wider: credentials_encrypted stays unwritable by the worker.
+// column-scoped UPDATE (is_active, updated_at, and the last_test_* result columns) on
+// integration_credentials and nothing wider: credentials_encrypted stays unwritable by the worker.
 
 func TestDeletedInstallationDeactivatesCredentialAsTheDomainRole(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -120,8 +120,16 @@ ORDER BY attribute.attnum`)
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if columns < 5 || !updatable["is_active"] || !updatable["updated_at"] || len(updatable) != 2 {
-		t.Fatalf("updatable columns = %v of %d, want exactly is_active and updated_at", updatable, columns)
+	// is_active and updated_at are the deactivation columns; the last_test_* result columns are
+	// the connected stamp a successful sync run writes (CHAOS-11881). Nothing else.
+	wantUpdatable := []string{"is_active", "updated_at", "last_test_at", "last_test_success", "last_test_error"}
+	if columns < 5 || len(updatable) != len(wantUpdatable) {
+		t.Fatalf("updatable columns = %v of %d, want exactly %v", updatable, columns, wantUpdatable)
+	}
+	for _, name := range wantUpdatable {
+		if !updatable[name] {
+			t.Fatalf("updatable columns = %v of %d, want exactly %v", updatable, columns, wantUpdatable)
+		}
 	}
 	if _, found := updatable["credentials_encrypted"]; found {
 		t.Fatal("credentials_encrypted is updatable by the domain role")

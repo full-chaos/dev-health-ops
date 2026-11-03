@@ -1,10 +1,14 @@
+contracts/auth/v1/vocabulary
 internal/api/policy
 internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
+internal/auth/acraudience
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
+internal/auth/platformrole/rule
+internal/auth/policycatalog
 internal/auth/sessionid
 internal/chmigrate
 internal/cli
@@ -49,6 +53,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog
@@ -63,6 +68,7 @@ internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
+~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down

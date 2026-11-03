@@ -47,14 +47,15 @@ func TestProvidersyncShardBudgetIsThreeQuartersOfTheGoTestTimeout(t *testing.T) 
 	t.Parallel()
 	script := readText(t, filepath.Join(rootOf(t), "ci", "check_go.sh"))
 	var timeout int
-	for _, line := range strings.Split(script, "\n") {
-		if strings.Contains(line, "go test") && strings.Contains(line, "-run \"${test_regex}\"") && strings.Contains(line, "./internal/providersync") {
-			m := regexp.MustCompile(`-timeout=(\d+)m\b`).FindStringSubmatch(line)
-			if m == nil {
-				t.Fatalf("providersync shard go test has no -timeout=<N>m: %s", line)
-			}
-			timeout, _ = strconv.Atoi(m[1])
-		}
+	start := strings.Index(script, "run_providersync_bounded() {")
+	if start < 0 {
+		t.Fatal("run_providersync_bounded not found in ci/check_go.sh")
+	}
+	fn := script[start : start+strings.Index(script[start:], "\n}\n")]
+	if m := regexp.MustCompile(`job_go_test_timeout (\d+)`).FindStringSubmatch(fn); m == nil || !strings.Contains(fn, `-timeout="${tmo}"`) {
+		t.Fatalf("the providersync shard go test must take its -timeout from job_go_test_timeout N")
+	} else {
+		timeout, _ = strconv.Atoi(m[1])
 	}
 	m := regexp.MustCompile(`DEV_HEALTH_GO_PROVIDER_SHARD_BUDGET:-(\d+)\}`).FindStringSubmatch(script)
 	if timeout == 0 || m == nil {

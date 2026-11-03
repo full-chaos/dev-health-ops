@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // User is api/services/auth.py AuthenticatedUser after
@@ -26,27 +27,39 @@ type User struct {
 	// OrgID is the "org_id" claim, "" when absent or null.
 	OrgID string
 	// Role is the "role" claim ("member" when absent, "" when null).
-	Role           string
-	IsSuperuser    bool
+	Role        string
+	IsSuperuser bool
+	// Platform is the platform action set the caller holds when it is not
+	// the one IsSuperuser means; nil is a caller that carries only the flag.
+	Platform       *rule.Platform
 	Username       *string
 	FullName       *string
 	ImpersonatedBy *string
 	TokenVersion   int
+	// SessionID is the auth-service session the token's sid claim names,
+	// checked live; nil for a token without sid (a go-api token).
+	SessionID *uuid.UUID
 	// superuserClaim is the verified legacy token's is_superuser claim, by
 	// Python truthiness; accessToken marks a user access token.
 	superuserClaim bool
 	accessToken    bool
 }
 
+// Holds reports whether the caller holds the platform action now.
+func (u *User) Holds(action string) bool {
+	return rule.Holds(u.Platform, u.IsSuperuser, action)
+}
+
 // IsAdmin is AuthenticatedUser.is_admin.
 func (u *User) IsAdmin() bool {
-	return u.Role == "owner" || u.Role == "admin" || u.IsSuperuser
+	return u.Role == "owner" || u.Role == "admin" || u.Holds(rule.ActionAdminOrgs)
 }
 
 // UserState is the users row authenticate_access_token reads.
 type UserState struct {
 	IsActive     bool
 	IsSuperuser  bool
+	Platform     *rule.Platform
 	TokenVersion int64
 }
 
@@ -59,9 +72,16 @@ type Store interface {
 	// Membership reads the memberships row linking user and org: the role
 	// the user holds in that org, and whether the row exists at all.
 	Membership(ctx context.Context, userID, orgID uuid.UUID) (role string, member bool, err error)
+	// OrgMembership is Membership's row and whether the org exists, read in
+	// one statement: an existing org without the row is told apart from an
+	// org that does not exist.
+	OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (role string, member, orgFound bool, err error)
 	// ActiveImpersonation returns the admin's unexpired, unended session, or
 	// nil.
 	ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*Impersonation, error)
+	// ReadsPlatformRoles is AUTH_PLATFORM_ROLES_OWNED: UserState's
+	// IsSuperuser is the platform role rule, not users.is_superuser.
+	ReadsPlatformRoles() bool
 }
 
 // ErrUnavailable marks a store failure that get_current_user answers with
@@ -187,10 +207,12 @@ func (a *Authenticator) CheckClaims(ctx context.Context, claims jwt.MapClaims) (
 		a.logger.WarnContext(ctx, "api access denied: stale session", slog.String("user_id", user.UserID))
 		return nil, errRejected
 	}
-	if err := a.checkSession(ctx, claims, id, state.TokenVersion); err != nil {
+	sessionID, err := a.checkSession(ctx, claims, id, state.TokenVersion)
+	if err != nil {
 		return nil, err
 	}
-	user.IsSuperuser = state.IsSuperuser
+	user.SessionID = sessionID
+	user.IsSuperuser, user.Platform = state.IsSuperuser, state.Platform
 	user.TokenVersion = int(version)
 	return user, nil
 }

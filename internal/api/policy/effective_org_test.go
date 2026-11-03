@@ -20,7 +20,7 @@ func effectiveOrgStack(t *testing.T, store *fakeStore, level Authz) http.Handler
 	t.Helper()
 	auth := authenticator(t, store)
 	scope := NewScope(auth, quiet())
-	return scope.Principal(scope.OrgScope(scope.Impersonation(NewGuard(auth, quiet()).Wrap(level, actingOrg))))
+	return scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), level, actingOrg))))
 }
 
 func superClaims(c jwt.MapClaims) { c["is_superuser"] = true }
@@ -95,6 +95,7 @@ func TestNonImpersonatingOrgResolution(t *testing.T) {
 
 	memberStore := newStore()
 	memberStore.users[userID] = UserState{IsActive: true}
+	memberStore.roles[ownOrgKey] = "admin"
 	adminToken := sign(t, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
 	got := serve(effectiveOrgStack(t, memberStore, Admin), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + adminToken, "X-Org-Id": memberOrg})
 	if got.status != 200 || got.body != "acting="+ownOrg {
@@ -129,6 +130,7 @@ func TestIdentityRoutesKeepTheOwnOrg(t *testing.T) {
 func TestNonSuperuserCannotImpersonate(t *testing.T) {
 	store := newStore()
 	store.users[userID] = UserState{IsActive: true}
+	store.roles[ownOrgKey] = "admin"
 	store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
 	forged := sign(t, claims(func(c jwt.MapClaims) { superClaims(c); c["role"] = "admin" }))
 	headers := map[string]string{"Authorization": "Bearer " + forged}

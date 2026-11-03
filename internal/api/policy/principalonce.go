@@ -19,6 +19,10 @@ type BearerRow struct {
 	Domain bool
 	// Webhook: the row accepts a provider webhook signature.
 	Webhook bool
+	// NotOrgScoped: the route does not act in the caller's org (tenant
+	// requirement none or cross_org_superuser_only), so the org scope reads
+	// no membership for the token's own org.
+	NotOrgScoped bool
 }
 
 // EarlyRefusal is one row of the refusal table: a Bearer value that starts
@@ -37,6 +41,11 @@ var earlyRefusals = []EarlyRefusal{
 	{Prefix: "fcpush_", Classes: []string{"external_push_ingest_token"}},
 	{Prefix: "fcacr_", Classes: []string{"acr_client_credential"}},
 	{Prefix: "whsec_", Classes: nil},
+	// The Compose bootstrap credential is accepted only at auth-service's
+	// workload-token exchange, never as a Bearer.
+	{Prefix: "fcwlb_", Classes: nil},
+	// No route accepts a service-account key, as a Bearer or otherwise.
+	{Prefix: "fcsak_", Classes: nil},
 }
 
 const (

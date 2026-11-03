@@ -37,6 +37,11 @@ func (goAPIScopeStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string
 	return "", false, nil
 }
 
+func (s goAPIScopeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (goAPIScopeStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, nil
 }
@@ -147,3 +152,5 @@ func TestGoAPIProxiedLoginAnswers503WhileTheLockoutKeyIsUnsetAlsoOnTheRollbackCo
 		t.Fatalf("auth-service limiter hit %d times; want 0", hits.Load())
 	}
 }
+
+func (goAPIScopeStore) ReadsPlatformRoles() bool { return false }

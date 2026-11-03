@@ -1,0 +1,17 @@
+{
+  "schema_version": "oauth-clients.v1",
+  "clients": [
+    {
+      "client_id": "desktop-client",
+      "client_name": "Desktop client",
+      "client_class": "mcp",
+      "first_party": false,
+      "audiences": [
+        "acr-api"
+      ],
+      "redirect_uris": [
+        "https://client.example.test/callback"
+      ]
+    }
+  ]
+}

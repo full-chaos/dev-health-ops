@@ -37,14 +37,12 @@ func NewClickHouseLoader(connection conn) (*ClickHouseLoader, error) {
 // comment on the DOUBLE WINDOW FILTER. finished_at IS NULL (a still-running
 // pipeline) never matches this range filter, matching Python exactly.
 //
-// No FINAL: ci_pipeline_runs is a ReplacingMergeTree, but load_cicd_data's
-// real query never uses FINAL on it either (verified against
-// loaders/clickhouse.py:1212-1217) -- this is parity with a pre-existing
-// Python gap, not an oversight. See repouser/clickhouse.go's identical note
-// for git_commits/git_pull_requests for the same reasoning.
+// FINAL: ci_pipeline_runs is a ReplacingMergeTree; without it unmerged
+// versions of one run count twice, and a stale version can match the
+// finished_at window that the live version no longer matches.
 const pipelineRunsQuery = `
 SELECT repo_id, run_id, status, queued_at, started_at, finished_at
-FROM ci_pipeline_runs
+FROM ci_pipeline_runs FINAL
 WHERE finished_at >= {start:DateTime64(3, 'UTC')} AND finished_at < {end:DateTime64(3, 'UTC')}
   AND repo_id IN {repo_ids:Array(UUID)}
   AND org_id = {org_id:String}`

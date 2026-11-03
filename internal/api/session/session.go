@@ -23,6 +23,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
@@ -37,14 +38,12 @@ type Deps struct {
 	Auth     *policy.Authenticator
 	Verifier *edgetoken.Verifier
 	Signer   *edgetoken.Signer
-	// ClickHouse is the api's own ClickHouse login, used for organization
-	// activity; nil means no activity (Python: no CLICKHOUSE_URI).
+	// ClickHouse is the api's own ClickHouse login (organization activity); nil means none (no CLICKHOUSE_URI).
 	ClickHouse driver.Conn
 	// Limits is where the rate limits count: the api's shared counter
 	// store (Valkey when configured); nil means an in-process one on Now.
 	Limits httpapi.CounterStore
-	// Write renders the limits' refusal (httpapi.CodeRateLimited); nil
-	// means httpapi.WriteError.
+	// Write renders the limits' refusal (httpapi.CodeRateLimited); nil means httpapi.WriteError.
 	Write httpapi.ErrorWriter
 	OAuth *oauthprovider.Client
 	// Getenv reads the social-login client settings and
@@ -69,6 +68,10 @@ type Deps struct {
 	// issues every token pair these routes hand out; go-api then mints none
 	// and writes no refresh_tokens row. nil mints in go-api.
 	Issuer sessionissue.Issuer
+	// PlatformRoles is how the users reads take is_superuser (AUTH_PLATFORM_ROLES_OWNED).
+	PlatformRoles policy.PlatformRoleRead
+	// Provision (AUTH_PROXY_ORG_PROVISIONING) sends the invite joins to auth-service; nil joins in go-api.
+	Provision authprovision.Provisioner
 }
 
 type handlers struct {
@@ -136,27 +139,27 @@ func Routes(deps Deps) []httpapi.Route {
 	}
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/login", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
+			httpapi.ValidateThenLimitDependency(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/social-login", h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refresh)))},
+			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refresh)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/switch-org", h.switchOrg))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/validate", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(inner("/api/v1/auth/validate", h.validate)))},
+			httpapi.ValidateThenLimitDependency(h.validateTokenBody, h.validateLimiter, validateLimitKey, h.Write)(inner("/api/v1/auth/validate", h.validate)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/logout", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/logout", h.logout))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/register", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateRegister, h.registerLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/register", h.register)))},
+			httpapi.ValidateThenLimitDependency(validateRegister, h.registerLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/register", h.register)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/verify", Handler: guard.Wrap(policy.Public,
-			httpapi.ValidateThenLimit(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(inner("/api/v1/auth/verify", h.verify)))},
+			httpapi.ValidateThenLimitDependency(validateVerify, h.verifyLimiter, queryAuthKey, h.Write)(inner("/api/v1/auth/verify", h.verify)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/resend-verification", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(httpapi.LimitWith(httpapi.NewKeyedLimiter(defaults.Limits, resendAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/resend-verification", h.resendVerification))))},
+			httpapi.ValidateThenLimitDependency(validateEmailBody, h.resendLimiter, bodyAuthKey, h.Write)(httpapi.LimitWithDependency(httpapi.NewKeyedLimiter(defaults.Limits, resendAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/resend-verification", h.resendVerification))))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/forgot-password", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimit(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(httpapi.LimitWith(httpapi.NewKeyedLimiter(defaults.Limits, forgotAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/forgot-password", h.forgotPassword))))},
+			httpapi.ValidateThenLimitDependency(validateEmailBody, h.forgotLimiter, bodyAuthKey, h.Write)(httpapi.LimitWithDependency(httpapi.NewKeyedLimiter(defaults.Limits, forgotAddrLimit), addrBucketKey, h.Write)(inner("/api/v1/auth/forgot-password", h.forgotPassword))))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/reset-password", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/reset-password", h.resetPassword))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/change-password", Handler: guard.BodyFirst(policy.Authenticated,
-			httpapi.ValidateThenLimit(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(inner("/api/v1/auth/change-password", h.changePassword)))},
+			httpapi.ValidateThenLimitDependency(validateChangePassword, h.changePasswordLimiter, changePasswordKey, h.Write)(inner("/api/v1/auth/change-password", h.changePassword)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/accept-invite", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/accept-invite", h.acceptInviteRoute))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/onboard", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/onboard", h.onboard))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/onboarding/state", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/onboarding/state", h.onboardingStateRoute))},

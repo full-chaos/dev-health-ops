@@ -39,7 +39,7 @@ the person. The email address never selects an account.
 | The key is new, and an account already holds the email | Refused with a conflict. Nothing is written or linked. For a social sign-in the answer names the existing sign-in method, so the user can sign in that way and then link. |
 | The key is new, no account holds the email, and creation is allowed | An account is created (see below). |
 | The key is new and creation is not allowed | Refused. Nothing is written. |
-| The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A key that is already bound signs in without this check. |
+| The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A social key that is already bound signs in without this check; an SSO OAuth sign-in is checked every time. |
 
 ## Explicit link and unlink
 
@@ -78,7 +78,10 @@ default role (`member` when unset). With `auto_provision_users` on:
 
 1. The response must carry an email. When `allowed_domains` is set, the email
    domain must be in the list (compared exactly). An email with no domain is
-   refused when the list is set.
+   refused when the list is set. These checks run on every sign-in, also for a
+   key that is already linked: when its domain leaves the list, or the provider
+   sends no email, the next sign-in is refused. To let the user in again, an
+   organization admin adds the domain to `allowed_domains`.
 2. A new key whose email is held by another account is refused with an
    identity conflict.
 3. Otherwise the user, the identity and the membership in the provider's
@@ -94,6 +97,17 @@ with `membership_required`. With it on, a known account joins as in step 4;
 `membership_required` then applies to an account that is a member of another
 organization only. An SSO sign-in never issues a session outside the provider's
 organization.
+
+auth-service provisions the same way when `AUTH_SSO_JIT=true`, and it differs from
+go-api on three points:
+
+- A sign-in grants `viewer`, `member` or `admin`. A default role of `owner`, or any
+  other value, refuses the sign-in as `membership_required`, and nothing is written.
+- A sign-in never undoes a membership status. A removed, suspended or invited member
+  of the provider's organization is refused as `membership_required`.
+- An email from the identity provider is the provider's claim, never proof of the
+  mailbox. A new account needs a domain in `allowed_domains`: an empty list refuses it,
+  answered as auto-provisioning off. A key the provider row already holds is not affected.
 
 For OAuth providers the provider must report the email as verified. For OIDC and
 SAML providers the identity provider's response is the source of the email.
@@ -121,7 +135,32 @@ writes an `SSO_LOGIN` audit row, with status success or failure.
 
 **auth-service.** Social exchange, link and unlink outcomes are counted by
 `auth.social.outcomes` and logged with a reason code; OIDC outcomes are counted
-by `auth.oidc.outcomes`. The reason codes are:
+by `auth.oidc.outcomes`. An OAuth sign-in refusal that go-api audits also writes
+the `sso_login` failure row go-api writes, with go-api's stage and message,
+before it answers: `state_auth` (the state expired or does not match, or the
+login cookie is missing or wrong), `provider_profile` (the profile has no user
+id), `email_verification` (no verified email), `provisioning` (an unusable email
+or subject, auto-provisioning off, an identity conflict or an email another
+account holds, or no membership) and
+`domain_check` (the domain is off the list; the message names it). When that
+row cannot be written, the sign-in answers 500. A provider error go-api records is recorded as go-api
+records it, with go-api's fixed text: the provider row's `last_error`,
+`last_error_at` and `updated_at` (its status is left as it was) and an
+`sso_login` failure row, in one transaction, before the sign-in answers. These
+are: the OAuth token exchange or profile request failing (profile: in transport
+or with a non-2xx status); an OIDC discovery, token exchange, ID token or
+userinfo failure, and OIDC claims without an email; a SAML provider without a
+usable certificate, a signed assertion with no subject confirmation or no email;
+and, with stage `provisioning`, a new OIDC or SAML account with auto-provisioning
+off. The OIDC answers are `OIDC authentication failed` and, for
+auto-provisioning off, 400 `OIDC user provisioning failed`; the SAML answers are
+`SAML authentication failed` and `SAML user provisioning failed`. Checks only
+auth-service makes record nothing. When the record cannot be written, the
+sign-in answers 500. A completed OIDC, OAuth or SAML sign-in is recorded as go-api
+records it: the provider row's `last_login_at` and `updated_at` and an `sso_login`
+success row on resource `session`, in one transaction, after the session is issued
+and before the tokens answer. When that record cannot be written, the sign-in
+answers 500 and the tokens are withheld. The reason codes are:
 
 | Reason | Meaning |
 | --- | --- |

@@ -51,7 +51,8 @@ func TestEveryPostureCheckSiteUsesTheSharedIdentityPredicate(t *testing.T) {
 	// claims the connected login is that role). Its own doc comments mention
 	// current_user only to say so.
 	exempt := map[string]string{
-		"storage/postgres/posture_diagnostics.go": "DiagnoseRolePosture reads the named role's grants; it asserts no login",
+		"storage/postgres/posture_diagnostics.go":              "DiagnoseRolePosture reads the named role's grants; it asserts no login",
+		"storage/postgres/authschema/push_lifecycle_writer.go": "reads whether the migration login may SET ROLE to the named writer role and what that role holds; it asserts no login identity",
 	}
 	root := filepath.Join("..", "..") // internal/
 	var found []string

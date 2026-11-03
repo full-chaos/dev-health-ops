@@ -48,14 +48,28 @@ type ServiceCredentials interface {
 	Check(ctx context.Context, token contracts.SecretString) (servicecred.Credential, servicecred.Refusal, error)
 }
 
+// IssueSessions is the session domain the issue route drives
+// (*session.Store): a new session, or one that supersedes the caller's own
+// session (an organization switch, CHAOS-12085), and the delegated routes.
+type IssueSessions interface {
+	DelegatedSessions
+	CreateAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string, event audit.AuditEvent) (session.Issued, error)
+	CreateSupersedingAudited(ctx context.Context, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+		predecessor uuid.UUID, event audit.AuditEvent) (session.Issued, error)
+}
+
 var errIssueRequest = errors.New("authapi: not a session issue request")
 
 // issueRequest is the issue route's body: exactly principal_id,
-// organization_id (a UUID or null) and amr.
+// organization_id (a UUID or null) and amr, and optionally
+// predecessor_session_id (a UUID): the caller's own session, which an
+// organization switch supersedes (CHAOS-12085). A body that names a
+// predecessor revokes it in the transaction that creates the successor.
 type issueRequest struct {
 	principal    uuid.UUID
 	organization *uuid.UUID
 	amr          []string
+	predecessor  *uuid.UUID
 }
 
 func parseIssueRequest(body io.Reader) (issueRequest, error) {
@@ -88,7 +102,12 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 	principalRaw, okPrincipal := members["principal_id"]
 	orgRaw, okOrg := members["organization_id"]
 	amrRaw, okAMR := members["amr"]
-	if len(members) != 3 || !okPrincipal || !okOrg || !okAMR {
+	predecessorRaw, okPredecessor := members["predecessor_session_id"]
+	want := 3
+	if okPredecessor {
+		want = 4
+	}
+	if len(members) != want || !okPrincipal || !okOrg || !okAMR {
 		return issueRequest{}, errIssueRequest
 	}
 	var out issueRequest
@@ -115,6 +134,17 @@ func parseIssueRequest(body io.Reader) (issueRequest, error) {
 	if err := json.Unmarshal(amrRaw, &out.amr); err != nil || !session.ValidAMR(out.amr) {
 		return issueRequest{}, errIssueRequest
 	}
+	if okPredecessor {
+		var predecessor string
+		if err := json.Unmarshal(predecessorRaw, &predecessor); err != nil {
+			return issueRequest{}, errIssueRequest
+		}
+		id, err := uuid.Parse(predecessor)
+		if err != nil || predecessor != id.String() {
+			return issueRequest{}, errIssueRequest
+		}
+		out.predecessor = &id
+	}
 	return out, nil
 }
 
@@ -123,6 +153,9 @@ type issueAnswer struct {
 	RefreshToken string `json:"refresh_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
+	// SessionAccessToken is the session routes' token under the eddsa class;
+	// absent under hs256_compat.
+	SessionAccessToken string `json:"session_access_token,omitempty"`
 }
 
 // issueSession is POST /internal/v1/sessions. It refuses anything but a live
@@ -137,14 +170,8 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
 		return
 	}
-	credential, refused, err := h.ServiceCredentials.Check(ctx, contracts.NewSecretString(token))
-	if err != nil {
-		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
-		return
-	}
-	if refused != "" {
-		h.rec.logger.WarnContext(ctx, "session issue refused: service credential", "refusal", string(refused))
-		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonInvalidCredentials), nil)
+	caller, ok := h.issueCaller(w, r, token)
+	if !ok {
 		return
 	}
 	req, err := parseIssueRequest(http.MaxBytesReader(w, r.Body, maxIssueBody))
@@ -201,9 +228,23 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonDependency), err)
 		return
 	}
-	issued, err := h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
-		issuedEvent(ctx, req, credential))
+	var issued session.Issued
+	if req.predecessor != nil {
+		issued, err = h.Sessions.CreateSupersedingAudited(ctx, req.principal, req.organization, req.amr,
+			*req.predecessor, issuedEvent(ctx, req, caller))
+	} else {
+		issued, err = h.Sessions.CreateAudited(ctx, req.principal, req.organization, req.amr,
+			issuedEvent(ctx, req, caller))
+	}
 	switch {
+	case errors.Is(err, session.ErrPredecessorNotLive):
+		// The caller's own session ended first (a concurrent switch from it
+		// superseded it, or a sign-out): no successor.
+		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonSessionRevoked), nil)
+		return
+	case errors.Is(err, session.ErrPredecessorOtherPrincipal), errors.Is(err, session.ErrPredecessorDelegated):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+		return
 	case errors.Is(err, session.ErrInvalidAMR):
 		h.rec.refuse(w, r, opSessionIssue, unauthorized(reasonMalformed), nil)
 		return
@@ -214,7 +255,7 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
 		return
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{
+	tokens, err := h.Issuer.Tokens(ctx, Grant{
 		PrincipalID: req.principal, OrganizationID: req.organization, Role: role, SessionID: issued.Session.ID, User: user,
 	})
 	if err != nil {
@@ -223,21 +264,30 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 	}
 	h.rec.record(ctx, opSessionIssue, "success", reasonAccepted, nil)
 	writeJSON(w, http.StatusOK, issueAnswer{
-		AccessToken: access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: AccessExpiresIn,
+		AccessToken: tokens.Access, RefreshToken: issued.Credential.Reveal(), TokenType: "bearer", ExpiresIn: h.Issuer.ExpiresIn(),
+		SessionAccessToken: tokens.Session,
 	})
 }
 
 // issuedEvent is the auth.session.issued audit row: the user as subject, the
-// organization, the amr, the service credential that asked, and its source.
-func issuedEvent(ctx context.Context, req issueRequest, credential servicecred.Credential) audit.AuditEvent {
+// organization, the amr and the source, with the caller: a service credential
+// row id, or the workload principal as actor and the token's jti.
+func issuedEvent(ctx context.Context, req issueRequest, caller issueCaller) audit.AuditEvent {
 	principal := req.principal.String()
 	event := audit.AuditEvent{
 		EventType: EventSessionIssued, Outcome: audit.OutcomeAllowed,
 		SubjectPrincipalID: &principal, RequestID: requestid.Audit(ctx),
 		Attributes: map[string]any{
 			"reason_code": reasonAccepted, "target_kind": "session", "source": sourceGoAPIDelegated,
-			"amr": append([]string(nil), req.amr...), "credential_id": credential.ID,
+			"amr": append([]string(nil), req.amr...),
 		},
+	}
+	if caller.workload != nil {
+		actor := caller.workload.String()
+		event.ActorPrincipalID = &actor
+		event.Attributes["workload_jti"] = caller.jti
+	} else {
+		event.Attributes["credential_id"] = caller.credentialID
 	}
 	if req.organization != nil {
 		org := req.organization.String()

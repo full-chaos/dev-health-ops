@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -126,12 +127,17 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 
 	// Work-item rows: alice (aggregation branch) and carol (work-item-only,
 	// no git row exists for her at all).
+	// alice's row carries its team split (CHAOS-12535): her 4 done and 2 open
+	// items are attributed to team-shared-ab, the team that owns her
+	// repository (see the declared divergence below).
 	if err := conn.Exec(ctx, `INSERT INTO work_item_user_metrics_daily
         (day, provider, work_scope_id, user_identity, team_id, team_name,
          items_started, items_completed, wip_count_end_of_day,
-         cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id)
+         cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id,
+         team_split_team_ids, team_split_is_primary, team_split_items_completed, team_split_wip_end_of_day)
         VALUES (?, 'jira', 'scope-alice', 'alice@example.com', 'team-git-a', 'Team Git A',
-                6, 4, 2, 10.0, 20.0, ?, ?)`,
+                6, 4, 2, 10.0, 20.0, ?, ?,
+                ['team-shared-ab'], [1], [4], [2])`,
 		day, seedNow, orgID); err != nil {
 		t.Fatal(err)
 	}
@@ -173,6 +179,16 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 	// synthesized repository), which no team owns: her point is "unassigned",
 	// a DECLARED divergence from the reference's team-wi-c (a one-member team
 	// ranks 0.5 either way, so only the team id differs).
+	//
+	// A second DECLARED divergence (CHAOS-12535): the team of a person's work
+	// items is the items' own attribution (the team split of the person's
+	// work_item_user_metrics_daily row), not the team of the person's git row.
+	// The reference put alice's work items on her git row, so on
+	// team-shared-ab; the fixture states that attribution in alice's split, so
+	// her point is the reference's. carol's row holds no split (the shape of a
+	// row written before the split existed): her items are unassigned, as
+	// declared above. TestTheLandscapeTakesAWorkItemsTeamFromTheLadder (package
+	// daily) pins the unattributed and pre-split cases.
 	for _, repoID := range []uuid.UUID{repoAlice, repoBob} {
 		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, 'github', ?)`,
 			repoID, "acme/"+repoID.String(), orgID, seedNow); err != nil {
@@ -191,6 +207,21 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 			golden.LandscapeRolling[index].TeamID = &unassigned
 		}
 	}
+	// A declared divergence (CHAOS-12562): carol has no merged pull request, so
+	// she has no 30-day cycle. The reference stored 0 and put her on the cycle
+	// map at log1p(0), the fastest place; here her cycle is NULL and she has no
+	// cycle-map point. Her churn and WIP points are the reference's.
+	kept := golden.LandscapeRolling[:0]
+	for _, row := range golden.LandscapeRolling {
+		if row.IdentityID == "carol@example.com" {
+			if row.MapName == "cycle_throughput" {
+				continue
+			}
+			row.CycleP5030dHours = nil
+		}
+		kept = append(kept, row)
+	}
+	golden.LandscapeRolling = kept
 
 	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil, nil); err != nil {
 		t.Fatalf("computeForDay: %v", err)
@@ -261,17 +292,17 @@ type goldenUserMetric struct {
 }
 
 type goldenLandscapeRow struct {
-	IdentityID       string  `json:"identity_id"`
-	TeamID           *string `json:"team_id"`
-	MapName          string  `json:"map_name"`
-	XRaw             float64 `json:"x_raw"`
-	YRaw             float64 `json:"y_raw"`
-	XNorm            float64 `json:"x_norm"`
-	YNorm            float64 `json:"y_norm"`
-	ChurnLOC30d      int64   `json:"churn_loc_30d"`
-	DeliveryUnits30d int64   `json:"delivery_units_30d"`
-	CycleP5030dHours float64 `json:"cycle_p50_30d_hours"`
-	WIPMax30d        int64   `json:"wip_max_30d"`
+	IdentityID       string   `json:"identity_id"`
+	TeamID           *string  `json:"team_id"`
+	MapName          string   `json:"map_name"`
+	XRaw             float64  `json:"x_raw"`
+	YRaw             float64  `json:"y_raw"`
+	XNorm            float64  `json:"x_norm"`
+	YNorm            float64  `json:"y_norm"`
+	ChurnLOC30d      int64    `json:"churn_loc_30d"`
+	DeliveryUnits30d int64    `json:"delivery_units_30d"`
+	CycleP5030dHours *float64 `json:"cycle_p50_30d_hours"`
+	WIPMax30d        int64    `json:"wip_max_30d"`
 }
 
 type parityGolden struct {
@@ -373,7 +404,7 @@ type gotLandscapeRow struct {
 	YNorm            float64
 	ChurnLOC30d      uint64
 	DeliveryUnits30d uint32
-	CycleP5030dHours float64
+	CycleP5030dHours *float64
 	WIPMax30d        uint32
 }
 
@@ -401,7 +432,12 @@ WHERE as_of_day = ? AND org_id = ?`, day.Format("2006-01-02"), orgID)
 			t.Fatal(err)
 		}
 		row.TeamID = teamID
-		out[row.IdentityID+"\x1f"+row.MapName] = row
+		key := row.IdentityID + "\x1f" + row.MapName
+		if earlier, seen := out[key]; seen {
+			t.Fatalf("%s %s has two points, team %s and team %s: the readback keys a point by identity and map, so one would hide the other",
+				row.IdentityID, row.MapName, optionalString(earlier.TeamID), optionalString(teamID))
+		}
+		out[key] = row
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -538,11 +574,24 @@ func assertLandscapeMatchesGolden(
 		if int64(row.DeliveryUnits30d) != want.DeliveryUnits30d {
 			t.Errorf("%s: DeliveryUnits30d = %d, want %d", key, row.DeliveryUnits30d, want.DeliveryUnits30d)
 		}
-		assertFloatEqual(t, key, "CycleP5030dHours", row.CycleP5030dHours, want.CycleP5030dHours)
+		switch {
+		case row.CycleP5030dHours == nil && want.CycleP5030dHours == nil:
+		case row.CycleP5030dHours == nil || want.CycleP5030dHours == nil:
+			t.Errorf("%s: CycleP5030dHours = %s, want %s", key, optionalFloat(row.CycleP5030dHours), optionalFloat(want.CycleP5030dHours))
+		default:
+			assertFloatEqual(t, key, "CycleP5030dHours", *row.CycleP5030dHours, *want.CycleP5030dHours) // gitleaks:allow
+		}
 		if int64(row.WIPMax30d) != want.WIPMax30d {
 			t.Errorf("%s: WIPMax30d = %d, want %d", key, row.WIPMax30d, want.WIPMax30d)
 		}
 	}
+}
+
+func optionalFloat(value *float64) string {
+	if value == nil {
+		return "NULL"
+	}
+	return strconv.FormatFloat(*value, 'g', -1, 64)
 }
 
 func assertFloatEqual(t *testing.T, subject, field string, got, want float64) {
@@ -566,6 +615,13 @@ func assertOptionalStringEqual(t *testing.T, subject, field string, got, want *s
 }
 
 func derefOrNil(value *string) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return *value
+}
+
+func optionalString(value *string) string {
 	if value == nil {
 		return "<nil>"
 	}

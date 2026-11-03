@@ -132,7 +132,7 @@ func workflowChainGuard(d docTree) []string {
 	lines := commandLines(asString(step["run"]))
 	var cmds []string
 	for _, l := range lines {
-		if strings.HasPrefix(l, "go run") || strings.HasPrefix(l, "python -m mkdocs") {
+		if strings.HasPrefix(l, "go run") || strings.HasPrefix(l, "uv run --no-project") {
 			cmds = append(cmds, l)
 		}
 	}

@@ -47,6 +47,10 @@ var (
 	socialLinkLimit     = httpapi.Limit{ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour}
 	// refreshLimit is go-api's auth_refresh budget (10 per 15 minutes per client address) for the compatibility refresh route.
 	refreshLimit = httpapi.Limit{ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute}
+	// The OAuth authorize budgets (D0 section 4). go-api's aggregate charges the per
+	// address budgets outside body processing; these need the parsed request.
+	oauthClientLimit    = httpapi.Limit{ID: "auth_svc_oauth_authorize_client", Count: 60, Window: time.Minute}
+	oauthPrincipalLimit = httpapi.Limit{ID: "auth_svc_oauth_authorize_principal", Count: 20, Window: time.Minute}
 )
 
 // rateLimitKeyInfo is the HKDF info of the key that digests identifiers in the
@@ -54,14 +58,14 @@ var (
 // package: not logged, not exported, not part of any value.
 const rateLimitKeyInfo = "dev-health/auth-service/ratelimit-key/v1"
 
-// minRateLimitSecretBytes is authconfig's floor for AUTH_JWT_SECRET_KEY.
+// minRateLimitSecretBytes is authconfig's floor for AUTH_JWT_SECRET_KEY and AUTH_RATE_LIMIT_KEY.
 const minRateLimitSecretBytes = 32
 
 // Limits is what a limited route counts with: the shared counter store and the
 // key that digests an e-mail, a link secret or a principal id before it is
-// part of a counter key. The key is HKDF-SHA256 of the session signing secret
-// (AUTH_JWT_SECRET_KEY, which every limited route needs to mount), so there
-// is no Secret of its own; rotating that secret resets the buckets.
+// part of a counter key. The key is HKDF-SHA256 of the secret NewLimits is
+// given (AUTH_RATE_LIMIT_KEY, else the session signing secret
+// AUTH_JWT_SECRET_KEY); rotating it resets the buckets.
 type Limits struct {
 	store httpapi.CounterStore
 	key   []byte
@@ -89,7 +93,8 @@ func NewLimits(store httpapi.CounterStore, secret string) (*Limits, error) {
 func LimitIDs() []string {
 	limits := []httpapi.Limit{
 		loginIPLimit, loginAccountLimit, verifyLimit, resendLimit, resendIPLimit, forgotLimit, forgotIPLimit,
-		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit,
+		resetIPLimit, resetTokenLimit, changePasswordLimit, socialLinkLimit, refreshLimit, registerIPLimit, validateLimit,
+		switchOrgLimit,
 	}
 	ids := make([]string, len(limits))
 	for i, limit := range limits {
@@ -129,10 +134,14 @@ type charge struct {
 // scopeCodes is the closed set of counter scopes admit accepts, each with the
 // neutral code the store keys on. A route outside it is refused, never counted.
 var scopeCodes = map[string]string{
-	PatternCompatLogin:   "s01",
-	PatternCompatRefresh: "s04",
-	PatternResetPassword: "s02",
-	socialLinkRoute:      "s03",
+	PatternCompatLogin:     "s01",
+	PatternCompatRefresh:   "s04",
+	PatternCompatValidate:  "s07",
+	PatternCompatSwitchOrg: "s08",
+	PatternResetPassword:   "s02",
+	socialLinkRoute:        "s03",
+	oauthAuthorizeScope:    "s05",
+	oauthDecideScope:       "s06",
 }
 
 // admit counts each charge in order and reports whether the request may go
@@ -196,7 +205,7 @@ func goAPIRefusal(w http.ResponseWriter, _ *http.Request, code httpapi.Code) {
 }
 
 // clientKey is the caller address the limits key on (clientaddr resolves it:
-// the socket peer, or the one forwarded address a trusted proxy sent).
+// the socket peer, or the right-most untrusted X-Forwarded-For hop a trusted proxy sent).
 //
 // An IPv6 client is keyed by its /64: a host holds a whole /64 and can rotate
 // through it, so the address alone would hand it a fresh bucket per request.

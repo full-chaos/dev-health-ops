@@ -372,8 +372,9 @@ dispatch delays derived materializations but never loses a transition row.
 Every integration places delivery work in one tree: **Repository <> Pull
 request <> Issue <> Project**. A pull request or merge request is itself a
 work item (type `pr` or `merge_request`); an issue is a work item of any other
-type. Teams and deployments hang off the tree. Each edge below is the
-relationship name the graph uses, with the table that supplies it.
+type. Teams, deployments, CI runs, incidents and pull request reviews hang off
+the tree. Each edge below is the relationship name the graph uses, with the
+table that supplies it.
 
 ```mermaid
 flowchart TB
@@ -384,6 +385,8 @@ flowchart TB
     TEAM["Team<br/>teams"]
     DEP["Deployment<br/>deployments"]
     INC["Incident<br/>operational_incidents"]
+    CIRUN["CI run<br/>ci_pipeline_runs"]
+    PRREV["Pull request review<br/>git_pull_request_reviews"]
 
     PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
     PR ==>|"RELATES_TO<br/>work_graph_issue_pr link row"| ISSUE
@@ -391,7 +394,10 @@ flowchart TB
     REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
     DEP -.->|"BELONGS_TO_REPOSITORY<br/>deployments.repo_id"| REPO
-    DEP -.->|"CORRELATED_WITH_INCIDENT<br/>work_graph_deployment_incident_edges"| INC
+    DEP -.->|"CORRELATED_WITH_INCIDENT, relevance only<br/>work_graph_deployment_incident_edges"| INC
+    CIRUN -.->|"BELONGS_TO_REPOSITORY<br/>ci_pipeline_runs.repo_id"| REPO
+    INC -.->|"BELONGS_TO_REPOSITORY, one per mapped repository<br/>operational_service_repository_mappings"| REPO
+    PRREV -.->|"BELONGS_TO_PULL_REQUEST<br/>git_pull_request_reviews"| PR
     ISSUE -.->|"PART_OF<br/>work_items.parent_id, the parent issue"| ISSUE
     REPO x-.-|"not the tree: the issue's<br/>own work_items.repo_id"| ISSUE
     ISSUE -.-x|"not ownership: OWNED_BY_TEAM<br/>work_item_team_attributions"| TEAM
@@ -409,7 +415,10 @@ specific to one provider.
   repository, deployment and incident; tier ranked **native > explicit_text >
   heuristic** by `linktier.Rank`, `source` is the tier; two repositories
   that run one deployment id each hold their own row), and an issue is part of
-  its parent issue (`PART_OF`).
+  its parent issue (`PART_OF`). A CI run belongs to its repository, an incident
+  to each repository its service maps to, and a pull request review to its pull
+  request. `CORRELATED_WITH_INCIDENT` establishes relevance, never ownership: an
+  incident reaches a team only through its own repository edges.
 - **Crossed edges** exist but are never tree membership.
 
 Two rules hold for every read of the tree:
@@ -543,10 +552,13 @@ already reads; GitLab costs one call per non-archived project per sync
 (`GET /projects/:id/milestones?state=active&include_ancestors=true`).
 
 GitLab GROUP milestones count: the same call lists the milestones of every
-ancestor group (`include_ancestors`, the documented name since GitLab deprecated
-`include_parent_milestones`; the request sends both, because the GitLab API
-docs state no minimum version for `include_ancestors` and an instance that does
-not know it would silently drop the group milestones). A group milestone that is
+ancestor group. The request reads `GET /api/v4/version` once per run and sends
+`include_ancestors` to GitLab 16.7 and newer (the documented name since GitLab
+deprecated `include_parent_milestones` in 16.7), or `include_parent_milestones`
+to older instances. It never sends both, because GitLab declares the two names
+mutually exclusive and refuses a request that carries both with HTTP 400
+(CHAOS-12145). A version read that fails or cannot be parsed falls back to
+`include_ancestors` and logs the error with the org and unit ids (CHAOS-12150). A group milestone that is
 the earliest open dated one supplies the target with source
 `gitlab.group_milestone.due_date` and a `target_ref` that names the group. It has
 a `sprints` row under the same key (the work-items unit lists the same ancestor milestones and writes a group milestone once, keyed by its group), so `target_ref` joins the sprint row.

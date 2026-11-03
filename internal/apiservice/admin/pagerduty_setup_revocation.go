@@ -91,10 +91,8 @@ func (h *handlers) revokePagerDutySetupToken(ctx context.Context, setupID uuid.U
 // the calling route answers.
 func (h *handlers) drainPagerDutySetupRevocations(ctx context.Context, orgID string) {
 	if _, err := h.retryPagerDutyRevocationRows(ctx, orgID,
-		`SELECT id, token_encrypted FROM provider_oauth_revocations
-WHERE org_id = $1 AND provider = 'pagerduty' AND purpose = 'setup' AND status = 'pending'
-  AND (attempts > 0 OR created_at < now() - interval '`+setupRevocationStaleInterval+`')
-ORDER BY created_at FOR UPDATE`); err != nil {
+		`org_id = $1 AND provider = 'pagerduty' AND purpose = 'setup' AND status = 'pending'
+  AND (attempts > 0 OR created_at < now() - interval '`+setupRevocationStaleInterval+`')`); err != nil {
 		h.logger.ErrorContext(ctx, "admin: draining pagerduty setup revocations failed", slog.String("error", err.Error()))
 	}
 }

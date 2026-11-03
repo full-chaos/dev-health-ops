@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "4337f3509db0ba9bfdbb80f35c30ca450dfe169abb5a1bf18598dc2b92719ccf"
-	rolesSHA   = "867899e8151541437162b6fed8eae0f00fb5c6117367b9e657193d7729418446"
+	actionsSHA = "0cbbb590cab09eedb93fda0f1ef12a4ebab3c3f5a8c12af6497edaea317f6a32"
+	rolesSHA   = "b882640884c42aec660fda0fab492a7ec71c1cc1da5f10fa32b0bbaab7de82bb"
 )
 
 func repoRoot(t *testing.T) string {
@@ -112,8 +112,33 @@ func TestScopesDoNotMix(t *testing.T) {
 	}
 }
 
+// platform_owner is a marker role (CHAOS-12294): it holds NO action, so an
+// owner-only principal passes no authorization check. To act, an owner also
+// holds a platform_admin row.
+func TestPlatformOwnerIsAMarkerHoldingNoAction(t *testing.T) {
+	c := Default()
+	owner, err := c.Role("platform_owner")
+	if err != nil {
+		t.Fatalf("platform_owner is not in the catalog: %v", err)
+	}
+	if owner.Scope != ScopePlatform {
+		t.Errorf("platform_owner scope = %s, want platform", owner.Scope)
+	}
+	if len(owner.Actions) != 0 {
+		t.Errorf("platform_owner actions = %v, want none", owner.Actions)
+	}
+	for _, a := range c.Actions() {
+		if c.Allows("platform_owner", a.ID) {
+			t.Errorf("platform_owner allows %s", a.ID)
+		}
+	}
+	if admin, _ := c.Role("platform_admin"); len(admin.Actions) == 0 {
+		t.Error("platform_admin lost its actions")
+	}
+}
+
 func TestLoadRefusesMalformedCatalogs(t *testing.T) {
-	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	const okA = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
 	if _, err := Load([]byte(okA), []byte(okR)); err != nil {
 		t.Fatalf("well-formed catalog refused: %v", err)
@@ -165,7 +190,7 @@ func TestEveryEmbeddedActionHasARiskAndCacheClassAndHighRiskIsNeverCached(t *tes
 }
 
 func TestLoadRefusesARoleHoldingEveryAction(t *testing.T) {
-	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound"}]}`
+	a := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"},{"action":"a.c","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}]}`
 	r := `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b","a.c"]}]}`
 	if _, err := Load([]byte(a), []byte(r)); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
@@ -193,20 +218,30 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 	}
 }
 
-// Parity: the role -> action sets equal the hierarchy in
-// internal/api/session/permissions.go (roleHierarchy; each role holds its own
-// entries and every lower role's), with ':' spelled '.'.
-func TestRolesMatchTheSessionHierarchy(t *testing.T) {
+// catalogOnly is the closed set of catalog actions that have no permission in
+// internal/api/session/permissions.go. Catalog-only = not served in /auth/me
+// until a web-reviewed change adds it there; every other catalog action must
+// still equal a session permission.
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "acr.evidence.read": true, "acr.credential.issue": true,
+	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+	"credentials.project": true,
+}
+
+type sessionEntry struct {
+	role string
+	perm []string
+}
+
+// sessionPermissions parses roleHierarchy and standardPermissions from
+// internal/api/session/permissions.go.
+func sessionPermissions(t *testing.T) ([]sessionEntry, []string) {
+	t.Helper()
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), "internal/api/session/permissions.go"), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	type entry struct {
-		role string
-		perm []string
-	}
-	var hier []entry
+	var hier []sessionEntry
 	var std []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		vs, ok := n.(*ast.ValueSpec)
@@ -225,7 +260,7 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 		case "roleHierarchy":
 			for _, e := range lit.Elts {
 				el := e.(*ast.CompositeLit)
-				en := entry{role: unq(t, el.Elts[0])}
+				en := sessionEntry{role: unq(t, el.Elts[0])}
 				for _, p := range el.Elts[1].(*ast.CompositeLit).Elts {
 					en.perm = append(en.perm, unq(t, p))
 				}
@@ -237,6 +272,15 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 	if len(hier) != 4 || len(std) != 22 {
 		t.Fatalf("parsed %d roles and %d permissions from permissions.go", len(hier), len(std))
 	}
+	return hier, std
+}
+
+// Parity: the role -> action sets equal the hierarchy in
+// internal/api/session/permissions.go (roleHierarchy; each role holds its own
+// entries and every lower role's), with ':' spelled '.'; catalogOnly actions
+// are left out of the comparison.
+func TestRolesMatchTheSessionHierarchy(t *testing.T) {
+	hier, std := sessionPermissions(t)
 	c := Default()
 	held := map[string]bool{}
 	for _, e := range hier {
@@ -248,7 +292,12 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := append([]string(nil), r.Actions...)
+		var got []string
+		for _, a := range r.Actions {
+			if !catalogOnly[a] {
+				got = append(got, a)
+			}
+		}
 		sort.Strings(got)
 		if strings.Join(got, ",") != strings.Join(want, ",") {
 			t.Errorf("role %s = %v, want %v", e.role, got, want)
@@ -265,8 +314,8 @@ func TestRolesMatchTheSessionHierarchy(t *testing.T) {
 			t.Errorf("action %s has scope %s", a.ID, a.Scope)
 		}
 	}
-	if len(c.Actions()) != len(std) {
-		t.Errorf("catalog has %d actions, permissions.go %d", len(c.Actions()), len(std))
+	if len(c.Actions()) != len(std)+len(catalogOnly) {
+		t.Errorf("catalog has %d actions, permissions.go %d plus %d catalog-only", len(c.Actions()), len(std), len(catalogOnly))
 	}
 	if _, err := os.Stat(filepath.Join(repoRoot(t), "internal/api/session/permissions.go")); err != nil {
 		t.Fatal(err)
@@ -289,4 +338,305 @@ func keys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// The catalog actions with no session permission are exactly catalogOnly. Load
+// already refuses a role that lists an action of the other scope.
+func TestCatalogOnlyActionsAreExactlyTheClosedSet(t *testing.T) {
+	_, std := sessionPermissions(t)
+	session := map[string]bool{}
+	for _, p := range std {
+		session[strings.Replace(p, ":", ".", 1)] = true
+	}
+	extra := map[string]bool{}
+	for _, a := range Default().Actions() {
+		if !session[a.ID] {
+			extra[a.ID] = true
+		}
+	}
+	if strings.Join(keys(extra), ",") != strings.Join(keys(catalogOnly), ",") {
+		t.Errorf("catalog actions with no session permission = %v, want exactly %v", keys(extra), keys(catalogOnly))
+	}
+}
+
+// The billing and license actions carry these classes and are held by exactly these roles.
+func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
+	classes := map[string][2]string{
+		"billing.read":   {RiskLow, CacheDecisionBound},
+		"billing.manage": {RiskHigh, CacheNone},
+		"license.read":   {RiskLow, CacheDecisionBound},
+	}
+	holders := map[string][]string{
+		"billing.read":   {"admin", "member", "owner", "viewer"},
+		"billing.manage": {"admin", "owner"},
+		"license.read":   {"admin", "member", "owner", "viewer"},
+	}
+	c := Default()
+	for id, want := range classes {
+		a, err := c.Action(id)
+		if err != nil {
+			t.Errorf("action %s: %v", id, err)
+			continue
+		}
+		if a.RiskClass != want[0] || a.CacheClass != want[1] {
+			t.Errorf("action %s = %s/%s, want %s/%s", id, a.RiskClass, a.CacheClass, want[0], want[1])
+		}
+		var got []string
+		for _, r := range c.Roles() {
+			if c.Allows(r.ID, id) {
+				got = append(got, r.ID)
+			}
+		}
+		sort.Strings(got)
+		if strings.Join(got, ",") != strings.Join(holders[id], ",") {
+			t.Errorf("action %s is held by %v, want %v", id, got, holders[id])
+		}
+	}
+}
+
+// acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
+func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
+	a, err := Default().Action("acr.context.read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "repository" || a.RiskClass != RiskLow || a.CacheClass != CacheResourceRevisionBound {
+		t.Errorf("acr.context.read = %+v, want organization scope, repository kind, low risk, resource_revision_bound", a)
+	}
+}
+
+// The resource-kind set widens to repository; the scope sets do not.
+func TestRepositoryIsAResourceKindAndNeverAScope(t *testing.T) {
+	const okR = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	act := func(scope, kind string) string {
+		row := func(id string) string {
+			return `{"action":"` + id + `","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"decision_bound","impersonation":"denied"}`
+		}
+		return `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` + row("a.b") + `,` + row("a.c") + `]}`
+	}
+	if _, err := Load([]byte(act("organization", "repository")), []byte(okR)); err != nil {
+		t.Errorf("repository resource_kind refused: %v", err)
+	}
+	for name, a := range map[string]string{
+		"repository scope":      act("repository", "organization"),
+		"unknown resource kind": act("organization", "galaxy"),
+	} {
+		if _, err := Load([]byte(a), []byte(okR)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	allRepo := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("repository", "repository")), []byte(allRepo)); err == nil {
+		t.Error("a repository scope was accepted for an action and its role")
+	}
+	roleScope := strings.Replace(okR, `"scope":"organization"`, `"scope":"repository"`, 1)
+	if _, err := Load([]byte(act("organization", "organization")), []byte(roleScope)); err == nil {
+		t.Error("a repository role scope was accepted")
+	}
+}
+
+// acr.context.read reads a context at a revision, like git.read: the organization roles that hold git.read hold it, and
+// no platform role does. The real catalog allows those roles by default.
+func TestAcrContextReadIsHeldByExactlyTheRolesThatHoldGitRead(t *testing.T) {
+	c := Default()
+	var holders []string
+	for _, r := range c.Roles() {
+		if got, want := c.Allows(r.ID, "acr.context.read"), c.Allows(r.ID, "git.read"); got != want {
+			t.Errorf("role %s: acr.context.read %v, git.read %v", r.ID, got, want)
+		}
+		if c.Allows(r.ID, "acr.context.read") {
+			holders = append(holders, r.ID)
+		}
+	}
+	sort.Strings(holders)
+	if got := strings.Join(holders, ","); got != "admin,member,owner,viewer" {
+		t.Errorf("acr.context.read is held by %q, want admin,member,owner,viewer", got)
+	}
+	if c.Allows("platform_admin", "acr.context.read") {
+		t.Error("platform_admin holds acr.context.read")
+	}
+	for _, role := range []string{"platform_admin", "platform_owner"} {
+		for _, action := range []string{"acr.context.read", "git.read"} {
+			if c.Allows(role, action) {
+				t.Errorf("%s holds %s", role, action)
+			}
+		}
+	}
+}
+
+func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
+	want := map[string]bool{
+		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
+		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
+	}
+	actions := Default().Actions()
+	if len(actions) != 37 {
+		t.Fatalf("%d actions, want 37", len(actions))
+	}
+	for _, a := range actions {
+		denied := a.Impersonation == ImpersonationDenied
+		if denied != want[a.ID] {
+			t.Errorf("%s impersonation = %s", a.ID, a.Impersonation)
+		}
+	}
+}
+
+func TestLoadRefusesAnActionWithNoImpersonationValue(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	for name, member := range map[string]string{"missing": ``, "unknown": `,"impersonation":"maybe"`, "empty": `,"impersonation":""`} {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none"` + member + `}]}`
+		if _, err := Load([]byte(actions), []byte(roles)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestOnlyThePlatformAdminRoleHoldsImpersonate(t *testing.T) {
+	got := Default().RolesHolding("admin.impersonate", ScopePlatform)
+	if len(got) != 1 || got[0] != "platform_admin" {
+		t.Fatalf("roles holding admin.impersonate = %v", got)
+	}
+	if got := Default().RolesHolding("admin.impersonate", ScopeOrganization); len(got) != 0 {
+		t.Fatalf("organization roles holding admin.impersonate = %v", got)
+	}
+}
+
+func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) {
+	got, err := Default().DelegatedActions("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("owner permits no delegated action")
+	}
+	for _, id := range got {
+		if a, err := Default().Action(id); err != nil || a.Impersonation != ImpersonationAllowed {
+			t.Errorf("owner delegated action %s: %+v, %v", id, a, err)
+		}
+	}
+	for _, role := range []string{"platform_admin", "custom", ""} {
+		if _, err := Default().DelegatedActions(role); !errors.Is(err, ErrUnknownRole) {
+			t.Errorf("DelegatedActions(%q) = %v, want ErrUnknownRole", role, err)
+		}
+	}
+}
+
+func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
+	want := map[string]string{
+		"acr.context.read":     ImpersonationAllowed,
+		"acr.evidence.read":    ImpersonationAllowed,
+		"acr.credential.issue": ImpersonationDenied,
+		"authz.decide":         ImpersonationDenied,
+		"members.update":       ImpersonationDenied,
+	}
+	for id, v := range want {
+		a, err := Default().Action(id)
+		if err != nil || a.Impersonation != v {
+			t.Errorf("%s impersonation = %q, %v; want %s", id, a.Impersonation, err, v)
+		}
+	}
+}
+
+func TestShippedRolesDelegateTheRepositoryReadExactlyWhenTheyHoldIt(t *testing.T) {
+	c := Default()
+	delegating := 0
+	for _, r := range c.Roles() {
+		if r.Scope != ScopeOrganization {
+			continue
+		}
+		got, err := c.DelegatedActions(r.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		has := false
+		for _, id := range got {
+			has = has || id == "acr.context.read"
+		}
+		if has != c.Allows(r.ID, "acr.context.read") {
+			t.Errorf("role %s: delegates acr.context.read %v, holds it %v", r.ID, has, c.Allows(r.ID, "acr.context.read"))
+		}
+		if has {
+			delegating++
+		}
+	}
+	if delegating != 4 {
+		t.Errorf("%d organization roles delegate acr.context.read, want 4", delegating)
+	}
+}
+
+func TestDelegatedActionsReturnTheRepositoryReadForARoleThatHoldsIt(t *testing.T) {
+	const actions = `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[{"action":"acr.context.read","scope":"organization","resource_kind":"repository","risk_class":"low","cache_class":"resource_revision_bound","impersonation":"allowed"},{"action":"x.write","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"},{"action":"x.other","scope":"organization","resource_kind":"organization","risk_class":"high","cache_class":"none","impersonation":"denied"}]}`
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["acr.context.read","x.write"]}]}`
+	c, err := Load([]byte(actions), []byte(roles))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.DelegatedActions("r")
+	if err != nil || len(got) != 1 || got[0] != "acr.context.read" {
+		t.Fatalf("DelegatedActions = %v, %v; want [acr.context.read]", got, err)
+	}
+}
+
+// The admin platform actions are exactly the eight the platform_admin
+// role lists, every one high risk, never cached and denied to a delegated
+// session, and no organization role holds one.
+func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
+	c := Default()
+	want := []string{"admin.audit", "admin.billing", "admin.flags", "admin.impersonate", "admin.orgs", "admin.stats", "admin.telemetry", "admin.users"}
+	var platform []string
+	for _, a := range c.Actions() {
+		if a.Scope != ScopePlatform || !strings.HasPrefix(a.ID, "admin.") {
+			continue
+		}
+		platform = append(platform, a.ID)
+		if a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.ResourceKind != "platform" || a.Impersonation != ImpersonationDenied {
+			t.Errorf("platform action %s: risk %s cache %s kind %s impersonation %s", a.ID, a.RiskClass, a.CacheClass, a.ResourceKind, a.Impersonation)
+		}
+		for _, r := range c.Roles() {
+			if r.ID != "platform_admin" && c.Allows(r.ID, a.ID) {
+				t.Errorf("role %s holds platform action %s", r.ID, a.ID)
+			}
+		}
+	}
+	sort.Strings(platform)
+	if strings.Join(platform, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform actions %v, want %v", platform, want)
+	}
+	for _, a := range want {
+		if !c.Allows("platform_admin", a) {
+			t.Errorf("platform_admin does not hold %s", a)
+		}
+	}
+}
+
+// acr.evidence.read reads evidence at a revision like acr.context.read; acr.credential.issue mints a credential and is never cached.
+func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
+	want := map[string]Action{
+		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+	}
+	for id, w := range want {
+		a, err := Default().Action(id)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+			t.Errorf("%s = %+v, want %+v", id, a, w)
+		}
+	}
+}
+
+// No role holds the two new actions until a roles change grants them.
+func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+	c := Default()
+	for _, r := range c.Roles() {
+		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
+			if c.Allows(r.ID, id) {
+				t.Errorf("role %s holds %s", r.ID, id)
+			}
+		}
+	}
 }

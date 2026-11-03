@@ -157,6 +157,8 @@ func TestGitLabProjectTargetFollowsOpenMilestonesThroughTheCatalogWrite(t *testi
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.EscapedPath() {
+		case "/api/v4/version":
+			_, _ = w.Write([]byte(`{"version":"17.0.0","revision":"0000000"}`))
 		case "/api/v4/groups/org":
 			_, _ = w.Write([]byte(`{"id":1,"full_path":"org","name":"Org"}`))
 		case "/api/v4/groups/org/subgroups":

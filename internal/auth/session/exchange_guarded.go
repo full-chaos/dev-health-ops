@@ -32,7 +32,7 @@ func (guardRefusal) Is(target error) bool { return target == ErrGuardRefused }
 
 // runGuard is called by rotate under the session lock, before the successor
 // is inserted.
-func runGuard(ctx context.Context, tx pgx.Tx, record Record, guard Guard) error {
+func runGuard(ctx context.Context, tx Queryer, record Record, guard Guard) error {
 	if guard == nil {
 		return nil
 	}
@@ -49,7 +49,15 @@ func runGuard(ctx context.Context, tx pgx.Tx, record Record, guard Guard) error 
 // with the locked session in Result.Session and an empty Reason; no exchange
 // is counted for it. A grace replay and every other refusal are unguarded.
 func (s *Store) ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard Guard) (Result, error) {
-	result, err := s.exchange(ctx, credential, guard)
+	return s.ExchangeGuardedWith(ctx, credential, guard, publicRowOf(ctx))
+}
+
+// ExchangeGuardedWith is ExchangeGuarded with public, when not nil, run in the
+// exchange's transaction after an accepted rotation, with the session's
+// principal and organization: go-api's public.audit_logs row of a compatibility
+// refresh. An error from public rolls the rotation back with everything else.
+func (s *Store) ExchangeGuardedWith(ctx context.Context, credential contracts.SecretString, guard Guard, public PublicRow) (Result, error) {
+	result, err := s.exchange(ctx, credential, guard, public)
 	var refusal guardRefusal
 	if errors.As(err, &refusal) {
 		return Result{Issued: Issued{Session: refusal.record}}, ErrGuardRefused

@@ -114,10 +114,8 @@ func TestRenderedTransactionPoolerCapsTheKedaLoginAtItsPoolSize(t *testing.T) {
 		addr := fmt.Sprintf("%s:%s", host, port.Port())
 		logs, _ := c.Logs(ctx)
 		raw, _ := io.ReadAll(logs)
-		ini := string(raw)
-		if i, j := strings.Index(ini, "################## Auto generated"), strings.Index(ini, "################## end file"); i >= 0 && j > i {
-			ini = ini[i:j]
-		} else {
+		ini, found := generatedPgbouncerIni(string(raw))
+		if !found {
 			t.Fatal("the image did not print its generated ini")
 		}
 

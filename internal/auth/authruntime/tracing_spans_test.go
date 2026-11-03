@@ -113,15 +113,14 @@ func tracedService(t *testing.T, env map[string]string, paths ...string) ([]expo
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	ports := reservePorts(t, 2)
 	if env == nil {
-		env = brokenEnvironment(t, ports[0], ports[1])
+		env = brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
 	}
-	logs, stop := runService(t, env)
+	logs, stop, apiAddress, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
-	api := "http://" + env[authconfig.EnvAPIAddress]
-	operator := "http://" + env[authconfig.EnvOperatorAddress]
+	api := "http://" + apiAddress
+	operator := "http://" + operatorAddress
 	awaitResponse(t, client, operator+"/healthz").Body.Close()
 	// The API listener starts after the operator listener: wait for it on a probe path, which opens no span.
 	awaitResponse(t, client, api+"/health").Body.Close()
@@ -242,14 +241,12 @@ func TestTracingOffExportsNothing(t *testing.T) {
 			t.Setenv("OTEL_ENABLED", value)
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 			t.Setenv("OTEL_SAMPLE_RATE", "1")
-			ports := reservePorts(t, 2)
-			env := brokenEnvironment(t, ports[0], ports[1])
-			env[authconfig.EnvLogLevel] = "info"
-			logs, stop := runService(t, env)
+			env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
+			logs, stop, apiAddress, operatorAddress := startOnAnyPort(t, env)
 			client := serviceClient(10 * time.Second)
 			defer client.CloseIdleConnections()
-			awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
-			response := awaitResponse(t, client, "http://"+ports[0]+"/v1/unmatched-probe")
+			awaitResponse(t, client, "http://"+operatorAddress+"/healthz").Body.Close()
+			response := awaitResponse(t, client, "http://"+apiAddress+"/v1/unmatched-probe")
 			_ = response.Body.Close()
 			if code := stop(); code != 0 {
 				t.Fatalf("Execute exited %d", code)
@@ -294,13 +291,11 @@ func TestTheStartupLineNamesTheCollectorByHostAndPortOnly(t *testing.T) {
 			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tc.endpoint)
 			t.Setenv("OTEL_SAMPLE_RATE", "0")
 			t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
-			ports := reservePorts(t, 2)
-			env := brokenEnvironment(t, ports[0], ports[1])
-			env[authconfig.EnvLogLevel] = "info"
-			logs, stop := runService(t, env)
+			env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
+			logs, stop, _, operatorAddress := startOnAnyPort(t, env)
 			client := serviceClient(10 * time.Second)
 			defer client.CloseIdleConnections()
-			awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
+			awaitResponse(t, client, "http://"+operatorAddress+"/healthz").Body.Close()
 			if code := stop(); code != 0 {
 				t.Fatalf("Execute exited %d", code)
 			}
@@ -327,13 +322,11 @@ func TestWithNoOTELVariablesTheServiceStartsWithTheDefaults(t *testing.T) {
 		unsetEnv(t, name)
 	}
 	t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
-	ports := reservePorts(t, 2)
-	env := brokenEnvironment(t, ports[0], ports[1])
-	env[authconfig.EnvLogLevel] = "info"
-	logs, stop := runService(t, env)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
+	logs, stop, _, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
-	awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
+	awaitResponse(t, client, "http://"+operatorAddress+"/healthz").Body.Close()
 	if code := stop(); code != 0 {
 		t.Fatalf("Execute exited %d", code)
 	}
@@ -350,13 +343,11 @@ func TestAMalformedCollectorEndpointLeavesTracingOffAndUnnamed(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "ops-user:c4n4ry-pw@127.0.0.1:4317")
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
 	t.Cleanup(func() { otel.SetTracerProvider(noop.NewTracerProvider()) })
-	ports := reservePorts(t, 2)
-	env := brokenEnvironment(t, ports[0], ports[1])
-	env[authconfig.EnvLogLevel] = "info"
-	logs, stop := runService(t, env)
+	env := brokenEnvironment(t, anyAPIAddress, anyOperatorAddress)
+	logs, stop, _, operatorAddress := startOnAnyPort(t, env)
 	client := serviceClient(10 * time.Second)
 	defer client.CloseIdleConnections()
-	awaitResponse(t, client, "http://"+ports[1]+"/healthz").Body.Close()
+	awaitResponse(t, client, "http://"+operatorAddress+"/healthz").Body.Close()
 	if code := stop(); code != 0 {
 		t.Fatalf("Execute exited %d", code)
 	}
@@ -380,13 +371,12 @@ func TestARequestInFlightAtShutdownHasItsSpanFlushed(t *testing.T) {
 	t.Setenv("OTEL_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+address)
 	t.Setenv("OTEL_SAMPLE_RATE", "1")
-	ports := reservePorts(t, 2)
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(map[string]string{
 		authconfig.EnvDatabaseURI:        "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile:     filepath.Join(t.TempDir(), "absent-signing-key.pem"),
 		authconfig.EnvSigningKeyID:       "drain-test",
-		authconfig.EnvAPIAddress:         ports[0],
-		authconfig.EnvOperatorAddress:    ports[1],
+		authconfig.EnvAPIAddress:         anyAPIAddress,
+		authconfig.EnvOperatorAddress:    anyOperatorAddress,
 		authconfig.EnvHealthCheckTimeout: "1s",
 		authconfig.EnvShutdownTimeout:    "10s",
 	})})
@@ -416,9 +406,9 @@ func TestARequestInFlightAtShutdownHasItsSpanFlushed(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() { done <- runtime.Run(ctx) }()
-	awaitBoundAddress(t, logs, "auth-api-http")
+	apiAddress := awaitBoundAddress(t, logs, "auth-api-http")
 	go func() {
-		response, err := http.Get("http://" + ports[0] + "/v1/drain-hold")
+		response, err := http.Get("http://" + apiAddress + "/v1/drain-hold")
 		if err == nil {
 			_ = response.Body.Close()
 		}

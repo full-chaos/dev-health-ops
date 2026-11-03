@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -13,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
 	"github.com/valkey-io/valkey-go"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/valkeyreply"
 )
 
 var errStore = errors.New("store unavailable")
@@ -32,6 +36,36 @@ func closedPoolError(t *testing.T) error {
 		t.Fatal("a closed pool answered")
 	}
 	return err
+}
+
+func TestDependencyFailureClassifiesEachValkeyReply(t *testing.T) {
+	for _, c := range []struct {
+		reply string
+		want  bool
+	}{
+		{"LOADING Valkey is loading the dataset in memory", true},
+		{"BUSY Valkey is busy running a script", true},
+		{"MASTERDOWN Link with MASTER is down", true},
+		{"CLUSTERDOWN The cluster is down", true},
+		{"TRYAGAIN Multiple keys request during rehashing of slot", true},
+		{"READONLY You can't write against a read only replica", true},
+		{"WRONGTYPE Operation against a key holding the wrong kind of value", false},
+		{"NOSCRIPT No matching script", false},
+		{"NOPERM this user has no permissions to run the command", false},
+		{"MOVED 3999 127.0.0.1:6381", false},
+		{"ASK 3999 127.0.0.1:6381", false},
+		{"ERR value is not an integer or out of range", false},
+		{"ERR something BUSY", false},
+		{"WRONGTYPE key holds a LOADING value", false},
+		{"EXECABORT Transaction discarded because of previous errors", false},
+	} {
+		t.Run(strings.Fields(c.reply)[0]+"/"+strconv.FormatBool(c.want)+"/"+strconv.Itoa(len(c.reply)), func(t *testing.T) {
+			reply := valkeyreply.Error(t, c.reply)
+			if got := DependencyFailure(fmt.Errorf("rate limit script: %w", reply)); got != c.want {
+				t.Fatalf("DependencyFailure(%v) = %v, want %v", reply, got, c.want)
+			}
+		})
+	}
 }
 
 func TestDependencyFailureClassifiesEachStoreErrorClass(t *testing.T) {
@@ -54,7 +88,7 @@ func TestDependencyFailureClassifiesEachStoreErrorClass(t *testing.T) {
 		{"unexpected eof", fmt.Errorf("read: %w", io.ErrUnexpectedEOF), true},
 		{"valkey closing", fmt.Errorf("rate limit script: %w", valkey.ErrClosing), true},
 		{"valkey no address", valkey.ErrNoAddr, true},
-		{"valkey server error", &valkey.ValkeyError{}, true},
+		{"valkey empty reply", &valkey.ValkeyError{}, false},
 		{"store deadline", fmt.Errorf("rate limit peek: %w", context.DeadlineExceeded), true},
 		{"client cancel", fmt.Errorf("query: %w", context.Canceled), false},
 		{"cancel inside a connect error", fmt.Errorf("%w", errors.Join(context.Canceled, &net.OpError{Op: "dial"})), false},

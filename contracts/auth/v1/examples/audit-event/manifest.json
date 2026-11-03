@@ -20,6 +20,30 @@
     {
       "file": "valid-policy-revision-zero.json",
       "why": "Policy revision 0, as principal.v1 allows."
+    },
+    {
+      "file": "valid-producer-membership-role-changed.json",
+      "why": "A real change-role row (the shape membership.auditFor builds), ids in the wire form."
+    },
+    {
+      "file": "valid-producer-workload-token-issued.json",
+      "why": "A workload token row: ids, a revision, a closed audience and an action list."
+    },
+    {
+      "file": "valid-producer-session-issued.json",
+      "why": "A delegated session row: amr is a list, source and credential_id are closed."
+    },
+    {
+      "file": "valid-producer-signing-key-refused.json",
+      "why": "A refused signing-key move: key ids and the rotation vocabulary."
+    },
+    {
+      "file": "valid-producer-legacy-link-tokens-purged.json",
+      "why": "Whole-number counters, zero included, and a run slug."
+    },
+    {
+      "file": "valid-producer-authorize-high-risk-decided.json",
+      "why": "The auth.authorize.high_risk_decided row (ops #5530): decision id, the 24-code decision vocabulary, a repository resource, the caller's workload attributes."
     }
   ],
   "reject": [
@@ -118,6 +142,84 @@
       "expect_instance_location": "/attributes/reason_code",
       "expect_keyword": "enum",
       "why": "A plausible code outside the closed vocabulary."
+    },
+    {
+      "file": "invalid-attributes-target-id-not-uuid.json",
+      "expect_instance_location": "/attributes/target_id",
+      "expect_keyword": "pattern",
+      "why": "An attribute id is the row uuid."
+    },
+    {
+      "file": "invalid-attributes-target-kind-unlisted.json",
+      "expect_instance_location": "/attributes/target_kind",
+      "expect_keyword": "enum",
+      "why": "A closed vocabulary."
+    },
+    {
+      "file": "invalid-attributes-new-role-list-form.json",
+      "expect_instance_location": "/attributes/new_role",
+      "expect_keyword": "type",
+      "why": "A single-member key is a string, not a list."
+    },
+    {
+      "file": "invalid-attributes-changed-fields-empty.json",
+      "expect_instance_location": "/attributes/changed_fields",
+      "expect_keyword": "minItems",
+      "why": "A change names at least one field."
+    },
+    {
+      "file": "invalid-attributes-changed-fields-string.json",
+      "expect_instance_location": "/attributes/changed_fields",
+      "expect_keyword": "type",
+      "why": "A list."
+    },
+    {
+      "file": "invalid-attributes-actions-too-many.json",
+      "expect_instance_location": "/attributes/actions",
+      "expect_keyword": "maxItems",
+      "why": "The registry bounds allowed actions at 64."
+    },
+    {
+      "file": "invalid-attributes-revision-negative.json",
+      "expect_instance_location": "/attributes/revision",
+      "expect_keyword": "minimum",
+      "why": "A revision counter is not negative."
+    },
+    {
+      "file": "invalid-attributes-principal-enabled-false.json",
+      "expect_instance_location": "/attributes/principal_enabled",
+      "expect_keyword": "enum",
+      "why": "Present only when the principal row was enabled."
+    },
+    {
+      "file": "invalid-attributes-credential-class-unlisted.json",
+      "expect_instance_location": "/attributes/credential_class",
+      "expect_keyword": "enum",
+      "why": "A closed set, not a lowercase pattern."
+    },
+    {
+      "file": "invalid-actor-raw-uuid.json",
+      "expect_instance_location": "/actor_principal_id",
+      "expect_keyword": "pattern",
+      "why": "The row holds a bare uuid; the wire form is prefixed."
+    },
+    {
+      "file": "invalid-attributes-decision-reason-code-unlisted.json",
+      "expect_instance_location": "/attributes/decision_reason_code",
+      "expect_keyword": "enum",
+      "why": "The decision reason code is a closed 24-code vocabulary."
+    },
+    {
+      "file": "invalid-attributes-decision-id-malformed.json",
+      "expect_instance_location": "/attributes/decision_id",
+      "expect_keyword": "pattern",
+      "why": "A decision id is dec_ plus 26 characters."
+    },
+    {
+      "file": "invalid-attributes-resource-type-unlisted.json",
+      "expect_instance_location": "/attributes/resource_type",
+      "expect_keyword": "enum",
+      "why": "The resource type is the closed authorization_request.v1 set."
     }
   ],
   "reject_by_client": [
@@ -136,6 +238,10 @@
     {
       "file": "client-rejected-aggregate-revision-exponent-form.json",
       "why": "A decimal-form token inside attributes: the guard is not top-level only."
+    },
+    {
+      "file": "client-rejected-revision-decimal-form.json",
+      "why": "A decimal-form token for a whole-number attribute: the guard covers every integer member."
     }
   ]
 }

@@ -163,9 +163,11 @@ type OutboxEvent struct {
 	Change        map[string]any
 }
 
-// OffStreamSessionLifecycle marks a mutation that is deliberately not a
-// provisioning event: session and refresh-credential lifecycle (the
-// provisioning stream has no session aggregate).
+// OffStreamSessionLifecycle marks a mutation with no STATIC provisioning events:
+// session and refresh-credential lifecycle. Its revocations are queued from
+// inside Apply with TxOps.AddEvent (session.revoked and the scope events,
+// CHAOS-11816), because only the code that ended the sessions knows which; a
+// session start and a revoke that changes nothing write none.
 const OffStreamSessionLifecycle = "session_lifecycle"
 
 // OffStreamLinkCredentialLifecycle marks the consume of a single-use link
@@ -175,17 +177,29 @@ const OffStreamSessionLifecycle = "session_lifecycle"
 // new password) is a provisioning event written by the identity store.
 const OffStreamLinkCredentialLifecycle = "link_credential_lifecycle"
 
-// OffStreamSigningKeyLifecycle marks a signing-key rotation verb: key states
-// are not a provisioning aggregate.
+// OffStreamSigningKeyLifecycle marks a signing-key rotation verb: only the
+// compromise queues an event (signing_key.compromised); the other key states
+// are the JWKS's, not the stream's.
 const OffStreamSigningKeyLifecycle = "signing_key_lifecycle"
 
 // OffStreamWorkloadRegistry marks a workload registry change that has no
 // provisioning event yet: allowed actions and deployment bindings.
 const OffStreamWorkloadRegistry = "workload_registry"
 
+// OffStreamRestoreFence marks the restore fence's apply (auth-migrate
+// restore-fence apply): it raises revision counters and re-applies revocations
+// after a point-in-time restore. Its writes republish nothing; the counters it
+// raises exist so the next real event is a revision no consumer has seen.
+const OffStreamRestoreFence = "restore_fence"
+
+// OffStreamCredentialProjection marks the projection of an external credential
+// event (CHAOS-10896): it writes the principal, the registry row and the
+// projected state and republishes nothing.
+const OffStreamCredentialProjection = "credential_projection"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
-	OffStreamWorkloadRegistry: true,
+	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.
@@ -236,7 +250,54 @@ var offStreamReasons = map[string]bool{
 // the parameterised case at the server, and it was wrongly credited here as the
 // control until that claim was measured.
 
-type TxOps struct{ tx pgx.Tx }
+type TxOps struct {
+	tx    pgx.Tx
+	queue *auditQueue
+}
+
+// auditQueue holds the rows AddAudit queued. It belongs to one Commit call, so
+// a Commit a caller tries again starts empty. closed is set once Commit has
+// read it: a retained TxOps cannot add a row nothing would write.
+type auditQueue struct {
+	events []AuditEvent
+	outbox []OutboxEvent
+	closed bool
+}
+
+// AddAudit queues audit rows of this mutation from inside Apply, for a row only
+// the code that reached a state change can name (a delegated session a cascade
+// ended). Commit writes them after Audit and Also, in the same transaction: a
+// failure writing one rolls the mutation back. A TxOps of any other transaction
+// has no queue and refuses.
+func (t TxOps) AddAudit(events ...AuditEvent) error {
+	if t.queue == nil || t.queue.closed {
+		return fmt.Errorf("%w: no audit queue on this transaction", ErrMutationFailed)
+	}
+	for _, event := range events {
+		if err := validateMutationAudit(event); err != nil {
+			return err
+		}
+	}
+	t.queue.events = append(t.queue.events, events...)
+	return nil
+}
+
+// AddEvent queues outbox events of this mutation from inside Apply, for an event only the code that reached a state
+// change can name (the sessions a cascade ended). Commit writes them with Events, in the same transaction, after the
+// changed-row count: a mutation that changed nothing writes none, and a failure writing one rolls the mutation back. Each
+// event is checked against provisioning-event.v1 here. A TxOps of any other transaction has no queue and refuses.
+func (t TxOps) AddEvent(events ...OutboxEvent) error {
+	if t.queue == nil || t.queue.closed {
+		return fmt.Errorf("%w: no event queue on this transaction", ErrMutationFailed)
+	}
+	for _, e := range events {
+		if err := provisioning.CheckEvent(e.AggregateType, e.AggregateID, e.EventType, e.Change); err != nil {
+			return fmt.Errorf("%w: %w", ErrMutationFailed, err)
+		}
+	}
+	t.queue.outbox = append(t.queue.outbox, events...)
+	return nil
+}
 
 // EVERY forward carries pgx.QueryExecModeExec, and that is a second control
 // rather than a performance choice.
@@ -369,21 +430,39 @@ func (e errRow) Scan(...any) error { return e.err }
 // one of the two is set: a mutation cannot forget its events by leaving a
 // slice empty.
 type Mutation struct {
-	Apply     func(ctx context.Context, tx TxOps) error
-	Audit     AuditEvent
+	Apply func(ctx context.Context, tx TxOps) error
+	Audit AuditEvent
+	// Also are further audit rows of the same mutation, written after Audit
+	// in the same transaction: one state change that ends one thing and
+	// starts another (an organization switch revokes the predecessor session
+	// it issues a successor for) records each half as its own row.
+	Also      []AuditEvent
 	Events    []OutboxEvent
 	OffStream string
+	// Refusals are Apply errors that are expected domain refusals: Commit still
+	// rolls back, and logs them at WARN, not ERROR.
+	Refusals []error
+}
+
+// validateMutationAudit is the check of one audit row of a mutation.
+func validateMutationAudit(event AuditEvent) error {
+	if err := event.validate(); err != nil {
+		return err
+	}
+	if appendOnlyEventTypes[event.EventType] || publicPurgeEventTypes[event.EventType] {
+		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, event.EventType)
+	}
+	return nil
 }
 
 func (m Mutation) validate() error {
 	if m.Apply == nil {
 		return fmt.Errorf("%w: no state mutation", ErrMutationFailed)
 	}
-	if err := m.Audit.validate(); err != nil {
-		return err
-	}
-	if appendOnlyEventTypes[m.Audit.EventType] || publicPurgeEventTypes[m.Audit.EventType] {
-		return fmt.Errorf("%w: audit event_type %q is append-only and has no state mutation", ErrMutationFailed, m.Audit.EventType)
+	for _, event := range append([]AuditEvent{m.Audit}, m.Also...) {
+		if err := validateMutationAudit(event); err != nil {
+			return err
+		}
 	}
 	switch {
 	case len(m.Events) > 0 && m.OffStream != "":
@@ -417,10 +496,10 @@ func (m Mutation) validate() error {
 // security mutation is the failure this package exists to make impossible.
 func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m Mutation) (err error) {
 	defer func() {
-		if err != nil {
-			slog.ErrorContext(ctx, "audit: Commit failed; its own transaction rolled back",
-				"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
-				"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
+		// A mutation that changed nothing (ErrNoStateChange) is a no-op, not a failed commit: a refused refresh
+		// exchange is normal traffic (CHAOS-11400), so it logs no ERROR line.
+		if err != nil && !errors.Is(err, ErrNoStateChange) {
+			logCommitFailure(ctx, m, err)
 		}
 	}()
 	if pool == nil {
@@ -446,7 +525,8 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 		return fmt.Errorf("%w: arming the commit guard: %w", ErrMutationFailed, err)
 	}
 
-	if applyErr := m.Apply(ctx, TxOps{tx: tx}); applyErr != nil {
+	queue := &auditQueue{}
+	if applyErr := m.Apply(ctx, TxOps{tx: tx, queue: queue}); applyErr != nil {
 		return fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, applyErr)
 	}
 	var changed int64
@@ -476,11 +556,15 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	}
 	// After the changed-row count: the revision rows are guarded, so a bump
 	// counted before it would make a no-op mutation look like a change.
+	m.Events = append(append([]OutboxEvent(nil), m.Events...), queue.outbox...)
 	if err := insertOutboxEvents(ctx, tx, schema, m); err != nil {
 		return err
 	}
-	if err := insertAuditEvent(ctx, tx, schema, m.Audit); err != nil {
-		return err
+	queue.closed = true
+	for _, event := range append(append([]AuditEvent{m.Audit}, m.Also...), queue.events...) {
+		if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
@@ -488,34 +572,57 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 	return nil
 }
 
-// insertOutboxEvents bumps each event's aggregate revision and writes the
-// event with that revision. Events are taken in (aggregate_type, aggregate_id)
-// order, so every transaction locks revision rows in one order and two
-// mutations over the same aggregates cannot deadlock; events of one aggregate
-// keep the caller's order. The upsert's row lock is held to commit, so the
-// next writer of an aggregate reads the committed value (contiguous), and a
-// rollback undoes the bump (no gap).
-func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, m Mutation) error {
-	events := append([]OutboxEvent(nil), m.Events...)
-	sort.SliceStable(events, func(i, j int) bool {
-		if events[i].AggregateType != events[j].AggregateType {
-			return events[i].AggregateType < events[j].AggregateType
+func logCommitFailure(ctx context.Context, m Mutation, err error) {
+	level, msg := slog.LevelError, "audit: Commit failed; its own transaction rolled back"
+	for _, refusal := range m.Refusals {
+		if errors.Is(err, refusal) {
+			level, msg = slog.LevelWarn, "audit: Commit refused; its own transaction rolled back"
+			break
 		}
-		return events[i].AggregateID < events[j].AggregateID
+	}
+	slog.Log(ctx, level, msg, "audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
+		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
+}
+
+// outboxOrder is the order a mutation's events are written in:
+// (aggregate_type, aggregate_id), so every transaction locks revision rows in
+// one order and two mutations over the same aggregates cannot deadlock; events
+// of one aggregate keep the caller's order. The order across aggregates is
+// therefore not the caller's: a mutation over two aggregates (a replace that
+// revokes one assignment and grants another) writes them in id order. The
+// consumer contract is per aggregate only (contiguous revisions); a consumer
+// keyed by something else (a principal, a role) must re-read the current state
+// when it applies an event (for a platform role, rule.HoldsSQL) and never
+// apply the event as a delta.
+func outboxOrder(events []OutboxEvent) []OutboxEvent {
+	ordered := append([]OutboxEvent(nil), events...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].AggregateType != ordered[j].AggregateType {
+			return ordered[i].AggregateType < ordered[j].AggregateType
+		}
+		return ordered[i].AggregateID < ordered[j].AggregateID
 	})
+	return ordered
+}
+
+// insertOutboxEvents bumps each event's aggregate revision and writes the
+// event with that revision, in outboxOrder. The upsert's row lock is held to
+// commit, so the next writer of an aggregate reads the committed value
+// (contiguous), and a rollback undoes the bump (no gap).
+func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.ValidatedIdentifier, m Mutation) error {
+	events := outboxOrder(m.Events)
 	q := authschema.Quote(schema)
 	for _, e := range events {
-		var revision int64
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO `+q+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
-			VALUES ($1, $2, 1)
-			ON CONFLICT (aggregate_type, aggregate_id)
-			DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
-			RETURNING r.revision`, e.AggregateType, e.AggregateID).Scan(&revision); err != nil {
-			return fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, e.AggregateType, err)
+		oneShot := provisioning.IsOneShot(e.AggregateType)
+		revision := int64(1)
+		if !oneShot {
+			var err error
+			if revision, err = bumpRevision(ctx, tx, q, e.AggregateType, e.AggregateID); err != nil {
+				return err
+			}
 		}
 		payload := map[string]any{"revision": revision, "change": orEmpty(e.Change)}
-		if m.Audit.OrganizationID != nil {
+		if a, _ := provisioning.AggregateOf(e.AggregateType); m.Audit.OrganizationID != nil && !a.NoOrganization {
 			payload["organization_id"] = provisioning.WireID("organization", *m.Audit.OrganizationID)
 		}
 		if m.Audit.ActorPrincipalID != nil {
@@ -525,16 +632,49 @@ func insertOutboxEvents(ctx context.Context, tx pgx.Tx, schema authschema.Valida
 		if err != nil {
 			return fmt.Errorf("%w: encoding the outbox payload", ErrMutationFailed)
 		}
-		key := e.AggregateType + ":" + e.AggregateID + ":" + strconv.FormatInt(revision, 10)
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO `+q+`.auth_outbox_events
-			    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
-			VALUES ($1, $2, $3, $4, $5)`,
-			e.AggregateType, e.AggregateID, e.EventType, encoded, key); err != nil {
-			return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
+		if err := insertOutboxRow(ctx, tx, q, e.AggregateType, e.AggregateID, e.EventType, revision, encoded, oneShot); err != nil {
+			return err
 		}
 		slog.DebugContext(ctx, "audit: outbox event written",
 			"aggregate_type", e.AggregateType, "event_type", e.EventType, "revision", revision)
+	}
+	return nil
+}
+
+// bumpRevision raises the aggregate's revision by one, creating it at 1, and
+// returns the new value. The upsert's row lock is held to commit, so the next
+// writer of the aggregate reads the committed value (contiguous), and a
+// rollback undoes the bump (no gap). Every outbox writer goes through it.
+func bumpRevision(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID string) (int64, error) {
+	var revision int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO `+quotedSchema+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
+		VALUES ($1, $2, 1)
+		ON CONFLICT (aggregate_type, aggregate_id)
+		DO UPDATE SET revision = r.revision + 1, updated_at = clock_timestamp()
+		RETURNING r.revision`, aggregateType, aggregateID).Scan(&revision); err != nil {
+		return 0, fmt.Errorf("%w: bumping the %s revision: %w", ErrMutationFailed, aggregateType, err)
+	}
+	return revision, nil
+}
+
+// insertOutboxRow writes one outbox row, its key aggregate_type:aggregate_id:revision.
+//
+// A one-shot aggregate's key is the same on every attempt (revision 1), and the same session can be revoked as a child
+// of its parent and again on its own row: the second write is the same fact, so it conflicts on the key and writes
+// nothing, instead of aborting the mutation (a logout must not fail on it).
+func insertOutboxRow(ctx context.Context, tx pgx.Tx, quotedSchema, aggregateType, aggregateID, eventType string, revision int64, payload []byte, oneShot bool) error {
+	key := aggregateType + ":" + aggregateID + ":" + strconv.FormatInt(revision, 10)
+	onConflict := ""
+	if oneShot {
+		onConflict = " ON CONFLICT (idempotency_key) DO NOTHING"
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO `+quotedSchema+`.auth_outbox_events
+		    (aggregate_type, aggregate_id, event_type, payload, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5)`+onConflict,
+		aggregateType, aggregateID, eventType, payload, key); err != nil {
+		return fmt.Errorf("%w: inserting the outbox event: %w", ErrMutationFailed, err)
 	}
 	return nil
 }

@@ -3,12 +3,15 @@ package sso
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -65,14 +68,22 @@ func (h handlers) provisionOrGetUser(ctx context.Context, row *providerRow, emai
 		isSuperuser                bool
 		tokenVersion               int64
 	)
+	if err := refuseUnusableSubject(authProviderValue, externalID); err != nil {
+		return nil, nil, err
+	}
+	if err := refuseUnusableEmail(email); err != nil {
+		return nil, nil, err
+	}
+	if err := checkAllowedDomain(row, email); err != nil {
+		return nil, nil, err
+	}
 	userID, found, err := h.resolveProviderIdentity(ctx, authProviderValue, providerID, externalID, email)
 	if err != nil {
 		return nil, nil, err
 	}
 	err = pgx.ErrNoRows
 	if found {
-		err = h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, is_superuser, token_version
-FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &existingFullName,
+		err = h.signInUser(ctx, `id, email, username, full_name, `, userID, &id, &existingEmail, &username, &existingFullName,
 			&isSuperuser, &tokenVersion)
 	}
 
@@ -85,9 +96,7 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if name != "" {
 			fullNamePtr = &name
 		}
-		if externalID != "" {
-			externalIDPtr = &externalID
-		}
+		externalIDPtr = &externalID
 		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
 			email: email, authProvider: authProviderValue, externalID: externalIDPtr, fullName: fullNamePtr,
 			ssoProviderID: &providerID, saml: saml,
@@ -125,6 +134,70 @@ WHERE id = $1::uuid`,
 		isSuperuser: isSuperuser, tokenVersion: tokenVersion}, membership, nil
 }
 
+// refuseUnusableSubject is the one subject rule of the sign-in callbacks (OIDC, SAML, OAuth): an empty subject, or one
+// that identity.ValidSubject refuses (NUL and other control characters, invalid UTF-8, edge white space, too long), is
+// refused before any database statement, so the answer never depends on which accounts exist. The error names no value.
+func refuseUnusableSubject(authProvider, externalID string) error {
+	return identity.RefuseInvalidProviderID(authProvider, &externalID)
+}
+
+// errInvalidProviderEmail: the identity provider returned an address the shared email text rule refuses. The text names
+// no value.
+var errInvalidProviderEmail = errors.New("sso: the identity provider returned an unusable email address")
+
+// refuseUnusableEmail is the one email text rule of the sign-in callbacks (OIDC, SAML, OAuth): identity.RefuseProviderEmail,
+// the rule auth-service applies too (lone surrogate, invalid UTF-8, NUL, control characters, U+FFFD after the edge
+// trim), applied before any database statement, so the answer never depends on which accounts exist.
+func refuseUnusableEmail(email string) error {
+	if identity.RefuseProviderEmail(email) != nil {
+		return errInvalidProviderEmail
+	}
+	return nil
+}
+
+// errProviderEmailMalformed: a provider with an allowlist returned an address without "@".
+var errProviderEmailMalformed = errors.New("sso: the identity provider returned an address without a domain")
+
+// domainNotAllowedError: the address's domain is not on the provider's allowlist. Its text names no value; the domain
+// goes to the server log only, never to the answer or the audit row.
+type domainNotAllowedError struct{ domain string }
+
+func (*domainNotAllowedError) Error() string {
+	return "sso: email domain is not allowed for this provider"
+}
+
+// domainNotAllowedText is the 403 detail of a refused domain, the text auth-service answers; it names no domain.
+const domainNotAllowedText = "Email domain is not allowed for this provider"
+
+// checkAllowedDomain is the allowlist check of the OIDC and SAML callbacks. It runs after the subject and email rules
+// and before any database statement; an empty or absent allowlist allows every domain.
+func checkAllowedDomain(row *providerRow, email string) error {
+	allowedDomains, err := decodeAllowedDomains(row.AllowedDomains)
+	if err != nil {
+		return fmt.Errorf("decode allowed domains: %w", err)
+	}
+	if len(allowedDomains) == 0 {
+		return nil
+	}
+	at := strings.LastIndex(email, "@")
+	if at < 0 {
+		return errProviderEmailMalformed
+	}
+	if domain := email[at+1:]; !emaildomain.Allowed(allowedDomains, domain) {
+		return &domainNotAllowedError{domain: domain}
+	}
+	return nil
+}
+
+// invalidProviderEmailDetail is the 400 body of a sign-in whose identity provider returned an unusable email
+// address; it names no value.
+func invalidProviderEmailDetail() *pyjson.Object {
+	detail := pyjson.NewObject()
+	detail.Set("message", "The identity provider returned an unusable email address")
+	detail.Set("reason", "invalid_provider_email")
+	return detail
+}
+
 // errIdentityConflict: the email belongs to an account with another or no SSO
 // identity, or the identity key matches more than one account.
 var errIdentityConflict = errors.New("identity conflict")
@@ -137,7 +210,7 @@ var errIdentityConflict = errors.New("identity conflict")
 // provider's identity.
 func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider string, providerID uuid.UUID, externalID, email string) (uuid.UUID, bool, error) {
 	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND sso_provider_id = $3::uuid AND auth_provider_id = $2::text LIMIT 2`,
-		[]any{authProvider, externalID, providerID}, externalID, email)
+		[]any{authProvider, externalID, providerID}, email)
 }
 
 // resolveSSOIdentity selects an OAuth account by its (auth_provider,
@@ -147,34 +220,32 @@ func (h handlers) resolveProviderIdentity(ctx context.Context, authProvider stri
 // conflict; it is never adopted or rewritten.
 func (h handlers) resolveSSOIdentity(ctx context.Context, authProvider, externalID, email string) (uuid.UUID, bool, error) {
 	return h.resolveIdentityKey(ctx, `SELECT id FROM users WHERE auth_provider = $1::text AND auth_provider_id = $2::text LIMIT 2`,
-		[]any{authProvider, externalID}, externalID, email)
+		[]any{authProvider, externalID}, email)
 }
 
-func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, externalID, email string) (uuid.UUID, bool, error) {
-	if externalID != "" {
-		rows, err := h.Pool.Query(ctx, keyQuery, keyArgs...)
-		if err != nil {
+func (h handlers) resolveIdentityKey(ctx context.Context, keyQuery string, keyArgs []any, email string) (uuid.UUID, bool, error) {
+	rows, err := h.Pool.Query(ctx, keyQuery, keyArgs...)
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
 			return uuid.Nil, false, err
 		}
-		defer rows.Close()
-		var ids []uuid.UUID
-		for rows.Next() {
-			var id uuid.UUID
-			if err := rows.Scan(&id); err != nil {
-				return uuid.Nil, false, err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			return uuid.Nil, false, err
-		}
-		switch len(ids) {
-		case 1:
-			return ids[0], true, nil
-		case 0:
-		default:
-			return uuid.Nil, false, errIdentityConflict
-		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return uuid.Nil, false, err
+	}
+	switch len(ids) {
+	case 1:
+		return ids[0], true, nil
+	case 0:
+	default:
+		return uuid.Nil, false, errIdentityConflict
 	}
 	var taken bool
 	if err := h.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(email) = lower($1::text))`, email).Scan(&taken); err != nil {
@@ -297,9 +368,9 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `INSERT INTO users
-	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified, is_superuser,
+	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified,
 	 token_version, last_login_at, created_at, updated_at, saml_nameid_format, saml_sp_name_qualifier)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, false, 0, $8, $8, $8, $10, $11)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, 0, $8, $8, $8, $10, $11)`,
 		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID,
 		account.saml.formatArg(), account.saml.qualifierArg()); err != nil {
 		if isUniqueViolation(err) {
@@ -334,7 +405,7 @@ type dbExecer interface {
 // the same way); otherwise it runs on the pool. nil means no write.
 func (h handlers) membershipOrJoin(ctx context.Context, row *providerRow, userID uuid.UUID, update func(ctx context.Context, db dbExecer) error) (*provisionedMembership, error) {
 	membership, err := h.requireMembership(ctx, userID, row.OrgID)
-	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision {
+	if !errors.Is(err, errMembershipRequired) || !row.AutoProvision || h.refuseWhileUsersOwned() != nil {
 		if err != nil {
 			return nil, err
 		}

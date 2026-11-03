@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // baseEnv is a minimally valid environment: the two settings Load requires and
@@ -315,64 +317,82 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 // site reads is exactly the four-surface drift CHAOS-3942 was.
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
-		EnvUsersOwned:             "true",
-		EnvOrgsOwned:              "true",
-		EnvLogLevel:               "debug",
-		EnvShutdownTimeout:        "42s",
-		EnvHealthCheckTimeout:     "1500ms",
-		EnvAPIAddress:             "127.0.0.1:19095",
-		EnvOperatorAddress:        "127.0.0.1:19096",
-		EnvRequestTimeout:         "7s",
-		EnvMaxBodyBytes:           "4096",
-		EnvRateLimitPerSecond:     "3.5",
-		EnvRateLimitBurst:         "9",
-		EnvPublicMaxInFlight:      "17",
-		EnvPublicRateLimit:        "7.5",
-		EnvPublicRateLimitBurst:   "19",
-		EnvDatabaseSchema:         "authtest",
-		EnvDatabaseMaxConns:       "11",
-		EnvDatabaseConnectTimeout: "3s",
-		EnvSigningKeyFile:         "/tmp/other-key.pem",
-		EnvSigningKeyID:           "other-kid",
-		EnvSigningKeySetFile:      "/tmp/other-keyset.json",
-		EnvTokenIssuerURL:         "https://other-issuer.example.test",
-		EnvAccessTokenIssuer:      "other-issuer",
-		EnvAccessTokenAudience:    "other-audience",
-		EnvSocialLinkRoutes:       "true",
-		EnvTrustedProxies:         "10.0.0.5,192.168.0.0/16",
-		"SOCIAL_GITHUB_CLIENT_ID": "gh-client",
-		"SOCIAL_GITLAB_CLIENT_ID": "gl-client",
-		"SOCIAL_GOOGLE_CLIENT_ID": "google-client",
+		EnvUsersOwned:                  "true",
+		EnvOrgsOwned:                   "true",
+		EnvRevisionFeed:                "on",
+		EnvPushProjection:              "on",
+		rule.OwnedEnv:                  "true",
+		EnvLogLevel:                    "debug",
+		EnvShutdownTimeout:             "42s",
+		EnvHealthCheckTimeout:          "1500ms",
+		EnvAPIAddress:                  "127.0.0.1:19095",
+		EnvOperatorAddress:             "127.0.0.1:19096",
+		EnvRequestTimeout:              "7s",
+		EnvMaxBodyBytes:                "4096",
+		EnvRateLimitPerSecond:          "3.5",
+		EnvRateLimitBurst:              "9",
+		EnvPublicMaxInFlight:           "17",
+		EnvPublicRateLimit:             "7.5",
+		EnvPublicRateLimitBurst:        "19",
+		EnvDatabaseSchema:              "authtest",
+		EnvDatabaseMaxConns:            "11",
+		EnvDatabaseConnectTimeout:      "3s",
+		EnvSigningKeyFile:              "/tmp/other-key.pem",
+		EnvSigningKeyID:                "other-kid",
+		EnvSigningKeySetFile:           "/tmp/other-keyset.json",
+		EnvTokenIssuerURL:              "https://other-issuer.example.test",
+		EnvAccessTokenIssuer:           "other-issuer",
+		EnvAccessTokenAudience:         "other-audience",
+		EnvLegacyJWTAudience:           "other-legacy-audience",
+		EnvSocialLinkRoutes:            "true",
+		EnvSSOJIT:                      "true",
+		EnvMembershipRoutes:            "true",
+		EnvSessionIssueWorkloadSubject: "prn_AAAAAAAAAAAAAAAAAAAAAA",
+		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
+		EnvAcrEventsWorkloadSubject:    "prn_BBBBBBBBBBBBBBBBBBBBBB",
+		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
+		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
+		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
+		"SOCIAL_GOOGLE_CLIENT_ID":      "google-client",
 	}
 	read := map[string]func(Config) string{
-		EnvUsersOwned:             func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
-		EnvOrgsOwned:              func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
-		EnvLogLevel:               func(c Config) string { return c.LogLevel.String() },
-		EnvShutdownTimeout:        func(c Config) string { return c.ShutdownTimeout.String() },
-		EnvHealthCheckTimeout:     func(c Config) string { return c.HealthCheckTimeout.String() },
-		EnvAPIAddress:             func(c Config) string { return c.APIAddress },
-		EnvOperatorAddress:        func(c Config) string { return c.OperatorAddress },
-		EnvRequestTimeout:         func(c Config) string { return c.RequestTimeout.String() },
-		EnvMaxBodyBytes:           func(c Config) string { return itoa(c.MaxBodyBytes) },
-		EnvRateLimitPerSecond:     func(c Config) string { return ftoa(c.RateLimit.PerSecond) },
-		EnvRateLimitBurst:         func(c Config) string { return itoa(int64(c.RateLimit.Burst)) },
-		EnvPublicMaxInFlight:      func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
-		EnvPublicRateLimit:        func(c Config) string { return ftoa(c.Public.PerSecond) },
-		EnvPublicRateLimitBurst:   func(c Config) string { return itoa(int64(c.Public.Burst)) },
-		EnvDatabaseSchema:         func(c Config) string { return c.DatabaseSchema },
-		EnvDatabaseMaxConns:       func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
-		EnvDatabaseConnectTimeout: func(c Config) string { return c.DatabaseConnectTimeout.String() },
-		EnvSigningKeyFile:         func(c Config) string { return c.SigningKeyPath },
-		EnvSigningKeyID:           func(c Config) string { return c.SigningKeyID },
-		EnvSigningKeySetFile:      func(c Config) string { return c.SigningKeySetPath },
-		EnvTokenIssuerURL:         func(c Config) string { return c.TokenIssuerURL },
-		EnvAccessTokenIssuer:      func(c Config) string { return c.Session.AccessIssuer },
-		EnvAccessTokenAudience:    func(c Config) string { return c.Session.AccessAudience },
-		EnvSocialLinkRoutes:       func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
-		EnvTrustedProxies:         func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
-		"SOCIAL_GITHUB_CLIENT_ID": func(c Config) string { return c.Social["github"].ID },
-		"SOCIAL_GITLAB_CLIENT_ID": func(c Config) string { return c.Social["gitlab"].ID },
-		"SOCIAL_GOOGLE_CLIENT_ID": func(c Config) string { return c.Social["google"].ID },
+		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
+		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
+		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
+		EnvPushProjection:              func(c Config) string { return strconv.FormatBool(c.PushProjection) },
+		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
+		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
+		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
+		EnvHealthCheckTimeout:          func(c Config) string { return c.HealthCheckTimeout.String() },
+		EnvAPIAddress:                  func(c Config) string { return c.APIAddress },
+		EnvOperatorAddress:             func(c Config) string { return c.OperatorAddress },
+		EnvRequestTimeout:              func(c Config) string { return c.RequestTimeout.String() },
+		EnvMaxBodyBytes:                func(c Config) string { return itoa(c.MaxBodyBytes) },
+		EnvRateLimitPerSecond:          func(c Config) string { return ftoa(c.RateLimit.PerSecond) },
+		EnvRateLimitBurst:              func(c Config) string { return itoa(int64(c.RateLimit.Burst)) },
+		EnvPublicMaxInFlight:           func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
+		EnvPublicRateLimit:             func(c Config) string { return ftoa(c.Public.PerSecond) },
+		EnvPublicRateLimitBurst:        func(c Config) string { return itoa(int64(c.Public.Burst)) },
+		EnvDatabaseSchema:              func(c Config) string { return c.DatabaseSchema },
+		EnvDatabaseMaxConns:            func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
+		EnvDatabaseConnectTimeout:      func(c Config) string { return c.DatabaseConnectTimeout.String() },
+		EnvSigningKeyFile:              func(c Config) string { return c.SigningKeyPath },
+		EnvSigningKeyID:                func(c Config) string { return c.SigningKeyID },
+		EnvSigningKeySetFile:           func(c Config) string { return c.SigningKeySetPath },
+		EnvTokenIssuerURL:              func(c Config) string { return c.TokenIssuerURL },
+		EnvAccessTokenIssuer:           func(c Config) string { return c.Session.AccessIssuer },
+		EnvAccessTokenAudience:         func(c Config) string { return c.Session.AccessAudience },
+		EnvLegacyJWTAudience:           func(c Config) string { return c.Session.LegacyAudience },
+		EnvSocialLinkRoutes:            func(c Config) string { return strconv.FormatBool(c.Session.SocialLinkRoutes) },
+		EnvSSOJIT:                      func(c Config) string { return strconv.FormatBool(c.SSO.JIT) },
+		EnvMembershipRoutes:            func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
+		EnvSessionIssueWorkloadSubject: func(c Config) string { return c.SessionIssueWorkloadSubject },
+		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
+		EnvAcrEventsWorkloadSubject:    func(c Config) string { return c.AcrEventsWorkloadSubject },
+		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
+		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
+		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
+		"SOCIAL_GOOGLE_CLIENT_ID":      func(c Config) string { return c.Social["google"].ID },
 	}
 
 	baseline, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
@@ -400,9 +420,20 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 				delete(env, EnvSigningKeyFile)
 				delete(env, EnvSigningKeyID)
 			}
+			if option.Env == EnvMembershipRoutes {
+				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
+				env[EnvValkeyURI] = testValkeyURI
+				env[EnvInviteTokenSecret], env[EnvInviteTokenSecretPrevious] = "invite-signing-key", "invite-previous-key"
+			}
 			if option.Env == EnvSocialLinkRoutes {
 				env[EnvAccessTokenSecret], env[EnvSessionSuccessorKey] = testAccessSecret, testSuccessorKey
 				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvRevisionFeed {
+				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects || option.Env == EnvAcrEventsWorkloadSubject {
+				env[EnvTokenIssuerURL] = "https://auth.example.com"
 			}
 			env[option.Env] = value
 			cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
@@ -583,6 +614,24 @@ func TestPublicAdmissionRefusesAValueBeyondIntRange(t *testing.T) {
 	}
 	e := baseEnv()
 	e[EnvPublicMaxInFlight] = "1.5"
+	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Errorf("1.5: error = %v, want an integer refusal", err)
+	}
+}
+
+// A RateLimit burst beyond the range of an int on any platform is refused with
+// the range message, as the public burst is; it is not read as "not an integer".
+func TestRateLimitBurstRefusesAValueBeyondIntRange(t *testing.T) {
+	for _, value := range []string{"4294967297", "2147483648", "9223372036854775808", "-2147483649"} {
+		e := baseEnv()
+		e[EnvRateLimitBurst] = value
+		_, err := Load(Spec{LookupEnv: lookupFrom(e)})
+		if err == nil || !strings.Contains(err.Error(), "must be between") {
+			t.Errorf("%s=%s: error = %v, want a range refusal", EnvRateLimitBurst, value, err)
+		}
+	}
+	e := baseEnv()
+	e[EnvRateLimitBurst] = "1.5"
 	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
 		t.Errorf("1.5: error = %v, want an integer refusal", err)
 	}

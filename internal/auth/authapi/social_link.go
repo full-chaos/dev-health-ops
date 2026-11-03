@@ -26,7 +26,7 @@ const (
 
 // SocialLinkDeps are the link routes' collaborators.
 type SocialLinkDeps struct {
-	Sessions Sessions
+	Sessions GuardedSessions
 	Users    Users
 	Issuer   *Issuer
 	Logger   *slog.Logger

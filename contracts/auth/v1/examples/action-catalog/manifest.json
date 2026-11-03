@@ -8,6 +8,10 @@
     {
       "file": "valid-platform-action.json",
       "why": "An organization and a platform action."
+    },
+    {
+      "file": "valid-repository-action.json",
+      "why": "A repository-kind action: an organization-scope action whose resource kind is a repository."
     }
   ],
   "reject": [
@@ -76,6 +80,24 @@
       "expect_instance_location": "/actions/0",
       "expect_keyword": "required",
       "why": "Every action names its cache class."
+    },
+    {
+      "file": "invalid-resource-kind-unknown.json",
+      "expect_instance_location": "/actions/0/resource_kind",
+      "expect_keyword": "enum",
+      "why": "A resource kind outside the closed set."
+    },
+    {
+      "file": "invalid-impersonation-missing.json",
+      "expect_instance_location": "/actions/0",
+      "expect_keyword": "required",
+      "why": "impersonation is required: an action added later cannot default open."
+    },
+    {
+      "file": "invalid-impersonation-unknown.json",
+      "expect_instance_location": "/actions/0/impersonation",
+      "expect_keyword": "enum",
+      "why": "impersonation is denied or allowed."
     }
   ]
 }

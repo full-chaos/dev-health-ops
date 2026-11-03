@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,8 +29,19 @@ type pgStore struct {
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so every
 	// public.users writer of the store refuses before it writes.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: auth-service owns the
+	// platform roles, so a write of public users.is_superuser refuses.
+	PlatformRolesOwned bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA, the schema the platform role rule
+	// reads while PlatformRolesOwned (empty: "auth").
+	AuthSchema string
 	// Now is injectable for tests; nil means time.Now.
 	Now func() time.Time
+}
+
+// platformRoles is how this store's users reads decide is_superuser.
+func (s pgStore) platformRoles() policy.PlatformRoleRead {
+	return policy.PlatformRoleRead{Owned: s.PlatformRolesOwned, AuthSchema: s.AuthSchema}
 }
 
 func (s pgStore) now() time.Time {
@@ -48,12 +60,23 @@ type targetUser struct {
 	IsSuperuser bool
 }
 
+// targetUserSQL is userByID's read, with is_superuser by the platform roles switch.
+func (s pgStore) targetUserSQL() (string, error) {
+	superuser, err := s.platformRoles().Superuser("is_superuser", "users.id")
+	if err != nil {
+		return "", err
+	}
+	return `SELECT id, email, is_active, ` + superuser + ` FROM users WHERE id = $1`, nil
+}
+
 // userByID is impersonation.py's `select(User).where(User.id == ...)`.
 func (s pgStore) userByID(ctx context.Context, id uuid.UUID) (*targetUser, error) {
 	var user targetUser
-	err := s.Pool.QueryRow(ctx,
-		`SELECT id, email, is_active, is_superuser FROM users WHERE id = $1`, id,
-	).Scan(&user.ID, &user.Email, &user.IsActive, &user.IsSuperuser)
+	query, err := s.targetUserSQL()
+	if err != nil {
+		return nil, err
+	}
+	err = s.Pool.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.IsActive, &user.IsSuperuser)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -202,4 +225,17 @@ func parseUUID(value string) (uuid.UUID, error) {
 // users; the routes answer the moved operation and the operator verbs exit refused.
 var ErrUsersOwned = usersowned.ErrRefused
 
+// ErrPlatformRolesOwned is the refusal of an is_superuser write while
+// auth-service owns the platform roles.
+var ErrPlatformRolesOwned = usersowned.ErrPlatformRolesRefused
+
 func (s pgStore) refuseWhileUsersOwned() error { return usersowned.RefuseWhileUsersOwned(s.UsersOwned) }
+
+// refuseSuperuserWhileOwned is the guard of a write that sets is_superuser:
+// while auth-service owns the platform roles, it refuses before it writes.
+func refuseSuperuserWhileOwned(owned, writesSuperuser bool) error {
+	if owned && writesSuperuser {
+		return ErrPlatformRolesOwned
+	}
+	return nil
+}

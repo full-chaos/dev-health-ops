@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -347,6 +348,7 @@ func (h *harness) writeAudit(_ context.Context, event audit.AuditEvent) error {
 	if h.auditErr != nil {
 		return h.auditErr
 	}
+	auditwire.MustValidate(h.t, event)
 	if err := audit.ValidateAttributes(event.Attributes); err != nil {
 		return err
 	}
@@ -409,11 +411,36 @@ func (h *harness) postWith(body, contentType, target string) *httptest.ResponseR
 
 func (h *harness) validSubject() string { return subjectToken(h.now.Add(time.Hour)) }
 
-// metricPoints returns every exported data point of the outcome counter as
-// "outcome/reason/audience=value".
+// metricPoints returns the outcome counter's Kubernetes-subject points and the
+// request shape faults (subject none) as "outcome/reason/audience=value".
 func (h *harness) metricPoints() map[string]int64 {
 	h.t.Helper()
-	return collectCounter(h.t, h.reader, "auth.workload.exchanges")
+	out := map[string]int64{}
+	for key, value := range collectCounter(h.t, h.reader, "auth.workload.exchanges") {
+		subject, series, _ := strings.Cut(key, "|")
+		switch {
+		case subject == subjectKubernetes:
+			out[series] = value
+		case subject == subjectNone && strings.HasPrefix(series, outcomeInvalid+"/"):
+			out[series] = value
+		case subject == subjectNone:
+			h.t.Fatalf("series %s is counted under subject none: only a shape fault is", series)
+		}
+	}
+	return out
+}
+
+// bootstrapPoints returns the outcome counter's bootstrap-subject points as
+// "outcome/reason/audience=value".
+func (h *harness) bootstrapPoints() map[string]int64 {
+	h.t.Helper()
+	out := map[string]int64{}
+	for key, value := range collectCounter(h.t, h.reader, "auth.workload.exchanges") {
+		if subject, series, _ := strings.Cut(key, "|"); subject == subjectBootstrap {
+			out[series] = value
+		}
+	}
+	return out
 }
 
 func readAll(t *testing.T, r io.Reader) string {

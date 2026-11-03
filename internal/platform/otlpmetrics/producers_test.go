@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/postureguard"
@@ -19,7 +18,7 @@ import (
 // bridge, built from the real producers and no capture: a health.Registry
 // holding the MetricsSources the worker binaries register that can be built
 // without a database or a cluster (the job runtime collector with its
-// histograms, the provider-foundation counters, the legacy-ingest and
+// histograms, the provider-foundation counters, the
 // sync-coverage counters, the posture guard), plus the required readiness
 // checks, is served through the real operator /metrics handler and pushed
 // through the real Pipeline to a real OTLP/gRPC collector. Every family, type,
@@ -61,7 +60,6 @@ func TestEveryFamilyOfTheRealProducersArrivesOverOTLPUnchanged(t *testing.T) {
 	for name, source := range map[string]health.MetricsSource{
 		"job_runtime":  collector,
 		"providers":    providers,
-		"legacyingest": legacyingest.NewMetrics(),
 		"scope_intent": synccoverage.NewScopeIntentMetrics(),
 		"folded_keys":  synccoverage.NewFoldedKeyResolutionMetrics(),
 		"posture":      guard,

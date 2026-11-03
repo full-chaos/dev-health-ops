@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
@@ -239,7 +240,7 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 	}
 	failures := []error{
 		&social.ConflictError{ExistingMethod: "password"}, social.ErrProviderUnavailable, social.ErrProviderNotConfigured,
-		social.ErrProviderRefused, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
+		social.ErrProviderRefused, social.ErrInvalidProviderID, social.ErrEmailUnverified, social.ErrPrincipalDisabled, identity.ErrSignupNotAvailable,
 		social.ErrReauthenticationRequired, identity.ErrIdentityConflict, social.ErrProviderLinked, identity.ErrNotFound,
 		identity.ErrLastSignInMethod, social.ErrUnavailable, errors.New("unclassified"),
 	}
@@ -281,5 +282,98 @@ func TestEverySocialLinkAnswerIsADeclaredOpenAPIResponse(t *testing.T) {
 				t.Errorf("%s: %s answered %d, which the operation does not declare", call.openapiPath, name, response.Code)
 			}
 		}
+	}
+}
+
+// TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody: the link route answers an invalid provider user id
+// with go-api's exact bytes (as the sign-in route does), and that body validates against exactly one member of
+// the 400 schema the OpenAPI document declares for POST /v1/identities/social.
+func TestLinkInvalidProviderIDAnswersGoAPIsBytesAndADeclaredBody(t *testing.T) {
+	f := newFixture(t)
+	routes, err := SocialLinkRoutes(SocialLinkDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, nil)), Social: failingLinkDomain{err: social.ErrInvalidProviderID}, Limits: mustLimits(t, httpapi.NewMemoryCounters(nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	f.server = httpapi.RequestID(mux)
+	response := f.do(http.MethodPost, PatternSocialLink, linkBody, f.bearer(f.grant()))
+	const want = `{"detail":{"message":"The provider returned an invalid user id"}}`
+	if response.Code != http.StatusBadRequest || response.Body.String() != want {
+		t.Fatalf("status %d body %q, want 400 %q", response.Code, response.Body.String(), want)
+	}
+	var body any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "contracts", "auth", "v1", "openapi", "auth-v1.openapi.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]struct {
+				Content map[string]struct {
+					Schema struct {
+						OneOf []json.RawMessage `json:"oneOf"`
+					} `json:"schema"`
+				} `json:"content"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	members := document.Paths["/v1/identities/social"]["post"].Responses["400"].Content["application/json"].Schema.OneOf
+	if len(members) != 2 {
+		t.Fatalf("the declared 400 of POST /v1/identities/social has %d oneOf members, want the transport error and the go-api refusal", len(members))
+	}
+	matched := 0
+	for _, member := range members {
+		var ref struct {
+			Ref string `json:"$ref"`
+		}
+		if err := json.Unmarshal(member, &ref); err != nil {
+			t.Fatal(err)
+		}
+		if ref.Ref == "#/components/schemas/TransportError" {
+			if contracts.Validate(repoRoot(t), "transport-error.v1", body) == nil {
+				matched++
+			}
+			continue
+		}
+		var schema jsonschema.Schema
+		if err := json.Unmarshal(member, &schema); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := schema.Resolve(nil)
+		if err != nil {
+			t.Fatalf("the go-api member does not compile: %v", err)
+		}
+		if resolved.Validate(body) == nil {
+			matched++
+		}
+		for name, refused := range map[string]string{
+			"another text":        `{"detail":{"message":"The provider returned an invalid user ID"}}`,
+			"an extra detail key": `{"detail":{"message":"The provider returned an invalid user id","extra":1}}`,
+			"an extra top-level":  `{"detail":{"message":"The provider returned an invalid user id"},"extra":1}`,
+			"a text detail":       `{"detail":"The provider returned an invalid user id"}`,
+			"a missing message":   `{"detail":{}}`,
+			"a missing detail":    `{}`,
+		} {
+			var doc any
+			if err := json.Unmarshal([]byte(refused), &doc); err != nil {
+				t.Fatal(err)
+			}
+			if resolved.Validate(doc) == nil {
+				t.Errorf("the declared go-api member accepts %s: %s", name, refused)
+			}
+		}
+	}
+	if matched != 1 {
+		t.Fatalf("the 400 body validates against %d declared members, want exactly 1", matched)
 	}
 }

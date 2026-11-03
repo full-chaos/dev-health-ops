@@ -257,6 +257,10 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authctx.Claims{}, false
 	}
 
+	if edgeVerifier.Routed() && principal.AccessClassOf(token) != principal.AccessClassOther {
+		return authenticateRESTRouted(w, r, edgeVerifier, token, component)
+	}
+
 	if edgeVerifier != nil {
 		if alg, ok := jwtHeaderAlg(token); ok && alg == principal.EdgeAlgorithm {
 			edgeVerifyCtx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))

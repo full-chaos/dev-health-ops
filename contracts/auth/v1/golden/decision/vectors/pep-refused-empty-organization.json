@@ -1,0 +1,11 @@
+{
+  "expect": {
+    "outcome": "refused",
+    "question": null,
+    "refusal": "/resource/organization_id is empty"
+  },
+  "id": "pep-refused-empty-organization",
+  "layer": "pep",
+  "request_raw": "{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"prf_EXAMPLE0000000000000001\",\"action\":\"acr.context.read\",\"resource\":{\"type\":\"repository\",\"key\":\"acme/api\",\"organization_id\":\"\"},\"context\":{\"request_id\":\"req_EXAMPLE0000000000000000001\",\"client_service\":\"dev-health-web\"}}",
+  "why": "an empty organization hint is refused."
+}

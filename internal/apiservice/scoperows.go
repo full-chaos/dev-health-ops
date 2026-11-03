@@ -33,6 +33,7 @@ func parseScopeRows(raw []byte) (map[string]policy.BearerRow, error) {
 			AccessTokenValidation *struct {
 				LegacyHS256 bool `json:"legacy_hs256"`
 			} `json:"access_token_validation"`
+			TenantRequirement string `json:"tenant_requirement"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -50,7 +51,15 @@ func parseScopeRows(raw []byte) (map[string]policy.BearerRow, error) {
 		if _, seen := rows[profile]; seen {
 			return nil, fmt.Errorf("go-api endpoint profiles: %s has two rows", profile)
 		}
-		rows[profile] = policy.BearerRowFor(entry.AcceptedClasses, entry.AccessTokenValidation != nil && entry.AccessTokenValidation.LegacyHS256)
+		row := policy.BearerRowFor(entry.AcceptedClasses, entry.AccessTokenValidation != nil && entry.AccessTokenValidation.LegacyHS256)
+		switch entry.TenantRequirement {
+		case "org_scoped":
+		case "none", "cross_org_superuser_only":
+			row.NotOrgScoped = true
+		default:
+			return nil, fmt.Errorf("go-api endpoint profiles: %s has tenant_requirement %q", profile, entry.TenantRequirement)
+		}
+		rows[profile] = row
 	}
 	if len(rows) == 0 {
 		return nil, errors.New("go-api endpoint profiles: no row for the api service")

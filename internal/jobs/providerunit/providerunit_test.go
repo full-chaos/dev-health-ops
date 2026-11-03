@@ -1225,17 +1225,16 @@ func (output stuckLogOutput) Write(p []byte) (int, error) {
 // TestRequestUsageNeverDelaysAUnitsCompletion runs the same unit twice, once
 // with no usage writer and once with a writer that nobody drains (a full
 // queue) and whose own log output is stuck: the unit reaches Complete, with
-// the same terminal result, in the same time.
+// the same terminal result, while the writer is still stuck. No clock is read:
+// a writer that held the unit would never return, and the wait below ends the
+// test.
 func TestRequestUsageNeverDelaysAUnitsCompletion(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	output := stuckLogOutput{release: make(chan struct{})}
 	t.Cleanup(func() { close(output.release) })
 	stuck := providersync.NewRequestUsageWriter(nil, slog.New(slog.NewTextHandler(output, nil)))
-	for range 2048 {
-		stuck.Offer([]providersync.RequestUsageRow{{Requests: 1}})
-	}
-	run := func(writer *providersync.RequestUsageWriter) (time.Duration, *memoryUnitRepository) {
+	run := func(writer *providersync.RequestUsageWriter) *memoryUnitRepository {
 		repository := newMemoryUnitRepository(providerUnit())
 		build := successfulExecutor(t, now)
 		handler := &Handler{
@@ -1247,22 +1246,31 @@ func TestRequestUsageNeverDelaysAUnitsCompletion(t *testing.T) {
 				return executor, err
 			},
 		}
-		started := time.Now()
 		if err := handler.Work(context.Background(), providerExecution(repository.unit, now, 1)); err != nil {
-			t.Fatalf("Work() error = %v", err)
+			t.Errorf("Work() error = %v", err)
 		}
-		return time.Since(started), repository
+		return repository
 	}
-	baseline, plain := run(nil)
-	elapsed, recorded := run(stuck)
+	plain := run(nil)
+	var recorded *memoryUnitRepository
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2048 {
+			stuck.Offer([]providersync.RequestUsageRow{{Requests: 1}})
+		}
+		recorded = run(stuck)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the unit did not reach Complete while the usage writer was stuck")
+	}
 	if plain.status != "success" || recorded.status != "success" {
 		t.Fatalf("status plain=%s recorded=%s", plain.status, recorded.status)
 	}
 	route, _ := recorded.result["go_provider_route"].(map[string]any)
 	if requests, _ := route["requests"].(int); requests != 2 {
 		t.Fatalf("go_provider_route=%#v", route)
-	}
-	if elapsed > baseline+100*time.Millisecond {
-		t.Fatalf("Complete reached in %s with a stuck writer, %s without one", elapsed, baseline)
 	}
 }

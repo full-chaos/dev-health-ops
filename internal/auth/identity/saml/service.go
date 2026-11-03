@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -27,6 +29,8 @@ var (
 	ErrDomainNotAllowed      = errors.New("saml: email domain is not allowed for this provider")
 	ErrAutoProvisionDisabled = errors.New("saml: user not found and auto-provisioning disabled")
 	ErrAccountDisabled       = errors.New("saml: account is disabled")
+	// ErrUnusableEmail: the asserted email fails the shared provider email text rule.
+	ErrUnusableEmail = identity.ErrUnusableProviderEmail
 	// ErrSessionUnavailable: tokens cannot be minted now; ACS answers 503.
 	ErrSessionUnavailable = errors.New("saml: the session cannot be issued now")
 )
@@ -55,6 +59,10 @@ type Service struct {
 	BaseURL      func() string
 	Now          func() time.Time
 	Logger       *slog.Logger
+	// ProviderFailure records a provider failure (an assertion without an
+	// email: go-api's recordSSOFailure) before the refusal answers; nil
+	// records none.
+	ProviderFailure ssoaudit.ProviderFailure
 }
 
 func (s *Service) now() time.Time {
@@ -206,8 +214,9 @@ func (s *Service) BoundToRoute(ctx context.Context, p Provider, routeID uuid.UUI
 
 // ConsumeFor verifies a posted SAMLResponse for a resolved provider and
 // resolves the account. cookie returns a request cookie value by name (""
-// when absent). On an identity key hit the account signs in from its stored
-// state and the assertion's email is not read; only a miss needs the email.
+// when absent). Before the lookup, the assertion's email must be usable,
+// present and allowed by the provider's domain list, on a key hit or a miss;
+// on a hit the account then signs in from its stored state.
 // Every sign-in ends in the provider's organization: an account that is not
 // a member after the membership seam ran is ErrNotOrgMember, and a miss
 // creates an account only through the membership seam (see provisionNew).
@@ -217,16 +226,28 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 	if p.Config.Certificate == "" {
+		if err := s.recordProviderFailure(ctx, p, "", msgNoCertificate); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider has no certificate"))
 	}
 	cert, err := ParseCertificate(p.Config.Certificate)
 	if err != nil {
+		if err := s.recordProviderFailure(ctx, p, "", msgCertificateParse); err != nil {
+			return SignIn{}, err
+		}
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonSignatureInvalid, "provider certificate does not parse"))
 	}
 	base := s.BaseURL()
 	now := s.now()
 	v, err := Verify(raw, SP{EntityID: p.SPEntityID(base), ACSURL: p.ACSURL(base), IdPEntityID: p.Config.EntityID, IdPCert: cert}, now)
 	if err != nil {
+		var r *RefusedError
+		if errors.As(err, &r) && r.NoConfirmation {
+			if err := s.recordProviderFailure(ctx, p, "", msgNoConfirmation); err != nil {
+				return SignIn{}, err
+			}
+		}
 		return SignIn{}, s.refuse(ctx, p, err)
 	}
 
@@ -242,6 +263,24 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, s.refuse(ctx, p, refused(ReasonNameID, "NameID cannot key an identity"))
 	}
 	id := Identity{Issuer: v.Issuer, Provider: p.ID.String(), Subject: subject}
+	email := s.email(p, v)
+	if identity.RefuseProviderEmail(email) != nil {
+		return SignIn{}, s.refuse(ctx, p, ErrUnusableEmail)
+	}
+	// The address and the provider's domain list decide every sign-in, linked
+	// or not, before the lookup (go-api saml.go).
+	if email == "" {
+		if err := s.recordProviderFailure(ctx, p, "", msgEmailMissing); err != nil {
+			return SignIn{}, err
+		}
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
+	}
+	if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
+		return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
+	}
+	if !p.DomainAllowed(email) {
+		return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
+	}
 	legacy := &LegacyMatch{AuthProvider: "saml", Subject: v.NameID.Value, MembershipOrg: p.OrgID}
 	principal, found, err := s.Store.IdentityBySubject(ctx, id, legacy)
 	if errors.Is(err, ErrNotOrgMember) || errors.Is(err, ErrIdentityAmbiguous) {
@@ -251,17 +290,7 @@ func (s *Service) ConsumeFor(ctx context.Context, p Provider, posted string, coo
 		return SignIn{}, err
 	}
 	if !found {
-		email := s.email(p, v)
-		if email == "" {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMissing)
-		}
-		if len(p.AllowedDomains) > 0 && !strings.Contains(email, "@") {
-			return SignIn{}, s.refuse(ctx, p, ErrEmailMalformed)
-		}
-		if !p.DomainAllowed(email) {
-			return SignIn{}, s.refuse(ctx, p, ErrDomainNotAllowed)
-		}
-		principalID, err := s.provisionNew(ctx, p, id, email, s.fullName(p, v))
+		principalID, err := s.provisionNew(ctx, p, id, v.NameID.Value, email, s.fullName(p, v))
 		if err != nil {
 			return SignIn{}, err
 		}
@@ -289,7 +318,7 @@ func (s *Service) requireMember(ctx context.Context, p Provider, principalID uui
 	if err != nil {
 		return err
 	}
-	if !member && s.JIT != nil {
+	if !member && s.JIT != nil && p.AutoProvision {
 		if err := s.JIT.JoinOnSignIn(ctx, principalID, p); err != nil {
 			return err
 		}
@@ -331,7 +360,7 @@ func (s *Service) matchRequest(ctx context.Context, p Provider, v Verified, cook
 // service without the membership seam is ErrNotOrgMember. All of these write
 // nothing. Otherwise the seam creates the account, its identity and its
 // membership in one transaction; the session is issued after it returns.
-func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, email, fullName string) (uuid.UUID, error) {
+func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, nameID, email, fullName string) (uuid.UUID, error) {
 	normalized, err := s.Store.NormalizeEmail(email)
 	if err != nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrInvalidEmailAddress)
@@ -344,12 +373,21 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, ema
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{Method: owner.Method})
 	}
 	if !p.AutoProvision {
-		return uuid.Nil, s.refuse(ctx, p, ErrAutoProvisionDisabled)
+		return uuid.Nil, s.provisioningOff(ctx, p)
 	}
 	if s.JIT == nil {
 		return uuid.Nil, s.refuse(ctx, p, ErrNotOrgMember)
 	}
-	principalID, err := s.JIT.ProvisionOnSignIn(ctx, NewAccount{Identity: id, Email: normalized, FullName: fullName}, p)
+	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
+	if len(p.AllowedDomains) == 0 {
+		return uuid.Nil, s.provisioningOff(ctx, p)
+	}
+	var legacyName *string
+	if fullName != "" {
+		legacyName = &fullName
+	}
+	principalID, err := s.JIT.ProvisionOnSignIn(ctx,
+		NewAccount{Identity: id, Email: normalized, FullName: fullName, LegacySubject: nameID, LegacyFullName: legacyName}, p)
 	switch {
 	case err == nil:
 		return principalID, nil
@@ -357,6 +395,14 @@ func (s *Service) provisionNew(ctx context.Context, p Provider, id Identity, ema
 		return uuid.Nil, s.refuse(ctx, p, &EmailConflictError{})
 	}
 	return uuid.Nil, s.refuse(ctx, p, err)
+}
+
+// provisioningOff is the refusal of a new account a provider row does not allow.
+func (s *Service) provisioningOff(ctx context.Context, p Provider) error {
+	if err := s.recordProviderFailure(ctx, p, stageProvisioning, msgAutoProvisionOff); err != nil {
+		return err
+	}
+	return s.refuse(ctx, p, ErrAutoProvisionDisabled)
 }
 
 func (s *Service) fullName(p Provider, v Verified) string {
@@ -382,6 +428,27 @@ func (s *Service) email(p Provider, v Verified) string {
 // refuse logs a refusal with its auth-outcome reason code and the failed
 // check, and returns err unchanged. No NameID, email or assertion content is
 // logged.
+// go-api's SAML provider failure texts (internal/api/sso saml.go, provision.go), the record's error_message. A record
+// carries one of these fixed texts, never an error's text or a value of the assertion.
+const (
+	msgEmailMissing     = "SAML assertion missing email attribute"
+	msgNoCertificate    = "SAML certificate is required for validation"
+	msgCertificateParse = "SAML signature validation failed"
+	msgNoConfirmation   = "SAML subject confirmation missing"
+	msgAutoProvisionOff = "User not found and auto-provisioning disabled"
+
+	stageProvisioning = "provisioning"
+)
+
+// recordProviderFailure records a provider failure as go-api's recordSSOFailure does (protocol saml, the stage if
+// any). A write error is returned as is: the 500 go-api answers.
+func (s *Service) recordProviderFailure(ctx context.Context, p Provider, stage, message string) error {
+	if s.ProviderFailure == nil {
+		return nil
+	}
+	return s.ProviderFailure.Failed(ctx, ssoaudit.Row{OrgID: p.OrgID, ProviderID: p.ID, Protocol: "saml", Stage: stage, ErrorMessage: message})
+}
+
 func (s *Service) refuse(ctx context.Context, p Provider, err error) error {
 	check, detail := "", ""
 	var r *RefusedError
@@ -419,7 +486,8 @@ func OutcomeReason(err error) string {
 		return "membership_required"
 	case errors.Is(err, ErrIdentityAmbiguous):
 		return "identity_conflict"
-	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress):
+	case errors.Is(err, ErrEmailMissing), errors.Is(err, ErrEmailMalformed), errors.Is(err, ErrInvalidEmailAddress),
+		errors.Is(err, ErrUnusableEmail):
 		return "malformed"
 	}
 	var r *RefusedError

@@ -1,8 +1,10 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
+	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
@@ -18,7 +20,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
-	"github.com/full-chaos/dev-health-ops/internal/api/legacyingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/licensing/processlicense"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
@@ -100,13 +101,6 @@ type Deps struct {
 	// HTTP client (nil: the area's default); a test sets one that trusts
 	// its fake Jira's certificate.
 	SyncJiraHTTP *http.Client
-	// LegacyIngestMetrics counts the legacy ingest routes' credential
-	// refusals (registered on the operator metrics endpoint by configure).
-	LegacyIngestMetrics *legacyingest.Metrics
-	// LegacyIngestEnabled mounts the legacy ingest routes (default off);
-	// LegacyIngestOptions hardens them. buildDeps sets both.
-	LegacyIngestEnabled bool
-	LegacyIngestOptions legacyingest.Options
 	// Pool is nil when API_DATABASE_URI is not configured (the CHAOS-6269
 	// bootstrap has not run yet in this environment). A route needing it
 	// answers CodeInternal rather than dereferencing a nil pool; the
@@ -160,6 +154,8 @@ type Deps struct {
 	// audience its install state is signed with.
 	GitHubApp         githubapp.Config
 	GitHubStateSigner githubapp.Signer
+	// SSOStateSecret keys the SSO login state (OIDC, OAuth, SAML): SSO_STATE_SECRET, else JWT_SECRET_KEY.
+	SSOStateSecret, SSOStateSecretFallback string
 	// GitHubAppHTTPClient, GitHubAppURL and GitHubAppAPIURL are the install
 	// callback's outbound seam: nil/empty in production (github.com and
 	// api.github.com, no redirects); the venue oracle points them at a stub.
@@ -203,13 +199,46 @@ type Deps struct {
 	// AuthProxy routes /api/v1/auth/* aggregates to auth-service
 	// (AUTH_PROXY_*); the zero value serves every route in go-api.
 	AuthProxy AuthProxyConfig
+	// ACRAccessProjectScope is EnvACRAccessProjectScope (default off): the ACR
+	// principal access read also answers project_scope for an org with no
+	// repository inventory, and the ClickHouse readiness check also requires
+	// SELECT on projects. See EnvACRAccessProjectScope for the acr
+	// DisallowUnknownFields dependency and the roll order.
+	ACRAccessProjectScope bool
 	// SessionIssuer issues the session and sso routes' token pairs at
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// OrgReactivator reactivates an organization in auth-service before the
+	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
+	// leaves the PATCH as it was.
+	OrgReactivator orgreactivate.Reactivator
+	// OrgProvisioner sends member, invite and organization delete changes to
+	// auth-service; nil (AUTH_PROXY_ORG_PROVISIONING off) leaves go-api the
+	// writer.
+	OrgProvisioner authprovision.Provisioner
+	// OrgSuspender suspends an organization in auth-service before the admin PATCH writes is_active=false; nil with
+	// AUTH_PROXY_ORG_PROVISIONING off.
+	OrgSuspender orgreactivate.Suspender
+	// OrgState reads the organization's state in auth-service whose revision the two verbs above send; set with them.
+	OrgState orgreactivate.StateReader
+	// OrgRenamer renames an organization in auth-service: the name of both PATCH routes while AUTH_ORGS_OWNED is on;
+	// set with the three above.
+	OrgRenamer orgreactivate.Renamer
 	// UsersOwned is AUTH_USERS_OWNED: auth-service owns users, so the go-api
 	// routes and verbs that write public.users refuse.
 	UsersOwned bool
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments and a public is_superuser write
+	// refuses.
+	PlatformRolesOwned bool
+	// PushLifecycleEvents is EnvPushLifecycleEvents (default off): customer-push
+	// token writes also append External Push lifecycle events to the auth
+	// outbox, in the same transaction.
+	PushLifecycleEvents bool
+	// AuthSchema is AUTH_DATABASE_SCHEMA, where the platform role rule reads
+	// while PlatformRolesOwned (empty: "auth").
+	AuthSchema string
 	// Limits is the rate-limit store every limited route counts through
 	// (see limitStore); nil means the Valkey-backed store when Valkey is
 	// configured, else an in-process one.
@@ -321,8 +350,9 @@ func buildDeps(
 	registry *health.Registry,
 	logger *slog.Logger,
 	authProxy AuthProxyConfig,
+	acrProjectScope bool,
 ) (Deps, []lifecycle.Component, error) {
-	deps := Deps{AuthProxy: authProxy}
+	deps := Deps{AuthProxy: authProxy, ACRAccessProjectScope: acrProjectScope}
 	var components []lifecycle.Component
 
 	// LicenseManager.initialize() (CHAOS-6663): the process-wide install
@@ -336,12 +366,6 @@ func buildDeps(
 	// development, else every limit is per replica. A process with no
 	// database configured (the pre-bootstrap shape) serves none of them and
 	// still starts.
-	legacyEnabled, legacyOptions, legacyReason, legacyErr := checkLegacyIngest(envsecrets.ProcessLookup)
-	if legacyErr != nil {
-		return Deps{}, nil, dependencyFailure(ctx, logger, "legacy_ingest", legacyReason, legacyErr)
-	}
-	deps.LegacyIngestEnabled, deps.LegacyIngestOptions = legacyEnabled, legacyOptions
-
 	if cfg.APIDatabaseURI.Configured() && !cfg.ValkeyURI.Configured() && !developmentEnvironment(envsecrets.ProcessLookup) {
 		return Deps{}, nil, dependencyFailure(ctx, logger, "api_rate_limiter", "api_rate_limiter_shared_store_required", errSharedLimiterRequired)
 	}
@@ -417,7 +441,7 @@ func buildDeps(
 		deps.ClickHouse = conn
 		components = append(components, &clickHouseComponent{conn: conn})
 		if err := registry.RegisterRequired(apiClickHouseCheck, func(checkCtx context.Context) error {
-			return chclickhouse.CheckAPIClickHouseAuthorization(checkCtx, conn)
+			return chclickhouse.CheckAPIClickHouseAuthorizationFor(checkCtx, conn, acrProjectScope)
 		}); err != nil {
 			return Deps{}, nil, dependencyFailure(ctx, logger, "api_clickhouse", "api_clickhouse_check_register_failed", err)
 		}
@@ -431,4 +455,9 @@ func buildDeps(
 		slog.Bool("webhook_secret_decryptor_configured", deps.Pool != nil && cfg.SettingsEncryptionKey.Configured()),
 	)
 	return deps, components, nil
+}
+
+// platformRoles is how the go-api users reads take is_superuser.
+func (d Deps) platformRoles() policy.PlatformRoleRead {
+	return policy.PlatformRoleRead{Owned: d.PlatformRolesOwned, AuthSchema: d.AuthSchema}
 }

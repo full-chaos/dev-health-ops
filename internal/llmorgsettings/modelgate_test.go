@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestDecideTable(t *testing.T) {
+func TestModelGateDecideTable(t *testing.T) {
 	cases := []struct {
 		name string
 		in   Inputs

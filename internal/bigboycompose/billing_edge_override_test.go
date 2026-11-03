@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"gopkg.in/yaml.v3"
 )
@@ -25,7 +26,7 @@ func toolsDir(t *testing.T) string {
 	if !ok {
 		t.Fatal("resolve the package path")
 	}
-	return filepath.Join(filepath.Dir(file), "..", "..", "ci", "bigboy")
+	return bigboydir.Dir(t, filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
 func toolsPath(t *testing.T, name string) string {

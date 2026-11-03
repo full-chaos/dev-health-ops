@@ -13,18 +13,27 @@ Seven surfaces are planned (CHAOS-3270). Shipped so far: `principal.v1`
 `authorization_decision.v1` and the two batch forms (CHAOS-4932). All seven
 planned surfaces have shipped, and the Wave 2 session surfaces `session.v1`,
 `refresh-request.v1`, `refresh-response.v1` and `auth-outcome.v1` (CHAOS-10155)
-follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442), the Wave 8
+follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
+`refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
+the service account token `service-account-token.v1` (CHAOS-12362: typ `sa+jwt`, audience
+`dev-health-api`, `org_id` and `cid`, no `sid`/`scope`, at most 300 s; its signed corpus is
+`golden/service-account-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
 transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 2 gives every
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds
+`billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
+licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
+web-reviewed change does. Catalog version 2 gives every
 action a `risk_class` and a `cache_class` (a high-risk action is never cached), and
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
-`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action (one pinned exemption, acr.context.read, until it is catalogued) and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
+`vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
+
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
@@ -32,8 +41,33 @@ The provisioning resources and request bodies `organization.v1`,
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
 
+The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
+has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
+`organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
+(an organization's principals, each with its membership), `organization-list.v1`
+(a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
+`*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
+(`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
+`next_cursor`). A principal read holds an id, a kind, a status and a revision and no personal field. A grant read
+carries the repository `resource_key`; an error body never does. A read holds a read scope (`principals:read`,
+`organizations:read`, `memberships:read`, `grants:read`, on `internal_svc_authsess_token`); a write scope never
+satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
+rules a schema cannot say (the answer is the one asked for, ascending ids, a cursor that is the last item's) are
+`ParseReadRequest` and `ParseReadResponse`; their cells run on `golden/read-api`.
+
+`oauth-clients.v1` is the OAuth authorization server's static client registry
+(ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with
+no per-environment overlay, and `oauth-authorization-server.v1` is its RFC 8414
+document. A first-party row holds a redirect path, resolved against
+`AUTH_OAUTH_WEB_ORIGIN`, and a fixed-URI row holds its exact https URIs. A row names
+audiences, never resource URIs.
+
 - A role field is a role key of the organization roles of `roles.v1`
   (viewer, member, admin, owner). A platform role is not a membership role.
+  The platform roles are `platform_admin` and `platform_owner`. `platform_owner`
+  is a marker role: it holds no action (an owner acts through a
+  `platform_admin` row it also holds), and only `auth-migrate platform-owner-grant` and `platform-owner-revoke`
+  write it (CHAOS-12294); no API route grants or revokes it.
 - `membership.v1` status is the memberships status of the auth schema:
   `invited`, `active`, `suspended`, `removed`. The provisioning event spells the
   same states differently: `invited` (event `pending`); the other three are
@@ -113,6 +147,13 @@ class bit `error.v1` once because no shared guard existed):
 `error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
 use the same rule; revisions add the int64 range. Fixtures for these rules
 belong in `reject_by_client`.
+
+`error.v1`'s `status` admits 400 for reason `malformed` only (D6643, an
+amendment of TRD section 18): the schema's `allOf` conditional ties the two, so
+a route cannot use 400 for any other refusal. A route that answers it declares
+`oneOf [TransportError, Error]` for its 400: the transport's own 400 (a body
+that could not be read) and the route's `error.v1` refusal are disjoint
+(`TestErrorV1IsDisjointFromTheTransportEnvelope`).
 
 ### Constraints live in the cross-language dialect intersection
 
@@ -281,6 +322,21 @@ boundary (TRD §9, §13).
   excluded with a reason, or a member has no column. Excluded: surrogate ids,
   delivery bookkeeping (`available_at`, `published_at`, `attempts`,
   `last_error`) and `client_ip`.
+* **`audit-event.v1` `attributes` is the producer allowlist, one vocabulary.**
+  Every key `internal/audit/allowlist.go` accepts is a member of `attributes`
+  with the same closed rule (same enum, same id pattern, same list and integer
+  bounds), and `TestAuditAllowlistKeysEqualSchemaAttributeKeys` and
+  `TestAuditAttributeRulesMatchTheSchemaTypes` fail on any difference in either
+  direction. The members no producer writes (`action`, `aggregate_type`,
+  `aggregate_revision`) stay in v1 and are named, with a reason, in
+  `schemaOnlyAuditKeys`. An allowlist key that no producer writes and no open
+  change plans is deleted (`TestEveryAuditAllowlistKeyHasAWriter`). The
+  database row keeps uuid text for every id; the wire document prefixes
+  the envelope ids (`prn_` for the actor and the subject, `org_` for the
+  organization) and re-encodes `request_id` as `req_` plus 26 base32
+  characters (`requestid.WireOf`); an attribute id is the row's uuid text.
+  `internal/testsupport/auditwire` projects a producer row that way and the
+  producer unit tests validate it against the schema.
 * **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
   and `revision` is per aggregate.** Nothing implies an ordering across
   aggregates, so a consumer that sorts the whole stream is wrong. The
@@ -310,6 +366,30 @@ boundary (TRD §9, §13).
   metadata projections owned by the credential surface and are not in this
   stream in v1 (ACP-ADR-08, ACP-ADR-09); mutation request bodies are caller
   hints, never authority, and belong with each route when it is mounted.
+
+* **Revocation events (CHAOS-11816, ruled by acp, answers-11816-1).** A consumer
+  learns that sessions or a signing key ended from this stream, not from the WAL.
+  `session.revoked` (aggregate `session`, id `ses_` + the `session.v1` id,
+  `change`: `status` = `revoked` and a closed `reason`) is ONE session, ended by
+  an explicit revoke; it is revision 1 and terminal, there is no `session.created`,
+  and a revoke that changes nothing writes no event. `session` is a
+  one-shot aggregate: the producer writes revision 1 with no `aggregate_revisions` row, the
+  second write of the same session (a child revoked with its parent, then on its own row)
+  is the same fact and writes no second row, and the revision feed publishes it without a
+  high-water field, a mark or a cursor entry on any side. A bulk end is ONE scope
+  event on the existing aggregates, `principal.sessions_revoked` or
+  `organization.sessions_revoked`, whose `change.revoked_before` is the instant the
+  store wrote as `revoked_at` on the sessions it ended (one clock reading, not the
+  event's `created_at`): the consumer drops every session it holds in that scope
+  that started before `revoked_before` and leaves a session that started at or
+  after it. `signing_key.compromised` (aggregate `signing_key`, id `key_` + the
+  unpadded base64url SHA-256 of the kid, because a kid may hold a dot that an
+  aggregate id cannot; `change.kid` carries the kid) voids every token the key
+  signed; the other key states are the JWKS's. A signing-key event has no
+  `organization_id`: the optional member is absent for a platform-level aggregate.
+  The allowlist is per EVENT, not per aggregate: a scope event carries `revoked_before` and `reason` and nothing else, and no ordinary principal or organization event carries either. The wire pins a session event at revision 1, and clients (`ParseProvisioningEvent`, the feed mapper, the sink and the consumer) refuse any other revision for it and an id that is not the derived one for a signing key. `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
+  `delegation_ended` or `compromised`. A principal's sessions ended in ONE organization (a membership removed) are told as `principal.sessions_revoked` with reason `org_ended`: there is no (principal, organization) shape, so a consumer may also drop that principal's sessions in other organizations, which only evicts a cache (the server still decides). Order across aggregates stays unpromised.
+  Producers: every session end that writes a revoke (explicit revoke, refresh reuse, sign-in supersede, a legacy family revoke, a delegated session ended with its actor or base) queues `session.revoked`, and the live linked client sessions of a revoked web session get one each in the same transaction (a client session that commits after that read has no event; the server's read of the parent still refuses it). Bulk ends queue one scope event with the one clock reading written as `revoked_at`: revoke-all and end-all (reason `caller`), a membership or organization end (`org_ended`), a password change (`password_changed`, `revoked_before` is the stamp the same UPDATE wrote; a session created between that stamp and the UPDATE is decided by the server's row, not the event). A key compromise queues `signing_key.compromised` only. `RevokeUnpinned` (a one-off backfill) stays off-stream by ruling.
 
 ### Credential metadata: secrets are returned once (CHAOS-4934)
 
@@ -351,7 +431,7 @@ visible in the file layout, not in a conditionally present field:
 * `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
   same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
   value of a closed vocabulary (`vocabulary/reason-codes.json`: `compromised`,
-  `owner_request`), never the free text the database column allows; the audit
+  `domain_revoked`, `owner_request`), never the free text the database column allows; the audit
   event's `attributes.reason_code` is a closed list in the same file, and a new
   value arrives with the producer that emits it and its own migration.
 * The list items, the receipt's credential and the entry are copies of one body
@@ -362,6 +442,35 @@ visible in the file layout, not in a conditionally present field:
   `external_reference`), never as validators (ACP-ADR-08/09). The list is
   paged by an opaque cursor (CHAOS-10136): at most 100 items a page, `next_cursor`
   absent on the last page, order created_at then id ascending.
+
+### ACR credential lifecycle events: metadata only (CHAOS-11193)
+
+`acr-credential-lifecycle-event.v1` is one lifecycle event of an ACR `fcacr_`
+credential as the Auth Control Plane receives it (ACP-ADR-08). ACR stays the
+validator and the writer; the event is a closed projection of lifecycle state.
+
+* **Closed at every level.** The envelope, the payload and each change object
+  have `additionalProperties: false`. There is no member for a secret, a hash, a
+  token, a token prefix, a fingerprint, a device or user code, or a principal id;
+  a test walks the schema and the accepted fixtures and fails on any member name
+  that suggests secret material.
+* **Same aggregate rule as the External Push contract.** The aggregate is the acr
+  credential id (the registry's `external_reference`); `revision` is per
+  aggregate; the idempotency key is `acr_credential:<id>:<revision>`. The ordering,
+  terminal and no-widen rules are the `internal/auth/pushlifecycle` core:
+  `acr_mapping_test.go` drives the golden events through the real `Apply`.
+* **Kinds:** `issued`, `device_redeemed`, `rotated` (revision 1, a new aggregate
+  that names its parent), `revoked` and `expired` (revision 2 or more, terminal).
+  No scope or audience event: no acr path changes scopes after issue. A rotation
+  with no overlap also revokes the parent in the same transaction; with an overlap
+  the parent stays active and receives `expired` when its cut expiry passes.
+* **Actor.** `actor_type` (`user`, `operator`, `credential`, `system`) plus
+  `actor_ref`, absent for `system`. A credential acting on itself is
+  `actor_type` `credential`; the clients check that `actor_ref` is the aggregate
+  id on `revoked` and the replaced credential on `rotated`. `issued` and
+  `device_redeemed` are never written by a credential actor. `expired` is always
+  written by the system. `change.acr_class` (six values) and the optional
+  opaque `change.owner_subject` ride on revision 1 events only.
 
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 

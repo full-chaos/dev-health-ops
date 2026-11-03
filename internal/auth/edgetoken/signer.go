@@ -74,6 +74,11 @@ type RefreshClaims struct {
 // the order the Python dict holds them, username, full_name and
 // impersonating_user_id only when non-empty.
 func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string, error) {
+	return s.AccessUntil(claims, now, now.Add(AccessLifetime), jti)
+}
+
+// AccessUntil is Access with a given expiry.
+func (s *Signer) AccessUntil(claims AccessClaims, now, expiresAt time.Time, jti string) (string, error) {
 	var payload claimWriter
 	payload.str("sub", claims.UserID)
 	payload.str("email", claims.Email)
@@ -83,7 +88,7 @@ func (s *Signer) Access(claims AccessClaims, now time.Time, jti string) (string,
 	payload.str("type", AccessType)
 	payload.str("iss", s.issuer)
 	payload.str("aud", s.audience)
-	payload.integer("exp", now.Add(AccessLifetime).Unix())
+	payload.integer("exp", expiresAt.Unix())
 	payload.integer("iat", now.Unix())
 	payload.str("jti", jti)
 	payload.integer("tv", claims.TokenVersion)

@@ -173,7 +173,7 @@ func TestRunRefusesACredentialBearingEndpointBeforeAnyHTTPCall(t *testing.T) {
 // happens BEFORE client.Do and is only bounded by whichever ctx
 // FetchBuildIdentity was actually given). Replacing `boundedCtx()` with
 // `context.Background()` at that call site lets a hanging minter block
-// forever instead of failing at -timeout: this test's elapsed-time bound
+// forever instead of failing at -timeout: this test's 30 s failure-only guard
 // catches exactly that.
 //
 // The fake minter never returns on its own; it is cancelled by the
@@ -181,6 +181,8 @@ func TestRunRefusesACredentialBearingEndpointBeforeAnyHTTPCall(t *testing.T) {
 // test's own goroutine -- respecting ctx is exactly what a real minting
 // helper invocation must also do.
 func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
 	registry := httptest.NewServer(writeStaticJSONHandler(
 		`{"schema_digest":"sha256:e2e","operations":[{"operation":"featureFlags","document_digest":"sha256:unused"}]}`))
 	t.Cleanup(registry.Close)
@@ -189,33 +191,43 @@ func TestRunBoundsTheOpeningBuildinfoReadToTheConfiguredTimeout(t *testing.T) {
 		if helperName == "mint-edge-token" {
 			return syntheticJWT(t, map[string]string{"sub": "edge"}), nil
 		}
-		<-ctx.Done()
-		return "", ctx.Err()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-release: // opened at cleanup, so a run whose -timeout was not applied does not outlive the test
+			return "", errors.New("released at test cleanup")
+		}
 	})
 
-	started := time.Now()
-	err := runCLI(t, []string{
-		"-registry-url=" + registry.URL + "/registry",
-		"-documents=/nonexistent/documents.json",
-		"-org=70d529e0",
-		"-artifact-dir=/nonexistent/artifacts",
-		"-recorded-by=harness",
-		"-review-evidence=e2e harness",
-		"-timeout=300ms",
-		"-dry-run",
-	})
-	elapsed := time.Since(started)
+	// A run that applies -timeout (300 ms) to the minting step ends with the deadline; one that does not stays on
+	// the minter, which has no deadline of its own. The 30 s guard is a failure-only ceiling and is never reached.
+	type result struct{ err error }
+	done := make(chan result, 1)
+	go func() {
+		done <- result{runCLI(t, []string{
+			"-registry-url=" + registry.URL + "/registry",
+			"-documents=/nonexistent/documents.json",
+			"-org=70d529e0",
+			"-artifact-dir=/nonexistent/artifacts",
+			"-recorded-by=harness",
+			"-review-evidence=e2e harness",
+			"-timeout=300ms",
+			"-dry-run",
+		})}
+	}()
+	var err error
+	select {
+	case got := <-done:
+		err = got.err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the opening /buildinfo read's minting step is still running after the 30 s guard: -timeout was not applied to it")
+	}
 
 	if err == nil {
 		t.Fatal("expected the opening /buildinfo read's minting step to fail once -timeout elapses")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected the minting-deadline refusal, got: %v", err)
-	}
-	// The bracketing deadline this test pins bounds the run to -timeout
-	// (300ms). A generous margin over that is the signal.
-	if elapsed > 5*time.Second {
-		t.Fatalf("the opening /buildinfo read was not bounded to -timeout: took %s", elapsed)
 	}
 }
 

@@ -210,12 +210,31 @@ func authCorpusGateViolations(t *testing.T, root string) []string {
 	for _, tc := range cases {
 		cmd := exec.Command("bash", "-c", run)
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "CHANGES=" + tc.changes, "RELEVANT=" + tc.rel, "CORPUS_RELEVANT=" + tc.corpusRel,
-			"QUALITY=" + tc.quality, "TEST=" + tc.test, "FUZZ=" + tc.fuzz, "CORPUS=" + tc.corpus}
+			"QUALITY=" + tc.quality, "TEST=" + tc.test, "RACE=" + tc.test, "RACE_INTEGRATION=" + tc.test, "FUZZ=" + tc.fuzz, "CORPUS=" + tc.corpus}
 		raw, err := cmd.CombinedOutput()
 		failed := err != nil
 		if failed != tc.wantFail {
 			out = append(out, fmt.Sprintf("auth-gate case %q: failed=%v want %v (a skipped corpus leg with relevant=true must fail): %s", tc.name, failed, tc.wantFail, strings.TrimSpace(string(raw))))
 		}
+	}
+	for _, result := range []string{"failure", "skipped", "cancelled"} {
+		for _, leg := range []struct{ name, race, integration string }{
+			{"auth-race", result, "success"},
+			{"auth-race-integration", "success", result},
+		} {
+			cmd := exec.Command("bash", "-c", run)
+			cmd.Env = []string{"PATH=/usr/bin:/bin", "CHANGES=success", "RELEVANT=true", "CORPUS_RELEVANT=true", "QUALITY=success", "TEST=success",
+				"RACE=" + leg.race, "RACE_INTEGRATION=" + leg.integration, "FUZZ=success", "CORPUS=success"}
+			if _, err := cmd.CombinedOutput(); err == nil {
+				out = append(out, fmt.Sprintf("auth-gate passed a relevant change whose %s job was %s", leg.name, result))
+			}
+		}
+	}
+	cmd := exec.Command("bash", "-c", run)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "CHANGES=success", "RELEVANT=true", "CORPUS_RELEVANT=true", "QUALITY=success", "TEST=success",
+		"RACE=success", "RACE_INTEGRATION=success", "FUZZ=success", "CORPUS=success"}
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		out = append(out, fmt.Sprintf("auth-gate failed a relevant change whose gate jobs all passed: %s", raw))
 	}
 	return out
 }
@@ -348,7 +367,7 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
 	}{
 		{"job runs on pull requests too", []mutation{{wf, corpusQueueIf, "needs.auth-changes.outputs.corpus == 'true'"}}, []string{"auth-corpus-queue.if must be exactly"}},
 		{"job loses its timeout", []mutation{{wf, "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n", "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n"}}, []string{"timeout-minutes"}},
-		{"job hides a red leg behind continue-on-error", []mutation{{wf, "    timeout-minutes: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]", "    timeout-minutes: 30\n    continue-on-error: true\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]"}}, []string{"continue-on-error"}},
+		{"job hides a red leg behind continue-on-error", []mutation{{wf, "    timeout-minutes: 30\n    env:\n      CHECK_GO_JOB_CAP_MIN: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]", "    timeout-minutes: 30\n    continue-on-error: true\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]"}}, []string{"continue-on-error"}},
 		{"a leg is retried", []mutation{{wf, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}" || bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`}}, []string{"runs the corpus script more than once"}},
 		{"a leg is hidden behind || true", []mutation{{wf, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}" || true`}}, []string{"retry or error-hiding"}},
 		{"no-keys leg loses the by-name grep", []mutation{{wf, "required aggregate sessions is not served by auth-service", "required aggregate"}}, []string{"inverted exit form"}},
@@ -358,7 +377,7 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
             echo "ERROR: leg acp passed with social forwarded and users not owned"`}}, []string{"inverted exit check in both negative legs"}},
 		{"the plain run step also runs the forced-social leg", []mutation{{wf, "if: matrix.leg != 'acp-nokeys' && matrix.leg != 'acp-social-unowned'", "if: matrix.leg != 'acp-nokeys'"}}, []string{"forced-social leg lacks"}},
 		{"forced-social leg loses the force switch", []mutation{{wf, "AUTH_CORPUS_USERS_UNOWNED=1 AUTH_CORPUS_FORCE_SOCIAL=1 bash", "AUTH_CORPUS_USERS_UNOWNED=1 bash"}}, []string{"forced-social leg lacks"}},
-		{"gate stops waiting for the corpus job", []mutation{{wf, "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz, auth-corpus-queue]", "needs: [auth-changes, auth-go-quality, auth-test, auth-fuzz]"}}, []string{"auth-gate.needs must include auth-corpus-queue"}},
+		{"gate stops waiting for the corpus job", []mutation{{wf, "needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz, auth-corpus-queue]", "needs: [auth-changes, auth-go-quality, auth-test, auth-race, auth-race-integration, auth-fuzz]"}}, []string{"auth-gate.needs must include auth-corpus-queue"}},
 	}
 	for _, c := range shape {
 		t.Run(c.name, func(t *testing.T) {

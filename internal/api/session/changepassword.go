@@ -88,7 +88,7 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if violations := passwordpolicy.Validate(input.next); len(violations) > 0 {
+	if violations := passwordpolicy.ValidateForHash(input.next); len(violations) > 0 {
 		h.Logger.InfoContext(ctx, "change-password refused: policy", "user_id", caller.UserID, "violations", len(violations))
 		detail := pyjson.NewObject()
 		list := make([]pyjson.Value, len(violations))
@@ -114,7 +114,7 @@ func (h handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "lock user", err)
 		return
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return

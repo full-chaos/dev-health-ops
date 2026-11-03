@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -200,28 +201,33 @@ func TestQueueTelemetrySamplerHonorsQueryTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sampler := &QueueTelemetrySampler{
-		config: normalized,
-		read: func(ctx context.Context) ([]queueTelemetryRow, error) {
-			<-ctx.Done()
-			return nil, ctx.Err()
-		},
-	}
-	started := time.Now()
-	_, err = sampler.Snapshot(context.Background())
-	if !errors.Is(err, ErrQueueTelemetryUnavailable) {
-		t.Fatalf("timed out Snapshot() error = %v, want ErrQueueTelemetryUnavailable", err)
-	}
-	// The read failed only because its own bounded context expired -- a
-	// caller classifying retryable causes by unwrapping to
-	// context.DeadlineExceeded must still be able to tell that apart from a
-	// genuine, non-transient failure (see queueTelemetryReadFailure).
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("timed out Snapshot() error = %v, want it to still unwrap to context.DeadlineExceeded", err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("query timeout took %s", elapsed)
-	}
+	// The sampler runs in a bubble on a virtual clock with an in-memory read that waits for its context: the snapshot fails at
+	// exactly the configured query timeout.
+	synctest.Test(t, func(t *testing.T) {
+		sampler := &QueueTelemetrySampler{
+			config: normalized,
+			read: func(ctx context.Context) ([]queueTelemetryRow, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		}
+		started := time.Now()
+		_, err := sampler.Snapshot(context.Background())
+		returnedAt := time.Now()
+		if !errors.Is(err, ErrQueueTelemetryUnavailable) {
+			t.Fatalf("timed out Snapshot() error = %v, want ErrQueueTelemetryUnavailable", err)
+		}
+		// The read failed only because its own bounded context expired -- a
+		// caller classifying retryable causes by unwrapping to
+		// context.DeadlineExceeded must still be able to tell that apart from a
+		// genuine, non-transient failure (see queueTelemetryReadFailure).
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("timed out Snapshot() error = %v, want it to still unwrap to context.DeadlineExceeded", err)
+		}
+		if !returnedAt.Equal(started.Add(config.QueryTimeout)) {
+			t.Fatalf("Snapshot returned at +%v of virtual time, want +%v (the query timeout)", returnedAt.Sub(started), config.QueryTimeout)
+		}
+	})
 }
 
 // TestCheckAvailableContractVersionsPreservesADeadlineButSanitizesOtherErrors

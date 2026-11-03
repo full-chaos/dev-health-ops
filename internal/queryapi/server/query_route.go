@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"io"
 	"log"
@@ -3168,6 +3169,72 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
   }
 }`
 
+// registeredInvestmentBreakdownTeamDocument and registeredInvestmentBreakdownRepositoryDocument are CHAOS-12698's
+// registered documents for acr's scoped investment breakdowns -- same contract as registeredInvestmentBreakdownDocument
+// above. Each body is that document's CURRENT text byte for byte; only the operation name differs
+// ("InvestmentBreakdownTeam", "InvestmentBreakdownRepository"). acr maps each operation it serves to ONE row of this
+// registry by name, and serves a team-scoped and a repository-scoped breakdown as separate policy entries (scope level
+// TEAM or REPO, exactly one id), so each needs its own name and therefore its own digest. Neither has a legacy text:
+// no client ever sent the V1 text under these names.
+//
+// Nothing else differs. The analytics resolver already applies the batch scope: TEAM weights each repository by the
+// team's owner share (teamscope.RepoShare), REPO filters on repo_id. These documents add no resolver, schema, scope or
+// class-gate behaviour: the root is `analytics`, so the MCP class row is mcp:analytics, as for investmentBreakdown.
+//
+// Literal text, not built from the const above: cmd/registrydump reads every registered*Document const as a string
+// literal and refuses any other expression. TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName
+// pins the equality instead, so the three bodies cannot drift.
+const registeredInvestmentBreakdownTeamDocument = `query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredInvestmentBreakdownRepositoryDocument: see registeredInvestmentBreakdownTeamDocument above.
+const registeredInvestmentBreakdownRepositoryDocument = `query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentEvidenceQualityDocument is CHAOS-8104's registered
 // document for the Investment Evidence table's served mean-by-group column.
 // Its text is the captured wire document that CHAOS-8745's browser client
@@ -6150,28 +6217,51 @@ func queryAPIPostureCheckWith(
 	return func(context.Context) error { return cached.CheckNoWait() }
 }
 
-// queryAPISessionRead is the auth session read the role must hold while
-// auth-service owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or
-// nil when the flag is off. The schema is AUTH_DATABASE_SCHEMA, the one the
-// session check reads.
+// queryAPISessionRead is the auth read the role must hold while auth-service
+// owns sessions (AUTH_PROXY_SESSIONS, read as go-api reads it), or nil when the
+// flag is off. While auth-service also owns the platform roles
+// (AUTH_PLATFORM_ROLES_OWNED, rule.OwnedFromLookup) it carries the
+// platform role read, which needs the session read. The schema is
+// AUTH_DATABASE_SCHEMA, the one the session check reads.
 func queryAPISessionRead(getenv getenvFunc) (*postgresstore.QueryAPISessionRead, error) {
-	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
-	if raw == "" {
-		return nil, nil
-	}
-	on, err := strconv.ParseBool(raw)
+	platformRolesOwned, err := queryAPIPlatformRolesOwned(getenv)
 	if err != nil {
-		return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+		return nil, err
+	}
+	raw := strings.TrimSpace(getenv("AUTH_PROXY_SESSIONS"))
+	on := false
+	if raw != "" {
+		if on, err = strconv.ParseBool(raw); err != nil {
+			return nil, fmt.Errorf("AUTH_PROXY_SESSIONS must be true or false")
+		}
 	}
 	if !on {
+		if platformRolesOwned {
+			return nil, fmt.Errorf("%s is on: AUTH_PROXY_SESSIONS must be on too", rule.OwnedEnv)
+		}
 		return nil, nil
 	}
 	schema, err := policy.AuthSchemaFromEnv(getenv)
 	if err != nil {
 		return nil, err
 	}
-	read := postgresstore.QueryAPISessionReadFor(schema)
+	read := postgresstore.QueryAPISessionReadFor(schema, platformRolesOwned)
 	return &read, nil
+}
+
+// platformRolesOwnedEnv is rule.OwnedEnv, spelled here so the settings census
+// can resolve the name the routes read.
+const platformRolesOwnedEnv = "AUTH_PLATFORM_ROLES_OWNED"
+
+// queryAPIPlatformRolesOwned reads AUTH_PLATFORM_ROLES_OWNED through the one parse.
+func queryAPIPlatformRolesOwned(getenv getenvFunc) (bool, error) {
+	value := getenv(platformRolesOwnedEnv)
+	return rule.OwnedFromLookup(func(name string) (string, bool) {
+		if name != platformRolesOwnedEnv {
+			return "", false
+		}
+		return value, value != ""
+	})
 }
 
 // queryAPIRiverSchema is the River schema the posture check asserts the role
@@ -6359,6 +6449,9 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 	// never by GraphQL operation/field name, so this key only has to be
 	// internally consistent across this map and digestByOperation's reverse
 	// index -- it is never compared against request text.
+	// "investmentBreakdownTeam"/"investmentBreakdownRepository" (CHAOS-12698)
+	// are two more keys over `analytics`: the investmentBreakdown body under
+	// acr's own operation names, one registry row per acr policy entry.
 	//
 	// This is cmd/registrydump's parse target -- see
 	// mountedRouteLogMessage's doc comment above for why this literal's
@@ -6379,6 +6472,8 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
+		"investmentBreakdownTeam":           digestHex(registeredInvestmentBreakdownTeamDocument),
+		"investmentBreakdownRepository":     digestHex(registeredInvestmentBreakdownRepositoryDocument),
 		"investmentEvidenceQuality":         digestHex(registeredInvestmentEvidenceQualityDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),

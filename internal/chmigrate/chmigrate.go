@@ -5,10 +5,14 @@
 // (frozen as text in internal/chmigrate/history; its Python half is deleted) mixed .sql files with procedural
 // Python migrations that rebuild tables and move rows, and only a database
 // below the head needs them. So the head is a BASELINE: the end state of a
-// fresh database after the real Python chain has run, captured by executing
-// that chain (baseline_integration_test.go) and checked in as
-// baseline/head.json -- every table and view with its CREATE statement, the
-// rows the chain seeds, and the schema_migrations versions it records.
+// fresh database after the real chain has run, captured by executing it and
+// checked in as baseline/head.json -- every table and view with its CREATE
+// statement, the rows the chain seeds, and the schema_migrations versions it
+// records. The baseline was first the Python chain's end state at 098
+// (baseline_integration_test.go holds it to the recorded Python golden); it
+// moved once to the chain head 144 (CHAOS-11751): archive/ holds the 098
+// baseline and the chain files 099..144, and squash_baseline_integration_test.go
+// holds baseline/head.json equal to them by execution.
 //
 // The chain's end state depends on OPERATIONAL_ORDERING_CONTRACT: migration
 // 067 builds a different table shape, and records itself, only under contract
@@ -286,7 +290,9 @@ func (e BelowHeadError) Error() string {
 		shown, suffix = shown[:5], fmt.Sprintf(" and %d more", len(e.Missing)-5)
 	}
 	return fmt.Sprintf("the ClickHouse schema is below the head (ordering contract %d): %d baseline version(s) are not applied (%s%s). "+
-		"dho applies the head only to an empty database and has no upgrade path for one below it. Ordering contract 1 (a database "+
-		"without migration 067) is unsupported: re-create the database from the head (`dho migrate clickhouse upgrade` on an empty database)",
+		"dho applies the head only to an empty database and has no upgrade path for one below it. The baseline is squashed at the "+
+		"chain head 144: a database below it reaches it with the last pre-squash build (`dho migrate clickhouse upgrade`), or is "+
+		"re-created. Ordering contract 1 (a database without migration 067) is unsupported: re-create the database from the head "+
+		"(`dho migrate clickhouse upgrade` on an empty database). Nothing was changed",
 		e.Contract, len(e.Missing), strings.Join(shown, ", "), suffix)
 }

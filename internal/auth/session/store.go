@@ -35,7 +35,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -80,6 +82,9 @@ type Config struct {
 	SessionLifetime time.Duration
 	Logger          *slog.Logger
 	UsersOwned      bool // AUTH_USERS_OWNED: a sign-in stamps public.users.last_login_at
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED. Off, or with UsersOwned
+	// off, StartDelegation refuses (ErrNotOwned).
+	PlatformRolesOwned bool
 	// Meter registers the exchange and revocation counters; nil uses the
 	// process meter.
 	Meter metric.Meter
@@ -94,9 +99,11 @@ type Store struct {
 	refreshTTL      time.Duration
 	sessionLifetime time.Duration
 	usersOwned      bool
+	platformOwned   bool
 	logger          *slog.Logger
 	exchanges       metric.Int64Counter
 	revocations     metric.Int64Counter
+	delegations     metric.Int64Counter
 }
 
 // Format and LogValue keep the successor key out of every printed form: fmt
@@ -119,7 +126,7 @@ func New(cfg Config) (*Store, error) {
 	}
 	s := &Store{
 		pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), key: key,
-		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, logger: cfg.Logger,
+		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, platformOwned: cfg.PlatformRolesOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
 		s.refreshTTL = defaultRefreshTTL
@@ -142,6 +149,10 @@ func New(cfg Config) (*Store, error) {
 		metric.WithDescription("Sessions revoked, by revoked_reason.")); err != nil {
 		return nil, fmt.Errorf("session: registering the revocation counter: %w", err)
 	}
+	if s.delegations, err = meter.Int64Counter("auth.session.delegations",
+		metric.WithDescription("Delegated session starts by outcome: started or refused.")); err != nil {
+		return nil, fmt.Errorf("session: registering the delegation counter: %w", err)
+	}
 	return s, nil
 }
 
@@ -159,6 +170,17 @@ type Record struct {
 	// LegacyTokenVersion is public.users.token_version when the session was
 	// created; nil on a session row older than migration 0016.
 	LegacyTokenVersion *int64
+	// Delegation is set on a delegated session: PrincipalID is the effective
+	// subject, Delegation.Actor the real actor (G-49).
+	Delegation *Delegation
+}
+
+// Delegation is what a delegated session row adds. ID, start and end are the
+// session's own id, CreatedAt and ExpiresAt.
+type Delegation struct {
+	Actor            uuid.UUID
+	Reason           string
+	PermittedActions []string
 }
 
 // Wire is the session.v1 document of the record.
@@ -175,6 +197,13 @@ func (r Record) Wire() contracts.Session {
 	}
 	if r.RevokedAt != nil {
 		out.RevokedAt = &contracts.Timestamp{Time: r.RevokedAt.UTC()}
+	}
+	if r.Delegation != nil {
+		out.Delegation = &contracts.SessionDelegation{
+			ActorPrincipalID: WirePrincipalID(r.Delegation.Actor),
+			Reason:           r.Delegation.Reason,
+			PermittedActions: append([]string{}, r.Delegation.PermittedActions...),
+		}
 	}
 	return out
 }
@@ -210,36 +239,77 @@ func validAMR(amr []string) bool {
 // refresh lifetime, which is when its last credential expired.
 func (s *Store) sessionColumns() string {
 	return `s.id::text, s.principal_id::text, s.organization_id::text, s.revision,
-	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version`
+	s.auth_time, s.amr, s.created_at, ` + s.effectiveExpiry() + `, ` + s.effectiveRevokedAt() + `, s.legacy_token_version,
+	s.actor_principal_id::text, s.delegation_reason, s.delegation_permitted_actions`
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
-// reports it: the explicit revoke, else the principal's password stamp
-// (users.password_updated_at) when that is strictly after the session was
-// created. A password change thus ends every older session in the same
-// transaction that wrote the new hash, whether or not RevokeAll ran. Both
-// times are database-clock values; a principal with no stamp voids nothing.
+// reports it: the session's own revoke (ownRevokedAt), else, for a browser
+// client's session, the whole effective revoke of its web session, evaluated
+// over the web session's row. A client session is created after its web session,
+// so a password change between the two creations voids the parent and not the
+// child's own stamp: the parent's stamp must be read against the parent's
+// created_at. Liveness is read, not written (CHAOS-12398): a web logout, an
+// organization switch, revoke-all and a password change end the child with no
+// code on those paths.
 func (s *Store) effectiveRevokedAt() string {
-	return fmt.Sprintf(`COALESCE(s.revoked_at,
-		(SELECT u.password_updated_at FROM %s.users u
-		 WHERE u.principal_id = s.principal_id AND u.password_updated_at > s.created_at))`, s.q)
+	return `COALESCE(` + s.ownRevokedAt("s") + `, ` + s.ofWebParent(s.ownRevokedAt("wp")) + `)`
 }
 
-// effectiveExpiry is the expression for alias s's effective expiry.
+// ownRevokedAt is one session row's revoke, for alias: the explicit revoke, else
+// the principal's password stamp (users.password_updated_at) when that is
+// strictly after the session was created. A password change thus ends every
+// older session in the same transaction that wrote the new hash, whether or not
+// RevokeAll ran. Both times are database-clock values; a principal with no stamp
+// voids nothing.
+func (s *Store) ownRevokedAt(alias string) string {
+	return fmt.Sprintf(`COALESCE(%[2]s.revoked_at,
+		(SELECT u.password_updated_at FROM %[1]s.users u
+		 WHERE u.principal_id = %[2]s.principal_id AND u.password_updated_at > %[2]s.created_at))`, s.q, alias)
+}
+
+// effectiveExpiry is the expression for alias s's effective expiry: its own, or
+// for a browser client's session its web session's when that is first. LEAST
+// ignores the NULL of an unlinked session.
 func (s *Store) effectiveExpiry() string {
-	return fmt.Sprintf(`LEAST(s.expires_at, COALESCE(
-		(SELECT r.expires_at FROM %s.refresh_credentials r WHERE r.session_id = s.id
+	return `LEAST(` + s.ownExpiry("s") + `, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// effectiveCap is alias s's absolute cap: sessions.expires_at, or for a browser
+// client's session its web session's effective expiry when that is first. A
+// refresh exchange and a new credential's expiry both read it, so a client
+// session cannot be exchanged, or hold a credential, past its web session.
+func (s *Store) effectiveCap() string {
+	return `LEAST(s.expires_at, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
+}
+
+// ownExpiry is one session row's expiry, for alias: the absolute cap or its
+// newest credential's expiry, whichever is first. A session with no credential
+// uses its last rotation plus the refresh lifetime.
+func (s *Store) ownExpiry(alias string) string {
+	return fmt.Sprintf(`LEAST(%[2]s.expires_at, COALESCE(
+		(SELECT r.expires_at FROM %[1]s.refresh_credentials r WHERE r.session_id = %[2]s.id
 		 ORDER BY r.issued_at DESC, r.created_at DESC LIMIT 1),
-		COALESCE(s.last_seen_at, s.created_at) + %d * interval '1 microsecond'))`, s.q, s.refreshTTL.Microseconds())
+		COALESCE(%[2]s.last_seen_at, %[2]s.created_at) + %[3]d * interval '1 microsecond'))`, s.q, alias, s.refreshTTL.Microseconds())
+}
+
+// ofWebParent reads expr over alias wp, the web session of alias s. It is NULL
+// for an unlinked session. Depth one: a linked session's parent has no link
+// (0042's trigger), so one subquery is the whole chain.
+func (s *Store) ofWebParent(expr string) string {
+	return `(SELECT ` + expr + ` FROM ` + s.q + `.sessions wp WHERE wp.id = s.web_session_id)`
 }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	var (
-		r                 Record
-		id, principal     string
-		organization      *string
-		authTime          *time.Time
-		dest              = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion}
+		r             Record
+		id, principal string
+		organization  *string
+		authTime      *time.Time
+		actor, reason *string
+		permitted     []string
+		dest          = []any{&id, &principal, &organization, &r.Revision, &authTime, &r.AMR, &r.CreatedAt, &r.ExpiresAt, &r.RevokedAt, &r.LegacyTokenVersion,
+			&actor, &reason, &permitted}
 		parseErr, scanErr error
 	)
 	if scanErr = row.Scan(append(dest, extra...)...); scanErr != nil {
@@ -262,6 +332,16 @@ func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 		r.AuthTime = *authTime
 	} else {
 		r.AuthTime = r.CreatedAt
+	}
+	if actor != nil {
+		id, err := uuid.Parse(*actor)
+		if err != nil {
+			return Record{}, err
+		}
+		r.Delegation = &Delegation{Actor: id, PermittedActions: permitted}
+		if reason != nil {
+			r.Delegation.Reason = *reason
+		}
 	}
 	return r, nil
 }
@@ -329,8 +409,8 @@ type queryRower interface {
 // lockedSession is the session row read FOR UPDATE, with what an exchange
 // decides on. expired is the EFFECTIVE expiry (Record.ExpiresAt) against the
 // database clock, the same liveness Current reports; capExpired is the
-// absolute cap alone, which an exchange checks before the credential's own
-// expiry so an expired credential reports refresh_expired.
+// absolute cap alone (effectiveCap), which an exchange checks before the
+// credential's own expiry so an expired credential reports refresh_expired.
 type lockedSession struct {
 	Record
 	expired, capExpired, principalDisabled bool
@@ -341,7 +421,7 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, clock_timestamp(), s.expires_at <= clock_timestamp(), p.disabled_at IS NOT NULL
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), p.disabled_at IS NOT NULL
 		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
 		WHERE s.id = $1
 		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
@@ -365,89 +445,111 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 // is set only when the store failed or the grace successor could not be
 // recomputed; Result.Reason then says which.
 func (s *Store) Exchange(ctx context.Context, credential contracts.SecretString) (result Result, err error) {
-	return s.exchange(ctx, credential, nil)
+	return s.exchange(ctx, credential, nil, nil)
 }
 
-func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard) (result Result, err error) {
+func (s *Store) exchange(ctx context.Context, credential contracts.SecretString, guard Guard, public PublicRow) (result Result, err error) {
 	defer func() { s.recordExchange(ctx, result, err) }()
 	if !wellFormed(credential) {
 		return Result{Reason: ReasonMalformed}, nil
 	}
 	hash := hashCredential(credential)
 
+	// The audit row is fixed before the transaction: the session and principal
+	// of the presented credential, read by its hash (as RevokeByCredential does).
+	var sessionID, principal string
+	if err := s.pool.QueryRow(ctx, `SELECT session_id::text, principal_id::text FROM `+s.q+`.refresh_credentials WHERE token_hash = $1`, hash).
+		Scan(&sessionID, &principal); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Result{Reason: ReasonRefreshUnknown}, nil
+		}
+		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
+	}
+
 	var reuse *lockedSession
 	var reusedFamily string
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var sessionID string
-		if err := tx.QueryRow(ctx, `SELECT session_id::text FROM `+s.q+`.refresh_credentials WHERE token_hash = $1`, hash).Scan(&sessionID); err != nil {
+	// Only the rotate branch changes state (the successor credential, counted
+	// by migration refresh_credentials_create_count), so only it commits, with its auth.session.refreshed
+	// row and the caller's public row. Every other branch writes nothing and
+	// ends in ErrNoStateChange with its result set: a refusal, a grace replay
+	// (it rotates nothing: no event, no row) or a reuse, revoked below.
+	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			locked, err := s.lockSession(ctx, tx, sessionID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				result.Reason = ReasonRefreshUnknown
 				return nil
 			}
-			return err
-		}
-		locked, err := s.lockSession(ctx, tx, sessionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			result.Reason = ReasonRefreshUnknown
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		p, err := s.readPresented(ctx, tx, hash, sessionID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			result.Reason = ReasonRefreshUnknown
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch {
-		case locked.RevokedAt != nil || p.revoked:
-			result.Reason = ReasonSessionRevoked
-		case locked.capExpired:
-			result.Reason = ReasonSessionExpired
-		case locked.principalDisabled:
-			result.Reason = ReasonPrincipalDeactivated
-		case locked.LegacyTokenVersion == nil:
-			s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
-				"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
-			result.Reason = ReasonRevisionStale
-		case !p.consumed && p.expired:
-			result.Reason = ReasonRefreshExpired
-		case !p.consumed:
-			if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
-				return err
-			}
-			issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
 			if err != nil {
 				return err
 			}
-			result = Result{Reason: ReasonAccepted, Issued: issued}
-		case p.inGrace && p.successorLive:
-			childID, err := uuid.Parse(*p.successor)
+			p, err := s.readPresented(ctx, tx, hash, sessionID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				result.Reason = ReasonRefreshUnknown
+				return nil
+			}
 			if err != nil {
 				return err
 			}
-			successor := deriveSuccessor(s.key, childID, credential)
-			if !equalHash(hashCredential(successor), p.successorHash) {
-				result.Reason = ReasonDependency
-				return ErrGraceUnavailable
+			switch {
+			case locked.RevokedAt != nil || p.revoked:
+				result.Reason = ReasonSessionRevoked
+			case locked.capExpired:
+				result.Reason = ReasonSessionExpired
+			case locked.principalDisabled:
+				// The locked session names the principal and organization of the
+				// refusal, for go-api's deactivated row (compat refresh); nothing is
+				// written here and no credential is returned.
+				result = Result{Reason: ReasonPrincipalDeactivated, Issued: Issued{Session: locked.Record}}
+			case locked.LegacyTokenVersion == nil:
+				s.logger.WarnContext(ctx, "refresh refused: session has no token_version pin",
+					"session_id", sessionID, "reason_code", string(ReasonRevisionStale))
+				result.Reason = ReasonRevisionStale
+			case !p.consumed && p.expired:
+				result.Reason = ReasonRefreshExpired
+			case !p.consumed:
+				if err := runGuard(ctx, tx, locked.Record, guard); err != nil {
+					return err
+				}
+				issued, err := s.rotate(ctx, tx, locked.Record, p, credential)
+				if err != nil {
+					return err
+				}
+				if public != nil {
+					if err := public(ctx, tx, issued.Session.PrincipalID, issued.Session.OrganizationID); err != nil {
+						return err
+					}
+				}
+				result = Result{Reason: ReasonAccepted, Issued: issued}
+			case p.inGrace && p.successorLive:
+				childID, err := uuid.Parse(*p.successor)
+				if err != nil {
+					return err
+				}
+				successor := deriveSuccessor(s.key, childID, credential)
+				if !equalHash(hashCredential(successor), p.successorHash) {
+					result.Reason = ReasonDependency
+					return ErrGraceUnavailable
+				}
+				var expires time.Time
+				if err := tx.QueryRow(ctx, `SELECT expires_at FROM `+s.q+`.refresh_credentials WHERE id = $1`, childID.String()).Scan(&expires); err != nil {
+					return err
+				}
+				result = Result{Reason: ReasonGraceReplay, Issued: Issued{Session: locked.Record, Credential: successor, ExpiresAt: expires}}
+			default:
+				reuse, reusedFamily = &locked, p.familyID
 			}
-			var expires time.Time
-			if err := tx.QueryRow(ctx, `SELECT expires_at FROM `+s.q+`.refresh_credentials WHERE id = $1`, childID.String()).Scan(&expires); err != nil {
-				return err
-			}
-			result = Result{Reason: ReasonGraceReplay, Issued: Issued{Session: locked.Record, Credential: successor, ExpiresAt: expires}}
-		default:
-			reuse, reusedFamily = &locked, p.familyID
-		}
-		return nil
+			return nil
+		},
+		Audit:     refreshedEvent(ctx, principal, sessionID),
+		OffStream: audit.OffStreamSessionLifecycle,
+		Refusals:  []error{ErrGuardRefused, ErrGraceUnavailable},
 	})
-	if err != nil {
-		if errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused) {
-			return Result{Reason: ReasonDependency}, err
-		}
+	switch {
+	case err == nil, errors.Is(err, audit.ErrNoStateChange):
+	case errors.Is(err, ErrGraceUnavailable) || errors.Is(err, ErrGuardRefused):
+		return Result{Reason: ReasonDependency}, err
+	default:
 		return Result{Reason: ReasonStoreUnavailable}, fmt.Errorf("%w: refresh exchange: %w", ErrStore, err)
 	}
 	if reuse == nil {
@@ -465,7 +567,7 @@ type Issued struct {
 
 // rotate inserts the successor and consumes the parent. The caller holds the
 // session lock.
-func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p presented, parent contracts.SecretString) (Issued, error) {
+func (s *Store) rotate(ctx context.Context, tx txWriter, session Record, p presented, parent contracts.SecretString) (Issued, error) {
 	childID, err := uuid.NewRandom()
 	if err != nil {
 		return Issued{}, err
@@ -475,7 +577,7 @@ func (s *Store) rotate(ctx context.Context, tx pgx.Tx, session Record, p present
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO `+s.q+`.refresh_credentials (id, session_id, principal_id, token_hash, family_id, parent_id, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, LEAST(clock_timestamp() + make_interval(secs => $7::double precision),
-			(SELECT expires_at FROM `+s.q+`.sessions WHERE id = $2)))
+			(SELECT `+s.effectiveCap()+` FROM `+s.q+`.sessions s WHERE s.id = $2)))
 		RETURNING expires_at`,
 		childID.String(), session.ID.String(), session.PrincipalID.String(), hashCredential(successor),
 		p.familyID, p.id, s.refreshTTL.Seconds()).Scan(&expires); err != nil {
@@ -529,16 +631,7 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 			}
 			return s.revokeSessions(ctx, tx, []string{sessionID}, revokedByReuse)
 		},
-		Audit: audit.AuditEvent{
-			EventType:          "auth.session.refresh_reuse_revoked",
-			Outcome:            audit.OutcomeDenied,
-			SubjectPrincipalID: &principal,
-			RequestID:          requestid.Audit(ctx),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "session", "target_id": sessionID,
-				"credential_class": "refresh_credential",
-			},
-		},
+		Audit:     reuseRevokedEvent(ctx, principal, "session", sessionID),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -559,24 +652,133 @@ func (s *Store) revokeForReuse(ctx context.Context, session Record, familyID str
 }
 
 // revokeSessions revokes the given sessions and every credential of them. The
-// caller holds their locks inside an audit.Commit transaction.
+// caller holds their locks inside an audit.Commit transaction. It queues a
+// session.revoked event for each session it ended, for each live client session
+// under them and for each delegated session it reached (CHAOS-11816).
 func (s *Store) revokeSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string) error {
+	_, err := s.endSessions(ctx, tx, ids, reason, false, true)
+	return err
+}
+
+// revokeSessionsBulk is revokeSessions for a bulk end whose caller queues ONE scope event instead of one per session
+// (principal.sessions_revoked, organization.sessions_revoked). It returns the instant it wrote as revoked_at on every row,
+// which the scope event carries as revoked_before.
+func (s *Store) revokeSessionsBulk(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait bool) (time.Time, error) {
+	return s.endSessions(ctx, tx, ids, reason, nowait, false)
+}
+
+// endSessions is revokeSessions; a delegated row among ids and every delegated
+// child of ids end with them, each with a delegation_ended audit row. nowait
+// is the mode of a caller under the auth lock order's step 6a. It reads ONE
+// clock reading and writes it as revoked_at of every credential and session it
+// ends, and returns it. With each set it queues session.revoked for every
+// session it ended and for the live client sessions whose web session it ended
+// (they end by read of the parent's revoke, with no row written; a client
+// session that commits after this read has no event, and the server's read of
+// the parent still refuses it).
+func (s *Store) endSessions(ctx context.Context, tx audit.TxOps, ids []string, reason string, nowait, each bool) (time.Time, error) {
+	delegated, err := delegationend.Lock(ctx, tx, s.q, ids, nowait)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var at time.Time
+	if err := tx.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&at); err != nil {
+		return time.Time{}, err
+	}
+	var children []string
+	if each {
+		if children, err = s.liveClientSessions(ctx, tx, ids); err != nil {
+			return time.Time{}, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE `+s.q+`.refresh_credentials
-		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason); err != nil {
-		return err
+		SET revoked_at = $3, revoked_reason = $2, updated_at = $3
+		WHERE session_id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason, at); err != nil {
+		return time.Time{}, err
 	}
-	_, err := tx.Exec(ctx, `
+	rows, err := tx.Query(ctx, `
 		UPDATE `+s.q+`.sessions
-		SET revoked_at = clock_timestamp(), revoked_reason = $2, updated_at = clock_timestamp()
-		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, reason)
-	return err
+		SET revoked_at = $3, revoked_reason = $2, updated_at = $3
+		WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL
+		RETURNING id::text`, ids, reason, at)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var ended []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return time.Time{}, err
+		}
+		ended = append(ended, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return time.Time{}, err
+	}
+	if each {
+		wire, err := eventReason(reason)
+		if err != nil {
+			return time.Time{}, err
+		}
+		for _, id := range append(ended, children...) {
+			event, err := sessionevent.Session(id, wire)
+			if err != nil {
+				return time.Time{}, err
+			}
+			if err := tx.AddEvent(event); err != nil {
+				return time.Time{}, err
+			}
+		}
+	}
+	if err := delegationend.End(ctx, tx, s.q, delegationend.Children(delegated, ids), delegationend.ReasonBaseEnded); err != nil {
+		return time.Time{}, err
+	}
+	return at, delegationend.Record(ctx, tx, delegated, delegationend.EndPublicRows)
+}
+
+// liveClientSessions are the sessions under the web sessions ids whose own revoked_at is NULL.
+func (s *Store) liveClientSessions(ctx context.Context, tx audit.TxOps, ids []string) ([]string, error) {
+	rows, err := tx.Query(ctx, `SELECT id::text FROM `+s.q+`.sessions WHERE web_session_id = ANY($1::uuid[]) AND revoked_at IS NULL ORDER BY id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// eventReason maps a stored revoked_reason to the closed reason of provisioning-event.v1.
+func eventReason(reason string) (string, error) {
+	switch reason {
+	case revokedByCaller:
+		return sessionevent.ReasonCaller, nil
+	case revokedByReuse:
+		return sessionevent.ReasonRefreshReuse, nil
+	}
+	return "", fmt.Errorf("%w: no event reason for revoked_reason %q", ErrStore, reason)
 }
 
 // Revoke ends one live session and every credential of it. It reports false
 // when the session was already revoked or its effective expiry has passed.
 func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (bool, error) {
+	return s.RevokeWith(ctx, sessionID, actor, publicRowOf(ctx))
+}
+
+// RevokeWith is Revoke with public, when not nil, run in the revocation's
+// transaction after the session is revoked, with its principal and
+// organization: go-api's refusal row of a compatibility refresh. It commits
+// only with a revocation; an error from public rolls the revocation back.
+func (s *Store) RevokeWith(ctx context.Context, sessionID uuid.UUID, actor Actor, public PublicRow) (bool, error) {
 	id := sessionID.String()
 	var principal string
 	if err := s.pool.QueryRow(ctx, `SELECT principal_id::text FROM `+s.q+`.sessions WHERE id = $1`, id).Scan(&principal); err != nil {
@@ -595,13 +797,15 @@ func (s *Store) Revoke(ctx context.Context, sessionID uuid.UUID, actor Actor) (b
 				// Already dead: nothing to revoke, so no audit row (ErrNoStateChange).
 				return nil
 			}
-			return s.revokeSessions(ctx, tx, []string{id}, revokedByCaller)
+			if err := s.revokeSessions(ctx, tx, []string{id}, revokedByCaller); err != nil {
+				return err
+			}
+			if public != nil {
+				return public(ctx, tx, locked.PrincipalID, locked.OrganizationID)
+			}
+			return nil
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session", "target_id": id},
-		},
+		Audit:     revokedEvent(ctx, actor, principal, "session", id, false),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -628,11 +832,7 @@ func (s *Store) RevokeAll(ctx context.Context, principalID uuid.UUID, actor Acto
 			revoked = n
 			return err
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal},
-		},
+		Audit:     revokedAllEvent(ctx, actor, principal),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {
@@ -672,11 +872,7 @@ func (s *Store) BumpRevision(ctx context.Context, sessionID uuid.UUID, actor Act
 				UPDATE `+s.q+`.sessions SET revision = revision + 1, updated_at = clock_timestamp()
 				WHERE id = $1 RETURNING revision`, id).Scan(&revision)
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.session.revision_bumped", Outcome: audit.OutcomeAllowed,
-			ActorPrincipalID: actorID(actor), SubjectPrincipalID: &principal, RequestID: requestIDOf(ctx, actor),
-			Attributes: map[string]any{"target_kind": "session", "target_id": id},
-		},
+		Audit:     revisionBumpedEvent(ctx, actor, principal, id),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {

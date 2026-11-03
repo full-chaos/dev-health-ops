@@ -79,6 +79,7 @@ func WithImpersonation(ctx context.Context, session *Impersonation) context.Cont
 type Guard struct {
 	auth   *Authenticator
 	logger *slog.Logger
+	shadow *Shadow
 }
 
 // NewGuard builds a Guard over auth.
@@ -89,13 +90,45 @@ func NewGuard(auth *Authenticator, logger *slog.Logger) *Guard {
 	return &Guard{auth: auth, logger: logger}
 }
 
-// Wrap returns next behind level. A refused caller never reaches next.
+// gate names the action a platform wrap decides by; the zero gate is the
+// generic wrap, whose org-less rule is admin.orgs.
+type gate struct {
+	action string
+	kind   gateKind
+}
+
+type gateKind int
+
+const (
+	gateNone gateKind = iota
+	// gatePlatform admits only a holder of the action.
+	gatePlatform
+	// gateAdminOr admits Admin, or a holder of the action.
+	gateAdminOr
+)
+
+// orglessAction is the action that lets a caller with no organization reach a
+// route: the route's own, else admin.orgs.
+func (gt gate) orglessAction() string {
+	if gt.action != "" {
+		return gt.action
+	}
+	return ActionAdminOrgs
+}
+
+// Wrap returns next behind level. A refused caller never reaches next. The
+// bare Superuser level admits nobody: a platform route is wrapped with
+// WrapPlatform and its action.
 func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
+	return g.wrap(level, gate{}, next)
+}
+
+func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 	if level == Public {
-		return next
+		return countGuardLevel(level, next)
 	}
 	if level == Optional {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := g.optionalUser(w, r)
 			if !ok {
 				return
@@ -104,14 +137,22 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				r = r.WithContext(WithUser(r.Context(), user))
 			}
 			next.ServeHTTP(w, r)
-		})
+		}))
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := g.currentUser(w, r)
+	return countGuardLevel(level, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := g.currentUser(w, r, level, gt)
 		if !ok {
 			return
 		}
-		if user.OrgID == "" && !user.IsSuperuser && !OrglessMayReach(r.Method, r.URL.Path) {
+		// The shadow call sees the caller as the legacy decision did, before an org swap, and
+		// never changes the answer.
+		caller := user
+		bearer := ""
+		if g.shadow != nil {
+			bearer, _ = BearerToken(r.Header.Get("Authorization"))
+		}
+		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
+			g.observeShadow(r, caller, bearer, false)
 			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 			return
 		}
@@ -125,26 +166,43 @@ func (g *Guard) Wrap(level Authz, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
-			if !user.IsAdmin() {
+			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
+				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
 			}
 			if level == AdminOrg && user.OrgID == "" {
+				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 				return
 			}
 		case Superuser:
-			if !user.IsSuperuser {
+			if gt.kind != gatePlatform || !user.Holds(gt.action) {
+				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
 		}
+		g.observeShadow(r, caller, bearer, true)
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
-	})
+	}))
 }
 
-// currentUser is get_current_user. It writes the refusal itself.
-func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool) {
+// WrapPlatform returns next behind the platform gate of action: only a caller
+// that holds action passes.
+func (g *Guard) WrapPlatform(action string, next http.Handler) http.Handler {
+	return g.wrap(Superuser, gate{action, gatePlatform}, next)
+}
+
+// WrapAdminOr returns next behind Admin, which a caller that holds action also
+// passes.
+func (g *Guard) WrapAdminOr(action string, next http.Handler) http.Handler {
+	return g.wrap(Admin, gate{action, gateAdminOr}, next)
+}
+
+// currentUser is get_current_user. It writes the refusal itself. At the admin
+// levels the role is the token org's membership row's (adminRole).
+func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz, gt gate) (*User, bool) {
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" {
 		authFailure(w, "Not authenticated", nil)
@@ -163,6 +221,47 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request) (*User, bool
 		}
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
+	}
+	switch {
+	case level == Superuser:
+		countRoleSource(r.Context(), kindRolePlatformGate)
+	case level == Admin || level == AdminOrg:
+		switch {
+		case user.Holds(ActionAdminOrgs):
+			countRoleSource(r.Context(), kindRolePlatformBypass)
+		case user.OrgID == "":
+			countRoleSource(r.Context(), kindRoleClaimFallback)
+		}
+	}
+	if (level != Admin && level != AdminOrg) || user.Holds(ActionAdminOrgs) || (gt.kind == gateAdminOr && user.Holds(gt.action)) || user.OrgID == "" {
+		return user, true
+	}
+	// At an admin level the caller's role in the token's own org is the
+	// membership row's now, not the role claim; an existing org without the
+	// row is the org scope's X-Org-Id refusal, an org that does not exist or
+	// a claim that is not a UUID keeps main's answer (the claim), and a
+	// failed read is 503 or 500. Behind ReadOnce this is the org scope's read.
+	role, standing, err := g.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)
+	if err != nil {
+		g.logger.ErrorContext(r.Context(), "api guard: membership lookup failed",
+			slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)),
+			slog.String("missing_grant", MissingGrant(err)))
+		WriteAuthFailure(w, "", err)
+		return nil, false
+	}
+	switch standing {
+	case tokenOrgNoRow:
+		writeOrgDenied(w)
+		return nil, false
+	case tokenOrgAsMain:
+		countRoleSource(r.Context(), kindRoleClaimFallback)
+		return user, true
+	}
+	countRoleSource(r.Context(), kindRoleMembershipRow)
+	if role != user.Role {
+		acting := *user
+		acting.Role = role
+		user = &acting
 	}
 	return user, true
 }

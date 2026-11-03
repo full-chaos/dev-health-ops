@@ -54,4 +54,5 @@ const (
 	gitlabFindingsRoute      = gitlabProjectRoute + "/vulnerability_findings"
 	gitlabDependenciesRoute  = gitlabProjectRoute + "/dependencies"
 	gitlabMilestonesRoute    = gitlabProjectRoute + "/milestones"
+	gitlabVersionRoute       = "/version"
 )

@@ -58,8 +58,7 @@ func UpgradeLogged(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain
 // set_config(name, value, true) inside the walk's one transaction, before it plans or
 // applies anything, so every revision of the walk reads them and nothing outside the
 // transaction does (no session state that a pooler could hand to another client, or
-// that a later transaction on the same connection could read). Revision 0146 reads
-// ClassDecisionLiveDigestSetting this way (CHAOS-8735).
+// that a later transaction on the same connection could read).
 type WalkSettings map[string]string
 
 // UpgradeLoggedWithSettings is UpgradeLogged with settings set for the walk's transaction.
@@ -145,7 +144,7 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 	var done walked
 	err := inTransaction(ctx, conn, func(tx pgx.Tx) error {
 		done = walked{}
-		if err := setForTransaction(ctx, tx, withWalkDefaults(settings)); err != nil {
+		if err := setForTransaction(ctx, tx, settings); err != nil {
 			return err
 		}
 		observation, err := observe(ctx, tx)
@@ -166,6 +165,9 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 		case StateSchemaMismatch:
 			return SchemaMismatchError{Recorded: observation.Versions, MissingTables: plan.MissingTables}
 		case StateBelowHead:
+			if len(plan.Missing) == 1 && plan.Missing[0] == applicationHead(baseline) {
+				return BelowBaselineError{Recorded: observation.Versions, Baseline: applicationHead(baseline)}
+			}
 			return BelowHeadError{Recorded: observation.Versions, Missing: plan.Missing}
 		case StateEmpty:
 			if _, err := tx.Exec(ctx, baseline.Schema); err != nil {
@@ -437,25 +439,6 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	sort.Strings(versions)
 	observation.Versions = versions
 	return observation, nil
-}
-
-// walkDefaults are set for every walk unless its settings name them. The live digest
-// defaults to empty so that revision 0146 never reads a value the walk did not set: a
-// role or database default of the setting (ALTER ROLE/DATABASE ... SET) would otherwise
-// show through current_setting when the environment does not name a digest (CHAOS-8755).
-// Empty is what revision 0146 refuses with MCP class rows present.
-var walkDefaults = WalkSettings{ClassDecisionLiveDigestSetting: ""}
-
-// withWalkDefaults is settings with every walk default it does not name.
-func withWalkDefaults(settings WalkSettings) WalkSettings {
-	out := make(WalkSettings, len(walkDefaults)+len(settings))
-	for name, value := range walkDefaults {
-		out[name] = value
-	}
-	for name, value := range settings {
-		out[name] = value
-	}
-	return out
 }
 
 // setForTransaction sets each setting for tx only (is_local = true), in name order.

@@ -19,7 +19,7 @@ const (
 	buildCmd      = "go run -trimpath -mod=readonly ./cmd/cigate docs-build"
 	preCmd        = buildCmd + " pre"
 	postCmd       = buildCmd + " post"
-	mkdocsCmdLine = "python -m mkdocs build --strict --config-file mkdocs.yml"
+	mkdocsCmdLine = `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict --config-file mkdocs.yml`
 )
 
 // commandIndex is the position of the first command line that starts with command and carries every arg, or -1.
@@ -51,7 +51,7 @@ type expectedCheck struct {
 
 var docsGuardsChecks = []expectedCheck{
 	{"Validate publication inventory and IA placement", goCmd("validate-publication"), nil},
-	{"Strict canonical build", "python -m mkdocs build --strict", []string{"--config-file mkdocs.yml"}},
+	{"Strict canonical build", `uv run --no-project --python "$RUNNER_TEMP/docs-venv/bin/python" mkdocs build --strict`, []string{"--config-file mkdocs.yml"}},
 	{"Check rendered links, anchors, and assets", goCmd("check-built-site-links"), []string{"--site-dir .build/docs"}},
 	{"Check task-based search acceptance", goCmd("check-docs-search"), []string{"--site-dir .build/docs", "--queries " + searchAcceptance}},
 	{"Check structural accessibility invariants", goCmd("check-docs-accessibility"), []string{"--site-dir .build/docs", "--css docs/stylesheets/extra.css"}},
@@ -684,9 +684,9 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"preview-or-build gains a second setup-go step", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(cloudflarePath)
 			i := strings.Index(text, "      - uses: actions/setup-go@")
-			j := strings.Index(text[i:], "      - uses: actions/setup-python@")
+			j := strings.Index(text[i:], "      - name: Set up uv\n")
 			if i < 0 || j < 0 {
-				t.Fatal("no setup-go step before setup-python in preview-or-build")
+				t.Fatal("no setup-go step before Set up uv in preview-or-build")
 			}
 			return d.added(cloudflarePath, text[:i+j]+text[i:i+j]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 2"},
@@ -696,9 +696,9 @@ func TestCloudflareWorkflowGates(t *testing.T) {
 		{"preview-or-build loses its setup-go step", func(t *testing.T, d docTree) docTree {
 			text, _ := d.read(cloudflarePath)
 			i := strings.Index(text, "      - uses: actions/setup-go@")
-			j := strings.Index(text[i:], "      - uses: actions/setup-python@")
+			j := strings.Index(text[i:], "      - name: Set up uv\n")
 			if i < 0 || j < 0 {
-				t.Fatal("no setup-go step before setup-python in preview-or-build")
+				t.Fatal("no setup-go step before Set up uv in preview-or-build")
 			}
 			return d.added(cloudflarePath, text[:i]+text[i+j:])
 		}, "preview-or-build must set up Go exactly once, found 0"},

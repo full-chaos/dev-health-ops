@@ -117,8 +117,15 @@ func composeOneOffNeedsNoOwnVariables(g *guard) {
 	}
 	want := []string{"BIGBOY_ACR_API_IMAGE", "BIGBOY_ACR_FALKORDB_IMAGE", "BIGBOY_ACR_MCP_IMAGE", "BIGBOY_ACR_NGINX_IMAGE", "BIGBOY_ACR_POSTGRES_IMAGE",
 		"BIGBOY_API_TOOLS_IMAGE", "BIGBOY_DHO_IMAGE", "BIGBOY_WEB_IMAGE", "DHO_API_CH_USERS_XML"}
+	sort.Strings(want)
 	got := composeRequired(g)
-	g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins and DHO_API_CH_USERS_XML %v", got, want)
+	if len(composeBugsinkEnv()) == 0 { // the in-repo tree keeps its bugsink defaults: it requires none of the bugsink variables
+		g.expect(equal(got, want), "compose.bigboy.yml requires %v, want only the pins and DHO_API_CH_USERS_XML %v", got, want)
+		return
+	}
+	for _, f := range composeBugsinkFileFindings(g, got, want) {
+		g.failf("%s", f)
+	}
 }
 
 func composeOneOffScriptsCheckTheirOwnVariables(g *guard) {
@@ -153,9 +160,9 @@ func composeEachOldSetRenders(g *guard) {
 
 func composeFreshRootRendersWithTrackedEnvFiles(g *guard) {
 	for _, p := range [][]string{nil, composeAllOneOffs} {
-		composeMust(g, composeIn{profiles: p, env: map[string]string{}})
+		composeMust(g, composeIn{profiles: p, env: composeBugsinkEnv()})
 	}
-	images := strings.Join(composeRender(g, composeIn{env: map[string]string{}}).images, "\n")
+	images := strings.Join(composeRender(g, composeIn{env: composeBugsinkEnv()}).images, "\n")
 	g.expect(strings.Contains(images, "dev-health-go-operator:not-resolved"), "a fresh root renders no worker with the placeholder operator tag")
 	g.expect(!strings.Contains(images, "go-operator@sha256"), "a fresh root renders a worker from a go-operator@sha256 digest the tracked copy does not carry")
 }

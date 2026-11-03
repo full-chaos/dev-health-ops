@@ -81,6 +81,7 @@ func TestEveryChainRevisionCanRunInTheWalksOneTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	chain = append(archivedChainFiles(t), chain...)
 	if len(chain) < 7 {
 		t.Fatalf("the chain holds %d revisions: the guard measures nothing", len(chain))
 	}

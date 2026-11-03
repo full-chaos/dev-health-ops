@@ -22,6 +22,10 @@ type verdict struct {
 	status int
 	detail string
 	err    error
+	// inaccessible marks the one refusal for an installation the installer
+	// cannot access; the callback runs the same local work before it as before
+	// the linked-elsewhere refusal.
+	inaccessible bool
 }
 
 const authorizationNotVerified = "GitHub user authorization could not be verified"
@@ -107,7 +111,7 @@ func (h handlers) findAccessibleInstallation(ctx context.Context, accessToken st
 			break
 		}
 	}
-	return nil, verdict{status: http.StatusForbidden, detail: installerAccessDenied}
+	return nil, verdict{status: http.StatusForbidden, detail: installerAccessDenied, inaccessible: true}
 }
 
 // fetchJSON performs request and decodes a 2xx-or-error body the way

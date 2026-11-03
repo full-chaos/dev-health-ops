@@ -31,6 +31,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -413,6 +414,11 @@ func (s *Store) applyProjectionChange(ctx context.Context, id uuid.UUID, src sou
 SET disabled_at = CASE WHEN $2::boolean THEN NULL ELSE clock_timestamp() END, updated_at = clock_timestamp()
 WHERE id = $1 AND (disabled_at IS NULL) IS DISTINCT FROM $2::boolean`, id, src.active); err != nil {
 				return err
+			}
+			if !src.active {
+				if _, err := delegationend.EndOfActor(ctx, tx, s.q, id); err != nil {
+					return err
+				}
 			}
 			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
 SET email = $2, email_lower = $3, updated_at = clock_timestamp()

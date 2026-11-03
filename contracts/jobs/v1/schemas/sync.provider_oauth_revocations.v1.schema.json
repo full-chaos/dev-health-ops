@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dev-health.jobs/sync.provider_oauth_revocations.v1",
+  "title": "Provider OAuth revocations send v1 payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scheduled_for"],
+  "properties": {
+    "scheduled_for": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}

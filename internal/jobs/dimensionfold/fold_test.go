@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
@@ -89,35 +90,38 @@ func decodeEvents(t *testing.T, output *bytes.Buffer) []map[string]any {
 // reads never return is abandoned at TableTimeout with its cause logged, and
 // the next table still folds, all well inside the job's own budget.
 func TestFoldTableTimeoutReleasesTheRun(t *testing.T) {
-	conn := &fakeConn{
-		block: map[string]bool{"repos": true},
-		parts: map[string][]partsState{"teams": {
-			{partitions: 1, parts: 3, rows: 10, names: "a,b,c"},
-			{partitions: 1, parts: 1, rows: 7, names: "d"},
-		}},
-	}
-	cfg := DefaultConfig()
-	cfg.TableTimeout = 50 * time.Millisecond
-	folder, output := newTestFolder(t, conn, cfg)
-	started := time.Now()
-	reports, err := folder.Run(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("run took %s with a blocked table", elapsed)
-	}
-	if reports[0].Outcome != OutcomeFailed || !errors.Is(reports[0].Err, context.DeadlineExceeded) {
-		t.Fatalf("blocked table report=%+v", reports[0])
-	}
-	if reports[1].Outcome != OutcomeFolded || reports[1].PartsBefore != 3 || reports[1].PartsAfter != 1 {
-		t.Fatalf("next table report=%+v", reports[1])
-	}
-	events := decodeEvents(t, output)
-	if events[0]["table"] != "repos" || events[0]["level"] != "WARN" ||
-		!strings.Contains(events[0]["error"].(string), "deadline exceeded") {
-		t.Fatalf("timeout event=%v", events[0])
-	}
+	synctest.Test(t, func(t *testing.T) {
+		conn := &fakeConn{
+			block: map[string]bool{"repos": true},
+			parts: map[string][]partsState{"teams": {
+				{partitions: 1, parts: 3, rows: 10, names: "a,b,c"},
+				{partitions: 1, parts: 1, rows: 7, names: "d"},
+			}},
+		}
+		cfg := DefaultConfig()
+		cfg.TableTimeout = 50 * time.Millisecond
+		folder, output := newTestFolder(t, conn, cfg)
+		started := time.Now()
+		reports, err := folder.Run(context.Background())
+		returnedAt := time.Now()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !returnedAt.Equal(started.Add(cfg.TableTimeout)) {
+			t.Fatalf("the run returned at +%v of virtual time with a blocked table, want +%v (the blocked table is abandoned at TableTimeout, the next table costs none)", returnedAt.Sub(started), cfg.TableTimeout)
+		}
+		if reports[0].Outcome != OutcomeFailed || !errors.Is(reports[0].Err, context.DeadlineExceeded) {
+			t.Fatalf("blocked table report=%+v", reports[0])
+		}
+		if reports[1].Outcome != OutcomeFolded || reports[1].PartsBefore != 3 || reports[1].PartsAfter != 1 {
+			t.Fatalf("next table report=%+v", reports[1])
+		}
+		events := decodeEvents(t, output)
+		if events[0]["table"] != "repos" || events[0]["level"] != "WARN" ||
+			!strings.Contains(events[0]["error"].(string), "deadline exceeded") {
+			t.Fatalf("timeout event=%v", events[0])
+		}
+	})
 }
 
 // TestFoldDecisionTable runs every outcome the fold can reach for one table.

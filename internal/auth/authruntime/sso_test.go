@@ -4,14 +4,16 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -111,32 +113,22 @@ func TestAnUnusableBaseURLRefusesStartup(t *testing.T) {
 	}
 }
 
-// TestFederatedSignInHasNoJITSeam: JIT provisioning stays off. Neither service
-// is given a membership seam, so a sign-in that resolves no account is refused
-// and writes nothing (the services' own refusal tests prove the refusal).
-func TestFederatedSignInHasNoJITSeam(t *testing.T) {
-	raw, err := os.ReadFile("sso.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		code, _, _ := strings.Cut(line, "//")
-		if strings.Contains(code, "JIT:") || strings.Contains(code, "JIT =") {
-			t.Fatalf("sso.go sets a membership seam: %q", strings.TrimSpace(line))
-		}
-	}
+// ssoSeams builds both membership seams from the settings in env.
+func ssoSeams(t *testing.T, env map[string]string) (saml.MembershipJIT, oidc.MembershipJIT) {
+	t.Helper()
 	pool, err := pgxpool.New(context.Background(), "postgres://auth@127.0.0.1:1/devhealth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	schema, err := authschema.NewValidatedIdentifier("auth")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(map[string]string{
-		authconfig.EnvDatabaseURI: "postgres://auth@127.0.0.1:1/devhealth", authconfig.EnvSigningKeyFile: "/nonexistent", authconfig.EnvSigningKeyID: "sso-test",
-	}))})
+	env[authconfig.EnvDatabaseURI] = "postgres://auth@127.0.0.1:1/devhealth"
+	env[authconfig.EnvSigningKeyFile] = "/nonexistent"
+	env[authconfig.EnvSigningKeyID] = "sso-test"
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(env))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +140,22 @@ func TestFederatedSignInHasNoJITSeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if service.JIT != nil {
-		t.Fatal("the SAML service has a membership seam")
+	return service.JIT, oidcJIT(cfg, slog.Default(), identities, nil, authapi.SSOSessions{})
+}
+
+// TestFederatedSignInHasNoJITSeam: with AUTH_SSO_JIT off neither service gets a
+// membership seam, so a sign-in that resolves no account is refused and writes
+// nothing (the services' own refusal tests prove the refusal).
+func TestFederatedSignInHasNoJITSeam(t *testing.T) {
+	samlSeam, oidcSeam := ssoSeams(t, map[string]string{})
+	if samlSeam != nil || oidcSeam != nil {
+		t.Fatalf("seams %v, %v with the switch off", samlSeam, oidcSeam)
+	}
+}
+
+func TestFederatedSignInSeamWithTheSwitch(t *testing.T) {
+	samlSeam, oidcSeam := ssoSeams(t, map[string]string{authconfig.EnvSSOJIT: "true"})
+	if samlSeam == nil || oidcSeam == nil {
+		t.Fatalf("seams %v, %v with the switch on", samlSeam, oidcSeam)
 	}
 }

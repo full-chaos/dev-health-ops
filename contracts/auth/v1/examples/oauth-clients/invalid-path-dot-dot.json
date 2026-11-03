@@ -1,0 +1,15 @@
+{
+  "schema_version": "oauth-clients.v1",
+  "clients": [
+    {
+      "client_id": "dev-health-web",
+      "client_name": "Dev Health",
+      "client_class": "browser",
+      "first_party": true,
+      "audiences": [
+        "acr-api"
+      ],
+      "redirect_path": "/../cb"
+    }
+  ]
+}

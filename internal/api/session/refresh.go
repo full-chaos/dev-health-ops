@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -12,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -65,13 +67,50 @@ func refreshResponse(access, refresh string, user *pyjson.Object) *pyjson.Object
 	return out
 }
 
-// refresh is POST /api/v1/auth/refresh (refresh.py).
-func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+// refreshAccepted counts each HS256 refresh token the refresh route accepts;
+// nil counts nothing. It is a variable of this package, not a Deps field,
+// because the endpoint-profile rows pin line numbers in session.go.
+var refreshAccepted atomic.Pointer[accessverify.RefreshCounter]
+
+// SetRefreshAccepted sets the counter the refresh route counts accepted HS256 refresh tokens with.
+func SetRefreshAccepted(counter *accessverify.RefreshCounter) { refreshAccepted.Store(counter) }
+
+// statusRecorder keeps the status the refresh route answers with, so the route
+// counts a refresh token only when it answered 200.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaims, error) {
+	claims, err := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	if err != nil {
+		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(err))
+		return nil, err
+	}
+	return claims, nil
+}
+
+// refreshClaims verifies a refresh token and reads the sub, org_id and jti the
+// route needs. It answers the refusal itself and returns false.
+func (h handlers) refreshClaims(w http.ResponseWriter, r *http.Request, token string) (userIDText, orgIDText, jti string, ok bool) {
 	ctx := r.Context()
-	token, _ := ctx.Value(refreshInputKey{}).(string)
-	claims, verifyErr := h.Verifier.VerifyType(token, edgetoken.RefreshType)
+	claims, verifyErr := h.verifyRefresh(ctx, token)
 	if verifyErr != nil {
-		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(verifyErr))
 		h.refuseInvalidRefresh(w, r, token)
 		return
 	}
@@ -80,7 +119,6 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "refresh sub", err)
 		return
 	}
-	orgIDText := ""
 	if raw, present := claims["org_id"]; present {
 		if orgIDText, err = pyStrClaim(raw); err != nil {
 			h.fail(w, r, "refresh org", err)
@@ -92,9 +130,26 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
-	jti, err := pyStrClaim(jtiRaw)
-	if err != nil {
+	if jti, err = pyStrClaim(jtiRaw); err != nil {
 		h.fail(w, r, "refresh jti", err)
+		return
+	}
+	return userIDText, orgIDText, jti, true
+}
+
+// refresh is POST /api/v1/auth/refresh (refresh.py).
+func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	recorder := &statusRecorder{ResponseWriter: w}
+	w = recorder
+	defer func() {
+		if recorder.status == http.StatusOK {
+			refreshAccepted.Load().Accepted(ctx)
+		}
+	}()
+	token, _ := ctx.Value(refreshInputKey{}).(string)
+	userIDText, orgIDText, jti, ok := h.refreshClaims(w, r, token)
+	if !ok {
 		return
 	}
 
@@ -119,6 +174,9 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if done := h.refuseRevokedOfAGoneMember(w, r, tx, record, userIDText, orgIDText); done {
+			return
+		}
 		if err := revokeFamily(ctx, tx, record.FamilyID, h.Now()); err != nil {
 			h.fail(w, r, "revoke family", err)
 			return
@@ -137,7 +195,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "refresh sub is not a UUID", nil)
 		return
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
@@ -160,7 +218,7 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	if !h.allowActive(w, r, tx, user, record, userIDText, orgIDText) {
 		return
 	}
-	role, ok := h.refreshRole(w, r, tx, user, orgIDText)
+	role, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
 	if !ok {
 		return
 	}
@@ -276,9 +334,13 @@ func (h handlers) allowActive(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 }
 
 // refreshRole is the role refresh.py puts in the new access token: the
-// membership's role in the token's org, else "member". A non-empty org
+// membership's role in the token's org, else "member" (no org claim, or a
+// superuser without a membership). A non-empty org
 // claim that is not a UUID raises ValueError in Python (the bare 500).
-func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, orgIDText string) (string, bool) {
+// A non-superuser whose membership in the token's org is gone (removed or
+// left, D6507) is refused as allowActive refuses a deactivated user: the
+// family revoked, a login_failed audit row, then the generic 401.
+func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx, user *userRow, record *refreshRecord, userIDText, orgIDText string) (string, bool) {
 	if orgIDText == "" {
 		return "member", true
 	}
@@ -292,10 +354,75 @@ func (h handlers) refreshRole(w http.ResponseWriter, r *http.Request, tx pgx.Tx,
 		h.fail(w, r, "membership role", err)
 		return "", false
 	}
+	if !found && !user.Holds(policy.ActionAdminOrgs) {
+		ctx := r.Context()
+		if err := revokeFamily(ctx, tx, record.FamilyID, h.Now()); err != nil {
+			h.fail(w, r, "revoke family", err)
+			return "", false
+		}
+		if err := h.emitAudit(ctx, tx, r, auditEntry{orgID: orgID, action: audit.ActionLoginFailed, resourceID: userIDText,
+			userID: &user.ID, description: "Token refresh failed: not a member", failure: true,
+			errorMessage: "Not a member of the organization"}); err != nil {
+			h.fail(w, r, "audit not a member", err)
+			return "", false
+		}
+		if err := tx.Commit(ctx); err != nil {
+			h.fail(w, r, "commit not a member", err)
+			return "", false
+		}
+		h.Logger.WarnContext(ctx, "refresh rejected: no membership in the token's organization", "user_id", user.ID.String())
+		refuse(w, http.StatusUnauthorized, "Invalid or expired refresh token")
+		return "", false
+	}
 	if !found {
 		return "member", true
 	}
 	return roleText(role), true
+}
+
+// refuseRevokedOfAGoneMember answers a revoked token with no live successor
+// whose (non-superuser) user has no membership in the token's org any more
+// (a member removal revokes the org's tokens, D6507) with the not-a-member
+// refusal of refreshRole instead of the reuse branch. It returns true when it
+// answered; false keeps the reuse branch unchanged.
+func (h handlers) refuseRevokedOfAGoneMember(w http.ResponseWriter, r *http.Request, tx pgx.Tx, record *refreshRecord, userIDText, orgIDText string) bool {
+	if orgIDText == "" {
+		return false
+	}
+	ctx := r.Context()
+	if record.SuccessorJTI != nil {
+		successor, err := refreshByHash(ctx, tx, *record.SuccessorJTI, false)
+		if err != nil {
+			h.fail(w, r, "load successor", err)
+			return true
+		}
+		if successor != nil && successor.RevokedAt == nil {
+			return false
+		}
+	}
+	userID, okUser := policy.ParsePyUUID(userIDText)
+	orgID, okOrg := policy.ParsePyUUID(orgIDText)
+	if !okUser || !okOrg {
+		return false
+	}
+	user, err := h.userByID(ctx, tx, userID)
+	if err != nil {
+		h.fail(w, r, "load user", err)
+		return true
+	}
+	if user == nil || user.Holds(policy.ActionAdminOrgs) {
+		return false
+	}
+	_, found, err := membershipRole(ctx, tx, user.ID, orgID)
+	if err != nil {
+		h.fail(w, r, "membership role", err)
+		return true
+	}
+	if found {
+		return false
+	}
+	_, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
+	return !ok
 }
 
 // replaySuccessor is the grace-window branch: when the successor is still
@@ -317,7 +444,7 @@ func (h handlers) replaySuccessor(w http.ResponseWriter, r *http.Request, tx pgx
 		h.fail(w, r, "refresh sub is not a UUID", nil)
 		return true
 	}
-	user, err := userByID(ctx, tx, userID)
+	user, err := h.userByID(ctx, tx, userID)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return true
@@ -328,7 +455,7 @@ func (h handlers) replaySuccessor(w http.ResponseWriter, r *http.Request, tx pgx
 	if !h.allowActive(w, r, tx, user, record, userIDText, orgIDText) {
 		return true
 	}
-	role, ok := h.refreshRole(w, r, tx, user, orgIDText)
+	role, ok := h.refreshRole(w, r, tx, user, record, userIDText, orgIDText)
 	if !ok {
 		return true
 	}

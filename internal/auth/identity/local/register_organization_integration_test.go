@@ -56,6 +56,10 @@ FROM public.organizations`).Scan(&orgID, &slug, &orgName, &tier, &managedBy, &ac
 	if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.principal.provisioned'`); n != 1 {
 		t.Fatalf("auth.principal.provisioned rows = %d, want 1", n)
 	}
+	if n := rig.env.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.principal.provisioned' AND organization_id IS NULL AND subject_principal_id = $1
+AND attributes->'changed_fields' = '["email", "organization_id"]'::jsonb`, userID); n != 1 {
+		t.Fatalf("the registration audit row does not hold changed_fields [email organization_id] with no organization column")
+	}
 }
 
 func TestRegisterWithoutAnOrganizationNameCreatesNoOrganization(t *testing.T) {

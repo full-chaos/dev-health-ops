@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -238,5 +239,73 @@ func TestIssueNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}
 	if !errors.Is(err, ErrUnavailable) || pair.Access != "" {
 		t.Fatalf("redirect = %+v, %v; want ErrUnavailable and no pair", pair, err)
+	}
+}
+
+// A refusal answered with auth-service's error.v1 document carries its status
+// and reason, and is still ErrUnavailable for every caller.
+func TestIssueRefusalCarriesTheErrorDocument(t *testing.T) {
+	document := func(status int, reason string) string {
+		return `{"schema_version":"error.v1","status":` + strconv.Itoa(status) + `,"reason_code":"` + reason +
+			`","request_id":"req-1","occurred_at":"2026-10-30T12:00:00Z"}`
+	}
+	answers := map[string]struct {
+		status int
+		body   string
+		want   *RefusedError
+	}{
+		"403 not_entitled":      {http.StatusForbidden, document(403, "not_entitled"), &RefusedError{Status: 403, Reason: "not_entitled"}},
+		"403 deactivated":       {http.StatusForbidden, document(403, "deactivated"), &RefusedError{Status: 403, Reason: "deactivated"}},
+		"403 no body":           {http.StatusForbidden, "", nil},
+		"403 not a document":    {http.StatusForbidden, `{"detail":"Forbidden"}`, nil},
+		"403 other schema":      {http.StatusForbidden, strings.Replace(document(403, "not_entitled"), "error.v1", "error.v2", 1), nil},
+		"403 status mismatch":   {http.StatusForbidden, document(401, "not_entitled"), nil},
+		"403 reason not a code": {http.StatusForbidden, document(403, "Not Entitled!"), nil},
+		"503 document":          {http.StatusServiceUnavailable, document(503, "dependency_unavailable"), &RefusedError{Status: 503, Reason: "dependency_unavailable"}},
+		"500 html":              {http.StatusInternalServerError, "<html>", nil},
+	}
+	for name, a := range answers {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(a.status)
+			_, _ = io.WriteString(w, a.body)
+		}))
+		client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}})
+		server.Close()
+		if !errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s: err %v, want ErrUnavailable", name, err)
+		}
+		var refused *RefusedError
+		got := errors.As(err, &refused)
+		switch {
+		case a.want == nil && got:
+			t.Errorf("%s: a refusal %+v from an answer that is not the error document", name, *refused)
+		case a.want != nil && (!got || *refused != *a.want):
+			t.Errorf("%s: err %v, want the refusal %+v", name, err, *a.want)
+		}
+	}
+}
+
+// The issue client reads the refusal document the same strict way: a 401
+// whose reason_code is repeated is no session_revoked, so a superseding issue
+// never reads it as the predecessor having ended.
+func TestIssueRefusesAnErrorDocumentWithARepeatedMember(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"schema_version":"error.v1","status":401,"reason_code":"invalid_credentials","reason_code":"session_revoked"}`)
+	}))
+	defer server.Close()
+	client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor := uuid.New()
+	_, err = client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}, PredecessorSessionID: &predecessor})
+	var refused *RefusedError
+	if errors.Is(err, ErrSessionEnded) || errors.As(err, &refused) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("err = %v, want a plain ErrUnavailable (not ErrSessionEnded, not a refusal document)", err)
 	}
 }

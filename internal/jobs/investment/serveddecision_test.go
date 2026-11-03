@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -317,6 +318,82 @@ func TestACancelledContextIsNotAServedFailure(t *testing.T) {
 	}
 	if served.keepsLastRow(entry.index) || served.isLowQuality(entry.index) {
 		t.Error("a cancelled unit is marked")
+	}
+}
+
+// countingServedClassifier counts its calls. With block set, a call closes
+// entered, waits for its context to end and returns the context error.
+type countingServedClassifier struct {
+	calls   atomic.Int32
+	block   bool
+	entered chan struct{}
+}
+
+func (c *countingServedClassifier) Classify(ctx context.Context, _ units.TextBundle) (decision.Classification, error) {
+	c.calls.Add(1)
+	if c.block {
+		close(c.entered)
+		<-ctx.Done()
+	}
+	return decision.Classification{}, ctx.Err()
+}
+
+func (c *countingServedClassifier) LevelMix(map[string]int) (map[string]float64, bool) {
+	return nil, false
+}
+
+func servedOutcomeCounts(served *ServedDecision) (sum int, nonzero map[string]int) {
+	served.mu.Lock()
+	defer served.mu.Unlock()
+	nonzero = map[string]int{}
+	for outcome, count := range served.outcomes {
+		sum += count
+		if count != 0 {
+			nonzero[outcome] = count
+		}
+	}
+	return sum, nonzero
+}
+
+// The worker pool can hand over a unit after the run stopped. That unit is not
+// asked, so it has no outcome count: the counts sum to the units asked.
+func TestAUnitHandedOverAfterTheRunStoppedIsNotSentAndHasNoOutcomeCount(t *testing.T) {
+	classifier := &countingServedClassifier{}
+	served := servedWith(t, classifier, &syncBuffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := served.categorize(ctx, shadowTestConfig(), shadowTestEntries(t, "unit-handed-over")[0])
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the context error", err)
+	}
+	if calls := classifier.calls.Load(); calls != 0 {
+		t.Fatalf("the classifier was called %d time(s) on a stopped run", calls)
+	}
+	if sum, counts := servedOutcomeCounts(served); sum != 0 {
+		t.Fatalf("outcome counts %v (sum %d) for a unit that was not asked, want none", counts, sum)
+	}
+}
+
+// A unit that was asked and whose run stops during its request has exactly one
+// outcome count: cancelled.
+func TestAUnitWhoseRunStopsDuringItsRequestIsCountedCancelledOnce(t *testing.T) {
+	classifier := &countingServedClassifier{block: true, entered: make(chan struct{})}
+	served := servedWith(t, classifier, &syncBuffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-classifier.entered
+		cancel()
+	}()
+	_, err := served.categorize(ctx, shadowTestConfig(), shadowTestEntries(t, "unit-in-flight")[0])
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the context error", err)
+	}
+	if calls := classifier.calls.Load(); calls != 1 {
+		t.Fatalf("the classifier was called %d time(s), want 1", calls)
+	}
+	if sum, counts := servedOutcomeCounts(served); sum != 1 || counts[servedOutcomeCancelled] != 1 {
+		t.Fatalf("outcome counts %v (sum %d), want exactly one cancelled", counts, sum)
 	}
 }
 

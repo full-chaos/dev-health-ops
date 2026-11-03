@@ -124,6 +124,19 @@ func buildProvider(push PushOptions) (*sdkmetric.MeterProvider, *Source, error) 
 // reader and would otherwise be sent twice.
 func pushSkip() map[string]bool { return map[string]bool{SourceName: true} }
 
+// ForceFlush exports what the OTLP push holds now (a no-op without one). It is what the shell runs at start, so
+// series created at construction leave before the first request.
+func (s *Source) ForceFlush(ctx context.Context) error {
+	if s == nil || s.pushReader == nil {
+		return nil
+	}
+	flusher, ok := s.pushReader.(interface{ ForceFlush(context.Context) error })
+	if !ok {
+		return nil
+	}
+	return flusher.ForceFlush(ctx)
+}
+
 // Shutdown flushes and stops the OTLP push (a no-op without one). Only the
 // push reader stops: the provider and the Prometheus reader keep serving
 // /metrics and recording, as they do for a process that never pushed.

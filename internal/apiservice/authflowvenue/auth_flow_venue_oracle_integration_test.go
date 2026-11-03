@@ -335,8 +335,12 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
 				LoginNoStore:       r.external && r.forwarded.Has(authrows.LocalLogin),
 				CredentialsNoStore: credentialsNoStore(r.external, r.forwarded)})
-		if !same && r.usersOwned && r.forwarded.Has(authrows.Credentials) {
-			for _, declared := range ownedStepDivergences {
+		if !same {
+			table := goAPIStepDivergences
+			if r.usersOwned && r.forwarded.Has(authrows.Credentials) {
+				table = ownedStepDivergences
+			}
+			for _, declared := range table {
 				if declared.covers(s.name, pyShown, goShown, compared) {
 					r.divergencesFired[declared.Step]++
 					same = true

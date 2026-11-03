@@ -21,16 +21,22 @@ import (
 
 // usersOwnedPublicGrant reports whether g, a direct grant of the runtime role
 // on a public table (g.Object is the bare table name), is one the users-owned
-// switch gives: UsersWriteGrant, RegisterOrganizationGrants or
-// LegacyLinkPurgeGrants. A grant held WITH GRANT OPTION never is.
+// switch gives: UsersWriteGrant, RegisterOrganizationGrants,
+// LegacyLinkPurgeGrants or the delegated Start's, or the OrganizationWriteGrants
+// of the orgs-owned switch (the 5->4 flip-back keeps them the same way). A grant
+// held WITH GRANT OPTION never is.
 func usersOwnedPublicGrant(g GrantRecord) bool {
 	if g.Grantable {
 		return false
 	}
 	switch g.Kind {
 	case "relation":
-		return g.Privilege == "DELETE" && isLegacyLinkPurgeTable(g.Object)
+		return g.Privilege == "DELETE" && (isLegacyLinkPurgeTable(g.Object) || isMembershipWriteDelete(g.Object))
 	case "column":
+		if isMembershipWriteColumn(g.Object, g.Privilege, g.Column) || isInviteWriteColumn(g.Object, g.Privilege, g.Column) ||
+			isImpersonationStartColumn(g.Object, g.Privilege, g.Column) || isOrganizationWriteColumn(g.Object, g.Privilege, g.Column) {
+			return true
+		}
 		if g.Object == "users" {
 			insert, update := UsersWriteGrant()
 			switch g.Privilege {
@@ -117,9 +123,68 @@ func retainUsersOwnedGrants(ctx context.Context, tx pgx.Tx, lost []GrantRecord, 
 	return retained, nil
 }
 
+// isPlatformReaderColumn reports whether table.column is a column of
+// PlatformRoleReaderColumns.
+func isPlatformReaderColumn(table, column string) bool {
+	for _, grant := range PlatformRoleReaderColumns() {
+		if grant.Table == table {
+			return slices.Contains(grant.Columns, column)
+		}
+	}
+	return false
+}
+
+// readerNarrowing is what a session reader lost of the platform role read
+// (column SELECTs of PlatformRoleReaderColumns) between before and after,
+// named by the reader. Any other grant a reader loses is one the reader grant
+// never declared (a re-apply removes it without an acknowledgement).
+func readerNarrowing(reader string, before, after []GrantRecord) []GrantRecord {
+	var lost []GrantRecord
+	for _, g := range narrowedGrants(before, after) {
+		if g.Kind != "column" || g.Privilege != "SELECT" || !isPlatformReaderColumn(g.Object, g.Column) {
+			continue
+		}
+		g.Role = reader
+		lost = append(lost, g)
+	}
+	return lost
+}
+
+// retainReaderPlatformGrants re-grants, in tx, every lost session reader
+// record that is a column SELECT of PlatformRoleReaderColumns (the platform
+// roles switch turned off while old owned pods still read), and returns them.
+func retainReaderPlatformGrants(ctx context.Context, tx pgx.Tx, lost []GrantRecord, schemaID ValidatedIdentifier) ([]GrantRecord, error) {
+	var retained []GrantRecord
+	for _, g := range lost {
+		if g.Role == "" || g.Grantable || g.Kind != "column" || g.Privilege != "SELECT" || !isPlatformReaderColumn(g.Object, g.Column) {
+			continue
+		}
+		roleID, err := NewValidatedIdentifier(g.Role)
+		if err != nil {
+			return nil, err
+		}
+		tableID, err := NewValidatedIdentifier(g.Object)
+		if err != nil {
+			return nil, err
+		}
+		columnID, err := NewValidatedIdentifier(g.Column)
+		if err != nil {
+			return nil, err
+		}
+		statement := fmt.Sprintf(`GRANT SELECT (%s) ON TABLE %s.%s TO %s`,
+			quoteIdentifier(columnID), quoteIdentifier(schemaID), quoteIdentifier(tableID), quoteIdentifier(roleID))
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			return nil, fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
+		}
+		retained = append(retained, g)
+	}
+	return retained, nil
+}
+
 // excuseRetained drops the posture violations that are exactly a retained
-// record: a public column privilege ("table.column") or a public table
-// privilege. Every other violation stays.
+// record: a public column privilege ("table.column"), a public table
+// privilege, or a session reader's retained column ("table.column", named by
+// the reader). Every other violation stays.
 func excuseRetained(violations []Violation, retained []GrantRecord) []Violation {
 	if len(retained) == 0 {
 		return violations
@@ -128,6 +193,14 @@ func excuseRetained(violations []Violation, retained []GrantRecord) []Violation 
 	for _, v := range violations {
 		excused := false
 		for _, g := range retained {
+			if g.Role != "" {
+				if v.Kind == "session_reader" && v.Privilege == g.Privilege && v.Object == g.Object+"."+g.Column &&
+					strings.HasPrefix(v.Detail, "session reader "+g.Role+" ") {
+					excused = true
+					break
+				}
+				continue
+			}
 			if v.Schema != publicSchema || v.Privilege != g.Privilege || v.Kind != g.Kind {
 				continue
 			}
@@ -141,4 +214,21 @@ func excuseRetained(violations []Violation, retained []GrantRecord) []Violation 
 		}
 	}
 	return kept
+}
+
+// projectionReaderNarrowing is what a projection reader lost of ProjectionReaderReads between before and after, named by the
+// reader. A grant it held outside the declared columns is one a re-apply removes without an acknowledgement.
+func projectionReaderNarrowing(reader string, before, after []GrantRecord) []GrantRecord {
+	var lost []GrantRecord
+	declared := ProjectionReaderReads()
+	for _, g := range narrowedGrants(before, after) {
+		if g.Kind != "column" || g.Privilege != "SELECT" || !slices.ContainsFunc(declared, func(r ColumnGrant) bool {
+			return r.Table == g.Object && slices.Contains(r.Columns, g.Column)
+		}) {
+			continue
+		}
+		g.Role = reader
+		lost = append(lost, g)
+	}
+	return lost
 }

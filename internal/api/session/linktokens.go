@@ -78,7 +78,7 @@ func (h handlers) redeemLinkToken(ctx context.Context, tx pgx.Tx, table, token s
 	// A token without its user returns None after deleting the token, but
 	// the route then refuses the request and the session rolls back, so
 	// nothing is written; the foreign key cascade makes it unreachable.
-	return userByID(ctx, tx, userID)
+	return h.userByID(ctx, tx, userID)
 }
 
 func deleteLinkTokens(ctx context.Context, tx pgx.Tx, table string, userID uuid.UUID) error {

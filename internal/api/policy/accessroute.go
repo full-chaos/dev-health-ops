@@ -111,12 +111,14 @@ func IsClaimTypeError(err error) bool { return errors.Is(err, errClaimType) }
 
 // mayImpersonate decides whether Impersonation runs its full check, from the
 // Principal decision alone: a user access token (it carries no is_superuser
-// claim), or a legacy token whose verified is_superuser claim is truthy. With
+// claim), or a legacy token whose verified is_superuser claim is truthy, or,
+// while the platform roles switch is owned, a legacy token whose live read
+// says superuser (a newly granted admin's claim is stale until renewal). With
 // no decision, or a failed lookup, the check runs and refuses (fail closed).
 func (s *Scope) mayImpersonate(r *http.Request) bool {
 	decision, ok := decisionFrom(r.Context())
 	if !ok || decision.err != nil {
 		return true
 	}
-	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim)
+	return decision.user != nil && (decision.user.accessToken || decision.user.superuserClaim || (decision.user.IsSuperuser && s.ReadsPlatformRoles()))
 }

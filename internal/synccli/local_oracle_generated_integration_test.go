@@ -825,32 +825,13 @@ func blameTimeScenarios() []localScenario {
 // (named divergence, D2615): where Python left batches behind (where the name sits
 // among the files, in the file system's os.walk order, decides it) the scenario
 // asserts the port's all-or-nothing; where Python left none the tables compare.
-// placeLastInWalkOrder writes a file alone in a directory that os.walk (the file
-// system's own directory order, which is not sorted) reaches last, so it is the last
-// file of the walk: the position that leaves every earlier batch to Python. Directory
-// names are tried until one lists last.
-func placeLastInWalkOrder(f *fixture, name string) {
+// placeInLastDirByName writes a file alone in zz000, the root directory that sorts last by name. Python's batches
+// (frozen in the golden) were recorded with the file last in os.walk order, which left every earlier batch behind;
+// the port walks sorted and validates every batch before it writes (D2615), so its answer does not depend on where
+// the name falls, and the fixture does not read the file system's directory order (tmpfs lists the newest first).
+func placeInLastDirByName(f *fixture, name string) {
 	f.t.Helper()
-	for k := 0; k < 500; k++ {
-		dir := fmt.Sprintf("zz%03d", k)
-		f.write(dir+"/"+name, "the last file\n", 0o644)
-		handle, err := os.Open(f.dir)
-		if err != nil {
-			f.t.Fatal(err)
-		}
-		entries, err := handle.ReadDir(-1)
-		_ = handle.Close()
-		if err != nil {
-			f.t.Fatal(err)
-		}
-		if entries[len(entries)-1].Name() == dir {
-			return
-		}
-		if err := os.RemoveAll(filepath.Join(f.dir, dir)); err != nil {
-			f.t.Fatal(err)
-		}
-	}
-	f.t.Fatal("no directory name lists last")
+	f.write("zz000/"+name, "the last file\n", 0o644)
 }
 
 func blameBatchScenarios() []localScenario {
@@ -875,7 +856,7 @@ func blameBatchScenarios() []localScenario {
 				for i := 0; i < shape.files; i++ {
 					f.write(fmt.Sprintf("d%d/f%04d.txt", i%7, i), fmt.Sprintf("line %d\n", i), 0o644)
 				}
-				placeLastInWalkOrder(f, "bad\xffname.txt")
+				placeInLastDirByName(f, "bad\xffname.txt")
 				f.commit("many\n", commitAt{committerDate: 1_690_000_000})
 				if shape.since {
 					f.write("d0/f0000.txt", "changed\n", 0o644)

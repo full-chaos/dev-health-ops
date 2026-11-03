@@ -241,6 +241,48 @@ func (e *Errors) RefuseSurrogate(name, text string) bool {
 	return true
 }
 
+// OptionalDisplayText is OptionalUTF8String for a name shown to people: besides a lone surrogate, a NUL, a C0 or C1
+// control character, DEL and invalid UTF-8 are string_unicode. A literal U+FFFD is kept. The refusal of the added
+// forms does not echo the input.
+func (e *Errors) OptionalDisplayText(object *pyjson.Object, name string) (string, bool) {
+	text, present := e.OptionalUTF8String(object, name)
+	if !present || e.RefuseTextForm(pyjson.ClassDisplayText, name, text) {
+		return "", false
+	}
+	return text, true
+}
+
+// OptionalURLString is OptionalString(object, name, 0, 0) for a URL held as text: every form BadTextForm names for
+// ClassURL is string_unicode, without echoing the input.
+func (e *Errors) OptionalURLString(object *pyjson.Object, name string) (string, bool) {
+	text, present := e.OptionalString(object, name, 0, 0)
+	if !present || e.RefuseTextForm(pyjson.ClassURL, name, text) {
+		return "", false
+	}
+	return text, true
+}
+
+// RefuseTextForm appends the answer for body field name and reports true when text holds a form the class refuses:
+// value_error for an email (the family the address validator already answers with), string_unicode otherwise. The
+// answer never carries the input.
+func (e *Errors) RefuseTextForm(class pyjson.TextClass, name, text string) bool {
+	form := pyjson.BadTextForm(class, text)
+	if form == pyjson.TextFormNone {
+		return false
+	}
+	loc := []pyjson.Value{"body", name}
+	if class == pyjson.ClassEmail {
+		ctx := pyjson.NewObject()
+		reason := "The email address contains unsafe characters."
+		ctx.Set("reason", reason)
+		*e = append(*e, Error{Type: "value_error", Loc: loc, Ctx: ctx, Msg: "value is not a valid email address: " + reason})
+		return true
+	}
+	*e = append(*e, Error{Type: "string_unicode", Loc: loc,
+		Msg: "Input should be a valid string, unable to parse raw data as a unicode string"})
+	return true
+}
+
 // RequiredString validates one required `str` field (no default) with
 // pydantic's min_length/max_length (code points; 0 = no bound). present is
 // false when the field is absent (a "missing" error, matching pydantic's

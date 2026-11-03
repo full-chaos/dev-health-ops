@@ -62,7 +62,7 @@ Call with (dict "ctx" $ "component" "web" "cfg" .Values.web.serviceAccount).
 */}}
 {{- define "dev-health.workloadServiceAccount" -}}
 serviceAccountName: {{ include "dev-health.workloadServiceAccountName" . }}
-automountServiceAccountToken: {{ .cfg.automountToken | default false }}
+automountServiceAccountToken: {{ if hasKey . "automount" }}{{ .automount }}{{ else }}{{ .cfg.automountToken | default false }}{{ end }}
 {{- end }}
 
 {{/*
@@ -210,11 +210,33 @@ epoch the Go finalize bumps must land in the keyspace the API's cache reads.
 {{- end }}
 
 {{/*
+CHAOS-11852: a user or password written into a connection URI is percent-encoded (RFC 3986 userinfo / path
+segment): urlquery, then "+" -> "%20" (QueryEscape writes a space as "+" and a literal "+" as %2B, so the replace is exact). A value of
+unreserved characters (A-Za-z0-9 - _ . ~) renders unchanged; every Go reader of these URIs decodes the userinfo.
+*/}}
+{{- define "dev-health.uriPart" -}}
+{{- . | toString | urlquery | replace "+" "%20" -}}
+{{- end -}}
+
+{{/*
+CHAOS-11852: a database name is written RAW into a connection URI path: the Python readers (SQLAlchemy with asyncpg, urllib) do not decode the
+path, so an encoded name would be read wrongly. Instead the render FAILS, by key name, when the name is not identifier-safe ([A-Za-z0-9_]+).
+Call with (dict "key" "<values key>" "value" <name>).
+*/}}
+{{- define "dev-health.uriDatabase" -}}
+{{- $db := .value | toString -}}
+{{- if not (regexMatch "^[A-Za-z0-9_]+$" $db) -}}
+{{- fail (printf "%s must be identifier-safe ([A-Za-z0-9_]+): it is written into a connection URI path that the Python readers (SQLAlchemy/asyncpg, urllib) do not decode" .key) -}}
+{{- end -}}
+{{- $db -}}
+{{- end -}}
+
+{{/*
 ClickHouse URI — auto-computed when clickhouse.enabled
 */}}
 {{- define "dev-health.clickhouseURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:8123/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "clickhouse.credentials.database" "value" .Values.clickhouse.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -258,7 +280,7 @@ workload.
 */}}
 {{- define "dev-health.clickhouseNativeURI" -}}
 {{- if .Values.clickhouse.enabled }}
-{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" .Values.clickhouse.credentials.user .Values.clickhouse.credentials.password (include "dev-health.fullname" .) .Values.clickhouse.credentials.database }}
+{{- printf "clickhouse://%s:%s@%s-clickhouse:9000/%s" (include "dev-health.uriPart" .Values.clickhouse.credentials.user) (include "dev-health.uriPart" .Values.clickhouse.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "clickhouse.credentials.database" "value" .Values.clickhouse.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -267,7 +289,7 @@ PostgreSQL URI — auto-computed when postgresql.enabled
 */}}
 {{- define "dev-health.postgresURI" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" .Values.postgresql.credentials.user .Values.postgresql.credentials.password (include "dev-health.fullname" .) .Values.postgresql.credentials.database }}
+{{- printf "postgresql+asyncpg://%s:%s@%s-postgresql:5432/%s" (include "dev-health.uriPart" .Values.postgresql.credentials.user) (include "dev-health.uriPart" .Values.postgresql.credentials.password) (include "dev-health.fullname" .) (include "dev-health.uriDatabase" (dict "key" "postgresql.credentials.database" "value" .Values.postgresql.credentials.database)) }}
 {{- end }}
 {{- end }}
 
@@ -718,17 +740,31 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- if hasKey $v.goApi "authProxy" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end -}}
+{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858, CHAOS-10988): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- if hasKey $v.goApi "authProxy" }}
+{{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
+{{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
 {{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
+{{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
+{{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
+{{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
+{{- end -}}
 {{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
 {{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
 {{- if and (ne (int $p) 4) (ne $stage "") }}{{- fail (printf "authService.usersOwnedStage is set but authService.phase is %d: the stage exists only at phase 4" (int $p)) }}{{- end -}}
+{{- $loginStage := toString (default "" $v.authService.loginStage) -}}
+{{- if not (has $loginStage (list "" "authService" "goApi")) }}{{- fail (printf "authService.loginStage must be authService or goApi, got %q" $loginStage) }}{{- end -}}
+{{- if and (eq (int $p) 3) (eq $loginStage "") }}{{- fail "authService.phase 3 needs authService.loginStage: authService first (auth-service mounts the login route and the social clients, go-api still logs in locally), then goApi (go-api forwards login and social once every auth-service pod serves them); a rollback runs the other way, goApi to authService, then phase 2 with no stage (docs/contribute/architecture/auth-control-plane-deployment.md)" }}{{- end -}}
+{{- if and (ne (int $p) 3) (ne $loginStage "") }}{{- fail (printf "authService.loginStage is set but authService.phase is %d: the stage exists only at phase 3 (authService first, then goApi; docs/contribute/architecture/auth-control-plane-deployment.md)" (int $p)) }}{{- end -}}
 {{- int $p -}}
 {{- end -}}
 
@@ -739,7 +775,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -751,7 +787,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -828,15 +864,59 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
 usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
+Phase 3 has two stages (authService.loginStage, CHAOS-12532): localLogin and social (auth-service: the lockout key and the social client env)
+are on at both; goApiLocalLogin and goApiSocial (go-api's AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL) are off at stage authService, so go-api
+forwards login only after every auth-service pod serves it. Phase 3 needs the stage (like usersOwnedStage at phase 4) and it exists only at phase 3.
 Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's AUTH_USERS_OWNED) is on at both; usersOwned (auth-service,
 the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "goApiLocalLogin" 3 "goApiSocial" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
 {{- $phase := int (include "dev-health.authPhase" .context) -}}
 {{- if ge $phase (int (get $ladder .flag)) -}}
-{{- if or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned") -}}true{{- end -}}
+{{- if and (or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned")) (or (not (has .flag (list "goApiLocalLogin" "goApiSocial"))) (ne (toString .context.Values.authService.loginStage) "authService")) -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
+auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
+moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
+*/}}
+{{- define "dev-health.platformRolesOwned" -}}
+{{- $v := .Values.authService.platformRolesOwned -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.platformRolesOwned must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- /* The phase 5 leaf (orgs owned) tightens this guard to authOn orgsOwned. */ -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.revisionFeed.enabled renders AUTH_REVISION_FEED=on on auth-service, else "". templates/auth-revision-feed-guard.yaml
+runs it on every render, so a switch that auth-service would not carry (phase 0 renders no auth-service) fails instead of being dropped.
+*/}}
+{{- define "dev-health.revisionFeed" -}}
+{{- $v := (default dict .Values.authService.revisionFeed).enabled -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.revisionFeed.enabled must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}{{- fail "authService.revisionFeed.enabled needs auth-service (authService.phase >= 1): below it no auth-service renders, and the switch would be dropped" }}{{- end -}}
+{{- if not .Values.authService.valkey.secretName }}{{- fail "authService.revisionFeed.enabled needs authService.valkey.secretName: the feed writes to the rate-limit store, and auth-service refuses to start without AUTH_VALKEY_URI" }}{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.ssoJit is on, else "". The one read of the switch.
+*/}}
+{{- define "dev-health.ssoJit" -}}
+{{- $v := .Values.authService.ssoJit -}}
+{{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
+{{- if $v -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}{{- fail "authService.ssoJit needs orgs owned (authService.phase 5): below it go-api's own sign-in join still writes, and two writers would race" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 
@@ -894,7 +974,13 @@ Call with the entry.
 {{- $exceptShape := "" -}}
 {{- if hasKey $ib "except" -}}
 {{- if not (kindIs "slice" $ib.except) -}}{{- $exceptShape = "ipBlock.except is not a list" -}}
-{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
+{{- else -}}{{- range $ib.except -}}{{- $es := include "dev-health.authMailCidrShape" . -}}
+{{- /* An IPv4-mapped address (five zero groups, then ffff) is refused by the apiserver: a connect to ::ffff:a.b.c.d leaves the pod as IPv4, so the v4 peer's except list already decides it. */ -}}
+{{- if and (not $es) (contains ":" (toString .)) -}}
+{{- $g := include "dev-health.ipv6Groups" (lower (index (splitList "/" (toString .)) 0)) | fromJsonArray -}}
+{{- if and (eq (len $g) 8) (eq (int (index $g 0)) 0) (eq (int (index $g 1)) 0) (eq (int (index $g 2)) 0) (eq (int (index $g 3)) 0) (eq (int (index $g 4)) 0) (eq (int (index $g 5)) 65535) }}{{- $es = "is an IPv4-mapped IPv6 address; the apiserver refuses it and the IPv4 except list already covers the mapped range" }}{{- end -}}
+{{- end -}}
+{{- if and $es (not $exceptShape) -}}{{- $exceptShape = printf "ipBlock.except entry %s %s" (toString .) $es -}}{{- end -}}{{- end -}}{{- end -}}
 {{- end -}}
 {{- if $shape -}}bad:ipBlock.cidr {{ $shape }}
 {{- else if $exceptShape -}}bad:{{ $exceptShape }}
@@ -926,16 +1012,17 @@ Call with the entry.
 "" when one authService.networkPolicy.egress.mail.to entry is acceptable, else the reason. Call with
 (dict "peer" <entry> "ports" <authService.networkPolicy.egress.mail.ports>). The class is dev-health.authMailPeerClass.
 The one whole-internet exception (D6427, a provider with no fixed addresses): exactly 0.0.0.0/0 or ::/0, only with ports
-[TCP 443] alone (protocol TCP or unset, no endPort) and an except list of well formed CIDRs holding every private,
-shared, link-local and loopback network below, and for IPv6 also the mapped and NAT64 ranges that would reach internal
-IPv4 addresses.
+[TCP 443] alone (protocol the string TCP or the key absent; "", null and any other value are refused; no endPort) and an except list of well formed CIDRs holding every private,
+shared, link-local and loopback network below, and for IPv6 also the NAT64 range. The IPv4-mapped range ::ffff:0:0/96 is
+not listed: an IPv4-mapped destination leaves the pod as IPv4, so the v4 peer's except list decides it, and the apiserver
+refuses a mapped ipBlock.except entry, so one is refused at render.
 */}}
 {{- define "dev-health.authMailPeerProblem" -}}
 {{- $class := include "dev-health.authMailPeerClass" .peer -}}
 {{- if hasPrefix "bad:" $class -}}{{ trimPrefix "bad:" $class }}
 {{- else if eq $class "wide" -}}
 {{- $cidr := .peer.ipBlock.cidr -}}
-{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "::ffff:0:0/96" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
+{{- $required := ternary (list "fc00::/7" "fe80::/10" "::1/128" "64:ff9b::/96") (list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "100.64.0.0/10" "169.254.0.0/16" "127.0.0.0/8") (contains ":" $cidr) -}}
 {{- $except := list -}}
 {{- range (.peer.ipBlock.except | default list) }}{{- $except = append $except (lower .) }}{{- end -}}
 {{- $missing := list -}}
@@ -943,32 +1030,102 @@ IPv4 addresses.
 {{- $ports := .ports | default list -}}
 {{- $port := dict -}}
 {{- if eq (len $ports) 1 }}{{- $port = index $ports 0 }}{{- end -}}
-{{- if not (and (eq (len $ports) 1) (kindIs "map" $port) (eq (toString (default "TCP" $port.protocol)) "TCP") (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
+{{- if and (eq (len $ports) 1) (kindIs "map" $port) (hasKey $port "protocol") (eq (toString $port.protocol) "") -}}authService.networkPolicy.egress.mail.ports[0].protocol is empty: omit protocol or set TCP; an empty string is not accepted on an ipBlock with prefix 0
+{{- else if not (and (eq (len $ports) 1) (kindIs "map" $port) (or (not (hasKey $port "protocol")) (and (kindIs "string" $port.protocol) (eq $port.protocol "TCP"))) (hasKey $port "port") (eq (int $port.port) 443) (not (hasKey $port "endPort"))) -}}an ipBlock with prefix 0 is accepted only with authService.networkPolicy.egress.mail.ports of TCP 443 alone
 {{- else if $missing -}}ipBlock.cidr {{ $cidr }} needs except entries {{ join ", " $missing }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-The access-token class (authService.accessToken). Checks it and renders the eddsa issuer URL, or "" for any other
-class: one value for auth-service (AUTH_TOKEN_ISSUER_URL) and go-api (AUTH_ACCESS_TOKEN_ISSUER). The pattern is
+"true" when ingress.enabled and a host routes a path to auth-service (CHAOS-12359: the issuer's two public documents). ingress.yaml checks the shape.
+*/}}
+{{- define "dev-health.authWellKnownRouted" -}}
+{{- $found := dict -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}{{- range .paths -}}{{- if eq .service "auth-service" -}}{{- $_ := set $found "yes" "true" -}}{{- end -}}{{- end -}}{{- end -}}
+{{- end -}}
+{{- get $found "yes" -}}
+{{- end -}}
+
+{{/*
+The access-token class (authService.accessToken). Checks it and renders the issuer URL when one is set (or the class is
+eddsa, which needs one): auth-service's AUTH_TOKEN_ISSUER_URL under any class. go-api's AUTH_ACCESS_TOKEN_ISSUER is the eddsa case alone (authEdDSAIssuer). The pattern is
 auth-service's issuerURLPattern (internal/auth/authconfig), so a value the service would refuse fails the render.
 */}}
-{{- define "dev-health.authEdDSAIssuer" -}}
+{{- define "dev-health.authTokenIssuer" -}}
 {{- $t := default dict .Values.authService.accessToken -}}
 {{- if not (and (or (kindIs "invalid" $t.class) (kindIs "string" $t.class)) (or (kindIs "invalid" $t.issuerURL) (kindIs "string" $t.issuerURL))) }}{{- fail "authService.accessToken.class and authService.accessToken.issuerURL must be strings" }}{{- end -}}
 {{- $class := $t.class | default "" -}}
 {{- $issuer := $t.issuerURL | default "" -}}
 {{- if $class -}}
-{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
+{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}{{- /* gitleaks:allow */ -}}
 {{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
 {{- end -}}
-{{- if eq $class "eddsa" -}}
+{{- if or (eq $class "eddsa") $issuer -}}
 {{- if not (regexMatch "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,63}){0,8}$" $issuer) }}{{- fail "authService.accessToken.class=eddsa needs authService.accessToken.issuerURL: an https URL with a lowercase host, no trailing slash, userinfo, query or fragment" }}{{- end -}}
 {{- $issuer -}}
-{{- else if $issuer -}}
-{{- fail "authService.accessToken.issuerURL is set but authService.accessToken.class is not eddsa: the issuer is rendered only for eddsa tokens" }}
 {{- end -}}
+{{- end -}}
+
+{{/*
+The eddsa access token's lifetime (authService.accessToken.lifetime, AUTH_ACCESS_TOKEN_LIFETIME): "" when unset (the
+service default, 60 minutes). Set, it must be whole minutes from 5m to 60m and the class must be eddsa: the
+hs256_compat token is go-api's, with go-api's 60 minutes (ACP-ADR-03 amendment).
+*/}}
+{{- define "dev-health.authAccessLifetime" -}}
+{{- $t := default dict .Values.authService.accessToken -}}
+{{- $lifetime := $t.lifetime | default "" -}}
+{{- if $lifetime -}}
+{{- if not (kindIs "string" $lifetime) }}{{- fail "authService.accessToken.lifetime must be a string such as 10m" }}{{- end -}}
+{{- if ne ($t.class | default "") "eddsa" }}{{- fail "authService.accessToken.lifetime needs authService.accessToken.class=eddsa: the hs256_compat token keeps go-api's 60 minutes" }}{{- end -}}
+{{- if not (regexMatch "^([5-9]|[1-5][0-9]|60)m$|^1h$" $lifetime) }}{{- fail "authService.accessToken.lifetime must be whole minutes from 5m to 60m (or 1h)" }}{{- end -}}
+{{- $lifetime -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The issuer go-api and query-api verify web access tokens against (AUTH_ACCESS_TOKEN_ISSUER): "" unless the class is eddsa.
+An issuer set under hs256_compat reaches auth-service alone (authTokenIssuer), so web-token validation does not change.
+*/}}
+{{- define "dev-health.authEdDSAIssuer" -}}
+{{- $issuer := include "dev-health.authTokenIssuer" . -}}
+{{- if eq ((default dict .Values.authService.accessToken).class | default "") "eddsa" -}}{{- $issuer -}}{{- end -}}
+{{- end -}}
+
+{{/*
+"true" when authService.workloadExchange.enabled, else "". Checks every input the exchange needs, so a render that
+would start auth-service with a half-set exchange fails here: the service must be on, an issuer URL set (any class),
+the trust domain and cluster issuer named, the API server an https origin, and a peer listed for the API server egress.
+*/}}
+{{- define "dev-health.authWorkloadExchange" -}}
+{{- $w := default dict .Values.authService.workloadExchange -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (ternary $w.enabled false (hasKey $w "enabled")) "key" "authService.workloadExchange.enabled")) "true" -}}
+{{- if not (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}{{- fail "authService.workloadExchange.enabled needs authService.phase >= 1: there is no auth-service to run the exchange" }}{{- end -}}
+{{- if not (include "dev-health.authTokenIssuer" .) }}{{- fail "authService.workloadExchange.enabled needs authService.accessToken.issuerURL: the exchange signs workload tokens under that issuer" }}{{- end -}}
+{{- range $k := list "trustDomain" "clusterIssuer" }}
+{{- $v := get $w $k -}}
+{{- if or (not (kindIs "string" $v)) (eq (trim $v) "") (ne (trim $v) $v) }}{{- fail (printf "authService.workloadExchange.%s must be a non-empty string without surrounding whitespace" $k) }}{{- end -}}
+{{- end -}}
+{{- if or (not (kindIs "string" $w.kubeAPIURL)) (eq (trim $w.kubeAPIURL) "") }}{{- fail "authService.workloadExchange.kubeAPIURL must be set: auth-service checks that it is an https origin at start" }}{{- end -}}
+{{- if .Values.authService.networkPolicy.enabled }}
+{{- $k := default dict .Values.authService.networkPolicy.egress.kubeAPI -}}
+{{- if not (kindIs "slice" $k.to) }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: a list of peers; without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end -}}
+{{- if not $k.to }}{{- fail "authService.networkPolicy.egress.kubeAPI.to is required while authService.workloadExchange.enabled: without it the policy cuts auth-service off from the API server and every exchange fails" }}{{- end -}}
+{{- range $i, $peer := $k.to }}{{- if not (and (kindIs "map" $peer) (gt (len $peer) 0)) }}{{- fail (printf "authService.networkPolicy.egress.kubeAPI.to[%d] must be a non-empty NetworkPolicy peer (podSelector, namespaceSelector or ipBlock): an empty peer admits every destination" $i) }}{{- end }}{{- end -}}
+{{- $port := $k.port -}}
+{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.networkPolicy.egress.kubeAPI.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The auth-service ServiceAccount token mount: the configured value, or on while the exchange runs (the pod's own token is
+the TokenReview reviewer token).
+*/}}
+{{- define "dev-health.authServiceAutomount" -}}
+{{- if or (include "dev-health.authWorkloadExchange" .) ((default dict .Values.authService.serviceAccount).automountToken) }}true{{ else }}false{{ end }}
 {{- end -}}
 
 {{/*
@@ -995,6 +1152,21 @@ schema Job and the grants Job.
 {{- if $ack -}}
 {{- if not (regexMatch "^[0-9a-f]{16}$" $ack) }}{{- fail "authService.migrate.acknowledgeGrantNarrowing must be the 16 lowercase hex characters of the digest a refused auth-migrate run prints" }}{{- end -}}
 -ack-grant-narrowing={{ $ack }}
+{{- end -}}
+{{- end }}
+
+{{/*
+The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
+Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
+push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).
+*/}}
+{{- define "dev-health.authSchemaOwnerRole" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $owner := trim (toString (default "" $m.ownerRole)) -}}
+{{- if $owner -}}
+{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
+{{- if has $owner $others }}{{- fail "authService.migrate.ownerRole must differ from authService.migrate.runtimeRole, every session reader role and every push lifecycle role" }}{{- end -}}
+{{- $owner -}}
 {{- end -}}
 {{- end }}
 
@@ -1578,3 +1750,26 @@ The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expand
 {{- end -}}
 {{- if $same }}true{{- end -}}
 {{- end -}}
+
+{{/*
+The ops schema owner pin (migrations.hook.ownerRole -> MIGRATION_OWNER_ROLE) for the migrate, open-units-index,
+streak-index and river-migrate Jobs, or "". Empty renders nothing. Set, it must be a plain role name that differs from
+every runtime login; and while auth-service owns sessions, query-api's session read must come from auth-grants
+(authService.migrate.sessionReaders.queryApi = the query-api login), because the pinned login cannot grant in the auth
+schema and the River step then leaves that read out.
+*/}}
+{{- define "dev-health.opsOwnerRole" -}}
+{{- $owner := trim (toString (default "" .Values.migrations.hook.ownerRole)) -}}
+{{- if $owner -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $owner) }}{{- fail "migrations.hook.ownerRole must be a plain role name ([a-z][a-z0-9_]*, at most 63 bytes)" }}{{- end -}}
+{{- $queryAPI := "" -}}
+{{- range .Values.queryApi.extraEnv }}{{- if eq .name "QUERY_API_DATABASE_ROLE" }}{{- $queryAPI = trim (toString .value) -}}{{- end }}{{- end -}}
+{{- $api := trim (toString (get (.Values.migrations.hook.provisionRoles.apiRole | default dict) "name")) -}}
+{{- $runtime := list (toString .Values.config.RIVER_DOMAIN_DATABASE_ROLE) (toString .Values.config.RIVER_QUEUE_DATABASE_ROLE) (toString .Values.config.RIVER_COORDINATOR_DATABASE_ROLE) (toString .Values.config.RIVER_KEDA_READONLY_DATABASE_ROLE) $queryAPI $api -}}
+{{- if has $owner $runtime }}{{- fail "migrations.hook.ownerRole must differ from every runtime login (the RIVER_*_DATABASE_ROLE logins, the query-api login and provisionRoles.apiRole)" }}{{- end -}}
+{{- if and $queryAPI (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") -}}
+{{- if ne (trim (toString .Values.authService.migrate.sessionReaders.queryApi)) $queryAPI }}{{- fail "migrations.hook.ownerRole is set while auth-service owns sessions: set authService.migrate.sessionReaders.queryApi to the query-api login (QUERY_API_DATABASE_ROLE); the pinned login cannot grant query-api's auth session read, so auth-grants must" }}{{- end -}}
+{{- end -}}
+{{- $owner -}}
+{{- end -}}
+{{- end }}

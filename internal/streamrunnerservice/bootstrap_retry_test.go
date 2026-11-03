@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -239,46 +240,48 @@ func TestStreamRunnerReadinessRecoversAfterAStartupDependencyOutage(t *testing.T
 // to stop while its dependencies are still down stops promptly, closes nothing
 // it did not open, and makes no further attempt after shutdown returns.
 func TestStreamRunnerShutdownDuringAStartupOutageIsClean(t *testing.T) {
-	var opens atomic.Int64
-	registry := health.NewRegistry(readinessTestCheckTimeout)
-	components, err := configureStreamRunnerDependenciesWithSources(
-		context.Background(),
-		config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
-		registry,
-		streamDependencySources{
-			openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
-				opens.Add(1)
-				return nil, dependencyUnavailable("stream_valkey_open_failed")
+	synctest.Test(t, func(t *testing.T) {
+		var opens atomic.Int64
+		registry := health.NewRegistry(readinessTestCheckTimeout)
+		components, err := configureStreamRunnerDependenciesWithSources(
+			context.Background(),
+			config.Config{Profile: "ingest", StreamConfiguredReplicas: 1},
+			registry,
+			streamDependencySources{
+				openStorage: func(context.Context, config.Config, *slog.Logger) (streamStorage, error) {
+					opens.Add(1)
+					return nil, dependencyUnavailable("stream_valkey_open_failed")
+				},
 			},
-		},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("a start-up dependency outage must not stop the process: %v", err)
-	}
-	stop := runStreamComponents(t, registry, components)
-	deadline := time.Now().Add(5 * time.Second)
-	for opens.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if opens.Load() == 0 {
-		t.Fatal("storage was never attempted")
-	}
-	status := registry.Readiness(context.Background())
-	want := []string{"clickhouse", "domain_postgres", "posture_manifest_lockstep", "stream_consumer", "valkey"}
-	if status.Ready || !slices.Equal(status.Failed, want) {
-		t.Fatalf("readiness during the outage = %#v, want failed %v", status, want)
-	}
-	began := time.Now()
-	stop()
-	if elapsed := time.Since(began); elapsed > 2*time.Second {
-		t.Fatalf("shutdown took %s during a start-up outage", elapsed)
-	}
-	after := opens.Load()
-	time.Sleep(1500 * time.Millisecond)
-	if opens.Load() != after {
-		t.Fatalf("storage attempted %d more times after shutdown returned", opens.Load()-after)
-	}
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("a start-up dependency outage must not stop the process: %v", err)
+		}
+		stop := runStreamComponents(t, registry, components)
+		deadline := time.Now().Add(5 * time.Second)
+		for opens.Load() == 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if opens.Load() == 0 {
+			t.Fatal("storage was never attempted")
+		}
+		status := registry.Readiness(context.Background())
+		want := []string{"clickhouse", "domain_postgres", "posture_manifest_lockstep", "stream_consumer", "valkey"}
+		if status.Ready || !slices.Equal(status.Failed, want) {
+			t.Fatalf("readiness during the outage = %#v, want failed %v", status, want)
+		}
+		began := time.Now()
+		stop()
+		if returnedAt := time.Now(); !returnedAt.Equal(began) {
+			t.Fatalf("shutdown took +%v of virtual time during a start-up outage: it waited on the retry instead of stopping at once", returnedAt.Sub(began))
+		}
+		after := opens.Load()
+		time.Sleep(1500 * time.Millisecond)
+		if opens.Load() != after {
+			t.Fatalf("storage attempted %d more times after shutdown returned", opens.Load()-after)
+		}
+	})
 }
 
 // waitForSupervisor waits until the supervisor's background start-up has

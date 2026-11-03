@@ -8,6 +8,7 @@ import (
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 )
 
@@ -38,6 +39,12 @@ var _ interface {
 	graphql.HandlerExtension
 	graphql.OperationInterceptor
 } = OperationOrgGuard{}
+
+// orglessRootActions are the root fields an org-less caller without the
+// superuser flag may run, each with the one platform action that admits it.
+var orglessRootActions = map[string]string{
+	"productTelemetryPlatformDashboard": rule.ActionAdminTelemetry,
+}
 
 func (OperationOrgGuard) ExtensionName() string { return "OperationOrgGuard" }
 
@@ -74,6 +81,11 @@ func operationOrgViolation(ctx context.Context, operation *graphql.OperationCont
 // the operation may run) and, when a verified, non-impersonating superuser named
 // an org other than their own, that org (the operation then runs against it).
 func operationOrgDecision(ctx context.Context, operation *graphql.OperationContext) (message, rebindTo string) {
+	if claims, ok := authctx.FromContext(ctx); ok && orglessPlatformCaller(claims) {
+		if !orglessOperationAllowed(claims, operation) {
+			return "Authorization required", ""
+		}
+	}
 	var requested []string
 	invalid := false
 	visited := map[string]bool{}
@@ -127,10 +139,58 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 	if claims.OrgID == first {
 		return "", ""
 	}
-	if claims.IsSuperuser && !claims.ImpersonationActive {
+	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
 		return "", first
 	}
 	return "Access denied: cannot query org '" + first + "'", ""
+}
+
+// orglessPlatformCaller is a caller with no organization and no superuser flag
+// that carries a platform action set: the one caller the edge lets through
+// org-less on a set alone.
+func orglessPlatformCaller(claims authctx.Claims) bool {
+	return claims.OrgID == "" && !claims.IsSuperuser && claims.Platform != nil
+}
+
+// orglessOperationAllowed is the admission of an org-less caller that has no
+// superuser flag and carries a platform action set: the operation is a query
+// whose every root field is in orglessRootActions, and the caller holds the
+// action of each, outside an impersonation. A root that is not in the table
+// (introspection included) refuses the whole operation.
+func orglessOperationAllowed(claims authctx.Claims, operation *graphql.OperationContext) bool {
+	if claims.ImpersonationActive || operation.Operation.Operation != ast.Query {
+		return false
+	}
+	roots := 0
+	visited := map[string]bool{}
+	var walk func(set ast.SelectionSet) bool
+	walk = func(set ast.SelectionSet) bool {
+		for _, selection := range set {
+			switch node := selection.(type) {
+			case *ast.Field:
+				action, listed := orglessRootActions[node.Name]
+				if !listed || !claims.Holds(action) {
+					return false
+				}
+				roots++
+			case *ast.InlineFragment:
+				if !walk(node.SelectionSet) {
+					return false
+				}
+			case *ast.FragmentSpread:
+				if visited[node.Name] {
+					continue
+				}
+				visited[node.Name] = true
+				fragment := operation.Doc.Fragments.ForName(node.Name)
+				if fragment == nil || !walk(fragment.SelectionSet) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return walk(operation.Operation.SelectionSet) && roots > 0
 }
 
 // orgArgumentValue is the string an orgId argument carries: a string literal,

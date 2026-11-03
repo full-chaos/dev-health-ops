@@ -69,7 +69,7 @@ func TestTheShardedTestLegNamesEveryGoTestTimeout(t *testing.T) {
 }
 
 func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
-	script := strings.Replace(readCheckGo(t), "-timeout 10m ${rest}", "${rest}", 1)
+	script := strings.Replace(readCheckGo(t), "-timeout \"$(cigates_go_test_timeout ${rest})\" ${rest}", "${rest}", 1)
 	missing, _ := callsMissingTimeout(t, script)
 	if len(missing) != 1 || !strings.Contains(missing[0], "check_test_shard") {
 		t.Fatalf("want exactly the planted check_test_shard line, got %v", missing)
@@ -81,16 +81,14 @@ func TestAGoTestLineWithoutATimeoutIsReported(t *testing.T) {
 	}
 }
 
-// CHAOS-11762 interim: the census call of a shard takes 20m only when its package list holds internal/cigates/checkgo, else 10m;
+// CHAOS-11787 interim (was CHAOS-11762, checkgo only): the census call of a shard takes its timeout from cigates_go_test_timeout;
 // the timeout is an argument of the helper, never read from the environment (the behaviour is run in internal/cigates/checkgo).
-func TestTheCensusCallTimeoutIs20mOnlyForACheckgoList(t *testing.T) {
+func TestTheCensusCallTimeoutComesFromTheCigatesHelper(t *testing.T) {
 	script := readCheckGo(t)
 	for _, want := range []string{
-		"    rows_timeout=10m\n",
-		`grep -qx -- "${CHECKGO_PACKAGE}"; then rows_timeout=20m; fi`,
+		`    rows_timeout="$(cigates_go_test_timeout ${rest_rows})"` + "\n",
 		`go_test_json_run_t "${rows_timeout}" "${json}" "${log}" ${rest_rows}`,
 		"go_test_json_run_t 10m \"${json}\" \"${log}\" \"$@\"",
-		`CHECKGO_PACKAGE="github.com/full-chaos/dev-health-ops/internal/cigates/checkgo"`,
 	} {
 		if n := strings.Count(script, want); n != 1 {
 			t.Errorf("ci/check_go.sh holds %d copies of %q, want 1", n, want)

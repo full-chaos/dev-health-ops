@@ -82,9 +82,8 @@ WHERE locktype = 'relation' AND relation = 'public.sync_run_units'::regclass AND
 // the run waits at its table-lock probe). The run refuses with no DDL, no retry and no cleanup: the INVALID index stays the
 // same relation. The verb reports it as build_index_session_changed.
 func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
-	position, _ := chainPosition(t, "0159")
 	d := newDownInstance(t)
-	uri := d.at(t, position)
+	uri := d.withoutIndex(t, "0159")
 	plantInvalidIndex(t, uri)
 	observer := connect(t, uri)
 	before := streakIndexState(t, observer)
@@ -165,7 +164,7 @@ func TestBuildIndexRefusesWhenTheBackendChangesUnderTheBuildLock(t *testing.T) {
 // pg_advisory_unlock returns false at the release (planted: it unlocks, then answers false). The run reports it with its
 // own reason, as an error and as a Warn line, never silently.
 func TestBuildIndexReportsAnUnlockThatReturnsFalse(t *testing.T) {
-	_, length := chainPosition(t, "0159")
+	length := headPosition(t)
 	d := newDownInstance(t)
 	uri := d.at(t, length)
 	observer := connect(t, uri)

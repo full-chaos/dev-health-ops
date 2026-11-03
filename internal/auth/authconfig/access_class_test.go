@@ -24,15 +24,14 @@ func eddsaEnv() map[string]string {
 	env := sessionEnv(testAccessSecret, testSuccessorKey)
 	env[EnvAccessTokenClass] = "eddsa"
 	env[EnvTokenIssuerURL] = "https://auth.example.test"
+	env[EnvAccessTokenAudience] = "dev-health-api"
 	return env
 }
 
-func TestAccessTokenClassEdDSALoadsWithItsIssuerURLAndEitherUserAudience(t *testing.T) {
-	for _, audience := range []string{"", "dev-health-api", "auth-service"} {
+func TestAccessTokenClassEdDSALoadsWithItsIssuerURLAndTheAPIAudience(t *testing.T) {
+	for _, audience := range []string{"dev-health-api"} {
 		env := eddsaEnv()
-		if audience != "" {
-			env[EnvAccessTokenAudience] = audience
-		}
+		env[EnvAccessTokenAudience] = audience
 		cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
 		if err != nil || cfg.Session.AccessClass != AccessClassEdDSA || cfg.TokenIssuerURL != "https://auth.example.test" {
 			t.Errorf("audience %q: class %q, issuer %q, err %v", audience, cfg.Session.AccessClass, cfg.TokenIssuerURL, err)

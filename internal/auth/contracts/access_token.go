@@ -13,17 +13,52 @@ const UserAccessTokenClass = "user_access_token"
 // It is the one place the value lives; the schema names it, the corpus pins it.
 const AccessTokenLifetimeCeiling = 60 * time.Minute
 
-// accessTokenScopes binds each user-token audience to its one scope
+// PlatformAPIAudience is the audience of go-api's HS256 access token and of the
+// EdDSA user access token that go-api and query-api accept.
+const PlatformAPIAudience = "dev-health-api"
+
+// SessionRouteAudience is the audience an EdDSA user access token carries to be
+// accepted at auth-service's own session routes.
+const SessionRouteAudience = "auth-service"
+
+// ACRAPIAudience and ACRMCPAudience are the user access token audiences that
+// ACR accepts: acr-api accepts ACRAPIAudience only and acr-mcp ACRMCPAudience
+// only. go-api, query-api and auth-service refuse both (ACP-ADR-13 decision 2,
+// CHAOS-12248). They equal acraudience.API and acraudience.MCP, the leaf names
+// the platform token packages refuse by.
+const (
+	ACRAPIAudience = "acr-api"
+	ACRMCPAudience = "acr-mcp"
+)
+
+// accessTokenScopes binds each session-token audience to its one scope
 // (vocabulary/audiences.json, access-token.v1 schema).
 var accessTokenScopes = map[string]string{
 	"dev-health-api": "api:access",
 	"auth-service":   "auth:session",
 }
 
-// AccessTokenScope is the scope of a user access token for audience; ok is
-// false for an audience no user access token carries.
+// acrAccessTokenScopes binds each ACR audience to its one scope. It is apart
+// from accessTokenScopes on purpose: the session minter and its configuration
+// accept only what AccessTokenScope knows, and an ACR audience has a separate
+// mint (ACP-ADR-13 decision 3). Together the two maps are the user_access_token
+// rows of vocabulary/audiences.json and the access-token.v1 aud/scope binding.
+var acrAccessTokenScopes = map[string]string{
+	ACRAPIAudience: "acr:api",
+	ACRMCPAudience: "acr:mcp",
+}
+
+// AccessTokenScope is the scope of a session-minted user access token for
+// audience; ok is false for any other audience, an ACR audience included.
 func AccessTokenScope(audience string) (scope string, ok bool) {
 	scope, ok = accessTokenScopes[audience]
+	return scope, ok
+}
+
+// ACRAccessTokenScope is the scope of a user access token for an ACR audience;
+// ok is false for any other audience.
+func ACRAccessTokenScope(audience string) (scope string, ok bool) {
+	scope, ok = acrAccessTokenScopes[audience]
 	return scope, ok
 }
 
@@ -46,7 +81,14 @@ type AccessTokenClaims struct {
 	Nbf           int64   `json:"nbf"`
 	Exp           int64   `json:"exp"`
 	OrgID         *string `json:"org_id,omitempty"`
-	Scope         string  `json:"scope"`
+	// Act is present only on a delegated token: the real actor (G-49).
+	Act   *AccessTokenActor `json:"act,omitempty"`
+	Scope string            `json:"scope"`
+}
+
+// AccessTokenActor is the act claim of a delegated access-token.v1 token.
+type AccessTokenActor struct {
+	Sub string `json:"sub"`
 }
 
 // AccessToken is one access-token.v1 document.

@@ -30,7 +30,7 @@ func valkeyArgs(deployment map[string]any) []string {
 
 func TestValkeyHasNoAclFileUnlessTheValueIsSet(t *testing.T) {
 	deployment, out := valkeyDeployment(t)
-	want := []string{"--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"}
+	want := []string{"--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"}
 	got := valkeyArgs(deployment)
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("valkey args = %v, want the unchanged %v", got, want)
@@ -134,7 +134,7 @@ func TestValkeyAclIsRefusedWithoutTheSecretItReads(t *testing.T) {
 	}
 	// A name with the value off is inert: nothing is read, nothing refused.
 	deployment, out := valkeyDeployment(t, "--set", "valkey.acl.secretName=valkey-users")
-	if strings.Join(valkeyArgs(deployment), " ") != "--appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru" || strings.Contains(out, "valkey-users") {
+	if strings.Join(valkeyArgs(deployment), " ") != "--appendonly yes --appendfsync everysec --maxmemory 256mb --maxmemory-policy allkeys-lru" || strings.Contains(out, "valkey-users") {
 		t.Error("a Secret name with valkey.acl.enabled=false changed the render")
 	}
 }

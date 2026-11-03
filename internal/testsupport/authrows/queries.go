@@ -40,8 +40,10 @@ const refreshTokensACP = `SELECT email, org, revoked, count(*) FROM (
 		JOIN users u ON u.id = s.principal_id LEFT JOIN organizations o ON o.id = s.organization_id
 ) t GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`
 
-// auditLogsACP reads go-api's audit rows and auth-service's sign-in audit events (auth.login.succeeded and
-// auth.login.failed) in the shape of go-api's own query, ordered by time.
+// auditLogsACP reads public.audit_logs in the shape of go-api's own query, ordered by time. auth-service writes
+// go-api's row of every route it took over there itself (CHAOS-11400), so no auth.* event is projected into it;
+// request_metadata's request_id is left out, since the go-api proxy always forwards one and the golden's requests
+// sent none.
 const auditLogsACP = `SELECT org, email, action, rtype, resource, description, changes, metadata, status, errmsg FROM (
 	SELECT coalesce(o.name, a.org_id::text) AS org, coalesce(u.email, '<null>') AS email, a.action::text AS action,
 		a.resource_type::text AS rtype,
@@ -51,26 +53,9 @@ const auditLogsACP = `SELECT org, email, action, rtype, resource, description, c
 		            JOIN organizations mo ON mo.id = mm.org_id WHERE mm.id::text = a.resource_id), a.resource_id) AS resource,
 		a.description AS description,
 		coalesce(regexp_replace(a.changes::text, '` + uuidScrub + `', '<uuid>', 'g'), '<null>') AS changes,
-		coalesce(a.request_metadata::text, '<null>') AS metadata, a.status::text AS status,
+		coalesce((a.request_metadata::jsonb - 'request_id')::text, '<null>') AS metadata, a.status::text AS status,
 		coalesce(a.error_message, '<null>') AS errmsg, a.created_at::timestamptz AS ts
 		FROM audit_logs a LEFT JOIN organizations o ON o.id = a.org_id LEFT JOIN users u ON u.id = a.user_id
-	UNION ALL
-	SELECT coalesce(o.name, e.organization_id::text), coalesce(u.email, '<null>'),
-		CASE e.event_type WHEN 'auth.login.succeeded' THEN 'login' ELSE 'login_failed' END, 'session',
-		'user:' || u.email,
-		CASE WHEN e.event_type = 'auth.login.succeeded' THEN 'User logged in'
-		     WHEN e.attributes->>'reason_code' = 'invalid_credentials' THEN 'Login failed: invalid credentials'
-		     ELSE 'Login failed: ' || coalesce(e.attributes->>'reason_code', '') END,
-		'{}',
-		jsonb_strip_nulls(jsonb_build_object('ip_address', host(e.client_ip), 'user_agent', e.user_agent))::text,
-		CASE WHEN e.event_type = 'auth.login.succeeded' THEN 'success' ELSE 'failure' END,
-		CASE WHEN e.event_type = 'auth.login.succeeded' THEN '<null>'
-		     WHEN e.attributes->>'reason_code' = 'invalid_credentials' THEN 'Invalid credentials'
-		     ELSE coalesce(e.attributes->>'reason_code', '') END,
-		e.occurred_at::timestamptz
-		FROM auth.security_audit_events e LEFT JOIN organizations o ON o.id = e.organization_id
-		LEFT JOIN users u ON u.id = coalesce(e.subject_principal_id, e.actor_principal_id)
-		WHERE e.event_type IN ('auth.login.succeeded', 'auth.login.failed')
 ) t ORDER BY ts, action`
 
 // publicOnly are the corpus's row comparisons no aggregate of auth-service writes: go-api writes them whichever

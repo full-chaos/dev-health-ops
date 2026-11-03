@@ -216,8 +216,8 @@ func TestProviderSpecificEnvBeatsGenericOnThePlatformProvider(t *testing.T) {
 func TestPlatformDefaultAppliesWhenNothingIsConfigured(t *testing.T) {
 	t.Setenv("LLM_MODEL", "")
 	t.Setenv("LLM_MODEL_OPENAI", "")
-	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-5-mini" {
-		t.Fatalf("model = %q, want the platform default %q", got, "gpt-5-mini")
+	if got := categorize.ResolveModelName(categorize.ProviderKindOpenAI, ""); got != "gpt-6-luna" {
+		t.Fatalf("model = %q, want the platform default %q", got, "gpt-6-luna")
 	}
 }
 

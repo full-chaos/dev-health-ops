@@ -39,12 +39,12 @@ func validateRegister(w http.ResponseWriter, r *http.Request) (*http.Request, bo
 	var errs pybody.Errors
 	var input registerInput
 	if object, ok := errs.Object(body); ok {
-		input.email, _ = errs.RequiredEmailStr(object, "email")
+		input.email, _ = errs.RequiredRegisterEmailStr(object, "email")
 		input.password, _ = errs.RequiredString(object, "password", 8, 128)
-		if value, present := errs.OptionalUTF8String(object, "full_name"); present {
+		if value, present := errs.OptionalDisplayText(object, "full_name"); present {
 			input.fullName = &value
 		}
-		if value, present := errs.OptionalUTF8String(object, "org_name"); present {
+		if value, present := errs.OptionalDisplayText(object, "org_name"); present {
 			input.orgName = &value
 		}
 	}
@@ -97,7 +97,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	input, _ := r.Context().Value(registerInputKey{}).(registerInput)
 	ctx := r.Context()
 	email := pythonparity.Strip(pythonparity.Lower(input.email))
-	if violations := passwordpolicy.Validate(input.password); len(violations) > 0 {
+	if violations := passwordpolicy.ValidateForHash(input.password); len(violations) > 0 {
 		refuseViolations(w, http.StatusUnprocessableEntity, "Password validation failed", violations)
 		return
 	}
@@ -108,7 +108,7 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	existing, err := userByEmail(ctx, tx, email)
+	existing, err := h.userByEmail(ctx, tx, email)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return
@@ -133,8 +133,8 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	user := &userRow{ID: h.NewUUID(), Email: email, FullName: input.fullName, IsActive: true}
 	if _, err := tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, $5, $5)`,
+	 is_active, is_verified, token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, 0, NULL, $5, $5)`,
 		user.ID, user.Email, hash, user.FullName, now.UTC()); err != nil {
 		if isUniqueViolation(err) {
 			// A concurrent sign-up for the same address won the unique index:
@@ -238,4 +238,11 @@ func (h handlers) sendAccountExists(ctx context.Context, user *userRow) error {
 		"signin_url": h.Mail.BaseURL() + "/auth/signin",
 		"reset_url":  h.Mail.BaseURL() + "/auth/forgot-password",
 	})
+}
+
+// refreshOrgGone reports the refresh token write's foreign key violation on
+// its organization: the organization row is gone.
+func refreshOrgGone(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "23503" && pg.ConstraintName == "refresh_tokens_org_id_fkey"
 }

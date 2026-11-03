@@ -298,6 +298,15 @@ func (served *ServedDecision) Identity() (provider, model string) {
 	return served.identity.Provider, served.identity.Model
 }
 
+// CredentialSource is the credential_source of the run's llm_token_usage row:
+// org for the backend of an org's own model, platform for jev.
+func (served *ServedDecision) CredentialSource() string {
+	if served.byo {
+		return chwrite.CredentialSourceOrg
+	}
+	return chwrite.CredentialSourcePlatform
+}
+
 // Close releases the client of the backend.
 func (served *ServedDecision) Close() error {
 	if served == nil || served.closer == nil {
@@ -357,15 +366,15 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	unit := shadowUnit{workUnitID: entry.result.Investment.WorkUnitID, bundle: entry.result.Bundle}
 	// The worker pool can still hand over a unit after the run stopped (its
 	// producer's select picks at random between two ready cases): that unit is
-	// never sent.
-	result := shadowResult{unit: unit, err: ctx.Err()}
-	if result.err == nil {
-		result = served.classifyOne(ctx, unit)
+	// never sent, so it is not asked and has no outcome count.
+	if err := ctx.Err(); err != nil {
+		return categorize.CategorizationOutcome{}, err
 	}
+	result := served.classifyOne(ctx, unit)
 	if result.err != nil {
 		// A cancelled or expired context (the only error Classify returns for a
-		// completer that NewCompleter built). The unit still has its one outcome
-		// count: a run with no count must not read as a healthy one.
+		// completer that NewCompleter built). The unit was asked, so it has its
+		// one outcome count.
 		served.mu.Lock()
 		served.outcomes[servedOutcomeCancelled]++
 		served.mu.Unlock()
@@ -674,6 +683,14 @@ func (m *Materializer) modelVersion(cfg Config) string {
 		return backend.Stamp()
 	}
 	return categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
+}
+
+// usageCredentialSource is the credential_source of the run's llm_token_usage row.
+func (m *Materializer) usageCredentialSource() string {
+	if backend := m.backend(); backend != nil {
+		return backend.CredentialSource()
+	}
+	return chwrite.CredentialSourcePlatform
 }
 
 // usageIdentity is the provider and model of the run's llm_token_usage row.

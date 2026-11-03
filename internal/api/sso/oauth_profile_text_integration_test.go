@@ -110,16 +110,19 @@ func TestOAuthCallbackNewUserWithASurrogateInTheProfileText(t *testing.T) {
 	}
 }
 
-// A lone surrogate in the email is refused with the unverified-email answer and writes nothing, new user or not.
+// A lone surrogate in the email is refused by the provider email rule before the verified-email check: 400
+// invalid_provider_email, one "provisioning" denial row, nothing else written.
 func TestOAuthCallbackRefusesASurrogateInTheEmail(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	st, _, providerID, _ := oauthStack(t, ctx, oauthProfileWith("44", `e\ud800@example.test`, "Cy", ""))
+	st, orgID, providerID, _ := oauthStack(t, ctx, oauthProfileWith("44", `e\ud800@example.test`, "Cy", ""))
 	before := snapshotRows(t, ctx, st)
 	status, body := oauthCallbackOnce(t, st, providerID)
-	if status != http.StatusForbidden || body["detail"] != "No verified email address is available from this OAuth provider" {
-		t.Fatalf("status=%d body=%v, want 403 No verified email address is available from this OAuth provider", status, body)
+	detail, _ := body["detail"].(map[string]any)
+	if status != http.StatusBadRequest || detail["reason"] != "invalid_provider_email" {
+		t.Fatalf("status=%d body=%v, want 400 invalid_provider_email", status, body)
 	}
+	assertSSOAuditStage(t, ctx, st.pool, orgID, "provisioning")
 	assertNoRowsWritten(t, ctx, st, before)
 }
 
@@ -180,10 +183,9 @@ func TestOAuthCallbackRefusesASurrogateProviderIDBeforeTheLookup(t *testing.T) {
 	}
 }
 
-// An EMPTY provider subject keeps the answer it has always had in the OAuth callback (this pins it as unchanged):
-// a new account is refused 400 invalid_provider_id at creation (CHAOS-11619), and an account that holds the email
-// is an identity conflict 409, because the identity lookup is skipped for an empty subject.
-func TestOAuthCallbackEmptyProviderIDKeepsItsAnswer(t *testing.T) {
+// An EMPTY provider subject is refused 400 invalid_provider_id before any lookup, whether or not another account holds
+// the email: the answer does not show whether an account exists.
+func TestOAuthCallbackEmptyProviderIDIsRefused(t *testing.T) {
 	for name, held := range map[string]bool{"new account": false, "email held by another account": true} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -196,12 +198,8 @@ func TestOAuthCallbackEmptyProviderIDKeepsItsAnswer(t *testing.T) {
 			before := snapshotRows(t, ctx, st)
 			status, body := oauthCallbackOnce(t, st, providerID)
 			detail, _ := body["detail"].(map[string]any)
-			wantStatus, wantReason := http.StatusBadRequest, "invalid_provider_id"
-			if held {
-				wantStatus, wantReason = http.StatusConflict, "identity_conflict"
-			}
-			if status != wantStatus || detail["reason"] != wantReason {
-				t.Fatalf("status=%d body=%v, want %d with reason %s", status, body, wantStatus, wantReason)
+			if status != http.StatusBadRequest || detail["reason"] != "invalid_provider_id" {
+				t.Fatalf("status=%d body=%v, want 400 with reason invalid_provider_id", status, body)
 			}
 			assertNoRowsWritten(t, ctx, st, before)
 		})

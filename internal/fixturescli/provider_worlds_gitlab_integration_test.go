@@ -423,8 +423,13 @@ var gitlabCheckoutItems = []gitlabItem{
 		CreatedAt: "2026-07-15T09:00:00Z", UpdatedAt: "2026-07-20T11:00:00Z", ClosedAt: "2026-07-20T11:00:00Z", MergedAt: "2026-07-20T11:00:00Z"},
 }
 
+// gitlabVersionAnswer is the one GitLab version of a world: the producers probe it before their first milestone read.
+func gitlabVersionAnswer() providerAnswer {
+	return get(gitlabHost, "/api/v4/version", "", map[string]any{"version": "17.0.0", "revision": "0000000"})
+}
+
 func gitlabAnswers() []providerAnswer {
-	var answers []providerAnswer
+	answers := []providerAnswer{gitlabVersionAnswer()}
 	answers = append(answers, gitlabTeamCatalogAnswers(append(append([]gitlabGroup{}, gitlabGroups...), gitlabArchiveGroup), "first")...)
 	answers = append(answers, gitlabTeamCatalogAnswers(gitlabGroups, "second")...)
 	answers = append(answers, gitlabProjectAnswers("chaos-gl/billing-service", gitlabBillingItems)...)

@@ -25,8 +25,8 @@
 // possession of a state token this package minted for this exact
 // provider/org is unauthenticated -- recordSSOUnauthenticated, no
 // sso_providers mutation. Everything after state verification (token
-// exchange, userinfo fetch) legitimately flips the row on failure, via
-// recordSSOFailure.
+// exchange, userinfo fetch) is recorded on the row on failure (last_error),
+// via recordSSOFailure.
 //
 // D2742 (team-lead): two deltas from OIDC/SAML's shape were flagged in an
 // earlier version of this file and preserved faithfully per Python's
@@ -42,7 +42,7 @@
 //     this; OIDC/SAML's own ssoErr call sites are unaffected (reason
 //     stays empty, their messages were already fixed and non-echoing).
 //  2. auto-provisioning-disabled is a THIRD bucket, distinct from both
-//     recordSSOFailure (flips the row) and recordSSOUnauthenticated (no
+//     recordSSOFailure (records last_error on the row) and recordSSOUnauthenticated (no
 //     mutation because the caller proved nothing): the state DID
 //     authenticate here, but auto-provisioning-disabled reflects a
 //     per-user access decision, not IdP-provider health, so it is
@@ -325,6 +325,11 @@ func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, provi
 	if !ok {
 		return oauthClaims{}, fmt.Errorf("%w: oauth user info email", errShape)
 	}
+	// The email text rule runs before the verified-email check: a lone surrogate (which the profile reader turns
+	// into "unverified") and every other refused form get the one invalid_provider_email answer.
+	if err := refuseUnusableEmail(email); err != nil {
+		return oauthClaims{}, err
+	}
 	// D2745 (team-lead, CHAOS-6986 r1 P1-1): never look up or link an
 	// existing user, and never auto-provision a new one, by an email the
 	// provider itself has not verified -- an attacker who controls an
@@ -512,6 +517,12 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 				invalidProviderIDDetail(), "oauth", "provider_profile")
 			return
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "oauth")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "oauth", "provisioning")
+			return
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusForbidden,
 				"No verified email address is available from this OAuth provider", "oauth", "email_verification")
@@ -621,7 +632,7 @@ func (h handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 // errOAuthAutoProvisionDisabled is router.py:1222's HTTPException(403) --
 // a distinct sentinel so oauthCallback can route it to
 // recordSSOAuthenticatedDenial (D2742) rather than ssoProcessing's
-// recordSSOFailure (which flips the row -- wrong here, see the call site).
+// recordSSOFailure (which records last_error on the row -- wrong here, see the call site).
 var errOAuthAutoProvisionDisabled = errors.New("user not found and auto-provisioning is disabled")
 
 // oauthFailureDetail is D2742's client-facing body for an authenticated-
@@ -650,7 +661,7 @@ func oauthDomainDeniedDetail() *pyjson.Object {
 func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWriter, r *http.Request, row *providerRow, providerID uuid.UUID,
 	providerType, stateToken, code string) (oauthClaims, error) {
 	now := h.Now()
-	state, err := verifyOAuthState(h.StateSecret, stateToken, providerID.String(), now)
+	state, err := verifyOAuthStateKeys(h.stateKeys(), stateToken, providerID.String(), now)
 	if err != nil {
 		if errors.Is(err, errOAuthStateExpired) {
 			return oauthClaims{}, ssoAuthErr("OAuth state expired")
@@ -701,12 +712,15 @@ func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWrit
 		if errors.Is(err, errShape) || errors.Is(err, oauthprovider.ErrUnexpected) {
 			return oauthClaims{}, err // the bare 500, matching an uncaught Python exception.
 		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			return oauthClaims{}, err // answered by the callback with invalid_provider_email, as the provisioning step did.
+		}
 		if errors.Is(err, errOAuthNoVerifiedEmail) {
 			// D2745 P1-1: propagated as-is, NOT wrapped in ssoErrReason --
 			// this authenticated (the state verified; the access token
 			// exchange succeeded) but a per-account access decision, not
 			// IdP-provider health, is oauthCallback's job to route to
-			// recordSSOAuthenticatedDenial (no row flip), the same bucket
+			// recordSSOAuthenticatedDenial (no row write), the same bucket
 			// as auto-provisioning-disabled just below in this file.
 			return oauthClaims{}, err
 		}
@@ -736,13 +750,11 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		isSuperuser                                   bool
 		tokenVersion                                  int64
 	)
-	// A non-empty subject that is not a valid identity key (a lone surrogate, edge white space, ...) is refused before
-	// any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the identity query.
-	// An empty subject keeps its answer: the lookup is skipped for it and the creation check refuses it.
-	if claims.externalID != "" {
-		if err := identity.RefuseInvalidProviderID(authProviderValue, &claims.externalID); err != nil {
-			return nil, nil, err
-		}
+	// A subject that is not a valid identity key (empty, a lone surrogate, control characters, edge white space, ...)
+	// is refused before any lookup, as social login does (session/social.go), so PostgreSQL never sees its bytes in the
+	// identity query and the answer does not depend on which accounts exist.
+	if err := refuseUnusableSubject(authProviderValue, claims.externalID); err != nil {
+		return nil, nil, err
 	}
 	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
 	if err != nil {
@@ -750,8 +762,7 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 	}
 	err = pgx.ErrNoRows
 	if found {
-		err = h.Pool.QueryRow(ctx, `SELECT id, email, username, full_name, avatar_url, is_superuser, token_version
-FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &existingFullName,
+		err = h.signInUser(ctx, `id, email, username, full_name, avatar_url, `, userID, &id, &existingEmail, &username, &existingFullName,
 			&existingAvatarURL, &isSuperuser, &tokenVersion)
 	}
 
@@ -767,9 +778,7 @@ FROM users WHERE id = $1::uuid`, userID).Scan(&id, &existingEmail, &username, &e
 		if claims.avatarURL != "" {
 			avatarURLPtr = &claims.avatarURL
 		}
-		if claims.externalID != "" {
-			externalIDPtr = &claims.externalID
-		}
+		externalIDPtr = &claims.externalID
 		if claims.username != "" {
 			usernamePtr = &claims.username
 		}

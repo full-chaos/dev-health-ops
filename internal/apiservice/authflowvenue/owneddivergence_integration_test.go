@@ -124,6 +124,16 @@ var ownedStepDivergences = []stepDivergence{
 		Reason: "auth-service counts the verify limit by one key where Python counted per e-mail, so the twelfth request is limited. " + credentialsFamily},
 }
 
+// goAPIStepDivergences are the steps where go-api's own answer is stricter than the frozen Python answer; exact, as
+// ownedStepDivergences is.
+var goAPIStepDivergences = []stepDivergence{
+	{Step: "register: password over 72 bytes", PythonStatus: 500, GoStatus: 422, PythonBodyMarker: "Internal Server Error",
+		GoBodyMarker: "Password must be no more than 72 bytes long",
+		Headers: []string{"content-length", "content-security-policy", "referrer-policy", "strict-transport-security", "vary",
+			"x-content-type-options", "x-frame-options", "access-control-allow-credentials", "access-control-allow-origin", "access-control-expose-headers"},
+		Reason: "Python's bcrypt raises on a password over 72 bytes (500); go-api refuses it with passwordpolicy.ValidateForHash before it hashes. Go is stricter. " + credentialsFamily},
+}
+
 func TestCredentialsNoStoreNeedsTheCredentialsAggregateForwarded(t *testing.T) {
 	parse := func(text string) authrows.Forwarded {
 		f, err := authrows.ParseForwarded(text)
@@ -149,7 +159,7 @@ func TestCredentialsNoStoreNeedsTheCredentialsAggregateForwarded(t *testing.T) {
 }
 
 func TestStepDivergenceTableIsWellFormedAndRefusesAGoFiveHundred(t *testing.T) {
-	if problems := checkStepDivergences(ownedStepDivergences); len(problems) != 0 {
+	if problems := append(checkStepDivergences(ownedStepDivergences), checkStepDivergences(goAPIStepDivergences)...); len(problems) != 0 {
 		t.Fatalf("the declared table: %v", problems)
 	}
 	base := ownedStepDivergences[0]

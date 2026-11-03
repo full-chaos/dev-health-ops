@@ -222,11 +222,13 @@ var (
 	censusDropTable   = regexp.MustCompile(`(?im)^\s*DROP TABLE\s+(?:IF EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s*;`)
 	// censusAlterBlock is one ALTER TABLE statement over several lines, as migration 141 has it: columns are added
 	// and the sorting key is rewritten in the same statement.
-	censusAlterBlock    = regexp.MustCompile(`(?is)\bALTER TABLE\s+(\w+)\s+([^;]*?MODIFY ORDER BY\s*\([^;]*);`)
-	censusBlockAddition = regexp.MustCompile(`(?is)ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^,;\n]+?)\s*,`)
-	censusModifyOrder   = regexp.MustCompile(`(?is)MODIFY ORDER BY\s*\(`)
-	censusCommentLine   = regexp.MustCompile(`(?m)^\s*--.*$`)
-	censusAddColumn     = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
+	censusAlterBlock     = regexp.MustCompile(`(?is)\bALTER TABLE\s+(\w+)\s+([^;]*?MODIFY ORDER BY\s*\([^;]*);`)
+	censusBlockAddition  = regexp.MustCompile(`(?is)ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^,;\n]+?)\s*,`)
+	censusModifyOrder    = regexp.MustCompile(`(?is)MODIFY ORDER BY\s*\(`)
+	censusCommentLine    = regexp.MustCompile(`(?m)^\s*--.*$`)
+	censusAlterStatement = regexp.MustCompile(`(?is)\bALTER TABLE\s+` + "`?" + `(\w+)` + "`?" + `\s+([^;]*);`)
+	censusModifyColumn   = regexp.MustCompile(`(?is)^MODIFY COLUMN\s+(?:IF EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+(\S.*)$`)
+	censusAddColumn      = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
 )
 
 // parseCensusTables reads every CREATE TABLE of a piece of SQL.
@@ -299,6 +301,7 @@ func loadCensusTables(t *testing.T) map[string]censusTable {
 	}
 	for _, file := range chain {
 		applyCensusSortingKeyAlters(t, tables, file)
+		applyCensusModifyColumns(t, tables, file)
 		for _, table := range parseCensusTables(t, file.SQL) {
 			tables[table.name] = table
 		}
@@ -374,6 +377,42 @@ func applyCensusSortingKeyAlters(t *testing.T, tables map[string]censusTable, fi
 			table.sortingKey = append(table.sortingKey, column[1])
 		}
 		tables[match[1]] = table
+	}
+}
+
+// applyCensusModifyColumns reads the MODIFY COLUMN clauses of a migration's ALTER TABLE statements: the column
+// keeps its place and takes the new type (migrations 124 and 128 turn counters into Float64 this way).
+func applyCensusModifyColumns(t *testing.T, tables map[string]censusTable, file chmigrate.ChainFile) {
+	t.Helper()
+	sql := censusCommentLine.ReplaceAllString(file.SQL, "")
+	for _, match := range censusAlterStatement.FindAllStringSubmatch(sql, -1) {
+		for _, clause := range splitTopLevel(match[2]) {
+			modify := censusModifyColumn.FindStringSubmatch(strings.TrimSpace(clause))
+			if modify == nil {
+				continue
+			}
+			table, known := tables[match[1]]
+			if !known {
+				t.Fatalf("migration %s modifies column %s of table %s, which the schema read does not hold", file.Version, modify[1], match[1])
+			}
+			typ, defaulted := strings.TrimSpace(modify[2]), ""
+			if at := strings.Index(typ, " DEFAULT "); at >= 0 {
+				typ, defaulted = strings.TrimSpace(typ[:at]), strings.TrimSpace(typ[at+len(" DEFAULT "):])
+			}
+			found := false
+			for index := range table.columns {
+				if table.columns[index].name == modify[1] {
+					table.columns[index].typ, found = typ, true
+					if defaulted != "" {
+						table.columns[index].defaulted = defaulted
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("migration %s modifies column %s of table %s, which the schema read does not hold", file.Version, modify[1], match[1])
+			}
+			tables[match[1]] = table
+		}
 	}
 }
 
@@ -491,6 +530,28 @@ func decidedTeamKeyTables() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// The census reads a column at the type the migrations leave it: migrations 124
+// and 128 turn these counters into Float64 with ALTER TABLE ... MODIFY COLUMN.
+func TestCensusReadsTheCounterTypesTheMigrationsLeave(t *testing.T) {
+	tables := loadCensusTables(t)
+	for _, want := range []struct{ table, column string }{
+		{"team_metrics_daily", "commits_count"},
+		{"team_complexity_daily", "loc_total"},
+		{"ai_impact_metrics_daily", "prs_total"},
+		{"compounding_risk_daily", "merged_prs_30d"},
+	} {
+		got := ""
+		for _, column := range tables[want.table].columns {
+			if column.name == want.column {
+				got = column.typ
+			}
+		}
+		if !strings.Contains(got, "Float64") {
+			t.Errorf("the census reads %s.%s as %q; the migrations leave it Float64", want.table, want.column, got)
+		}
+	}
 }
 
 // The declaration of each table of the shared rule against the schema: the
@@ -626,6 +687,8 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 			// key, and each is a measure. A table with none declares its
 			// marker columns, which are measures too. A reader's test of a
 			// row of zeros is built from them (MarkerColumns).
+			// A counter that a migration widened to Float64 (CHAOS-9601, 9604: a team's
+			// share of a count) stays a count: a row of zeros still holds 0 in it.
 			var unsigned []string
 			for _, column := range table.columns {
 				if strings.HasPrefix(column.typ, "UInt") && !contains(table.sortingKey, column.name) {
@@ -635,8 +698,15 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 			sort.Strings(unsigned)
 			declaredCounts := append([]string(nil), declared.Counts...)
 			sort.Strings(declaredCounts)
-			if !reflect.DeepEqual(declaredCounts, unsigned) && (len(declaredCounts) > 0 || len(unsigned) > 0) {
-				t.Errorf("declared counts %v, the unsigned columns outside the sorting key are %v", declaredCounts, unsigned)
+			var unsignedCounts []string
+			for _, name := range declaredCounts {
+				if column := columns[name]; column.typ == "Float64" {
+					continue
+				}
+				unsignedCounts = append(unsignedCounts, name)
+			}
+			if !reflect.DeepEqual(unsignedCounts, unsigned) && (len(unsignedCounts) > 0 || len(unsigned) > 0) {
+				t.Errorf("declared counts %v (Float64 counters aside: %v), the unsigned columns outside the sorting key are %v", declaredCounts, unsignedCounts, unsigned)
 			}
 			for _, column := range append(append([]string(nil), declared.Counts...), declared.Marker...) {
 				if !contains(declared.Measures, column) {

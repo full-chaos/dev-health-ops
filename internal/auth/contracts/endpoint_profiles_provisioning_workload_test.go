@@ -1,0 +1,188 @@
+package contracts
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// provisioningRoutes are the internal provisioning routes go-api calls.
+var provisioningRoutes = []string{
+	"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
+	"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept",
+	"/internal/v1/organizations/deprovision", "/internal/v1/organizations/reactivate", "/internal/v1/organizations/state",
+	"/internal/v1/organizations/suspend", "/internal/v1/organizations/rename",
+	"/internal/v1/organizations/onboard", "/internal/v1/organizations/create",
+	"/internal/v1/service-accounts/create", "/internal/v1/service-accounts/disable", "/internal/v1/service-accounts/enable",
+	"/internal/v1/service-accounts/owner",
+	"/internal/v1/service-accounts/keys/issue", "/internal/v1/service-accounts/keys/rotate",
+	"/internal/v1/service-accounts/keys/revoke", "/internal/v1/service-accounts/keys/list",
+	"/internal/v1/grants/create", "/internal/v1/grants/update", "/internal/v1/grants/revoke",
+}
+
+func provisioningRows(t *testing.T) map[string]map[string]any {
+	t.Helper()
+	rows := map[string]map[string]any{}
+	for _, item := range loadAuthServiceDocument(t)["rows"].([]any) {
+		row := item.(map[string]any)
+		if row["service"] == "dev-health-auth-service" && row["method"] == "POST" && slices.Contains(provisioningRoutes, row["route"].(string)) {
+			rows[row["route"].(string)] = row
+		}
+	}
+	if len(rows) != len(provisioningRoutes) {
+		t.Fatalf("%d provisioning rows, want %d", len(rows), len(provisioningRoutes))
+	}
+	return rows
+}
+
+// Every provisioning route accepts the go-api workload token beside the
+// session issuer credential (which stays until it is retired), chosen by the
+// JOSE typ of its header, and the selector gate accepts the row.
+func TestTheProvisioningRowsAcceptTheWorkloadTokenAndKeepTheServiceCredential(t *testing.T) {
+	registry := realRegistry(t)
+	for route, row := range provisioningRows(t) {
+		var classes []string
+		for _, class := range row["accepted_credential_classes"].([]any) {
+			classes = append(classes, class.(string))
+		}
+		slices.Sort(classes)
+		if !slices.Equal(classes, []string{"internal_svc_authsess_token", "workload_token"}) {
+			t.Fatalf("%s: accepted classes %v", route, classes)
+		}
+		selector, _ := row["class_disambiguator"].(map[string]any)
+		if selector["kind"] != "jwt_header_typ" || selector["name"] != "workload+jwt" {
+			t.Fatalf("%s: class_disambiguator %v, want jwt_header_typ workload+jwt", route, selector)
+		}
+		profile := map[string]any{"accepted_credential_classes": row["accepted_credential_classes"], "class_disambiguator": row["class_disambiguator"]}
+		if err := CheckClassSelector(profile, registry); err != nil {
+			t.Fatalf("%s: the selector gate refuses the row: %v", route, err)
+		}
+		description, _ := row["primary_validator"].(map[string]any)["description"].(string)
+		if !strings.Contains(description, "SessionIssueWorkload.authorize") {
+			t.Fatalf("%s: the validator description does not name the workload path", route)
+		}
+	}
+}
+
+// credential-classes.json names every provisioning route as a consumer of both
+// classes at the row's source line, and the workload consumer names the
+// subject variable that turns it on.
+func TestTheRegistryNamesTheProvisioningRoutesAsConsumersOfBothClasses(t *testing.T) {
+	document := loadClassRegistryDocument(t)
+	registry := indexRegistry(document)
+	for route, row := range provisioningRows(t) {
+		source := row["source"].(map[string]any)
+		key := anchorKey(source["file"].(string), int(source["line"].(float64)))
+		for _, class := range []string{"workload_token", "internal_svc_authsess_token"} {
+			if !registry.consumers[class][key] {
+				t.Errorf("%s: %s has no consumer anchored at %s", route, class, key)
+			}
+		}
+	}
+	for _, class := range document.Classes {
+		if class.ClassID != "workload_token" {
+			continue
+		}
+		var named int
+		for _, consumer := range class.Consumers {
+			if strings.Contains(consumer.Description, "/internal/v1/") && strings.Contains(consumer.Description, "AUTH_MEMBERSHIP_ROUTES") &&
+				strings.Contains(consumer.Description, "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT") {
+				named++
+			}
+		}
+		if named != len(provisioningRoutes) {
+			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
+		}
+	}
+}
+
+// A key route issues a value only on issue and rotate, and those two rows say the value authenticates nowhere yet.
+func TestTheKeyRowsNameTheIssuedKeyAndItsUse(t *testing.T) {
+	const gap = "a key this route issues authenticates nowhere yet"
+	rows := provisioningRows(t)
+	for route, issues := range map[string]bool{
+		"/internal/v1/service-accounts/keys/issue": true, "/internal/v1/service-accounts/keys/rotate": true,
+		"/internal/v1/service-accounts/keys/revoke": false, "/internal/v1/service-accounts/keys/list": false,
+	} {
+		issued, _ := rows[route]["issued_credential"].([]any)
+		gaps, _ := rows[route]["gaps"].([]any)
+		if issues != (len(issued) == 1) || issues != slices.Contains(gaps, any(gap)) {
+			t.Errorf("%s: issued %v, gaps %v; want the issued key and the gap line: %v", route, issued, gaps, issues)
+		}
+		if issues && issued[0].(map[string]any)["class_id"] != "service_account_key" {
+			t.Errorf("%s issues %v", route, issued[0])
+		}
+	}
+}
+
+// Issuing is live and use is not: the class stays unconsumed, with no consumer and no validator, until the use of a key lands.
+func TestTheKeyClassStaysUnconsumedUntilItsUseLands(t *testing.T) {
+	var document struct {
+		Classes []struct {
+			ClassID    string `json:"class_id"`
+			Status     string `json:"status"`
+			Consumers  []any  `json:"consumers"`
+			Validators []any  `json:"validators"`
+		} `json:"classes"`
+	}
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "auth", "v1", "credential-classes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range document.Classes {
+		if class.ClassID != "service_account_key" {
+			continue
+		}
+		if class.Status != "unconsumed" || len(class.Consumers) != 0 || len(class.Validators) != 0 {
+			t.Fatalf("service_account_key is %s with %d consumers and %d validators, want unconsumed with none", class.Status, len(class.Consumers), len(class.Validators))
+		}
+		return
+	}
+	t.Fatal("no service_account_key class")
+}
+
+// A provisioning consumer of credential-classes.json is anchored at a line that names the route its description names: where
+// the anchored line holds a quoted /internal/v1/ route, it is that route. A consumer moved onto the line of a sibling route
+// (which has its own pinned text) is caught here and nowhere else.
+func TestAProvisioningConsumerAnchorLineNamesTheRouteItDescribes(t *testing.T) {
+	document := loadClassRegistryDocument(t)
+	root := testRoot(t)
+	described := regexp.MustCompile(`auth-service POST (/internal/v1/[a-z0-9/_-]+)`)
+	quoted := regexp.MustCompile(`"(/internal/v1/[a-z0-9/_-]+)"`)
+	checked := map[string]int{}
+	for _, class := range document.Classes {
+		for _, consumer := range class.Consumers {
+			m := described.FindStringSubmatch(consumer.Description)
+			if m == nil || consumer.Anchor == nil || consumer.Anchor.Repo != "ops" {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(root, consumer.Anchor.Path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(string(raw), "\n")
+			if consumer.Anchor.Line < 1 || consumer.Anchor.Line > len(lines) {
+				t.Errorf("%s %s: anchor %s:%d is outside the file", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line)
+				continue
+			}
+			if q := quoted.FindStringSubmatch(lines[consumer.Anchor.Line-1]); q != nil {
+				if q[1] != m[1] {
+					t.Errorf("%s consumer of %s is anchored at %s:%d, a line that names %s", class.ClassID, m[1], consumer.Anchor.Path, consumer.Anchor.Line, q[1])
+				}
+				checked[class.ClassID]++
+			}
+		}
+	}
+	for _, class := range []string{"workload_token", "internal_svc_authsess_token"} {
+		if checked[class] < 7 {
+			t.Errorf("%s: %d provisioning consumers anchored at a quoted route line, want at least 7 (the grant and service account routes)", class, checked[class])
+		}
+	}
+}

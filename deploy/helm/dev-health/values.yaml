@@ -19,15 +19,6 @@ webImage:
 # It mounts no business route yet and nothing routes to it: the ingress path
 # table that sends a ported path here is a deploy-repo change made per ported
 # area. Off by default.
-# -- The legacy /api/v1/ingest/* routes of go-api. Off by default; on, go-api
-#    refuses to start outside development unless INGEST_API_KEYS or
-#    INGEST_SIGNING_SECRET is set. Every response carries a Deprecation header.
-legacyIngest:
-  enabled: false
-  # -- RFC 8594 HTTP-date for the Sunset header, for example
-  #    "Tue, 01 Dec 2026 00:00:00 GMT". Empty sends no Sunset header; a value
-  #    that is not an HTTP-date stops go-api at start.
-  sunset: ""
 goApi:
   enabled: false
   # -- This workload's own ServiceAccount (<fullname>-go-api). automountToken stays
@@ -42,6 +33,16 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+  # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
+  #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
+  #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization
+  #    create (admin, onboard create_org) and its organization delete go to auth-service first; go-api writes none of those rows itself (503 and no write when auth-service
+  #    refuses for a reason go-api has no answer for, or is down). Needs authService.phase 4 (the routes refuse until
+  #    auth-service owns users), auth-service's AUTH_MEMBERSHIP_ROUTES on (authService.extraEnv, name AUTH_MEMBERSHIP_ROUTES, value "true": the render refuses the switch without it),
+  #    and a go-api credential (goApi.sessionIssue) minted with the memberships:write scope. Off renders nothing.
+  #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
+  #    authProxy:
+  #      orgProvisioning: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.
@@ -138,6 +139,9 @@ goApi:
   #    name (*_SECRET, *_PASSWORD, *_TOKEN, *_KEY, *_DSN, *_CREDENTIALS, any
   #    case); such a name may come only by valueFrom.secretKeyRef.
   extraEnv: []
+  # -- Extra pod volumes and go-api container mounts (for example a projected serviceAccountToken). Empty renders no key.
+  extraVolumes: []
+  extraVolumeMounts: []
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -191,6 +195,29 @@ authService:
   #             barrier (up-owned) first. Rollback runs the other way: goApi, barrier down-auth, then phase 3.
   #    Runbook: docs/operate/runbooks/auth-users-owned-flip-and-rollback.md.
   usersOwnedStage: ""
+  # -- Phase 3 only (CHAOS-12532), required there and refused elsewhere: the roll order of login and social sign-in.
+  #      authService  auth-service mounts the login route and the social clients (the lockout key and SOCIAL_* env);
+  #                   go-api keeps AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL false and still logs in locally.
+  #                   Release this first and wait until every auth-service pod is Ready.
+  #      goApi        go-api forwards login and social (AUTH_PROXY_LOCAL_LOGIN, AUTH_PROXY_SOCIAL true). Every
+  #                   auth-service pod already serves them. Rollback runs the other way: stage authService, then phase 2.
+  #    The roll to phase 4 and the rollback to phase 2 drop the value. Runbook: docs/contribute/architecture/auth-control-plane-deployment.md.
+  loginStage: ""
+  # -- Platform roles owned: renders AUTH_PLATFORM_ROLES_OWNED=true on auth-service, go-api, query-api and the
+  #    auth-migrate, auth-grants and auth-backfill Jobs, so platform authority moves from public.users.is_superuser
+  #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
+  #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
+  platformRolesOwned: false
+  # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
+  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
+  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  ssoJit: false
+  # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
+  #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
+  #    valkey.secretName: the service refuses to start with the feed on and no AUTH_VALKEY_URI. Off renders nothing,
+  #    and outbox rows stay pending. authService.extraEnv cannot set AUTH_REVISION_FEED.
+  revisionFeed:
+    enabled: false
   # -- Two replicas keep the service up through one pod loss or node drain
   #    (N+1, docs/operate/plan/auth-service-capacity.md); a PodDisruptionBudget
   #    (minAvailable 1) renders only while this is 2 or more.
@@ -202,9 +229,33 @@ authService:
     class: ""
     # -- The https issuer of eddsa access tokens: auth-service signs it
     #    (AUTH_TOKEN_ISSUER_URL, with AUTH_JWT_AUDIENCE=dev-health-api) and go-api
-    #    verifies it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS. Rendered only
-    #    with class eddsa; go-api must reach the issuer's JWKS document.
+    #    and query-api verify it (AUTH_ACCESS_TOKEN_ISSUER) against its JWKS.
+    #    Under class eddsa go-api and query-api must reach the issuer's JWKS
+    #    document. Under hs256_compat (or an empty class) the issuer renders for
+    #    auth-service alone (AUTH_TOKEN_ISSUER_URL, no AUTH_JWT_AUDIENCE) and go-api
+    #    and query-api verify web tokens as before. It mounts auth-service's
+    #    discovery and JWKS routes and is required by the workload-token exchange.
     issuerURL: ""
+    # -- AUTH_ACCESS_TOKEN_LIFETIME, the eddsa access token's lifetime: whole minutes from 5m to 60m (or 1h). Empty
+    #    renders nothing (the service default, 60 minutes). Needs class eddsa. ACP-ADR-03 targets 10m, set as its own
+    #    step after the eddsa flip (refresh demand rises in the same ratio; see the auth-service capacity plan).
+    lifetime: ""
+  # -- The Kubernetes workload-token exchange (POST /internal/v1/token/exchange): a workload presents its
+  #    projected ServiceAccount token and auth-service has the cluster API server review it (TokenReview).
+  #    Off by default. On, the chart renders AUTH_WORKLOAD_EXCHANGE and its settings, the ClusterRole
+  #    and ClusterRoleBinding that let auth-service's own ServiceAccount create tokenreviews (and nothing
+  #    else), mounts that ServiceAccount's token as the reviewer token, opens egress to the API server
+  #    (networkPolicy.egress.kubeAPI) and admits go-api's pods on the API port. Needs
+  #    accessToken.issuerURL (any class) and authService.phase >= 1.
+  workloadExchange:
+    enabled: false
+    # -- AUTH_WORKLOAD_TRUST_DOMAIN: names this cluster in the workload bindings. Required when enabled.
+    trustDomain: ""
+    # -- AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER: the ServiceAccount token issuer (iss) of this cluster. Required when enabled.
+    clusterIssuer: ""
+    # -- AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL: the API server's https origin (no path).
+    #    The chart checks only that it is set; auth-service refuses a value that is not an https origin at start (D6465).
+    kubeAPIURL: "https://kubernetes.default.svc"
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
   socialLinkRoutes: false
@@ -392,6 +443,9 @@ authService:
   #    run by the service at startup.
   migrate:
     enabled: true
+    # -- The finished Job and its pod log stay this long (the next hook run replaces them sooner), so a roll readback
+    #    can read `kubectl logs job/<release>-auth-migrate` ("auth schema current at version N") without exec.
+    ttlSecondsAfterFinished: 86400
     image:
       # -- docker/go-worker.Dockerfile target `auth-migrate`.
       repository: ghcr.io/full-chaos/dev-health-go-auth-migrate
@@ -401,6 +455,14 @@ authService:
     secretKey: AUTH_MIGRATION_DATABASE_URI
     # -- The runtime login auth-migrate grants privileges to.
     runtimeRole: devhealth_auth
+    # -- The role that owns the auth schema and every object in it (AUTH_SCHEMA_OWNER_ROLE): a NOSUPERUSER login that is
+    #    the migration login's role. Set, both auth-migrate Jobs refuse, before any GRANT, a schema with an object
+    #    another role owns (the push lifecycle append function, owned by its writer role, is the one exception), and a
+    #    pinned role that holds SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or BYPASSRLS. Empty turns the pin off
+    #    (allowed at every phase). It must differ from runtimeRole, the session readers and the push lifecycle roles.
+    #    A database whose schema a superuser owns is moved once by `auth-migrate owner-move`, see
+    #    docs/contribute/architecture/auth-control-plane-deployment.md.
+    ownerRole: ""
     # -- The logins of the services that end an access token when its
     #    auth-service session is revoked (go-api's API_DATABASE_ROLE and
     #    query-api's registry login). auth-migrate grants each exactly SELECT on
@@ -408,6 +470,17 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
+    #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
+    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE
+    #    only; AUTH_PUSH_LIFECYCLE_CALLER_ROLES). The writer role must exist and
+    #    the migration login must be a member of it BEFORE this Job runs: a
+    #    privileged step, see docs/contribute/architecture/auth-control-plane-deployment.md.
+    #    Empty leaves the function unexecutable (go-api's AUTH_PUSH_LIFECYCLE_EVENTS
+    #    must stay off).
+    pushLifecycle:
+      writerRole: ""
+      callerRoles: []
     # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
     #    are granted like sessionReaderRoles (the rendered list is the union);
     #    phase >= 2 fails the render while either is empty.
@@ -489,6 +562,12 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
+    #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
+    #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.
+    ingressControllerPodLabels:
+      app.kubernetes.io/name: ingress-nginx
+      app.kubernetes.io/component: controller
     egress:
       # -- Peers the service may reach on database.port: a list of NetworkPolicy
       #    `to` entries (podSelector, namespaceSelector, ipBlock). REQUIRED when
@@ -502,6 +581,15 @@ authService:
       valkey:
         to: []
         port: 6379
+      # -- Peers of the Kubernetes API server, `to` entries plus port. REQUIRED while
+      #    authService.workloadExchange.enabled (the chart cannot see the API server address; for
+      #    `kubernetes.default.svc` list its ClusterIP or the control plane addresses).
+      #    Each entry must be a non-empty peer (an empty one means every destination). `port` is a whole number
+      #    from 1 to 65535 and must match the port of authService.workloadExchange.kubeAPIURL (the chart does
+      #    not compare them).
+      kubeAPI:
+        to: []
+        port: 443
       # -- Peers of the key custody service (KMS), `to` entries plus port. File
       #    custody (Wave 1) needs none, so the default grants no egress for it.
       keyCustody:
@@ -516,7 +604,9 @@ authService:
       #    ipBlock 0.0.0.0/0 (and/or ::/0) with ports of TCP 443 alone and an
       #    `except` list of at least 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
       #    100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 (IPv6: fc00::/7,
-      #    fe80::/10, ::1/128, ::ffff:0:0/96, 64:ff9b::/96).
+      #    fe80::/10, ::1/128, 64:ff9b::/96). The IPv4-mapped range is not listed
+      #    (an IPv4-mapped destination leaves the pod as IPv4 and meets the v4
+      #    list); a mapped `except` entry is refused, as the apiserver refuses it.
       mail:
         to: []
         ports:
@@ -1231,19 +1321,19 @@ migrations:
     # -- CHAOS-10754: run the migrate Job's ClickHouse step as the Cloud
     #    `default` login from its own Secret, not as the runtime login in the
     #    shared Secret's CLICKHOUSE_NATIVE_URI (which cannot run migration
-    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON adds
-    #    three secretKeyRef env entries and sets CLICKHOUSE_URI to
-    #    clickhouse://$(user):$(password)@$(host):<port>/<database>?secure=true,
-    #    expanded by Kubernetes in the Pod; the Secret is operator-created and
-    #    this chart never creates it. Requires migrations.hook.extraEnv and
-    #    migrations.hook.secretData to leave CLICKHOUSE_URI and
-    #    CLICKHOUSE_URI_FILE unset. An external migrate Secret
+    #    DDL on ClickHouse Cloud). OFF = today's render, unchanged. ON sets
+    #    dho's component form (CHAOS-11995): DEV_HEALTH_CH_HOST, _USER and
+    #    _PASSWORD from secretKeyRefs, DEV_HEALTH_CH_PORT and _DB from the
+    #    values below, DEV_HEALTH_CH_SECURE=true (TLS), and CLICKHOUSE_URI
+    #    blank. dho assembles and percent-encodes the DSN, so the password may
+    #    hold any character. The Secret is operator-created and this chart
+    #    never creates it. Requires migrations.hook.extraEnv and
+    #    migrations.hook.secretData to leave CLICKHOUSE_URI, its _FILE form
+    #    and every DEV_HEALTH_CH_* key unset. An external migrate Secret
     #    (migrations.hook.externalSecretName) may keep a CLICKHOUSE_URI key
-    #    (the env entry wins) but must NOT carry CLICKHOUSE_URI_FILE: dho
-    #    refuses both forms together and the chart cannot see inside it.
-    #    CHARSET REQUIREMENT: the expansion does no percent-encoding, so the
-    #    password and user must not contain any of  @ : / ? # %  (URL-safe
-    #    characters only; a hex password is safe). Check before enabling.
+    #    (the blank env entry wins) but must NOT carry CLICKHOUSE_URI_FILE or
+    #    a DEV_HEALTH_CH_USER_FILE / _PASSWORD_FILE key: dho refuses both
+    #    forms together and the chart cannot see inside it.
     clickhouseCloud:
       enabled: false
       secretName: ""
@@ -1290,6 +1380,32 @@ migrations:
         name: ""
         secretName: "otel-collector-postgres"
         secretKey: "POSTGRES_MONITOR_PASSWORD"
+      # -- CHAOS-12081: optional LOGIN for the Go api (go-api's API_DATABASE_ROLE, default
+      #    devhealth_api). EMPTY name = OFF (nothing is provisioned, no env is added to the
+      #    Job). When set, `dho migrate roles` creates it if missing (unprivileged login,
+      #    CONNECT on the application database, USAGE and no CREATE on schema public; table
+      #    privileges are `dho migrate river`'s) and the password is read from an
+      #    OPERATOR-CREATED Secret named by secretName / secretKey (this chart never creates
+      #    it; the render fails if name is set while either is empty). An existing login keeps
+      #    its password (never rotated). Must equal go-api's API_DATABASE_ROLE and the
+      #    password inside API_DATABASE_URI.
+      apiRole:
+        name: ""
+        secretName: ""
+        secretKey: "API_DATABASE_PASSWORD"
+      # -- CHAOS-12614: optional ops migration LOGIN (e.g. devhealth_migrator) that owns the database and the ops
+      #    schemas after `dho migrate owner-move`. EMPTY name = OFF. When set, `dho migrate roles` creates it if missing
+      #    (LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, CONNECT on the application database,
+      #    nothing else) with the password from an OPERATOR-CREATED Secret named by secretName / secretKey (the render
+      #    fails if name is set while either is empty). An existing login keeps its password.
+      migratorRole:
+        name: ""
+        secretName: ""
+        secretKey: "OPS_MIGRATOR_DATABASE_PASSWORD"
+      # -- CHAOS-12614: the Secret this Job envFroms when secrets.create=false. EMPTY MEANS
+      #    migrations.hook.externalSecretName. Set it to a Secret with the superuser DSN when the other ops hooks move
+      #    to the migration login: creating roles needs CREATEROLE.
+      externalSecretName: ""
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:
@@ -1410,13 +1526,14 @@ migrations:
     openUnitsIndex:
       enabled: false
       # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
-      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    streakIndex 2400 + openUnitsIndex 700 + the migrate Job 1800 + a 500 s rollout margin = 5400 s, the
       #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
-      activeDeadlineSeconds: 600
+      activeDeadlineSeconds: 700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      # -- window of the whole build in seconds; deadlineSeconds + 430 (the 70 s first-connect wait, startup and
+      #    cleanup) must not exceed activeDeadlineSeconds.
       deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15
@@ -1445,6 +1562,12 @@ migrations:
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""
+    # -- CHAOS-12614: the owner pin of the ops migrators (MIGRATION_OWNER_ROLE on the migrate, open-units-index,
+    #    streak-index and river-migrate Jobs). EMPTY = OFF (today's behaviour). Set, dho refuses to run any DDL unless
+    #    it is connected AS this role, the role is NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, and it
+    #    owns the database, schema river and every object of public and river (`dho migrate owner-move` first). While
+    #    auth-service owns sessions, authService.migrate.sessionReaders.queryApi must name the query-api login.
+    ownerRole: ""
 
 # =============================================================================
 # Ingress
@@ -1463,6 +1586,11 @@ ingress:
         - path: /
           pathType: Prefix
           service: web
+    # -- CHAOS-12359: the issuer's host may route exactly its two public documents to auth-service:
+    #    {host: auth.example.com, paths: [{path: /.well-known/openid-configuration, pathType: Exact, service: auth-service},
+    #    {path: /.well-known/jwks.json, pathType: Exact, service: auth-service}]}. The host serves nothing else, carries no
+    #    pythonAllowList, and authService.accessToken.issuerURL must be https://<host> (pods fetch issuer + /.well-known/...).
+    #    The auth-service NetworkPolicy then admits the ingress controller on the API port.
   # -- CHAOS-7047: paths that leave the go-api default when a host routes "/" to
   #    `service: go-api` (set `pythonAllowList: true` on that host; the key keeps
   #    its name). Everything else on such a host reaches the Go api, whose own 404
@@ -1713,6 +1841,10 @@ valkey:
   #    streams); volatile-* evict only keys with a TTL (rate-limit counters, idempotency markers) and refuse writes
   #    once none is left. A change restarts Valkey.
   maxmemoryPolicy: allkeys-lru
+  # -- AOF fsync policy, pinned in the args because INFO does not show it and the
+  #    revision-feed floor rule needs a durable AOF. Only everysec or always; the
+  #    render refuses no. A change restarts Valkey.
+  appendfsync: everysec
   # -- An ACL file for the in-chart Valkey, read from a Secret the chart does not
   #    create. Off unless enabled=true: Valkey then starts as before, with only its
   #    open default user, and nothing refers to the Secret. When enabled, Valkey
@@ -1723,7 +1855,7 @@ valkey:
   #    it, exactly as today) and the auth-service rate-limit user with a HASHED
   #    password:
   #      user default on nopass ~* &* +@all
-  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels -@all +hello +select +ping +get +eval +incr +pexpire +client|tracking
+  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
   #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
   #    default user keeps access to every key, the auth rate-limit counters
   #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the

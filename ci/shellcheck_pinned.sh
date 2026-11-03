@@ -130,6 +130,10 @@ FILES=(
   # neither escapes the lint the way lane-4441 found this script itself once did.
   "${ROOT}/ci/mirror_precheck_lib.sh"
   "${ROOT}/ci/mirror_precheck_lib_test.sh"
+  "${ROOT}/ci/verify_base_images.sh"
+  "${ROOT}/ci/verify_base_images_test.sh"
+  "${ROOT}/ci/verify_base_sources.sh"
+  "${ROOT}/ci/verify_base_sources_test.sh"
   # CHAOS-11422: the entry point that lists and runs the dedicated shell suites.
   "${ROOT}/ci/run_shell_tests.sh"
   # CHAOS-11096: base-image pull retry/fallback helper and its fixture suite.
@@ -138,9 +142,16 @@ FILES=(
   # CHAOS-11649: the shared bounded retry loop the pull helper uses, and its fixture suite.
   "${ROOT}/ci/lib/retry.sh"
   "${ROOT}/ci/retry_test.sh"
+  # CHAOS-12372: the bounded retry of registry blob-fetch failures in image builds.
+  "${ROOT}/ci/lib/registry_retry.sh"
   # the bounded ghcr.io login fallback for merge_group jobs, and its fixture suite.
   "${ROOT}/ci/lib/ghcr_login.sh"
   "${ROOT}/ci/ghcr_login_test.sh"
+  # the signing-key rotation rehearsal: its readers, its driver and their fixture suites.
+  "${ROOT}/ci/lib/auth_rotation_probe.sh"
+  "${ROOT}/ci/auth_rotation_probe_test.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

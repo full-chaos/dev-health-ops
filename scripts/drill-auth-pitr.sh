@@ -10,6 +10,14 @@
 # Passwords are generated at run time and live only in this shell's environment.
 #
 # Usage: DRILL_DIR=<new empty dir> scripts/drill-auth-pitr.sh
+#
+# DRILL_FENCE=1 runs the FENCED drill (CHAOS-11271): the source is initialised with `auth-migrate restore-fence init`
+# (a fresh database on timeline 1, as the first roll does), the end-of-WAL copy is restored FIRST and `restore-fence
+# export` runs against it, the PITR copy then starts read-only (default_transaction_read_only=on in its
+# postgresql.auto.conf), `restore-fence status` must say not fenced, `apply` runs as a dry run and then with -apply
+# (a per-connection override of the read-only default), the read-only default is reset, and the verify and post
+# phases must show no revocation after T alive and no key re-issued with different content. The default (unfenced)
+# drill is unchanged and still reports the GAP.
 set -euo pipefail
 umask 077
 
@@ -39,6 +47,11 @@ POSTGRES_PASSWORD="$(openssl rand -hex 16)"
 DRILL_RUNTIME_PASSWORD="$(openssl rand -hex 16)"
 export POSTGRES_PASSWORD DRILL_RUNTIME_PASSWORD
 
+fence_mode=0
+[[ "${DRILL_FENCE:-}" == "1" ]] && fence_mode=1
+unset DRILL_FENCE # forwarded to the driver only for the fenced post phase, by drill() arguments
+runtime_role="${DRILL_RUNTIME_ROLE:-drill_runtime}"
+
 export GOMODCACHE=/var/lib/oci-cache/go-mod GOCACHE=/var/lib/oci-cache/go-build GOTMPDIR=/var/lib/oci-cache/go-tmp GOMAXPROCS=8
 
 dc() { docker compose -f "$compose_file" -p "$project" "$@"; }
@@ -64,13 +77,92 @@ drill() {
   # exported in a subshell, never passed through `env`: the DSN holds a password
   # and an argv is readable by every user of the host.
   (
+    # shellcheck disable=SC2030 # each subshell sets its own copy on purpose
     export DRILL_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2030
     export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
     # shellcheck disable=SC2163 # each argument is a NAME=value assignment
-    export "$@"
+    # a bare `export` (no arguments) would print every exported variable of the invoking shell into the drill log
+    if (($#)); then export "$@"; fi
     "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPITR$' -test.count=1 -test.v \
       >>"$evidence/driver-$phase.log" 2>&1
   )
+}
+
+# drill_attempt runs the authentication-attempt driver (TestDrillAuthAttempt): revoked access must be refused by the
+# verifier the auth service uses, not only marked revoked in the tables. Same environment rules as drill().
+drill_attempt() { # port, phase, optional NAME=value...
+  local port="$1" phase="$2"
+  shift 2
+  (
+    # shellcheck disable=SC2030,SC2031 # each subshell sets its own copy on purpose
+    export DRILL_ATTEMPT_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2030,SC2031
+    export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
+    # shellcheck disable=SC2163 # each argument is a NAME=value assignment; a bare export would print the environment
+    if (($#)); then export "$@"; fi
+    "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthAttempt$' -test.count=1 -test.v \
+      >>"$evidence/driver-attempt-$phase.log" 2>&1
+  )
+}
+
+# drill_password runs the password driver (TestDrillAuthPassword, CHAOS-11834): after a restore, the password a user had
+# before T, and the one it set after T, must not log in on a fenced copy. Same environment rules as drill().
+drill_password() { # port, phase, optional NAME=value...
+  local port="$1" phase="$2"
+  shift 2
+  (
+    # shellcheck disable=SC2031 # each subshell sets its own copy on purpose
+    export DRILL_PASSWORD_PHASE="$phase" DRILL_EVIDENCE_DIR="$evidence"
+    # shellcheck disable=SC2031
+    export DRILL_DSN="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${port}/postgres?sslmode=disable"
+    # shellcheck disable=SC2163 # each argument is a NAME=value assignment; a bare export would print the environment
+    if (($#)); then export "$@"; fi
+    "$capped" -t 600 -- "$DRILL_DIR/drill.test" -test.run '^TestDrillAuthPassword$' -test.count=1 -test.v \
+      >>"$evidence/driver-password-$phase.log" 2>&1
+  )
+}
+
+# summary_files names the evidence files that go into summary.txt: results only. Every *secrets*.json (attempt-secrets.json
+# and any later one) stays out by an explicit filter, whatever its prefix.
+summary_files() {
+  local f
+  for f in "$evidence"/verify-*.json "$evidence"/post-*.json "$evidence"/attempt-*.json; do
+    case "${f##*/}" in
+    *secrets*) ;;
+    *) printf '%s\n' "$f" ;;
+    esac
+  done
+}
+
+write_summary() {
+  local files
+  mapfile -t files < <(summary_files)
+  jq -c . "${files[@]}" | tee "$evidence/summary.txt"
+}
+
+# guard_summary_no_secrets fails closed: a line (12 characters or more) of any *secrets*.json in the evidence directory, or
+# its compact form, found in summary.txt stops the drill. It prints the file names only, never a line or a value.
+guard_summary_no_secrets() {
+  local f line compact leaked=0
+  for f in "$evidence"/*secrets*.json; do
+    [[ -e "$f" ]] || continue
+    compact="$(jq -c . "$f" 2>/dev/null || true)"
+    if [[ -n "$compact" ]] && grep -qF -- "$compact" "$evidence/summary.txt"; then
+      echo "drill-auth-pitr.sh: summary.txt holds the content of ${f##*/}" >&2
+      leaked=1
+      continue
+    fi
+    while IFS= read -r line; do
+      [[ "${#line}" -ge 12 ]] || continue
+      if grep -qF -- "$line" "$evidence/summary.txt"; then
+        echo "drill-auth-pitr.sh: summary.txt holds a line of ${f##*/}" >&2
+        leaked=1
+        break
+      fi
+    done <"$f"
+  done
+  [[ "$leaked" -eq 0 ]]
 }
 
 load_gate() {
@@ -89,6 +181,11 @@ psql_in() { # service, sql
   dc exec -T "$1" psql -U postgres -At -c "$2"
 }
 
+# psql_rw runs a statement with the read-only default overridden for that session only (the PITR copy starts read-only).
+psql_rw() { # service, sql
+  dc exec -T -e PGOPTIONS='-c default_transaction_read_only=off' "$1" psql -U postgres -At -c "$2"
+}
+
 wait_promoted() { # service
   for _ in $(seq 1 90); do
     if [[ "$(psql_in "$1" 'select pg_is_in_recovery()' 2>/dev/null || true)" == "f" ]]; then return 0; fi
@@ -98,9 +195,22 @@ wait_promoted() { # service
   return 1
 }
 
-prepare_restore() { # service, target-time-or-empty
+# fence runs auth-migrate restore-fence <args> against a copy as the migration role. The DSN holds the password, so it is
+# exported inside a subshell (never argv). The per-connection options override lets apply write although the copy was
+# started read-only; export and status only read.
+fence() { # port, args...
+  local port="$1"
+  shift
+  (
+    export AUTH_MIGRATION_DATABASE_URI="host=127.0.0.1 port=${port} user=postgres password='${POSTGRES_PASSWORD}' dbname=postgres sslmode=disable options='-c default_transaction_read_only=off'"
+    export AUTH_RUNTIME_DATABASE_ROLE="$runtime_role" AUTH_DATABASE_SCHEMA=auth
+    "$capped" -t 300 -- "$DRILL_DIR/auth-migrate" restore-fence "$@"
+  )
+}
+
+prepare_restore() { # service, target-time-or-empty, optional "readonly"
   # shellcheck disable=SC2016 # the script body is expanded by the container's sh
-  dc run --rm --no-deps -T --user root --entrypoint sh -e DRILL_T="$2" "$1" -c '
+  dc run --rm --no-deps -T --user root --entrypoint sh -e DRILL_T="$2" -e DRILL_RO="${3:-}" "$1" -c '
     set -eu
     d=/var/lib/postgresql/pgdata
     mkdir -p "$d"
@@ -111,6 +221,9 @@ prepare_restore() { # service, target-time-or-empty
     if [ -n "$DRILL_T" ]; then
       printf "recovery_target_time = \047%s\047\n" "$DRILL_T" >>"$d/postgresql.auto.conf"
     fi
+    if [ "$DRILL_RO" = readonly ]; then
+      printf "default_transaction_read_only = \047on\047\n" >>"$d/postgresql.auto.conf"
+    fi
     chown -R postgres:postgres /var/lib/postgresql
     chmod 0700 "$d"
   '
@@ -119,10 +232,24 @@ prepare_restore() { # service, target-time-or-empty
 log "compile driver"
 (cd "$repo_root" && "$capped" -t 900 -- go test -p 4 -c -trimpath -tags=integration -o "$DRILL_DIR/drill.test" ./internal/audit/)
 
+if [[ "$fence_mode" -eq 1 ]]; then
+  log "compile auth-migrate (fenced drill)"
+  (cd "$repo_root" && "$capped" -t 900 -- go build -trimpath -o "$DRILL_DIR/auth-migrate" ./cmd/auth-migrate)
+fi
+
 log "S1 start source (WAL archive on)"
 load_gate
 dc --profile src up -d --wait src
-drill "$port_src" migrate
+if [[ "$fence_mode" -eq 1 ]]; then
+  drill "$port_src" migrate DRILL_FENCE=1 # the full migrated schema: the fence carries the legacy public tables too
+else
+  drill "$port_src" migrate
+fi
+if [[ "$fence_mode" -eq 1 ]]; then
+  # a database that is not a restore: the explicit init, once, on timeline 1 (the first-roll step)
+  fence "$port_src" init >"$evidence/fence-init-src.txt"
+  grep -q 'written=true' "$evidence/fence-init-src.txt"
+fi
 drill "$port_src" write DRILL_LABEL=A
 drill "$port_src" snapshot DRILL_LABEL=A
 
@@ -131,9 +258,13 @@ dc exec -T src pg_basebackup -U postgres -D /backup/base -Fp -X stream -c fast
 
 log "S3 writes B, snapshot T, writes C after T, snapshot F"
 drill "$port_src" write DRILL_LABEL=B
+drill_attempt "$port_src" seed # a workload with a live bootstrap credential per case, before T
+drill_password "$port_src" seed # an auth-service user and a go-api user, each with a password, before T
 drill "$port_src" snapshot DRILL_LABEL=T
 sleep 3
 drill "$port_src" write DRILL_LABEL=C
+drill_attempt "$port_src" revoke # after T: revoke one credential, disable one principal
+drill_password "$port_src" change # after T: both users change the password
 drill "$port_src" snapshot DRILL_LABEL=F
 last_lsn="$(psql_in src 'select pg_current_wal_lsn()')"
 psql_in src 'select pg_switch_wal()' >/dev/null
@@ -152,15 +283,85 @@ t_target="$(cat "$evidence/time-T.txt")"
   echo "drill-auth-pitr.sh: unexpected target time shape" >&2
   exit 1
 }
+# a failing check must not stop the run before the other copy is checked
+result=0
+
+if [[ "$fence_mode" -eq 1 ]]; then
+  log "S5 restore to end of WAL (shadow copy, first)"
+  prepare_restore latest ""
+  load_gate
+  dc --profile latest up -d --wait latest
+  wait_promoted latest
+  drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
+  # the manifest is exported BEFORE any new write on the shadow copy
+  fence "$port_latest" export -out "$evidence/fence-manifest.json" >"$evidence/fence-export.txt" || result=1
+  drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
+  drill_password "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
+  drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
+  dc --profile latest stop latest
+
+  log "S4 PITR to $t_target (started read-only)"
+  prepare_restore pitr "$t_target" readonly
+  load_gate
+  dc --profile pitr up -d --wait pitr
+  wait_promoted pitr
+  [[ "$(psql_in pitr 'show default_transaction_read_only')" == "on" ]] || { echo "drill-auth-pitr.sh: the PITR copy is not read-only" >&2; result=1; }
+  drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
+  drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
+  # readiness before the fence: a restored timeline has no fence row, status must say so (exit 1)
+  status_rc=0
+  fence "$port_pitr" status >"$evidence/fence-status-before.txt" || status_rc=$?
+  { [[ "$status_rc" -eq 1 ]] && grep -q 'fenced=false' "$evidence/fence-status-before.txt"; } || { echo "drill-auth-pitr.sh: status before apply is not 'fenced=false' (exit $status_rc)" >&2; result=1; }
+  fence "$port_pitr" apply -manifest "$evidence/fence-manifest.json" >"$evidence/fence-apply-dry-run.txt" || result=1
+  grep -q '"dry_run":true' "$evidence/fence-apply-dry-run.txt" || { echo "drill-auth-pitr.sh: the dry run did not report dry_run" >&2; result=1; }
+  fence "$port_pitr" apply -manifest "$evidence/fence-manifest.json" -apply >"$evidence/fence-apply.txt" || result=1
+  grep -q '"dry_run":false' "$evidence/fence-apply.txt" || { echo "drill-auth-pitr.sh: apply did not report dry_run false" >&2; result=1; }
+  fence "$port_pitr" status >"$evidence/fence-status-after.txt" || result=1
+  grep -q 'fenced=true' "$evidence/fence-status-after.txt" || { echo "drill-auth-pitr.sh: status after apply is not 'fenced=true'" >&2; result=1; }
+  # reset the read-only default, as the runbook does before auth-service starts
+  psql_rw pitr 'ALTER SYSTEM RESET default_transaction_read_only' >/dev/null
+  psql_rw pitr 'SELECT pg_reload_conf()' >/dev/null
+  for _ in $(seq 1 10); do # the reload is asynchronous
+    [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] && break
+    sleep 1
+  done
+  [[ "$(psql_in pitr 'show default_transaction_read_only')" == "off" ]] || { echo "drill-auth-pitr.sh: the read-only default was not reset" >&2; result=1; }
+  # the revoked credential and the disabled principal must be refused by the real verifier on the fenced copy
+  drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr DRILL_FENCE=1 || result=1
+  # the password changed after T: the old and the new password are both refused (the restored hash is cleared)
+  drill_password "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr DRILL_FENCE=1 || result=1
+  drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F DRILL_FENCE=1 || result=1
+  # the apply must have re-applied at least one revocation (a credential and a principal created before T and removed
+  # after it), and the rows the PITR copy lacks must be exactly the ones apply reported as absent (it cannot
+  # authenticate: absence is correct, ACP-PLAN-GO-11271 item 6)
+  apply_json="$(sed -n 's/^restore-fence apply //p' "$evidence/fence-apply.txt")"
+  reapplied="$(jq -r '.revocations_reapplied' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  apply_absent="$(jq -r '[.sections[] | select(.name == "auth.credential_registry" or .name == "auth.principals") | .absent] | add // 0' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  post_absent="$(jq -r '.absent_after_restore' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
+  { [[ "$reapplied" =~ ^[0-9]+$ ]] && [[ "$reapplied" -ge 1 ]]; } || { echo "drill-auth-pitr.sh: apply re-applied $reapplied revocation(s), want at least 1" >&2; result=1; }
+  [[ "$apply_absent" == "$post_absent" ]] || { echo "drill-auth-pitr.sh: absent rows: apply reported $apply_absent, the driver counted $post_absent" >&2; result=1; }
+  # the users the apply names for a forced reset (auth.users.password and public.users.password) must be exactly the two
+  # users whose password the drill changed after T
+  reset_ids="$(jq -r '[.actions[]? | select(.kind == "force_password_reset" and (.source == "auth.users.password" or .source == "public.users.password")) | .ids[]] | unique | .[]' <<<"$apply_json" 2>/dev/null || echo n/a)"
+  want_ids="$(jq -r 'sort | .[]' "$evidence/drill-password-ids.json" 2>/dev/null || echo n/a)"
+  if [[ -n "$want_ids" && "$reset_ids" == "$want_ids" ]]; then
+    reset_required="$(grep -c . <<<"$reset_ids")"
+  else
+    reset_required=0
+    echo "drill-auth-pitr.sh: force_password_reset names [$(tr '\n' ' ' <<<"$reset_ids")], want exactly the two users whose password changed after T" >&2
+    result=1
+  fi
+  dc --profile pitr stop pitr
+else
 log "S4 PITR to $t_target"
 prepare_restore pitr "$t_target"
 load_gate
 dc --profile pitr up -d --wait pitr
 wait_promoted pitr
-# a failing check must not stop the run before the other copy is checked
-result=0
 drill "$port_pitr" verify DRILL_EXPECT=T DRILL_MODE=exact || result=1
 drill "$port_pitr" verify DRILL_EXPECT=A DRILL_MODE=atleast || result=1
+drill_attempt "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # the unfenced copy must accept both secrets (the gap); a drill that does not reproduce it fails
+drill_password "$port_pitr" attempt DRILL_EXPECT=T DRILL_LABEL=pitr || result=1 # the old passwords log in again (the gap); a drill that does not reproduce it fails
 drill "$port_pitr" post DRILL_EXPECT=T DRILL_FINAL=F || result=1
 dc --profile pitr stop pitr
 
@@ -170,20 +371,39 @@ load_gate
 dc --profile latest up -d --wait latest
 wait_promoted latest
 drill "$port_latest" verify DRILL_EXPECT=F DRILL_MODE=exact || result=1
+drill_attempt "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
+drill_password "$port_latest" attempt DRILL_EXPECT=F DRILL_LABEL=shadow || result=1
 drill "$port_latest" post DRILL_EXPECT=F DRILL_FINAL=F || result=1
 dc --profile latest stop latest
 
+fi
+
 log "evidence in $evidence"
-jq -c . "$evidence"/verify-*.json "$evidence"/post-*.json | tee "$evidence/summary.txt"
+write_summary
+guard_summary_no_secrets
 # (a) revoked before T stays revoked, (d) no revision below T, (e) no duplicate: any failure above = FAIL.
 # (b) revokes after T that came back and (c) keys re-issued with different content = GAP.
 pitr_b="$(jq -r '.revokes_after_target_that_came_back' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
 pitr_c="$(jq -r '.keys_reissued_with_different_content' "$evidence/post-T.json" 2>/dev/null || echo n/a)"
+# (p) users whose password from before T still logs in on the T copy: GAP unfenced, 0 required fenced. (r) users the apply
+# named for a forced reset, with their restored hash cleared: 2 required fenced, 0 unfenced.
+pitr_p="$(jq -r '.old_password_accepted' "$evidence/attempt-password-T-pitr.json" 2>/dev/null || echo n/a)"
+if [[ "$fence_mode" -eq 1 ]]; then
+  { [[ "$pitr_p" == 0 ]] && [[ "${reset_required:-0}" == 2 ]]; } || { echo "drill-auth-pitr.sh: fenced: passwords-after-T-back=$pitr_p reset-required=${reset_required:-0}, want 0 and 2" >&2; result=1; }
+else
+  reset_required=0
+fi
 verdict=PASS
 if [[ "$result" -ne 0 ]]; then
   verdict=FAIL
-elif [[ "$pitr_b" -ne 0 || "$pitr_c" -ne 0 ]]; then
+elif [[ "$pitr_b" -ne 0 || "$pitr_c" -ne 0 || "$pitr_p" -ne 0 ]]; then
   verdict=GAP
 fi
-printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s)\n' "$verdict" "$pitr_b" "$pitr_c" | tee -a "$evidence/summary.txt"
+attempt_pitr="$(jq -r '.revoked_access_accepted' "$evidence/attempt-T-pitr.json" 2>/dev/null || echo n/a)"
+printf 'AUTH ATTEMPT on the restored copy: revoked or disabled secrets accepted=%s of 2 (fenced must be 0; the unfenced baseline shows the gap)\n' "$attempt_pitr" | tee -a "$evidence/summary.txt"
+pw_old="$pitr_p"
+pw_new="$(jq -r '.new_password_accepted' "$evidence/attempt-password-T-pitr.json" 2>/dev/null || echo n/a)"
+printf 'AUTH PASSWORD on the restored copy: old password accepted=%s of 2, new password accepted=%s of 2 (fenced must be 0 and 0; the unfenced baseline shows the gap)\n' "$pw_old" "$pw_new" | tee -a "$evidence/summary.txt"
+printf 'DRILL RESULT: %s (b revokes-after-T-back=%s, c reissued-different=%s, p passwords-after-T-back=%s, r reset-required=%s)\n' "$verdict" "$pitr_b" "$pitr_c" "$pitr_p" "$reset_required" | tee -a "$evidence/summary.txt"
+guard_summary_no_secrets
 [[ "$verdict" != FAIL ]]

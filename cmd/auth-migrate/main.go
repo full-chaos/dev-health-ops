@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
@@ -58,14 +59,24 @@ const (
 	// envSessionReaders names the roles (comma-separated) of the services that
 	// end an access token when its session is revoked: go-api and query-api.
 	envSessionReaders = "AUTH_SESSION_READER_ROLES"
+	// envProjectionReaders names the roles (comma-separated) that read the acr rows of the credential projection:
+	// the worker login that runs the acr reconcile.
+	envProjectionReaders = "AUTH_PROJECTION_READER_ROLES"
+	// envPushWriter is the NOLOGIN role that owns the External Push lifecycle
+	// append function, and envPushCallers the logins that may execute it
+	// (go-api's). Both empty leaves the function unexecutable.
+	envPushWriter  = "AUTH_PUSH_LIFECYCLE_WRITER_ROLE"
+	envPushCallers = "AUTH_PUSH_LIFECYCLE_CALLER_ROLES"
 )
 
 const (
 	defaultSchema = "auth"
-	// runBudget bounds the whole run. A migration that cannot finish inside
-	// it is a migration that is waiting on a lock it will not get, and a
-	// one-shot job that hangs forever in a deployment pipeline is worse than
-	// one that fails.
+	// runBudget bounds the whole run: a one-shot job that hangs forever in a
+	// deployment pipeline is worse than one that fails. A lock wait does not
+	// reach it: each migration's transaction gives up a lock wait after
+	// authschema.DefaultMigrationLockTimeout and the run fails after
+	// authschema.DefaultMigrationLockAttempts attempts (CHAOS-12200), so auth
+	// readers do not queue behind a waiting migration for the whole budget.
 	runBudget = 5 * time.Minute
 )
 
@@ -86,11 +97,32 @@ func execute(
 	if len(args) > 0 && args[0] == "keys" {
 		return executeKeys(parent, args[1:], lookup, stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "restore-fence" {
+		return executeRestoreFence(parent, args[1:], lookup, stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "sessions" {
 		return executeSessions(parent, args[1:], lookup, stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "workloads" {
 		return executeWorkloads(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "workload-assertion-key-set" {
+		return executeAssertionKeySet(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "workload-assertion-key-list" {
+		return executeAssertionKeyList(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "platform-role-bootstrap" {
+		return executePlatformRoleBootstrap(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == ownerMoveVerb {
+		return executeOwnerMove(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == platformOwnerGrantVerb {
+		return executePlatformOwnerGrant(parent, args[1:], lookup, stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == platformOwnerRevokeVerb {
+		return executePlatformOwnerRevoke(parent, args[1:], lookup, stdout, stderr)
 	}
 	grantsOnly := len(args) > 0 && args[0] == "grants"
 	if grantsOnly {
@@ -193,16 +225,59 @@ func execute(
 		return 1
 	}
 
+	orgsOwned, err := authconfig.OrgsOwnedFromLookup(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
+	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
+	projectionReaders, err := projectionReaderRoles(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
+	pushWriter := valueOr(lookup, envPushWriter, "")
+	pushCallers, err := roleList(lookup, envPushCallers)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+	if pushWriter != "" {
+		if err := authschema.ValidateIdentifier(pushWriter); err != nil {
+			fmt.Fprintf(stderr, "configuration error: %s is not a usable role name\n", envPushWriter)
+			return 1
+		}
+	}
+
+	ownerRole, err := schemaOwnerRole(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
-			Schema:               schema,
-			RuntimeRole:          runtimeRole,
-			SessionReaderRoles:   readers,
-			Logger:               logger,
-			UsersOwned:           usersOwned,
-			AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
-			DeferNarrowing:       *deferNarrowing,
+			Schema:                   schema,
+			RuntimeRole:              runtimeRole,
+			SessionReaderRoles:       readers,
+			ProjectionReaderRoles:    projectionReaders,
+			Logger:                   logger,
+			PushLifecycleWriterRole:  pushWriter,
+			PushLifecycleCallerRoles: pushCallers,
+			UsersOwned:               usersOwned,
+			OrgsOwned:                orgsOwned,
+			PlatformRolesOwned:       platformRolesOwned,
+			SchemaOwnerRole:          ownerRole,
+			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
+			DeferNarrowing:           *deferNarrowing,
 		})
 		if err != nil {
 			fmt.Fprintf(stderr, "grants failed: %v\n", err)
@@ -213,11 +288,17 @@ func execute(
 		return 0
 	}
 	result, err := authschema.Apply(ctx, pool, authschema.Options{
-		Schema:             schema,
-		RuntimeRole:        runtimeRole,
-		SessionReaderRoles: readers,
-		Logger:             logger,
-		UsersOwned:         usersOwned,
+		Schema:                   schema,
+		RuntimeRole:              runtimeRole,
+		SessionReaderRoles:       readers,
+		ProjectionReaderRoles:    projectionReaders,
+		Logger:                   logger,
+		PushLifecycleWriterRole:  pushWriter,
+		PushLifecycleCallerRoles: pushCallers,
+		UsersOwned:               usersOwned,
+		OrgsOwned:                orgsOwned,
+		PlatformRolesOwned:       platformRolesOwned,
+		SchemaOwnerRole:          ownerRole,
 
 		AcknowledgeNarrowing: strings.TrimSpace(*ackNarrowing),
 		DeferNarrowing:       *deferNarrowing,
@@ -240,7 +321,17 @@ func execute(
 // sessionReaderRoles reads AUTH_SESSION_READER_ROLES: role names separated by
 // commas, blanks ignored. Unset or empty means none.
 func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
-	raw, _ := lookup(envSessionReaders)
+	return roleList(lookup, envSessionReaders)
+}
+
+// projectionReaderRoles reads AUTH_PROJECTION_READER_ROLES, parsed as the session readers are.
+func projectionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
+	return roleList(lookup, envProjectionReaders)
+}
+
+// roleList reads a comma-separated list of role names from the environment.
+func roleList(lookup secrets.LookupEnv, name string) ([]string, error) {
+	raw, _ := lookup(name)
 	var roles []string
 	for _, entry := range strings.Split(raw, ",") {
 		entry = strings.TrimSpace(entry)
@@ -248,7 +339,7 @@ func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
 			continue
 		}
 		if err := authschema.ValidateIdentifier(entry); err != nil {
-			return nil, fmt.Errorf("%s holds an unusable role name", envSessionReaders)
+			return nil, fmt.Errorf("%s holds an unusable role name", name)
 		}
 		roles = append(roles, entry)
 	}

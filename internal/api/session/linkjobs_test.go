@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -251,8 +252,30 @@ func TestDropReporterLogsOnceWithTheCountAfterABurst(t *testing.T) {
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	h := handlers{Deps: Deps{Logger: logger}}
+	baseline := runtime.NumGoroutine()
 	release := fillQueue(t, q)
-	defer func() { release(); q.wait() }()
+	defer func() {
+		release()
+		q.wait()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		q.drain(ctx)
+		q.mu.Lock()
+		done := q.reporterDone
+		q.mu.Unlock()
+		select {
+		case <-done:
+		default:
+			t.Error("the drain returned before the reporter stopped")
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for runtime.NumGoroutine() > baseline && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if got := runtime.NumGoroutine(); got > baseline {
+			t.Errorf("the test left %d goroutines over its baseline: the reporter leaked", got-baseline)
+		}
+	}()
 	q.startReporter(logger, 40*time.Millisecond)
 	request := httptest.NewRequest(http.MethodPost, "/forgot", nil)
 	burst := func(n int) {
@@ -298,15 +321,12 @@ func TestDrainStopsTheReporterAfterALastReport(t *testing.T) {
 	drop()
 	release()
 	q.wait()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	// A live context: the drain returns only after its wait goroutine and the reporter's final report are done,
+	// so the next fillQueue never adds to the WaitGroup while that goroutine still starts its Wait.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	<-ctx.Done()
 	q.drain(ctx)
 	count := func() int { return strings.Count(logs.String(), "queue full") }
-	deadline := time.Now().Add(2 * time.Second)
-	for count() == 0 && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
 	if !strings.Contains(logs.String(), "count=1") {
 		t.Fatalf("the last report was not written at the stop:\n%s", logs.String())
 	}
@@ -413,4 +433,73 @@ func TestDrainWaitsForTheReportersFinalReport(t *testing.T) {
 	if got := queueFullLines(logs); len(got) != 1 || !strings.Contains(got[0], "count=1") {
 		t.Fatalf("drain returned before the final report: %q", got)
 	}
+}
+
+// gatedWriter holds every Write until its gate opens; wrote closes on the first Write's return.
+type gatedWriter struct {
+	gate  chan struct{}
+	logs  *lockedBuffer
+	wrote chan struct{}
+	once  sync.Once
+}
+
+func (w *gatedWriter) Write(p []byte) (int, error) {
+	<-w.gate
+	n, err := w.logs.Write(p)
+	w.once.Do(func() { close(w.wrote) })
+	return n, err
+}
+
+// expiredDrainFixture leaves one refused real job for the reporter's final report and returns the queue ready to drain.
+func expiredDrainFixture(t *testing.T, gate chan struct{}) (q *sendQueue, logs *lockedBuffer, wrote chan struct{}) {
+	t.Helper()
+	q = withQueue(t, 1)
+	logs = &lockedBuffer{}
+	w := &gatedWriter{gate: gate, logs: logs, wrote: make(chan struct{})}
+	logger := slog.New(slog.NewTextHandler(w, nil))
+	h := handlers{Deps: Deps{Logger: logger}}
+	release := fillQueue(t, q)
+	q.startReporter(logger, time.Hour)
+	h.queueLinkJob(context.Background(), httptest.NewRequest(http.MethodPost, "/x", nil), mailPasswordReset, true, func(context.Context, *http.Request) error { return nil })
+	release()
+	q.wait()
+	return q, logs, w.wrote
+}
+
+func expiredContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// With a drain context that already ended, the final "dropped N" report is still written before the drain returns.
+func TestExpiredDrainStillWritesTheFinalReport(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		close(gate)
+		q, logs, _ := expiredDrainFixture(t, gate)
+		q.drain(expiredContext())
+		if got := queueFullLines(logs); len(got) != 1 || !strings.Contains(got[0], "count=1") {
+			t.Fatalf("an expired drain returned before the final report: %q", got)
+		}
+	})
+}
+
+// A log writer that never returns does not hold an expired drain: the wait for the final report has its own bound.
+// Order only: the drain returns first, the line is written after the gate opens, and the reporter then stops.
+func TestExpiredDrainDoesNotWaitForeverOnAStuckLogWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		q, logs, wrote := expiredDrainFixture(t, gate)
+		q.drain(expiredContext())
+		if got := queueFullLines(logs); len(got) != 0 {
+			t.Fatalf("the gated writer wrote before its gate opened: %q", got)
+		}
+		close(gate)
+		<-wrote
+		q.waitReporter(context.Background())
+		if got := queueFullLines(logs); len(got) != 1 {
+			t.Errorf("the final report was lost: %q", got)
+		}
+	})
 }

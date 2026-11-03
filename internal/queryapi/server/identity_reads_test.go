@@ -63,6 +63,11 @@ func (s *countingIdentityStore) Membership(ctx context.Context, userID, orgID uu
 	return s.base.Membership(ctx, userID, orgID)
 }
 
+func (s *countingIdentityStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *countingIdentityStore) ActiveImpersonation(ctx context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {
 	s.count("session " + adminID.String())
 	return s.base.ActiveImpersonation(ctx, adminID)
@@ -229,3 +234,5 @@ func TestQueryProofWriteReadsTheOrgAllowlistOncePerRequest(t *testing.T) {
 		t.Fatalf("%d ran=%d allowlist asked %d time(s), want 200, one run, one ask", recorder.Code, ran, asked)
 	}
 }
+
+func (*countingIdentityStore) ReadsPlatformRoles() bool { return false }

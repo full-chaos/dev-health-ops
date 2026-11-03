@@ -43,7 +43,7 @@ func EffectiveOrgID(ctx context.Context, user *User) string {
 	if user == nil {
 		return ""
 	}
-	if user.IsSuperuser {
+	if user.Holds(ActionAdminImpersonate) {
 		if session := ImpersonationFrom(ctx); session != nil {
 			return session.TargetOrgID.String()
 		}
@@ -145,23 +145,23 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 		}
 		resolved := ""
 		switch {
-		case headerOrgID != "" && user != nil:
+		case headerOrgID != "" && user != nil && !(headerOrgID == user.OrgID && s.readsTokenOrg(r)):
 			allowed, err := s.mayUseOrg(r.Context(), user, headerOrgID)
 			if err != nil {
-				s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed",
-					slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)),
-					slog.String("missing_grant", MissingGrant(err)))
-				WriteInternal(w)
+				s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed", slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)))
+				s.writeLookupFailure(w, r, err)
 				return
 			}
 			if !allowed {
-				s.logger.WarnContext(r.Context(), "X-Org-Id rejected",
-					slog.String("user_id", user.UserID), slog.String("org_id", headerOrgID))
+				s.logger.WarnContext(r.Context(), "X-Org-Id rejected", slog.String("user_id", user.UserID), slog.String("org_id", headerOrgID))
 				writeOrgDenied(w)
 				return
 			}
 			resolved = headerOrgID
 		case user != nil && user.OrgID != "":
+			if s.readsTokenOrg(r) && !s.useTokenOrg(w, r, user) {
+				return
+			}
 			resolved = user.OrgID
 		}
 		ctx := context.WithValue(r.Context(), orgDecidedKey, true)
@@ -174,7 +174,7 @@ func (s *Scope) OrgScope(next http.Handler) http.Handler {
 
 // mayUseOrg is OrgIdMiddleware's acceptance rule for a requested org.
 func (s *Scope) mayUseOrg(ctx context.Context, user *User, orgID string) (bool, error) {
-	if user.IsSuperuser || orgID == user.OrgID {
+	if user.Holds(ActionAdminOrgs) || orgID == user.OrgID {
 		return true, nil
 	}
 	return s.auth.IsMember(ctx, user.UserID, orgID)
@@ -212,12 +212,12 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 	return role, member, err
 }
 
-// Impersonation is ImpersonationMiddleware. For a caller whose token claims
-// superuser and whose users row confirms it, an active session makes the
-// target's org the request's org, sets the impersonation context, and
-// stamps X-Impersonating / X-Impersonated-User-Id on the response. A
-// session lookup failure refuses the request with the generic 500, like the
-// other authorization lookups (fail closed, logged).
+// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
+// in whose users row says superuser, an active session makes the target's
+// org the request's org, sets the impersonation context, and stamps
+// X-Impersonating / X-Impersonated-User-Id on the response. A session
+// lookup failure refuses the request with the generic 500, like the other
+// authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || !user.IsSuperuser {
+		if user == nil || !user.Holds(ActionAdminImpersonate) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -294,4 +294,135 @@ func writeOrgDenied(w http.ResponseWriter) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(orgDeniedBody)))
 	w.WriteHeader(http.StatusForbidden)
 	_, _ = io.Copy(w, bytes.NewReader(orgDeniedBody))
+}
+
+// ReadsPlatformRoles is the platform roles switch the impersonation gate
+// reads: the one its users store reads is_superuser under.
+func (s *Scope) ReadsPlatformRoles() bool { return s.auth != nil && s.auth.store.ReadsPlatformRoles() }
+
+// useTokenOrg decides whether user may act in the token's own org, with or
+// without an X-Org-Id naming it, on a route that acts in an org
+// (readsTokenOrg): a token keeps its org_id claim after the member is
+// removed, so the membership row is read now (tokenOrgMembership). It writes
+// the refusal itself: an existing org without the row is the X-Org-Id
+// refusal, byte for byte; an org that does not exist or a claim that is not
+// a UUID goes on as on main; a failed read answers 503 (temporarily
+// unavailable) or 500, never a pass and never the refusal of a member. Behind
+// ReadOnce the route's guard gets the same read's answer.
+func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) bool {
+	if user.Holds(ActionAdminOrgs) {
+		return true
+	}
+	_, standing, err := s.auth.tokenOrgMembership(r.Context(), user.UserID, user.OrgID)
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "api org scope: membership lookup failed",
+			slog.String("user_id", user.UserID), slog.Bool("unavailable", isUnavailable(err)),
+			slog.String("missing_grant", MissingGrant(err)))
+		WriteAuthFailure(w, "", err)
+		return false
+	}
+	if standing == tokenOrgNoRow {
+		s.logger.WarnContext(r.Context(), "token org without a membership rejected",
+			slog.String("user_id", user.UserID), slog.String("org_id", user.OrgID))
+		writeOrgDenied(w)
+		return false
+	}
+	return true
+}
+
+// tokenOrgStanding is a caller's standing in its token's own org.
+type tokenOrgStanding int
+
+const (
+	// tokenOrgMember: the membership row exists.
+	tokenOrgMember tokenOrgStanding = iota
+	// tokenOrgNoRow: the org exists and the caller has no row in it.
+	tokenOrgNoRow
+	// tokenOrgAsMain: the org does not exist, or the claim is not a UUID: no
+	// refusal comes from the membership; the request goes on as on main.
+	tokenOrgAsMain
+)
+
+// tokenOrgMembership is the caller's standing in the token's own org, and the
+// row's role for a member, from one read (OrgMembership). Within a request
+// bound to a (ReadOnce) it shares Membership's record of the pair: a row or
+// a failure read first is the answer, and an earlier "no row" stays the
+// answer while this read adds whether the org exists.
+func (a *Authenticator) tokenOrgMembership(ctx context.Context, userID, orgID string) (string, tokenOrgStanding, error) {
+	org, okOrg := ParsePyUUID(orgID)
+	if !okOrg {
+		return "", tokenOrgAsMain, nil
+	}
+	user, okUser := ParsePyUUID(userID)
+	if !okUser {
+		return "", tokenOrgNoRow, nil
+	}
+	read, err := a.orgMembershipRead(ctx, user, org)
+	switch {
+	case err != nil:
+		return "", tokenOrgNoRow, err
+	case read.member:
+		return read.role, tokenOrgMember, nil
+	case read.orgFound:
+		return "", tokenOrgNoRow, nil
+	}
+	return "", tokenOrgAsMain, nil
+}
+
+func (a *Authenticator) orgMembershipRead(ctx context.Context, user, org uuid.UUID) (memberRead, error) {
+	reads := a.readsFor(ctx)
+	if reads == nil {
+		role, member, orgFound, err := a.store.OrgMembership(ctx, user, org)
+		return memberRead{role: role, member: member, orgRead: true, orgFound: orgFound}, err
+	}
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	key := [2]uuid.UUID{user, org}
+	got, seen := reads.members[key]
+	if seen && (got.err != nil || got.member || got.orgRead) {
+		return got, got.err
+	}
+	role, member, orgFound, err := a.store.OrgMembership(ctx, user, org)
+	if err != nil {
+		if !seen {
+			reads.members[key] = memberRead{err: err}
+		}
+		return memberRead{}, err
+	}
+	if !seen {
+		got = memberRead{role: role, member: member}
+	}
+	got.orgRead, got.orgFound = true, orgFound
+	reads.members[key] = got
+	return got, nil
+}
+
+// readsTokenOrg reports whether the request's route acts in an org, so the
+// token's own org needs a membership read: a route of a scope with declared
+// rows (go-api; TestGoAPIScopeDeclaresTheEndpointProfileRows holds that it
+// has them) unless its row says it does not act in an org (tenant requirement
+// none or cross_org_superuser_only); a route without a row reads it. A scope
+// without rows (query-api's /graphql, whose edge reads the membership itself)
+// reads nothing here. An org-less route (OrglessMayReach) serves the caller, not an org, and reads nothing.
+func (s *Scope) readsTokenOrg(r *http.Request) bool {
+	if s.rows == nil {
+		return false
+	}
+	if OrglessMayReach(r.Method, r.URL.Path) {
+		return false
+	}
+	row, found := s.rows(RouteProfileFrom(r.Context()))
+	return !found || !row.NotOrgScoped
+}
+
+// writeLookupFailure answers a failed membership read of an X-Org-Id: on a
+// route that acts in an org (readsTokenOrg, go-api) 503 when the database is
+// temporarily unavailable, else 500, as the token org's read answers; on
+// every other route main's 500.
+func (s *Scope) writeLookupFailure(w http.ResponseWriter, r *http.Request, err error) {
+	if s.readsTokenOrg(r) {
+		WriteAuthFailure(w, "", err)
+		return
+	}
+	WriteInternal(w)
 }

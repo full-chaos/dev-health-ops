@@ -180,6 +180,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 // A value enters with the producer that emits it (CHAOS-10194).
 var approvedRevokedReasons = []string{
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 }
 
@@ -194,6 +195,26 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"grant_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-deny.json"},
 	{"repository_not_granted", "deny", "contracts/auth/v1/examples/authorization_batch_response/batch-response-valid-items-disagree.json"},
 	{"platform_role_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-platform-decision-null-org.json"},
+	{"allowed_by_role", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-role.json"},
+	{"invalid_request", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-invalid-request.json"},
+	{"unknown_action", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-unknown-action.json"},
+	{"resource_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-resource-mismatch.json"},
+	{"principal_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-principal-inactive.json"},
+	{"organization_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-organization-inactive.json"},
+	{"no_membership", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-no-membership.json"},
+	{"org_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-org-mismatch.json"},
+	{"membership_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-membership-inactive.json"},
+	{"role_unknown", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-unknown.json"},
+	{"role_scope_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-scope-mismatch.json"},
+	{"role_lacks_action", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-lacks-action.json"},
+	{"grant_expired", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-grant-expired.json"},
+	{"grant_revoked", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-grant-revoked.json"},
+	{"workload_audience_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-workload-audience-denied.json"},
+	{"workload_action_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-workload-action-denied.json"},
+	{"service_account_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-service-account-inactive.json"},
+	{"allowed_by_membership_default", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-membership-default.json"},
+	{"impersonation_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-impersonation-denied.json"},
+	{"delegation_invalid", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-delegation-invalid.json"},
 }
 
 var approvedDecisionReasonCodes = func() []string {
@@ -218,13 +239,16 @@ var approvedAuditReasonCodes = []string{
 	"revision_conflict",
 	"internal_error",
 	"compromised",
+	"domain_revoked",
 	"owner_request",
 	"role_granted",
 	"role_revoked",
 	"membership_added",
 	"membership_removed",
 	"membership_status_changed",
+	"membership_role_changed",
 	"grant_created",
+	"grant_updated",
 	"grant_revoked",
 	"credential_issued",
 	"credential_rotated",
@@ -243,6 +267,7 @@ var approvedAuditReasonCodes = []string{
 	"identity_projected",
 	"identity_relinked",
 	"password_reset",
+	"password_reset_requested",
 	"policy_revision_activated",
 	"entitlement_snapshot_applied",
 	"denied_no_membership",
@@ -260,6 +285,12 @@ var approvedAuditReasonCodes = []string{
 	"expired",
 	"principal_not_found",
 	"malformed",
+	"invite_created",
+	"invite_accepted",
+	"invite_revoked",
+	"restore_fence_bootstrap",
+	"workload_enabled",
+	"service_account_owner_changed",
 }
 
 func TestTheVocabularyFileIsExactlyTheApprovedLists(t *testing.T) {
@@ -396,5 +427,30 @@ func TestEveryValidDecisionFixtureUsesAListedReasonCode(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The audit row of a high-risk authorize decision names the decision's reason in the audit
+// attribute decision_reason_code, a separate key from the audit reason_code set. Its closed
+// set is the decision reason vocabulary, and the schema enum of authorization_decision.v1.
+func TestAuditDecisionReasonCodeIsTheDecisionVocabulary(t *testing.T) {
+	vocab := loadReasonVocabulary(t)
+	producer := slices.Sorted(slices.Values(audit.AttributeVocabulary()["decision_reason_code"]))
+	if len(producer) < 20 {
+		t.Fatalf("the producer has %d decision reason codes; the check would be vacuous", len(producer))
+	}
+	if want := slices.Sorted(slices.Values(vocab.DecisionReason.Values)); !slices.Equal(producer, want) {
+		t.Errorf("audit decision_reason_code %v, vocabulary decision_reason_code %v", producer, want)
+	}
+	schema := readJSONFile(t, "contracts/auth/v1/jsonschema/authorization_decision.v1.schema.json")
+	props, _ := schema["properties"].(map[string]any)
+	reason, _ := props["reason_code"].(map[string]any)
+	list, _ := reason["enum"].([]any)
+	var enum []string
+	for _, v := range list {
+		enum = append(enum, v.(string))
+	}
+	if slices.Sort(enum); !slices.Equal(producer, enum) {
+		t.Errorf("audit decision_reason_code %v, authorization_decision.v1 enum %v", producer, enum)
 	}
 }

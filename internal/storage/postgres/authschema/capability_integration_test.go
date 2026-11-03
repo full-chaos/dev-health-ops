@@ -37,16 +37,24 @@ func insertFixtures(ids map[string]string) []struct {
 		{"users", `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, 'Cap@example.com', 'cap@example.com')`, []any{ids["principal"]}},
 		{"external_identities", `INSERT INTO auth.external_identities (principal_id, provider, subject) VALUES ($1, 'cap-idp', 'cap-subject')`, []any{ids["principal"]}},
 		{"memberships", `INSERT INTO auth.memberships (organization_id, principal_id, role) VALUES ($1, $2, 'member')`, []any{ids["org"], ids["principal"]}},
-		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'cap.platform')`, []any{ids["principal"]}},
+		{"invites", `INSERT INTO auth.invites (id, organization_id, email_normalized, role, token_hash, expires_at) VALUES (gen_random_uuid(), $1, 'cap@example.com', 'member', repeat('a', 64), now() + interval '1 hour')`, []any{ids["org"]}},
+		{"platform_role_assignments", `INSERT INTO auth.platform_role_assignments (principal_id, role_key) VALUES ($1, 'platform_admin')`, []any{ids["principal"]}},
 		{"service_accounts", `INSERT INTO auth.service_accounts (principal_id, organization_id, name, owner_principal_id) VALUES ($1, $2, 'cap-svc', $3)`, []any{ids["svcPrincipal"], ids["org"], ids["principal"]}},
 		{"workloads", `INSERT INTO auth.workloads (principal_id, organization_id, name) VALUES ($1, $2, 'cap-wl')`, []any{ids["wlPrincipal"], ids["org"]}},
 		{"sessions", `INSERT INTO auth.sessions (id, principal_id, token_hash, expires_at, legacy_token_version) VALUES ($1, $2, '\xdeadbeef'::bytea, now() + interval '1 hour', 0)`, []any{ids["session"], ids["principal"]}},
+		{"oauth_grants", `INSERT INTO auth.oauth_grants (id, principal_id, organization_id, client_id, client_class, resource, audience, scope, session_id, binding, consented_at) VALUES (gen_random_uuid(), $1, $2, 'cap', 'mcp', 'https://r.example.test', 'acr-mcp', 'acr:mcp', $3, 'client_session', now())`, []any{ids["principal"], ids["org"], ids["session"]}},
+		{"oauth_authorization_requests", `INSERT INTO auth.oauth_authorization_requests (id, client_id, client_class, redirect_uri, resource, audience, scope, state, code_challenge, code_challenge_method, expires_at) VALUES (gen_random_uuid(), 'cap', 'mcp', 'https://c.example.test/', 'https://r.example.test', 'acr-mcp', 'acr:mcp', 's', repeat('a', 43), 'S256', now() + interval '10 minutes')`, nil},
 		{"refresh_credentials", `INSERT INTO auth.refresh_credentials (session_id, principal_id, token_hash, expires_at) VALUES ($1, $2, '\xfeedface'::bytea, now() + interval '1 day')`, []any{ids["session"], ids["principal"]}},
 		{"link_credentials", `INSERT INTO auth.link_credentials (principal_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', decode(rpad('cafe0001', 64, '0'), 'hex'), now() + interval '1 hour')`, []any{ids["principal"]}},
 		{"login_attempts", `INSERT INTO auth.login_attempts (identifier_hash) VALUES (decode(rpad('cafe0002', 64, '0'), 'hex'))`, nil},
 		{"sso_flow_states", `INSERT INTO auth.sso_flow_states (protocol, provider_id, flow_hash, expires_at) VALUES ('oidc', gen_random_uuid(), decode(rpad('cafe0003', 64, '0'), 'hex'), now() + interval '10 minutes')`, nil},
 		{"saml_assertion_uses", `INSERT INTO auth.saml_assertion_uses (issuer, assertion_id_hash, expires_at) VALUES ('https://idp.example', decode(rpad('cafe0004', 64, '0'), 'hex'), now() + interval '10 minutes')`, nil},
 		{"credential_registry", `INSERT INTO auth.credential_registry (principal_id, credential_class, secret_hash, hash_algorithm, fingerprint) VALUES ($1, 'workload_token', '\xabad1dea'::bytea, 'sha256', '0123456789abcdef')`, []any{ids["principal"]}},
+		{"push_sources", `INSERT INTO auth.push_sources (organization_id, source_id, principal_id) VALUES ($1, 'cap-src', $2)`, []any{ids["org"], ids["srcPrincipal"]}},
+		{"credential_projection", `INSERT INTO auth.credential_projection (domain_owner, external_reference, organization_id, binding, source_id, revision, max_seen_revision, status, fingerprint, scopes, principal_id, registry_id) VALUES ('external_push', 'cap-cred', $1, 'source', 'cap-src', 1, 1, 'active', '0123456789abcdef', ARRAY['ingest:write'], $2, (SELECT id FROM auth.credential_registry WHERE principal_id = $3 LIMIT 1))`, []any{ids["org"], ids["srcPrincipal"], ids["principal"]}},
+		{"credential_projection_digest", `INSERT INTO auth.credential_projection_digest (domain_owner, external_reference, revision, digest, outcome) VALUES ('external_push', 'cap-cred', 1, decode(repeat('ab', 32), 'hex'), 'applied')`, nil},
+		{"projection_cursor", `INSERT INTO auth.projection_cursor (stream) VALUES ('external_push')`, nil},
+		{"projection_retry", `INSERT INTO auth.projection_retry (stream, outbox_id, aggregate_id, revision, body, last_outcome) VALUES ('external_push', 1, 'cap-cred', 2, '{}'::jsonb, 'gap')`, nil},
 		{"resource_grants", `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'cap.role', 'repository', 'cap/r1')`, []any{ids["principal"], ids["org"]}},
 		{"policy_revisions", `INSERT INTO auth.policy_revisions (revision, digest, document) VALUES (1, '\x01'::bytea, '{}'::jsonb)`, nil},
 		{"entitlement_snapshots", `INSERT INTO auth.entitlement_snapshots (organization_id, sequence, document, digest) VALUES ($1, 1, '{}'::jsonb, '\x02'::bytea)`, []any{ids["org"]}},
@@ -113,6 +121,7 @@ func TestRuntimeCanExerciseEveryDeclaredPrivilege(t *testing.T) {
 		"principal":    "11111111-1111-4111-8111-111111111111",
 		"svcPrincipal": "22222222-2222-4222-8222-222222222222",
 		"wlPrincipal":  "33333333-3333-4333-8333-333333333333",
+		"srcPrincipal": "66666666-6666-4666-8666-666666666666",
 		"org":          "44444444-4444-4444-8444-444444444444",
 		"session":      "55555555-5555-4555-8555-555555555555",
 	}
@@ -124,6 +133,13 @@ func TestRuntimeCanExerciseEveryDeclaredPrivilege(t *testing.T) {
 		); err != nil {
 			t.Fatalf("seed principal %s: %v", id, err)
 		}
+	}
+
+	// The external_source principal of the push_sources fixture (kind widened by the principal-kind migration).
+	if _, err := env.runtime.Exec(ctx,
+		`INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'external_source', 'cap-src')`, ids["srcPrincipal"],
+	); err != nil {
+		t.Fatalf("seed principal %s: %v", ids["srcPrincipal"], err)
 	}
 
 	fixtures := insertFixtures(ids)

@@ -1,0 +1,28 @@
+[
+  {
+    "case": "state",
+    "method": "POST",
+    "path": "/internal/v1/sessions/state",
+    "headers": {
+      "Accept": [
+        "application/json"
+      ],
+      "Accept-Encoding": [
+        "gzip"
+      ],
+      "Authorization": [
+        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+      ],
+      "Content-Length": [
+        "53"
+      ],
+      "Content-Type": [
+        "application/json"
+      ],
+      "User-Agent": [
+        "Go-http-client/1.1"
+      ]
+    },
+    "body": "{\"session_id\":\"55555555-5555-4555-8555-555555555555\"}"
+  }
+]

@@ -11,25 +11,32 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/oidc"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/saml"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 const (
 	opSSOSession = "sso_session"
-	ssoProvider  = "sso"
+	ssoProvider  = "oidc"
 	samlProvider = "saml"
 )
 
 // SSOSessions starts the session of a completed federated sign-in: the same
 // session row, audit row and access claims as a social sign-in.
-type SSOSessions struct{ h compatHandlers }
+type SSOSessions struct {
+	h compatHandlers
+	// record writes go-api's success record of a SAML sign-in.
+	record ssoaudit.SignInRecord
+}
 
 // NewSSOSessions binds the session domain of deps.
-func NewSSOSessions(deps CompatDeps) (SSOSessions, error) {
-	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil {
-		return SSOSessions{}, errors.New("authapi: sso sessions need sessions, users, an issuer, a projector and an audit appender")
+func NewSSOSessions(deps CompatDeps, record ssoaudit.SignInRecord) (SSOSessions, error) {
+	if deps.Sessions == nil || deps.Users == nil || deps.Issuer == nil || deps.Projector == nil || deps.AppendAudit == nil || record == nil {
+		return SSOSessions{}, errors.New("authapi: sso sessions need sessions, users, an issuer, a projector, an audit appender and a sign-in record")
 	}
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -42,13 +49,14 @@ func NewSSOSessions(deps CompatDeps) (SSOSessions, error) {
 	if err != nil {
 		return SSOSessions{}, err
 	}
-	return SSOSessions{h: compatHandlers{CompatDeps: deps, rec: rec}}, nil
+	return SSOSessions{h: compatHandlers{CompatDeps: deps, rec: rec}, record: record}, nil
 }
 
 type ssoIssued struct {
-	access, refresh string
-	email, role     string
-	org             *uuid.UUID
+	tokens      Tokens
+	refresh     string
+	email, role string
+	org         *uuid.UUID
 }
 
 func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid.UUID, role *string, amr []string, provider string) (ssoIssued, error) {
@@ -68,16 +76,41 @@ func (s SSOSessions) issue(ctx context.Context, principalID uuid.UUID, org *uuid
 	if err := s.h.Issuer.Preflight(ctx); err != nil {
 		return ssoIssued{}, fmt.Errorf("%w: %w", errSignerUnavailable, err)
 	}
-	issued, err := s.h.startSession(ctx, principalID, membership, nil, amr, provider)
+	issued, err := s.h.startSession(ctx, principalID, membership, amr, provider)
 	if err != nil {
 		return ssoIssued{}, err
 	}
 	text := roleText(role, org != nil)
-	access, err := s.h.Issuer.Access(Grant{PrincipalID: principalID, OrganizationID: org, Role: text, SessionID: issued.Session.ID, User: user})
+	tokens, err := s.h.Issuer.Tokens(ctx, Grant{PrincipalID: principalID, OrganizationID: org, Role: text, SessionID: issued.Session.ID, User: user})
 	if err != nil {
 		return ssoIssued{}, err
 	}
-	return ssoIssued{access: access, refresh: issued.Credential.Reveal(), email: user.Email, role: text, org: org}, nil
+	return ssoIssued{tokens: tokens, refresh: issued.Credential.Reveal(), email: user.Email, role: text, org: org}, nil
+}
+
+// LoginEvent is the audit row of a sign-in whose session a join's commit writes.
+func (s SSOSessions) LoginEvent(ctx context.Context, principalID uuid.UUID, org *uuid.UUID) audit.AuditEvent {
+	return loginSucceeded(ctx, principalID, org, ssoProvider)
+}
+
+// MintOIDC turns a session the join's commit stored into the caller's tokens. It
+// writes nothing.
+func (s SSOSessions) MintOIDC(ctx context.Context, issued session.Issued, req oidc.SessionRequest) (oidc.Tokens, error) {
+	user, found, err := s.h.Users.State(ctx, req.PrincipalID)
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	if !found {
+		return oidc.Tokens{}, errors.New("authapi: a federated sign-in's user is not in public.users")
+	}
+	role := req.Role
+	tokens, err := s.h.Issuer.Tokens(ctx, Grant{PrincipalID: req.PrincipalID, OrganizationID: req.OrgID, Role: roleText(&role, req.OrgID != nil),
+		SessionID: issued.Session.ID, User: user})
+	if err != nil {
+		return oidc.Tokens{}, err
+	}
+	return oidc.Tokens{AccessToken: tokens.Access, RefreshToken: issued.Credential.Reveal(), ExpiresIn: int64(s.h.Issuer.ExpiresIn()),
+		SessionAccessToken: tokens.Session}, nil
 }
 
 // OIDC is the oidc.SessionIssuer.
@@ -94,7 +127,8 @@ func (s oidcSessions) Issue(ctx context.Context, req oidc.SessionRequest) (oidc.
 	if err != nil {
 		return oidc.Tokens{}, err
 	}
-	return oidc.Tokens{AccessToken: out.access, RefreshToken: out.refresh, ExpiresIn: int64(AccessExpiresIn)}, nil
+	return oidc.Tokens{AccessToken: out.tokens.Access, RefreshToken: out.refresh, ExpiresIn: int64(s.h.Issuer.ExpiresIn()),
+		SessionAccessToken: out.tokens.Session}, nil
 }
 
 func (s oidcSessions) Preflight(ctx context.Context) error {
@@ -133,11 +167,16 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 		s.h.fail(w, r, opSSOSession, err)
 		return
 	}
+	// Before the body: a record that cannot be written withholds the tokens.
+	if err := s.recordSignIn(ctx, signIn); err != nil {
+		s.h.fail(w, r, opSSOSession, err)
+		return
+	}
 	body := pyjson.NewObject()
-	body.Set("access_token", out.access)
+	body.Set("access_token", out.tokens.Access)
 	body.Set("refresh_token", out.refresh)
 	body.Set("token_type", "bearer")
-	body.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
+	body.Set("expires_in", pyjson.IntOf(int64(s.h.Issuer.ExpiresIn())))
 	body.Set("user_id", signIn.PrincipalID.String())
 	body.Set("email", out.email)
 	orgText := ""
@@ -146,8 +185,17 @@ func (s samlSessions) IssueFederatedSession(w http.ResponseWriter, r *http.Reque
 	}
 	body.Set("org_id", orgText)
 	body.Set("role", out.role)
+	setSessionAccessToken(body, out.tokens)
 	s.h.rec.record(ctx, opSSOSession, "success", reasonAccepted, nil)
 	writeCompatModel(w, body)
+}
+
+func (s samlSessions) recordSignIn(ctx context.Context, signIn saml.SignIn) error {
+	if signIn.OrganizationID == nil {
+		return errors.New("authapi: a SAML sign-in has no provider organization to record")
+	}
+	return s.record.Succeeded(ctx, ssoaudit.Success{OrgID: *signIn.OrganizationID, ProviderID: signIn.ProviderID,
+		PrincipalID: signIn.PrincipalID, Protocol: samlProvider})
 }
 
 func (s samlSessions) Preflight(ctx context.Context) error { return s.h.Issuer.Preflight(ctx) }

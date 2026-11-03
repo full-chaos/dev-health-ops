@@ -5,25 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
-	"sort"
-	"strings"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/repoinventory"
 )
 
 // Catalog values query bounds. A repository catalog larger than
 // repositoryScopeLimit is rejected rather than truncated, so a scope reader
-// never sees a partial repository list.
+// never sees a partial repository list (internal/repoinventory owns the
+// limit, the read and the canonical form).
 const (
-	repositoryScopeLimit = 100
+	repositoryScopeLimit = repoinventory.Limit
 	defaultCatalogLimit  = 100
 )
-
-// repositoryPart matches one half of an "owner/name" repository slug.
-var repositoryPart = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
 
 var catalogDimensionOrder = []Dimension{
 	DimensionTeam,
@@ -113,24 +109,7 @@ func CompileCatalogValues(dimension Dimension, limit int, orgID string, timeoutS
 		if hasActiveFilters(filters) {
 			return compiledQuery{}, newValidationError("filters", "repo", "repository catalog filters are not supported")
 		}
-		sql := fmt.Sprintf(`
-SELECT
-    canonical_repo AS value,
-    count() AS count
-FROM (
-    SELECT lowerUTF8(trimBoth(repo)) AS canonical_repo
-    FROM repos FINAL
-    WHERE org_id = {org_id:String}
-)
-WHERE match(
-    canonical_repo,
-    '^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$'
-)
-GROUP BY canonical_repo
-ORDER BY value
-LIMIT {limit_n:UInt32}
-%s
-`, settingsMaxExecutionTime(timeoutSeconds))
+		sql := repoinventory.Statement(settingsMaxExecutionTime(timeoutSeconds))
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
 	}
 
@@ -212,34 +191,26 @@ LIMIT {limit_n:UInt32}
 	return compiledQuery{sql: sql, bindings: bindings}, nil
 }
 
-// canonicalRepositoryValues ports _canonical_repository_values: trims and
-// lowercases each slug, keeps only well-formed "owner/name" values, merges
-// duplicates by summing counts, rejects a catalog above the scope limit and
-// returns the slugs sorted.
+// canonicalRepositoryValues ports _canonical_repository_values through
+// repoinventory.Canonical (the one canonical form go-api's ACR access read
+// also serves): trims and lowercases each slug, keeps only well-formed
+// "owner/name" values, merges duplicates by summing counts, rejects a catalog
+// above the scope limit and returns the slugs sorted.
 func canonicalRepositoryValues(rows []catalogValueRow) ([]model.CatalogValueItem, error) {
-	counts := map[string]int{}
+	inventoryRows := make([]repoinventory.Row, 0, len(rows))
 	for _, row := range rows {
-		parts := strings.Split(strings.ToLower(strings.TrimSpace(row.Value)), "/")
-		if len(parts) != 2 || !repositoryPart.MatchString(parts[0]) || !repositoryPart.MatchString(parts[1]) {
-			continue
-		}
-		slug := parts[0] + "/" + parts[1]
-		counts[slug] = counts[slug] + int(row.Count)
+		inventoryRows = append(inventoryRows, repoinventory.Row{Value: row.Value, Count: row.Count})
 	}
-	if len(counts) > repositoryScopeLimit {
+	inventory, err := repoinventory.Canonical(inventoryRows)
+	if errors.Is(err, repoinventory.ErrOverLimit) {
 		return nil, newValidationError("dimension", "repo", "repository catalog exceeds supported scope limit")
 	}
-	slugs := make([]string, 0, len(counts))
-	if len(counts) == 0 {
-		return []model.CatalogValueItem{}, nil
+	if err != nil {
+		return nil, err
 	}
-	for slug := range counts {
-		slugs = append(slugs, slug)
-	}
-	sort.Strings(slugs)
-	items := make([]model.CatalogValueItem, 0, len(slugs))
-	for _, slug := range slugs {
-		items = append(items, model.CatalogValueItem{Value: slug, Count: counts[slug]})
+	items := make([]model.CatalogValueItem, 0, len(inventory))
+	for _, item := range inventory {
+		items = append(items, model.CatalogValueItem{Value: item.Slug, Count: int(item.Count)})
 	}
 	return items, nil
 }

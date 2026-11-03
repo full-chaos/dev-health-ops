@@ -44,6 +44,17 @@ func (e *Errors) RequiredEmailStr(object *pyjson.Object, name string) (string, b
 	return e.emailStr(raw, loc)
 }
 
+// RequiredRegisterEmailStr is RequiredEmailStr for an address that is about to be stored as a new account's login
+// key: it also refuses the forms ClassEmail names (U+FFFD, control characters, a lone surrogate). Login, verify and
+// limit routes keep RequiredEmailStr, so an address already stored can still sign in.
+func (e *Errors) RequiredRegisterEmailStr(object *pyjson.Object, name string) (string, bool) {
+	text, ok := e.RequiredEmailStr(object, name)
+	if !ok || e.RefuseTextForm(pyjson.ClassEmail, name, text) {
+		return "", false
+	}
+	return text, true
+}
+
 // OptionalEmailStr validates one `EmailStr | None = None` field. present is
 // false when the field is absent, null, or invalid.
 func (e *Errors) OptionalEmailStr(object *pyjson.Object, name string) (string, bool) {

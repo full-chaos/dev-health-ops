@@ -77,7 +77,7 @@ func ownedRoutes(t *testing.T, logs *bytes.Buffer) error {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
-	_, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t))
+	_, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), nil)
 	for _, c := range components {
 		_ = c.Shutdown(context.Background())
 	}

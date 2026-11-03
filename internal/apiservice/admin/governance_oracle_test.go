@@ -5,6 +5,7 @@ package admin_test
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestGovernanceRoutesVenueOracle(t *testing.T) {
 		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -150,8 +151,16 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 				"none":     admin2(adminNoLicense, orgAnyNoLicense, "gov-adminnone@example.com"),
 				"member":   {"user_id": memberEnt.String(), "email": "gov-memberent@example.com", "org_id": orgEnterprise.String(), "role": "member"},
 			}
-		},
+		}),
 	})
+
+	// The seed's only memberships are the token rows withTokenMemberships
+	// adds: the frozen Python plane was recorded without them, so its
+	// platform stats total_memberships is shifted by their count below.
+	tokenMemberships, err := strconv.Atoi(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), `SELECT count(*)::text FROM memberships`))
+	if err != nil || tokenMemberships == 0 {
+		t.Fatalf("seeded token memberships: %d (%v), want at least one", tokenMemberships, err)
+	}
 
 	flagIDs := strings.Split(venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB),
 		`SELECT id::text FROM feature_flags ORDER BY key LIMIT 14`), " | ")
@@ -442,6 +451,21 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		Golden: golden,
 		Retire: retiredGovernanceRequest,
 		Pin:    pin,
+		NormalizePython: func(request venueoracle.Request, body string) string {
+			if request.Name != "stats superuser" {
+				return body
+			}
+			return venueoracle.RedactJSON(body, func(path []string, raw string) (string, bool) {
+				if len(path) != 1 || path[0] != "total_memberships" {
+					return "", false
+				}
+				recorded, err := strconv.Atoi(raw)
+				if err != nil {
+					return "", false
+				}
+				return strconv.Itoa(recorded + tokenMemberships), true
+			})
+		},
 		// Ids are redacted from the comparison, so a created row's id is
 		// checked here instead: the Go response must carry a valid UUID that
 		// names the row it inserted.

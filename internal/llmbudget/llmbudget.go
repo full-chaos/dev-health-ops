@@ -129,13 +129,23 @@ var providerModelEnv = map[string][]string{
 	"ollama":    {"LLM_MODEL_OLLAMA", "OLLAMA_MODEL"},
 }
 
+// openAIDefaultChain is the OpenAI platform default and its fallbacks, in
+// order: the first is the default; the rest is the order the no-env path
+// reached before (the shared llm package default).
+var openAIDefaultChain = []string{"gpt-6-luna", "gpt-5-mini"}
+
+// OpenAIDefaultChain returns the ordered OpenAI default model chain.
+func OpenAIDefaultChain() []string { return append([]string(nil), openAIDefaultChain...) }
+
 // packageDefaultModel is the model a provider kind uses when nothing names
 // one: the shared llm package's default for every kind it serves (each a
 // current, listed model); base.py's values for the names no Go client
 // serves.
 func packageDefaultModel(provider string) string {
 	switch provider {
-	case "openai", "anthropic", "gemini", "qwen", "local":
+	case "openai":
+		return openAIDefaultChain[0]
+	case "anthropic", "gemini", "qwen", "local":
 		return llm.DefaultModel(llm.Kind(provider))
 	case "ollama":
 		return "llama3.2"

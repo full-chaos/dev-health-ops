@@ -33,14 +33,18 @@ var ErrRefused = errors.New(Message)
 // link auth-service's configuration; TestFromLookupAgreesWithAuthConfig pins
 // the two together.
 func FromLookup(lookup func(string) (string, bool)) (bool, error) {
-	raw, _ := lookup(Env)
+	return readSwitch(Env, lookup)
+}
+
+func readSwitch(name string, lookup func(string) (string, bool)) (bool, error) {
+	raw, _ := lookup(name)
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "false":
 		return false, nil
 	case "true":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", Env)
+	return false, fmt.Errorf("%s must be true or false", name)
 }
 
 // On reads the switch from the process environment on every call. The
@@ -50,6 +54,17 @@ func FromLookup(lookup func(string) (string, bool)) (bool, error) {
 // cannot be read here counts as on.
 func On() bool {
 	on, err := FromLookup(secrets.ProcessLookup)
+	return err != nil || on
+}
+
+// OrgsEnv is the orgs-owned switch, with the meaning auth-service gives it.
+const OrgsEnv = "AUTH_ORGS_OWNED"
+
+// OrgsOn reads OrgsEnv on every call, by the rule of On: a value that cannot be
+// read counts as on, so go-api holds back from a table auth may own. No start
+// check reads it; the chart holds the order of the switches.
+func OrgsOn() bool {
+	on, err := readSwitch(OrgsEnv, secrets.ProcessLookup)
 	return err != nil || on
 }
 
@@ -73,4 +88,21 @@ func Detail() *pyjson.Object {
 // Write answers a refused request: 409 with Detail.
 func Write(w http.ResponseWriter) {
 	policy.WriteDetail(w, http.StatusConflict, Detail(), nil)
+}
+
+// PlatformRolesMessage is the human-readable answer of a public is_superuser
+// write while auth-service owns the platform roles (AUTH_PLATFORM_ROLES_OWNED).
+const PlatformRolesMessage = "This operation is served by the authentication service while it owns platform roles"
+
+// ErrPlatformRolesRefused is the refusal of a public is_superuser write while
+// auth-service owns the platform roles.
+var ErrPlatformRolesRefused = errors.New(PlatformRolesMessage)
+
+// WritePlatformRoles answers a refused is_superuser write: 409 with the
+// operation_moved reason.
+func WritePlatformRoles(w http.ResponseWriter) {
+	detail := pyjson.NewObject()
+	detail.Set("message", PlatformRolesMessage)
+	detail.Set("reason", Reason)
+	policy.WriteDetail(w, http.StatusConflict, detail, nil)
 }

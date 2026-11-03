@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	schedulersync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"log/slog"
 	"sort"
 	"strings"
@@ -137,7 +138,7 @@ WHERE org_id = $1 AND integration_id = $2 AND is_enabled IS TRUE`
 		}
 		scope.DatasetKeys = kept
 	}
-	scope.DatasetKeys = uniqueSorted(scope.DatasetKeys)
+	scope.DatasetKeys = uniqueSorted(supportedDatasetKeys(config.Provider, scope.DatasetKeys))
 	sort.Slice(scope.Sources, func(i, j int) bool { return scope.Sources[i].ID.String() < scope.Sources[j].ID.String() })
 	if len(scope.Sources)*len(scope.DatasetKeys) > maxPairs {
 		return effectiveScope{}, fmt.Errorf("sync coverage pair limit exceeded: %d", maxPairs)
@@ -209,4 +210,18 @@ func intersectEnabledDatasets(targets, enabled []string) (kept, excluded []strin
 	}
 	sort.Strings(excluded)
 	return kept, excluded
+}
+
+// supportedDatasetKeys drops the dataset keys the provider does not support, by the planner's capability table
+// (schedulersync.ProviderSupportsDataset, the one source of truth). An enabled integration_datasets row can name a
+// dataset the provider has none of (GitHub has no incidents dataset); the planner plans no unit for it, so coverage
+// must show no gap and the admin page must not offer a backfill for it (D6467).
+func supportedDatasetKeys(provider string, keys []string) []string {
+	kept := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if schedulersync.ProviderSupportsDataset(provider, key) {
+			kept = append(kept, key)
+		}
+	}
+	return kept
 }

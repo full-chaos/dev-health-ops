@@ -218,6 +218,10 @@ volumes:
   # written once by auth-keys-init. Separate from envelope_keys on purpose.
   auth_signing_keys:
     driver: local
+  # The workload bootstrap credential file (profile `auth`), written once by
+  # auth-workload-bootstrap and mounted read-only into go-api only.
+  workload_bootstrap:
+    driver: local
 
 networks:
   # CHAOS-4886: the Auth Control Plane's network (profile `auth`). auth-service and
@@ -1179,6 +1183,14 @@ services:
       GO_API_ENVELOPE_KEY_ID: ${GO_API_ENVELOPE_KEY_ID:-go-api-envelope-2026-08}
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
+      # The workload bootstrap credential, as a read-only file (written by
+      # auth-workload-bootstrap, profile `auth`). go-api reads it only when
+      # AUTH_SESSION_ISSUE_CREDENTIAL or AUTH_PROVISIONING_CREDENTIAL selects
+      # `workload`; both are unset by default. The issuer must equal
+      # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
+      # signed under. A path, never the credential.
+      AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
+      AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-}
     volumes:
       # Only the private/ subpath: go-api never sees anything else, and
       # nothing but go-api mounts this one.
@@ -1188,6 +1200,10 @@ services:
         read_only: true
         volume:
           subpath: private
+      - type: volume
+        source: workload_bootstrap
+        target: /run/workload
+        read_only: true
     networks:
       - default
       - planes
@@ -1312,12 +1328,18 @@ services:
     volumes:
       - auth_signing_keys:/var/lib/dev-health/envelope-keys
 
-  # One-shot: creates the runtime login auth-service connects as, idempotently.
-  # It is a plain unprivileged login (no superuser, createdb, createrole,
-  # replication or RLS bypass) that owns nothing; auth-migrate grants it the
-  # approved table privileges. The password default equals the role name:
-  # local development only, like every other login in this file. A production
-  # login is provisioned by the database provider before auth-migrate runs.
+  # One-shot: creates the runtime login auth-service connects as and the migration
+  # login the auth one-shots connect as, idempotently, and the auth schema for the
+  # migration login. Both are plain unprivileged logins (no superuser, createdb,
+  # createrole, replication or RLS bypass). The runtime login owns nothing;
+  # auth-migrate grants it the approved table privileges. The migration login OWNS
+  # the auth schema and every object in it (the schema is created AUTHORIZATION it,
+  # so it needs no CREATE on the database), and auth-owner-grants gives it the
+  # privileges on the ops tables the grants pass needs. The password defaults equal
+  # the role names: local development only, like every other login in this file. A
+  # production login is provisioned by the database provider before auth-migrate
+  # runs. A volume made before this change holds a postgres-owned auth schema: move
+  # it once with `auth-migrate owner-move` (see the deployment doc) or `down -v`.
   # The DSNs of auth-migrate and auth-service use the libpq keyword form with the
   # password in single quotes (a URI would need every reserved character in the
   # password percent-encoded, which Compose cannot do): any password works except
@@ -1343,6 +1365,19 @@ services:
         SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
           WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
         SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec
+        \getenv mrole AUTH_MIGRATION_DATABASE_ROLE
+        \getenv mpw AUTH_MIGRATION_DATABASE_PASSWORD
+        \getenv schema AUTH_DATABASE_SCHEMA
+        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'mrole', :'mpw')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'mrole') \gexec
+        SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'mrole', :'mpw') \gexec
+        SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', :'schema', :'mrole')
+          WHERE NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :'schema') \gexec
+        \getenv writer AUTH_PUSH_LIFECYCLE_WRITER_ROLE
+        SELECT format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'writer')
+          WHERE :'writer' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'writer') \gexec
+        SELECT format('GRANT %I TO %I', :'writer', :'mrole')
+          WHERE :'writer' <> '' AND NOT pg_has_role(:'mrole', :'writer', 'MEMBER') \gexec
         SQL
     environment:
       PGHOST: postgres
@@ -1352,15 +1387,59 @@ services:
       PGDATABASE: ${POSTGRES_DB:-postgres}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_RUNTIME_DATABASE_PASSWORD: ${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}
+      AUTH_MIGRATION_DATABASE_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      AUTH_MIGRATION_DATABASE_PASSWORD: ${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      # CHAOS-10895: the NOLOGIN role that owns the External Push lifecycle append
+      # function, created here (with the migration login a member of it, the one
+      # thing ALTER FUNCTION OWNER needs) only when named. Empty creates nothing.
+      AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
     depends_on:
       postgres:
         condition: service_healthy
 
+  # One-shot: gives the migration login the privileges on the ops (public) tables that the
+  # grants pass needs to give the runtime login its rows (`auth-migrate owner-move
+  # -grants-only`): each privilege of the grants pass WITH GRANT OPTION, plus REFERENCES as
+  # the table-level anchor PostgreSQL needs for a REVOKE. It must connect as a superuser (it
+  # grants as the table owner), so it is the one auth one-shot that keeps the database
+  # superuser's DSN. It runs after the ops migrate (which creates the tables) and before
+  # auth-migrate; it changes no owner. A table the ops migrate has not created yet is skipped,
+  # and a repeat run changes nothing.
+  auth-owner-grants:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command:
+      - owner-move
+      - -from
+      - ${POSTGRES_USER:-postgres}
+      - -to
+      - ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
+      - -grants-only
+      - -apply
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-provision:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
   # One-shot: applies the auth schema lineage and the runtime grants. It
-  # connects as the database owner (the migration role), never as the runtime
-  # login: auth-migrate refuses a connection that authenticates AS the runtime
-  # role. `auth-migrate --check` reports whether the schema is at the embedded
-  # head without issuing DDL; the public-table grants come from auth-grants.
+  # connects as the migration login (a NOSUPERUSER role that owns the auth schema;
+  # AUTH_SCHEMA_OWNER_ROLE pins that), never as the runtime login: auth-migrate
+  # refuses a connection that authenticates AS the runtime role.
+  # `auth-migrate --check` reports whether the schema is at the embedded head
+  # without issuing DDL; the public-table grants come from auth-grants.
   auth-migrate:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     build:
@@ -1379,12 +1458,17 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+      AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
+      AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
     depends_on:
       auth-provision:
+        condition: service_completed_successfully
+      auth-owner-grants:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
@@ -1407,14 +1491,108 @@ services:
     security_opt: [no-new-privileges:true]
     tmpfs: [/tmp]
     environment:
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-postgres} password='${POSTGRES_PASSWORD:-postgres}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
       AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+      AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
+      AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
     depends_on:
       migrate:
         condition: service_completed_successfully
       auth-migrate:
+        condition: service_completed_successfully
+
+  # One-shot: `auth-migrate restore-fence init -if-absent` writes the fence row of the live
+  # timeline on a database that is NOT a restore (a fresh compose volume). auth-service is
+  # not ready until a row exists for the timeline. -if-absent makes a repeat bring-up exit 0;
+  # a restored volume is fenced with `restore-fence apply`, never with this service.
+  auth-fence-init:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["restore-fence", "init", "-if-absent"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+
+  # The workload bootstrap credential (profile `auth`), in three one-shots, never a dependency of a running service:
+  # a later `up` would run bootstrap-create again, and it refuses a workload with a live credential. Run
+  # `run --rm auth-workload-bootstrap`: compose starts the other two before it, and each is safe to run again.
+  # auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532; it changes the directory
+  # only when it is not already 65532:700 (the container has no CAP_FOWNER, so a second chmod would fail).
+  # auth-workload-seed: seeds the workload registry. auth-workload-bootstrap: writes the credential of the `api`
+  # workload to /run/workload/api.bootstrap (0600) and keeps only its hash. go-api reads the file from a read-only
+  # mount; auth-service never mounts it. `down -v` deletes the volume.
+  auth-workload-volume:
+    image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth]
+    network_mode: none
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt: [no-new-privileges:true]
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command: ['[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
+    volumes:
+      - workload_bootstrap:/run/workload
+
+  auth-workload-seed:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "seed", "-apply"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+
+  auth-workload-bootstrap:
+    image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
+    command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"]
+    profiles: [auth]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
+    volumes:
+      - workload_bootstrap:/run/workload
+    depends_on:
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
         condition: service_completed_successfully
 
   # The Auth Control Plane HTTP service. DORMANT: its API listener mounts no
@@ -1453,6 +1631,12 @@ services:
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      # The workload-token exchange for a Compose bootstrap credential. Off by
+      # default; on, it needs the issuer (a signed claim, https, nothing dials
+      # it) and the go-api principal. A blank value is unset.
+      AUTH_WORKLOAD_BOOTSTRAP: ${AUTH_WORKLOAD_BOOTSTRAP:-false}
+      AUTH_TOKEN_ISSUER_URL: ${AUTH_TOKEN_ISSUER_URL:-}
+      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
     volumes:
       - type: volume
         source: auth_signing_keys
@@ -1472,6 +1656,8 @@ services:
       auth-keys-init:
         condition: service_completed_successfully
       auth-grants:
+        condition: service_completed_successfully
+      auth-fence-init:
         condition: service_completed_successfully
 
   # The Go query plane (`dho query-api`): /graphql and the /api/v1 read

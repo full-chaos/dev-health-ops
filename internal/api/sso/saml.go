@@ -62,7 +62,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"net/http"
 	"net/url"
 	"strings"
@@ -571,7 +570,7 @@ func (h handlers) processSAMLResponse(ctx context.Context, w http.ResponseWriter
 		if relayState == "" {
 			return samlClaims{}, ssoAuthErr("Missing SAML RelayState")
 		}
-		state, err := verifySAMLState(h.StateSecret, relayState, row.ID, now)
+		state, err := verifySAMLStateKeys(h.stateKeys(), relayState, row.ID, now)
 		if err != nil {
 			if errors.Is(err, errSAMLStateExpired) {
 				return samlClaims{}, ssoAuthErr("SAML RelayState expired")
@@ -842,26 +841,18 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "Email address is missing from SAML response", nil)
 		return
 	}
-	allowedDomains, err := decodeAllowedDomains(row.AllowedDomains)
+	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, &samlNameIDParts{format: claims.nameIDFormat, spNameQualifier: claims.spNameQualifier})
 	if err != nil {
-		h.fail(w, r, "decode allowed domains", err)
-		return
-	}
-	if len(allowedDomains) > 0 {
-		at := strings.LastIndex(email, "@")
-		if at < 0 {
+		if errors.Is(err, errProviderEmailMalformed) {
 			policy.WriteDetail(w, http.StatusBadRequest, "Email address from SAML response is malformed", nil)
 			return
 		}
-		domain := email[at+1:]
-		if !emaildomain.Allowed(allowedDomains, domain) {
-			policy.WriteDetail(w, http.StatusForbidden, fmt.Sprintf("Email domain '%s' is not allowed for this provider", domain), nil)
+		var denied *domainNotAllowedError
+		if errors.As(err, &denied) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: email domain is not allowed for this provider", "protocol", "saml", "domain", denied.domain)
+			policy.WriteDetail(w, http.StatusForbidden, domainNotAllowedText, nil)
 			return
 		}
-	}
-
-	user, membership, err := h.provisionOrGetUser(ctx, row, email, claims.fullName, providerID, claims.externalID, &samlNameIDParts{format: claims.nameIDFormat, spNameQualifier: claims.spNameQualifier})
-	if err != nil {
 		if errors.Is(err, errIdentityConflict) {
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusConflict,
 				identityConflictDetail(), "saml", "provisioning")
@@ -881,6 +872,12 @@ func (h handlers) samlACSCallback(w http.ResponseWriter, r *http.Request) {
 			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an invalid user id", "protocol", "saml")
 			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
 				invalidProviderIDDetail(), "saml", "provisioning")
+			return
+		}
+		if errors.Is(err, errInvalidProviderEmail) {
+			h.Logger.WarnContext(ctx, "sso sign-in refused: the identity provider returned an unusable email address", "protocol", "saml")
+			h.recordSSOAuthenticatedDenial(ctx, w, r, row.OrgID, providerID, err.Error(), http.StatusBadRequest,
+				invalidProviderEmailDetail(), "saml", "provisioning")
 			return
 		}
 		var processing ssoProcessing

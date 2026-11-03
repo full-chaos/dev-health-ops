@@ -232,6 +232,13 @@ func (h handlers) upsertSubscription(ctx context.Context, tx pgx.Tx, subscriptio
 	if subscriptionID == "" || customer == "" {
 		return upsertedSubscription{}, errSubscriptionMalformed
 	}
+	// The organization row comes first, before the subscription and the
+	// license, as in the admin PATCH and the org purge. It is the same
+	// position as step 3 of the auth lock order (membership readPairs), on
+	// public.organizations. NO KEY UPDATE lets foreign key checks through.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, org); err != nil {
+		return upsertedSubscription{}, err
+	}
 	var existing upsertedSubscription
 	found := true
 	switch err := tx.QueryRow(ctx, `SELECT id, billing_plan_id, billing_price_id, status, current_period_start, current_period_end

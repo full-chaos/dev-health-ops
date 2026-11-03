@@ -146,11 +146,14 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 		"change":        {ID: "auth_svc_change_password", Count: 5, Window: time.Hour},
 		"social link":   {ID: "auth_svc_social_link_ip_principal", Count: 10, Window: time.Hour},
 		"refresh":       {ID: "auth_svc_refresh", Count: 10, Window: 15 * time.Minute},
+		"validate":      {ID: "auth_svc_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow},
+		"switch org":    {ID: "auth_svc_switch_org", Count: 30, Window: 15 * time.Minute},
 	}
 	got := map[string]httpapi.Limit{
 		"login ip": loginIPLimit, "login account": loginAccountLimit, "verify": verifyLimit, "resend": resendLimit,
 		"forgot": forgotLimit, "resend ip": resendIPLimit, "forgot ip": forgotIPLimit, "reset ip": resetIPLimit, "reset token": resetTokenLimit,
-		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit,
+		"change": changePasswordLimit, "social link": socialLinkLimit, "refresh": refreshLimit, "validate": validateLimit,
+		"switch org": switchOrgLimit,
 	}
 	for name, limit := range want {
 		if got[name] != limit {
@@ -164,8 +167,8 @@ func TestTheLimitTableIsPinned(t *testing.T) {
 
 func TestLimitIDsListEveryLimiter(t *testing.T) {
 	got := LimitIDs()
-	if len(got) != 13 {
-		t.Fatalf("%d ids, want the table's 13", len(got))
+	if len(got) != 15 {
+		t.Fatalf("%d ids, want the table's 15", len(got))
 	}
 	if !slices.Contains(got, registerIPLimit.ID) {
 		t.Fatalf("LimitIDs lacks the register limiter %q", registerIPLimit.ID)
@@ -600,7 +603,7 @@ func TestEverySharedRouteRefusesInGoAPIShape(t *testing.T) {
 // names or abbreviates its route, and a route outside the set is refused with
 // the generic 500 and counts nothing.
 func TestCounterScopesAreAClosedSetOfNeutralCodes(t *testing.T) {
-	want := map[string]string{PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04"}
+	want := map[string]string{oauthAuthorizeScope: "s05", oauthDecideScope: "s06", PatternCompatLogin: "s01", PatternResetPassword: "s02", socialLinkRoute: "s03", PatternCompatRefresh: "s04", PatternCompatValidate: "s07", PatternCompatSwitchOrg: "s08"}
 	if !reflect.DeepEqual(scopeCodes, want) {
 		t.Fatalf("scope codes %v, pinned %v", scopeCodes, want)
 	}
@@ -826,9 +829,9 @@ func TestLoginSpoofedForwardedValuesFromADirectClientShareOneBucket(t *testing.T
 	}
 }
 
-// A trusted peer's forwarded value is believed only when it is exactly one address: a chain or a second header line
-// falls back to the socket address, so a client-controlled value cannot split the bucket.
-func TestATrustedPeerWithMoreThanOneForwardedValueIsKeyedByItsSocketAddress(t *testing.T) {
+// A trusted peer's X-Forwarded-For is one chain read from the right: the right-most untrusted hop is the client, so
+// whatever a client wrote left of it cannot split the bucket, and a second header line extends the same chain.
+func TestAForwardedChainIsKeyedByItsRightMostUntrustedHop(t *testing.T) {
 	h := trustedProxy(t, newCompatFixture(t).server)
 	body := `{"refresh_token":"` + credential() + `"}`
 	post := func(lines ...string) *httptest.ResponseRecorder {
@@ -847,13 +850,13 @@ func TestATrustedPeerWithMoreThanOneForwardedValueIsKeyedByItsSocketAddress(t *t
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.2"); r.Code != http.StatusUnauthorized {
+		if r := post("203.0.113."+strconv.Itoa(i+50), "198.51.100.1"); r.Code != http.StatusUnauthorized {
 			t.Fatalf("two lines %d = %d, want 401", i+1, r.Code)
 		}
 	}
-	assertRateLimited(t, "the 11th request of the socket address", post("203.0.113.200, 198.51.100.3"))
-	assertRateLimited(t, "another chain", post("203.0.113.201, 198.51.100.4"))
-	if r := post("203.0.113.77"); r.Code != http.StatusUnauthorized {
-		t.Fatalf("one clean forwarded address = %d, want its own bucket (401)", r.Code)
+	assertRateLimited(t, "the 11th request of the right-most hop", post("203.0.113.200, 198.51.100.1"))
+	assertRateLimited(t, "a rotated left entry", post("203.0.113.201, 198.51.100.1"))
+	if r := post("203.0.113.77, 198.51.100.4"); r.Code != http.StatusUnauthorized {
+		t.Fatalf("another right-most hop = %d, want its own bucket (401)", r.Code)
 	}
 }

@@ -45,6 +45,9 @@ func providerText(value pyjson.Value) (*string, error) {
 // providerUserIDInvalid is the one answer to a profile whose user id is empty or unusable as an identity key.
 const providerUserIDInvalid = "The provider returned an invalid user id"
 
+// providerEmailUnusable is the one answer to a profile whose email the shared email text rule refuses; it names no value.
+const providerEmailUnusable = "The provider returned an unusable email address"
+
 // socialAccountExists is the 409 for an e-mail another account holds; it names
 // no sign-in method.
 const socialAccountExists = "An account with this email already exists. Please sign in with your existing sign-in method."
@@ -107,13 +110,22 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusBadRequest, providerUserIDInvalid)
 		return
 	}
+	if email, isText := info.Email.(string); isText && pyjson.BadTextForm(pyjson.ClassEmail, email) != pyjson.TextFormNone {
+		h.Logger.WarnContext(ctx, "social login refused: the provider returned an unusable email address", "provider", provider)
+		if !info.EmailVerified {
+			refuse(w, http.StatusForbidden, providerEmailUnverified)
+			return
+		}
+		refuse(w, http.StatusBadRequest, providerEmailUnusable)
+		return
+	}
 	tx, err := h.Pool.Begin(ctx)
 	if err != nil {
 		h.fail(w, r, "begin", err)
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	user, err := userByProvider(ctx, tx, providerUserID, provider)
+	user, err := h.userByProvider(ctx, tx, providerUserID, provider)
 	if err != nil {
 		h.fail(w, r, "load user by provider", err)
 		return
@@ -129,7 +141,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 			h.fail(w, r, "provider email", errProviderValueType)
 			return
 		}
-		if user, err = userByEmail(ctx, tx, pythonparity.Lower(email)); err != nil {
+		if user, err = h.userByEmail(ctx, tx, pythonparity.Lower(email)); err != nil {
 			h.fail(w, r, "load user by email", err)
 			return
 		}
@@ -173,7 +185,7 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 		orgUUID = &id
 	}
 	if h.Issuer != nil {
-		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated)
+		pair, err := h.issueSession(ctx, r, user.ID, orgUUID, amrFederated, nil)
 		if err != nil {
 			h.fail(w, r, "issue session", err)
 			return
@@ -220,8 +232,8 @@ func (h handlers) createSocialUser(ctx context.Context, tx pgx.Tx, info *oauthpr
 		AuthProviderID: &providerUserID, IsActive: true, IsVerified: true}
 	_, err = tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6, true, true, false, 0, NULL, $7, $7)`,
+	 is_active, is_verified, token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6, true, true, 0, NULL, $7, $7)`,
 		user.ID, user.Email, user.Username, user.FullName, provider, providerUserID, now)
 	if err != nil {
 		return nil, err

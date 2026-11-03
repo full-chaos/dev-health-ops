@@ -72,16 +72,18 @@ func parseRefreshRequest(body io.Reader) (contracts.SecretString, error) {
 	return contracts.NewSecretString(credential), nil
 }
 
-// refreshResponse is refresh-response.v1, written from revealed values (the
-// contracts types marshal secrets as "[redacted]").
+// refreshResponse is refresh-response.v1, or v2 with session_access_token
+// under the eddsa class, written from revealed values (the contracts types
+// marshal secrets as "[redacted]").
 type refreshResponse struct {
-	SchemaVersion     string `json:"schema_version"`
-	AccessToken       string `json:"access_token"`
-	TokenType         string `json:"token_type"`
-	ExpiresIn         int    `json:"expires_in"`
-	RefreshCredential string `json:"refresh_credential"`
-	RefreshExpiresIn  int    `json:"refresh_expires_in"`
-	SessionID         string `json:"session_id"`
+	SchemaVersion      string `json:"schema_version"`
+	AccessToken        string `json:"access_token"`
+	TokenType          string `json:"token_type"`
+	ExpiresIn          int    `json:"expires_in"`
+	RefreshCredential  string `json:"refresh_credential"`
+	RefreshExpiresIn   int    `json:"refresh_expires_in"`
+	SessionAccessToken string `json:"session_access_token,omitempty"`
+	SessionID          string `json:"session_id"`
 }
 
 // refreshExpiresIn is the whole seconds left on the rotated credential,
@@ -96,7 +98,8 @@ func refreshExpiresIn(expiresAt, now time.Time) int {
 // is minted from the user's state read after the exchange, as go-api's
 // refresh route reads it (internal/api/session/refresh.go). A user that is
 // gone or deactivated gets no token and the session is revoked, as go-api
-// revokes the family of a deactivated user.
+// revokes the family of a deactivated user. The same checks first run as the
+// exchange's guard, so a refused session's credential is never rotated.
 func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	credential, err := parseRefreshRequest(r.Body)
@@ -108,8 +111,9 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opRefresh, unavailable(reasonDependency), err)
 		return
 	}
-	result, err := h.Sessions.Exchange(ctx, credential)
-	if err != nil || !result.Reason.Success() {
+	result, err := h.Sessions.ExchangeGuarded(ctx, credential, h.refreshGuard)
+	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	if !guardRefused && (err != nil || !result.Reason.Success()) {
 		h.rec.refuse(w, r, opRefresh, exchangeRefusal(result.Reason), err)
 		return
 	}
@@ -150,9 +154,24 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 			h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), roleErr)
 			return
 		}
+		if !member && !user.Holds(actionAdminOrgs) {
+			// The membership the session was minted for is gone (D6507).
+			if _, revokeErr := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); revokeErr != nil {
+				h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), revokeErr)
+				return
+			}
+			h.rec.refuse(w, r, opRefresh, unauthorized(reasonNotEntitled), nil)
+			return
+		}
 		role = roleText(value, member)
 	}
-	access, err := h.Issuer.AccessContext(ctx, Grant{
+	if guardRefused {
+		// The guard refused; the reads above no longer do (a concurrent
+		// change). Nothing was rotated, so there is no credential to answer.
+		h.rec.refuse(w, r, opRefresh, unauthorized(reasonRevisionStale), nil)
+		return
+	}
+	tokens, err := h.Issuer.Tokens(ctx, Grant{
 		PrincipalID: record.PrincipalID, OrganizationID: record.OrganizationID, Role: role,
 		SessionID: record.ID, User: user,
 	})
@@ -161,13 +180,18 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.rec.record(ctx, opRefresh, "success", string(result.Reason), nil)
+	version := contracts.RefreshResponseSurface
+	if tokens.Session != "" {
+		version = contracts.RefreshResponseV2Surface
+	}
 	writeJSON(w, http.StatusOK, refreshResponse{
-		SchemaVersion:     contracts.RefreshResponseSurface,
-		AccessToken:       access,
-		TokenType:         "bearer",
-		ExpiresIn:         AccessExpiresIn,
-		RefreshCredential: result.Credential.Reveal(),
-		RefreshExpiresIn:  refreshExpiresIn(result.ExpiresAt, h.Issuer.now()),
-		SessionID:         session.WireSessionID(record.ID),
+		SchemaVersion:      version,
+		AccessToken:        tokens.Access,
+		TokenType:          "bearer",
+		ExpiresIn:          h.Issuer.ExpiresIn(),
+		RefreshCredential:  result.Credential.Reveal(),
+		RefreshExpiresIn:   refreshExpiresIn(result.ExpiresAt, h.Issuer.now()),
+		SessionAccessToken: tokens.Session,
+		SessionID:          session.WireSessionID(record.ID),
 	})
 }

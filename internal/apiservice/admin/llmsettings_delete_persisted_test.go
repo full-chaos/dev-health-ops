@@ -53,7 +53,7 @@ func TestLLMSettingsDeleteClearsDerivedRows(t *testing.T) {
 		GoOnly: true,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -86,7 +86,7 @@ VALUES ($1, $2, $3, $4, 'v', false, NULL, now(), now())`, uuid.New(), org.String
 				tokens[slug] = map[string]any{"user_id": adminUserID.String(), "email": "llmdelete-admin@example.com", "org_id": org.String(), "role": "admin"}
 			}
 			return tokens
-		},
+		}),
 	})
 	base, pool := startGoServer(t, ctx, venue, jwtKey)
 	auth := func(name string) map[string]string {

@@ -37,6 +37,11 @@ func (f *fakeEdgeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (strin
 	return "", false, errors.New("Membership must not be read")
 }
 
+func (f *fakeEdgeUsers) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := f.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (f *fakeEdgeUsers) ActiveImpersonation(context.Context, uuid.UUID) (*policy.Impersonation, error) {
 	return nil, errors.New("ActiveImpersonation must not be read")
 }
@@ -137,9 +142,9 @@ func TestNewEdgeUserStoreReusesTheGivenPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newEdgeUserStore: %v", err)
 	}
-	pg, ok := store.(policy.PGStore)
+	pg, ok := pgStoreOf(store)
 	if !ok || pg.Pool != pool {
-		t.Fatalf("store = %#v, want policy.PGStore over the given pool", store)
+		t.Fatalf("store = %#v, want query-api's users store over policy.PGStore over the given pool", store)
 	}
 }
 
@@ -311,3 +316,5 @@ func TestOrglessEdgeTokenNeverReachesAPlantedRoute(t *testing.T) {
 		})
 	}
 }
+
+func (fakeEdgeUsers) ReadsPlatformRoles() bool { return false }

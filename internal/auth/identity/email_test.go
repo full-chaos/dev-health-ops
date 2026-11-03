@@ -219,3 +219,23 @@ func FuzzNormalizeEmail(f *testing.F) {
 		checkNormalizeEmail(t, in)
 	})
 }
+
+func TestNormalizeLocalRegisterEmailRefusesTheRegisterFormsAndSignInKeepsTheOldRule(t *testing.T) {
+	for _, raw := range []string{"a�b@example.com", "�@example.com", "a\x00b@example.com", "a\x01b@example.com", "a\tb@example.com",
+		"a\u0085b@example.com", "a\x7fb@example.com", "a\xffb@example.com", string([]byte{'a', 0xed, 0xa0, 0x80, '@', 'e', '.', 'c'})} {
+		if got, err := NormalizeLocalRegisterEmail(raw); err == nil || got != "" {
+			t.Errorf("NormalizeLocalRegisterEmail(%q) = %q, %v; want a refusal", raw, got, err)
+		}
+	}
+	const plain = "Ann@Example.COM"
+	want, err := NormalizeEmail(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := NormalizeLocalRegisterEmail(plain); err != nil || got != want {
+		t.Errorf("NormalizeLocalRegisterEmail(%q) = %q, %v; want %q", plain, got, err, want)
+	}
+	if got, err := NormalizeEmail("a�b@example.com"); err != nil || got == "" {
+		t.Errorf("NormalizeEmail keeps the sign-in rule for a stored address: %q, %v", got, err)
+	}
+}

@@ -1,0 +1,424 @@
+package restorefence
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+)
+
+// ErrApply reports a refused or failed apply. The transaction rolled back and
+// nothing was written; readiness stays closed.
+var ErrApply = errors.New("restorefence: apply failed")
+
+// ErrPrivileges reports tables the migration role cannot write.
+var ErrPrivileges = errors.New("restorefence: the migration role lacks privileges the fence needs")
+
+// errDryRun ends the transaction of a dry run after the counts are read.
+var errDryRun = errors.New("restorefence: dry run")
+
+// errAlready ends the transaction when this timeline and manifest were applied.
+var errAlready = errors.New("restorefence: already applied")
+
+func applyRefusals() []error { return []error{errAlready, errDryRun} }
+
+// Options set one apply.
+type Options struct {
+	// Apply writes the change. Without it the run reads the counts inside a
+	// transaction that rolls back.
+	Apply bool
+	// BlindMargin raises every restored revision by this much. It is the
+	// fallback of last resort, used only when no manifest and no usable consumer
+	// input exists (the WAL after T is gone): consumers read the jump as a gap.
+	BlindMargin int64
+	// Inputs are consumer high-water inputs besides the registered ones.
+	Inputs []FloorInput
+	// Source, when set, is the shadow restore that exported the manifest: the provider revocations the manifest names
+	// and the restored database lacks are copied from it and queued again. It needs a manifest.
+	Source             RevocationSource
+	PlatformRolesOwned bool
+}
+
+// SectionReport is the count of one table.
+type SectionReport struct {
+	Name string `json:"name"`
+	// Changed is the rows revoked again, raised or deleted.
+	Changed int64 `json:"changed"`
+	// Absent is the manifest rows with no restored row: created after T, so
+	// they cannot authenticate. They are reported and never inserted.
+	Absent int64 `json:"absent"`
+}
+
+// Report is what one apply did (or, as a dry run, would do).
+type Report struct {
+	Timeline       int64           `json:"timeline"`
+	Source         string          `json:"source"`
+	Digest         string          `json:"digest"`
+	DryRun         bool            `json:"dry_run"`
+	AlreadyApplied bool            `json:"already_applied"`
+	FloorsRaised   int64           `json:"floors_raised"`
+	MarginRows     int64           `json:"margin_rows"`
+	Revocations    int64           `json:"revocations_reapplied"`
+	RowsRemoved    int64           `json:"rows_removed"`
+	Sections       []SectionReport `json:"sections"`
+	// Inputs is one line per floor input: used or skipped, and why.
+	Inputs []InputReport `json:"inputs"`
+	// Actions are the operator actions the apply names (ids only).
+	Actions []OperatorAction `json:"actions"`
+}
+
+// Preflight lists the tables the migration role cannot write, by name only.
+func Preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) ([]string, error) {
+	return preflight(ctx, pool, schema, false)
+}
+
+// preflight is Preflight plus, for a re-queue from the source, INSERT on the revocation table.
+func preflight(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, requeue bool) ([]string, error) {
+	var missing []string
+	var user string
+	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&user); err != nil {
+		return nil, fmt.Errorf("%w: reading the connected role", ErrApply)
+	}
+	check := func(name, qualified, privilege string) error {
+		var ok *bool
+		if err := pool.QueryRow(ctx, `SELECT CASE WHEN to_regclass($1) IS NULL THEN NULL ELSE has_table_privilege($3::text, $1, $2) END`,
+			qualified, privilege, user).Scan(&ok); err != nil {
+			return fmt.Errorf("%w: reading privileges", ErrApply)
+		}
+		if ok == nil || !*ok {
+			missing = append(missing, name+" "+privilege)
+		}
+		return nil
+	}
+	q := authschema.Quote(schema)
+	for _, p := range []string{"SELECT", "INSERT", "UPDATE"} {
+		if err := check(floorsSection, q+".aggregate_revisions", p); err != nil {
+			return nil, err
+		}
+	}
+	if err := check("auth.restore_fence_state", q+".restore_fence_state", "INSERT"); err != nil {
+		return nil, err
+	}
+	if err := check("auth.sso_flow_states", q+".sso_flow_states", "UPDATE"); err != nil {
+		return nil, err
+	}
+	for _, s := range sections {
+		for _, p := range s.privileges(schema, requeue) {
+			if err := check(p.name, p.qualified, p.privilege); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if requeue {
+		for _, t := range []struct{ name, qualified string }{{"auth.login_attempts", q + ".login_attempts"}, {"public.login_attempts", "public.login_attempts"}} {
+			for _, p := range []string{"INSERT", "UPDATE"} {
+				if err := check(t.name, t.qualified, p); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return missing, nil
+}
+
+type tablePrivilege struct{ name, qualified, privilege string }
+
+// privileges are what the apply of a section needs: its own write, INSERT on the revocation table for a section that
+// queues revocations, and for a re-queue from the source INSERT on the revocation table itself.
+func (s section) privileges(schema authschema.ValidatedIdentifier, requeue bool) []tablePrivilege {
+	privilege := "UPDATE"
+	switch s.kind {
+	case kindPresence:
+		privilege = "DELETE"
+	case kindInsert:
+		privilege = "INSERT"
+	case kindReport:
+		privilege = "SELECT"
+	}
+	out := []tablePrivilege{{s.name, s.qualified(schema), privilege}}
+	if s.queues {
+		out = append(out, tablePrivilege{revocationSection, "public.provider_oauth_revocations", "INSERT"})
+	}
+	if requeue && s.name == revocationSection {
+		out = append(out, tablePrivilege{s.name, s.qualified(schema), "INSERT"})
+	}
+	return out
+}
+
+func complete(m Manifest) error {
+	have := map[string]bool{}
+	for _, s := range m.Sections {
+		have[s.Name] = true
+	}
+	var absent []string
+	for _, s := range sections {
+		if !have[s.name] {
+			absent = append(absent, s.name)
+		}
+	}
+	if len(absent) > 0 {
+		return fmt.Errorf("%w: sections missing from the manifest: %s", ErrManifest, strings.Join(absent, ", "))
+	}
+	return nil
+}
+
+// Apply runs the fence on the restored database as the migration role, in ONE
+// audit.Commit transaction: the margin and the revision floors, the auth
+// revocations, the named legacy section, and the state row for the current
+// timeline. m may be nil only with a blind margin. Any error rolls everything
+// back. A second run for the same timeline and manifest changes nothing.
+func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, m *Manifest, opts Options) (Report, error) {
+	if opts.BlindMargin < 0 || opts.BlindMargin >= maxRevision {
+		return Report{}, fmt.Errorf("%w: the blind margin is outside 0..2^53-2", ErrApply)
+	}
+	if m != nil {
+		if m.Version != ManifestVersion {
+			return Report{}, fmt.Errorf("%w: manifest version %d, want %d: export it again with this auth-migrate binary", ErrManifest, m.Version, ManifestVersion)
+		}
+		if err := complete(*m); err != nil {
+			return Report{}, err
+		}
+		d, err := m.Digest()
+		if err != nil || d != m.SHA256 {
+			return Report{}, fmt.Errorf("%w: digest does not match the content", ErrManifest)
+		}
+	}
+	var requeue *revocationRequeue
+	if opts.Source != nil {
+		if m == nil {
+			return Report{}, fmt.Errorf("%w: the revocation source needs a manifest (a blind margin names no revocation)", ErrApply)
+		}
+		rq, err := readRevocationSource(ctx, opts.Source, schema, *m)
+		if err != nil {
+			return Report{}, err
+		}
+		requeue = &rq
+	}
+	plan, err := resolveInputs(ctx, m, opts, append(RegisteredFloorInputs(), opts.Inputs...))
+	if err != nil {
+		return Report{}, err
+	}
+	missing, err := preflight(ctx, pool, schema, requeue != nil)
+	if err != nil {
+		return Report{}, err
+	}
+	if len(missing) > 0 {
+		return Report{}, fmt.Errorf("%w: %s", ErrPrivileges, strings.Join(missing, "; "))
+	}
+	digest, source := plan.digest, plan.source
+	floorsJSON, err := json.Marshal(plan.floors)
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: encoding the floors", ErrApply)
+	}
+
+	q := authschema.Quote(schema)
+	report := Report{Source: source, Digest: digest, DryRun: !opts.Apply, Inputs: plan.reports}
+	commitErr := audit.Commit(ctx, pool, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			timeline, err := Timeline(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("reading the timeline (a server in recovery cannot be fenced)")
+			}
+			report.Timeline = timeline
+			var exists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+q+`.restore_fence_state WHERE timeline_id = $1 AND manifest_sha256 = $2)`,
+				timeline, digest).Scan(&exists); err != nil {
+				return fmt.Errorf("reading the fence state")
+			}
+			if exists {
+				return errAlready
+			}
+			if plan.margin > 0 {
+				tag, err := tx.Exec(ctx, `UPDATE `+q+`.aggregate_revisions SET revision = LEAST(revision + $1, `+fmt.Sprint(maxRevision)+`), updated_at = clock_timestamp()`, plan.margin)
+				if err != nil {
+					return fmt.Errorf("raising the revisions by the margin (sqlstate %s)", sqlState(err))
+				}
+				report.MarginRows = tag.RowsAffected()
+			}
+			tag, err := tx.Exec(ctx, `
+				WITH m AS (SELECT * FROM jsonb_to_recordset($1::jsonb) AS x(aggregate_type text, aggregate_id text, revision bigint))
+				INSERT INTO `+q+`.aggregate_revisions AS r (aggregate_type, aggregate_id, revision)
+				SELECT aggregate_type, aggregate_id, revision FROM m
+				ON CONFLICT (aggregate_type, aggregate_id)
+				DO UPDATE SET revision = EXCLUDED.revision, updated_at = clock_timestamp()
+				WHERE r.revision < EXCLUDED.revision`, string(floorsJSON))
+			if err != nil {
+				return fmt.Errorf("raising the revision floors (sqlstate %s)", sqlState(err))
+			}
+			report.FloorsRaised = tag.RowsAffected()
+			if requeue != nil {
+				if err := requeueRevocations(ctx, tx, *requeue, &report); err != nil {
+					return err
+				}
+				if err := raiseLockouts(ctx, tx, schema, *requeue, &report); err != nil {
+					return err
+				}
+			}
+			var rolesBefore int64
+			if err := tx.QueryRow(ctx, platformRolesCountSQL(schema)).Scan(&rolesBefore); err != nil {
+				return fmt.Errorf("counting the platform role assignments (sqlstate %s)", sqlState(err))
+			}
+			rolesInUse := rolesBefore > 0 || manifestRowCount(m, platformRolesSection) > 0
+			if m == nil {
+				var keys int64
+				if err := tx.QueryRow(ctx, liveKeysSQL(schema)).Scan(&keys); err != nil {
+					return fmt.Errorf("counting the live service account keys (sqlstate %s)", sqlState(err))
+				}
+				if keys > 0 {
+					report.Actions = append(report.Actions, OperatorAction{Kind: ActionRotateKeysAfterBlindMargin, Source: "auth.credential_registry", Count: keys})
+				}
+			}
+			for _, s := range sections {
+				if m == nil {
+					if q := blindReviewSQL(s, schema); q != "" {
+						ids, err := collectIDs(ctx, tx, q)
+						if err != nil {
+							return fmt.Errorf("naming the rows to review of section %s (sqlstate %s)", s.name, sqlState(err))
+						}
+						if len(ids) > 0 {
+							report.Actions = append(report.Actions, OperatorAction{Kind: ActionReviewAfterBlindMargin, Source: s.name, IDs: ids})
+						}
+					}
+					if s.manifestOnly {
+						continue
+					}
+				}
+				rows := []Row{}
+				if m != nil {
+					for _, ms := range m.Sections {
+						if ms.Name == s.name {
+							rows = ms.Rows
+						}
+					}
+				}
+				raw, err := json.Marshal(rows)
+				if err != nil {
+					return fmt.Errorf("encoding section %s", s.name)
+				}
+				if q := s.idsSQL(schema); q != "" {
+					ids, err := collectIDs(ctx, tx, q, string(raw))
+					if err != nil {
+						return fmt.Errorf("naming the operator action of section %s (sqlstate %s)", s.name, sqlState(err))
+					}
+					if len(ids) > 0 {
+						report.Actions = append(report.Actions, OperatorAction{Kind: s.action, Source: s.name, IDs: ids})
+					}
+				}
+				if q := s.queuedIDsSQL(schema); q != "" {
+					ids, err := collectIDs(ctx, tx, q, string(raw))
+					if err != nil {
+						return fmt.Errorf("naming the queued revocations of section %s (sqlstate %s)", s.name, sqlState(err))
+					}
+					if len(ids) > 0 {
+						report.Actions = append(report.Actions, OperatorAction{Kind: ActionProviderRevocationQueuedFromCredential, Source: s.name, IDs: ids})
+					}
+				}
+				if q := s.unknownRoleSQL(schema); q != "" {
+					ids, err := collectIDs(ctx, tx, q, string(raw))
+					if err != nil {
+						return fmt.Errorf("naming the unknown roles of section %s (sqlstate %s)", s.name, sqlState(err))
+					}
+					if len(ids) > 0 {
+						report.Actions = append(report.Actions, OperatorAction{Kind: ActionReviewMembershipRole, Source: s.name, IDs: ids})
+					}
+				}
+				var changed, absent int64
+				if err := tx.QueryRow(ctx, s.applySQL(schema), string(raw)).Scan(&changed, &absent); err != nil {
+					return fmt.Errorf("applying section %s (sqlstate %s)", s.name, sqlState(err))
+				}
+				if s.queues {
+					report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed},
+						SectionReport{Name: s.name + queuedSuffix, Changed: absent})
+				} else {
+					report.Sections = append(report.Sections, SectionReport{Name: s.name, Changed: changed, Absent: absent})
+				}
+				switch s.kind {
+				case kindPresence:
+					report.RowsRemoved += changed
+				case kindReport:
+				default:
+					report.Revocations += changed
+				}
+			}
+			if lockout, fired, err := platformAdminLockout(ctx, tx, schema, opts.PlatformRolesOwned, rolesInUse); err != nil {
+				return fmt.Errorf("reading the active platform administrators (sqlstate %s)", sqlState(err))
+			} else if fired {
+				report.Actions = append(report.Actions, lockout)
+			}
+			flows, err := tx.Exec(ctx, flowStatesSQL(schema))
+			if err != nil {
+				return fmt.Errorf("invalidating the SSO flow states (sqlstate %s)", sqlState(err))
+			}
+			report.Sections = append(report.Sections, SectionReport{Name: "auth.sso_flow_states", Changed: flows.RowsAffected()})
+			report.Revocations += flows.RowsAffected()
+			if !opts.Apply {
+				return errDryRun
+			}
+			report.Actions = mergeActions(report.Actions)
+			actionsJSON, err := json.Marshal(report.Actions)
+			if err != nil {
+				return fmt.Errorf("encoding the operator actions")
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO `+q+`.restore_fence_state (timeline_id, manifest_sha256, source, floors_raised, revocations_reapplied, operator_actions)
+				VALUES ($1, $2, $3, $4, $5, $6::jsonb) ON CONFLICT DO NOTHING`,
+				timeline, digest, source, report.FloorsRaised+report.MarginRows, report.Revocations+report.RowsRemoved, string(actionsJSON)); err != nil {
+				return fmt.Errorf("recording the fence (sqlstate %s)", sqlState(err))
+			}
+			return nil
+		},
+		Audit:     appliedRow(),
+		OffStream: audit.OffStreamRestoreFence,
+		Refusals:  applyRefusals(),
+	})
+	switch {
+	case errors.Is(commitErr, errDryRun):
+		return report, nil
+	case errors.Is(commitErr, errAlready):
+		report.AlreadyApplied = true
+		report.Sections = nil
+		report.FloorsRaised, report.MarginRows, report.Revocations, report.RowsRemoved = 0, 0, 0, 0
+		return report, nil
+	case commitErr != nil:
+		return Report{}, fmt.Errorf("%w: %v", ErrApply, commitErr)
+	}
+	return report, nil
+}
+
+func appliedRow() audit.AuditEvent {
+	return audit.AuditEvent{EventType: "auth.restore_fence.applied", Outcome: audit.OutcomeAllowed}
+}
+
+// sqlState is the SQLSTATE of a database error, or "none": the error text itself
+// can quote a row, so only the code is reported.
+func sqlState(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return "none"
+}
+
+// collectIDs runs an id-listing statement and returns the ids.
+func collectIDs(ctx context.Context, tx audit.TxOps, sql string, args ...any) ([]string, error) {
+	r, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	var ids []string
+	for r.Next() {
+		var id string
+		if err := r.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, r.Err()
+}

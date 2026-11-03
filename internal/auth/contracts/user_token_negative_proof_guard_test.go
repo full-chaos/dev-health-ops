@@ -23,7 +23,6 @@ var userAccessClasses = map[string]bool{
 
 const (
 	proofPush      = "internal/api/externalingest/user_tokens_refused_test.go"
-	proofLegacy    = "internal/api/legacyingest/user_tokens_refused_test.go"
 	proofACR       = "internal/apiservice/acr/user_tokens_refused_test.go"
 	proofStripe    = "internal/api/billing/user_tokens_refused_test.go"
 	proofWebhooks  = "internal/api/webhookintake/user_tokens_refused_test.go"
@@ -31,8 +30,11 @@ const (
 	proofIssue     = "internal/auth/authapi/issue_user_tokens_test.go"
 	proofRefresh   = "internal/auth/authapi/refresh_user_tokens_test.go"
 	proofExchange  = "internal/auth/workloadexchange/user_tokens_refused_test.go"
+	proofProvision = "internal/auth/authapi/provisioning_rows_test.go"
+	proofSessState = "internal/auth/authapi/session_state_user_tokens_test.go"
+	proofDelegated = "internal/auth/authapi/delegated_user_tokens_test.go"
+	proofAuthorize = "internal/auth/authapi/authorize_user_tokens_test.go"
 	pushRoutes     = "TestExternalPushAuthenticatedRoutesRefuseUserTokens"
-	legacyTest     = "TestLegacyIngestRefusesUserTokens"
 	acrTest        = "TestInternalACRRoutesRefuseUserTokens"
 	stripeTest     = "TestStripeWebhookRefusesUserTokens"
 	webhookTest    = "TestWebhookRoutesRefuseUserTokens"
@@ -41,6 +43,10 @@ const (
 	issueTest      = "TestIssueSessionRefusesUserTokens"
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
 	exchangeTest   = "TestTheExchangeRefusesUserTokens"
+	provisionTest  = "TestProvisioningRoutesRefuseUserTokens"
+	sessStateTest  = "TestSessionStateRefusesUserTokens"
+	delegatedTest  = "TestDelegatedRoutesRefuseUserTokens"
+	authorizeTest  = "TestAuthorizeRefusesUserTokens"
 	exemptExchange = "the credential is the social provider's own token in the request body, sent to the provider; no bearer of ours is read; a user flow, outside this leaf"
 )
 
@@ -50,32 +56,57 @@ type negativeProof struct {
 }
 
 var negativeProofs = map[string]negativeProof{
-	"go-api|GET /api/v1/external-ingest/availability [dev-health-ops-api @api]":               {file: proofPush, test: pushRoutes},
-	"go-api|GET /api/v1/external-ingest/batches [dev-health-ops-api @api]":                    {file: proofPush, test: pushRoutes},
-	"go-api|GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]":     {file: proofPush, test: pushRoutes},
-	"go-api|POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":                   {file: proofPush, test: pushRoutes},
-	"go-api|POST /api/v1/external-ingest/validate [dev-health-ops-api @api]":                  {file: proofPush, test: pushRoutes},
-	"go-api|GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]":    {file: proofACR, test: acrTest},
-	"go-api|GET /api/v1/internal/acr/health [dev-health-ops-api @internal]":                   {file: proofACR, test: acrTest},
-	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]": {file: proofACR, test: acrTest},
-	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-api @api]":                   {file: proofStripe, test: stripeTest},
-	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge @billing-edge]": {file: proofStripe, test: stripeTest},
-	"go-api|POST /api/v1/ingest/commits [dev-health-ops-api @api]":                            {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/deployments [dev-health-ops-api @api]":                        {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/incidents [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/pull-requests [dev-health-ops-api @api]":                      {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/telemetry [dev-health-ops-api @api]":                          {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/ingest/work-items [dev-health-ops-api @api]":                         {file: proofLegacy, test: legacyTest},
-	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                           {file: proofWebhooks, test: webhookTest},
-	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":           {file: proofWebhooks, test: webhookTest},
-	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                         {file: proofMCP, test: buildInfoTest},
-	"query-api|POST /query [dev-health-query-api @mcp]":                                       {file: proofMCP, test: mcpTest},
-	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                  {file: proofIssue, test: issueTest},
-	"auth-service|POST /internal/v1/token/exchange [dev-health-auth-service @api]":            {file: proofExchange, test: exchangeTest},
-	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                      {file: proofRefresh, test: refreshTest},
-	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                   {file: proofRefresh, test: refreshTest},
-	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                    {file: proofRefresh, test: refreshTest},
-	"auth-service|POST /api/v1/auth/social-login [dev-health-auth-service @api]":              {exempt: exemptExchange},
+	"go-api|GET /api/v1/external-ingest/availability [dev-health-ops-api @api]":                                {file: proofPush, test: pushRoutes},
+	"go-api|GET /api/v1/external-ingest/batches [dev-health-ops-api @api]":                                     {file: proofPush, test: pushRoutes},
+	"go-api|GET /api/v1/external-ingest/batches/{ingestion_id} [dev-health-ops-api @api]":                      {file: proofPush, test: pushRoutes},
+	"go-api|POST /api/v1/external-ingest/batches [dev-health-ops-api @api]":                                    {file: proofPush, test: pushRoutes},
+	"go-api|POST /api/v1/external-ingest/validate [dev-health-ops-api @api]":                                   {file: proofPush, test: pushRoutes},
+	"go-api|GET /api/v1/internal/acr/entitlements/{org_id} [dev-health-ops-api @internal]":                     {file: proofACR, test: acrTest},
+	"go-api|GET /api/v1/internal/acr/health [dev-health-ops-api @internal]":                                    {file: proofACR, test: acrTest},
+	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/llm-config [dev-health-ops-api @internal]":                  {file: proofACR, test: acrTest},
+	"go-api|GET /api/v1/internal/acr/orgs/{org_id}/principals/{user_id}/access [dev-health-ops-api @internal]": {file: proofACR, test: acrTest},
+	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-api @api]":                                    {file: proofStripe, test: stripeTest},
+	"go-api|POST /api/v1/billing/webhooks/stripe [dev-health-ops-billing-edge @billing-edge]":                  {file: proofStripe, test: stripeTest},
+	"go-api|POST /api/v1/webhooks/github [dev-health-ops-api @api]":                                            {file: proofWebhooks, test: webhookTest},
+	"go-api|POST /api/v1/webhooks/pagerduty/{binding_id} [dev-health-ops-api @api]":                            {file: proofWebhooks, test: webhookTest},
+	"query-api|GET /buildinfo [dev-health-query-api @query,internal]":                                          {file: proofMCP, test: buildInfoTest},
+	"query-api|POST /query [dev-health-query-api @mcp]":                                                        {file: proofMCP, test: mcpTest},
+	"auth-service|POST /internal/v1/sessions [dev-health-auth-service @api]":                                   {file: proofIssue, test: issueTest},
+	"auth-service|POST /internal/v1/token/exchange [dev-health-auth-service @api]":                             {file: proofExchange, test: exchangeTest},
+	"auth-service|POST /internal/v1/memberships/add [dev-health-auth-service @api]":                            {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/role [dev-health-auth-service @api]":                           {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/remove [dev-health-auth-service @api]":                         {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/memberships/transfer [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/invites/create [dev-health-auth-service @api]":                             {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/invites/accept [dev-health-auth-service @api]":                             {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/deprovision [dev-health-auth-service @api]":                  {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/reactivate [dev-health-auth-service @api]":                   {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/invites/revoke [dev-health-auth-service @api]":                             {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/suspend [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/state [dev-health-auth-service @api]":                        {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/rename [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/create [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/disable [dev-health-auth-service @api]":                   {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/enable [dev-health-auth-service @api]":                    {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/owner [dev-health-auth-service @api]":                     {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/keys/issue [dev-health-auth-service @api]":                {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/keys/rotate [dev-health-auth-service @api]":               {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/keys/revoke [dev-health-auth-service @api]":               {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/service-accounts/keys/list [dev-health-auth-service @api]":                 {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/create [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/update [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/grants/revoke [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/onboard [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/organizations/create [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/sessions/state [dev-health-auth-service @api]":                             {file: proofSessState, test: sessStateTest},
+	"auth-service|POST /internal/v1/sessions/delegated [dev-health-auth-service @api]":                         {file: proofDelegated, test: delegatedTest},
+	"auth-service|POST /internal/v1/sessions/delegated/end [dev-health-auth-service @api]":                     {file: proofDelegated, test: delegatedTest},
+	"auth-service|POST /v1/authorize [dev-health-auth-service @api]":                                           {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /v1/authorize:batch [dev-health-auth-service @api]":                                     {file: proofAuthorize, test: authorizeTest},
+	"auth-service|POST /v1/token/refresh [dev-health-auth-service @api]":                                       {file: proofRefresh, test: refreshTest},
+	"auth-service|POST /api/v1/auth/refresh [dev-health-auth-service @api]":                                    {file: proofRefresh, test: refreshTest},
+	"auth-service|POST /api/v1/auth/logout [dev-health-auth-service @api]":                                     {file: proofRefresh, test: refreshTest},
+	"auth-service|POST /api/v1/auth/social-login [dev-health-auth-service @api]":                               {exempt: exemptExchange},
 }
 
 // derivedRows reads the three profiles and returns the key of every protected row that accepts no user
@@ -177,7 +208,7 @@ func TestEveryNegativeProofNamesARealTestThatSendsUserTokens(t *testing.T) {
 	}
 }
 
-// The census: 26 derived rows = 25 proven + 1 exempt. A change to either count is a decision, made here.
+// The census: 33 derived rows = 32 proven + 1 exempt. A change to either count is a decision, made here.
 func TestNegativeProofCensus(t *testing.T) {
 	proven, exempt := 0, 0
 	for _, proof := range negativeProofs {
@@ -187,7 +218,11 @@ func TestNegativeProofCensus(t *testing.T) {
 			proven++
 		}
 	}
-	if len(derivedRows(t)) != 26 || proven != 25 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 26, 25, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before); CHAOS-11798 added the 7 provisioning rows (20, 19, 1 before);
+	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
+	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
+	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows.
+	if len(derivedRows(t)) != 51 || proven != 50 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 51, 50, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

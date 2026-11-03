@@ -1,0 +1,33 @@
+{{- /*
+The minimal RBAC auth-service's own ServiceAccount needs to have the cluster API server review a workload's projected
+token (the workload-token exchange): create on tokenreviews.authentication.k8s.io and nothing else. tokenreviews is
+cluster-scoped, so this is a ClusterRole and ClusterRoleBinding; the binding names auth-service's ServiceAccount alone.
+Rendered only while authService.workloadExchange.enabled.
+*/ -}}
+{{- if eq (include "dev-health.authWorkloadExchange" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-token-review
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-token-review
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dev-health.fullname" . }}-auth-service-token-review
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dev-health.workloadServiceAccountName" (dict "ctx" . "component" "auth-service") }}
+    namespace: {{ include "dev-health.namespace" . }}
+{{- end }}

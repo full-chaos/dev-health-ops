@@ -47,7 +47,7 @@ func TestCredentialRoutesOwnedUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t))
+	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestCredentialRoutesNotOwnedWriteNothingAndNeedNoMailProvider(t *testing.T)
 	t.Setenv("MAIL_PROVIDER", "a-provider-that-does-not-exist")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for name, owned := range map[string]string{"unset": "", "false": "false"} {
-		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, nil, schema, limits)
+		routes, components, err := credentialRoutes(credentialConfig(t, owned), logger, nil, schema, limits, nil)
 		if err != nil || len(components) != 0 || len(routes) != 6 {
 			t.Fatalf("%s: routes %d components %d err %v; want 6, 0, nil", name, len(routes), len(components), err)
 		}
@@ -140,7 +140,7 @@ func TestNotOwnedCredentialRoutesAnswer503ThroughTheServerUnderLoad(t *testing.T
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for name, owned := range map[string]string{"unset": "", "false": "false"} {
 		cfg := credentialConfig(t, owned)
-		routes, _, err := credentialRoutes(cfg, logger, nil, schema, mustLimits(t))
+		routes, _, err := credentialRoutes(cfg, logger, nil, schema, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -223,7 +223,7 @@ func TestOnlyTheSixNotOwnedCredentialRoutesAreUnthrottled(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+		credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

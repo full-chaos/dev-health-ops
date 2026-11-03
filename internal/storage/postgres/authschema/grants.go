@@ -84,6 +84,8 @@ func RuntimePosture() []TablePrivilege {
 		// Tenancy and non-human principals.
 		{Table: "organizations", Select: true, Insert: true, Update: true},
 		{Table: "memberships", Select: true, Insert: true, Update: true},
+		// Invites (0033): a revoked or accepted invite keeps its row, so no DELETE.
+		{Table: "invites", Select: true, Insert: true, Update: true},
 		{Table: "platform_role_assignments", Select: true, Insert: true, Delete: true},
 		{Table: "service_accounts", Select: true, Insert: true, Update: true},
 		{Table: "workloads", Select: true, Insert: true, Update: true},
@@ -96,6 +98,10 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "login_attempts", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "sso_flow_states", Select: true, Insert: true, Update: true, Delete: true},
 		{Table: "saml_assertion_uses", Select: true, Insert: true, Delete: true},
+		// OAuth authorization server (0042): a request row is swept once it and its
+		// code have expired; a revoked grant keeps its row, so no DELETE.
+		{Table: "oauth_authorization_requests", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "oauth_grants", Select: true, Insert: true, Update: true},
 
 		// Credential material: metadata only, and keys are read-only.
 		{Table: "signing_keys", Select: true},
@@ -105,7 +111,7 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "actions", Select: true},
 		{Table: "roles", Select: true},
 		{Table: "role_actions", Select: true},
-		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: true},
+		{Table: "resource_grants", Select: true, Insert: true, Update: true, Delete: false},
 		{Table: "policy_revisions", Select: true, Insert: true},
 		{Table: "entitlement_snapshots", Select: true, Insert: true},
 
@@ -114,6 +120,17 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "auth_outbox_events", Select: true, Insert: true, Update: true, Delete: true},
 		// Per-aggregate revision counter (0013): bumped, never deleted.
 		{Table: "aggregate_revisions", Select: true, Insert: true, Update: true},
+
+		// External credential projection (0049): written only inside audit.Commit.
+		// A digest row is never edited; a sources row is never removed.
+		{Table: "push_sources", Select: true, Insert: true},
+		{Table: "credential_projection", Select: true, Insert: true, Update: true},
+		{Table: "credential_projection_digest", Select: true, Insert: true},
+		{Table: "projection_cursor", Select: true, Insert: true, Update: true},
+		{Table: "projection_retry", Select: true, Insert: true, Update: true, Delete: true},
+
+		// Restore fence (0035): the runtime only reads which timelines are fenced.
+		{Table: "restore_fence_state", Select: true},
 	}
 }
 
@@ -228,11 +245,23 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		))
 	}
 
-	readerStatements, err := sessionReaderStatements(ctx, conn, options, schemaID)
+	sessionStatements, err := readerStatements(ctx, conn, options, schemaID,
+		options.SessionReaderRoles, SessionReaderReads(options.PlatformRolesOwned), "session reader")
 	if err != nil {
 		return err
 	}
-	statements = append(statements, readerStatements...)
+	statements = append(statements, sessionStatements...)
+
+	projectionReads, err := presentReads(ctx, conn, options.Schema, ProjectionReaderReads())
+	if err != nil {
+		return err
+	}
+	projectionStatements, err := readerStatements(ctx, conn, options, schemaID,
+		options.ProjectionReaderRoles, projectionReads, "projection reader")
+	if err != nil {
+		return err
+	}
+	statements = append(statements, projectionStatements...)
 
 	logger := options.Logger
 	if logger == nil {
@@ -257,6 +286,36 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		return err
 	}
 	publicStatements = append(publicStatements, linkPurge...)
+	membershipWrite, err := membershipWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, membershipWrite...)
+	organizationWrite, err := organizationWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, organizationWrite...)
+	inviteWrite, err := inviteWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, inviteWrite...)
+	auditWrite, err := publicAuditWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, auditWrite...)
+	providerWrite, err := ssoProviderWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, providerWrite...)
+	impersonationWrite, err := impersonationWriteStatements(ctx, conn, options, logger)
+	if err != nil {
+		return err
+	}
+	publicStatements = append(publicStatements, impersonationWrite...)
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -274,6 +333,18 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	beforePublic, err := snapshotDirectGrants(ctx, tx, publicSchema, options.RuntimeRole)
 	if err != nil {
 		return err
+	}
+	beforeReaders := make(map[string][]GrantRecord, len(options.SessionReaderRoles))
+	for _, reader := range options.SessionReaderRoles {
+		if beforeReaders[reader], err = snapshotDirectGrants(ctx, tx, options.Schema, reader); err != nil {
+			return err
+		}
+	}
+	beforeProjection := make(map[string][]GrantRecord, len(options.ProjectionReaderRoles))
+	for _, reader := range options.ProjectionReaderRoles {
+		if beforeProjection[reader], err = snapshotDirectGrants(ctx, tx, options.Schema, reader); err != nil {
+			return err
+		}
 	}
 	statements = append(statements, publicStatements...)
 
@@ -304,7 +375,24 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		g.Object = publicSchema + "." + g.Object
 		lost = append(lost, g)
 	}
+	// A session reader's lost platform role read counts too (the platform
+	// roles switch turned off), named by the reader.
+	for _, reader := range options.SessionReaderRoles {
+		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
+		if err != nil {
+			return err
+		}
+		lost = append(lost, readerNarrowing(reader, beforeReaders[reader], afterReader)...)
+	}
+	for _, reader := range options.ProjectionReaderRoles {
+		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
+		if err != nil {
+			return err
+		}
+		lost = append(lost, projectionReaderNarrowing(reader, beforeProjection[reader], afterReader)...)
+	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
+	var deferred []GrantRecord
 	if len(lost) > 0 {
 		digest := narrowingDigest(lost)
 		if options.AcknowledgeNarrowing != digest {
@@ -321,6 +409,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			if err != nil {
 				return err
 			}
+			readers, err := retainReaderPlatformGrants(ctx, tx, lost, schemaID)
+			if err != nil {
+				return err
+			}
+			kept = append(kept, readers...)
 			logger.WarnContext(
 				ctx, "runtime grants narrowing deferred with operator acknowledgement",
 				"schema", options.Schema, "runtime_role", options.RuntimeRole,
@@ -332,9 +425,31 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			"schema", options.Schema, "runtime_role", options.RuntimeRole,
 			"narrowed", len(lost)-len(kept), "digest", digest,
 		)
+		deferred = kept
 		if retained != nil {
 			*retained = kept
 		}
+	}
+	// A reader that cannot hold exactly its declared reads is refused here,
+	// inside the transaction, so the reader revokes roll back with the refusal.
+	readerViolations, err := sessionReaderViolations(ctx, tx.Conn(), options)
+	if err != nil {
+		return err
+	}
+	projectionViolations, err := projectionReaderViolations(ctx, tx.Conn(), options)
+	if err != nil {
+		return err
+	}
+	readerViolations = append(readerViolations, projectionViolations...)
+	if readerViolations = excuseRetained(readerViolations, deferred); len(readerViolations) > 0 {
+		logger.ErrorContext(
+			ctx, "session readers cannot hold exactly their declared reads; refusing and rolling back",
+			"schema", options.Schema, "violations", len(readerViolations),
+		)
+		return fmt.Errorf(
+			"%w (schema %q, role %q):\n%s",
+			ErrRuntimeRoleCanEscalate, options.Schema, options.RuntimeRole, describeViolations(readerViolations),
+		)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the runtime grants: %v", ErrMigrationFailed, redactPGError(err))

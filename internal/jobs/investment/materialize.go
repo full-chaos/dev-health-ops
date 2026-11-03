@@ -1218,6 +1218,8 @@ func (m *Materializer) flushTokenUsage(ctx context.Context, cfg Config, stats St
 		OutputTokens: stats.LLMOutputTokens,
 		Calls:        stats.LLMCalls,
 		ComputedAt:   cfg.ComputedAt,
+
+		CredentialSource: m.usageCredentialSource(),
 	}); err != nil {
 		return fmt.Errorf("write llm_token_usage: %w", err)
 	}

@@ -44,7 +44,7 @@ func TraceHandler(next http.Handler, options TraceOptions) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	access := newAccessObserver(logger, options.Listener, options.TrustRemoteSampling)
+	access := newAccessObserver(logger, options.Listener, options.TrustRemoteSampling, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		ctx, span := observer.start(r)

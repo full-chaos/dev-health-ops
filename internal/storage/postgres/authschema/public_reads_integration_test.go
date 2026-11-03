@@ -24,14 +24,15 @@ import (
 var publicReadOracle = map[string][]string{
 	"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"},
-	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at"},
-	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users",
+	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"},
+	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
 	"organizations":                {"id", "slug", "name", "is_active", "tier"},
 	"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
 	"org_licenses":                 {"org_id", "tier", "features_override"},
 	"org_activity":                 {"org_id", "has_data", "computed_at"},
 	"internal_service_credentials": {"id", "service_name", "token_hash", "scopes", "expires_at", "revoked_at"},
+	"impersonation_sessions":       {"id", "admin_user_id", "ended_at", "expires_at"},
 }
 
 type publicReadsEnv struct {
@@ -69,9 +70,12 @@ func newPublicReadsFixture(t *testing.T, ctx context.Context, hide ...string) *p
 		if _, err := conn.Exec(ctx, fmt.Sprintf(`GRANT CREATE ON SCHEMA public TO %s`, Quote(mustValidatedIdentifier(migrationRole)))); err != nil {
 			t.Fatal(err)
 		}
-		owned := []string{LegacyRefreshTokenGrant().Table, "email_verification_tokens", "password_reset_tokens"}
+		owned := []string{LegacyRefreshTokenGrant().Table, "email_verification_tokens", "password_reset_tokens", publicAuditTable}
 		for table := range publicReadOracle {
 			owned = append(owned, table)
+		}
+		for _, grant := range InviteWriteGrants() {
+			owned = append(owned, grant.Table)
 		}
 		for _, table := range owned {
 			if _, err := conn.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s OWNER TO %s`,

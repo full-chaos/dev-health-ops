@@ -29,11 +29,14 @@ func (s *writeCountingStore) ProvisionFederated(context.Context, identity.Provis
 	return uuid.New(), nil
 }
 
-// A provider email that holds U+FFFD, written as a lone surrogate escape or as
-// the character itself, is not the provider's address: it is refused as an
-// unverified email before any write.
+// A provider email that holds a lone surrogate escape is refused as an unverified
+// email and one that holds the character U+FFFD itself as an unusable address
+// (go-api's answers), both before any write.
 func TestAReplacementCharacterInTheProviderEmailWritesNothing(t *testing.T) {
-	for _, raw := range []string{`e\ud800@example.com`, `\ud800@example.com`, "e\xef\xbf\xbd@example.com", `e@exa\udfffmple.com`} {
+	for raw, want := range map[string]error{
+		`e\ud800@example.com`: ErrEmailUnverified, `\ud800@example.com`: ErrEmailUnverified,
+		"e\xef\xbf\xbd@example.com": ErrUnusableEmail, `e@exa\udfffmple.com`: ErrEmailUnverified,
+	} {
 		f := newFakeProviders(t)
 		store := &writeCountingStore{}
 		svc, err := New(Config{Store: store, Providers: f.client()})
@@ -42,8 +45,8 @@ func TestAReplacementCharacterInTheProviderEmailWritesNothing(t *testing.T) {
 		}
 		tok := f.token("surrogate", account{provider: Google, googleID: "g-1", verified: true, rawEmail: raw})
 		_, err = svc.Exchange(context.Background(), Google, tok, nil)
-		if !errors.Is(err, ErrEmailUnverified) {
-			t.Errorf("%q: err = %v, want ErrEmailUnverified", raw, err)
+		if !errors.Is(err, want) {
+			t.Errorf("%q: err = %v, want %v", raw, err, want)
 		}
 		if n := store.provisioned.Load(); n != 0 {
 			t.Errorf("%q: ProvisionFederated called %d times", raw, n)

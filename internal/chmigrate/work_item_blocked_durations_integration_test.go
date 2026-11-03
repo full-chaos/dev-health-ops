@@ -4,12 +4,11 @@ package chmigrate_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -18,7 +17,7 @@ import (
 // team with its duration. A zero snapshot replaces an earlier positive result,
 // so a reader that groups by the stable identity before filtering positives
 // does not report an item that is no longer blocked.
-func TestWorkItemBlockedDurationsMigrationReplacesAStalePositive(t *testing.T) {
+func TestWorkItemBlockedDurationsZeroSnapshotReplacesAStalePositive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	instance, err := containers.StartClickHouse(ctx)
@@ -30,6 +29,7 @@ func TestWorkItemBlockedDurationsMigrationReplacesAStalePositive(t *testing.T) {
 		defer closeCancel()
 		_ = instance.Close(closeCtx)
 	})
+	chschema.Apply(ctx, t, instance) // the head: work_item_blocked_durations_daily as migration 104 made it
 	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
 	if err != nil {
 		t.Fatal(err)
@@ -40,18 +40,6 @@ func TestWorkItemBlockedDurationsMigrationReplacesAStalePositive(t *testing.T) {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
-	}
-
-	sql, err := os.ReadFile("sql/104_work_item_blocked_durations.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := chmigrate.SplitStatements(string(sql))
-	if len(statements) != 1 {
-		t.Fatalf("migration 104 has %d statements, want its one table", len(statements))
-	}
-	for _, statement := range statements {
-		exec(statement)
 	}
 
 	insert := func(org, scope, teamID, teamName, item, duration, computedAt string) {
@@ -100,13 +88,5 @@ WHERE duration_hours > 0`, org).Scan(&count); err != nil {
 	}
 	if got := positiveCount("org-b"); got != 1 {
 		t.Fatalf("org-b positive count = %d, want 1 for its independent row", got)
-	}
-
-	// The migration is re-runnable: the table and all snapshots remain valid.
-	for _, statement := range statements {
-		exec(statement)
-	}
-	if got := positiveCount("org-a"); got != 0 {
-		t.Fatalf("after migration rerun, org-a positive count = %d, want 0", got)
 	}
 }

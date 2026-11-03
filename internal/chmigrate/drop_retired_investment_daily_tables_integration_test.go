@@ -58,9 +58,10 @@ func countRetiredInvestmentTables(t *testing.T, ctx context.Context, conn driver
 	return out
 }
 
-// INVARIANT (CHAOS-9302): after the head of the chain neither table of the
-// retired rule classifier exists, on an empty database, and on a database that
-// held the tables with rows. The table that replaced them stays.
+// INVARIANT (CHAOS-9302): after the head neither table of the retired rule
+// classifier exists on an empty database, and the table that replaced them
+// stays. (The drop of tables with rows, migration 120, is archived with the
+// chain it belongs to, CHAOS-11751.)
 func TestRetiredInvestmentDailyTablesAreAbsentAfterTheHeadOnAnEmptyDatabase(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -74,11 +75,11 @@ func TestRetiredInvestmentDailyTablesAreAbsentAfterTheHeadOnAnEmptyDatabase(t *t
 		t.Fatal(err)
 	}
 	found := false
-	for _, file := range chain {
-		found = found || file.Version == dropRetiredInvestmentVersion
+	for _, version := range baseline.Versions {
+		found = found || version == dropRetiredInvestmentVersion
 	}
 	if !found {
-		t.Fatalf("the chain holds no %s: the measurement did not happen", dropRetiredInvestmentVersion)
+		t.Fatalf("the head baseline records no %s: the measurement did not happen", dropRetiredInvestmentVersion)
 	}
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
 		t.Fatal(err)
@@ -91,57 +92,5 @@ func TestRetiredInvestmentDailyTablesAreAbsentAfterTheHeadOnAnEmptyDatabase(t *t
 	}
 	if counts["work_item_completion_daily"] != 1 {
 		t.Fatalf("work_item_completion_daily is missing after the head: %v", counts)
-	}
-}
-
-func TestRetiredInvestmentDailyTablesWithRowsAreGoneAfterTheMigration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-	db, conn := startDropRetiredInvestmentClickHouse(t, ctx)
-	baseline, err := chmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := chmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var before []chmigrate.ChainFile
-	for _, file := range chain {
-		if file.Version != dropRetiredInvestmentVersion {
-			before = append(before, file)
-		}
-	}
-	if len(before) != len(chain)-1 {
-		t.Fatalf("chain without the drop holds %d of %d files: the measurement did not happen", len(before), len(chain))
-	}
-	if _, err := chmigrate.Upgrade(ctx, db, baseline, before); err != nil {
-		t.Fatal(err)
-	}
-	for _, table := range retiredInvestmentTables {
-		if err := conn.Exec(ctx, `INSERT INTO `+table+` (day, org_id) VALUES ('2026-10-04', 'org-a'), ('2026-10-05', 'org-b')`); err != nil {
-			t.Fatalf("seed %s: %v", table, err)
-		}
-		var rows uint64
-		if err := conn.QueryRow(ctx, `SELECT count() FROM `+table).Scan(&rows); err != nil || rows != 2 {
-			t.Fatalf("seed %s: %d rows, err %v, want 2", table, rows, err)
-		}
-	}
-	var viewRows uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM v_investment_flow_edges`).Scan(&viewRows); err != nil {
-		t.Fatalf("v_investment_flow_edges did not exist before migration 120: %v", err)
-	}
-	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
-		t.Fatal(err)
-	}
-	counts := countRetiredInvestmentTables(t, ctx, conn, retiredInvestmentObjects...)
-	for table, present := range counts {
-		if present != 0 {
-			t.Fatalf("%s still exists after migration 120", table)
-		}
-	}
-	// Applying the head again is a no-op, and the statements are re-runnable.
-	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
-		t.Fatal(err)
 	}
 }

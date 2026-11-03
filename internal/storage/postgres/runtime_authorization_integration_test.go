@@ -73,10 +73,11 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"CREATE TABLE public.integrations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_sources (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.integration_datasets (id bigint PRIMARY KEY)",
-		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY, is_active boolean, updated_at timestamptz)",
+		"CREATE TABLE public.integration_credentials (id bigint PRIMARY KEY, is_active boolean, updated_at timestamptz, last_test_at timestamptz, last_test_success boolean, last_test_error text)",
 		"CREATE TABLE public.provider_oauth_credentials (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.github_app_installations (id bigint PRIMARY KEY, installation_id bigint, account_login text, account_type text, org_id text, suspended_at timestamptz, created_at timestamptz, updated_at timestamptz)",
 		"CREATE TABLE public.webhook_sync_requests (delivery_id bigint PRIMARY KEY, org_id text, sync_config_id uuid, mode text, source_ids text[], scheduled_for timestamptz, created_at timestamptz, attempts int, next_attempt_at timestamptz, last_error text, refused_at timestamptz, refused_reason text, minted_at timestamptz, occurrence_id text)",
+		"CREATE TABLE public.provider_oauth_revocations (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.sync_runs (id bigint PRIMARY KEY)",
 		// worker_job_routes is coordinator-exclusive under the Option B split
 		// (role-partition manifest, removed in e23ede618; see git history at
@@ -185,6 +186,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + runtimeAuthorizationDomainRole,
+		"GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_oauth_revocations TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources, public.integration_datasets, public.sync_runs, public.sync_run_units TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE ON TABLE public.report_runs, public.saved_reports TO " + runtimeAuthorizationDomainRole,
 		// CHAOS-4209: observeTerminalSyncRun terminalizes the backfill and
@@ -225,7 +227,7 @@ func TestRuntimeAuthorizationBindsSeparateLeastPrivilegeRolePools(t *testing.T) 
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationDomainRole,
-		"GRANT UPDATE (is_active, updated_at) ON TABLE public.integration_credentials TO " + runtimeAuthorizationDomainRole,
+		"GRANT UPDATE (is_active, updated_at, last_test_at, last_test_success, last_test_error) ON TABLE public.integration_credentials TO " + runtimeAuthorizationDomainRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_outbox TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, INSERT ON TABLE public.worker_job_delivery_abandonments TO " + runtimeAuthorizationQueueRole,
 		"GRANT SELECT, UPDATE, DELETE ON TABLE public.worker_job_completion_fences TO " + runtimeAuthorizationQueueRole,

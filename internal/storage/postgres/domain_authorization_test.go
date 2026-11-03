@@ -217,6 +217,25 @@ func TestDomainPostureInventoriesPagerDutyOAuthRotationPrivileges(t *testing.T) 
 	}
 }
 
+// CHAOS-12010: the revocation worker claims, deletes and updates a pending row;
+// it never queues one.
+func TestDomainPostureInventoriesProviderRevocationWorkerPrivileges(t *testing.T) {
+	t.Parallel()
+	var matches []TablePrivilege
+	for _, table := range domainPosture().RequiredTables {
+		if table.TableName == "provider_oauth_revocations" {
+			matches = append(matches, table)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("provider revocation posture entries=%d, want 1", len(matches))
+	}
+	grant := matches[0]
+	if grant.AllowInsert || !grant.AllowUpdate || !grant.AllowDelete {
+		t.Fatalf("provider revocation posture=%+v, want SELECT+UPDATE+DELETE only", grant)
+	}
+}
+
 func TestDomainPostureUsesWorkerInstancesTable(t *testing.T) {
 	t.Parallel()
 

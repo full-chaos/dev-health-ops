@@ -93,14 +93,27 @@ func (s *Store) ProjectOrganization(ctx context.Context, orgID uuid.UUID) (err e
 		return nil
 	case err != nil:
 		return s.storeErr(ctx, "read auth.organizations", err)
-	case cur == src:
+	case cur == keepSuspended(cur, src):
 		return nil
 	}
-	if err := s.updateOrganization(ctx, orgID, src, cur); err != nil {
+	if err := s.updateOrganization(ctx, orgID, keepSuspended(cur, src), cur); err != nil {
 		return err
 	}
 	outcome = "updated"
 	return nil
+}
+
+// keepSuspended is the one reactivation rule of every refresh from go-api's
+// row (the sign-in projection and the organizations backfill): an
+// organization suspended in the auth schema stays suspended. go-api's name and
+// slug still flow, and its is_active can suspend, never reactivate: a
+// suspension, an organization deprovision's included, ends only by an
+// auth-service verb (D6456, deny first).
+func keepSuspended(cur, src orgState) orgState {
+	if !cur.active {
+		src.active = false
+	}
+	return src
 }
 
 func (s *Store) insertOrganization(ctx context.Context, orgID uuid.UUID, src orgState) error {
@@ -142,6 +155,11 @@ RETURNING id`, orgID, src.slug, src.name, src.active).Scan(&inserted)
 	return s.storeErr(ctx, "insert organization", err)
 }
 
+// updateOrganization writes go-api's slug and name and a suspension, never a
+// reactivation: the UPDATE leaves disabled_at as it is when go-api's row is
+// active, so a suspension that commits after cur was read (an organization
+// deprovision) survives a projection planned before it. Only the auth-service
+// organization verb (org.Store.Reactivate) clears disabled_at.
 func (s *Store) updateOrganization(ctx context.Context, orgID uuid.UUID, src, cur orgState) error {
 	org := orgID.String()
 	var events []audit.OutboxEvent
@@ -158,9 +176,9 @@ func (s *Store) updateOrganization(ctx context.Context, orgID uuid.UUID, src, cu
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.organizations
-SET slug = $2, name = $3, disabled_at = CASE WHEN $4::boolean THEN NULL ELSE COALESCE(disabled_at, clock_timestamp()) END,
+SET slug = $2, name = $3, disabled_at = CASE WHEN $4::boolean THEN disabled_at ELSE COALESCE(disabled_at, clock_timestamp()) END,
     updated_at = clock_timestamp()
-WHERE id = $1 AND (slug IS DISTINCT FROM $2 OR name IS DISTINCT FROM $3 OR (disabled_at IS NULL) IS DISTINCT FROM $4::boolean)`,
+WHERE id = $1 AND (slug IS DISTINCT FROM $2 OR name IS DISTINCT FROM $3 OR (NOT $4::boolean AND disabled_at IS NULL))`,
 				orgID, src.slug, src.name, src.active)
 			return err
 		},

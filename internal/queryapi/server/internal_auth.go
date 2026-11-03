@@ -70,7 +70,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 	}
 
 	if edgeAuth != nil {
-		if alg, ok := jwtHeaderAlg(token); ok && alg == principal.EdgeAlgorithm {
+		if edgeCarrierToken(edgeAuth, token) {
 			return authenticateEdgeCarrier(w, r, edgeAuth, edgeStore, token)
 		}
 	}
@@ -103,6 +103,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 // get_authenticated_user does the same (services/auth.py:350), never
 // re-verified against a live row on either plane today.
 func authenticateEdgeCarrier(w http.ResponseWriter, r *http.Request, edgeAuth *policy.Authenticator, edgeStore policy.Store, token string) (authctx.Claims, bool) {
+	r = r.WithContext(policy.WithRouteProfile(r.Context(), routeProfile(r)))
 	claims, outcome := checkEdgeCarrier(r, edgeAuth, token, liveScope(edgeStore))
 	if outcome != edgeAccepted {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -190,7 +191,7 @@ func roleInOrg(user *policy.User, orgID, memberRole string, member bool) (string
 	switch {
 	case member:
 		return memberRole, true
-	case user.IsSuperuser && orgID != user.OrgID:
+	case user.Holds(policy.ActionAdminOrgs) && orgID != user.OrgID:
 		return "", true
 	}
 	return "", false
@@ -279,16 +280,19 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		}
 		role = orgRole
 		orgID = canonicalOrg(orgID)
-	case !user.IsSuperuser:
+	case !user.IsSuperuser && user.Platform == nil:
 		noteRefusal(r, "edge_org_missing", "edge")
 		return authctx.Claims{}, edgeRefused
 	}
 	// No org at all (a platform-wide operation, e.g.
 	// productTelemetryPlatformDashboard, which Python itself calls with
-	// org_id="" -- schema.py:222): no membership, no role in an org.
+	// org_id="" -- schema.py:222): no membership, no role in an org. A caller
+	// with no flag gets here only with a platform action set from the live
+	// row; graph.OperationOrgGuard then admits only the operations whose
+	// named action that set holds.
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive}, edgeAccepted
+	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive, Platform: user.Platform}, edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an
@@ -329,7 +333,7 @@ func authenticateEdgeTokenOnly(r *http.Request, edgeAuth *policy.Authenticator) 
 			r.URL.Path, envelopeRequestID(r))
 		return authctx.Claims{}, edgeUnavailable
 	}
-	if alg, ok := jwtHeaderAlg(token); !ok || alg != principal.EdgeAlgorithm {
+	if !edgeCarrierToken(edgeAuth, token) {
 		noteRefusal(r, "not_an_edge_token", "edge")
 		return authctx.Claims{}, edgeRefused
 	}

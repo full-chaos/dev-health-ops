@@ -6,7 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
@@ -15,13 +19,51 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -workload N -environment E -trust-domain T -issuer I -namespace NS -service-account SA [-uid U] [-apply]"
+const workloadsUsage = "usage: auth-migrate workloads seed [-apply] | bind -workload N -environment E -trust-domain T -issuer I -namespace NS -service-account SA [-uid U] [-apply]" +
+	" | bootstrap-create -workload N -out PATH [-audience A]... [-expires-in DUR] [-apply]" +
+	" | bootstrap-rotate -workload N -out PATH -overlap DUR [-expires-in DUR] [-apply]" +
+	" | bootstrap-revoke -credential ID -reason compromised|owner_request [-apply]" +
+	" | bootstrap-disable -workload N [-apply]" +
+	" | enable -workload N -operator ID [-enable-principal] [-apply]" +
+	" | disable -workload N [-apply]" +
+	" | rebind -trust-domain T -issuer I -namespace NS -service-account SA -uid U [-apply]" +
+	" | binding-disable|binding-enable -trust-domain T -issuer I -namespace NS -service-account SA [-apply]" +
+	"\ndisable sets the workload row's and its principal's disabled mark at once: the exchange refuses every binding of N. enable undoes it." +
+	"\nrebind sets the ServiceAccount uid pin of a binding. Read U from the cluster (kubectl get sa NAME -n NS -o jsonpath='{.metadata.uid}'), never from a failing caller:" +
+	" a recreated ServiceAccount of the same name is a new identity. It never enables a disabled binding; binding-enable does that." +
+	"\nA bootstrap value is written once, to a new 0600 -out file, and never to argv, stdout or a log." +
+	"\nPut -out in a directory writable only by the operator: a failed verb's file is removed by path." +
+	"\nbootstrap-disable revokes every live bootstrap value of N at once; workload tokens issued before it live at most 300 s." +
+	"\nenable clears the workload row's disabled mark (and, with -enable-principal, its workload principal's); ID is the enabled" +
+	" principal who enables it, named in the audit row. enable mints no credential: run bootstrap-create after it."
 
 type workloadsArgs struct {
 	verb    string
 	apply   bool
 	name    string
 	binding workload.BindingSpec
+
+	out          string
+	audiences    audienceList
+	expiresIn    time.Duration
+	overlap      time.Duration
+	credentialID uuid.UUID
+	reason       string
+
+	tuple workload.BindingTuple
+
+	operator        uuid.UUID
+	enablePrincipal bool
+}
+
+// audienceList is a repeatable -audience flag.
+type audienceList []string
+
+func (l *audienceList) String() string { return strings.Join(*l, ",") }
+
+func (l *audienceList) Set(v string) error {
+	*l = append(*l, v)
+	return nil
 }
 
 // parseWorkloadsArgs refuses a bad command line before any environment or
@@ -41,16 +83,37 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 	flags.StringVar(&parsed.binding.Namespace, "namespace", "", "bind: the Kubernetes namespace")
 	flags.StringVar(&parsed.binding.ServiceAccountName, "service-account", "", "bind: the Kubernetes service account name")
 	flags.StringVar(&parsed.binding.ServiceAccountUID, "uid", "", "bind: the service account uid, when it is to be pinned")
+	flags.StringVar(&parsed.out, "out", "", "bootstrap-create, bootstrap-rotate: the NEW file (mode 0600) the value is written to once, in a directory writable only by the operator")
+	flags.Var(&parsed.audiences, "audience", "bootstrap-create: an audience of the value (repeatable; default: the workload's audiences)")
+	flags.DurationVar(&parsed.expiresIn, "expires-in", workload.BootstrapExpiryDefault, "bootstrap-create, bootstrap-rotate: the value's lifetime (at most 2160h)")
+	flags.DurationVar(&parsed.overlap, "overlap", 0, "bootstrap-rotate: how long the old value stays live (0 to 1h)")
+	credential := flags.String("credential", "", "bootstrap-revoke: the credential id")
+	flags.StringVar(&parsed.reason, "reason", "", "bootstrap-revoke: compromised or owner_request")
+	operator := flags.String("operator", "", "enable: the id of the enabled principal who enables (the audit row's actor)")
+	flags.BoolVar(&parsed.enablePrincipal, "enable-principal", false, "enable: also enable the workload's principal row (workload kind only)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return workloadsArgs{}, err
 	}
 	if flags.NArg() != 0 {
 		return workloadsArgs{}, errors.New("positional arguments are not accepted")
 	}
+	set := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	only := func(verb string, allowed ...string) error {
+		for name := range set {
+			if name != "apply" && !slices.Contains(allowed, name) {
+				return fmt.Errorf("%s does not take -%s", verb, name)
+			}
+		}
+		return nil
+	}
 	switch parsed.verb {
 	case "seed":
 		if parsed.name != "" || parsed.binding != (workload.BindingSpec{}) {
 			return workloadsArgs{}, errors.New("seed takes no binding flags")
+		}
+		if err := only("seed"); err != nil {
+			return workloadsArgs{}, err
 		}
 	case "bind":
 		if workload.ValidateName(parsed.name) != nil {
@@ -58,6 +121,93 @@ func parseWorkloadsArgs(args []string, stderr io.Writer) (workloadsArgs, error) 
 		}
 		if workload.ValidateBinding(parsed.binding) != nil {
 			return workloadsArgs{}, errors.New("bind needs a valid -environment, -trust-domain, -issuer, -namespace and -service-account (and -uid, if given)")
+		}
+		if err := only("bind", "workload", "environment", "trust-domain", "issuer", "namespace", "service-account", "uid"); err != nil {
+			return workloadsArgs{}, err
+		}
+	case "bootstrap-create", "bootstrap-rotate":
+		allowed := []string{"workload", "out", "expires-in", "audience"}
+		if parsed.verb == "bootstrap-rotate" {
+			allowed = []string{"workload", "out", "expires-in", "overlap"}
+		}
+		if err := only(parsed.verb, allowed...); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, fmt.Errorf("%s needs a valid -workload", parsed.verb)
+		}
+		if parsed.out == "" || parsed.out == "-" {
+			return workloadsArgs{}, fmt.Errorf("%s needs -out, a file path (never stdout)", parsed.verb)
+		}
+		if parsed.expiresIn <= 0 || parsed.expiresIn > workload.BootstrapExpiryCeiling {
+			return workloadsArgs{}, errors.New("-expires-in must be above 0 and at most 2160h (90 d)")
+		}
+		if workload.ValidateAudiences(parsed.audiences) != nil {
+			return workloadsArgs{}, errors.New("an -audience is malformed or repeated")
+		}
+		if parsed.verb == "bootstrap-rotate" {
+			if !set["overlap"] {
+				return workloadsArgs{}, errors.New("bootstrap-rotate needs -overlap (0 cuts over at once)")
+			}
+			if parsed.overlap < 0 || parsed.overlap > workload.BootstrapOverlapCeiling {
+				return workloadsArgs{}, errors.New("-overlap must be from 0 to 1h")
+			}
+		}
+	case "bootstrap-revoke":
+		if err := only(parsed.verb, "credential", "reason"); err != nil {
+			return workloadsArgs{}, err
+		}
+		id, err := uuid.Parse(*credential)
+		if err != nil || id == uuid.Nil || id.String() != *credential {
+			return workloadsArgs{}, errors.New("bootstrap-revoke needs -credential, a credential id")
+		}
+		parsed.credentialID = id
+		if parsed.reason != workload.BootstrapReasonCompromised && parsed.reason != workload.BootstrapReasonOwnerRequest {
+			return workloadsArgs{}, errors.New("bootstrap-revoke needs -reason compromised or owner_request")
+		}
+	case "bootstrap-disable":
+		if err := only(parsed.verb, "workload"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("bootstrap-disable needs a valid -workload")
+		}
+	case "enable":
+		if err := only(parsed.verb, "workload", "operator", "enable-principal"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("enable needs a valid -workload")
+		}
+		id, err := uuid.Parse(*operator)
+		if err != nil || id == uuid.Nil || id.String() != *operator {
+			return workloadsArgs{}, errors.New("enable needs -operator, a principal id")
+		}
+		parsed.operator = id
+	case "disable":
+		if err := only(parsed.verb, "workload"); err != nil {
+			return workloadsArgs{}, err
+		}
+		if workload.ValidateName(parsed.name) != nil {
+			return workloadsArgs{}, errors.New("disable needs a valid -workload")
+		}
+	case "rebind", "binding-disable", "binding-enable":
+		allowed := []string{"trust-domain", "issuer", "namespace", "service-account"}
+		if parsed.verb == "rebind" {
+			allowed = append(allowed, "uid")
+		}
+		if err := only(parsed.verb, allowed...); err != nil {
+			return workloadsArgs{}, err
+		}
+		parsed.tuple = workload.BindingTuple{TrustDomain: parsed.binding.TrustDomain, Issuer: parsed.binding.Issuer,
+			Namespace: parsed.binding.Namespace, ServiceAccountName: parsed.binding.ServiceAccountName}
+		if workload.ValidateTuple(parsed.tuple) != nil {
+			return workloadsArgs{}, fmt.Errorf("%s needs a valid -trust-domain, -issuer, -namespace and -service-account", parsed.verb)
+		}
+		withEnv := parsed.binding
+		withEnv.Environment = "x"
+		if parsed.verb == "rebind" && (!set["uid"] || parsed.binding.ServiceAccountUID == "" || workload.ValidateBinding(withEnv) != nil) {
+			return workloadsArgs{}, errors.New("rebind needs -uid, a service account uid (lowercase 8-4-4-4-12 hex)")
 		}
 	default:
 		return workloadsArgs{}, errors.New("unknown verb")
@@ -153,6 +303,14 @@ func executeWorkloads(parent context.Context, args []string, lookup secrets.Look
 			return 1
 		}
 		fmt.Fprintf(stdout, "workloads bind applied: workload=%s environment=%s binding=%s\n", parsed.name, parsed.binding.Environment, id)
+	case "enable":
+		return runEnable(ctx, store, parsed, stdout, stderr)
+	case "disable":
+		return runDisable(ctx, store, parsed, stdout, stderr)
+	case "rebind", "binding-disable", "binding-enable":
+		return runBinding(ctx, store, parsed, stdout, stderr)
+	default:
+		return runBootstrap(ctx, store, parsed, stdout, stderr)
 	}
 	return 0
 }
@@ -163,8 +321,38 @@ func failureClass(err error) string {
 		return "workload not registered"
 	case errors.Is(err, workload.ErrBindingTaken):
 		return "federation tuple already bound"
+	case errors.Is(err, workload.ErrBindingNotFound):
+		return "binding not found"
+	case errors.Is(err, workload.ErrRebindStateChanged):
+		return "the binding changed during the run; read it again"
 	case errors.Is(err, workload.ErrBindingInvalid):
 		return "binding field refused"
+	case errors.Is(err, workload.ErrBootstrapLive):
+		return "the workload has a live bootstrap value; rotate it"
+	case errors.Is(err, workload.ErrBootstrapRotating):
+		return "a rotation is still in its overlap"
+	case errors.Is(err, workload.ErrBootstrapNone):
+		return "the workload has no live bootstrap value"
+	case errors.Is(err, workload.ErrBootstrapNotFound):
+		return "bootstrap credential not found"
+	case errors.Is(err, workload.ErrBootstrapWorkloadDisabled):
+		return "the workload row is disabled; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID, then bootstrap-create"
+	case errors.Is(err, workload.ErrBootstrapPrincipalDisabled):
+		return "the workload's principal is disabled, its row is not; to recover: bootstrap-disable -workload NAME -apply (revokes its live values), then auth-migrate workloads enable -workload NAME -operator ID -enable-principal, then bootstrap-create"
+	case errors.Is(err, workload.ErrOperatorNotFound):
+		return "the operator principal does not exist"
+	case errors.Is(err, workload.ErrOperatorDisabled):
+		return "the operator principal is disabled"
+	case errors.Is(err, workload.ErrOperatorIsSubject):
+		return "the operator cannot be the workload's own principal"
+	case errors.Is(err, workload.ErrPrincipalNotWorkload):
+		return "the workload's principal is not of kind workload; -enable-principal refuses it"
+	case errors.Is(err, workload.ErrEnableLiveBootstrap):
+		return "the workload holds a live bootstrap value; revoke it first (bootstrap-disable -workload NAME -apply, or bootstrap-revoke), then enable"
+	case errors.Is(err, workload.ErrEnableStateChanged):
+		return "the workload changed during the run; run again"
+	case errors.Is(err, workload.ErrAudienceInvalid):
+		return "audience refused"
 	case errors.Is(err, workload.ErrStore):
 		return "store unavailable"
 	}

@@ -7,6 +7,8 @@
 # One line per try on stderr: `retry: name=NAME attempt=N/TRIES rc=RC elapsed=Ss` (RETRY_QUIET=1 prints none, for a
 # caller that prints its own). The command's own output is not touched. Returns 0 on the first success, else the rc of the
 # last try; 2 (and no run) for a bad argument.
+# RETRY_WHEN=FUNCTION (CHAOS-12372): after a failed try that is not the last, FUNCTION RC is called; a nonzero answer stops
+# the loop at once (no wait) and the try's rc is returned. Unset, every failed try is retried.
 
 retry_named() {
   local name="${1-}" tries="${2-}" spec="${3-}" n=0 rc=0 start g base gap i
@@ -42,6 +44,7 @@ retry_named() {
     [ "${RETRY_QUIET:-0}" = 1 ] || printf 'retry: name=%s attempt=%d/%d rc=%d elapsed=%ds\n' "${name}" "${n}" "${tries}" "${rc}" "$((SECONDS - start))" >&2
     [ "${rc}" -ne 0 ] || return 0
     if [ "${n}" -lt "${tries}" ]; then
+      if [ -n "${RETRY_WHEN:-}" ] && ! "${RETRY_WHEN}" "${rc}"; then return "${rc}"; fi
       i=$((n - 1))
       sleep "${gaps[${i}]:-${gaps[${#gaps[@]} - 1]}}"
     fi

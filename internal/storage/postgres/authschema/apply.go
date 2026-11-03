@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,6 +30,33 @@ const advisoryLockKey int64 = 0x4155_5448_0001 // "AUTH" + lineage 1
 // with the objects it describes and travels with them.
 const versionTable = "schema_migrations"
 
+// The lock policy of one migration's transaction (CHAOS-12200).
+//
+// A migration that needs a strong table lock -- 0037's ALTER TABLE
+// credential_registry takes ACCESS EXCLUSIVE -- waits behind every open
+// transaction on that table, and while it waits every NEW reader of the table
+// queues behind it. Without a bound, auth paths that read the table stall for
+// as long as the oldest open reader stays open.
+//
+// lock_timeout bounds that wait. After LockTimeout the attempt rolls back and
+// gives up its place in the queue, so the queued readers are served. The
+// migration is tried again after a pause of the same length, at most
+// LockAttempts times in all. Every timed-out attempt logs a warning, and the
+// last one fails the run with ErrMigrationLockTimeout, with the version table
+// at the last migration that committed.
+//
+// The setting is transaction-local (set_config(..., true)) on purpose. The
+// session-level advisory lock that serialises auth-migrate runs is a lock wait
+// too, so a session-level lock_timeout would turn a concurrent run's wait for
+// the first run into a failure.
+const (
+	DefaultMigrationLockTimeout  = 5 * time.Second
+	DefaultMigrationLockAttempts = 3
+)
+
+// lockNotAvailable is the SQLSTATE of a lock wait that lock_timeout ended.
+const lockNotAvailable = "55P03"
+
 // Options configures one migration run.
 type Options struct {
 	// Schema is the auth-owned schema to create and populate.
@@ -39,6 +68,10 @@ type Options struct {
 	// token when its session is revoked (go-api and query-api read
 	// SessionReaderColumns, and nothing else in the schema). Empty means none.
 	SessionReaderRoles []string
+	// ProjectionReaderRoles are the roles that read the acr rows of the credential projection (the worker login that
+	// runs the acr reconcile, CHAOS-11199): column SELECT on ProjectionReaderReads, and nothing else in the schema.
+	// Empty means none.
+	ProjectionReaderRoles []string
 	// Logger receives one structured line per applied migration. Optional.
 	Logger *slog.Logger
 	// AcknowledgeNarrowing is the one-shot operator acknowledgement of a
@@ -56,10 +89,53 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
+	// OrgsOwned is the organizations-owned switch (AUTH_ORGS_OWNED): the runtime
+	// role holds OrganizationWriteGrants on public.organizations. Off, it holds
+	// no UPDATE there, and the grants pass revokes any it held.
+	OrgsOwned bool
 	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.
 	DeferNarrowing bool
+	// PlatformRolesOwned is the platform roles switch (AUTH_PLATFORM_ROLES_OWNED):
+	// each session reader role also holds PlatformRoleReaderColumns. Off, it
+	// holds the session read alone; turning it off is a narrowing.
+	PlatformRolesOwned bool
+	// SchemaOwnerRole pins the owner of the auth schema and of every object in it (AUTH_SCHEMA_OWNER_ROLE). Set, each
+	// apply and grants run refuses a schema with an object owned by any other role, and a pinned role that is a
+	// superuser or can create roles. Empty means the pin is off (a dev stack whose migrator is a superuser).
+	SchemaOwnerRole string
+
+	// PushLifecycleWriterRole is the dedicated NOLOGIN role that owns the one
+	// function go-api calls to append External Push lifecycle events
+	// (CHAOS-10895). Empty means the function stays owned by the migration role
+	// and nobody can execute it. It must already exist, must have no login and
+	// no membership, and the migration role must be a member of it (the one
+	// thing ALTER FUNCTION OWNER needs); see applyPushLifecycleWriter.
+	PushLifecycleWriterRole string
+	// PushLifecycleCallerRoles are the logins that may execute that function:
+	// go-api's, and no other. Required when PushLifecycleWriterRole is set.
+	PushLifecycleCallerRoles []string
+	// LockTimeout bounds how long one migration's transaction waits for a
+	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.
+	LockTimeout time.Duration
+	// LockAttempts is how many times in all a migration whose lock wait timed
+	// out is tried. Zero means DefaultMigrationLockAttempts.
+	LockAttempts int
+}
+
+// lockPolicy is the lock timeout and the attempt count a migration runs with.
+// It never returns a timeout under 1ms: lock_timeout is set in whole
+// milliseconds, and 0ms would turn the bound off.
+func (o Options) lockPolicy() (time.Duration, int) {
+	timeout, attempts := o.LockTimeout, o.LockAttempts
+	if timeout < time.Millisecond {
+		timeout = DefaultMigrationLockTimeout
+	}
+	if attempts < 1 {
+		attempts = DefaultMigrationLockAttempts
+	}
+	return timeout, attempts
 }
 
 // Result reports what a run did.
@@ -79,6 +155,9 @@ var (
 	// underlying driver error is wrapped for errors.Is/As but never rendered
 	// into this message, because a pgx error can carry the DSN's host and user.
 	ErrMigrationFailed = errors.New("auth migration failed")
+	// ErrMigrationLockTimeout reports a migration whose lock wait timed out on
+	// every attempt (the lock policy). It always comes with ErrMigrationFailed.
+	ErrMigrationLockTimeout = errors.New("auth migration could not take its locks in time")
 	// ErrPublicTableMissing reports a PublicReadColumns table absent from the
 	// ops schema in a run that requires it (the grants pass).
 	ErrPublicTableMissing = errors.New("auth public read table is missing")
@@ -112,6 +191,12 @@ func (o Options) Validate(migrationRole string) error {
 	if err := ValidateIdentifier(o.RuntimeRole); err != nil {
 		return err
 	}
+	if o.LockTimeout < 0 || (o.LockTimeout > 0 && o.LockTimeout < time.Millisecond) {
+		return fmt.Errorf("%w: LockTimeout %s must be zero (the default) or at least 1ms", ErrInvalidOptions, o.LockTimeout)
+	}
+	if o.LockAttempts < 0 {
+		return fmt.Errorf("%w: LockAttempts %d must be zero (the default) or positive", ErrInvalidOptions, o.LockAttempts)
+	}
 	// ACP-ADR-04: the runtime role owns no DDL. If the migration connection
 	// authenticates AS the runtime role, then every object this run creates is
 	// owned by the runtime role, which holds DDL over its own objects
@@ -127,6 +212,22 @@ func (o Options) Validate(migrationRole string) error {
 				ErrInvalidOptions, reader)
 		}
 		seen[reader] = true
+	}
+	for _, reader := range o.ProjectionReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
+			return fmt.Errorf("%w: projection reader role %q must differ from the runtime role, the migration role and every other reader",
+				ErrInvalidOptions, reader)
+		}
+		seen[reader] = true
+	}
+	if err := o.validateSchemaOwnerRole(); err != nil {
+		return err
+	}
+	if err := o.validatePushLifecycle(migrationRole); err != nil {
+		return err
 	}
 	if migrationRole != "" && migrationRole == o.RuntimeRole {
 		return fmt.Errorf(
@@ -320,6 +421,12 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	// removed from the manifest in a later release, a restored backup -- is
 	// corrected by the next migrate run rather than persisting because no new
 	// migration happened to be pending.
+	if err := verifySchemaOwnerPin(ctx, conn.Conn(), options); err != nil {
+		return result, err
+	}
+	if options.SchemaOwnerRole != "" {
+		logger.InfoContext(ctx, "verified auth schema owner pin", "schema", options.Schema, "owner_role", options.SchemaOwnerRole)
+	}
 	var retained []GrantRecord
 	if err := applyRuntimeGrants(ctx, conn.Conn(), RuntimePosture(), options, &retained); err != nil {
 		return result, err
@@ -329,6 +436,10 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		"schema", options.Schema, "runtime_role", options.RuntimeRole,
 		"tables", len(RuntimePosture()),
 	)
+
+	if err := applyPushLifecycleWriter(ctx, conn, options, logger); err != nil {
+		return result, err
+	}
 
 	// Grants applied without error proves the statements succeeded. It does
 	// NOT prove the runtime role holds only what the manifest declares:
@@ -349,6 +460,11 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		return result, err
 	}
 	violations = excuseRetained(violations, retained)
+	writerViolations, err := pushWriterViolations(ctx, conn, options)
+	if err != nil {
+		return result, err
+	}
+	violations = append(violations, writerViolations...)
 	if len(violations) > 0 {
 		logger.ErrorContext(
 			ctx, "runtime role can escalate beyond its declared posture",
@@ -368,15 +484,61 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 	return result, nil
 }
 
-// applyOne runs a single migration and records it, atomically.
+// applyOne runs a single migration and records it, atomically. An attempt
+// whose lock wait timed out rolls back, and the migration is tried again after
+// a pause, at most LockAttempts times in all (the lock policy).
 func applyOne(ctx context.Context, conn querier, options Options, migration Migration) error {
+	lockTimeout, attempts := options.lockPolicy()
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	for attempt := 1; ; attempt++ {
+		lockTimedOut, err := applyOnce(ctx, conn, options, migration, lockTimeout)
+		if !lockTimedOut {
+			return err
+		}
+		final := attempt >= attempts
+		outcome := "retrying"
+		if final {
+			outcome = "giving_up"
+		}
+		logger.WarnContext(
+			ctx, "auth migration lock wait timed out",
+			"version", migration.Version, "name", migration.Name, "schema", options.Schema,
+			"attempt", attempt, "attempts", attempts, "lock_timeout", lockTimeout.String(),
+			"outcome", outcome,
+		)
+		if final {
+			return fmt.Errorf(
+				"%w: %w: version %d (%s) waited %s for a lock on each of %d attempts; "+
+					"an open transaction holds a lock on a table it changes, so run auth-migrate again when that transaction ends",
+				ErrMigrationFailed, ErrMigrationLockTimeout, migration.Version, migration.Name, lockTimeout, attempts,
+			)
+		}
+		// The pause lets the readers that queued behind the wait through, and
+		// gives the transaction that holds the lock time to end.
+		pause := time.NewTimer(lockTimeout)
+		select {
+		case <-ctx.Done():
+			pause.Stop()
+			return fmt.Errorf("%w: version %d (%s) stopped between lock attempts: %w",
+				ErrMigrationFailed, migration.Version, migration.Name, ctx.Err())
+		case <-pause.C:
+		}
+	}
+}
+
+// applyOnce is one attempt of applyOne. lockTimedOut reports an attempt that
+// rolled back because lock_timeout ended a lock wait; err is nil then.
+func applyOnce(ctx context.Context, conn querier, options Options, migration Migration, lockTimeout time.Duration) (lockTimedOut bool, err error) {
 	schemaID, err := NewValidatedIdentifier(options.Schema)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: beginning version %d", ErrMigrationFailed, migration.Version)
+		return false, fmt.Errorf("%w: beginning version %d", ErrMigrationFailed, migration.Version)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -385,13 +547,23 @@ func applyOne(ctx context.Context, conn querier, options Options, migration Migr
 	// public. pg_temp is excluded deliberately: a temp object shadowing a
 	// real one during DDL is a genuinely confusing failure.
 	if _, err := tx.Exec(ctx, `SELECT set_config('search_path', $1, true)`, options.Schema); err != nil {
-		return fmt.Errorf("%w: setting search_path for version %d", ErrMigrationFailed, migration.Version)
+		return false, fmt.Errorf("%w: setting search_path for version %d", ErrMigrationFailed, migration.Version)
+	}
+	// lock_timeout for this transaction only (the lock policy). The value is
+	// a bound parameter, never SQL text.
+	if _, err := tx.Exec(
+		ctx, `SELECT set_config('lock_timeout', $1, true)`, strconv.FormatInt(lockTimeout.Milliseconds(), 10)+"ms",
+	); err != nil {
+		return false, fmt.Errorf("%w: setting lock_timeout for version %d", ErrMigrationFailed, migration.Version)
 	}
 	if _, err := tx.Exec(ctx, migration.SQL); err != nil {
+		if isLockTimeout(err) {
+			return true, nil
+		}
 		// The driver error carries the failing statement, which is our own
 		// embedded SQL and therefore safe -- but it can also carry connection
 		// context, so only the version and name are surfaced.
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"%w: applying version %d (%s): %v",
 			ErrMigrationFailed, migration.Version, migration.Name, redactPGError(err),
 		)
@@ -404,12 +576,21 @@ func applyOne(ctx context.Context, conn querier, options Options, migration Migr
 		),
 		migration.Version, migration.Name,
 	); err != nil {
-		return fmt.Errorf("%w: recording version %d", ErrMigrationFailed, migration.Version)
+		if isLockTimeout(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("%w: recording version %d", ErrMigrationFailed, migration.Version)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("%w: committing version %d", ErrMigrationFailed, migration.Version)
+		return false, fmt.Errorf("%w: committing version %d", ErrMigrationFailed, migration.Version)
 	}
-	return nil
+	return false, nil
+}
+
+// isLockTimeout reports a statement that lock_timeout ended.
+func isLockTimeout(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == lockNotAvailable
 }
 
 func highest(applied map[int]struct{}) int {

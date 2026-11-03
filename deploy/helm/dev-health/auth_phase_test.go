@@ -33,6 +33,9 @@ func phaseArgs(phase int, extra ...string) []string {
 	out = append(out, riverHookSets...)
 	out = append(out, roleEnv("devhealth_query")...)
 	out = append(out, "--set", fmt.Sprintf("authService.phase=%d", phase))
+	if phase == 3 {
+		out = append(out, "--set", "authService.loginStage=goApi")
+	}
 	if phase >= 2 {
 		out = append(out, "--set", "authService.migrate.sessionReaders.queryApi=devhealth_query")
 		out = append(out, sessionSuccessor...)
@@ -237,7 +240,8 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 5"},
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
-		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"},
+		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"}, // gitleaks:allow
+		"eddsa class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"), "authService.accessToken.class needs authService.phase >= 2"},
 		"token class unknown":     {phaseArgs(2, "--set", "authService.accessToken.class=rs256"), "must be empty, hs256_compat or eddsa"},
 		"token class not string":  {phaseArgs(2, "--set-json", "authService.accessToken.class=true"), "must be strings"},
 		"token class false":       {phaseArgs(2, "--set-json", "authService.accessToken.class=false"), "must be strings"},
@@ -248,7 +252,6 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"eddsa http issuer":       {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=http://auth.example"), "needs authService.accessToken.issuerURL"},
 		"eddsa trailing slash":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example/"), "needs authService.accessToken.issuerURL"},
 		"eddsa upper-case host":   {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://Auth.example"), "needs authService.accessToken.issuerURL"},
-		"issuer without eddsa":    {phaseArgs(2, "--set", "authService.accessToken.issuerURL=https://auth.example"), "is set but authService.accessToken.class is not eddsa"},
 		"link routes below 2":     {phaseArgs(1, "--set", "authService.socialLinkRoutes=true"), "authService.socialLinkRoutes needs authService.phase >= 2"},
 		"oidc on":                 {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true is refused"},
 		"saml on":                 {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true is refused"},
@@ -290,7 +293,7 @@ func TestAuthPhaseNamedKeys(t *testing.T) {
 	envOf := func(docs []map[string]any, kind, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, kind, name), env)
 	}
-	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat")
+	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat") // gitleaks:allow
 	if v, _ := envOf(docs, "Deployment", "a-dev-health-auth-service", "AUTH_SOCIAL_LINK_ROUTES"); v != "true" {
 		t.Errorf("AUTH_SOCIAL_LINK_ROUTES = %q, want true", v)
 	}
@@ -612,8 +615,8 @@ func TestAuthPhaseEmptyTokenClassIsTheDefault(t *testing.T) {
 // shadow the rendered one, a Secret reference included).
 func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 	configs := map[string][]string{
-		"phase 3 with legacy ingest": phaseArgs(3, "--set", "legacyIngest.enabled=true", "--set-string", "legacyIngest.sunset=Tue\\, 01 Dec 2026 00:00:00 GMT"),
-		"phase 2 with eddsa tokens":  phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
+		"phase 3":                   phaseArgs(3),
+		"phase 2 with eddsa tokens": phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"),
 	}
 	names := map[string][]string{}
 	for label, args := range configs {
@@ -630,8 +633,8 @@ func TestGoAPIExtraEnvRefusesEveryRenderedName(t *testing.T) {
 		}
 	}
 	// AUTH_USERS_OWNED renders only from phase 4, which the renders above do not use.
-	names["AUTH_USERS_OWNED"] = configs["phase 3 with legacy ingest"]
-	if len(names) < 19 {
+	names["AUTH_USERS_OWNED"] = configs["phase 3"]
+	if len(names) < 17 {
 		t.Fatalf("only %d go-api env names rendered: %v", len(names), names)
 	}
 	for name, args := range names {

@@ -181,3 +181,15 @@ func TestRuntimeSequencesCoverEveryGeneratedColumn(t *testing.T) {
 // package exists to remove, and the copy that drifts is always the one nobody
 // is looking at. The constructor calls ValidateIdentifier, so the corpus covers
 // both.
+
+// The runtime role marks a grant revoked and never deletes one: DELETE on
+// resource_grants would let a revoked row, which is history, disappear.
+func TestRuntimeCannotDeleteResourceGrants(t *testing.T) {
+	got := postureByTable(t)["resource_grants"]
+	if !got.Select || !got.Insert || !got.Update {
+		t.Fatalf("resource_grants posture = %+v, want SELECT, INSERT and UPDATE", got)
+	}
+	if got.Delete {
+		t.Fatal("resource_grants posture grants DELETE; a grant is ended by marking it revoked")
+	}
+}

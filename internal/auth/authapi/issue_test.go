@@ -15,7 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
 
-// fakeServiceCredentials accepts the token "good" unless refusal or err is set.
+// fakeServiceCredentials accepts any token unless refusal or err is set.
 type fakeServiceCredentials struct {
 	id      string
 	refusal servicecred.Refusal
@@ -34,7 +34,10 @@ func (f *fakeServiceCredentials) Check(_ context.Context, token contracts.Secret
 	return servicecred.Credential{ID: f.id}, "", nil
 }
 
-var issuerBearer = map[string]string{"Authorization": "Bearer good"}
+// issuerToken is a well-shaped svc_authsess_ credential: the route hands only that class to the credential check.
+const issuerToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+var issuerBearer = map[string]string{"Authorization": "Bearer " + issuerToken}
 
 func issueBody(principal uuid.UUID, org string, amr string) string {
 	orgJSON := "null"

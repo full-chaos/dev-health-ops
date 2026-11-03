@@ -139,7 +139,7 @@ func checkAppBaseURL(raw string, allowHTTP bool) error {
 // link-mail sender.
 func credentialRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	limits *authapi.Limits,
+	limits *authapi.Limits, accessSigner authapi.AccessSigner,
 ) ([]httpapi.Route, []lifecycle.Component, error) {
 	if !cfg.Session.Enabled {
 		return nil, nil, nil
@@ -154,7 +154,7 @@ func credentialRoutes(
 	if err != nil {
 		return nil, nil, err
 	}
-	issuer, err := authapi.NewIssuer(cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience)
+	issuer, err := credentialIssuer(cfg, logger, accessSigner, sessions)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -186,7 +186,7 @@ func credentialRoutes(
 		return nil, nil, err
 	}
 	routes, err := authapi.CredentialRoutes(authapi.CredentialDeps{
-		Flows: flows, Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Limits: limits,
+		Flows: flows, Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, Limits: limits,
 	})
 	if err != nil {
 		_ = sender.Close(context.Background())

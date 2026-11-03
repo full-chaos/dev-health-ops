@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // Kind is the parse type of an option value. It tells the flag layer which
@@ -216,9 +219,35 @@ var optionRegistry = []Option{
 		Usage: "aud of the compatibility access token (go-api's JWT_AUDIENCE)",
 	},
 	{
+		Env: EnvLegacyJWTAudience, Kind: KindString, Default: contracts.PlatformAPIAudience, Group: GroupSession,
+		Usage: "aud that the eddsa access token class checks go-api's HS256 compatibility token with (go-api's JWT_AUDIENCE); hs256_compat uses " +
+			EnvAccessTokenAudience + ". Set but empty is refused at start",
+	},
+	{
+		Env: EnvAuthorizeCallerSubjects, Kind: KindString, Group: GroupSession,
+		Usage: "comma-separated workload principal ids (prn_ and 22 base64url characters) whose workload token (audience auth-service) POST /v1/authorize and /v1/authorize:batch accept; unset refuses every caller. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
+		Env: EnvSessionIssueWorkloadSubject, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_ and 22 base64url characters) of go-api whose workload token POST /internal/v1/sessions accepts; unset refuses every workload token. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
+		Env: EnvAcrEventsWorkloadSubject, Kind: KindString, Group: GroupSession,
+		Usage: "workload principal id (prn_ and 22 base64url characters) of acr-api whose workload token POST /internal/v1/acr/credential-events accepts. Unset leaves the route unmounted. Needs " +
+			EnvTokenIssuerURL,
+	},
+	{
 		Env: EnvValkeyURI, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "Valkey URI (redis:// or rediss://, database 1) of the shared rate-limit store; " + EnvValkeyURI +
 			"_FILE reads it from a mounted file instead. Required while the login, credential or social link routes mount",
+	},
+	{
+		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
+			"; needs the session secrets",
 	},
 	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
@@ -230,12 +259,44 @@ var optionRegistry = []Option{
 		Usage: "true when auth-service owns user creation and local credential links; with the session secrets it mounts the password and e-mail verification routes",
 	},
 	{
+		Flag: "sso-jit", Env: EnvSSOJIT, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "\"true\" lets a federated sign-in join a known account to the provider's organization and create a new account. A provider row must allow it too (auto_provision_users), and it needs " + EnvUsersOwned,
+	},
+	{
+		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
+		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
+	},
+	{
 		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
+		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
+	},
+	{
+		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on gives the auth outbox publisher a Valkey sink and subscribes this replica to the revision feed channel; off (default) keeps publishing disabled. Needs " +
+			EnvValkeyURI + ". Mounts no route",
+	},
+	{
 		Flag: "social-link-routes", Env: EnvSocialLinkRoutes, Kind: KindString, Group: GroupSession, Default: "false",
 		Usage: "\"true\" mounts the bearer-only social link and unlink routes (POST /v1/identities/social, DELETE /v1/identities/social/{id}); needs the session secrets",
+	},
+	{
+		Flag: "membership-routes", Env: EnvMembershipRoutes, Kind: KindString, Group: GroupSession, Default: "false",
+		Usage: "\"true\" mounts the internal membership, invite and organization deprovision routes go-api calls with its service credential; needs " +
+			EnvInviteTokenSecret + " and " + EnvInviteTokenSecretPrevious,
+	},
+	{
+		Env: EnvInviteTokenSecret, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "signing key of new invite tokens (go-api's LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain); " +
+			EnvInviteTokenSecret + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
+	},
+	{
+		Env: EnvInviteTokenSecretPrevious, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "retired invite token key, accepted and never used to sign (go-api's LINK_TOKEN_SECRET_PREVIOUS); " +
+			EnvInviteTokenSecretPrevious + "_FILE reads it from a mounted file instead. Required while " + EnvMembershipRoutes + " is true",
 	},
 	{
 		Flag: "social-github-client-id", Env: "SOCIAL_GITHUB_CLIENT_ID", Kind: KindString, Group: GroupSession,

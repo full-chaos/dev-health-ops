@@ -24,8 +24,9 @@ metadata:
   annotations:
     helm.sh/hook: {{ join "," $m.hookEvents }}
     helm.sh/hook-weight: "0"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  ttlSecondsAfterFinished: {{ $m.ttlSecondsAfterFinished }}
   backoffLimit: {{ $m.backoffLimit }}
   activeDeadlineSeconds: {{ $m.activeDeadlineSeconds }}
   template:
@@ -59,10 +60,28 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
+            - name: AUTH_ORGS_OWNED
+              value: "true"
+            {{- end }}
+            {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            - name: AUTH_PLATFORM_ROLES_OWNED
+              value: "true"
+            {{- end }}
             {{- $readers := concat $m.sessionReaderRoles (compact (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi)))) | uniq }}
             {{- with $readers }}
             - name: AUTH_SESSION_READER_ROLES
               value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with include "dev-health.authSchemaOwnerRole" . }}
+            - name: AUTH_SCHEMA_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $m.pushLifecycle.writerRole }}
+            - name: AUTH_PUSH_LIFECYCLE_WRITER_ROLE
+              value: {{ . | quote }}
+            - name: AUTH_PUSH_LIFECYCLE_CALLER_ROLES
+              value: {{ join "," $m.pushLifecycle.callerRoles | quote }}
             {{- end }}
           resources:
             {{- toYaml $m.resources | nindent 12 }}

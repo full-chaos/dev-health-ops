@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -35,61 +36,61 @@ func pipelineConfigWithBudget(stage StageName, budget time.Duration) MutationPip
 // comment on MutationPipeline.Step), so the tick still succeeds: kernel and
 // the observer both still run, and Step returns nil.
 func TestRunStageBudgetIsIndependentOfItsSiblings(t *testing.T) {
-	var kernelRan, observerRan bool
-	pipeline, err := NewMutationPipeline(
-		pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
-			return LeaseRepairResult{}, nil
-		}),
-		pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
-			return TerminalDeliveryRepairResult{}, nil
-		}),
-		pipelineMaterializerFunc(func(ctx context.Context, _ time.Time, _ time.Time, _ int) (MaterializerResult, error) {
-			// Respects its context like every real stage does; it simply has
-			// nothing left to wait for once its own short budget expires.
-			<-ctx.Done()
-			return MaterializerResult{}, ctx.Err()
-		}),
-		pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
-			kernelRan = true
-			return KernelResult{}, nil
-		}),
-		pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
-			observerRan = true
-			return Observation{}, nil
-		}),
-		AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
-		PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
-		nil,
-		noopTerminalOutboxClose(),
-		noopOrphanedUnitRepair(),
-		pipelineConfigWithBudget(StageMaterializer, 5*time.Millisecond),
-	)
-	if err != nil {
-		t.Fatalf("construct pipeline: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		var kernelRan, observerRan bool
+		pipeline, err := NewMutationPipeline(
+			pipelineLeaseRepairFunc(func(context.Context, time.Time, int) (LeaseRepairResult, error) {
+				return LeaseRepairResult{}, nil
+			}),
+			pipelineTerminalDeliveryRepairFunc(func(context.Context, time.Time, int) (TerminalDeliveryRepairResult, error) {
+				return TerminalDeliveryRepairResult{}, nil
+			}),
+			pipelineMaterializerFunc(func(ctx context.Context, _ time.Time, _ time.Time, _ int) (MaterializerResult, error) {
+				// Respects its context like every real stage does; it simply has
+				// nothing left to wait for once its own short budget expires.
+				<-ctx.Done()
+				return MaterializerResult{}, ctx.Err()
+			}),
+			pipelineKernelFunc(func(context.Context, time.Time, int, time.Duration, AtLeastOncePublisher, PostSyncHandoff) (KernelResult, error) {
+				kernelRan = true
+				return KernelResult{}, nil
+			}),
+			pipelineObserverFunc(func(context.Context, time.Time, int) (Observation, error) {
+				observerRan = true
+				return Observation{}, nil
+			}),
+			AtLeastOncePublisher(func(context.Context, pgx.Tx, TransportClaim) (string, error) { return "", nil }),
+			PostSyncHandoff(func(context.Context, TransportClaim) error { return nil }),
+			nil,
+			noopTerminalOutboxClose(),
+			noopOrphanedUnitRepair(),
+			pipelineConfigWithBudget(StageMaterializer, 5*time.Millisecond),
+		)
+		if err != nil {
+			t.Fatalf("construct pipeline: %v", err)
+		}
 
-	start := time.Now()
-	_, stepErr := pipeline.Step(context.Background(), time.Now().UTC(), 10)
-	elapsed := time.Since(start)
+		start := time.Now()
+		_, stepErr := pipeline.Step(context.Background(), time.Now().UTC(), 10)
+		returnedAt := time.Now()
 
-	if stepErr != nil {
-		t.Fatalf("Step() error = %v, want nil: materializer is continue-safe", stepErr)
-	}
-	if !kernelRan || !observerRan {
-		t.Fatalf("a stage exceeding its own budget blocked its siblings: kernel=%v observer=%v", kernelRan, observerRan)
-	}
-	// A generous ceiling: this pins that the WHOLE call did not wait out some
-	// leftover flat deadline, only materializer's 5ms one. Any budget well
-	// under the package's default stage budgets (hundreds of ms) proves the
-	// point without being a flaky low-single-digit-millisecond assertion.
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("Step() took %s; a 5ms stage budget should not let a blocked stage stall the whole call", elapsed)
-	}
+		if stepErr != nil {
+			t.Fatalf("Step() error = %v, want nil: materializer is continue-safe", stepErr)
+		}
+		if !kernelRan || !observerRan {
+			t.Fatalf("a stage exceeding its own budget blocked its siblings: kernel=%v observer=%v", kernelRan, observerRan)
+		}
+		// On the virtual clock the whole call ends exactly at materializer's own 5 ms budget: a stage that
+		// outlived it, or a leftover flat deadline, moves this instant.
+		if !returnedAt.Equal(start.Add(5 * time.Millisecond)) {
+			t.Fatalf("Step() returned at +%v of virtual time; a 5ms stage budget must end the blocked stage at +5ms and not stall the whole call", returnedAt.Sub(start))
+		}
 
-	failures, _ := pipeline.stages.snapshot()
-	if failures[StageMaterializer] != 1 {
-		t.Fatalf("stage failure count for materializer = %d, want 1", failures[StageMaterializer])
-	}
+		failures, _ := pipeline.stages.snapshot()
+		if failures[StageMaterializer] != 1 {
+			t.Fatalf("stage failure count for materializer = %d, want 1", failures[StageMaterializer])
+		}
+	})
 }
 
 // TestObserverExceedingItsBudgetDegradesRatherThanFails pins the one stage

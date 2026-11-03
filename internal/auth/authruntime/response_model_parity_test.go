@@ -32,19 +32,49 @@ var goOnlyRoutes = map[string]struct {
 	model  bool
 	reason string
 }{
-	"DELETE /v1/identities/social/{id}":      {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"GET /v1/sessions/current":               {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /internal/v1/sessions":             {false, "internal session issue route; no go-api twin; writes no policy body"},
-	"POST /internal/v1/token/exchange":       {false, "internal workload-token exchange; no go-api twin; writes no policy body"},
-	"POST /v1/identities/social":             {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke-all":           {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/sessions/revoke":               {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"POST /v1/token/refresh":                 {false, "auth-service native route; no go-api twin; writes no policy body"},
-	"GET /.well-known/jwks.json":             {false, "well-known document; no go-api twin; written without a policy body"},
-	"HEAD /.well-known/jwks.json":            {false, "well-known document; no go-api twin; written without a policy body"},
-	"GET /.well-known/openid-configuration":  {false, "well-known document; no go-api twin; written without a policy body"},
-	"HEAD /.well-known/openid-configuration": {false, "well-known document; no go-api twin; written without a policy body"},
-	"POST /api/v1/auth/change-password":      {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
+	"DELETE /v1/identities/social/{id}":              {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /v1/sessions/current":                       {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/sessions":                     {false, "internal session issue route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/token/exchange":               {false, "internal workload-token exchange; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/add":              {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/role":             {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/remove":           {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/transfer":         {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/invites/create":               {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/invites/accept":               {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/invites/revoke":               {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/suspend":        {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/onboard":        {false, "internal provisioning route; no go-api twin; writes no policy model"},
+	"POST /internal/v1/organizations/create":         {false, "internal provisioning route; no go-api twin; writes no policy model"},
+	"POST /internal/v1/organizations/deprovision":    {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/reactivate":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/state":          {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/rename":         {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/create":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/disable":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/enable":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/owner":       {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/keys/issue":  {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/keys/rotate": {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/keys/revoke": {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/service-accounts/keys/list":   {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/grants/create":                {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/grants/update":                {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/grants/revoke":                {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/sessions/state":               {false, "internal session state read for go-api's Ask Dev access read; no go-api twin; writes nothing"},
+	"POST /internal/v1/sessions/delegated":           {false, "internal delegated session start, go-api calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /internal/v1/sessions/delegated/end":       {false, "internal delegated session end, go-api calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /v1/authorize":                             {false, "policy decision point, a policy-enforcement point calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /v1/authorize:batch":                       {false, "policy decision point batch, a policy-enforcement point calls it; no go-api twin; writes no Python-shaped body"},
+	"POST /v1/identities/social":                     {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke-all":                   {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/sessions/revoke":                       {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"POST /v1/token/refresh":                         {false, "auth-service native route; no go-api twin; writes no policy body"},
+	"GET /.well-known/jwks.json":                     {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/jwks.json":                    {false, "well-known document; no go-api twin; written without a policy body"},
+	"GET /.well-known/openid-configuration":          {false, "well-known document; no go-api twin; written without a policy body"},
+	"HEAD /.well-known/openid-configuration":         {false, "well-known document; no go-api twin; written without a policy body"},
+	"POST /api/v1/auth/change-password":              {true, "Go-only self-service route; answers through writeCompatModel (policy.WriteModel)"},
 }
 
 func parityRoutes(t *testing.T) []httpapi.Route {
@@ -58,7 +88,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		authconfig.EnvTokenIssuerURL:   "https://issuer.example.test",
 	}
 	exchangeEnvironment(t, env)
-	env = ssoEnvironment(compatEnvironment(env))
+	env = provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(env)})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +107,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
@@ -88,7 +118,12 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 	if err != nil {
 		t.Fatalf("exchangeRoutes: %v", err)
 	}
-	return append(append(routes, credentials...), exchange...)
+	_, _, keys := authorizeTestDeps(t)
+	decision, err := authorizeRoutes(cfg, logger, pool, schema, keys, nil)
+	if err != nil {
+		t.Fatalf("authorizeRoutes: %v", err)
+	}
+	return append(append(append(routes, credentials...), exchange...), decision...)
 }
 
 func TestAuthServiceResponseModelTableMatchesGoAPI(t *testing.T) {

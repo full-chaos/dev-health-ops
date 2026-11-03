@@ -1,8 +1,10 @@
 package identity
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,8 +56,9 @@ type OrgBackfillResult struct {
 
 // BackfillOrganization makes auth.organizations agree with t. A missing
 // organization is inserted; a differing one is updated (disabled_at is set
-// only when the organization turns inactive and cleared when it turns active,
-// so an equal organization keeps its timestamp); an equal one writes nothing.
+// only when the organization turns inactive, so an equal organization keeps
+// its timestamp; a suspended one stays suspended, keepSuspended); an equal one
+// writes nothing.
 func (s *Store) BackfillOrganization(ctx context.Context, t OrgBackfillTarget, dryRun bool) (OrgBackfillResult, error) {
 	var res OrgBackfillResult
 	src := orgState{slug: t.Slug, name: t.Name, active: t.Active}
@@ -68,6 +71,9 @@ func (s *Store) BackfillOrganization(ctx context.Context, t OrgBackfillTarget, d
 		found = false
 	case err != nil:
 		return res, s.storeErr(ctx, "read auth.organizations", err)
+	}
+	if found {
+		src = keepSuspended(cur, src)
 	}
 	d := decideOrg(found, cur, src)
 	if d.action == orgNone {
@@ -134,6 +140,9 @@ type MembershipBackfillTarget struct {
 	UserID   uuid.UUID
 	Role     string
 	JoinedAt *time.Time
+	// InvitedBy is public.memberships.invited_by_id. It is the same id space as UserID: an auth user
+	// principal has the id of its public.users row (BackfillMembership checks UserID the same way).
+	InvitedBy *uuid.UUID
 }
 
 // MembershipBackfillResult says what BackfillMembership wrote (or would write).
@@ -143,6 +152,12 @@ type MembershipBackfillResult struct {
 	// Diverged is set when the auth membership exists and is not active. It is
 	// reported and never written: a status in the auth schema is auth's own.
 	Diverged bool
+	// InviterSet and JoinedSet say a missing invited_by / joined_at was (or would be) filled from the
+	// public row. InviterUnresolved says the public inviter has no auth user principal, so invited_by
+	// stays NULL; it is a count, never a failure.
+	InviterSet        bool
+	JoinedSet         bool
+	InviterUnresolved bool
 }
 
 // BackfillMembership makes the auth membership of (OrgID, UserID) agree with
@@ -155,14 +170,17 @@ func (s *Store) BackfillMembership(ctx context.Context, t MembershipBackfillTarg
 	if !IsOrganizationRole(t.Role) {
 		return res, ErrBackfillRole
 	}
-	var orgExists, principalExists bool
+	var orgExists, principalExists, inviterResolved bool
 	var id *uuid.UUID
 	var status, role *string
+	var curInviter *uuid.UUID
+	var curJoined *time.Time
 	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+s.q+`.organizations WHERE id = $1),
        EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $2 AND kind = 'user'),
-       m.id, m.status, m.role
+       EXISTS (SELECT 1 FROM `+s.q+`.principals WHERE id = $3::uuid AND kind = 'user'),
+       m.id, m.status, m.role, m.invited_by, m.joined_at
 FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND m.principal_id = $2`,
-		t.OrgID, t.UserID).Scan(&orgExists, &principalExists, &id, &status, &role)
+		t.OrgID, t.UserID, t.InvitedBy).Scan(&orgExists, &principalExists, &inviterResolved, &id, &status, &role, &curInviter, &curJoined)
 	if err != nil {
 		return res, s.storeErr(ctx, "read auth.memberships", err)
 	}
@@ -171,19 +189,62 @@ FROM (SELECT 1) x LEFT JOIN `+s.q+`.memberships m ON m.organization_id = $1 AND 
 		return res, err
 	}
 	res = MembershipBackfillResult{Inserted: action == memberInsert, RoleUpdated: action == memberSetRole, Diverged: action == memberDiverged}
+	var fill fillDecision
+	switch action {
+	case memberInsert:
+		fill = decideFill(true, nil, nil, t.InvitedBy, inviterResolved, t.JoinedAt)
+		fill.Joined = false
+	case memberSetRole, memberNone:
+		fill = decideFill(true, curInviter, curJoined, t.InvitedBy, inviterResolved, t.JoinedAt)
+	}
+	res.InviterSet, res.JoinedSet, res.InviterUnresolved = fill.Inviter, fill.Joined, fill.Unresolved
 	if dryRun {
 		return res, nil
 	}
 	switch action {
 	case memberInsert:
-		err = s.insertMembership(ctx, t)
+		var inserted insertOutcome
+		inserted, err = s.insertMembership(ctx, t)
+		res = applyInsert(res, inserted)
 	case memberSetRole:
-		err = s.updateMembershipRole(ctx, *id, t)
+		var changed bool
+		changed, err = s.updateMembershipRole(ctx, *id, t, role)
+		res = applyRole(res, changed)
+	}
+	if err == nil && action != memberInsert && (fill.Inviter || fill.Joined || fill.Unresolved) {
+		var changed fillDecision
+		changed, err = s.fillMembership(ctx, *id, t, fill)
+		res = applyFill(res, changed)
 	}
 	if err != nil {
 		return MembershipBackfillResult{}, err
 	}
 	return res, nil
+}
+
+// applyFill sets the fill flags to what the fill transaction decided and changed, not to what the first read planned.
+func applyFill(res MembershipBackfillResult, changed fillDecision) MembershipBackfillResult {
+	res.InviterSet, res.JoinedSet, res.InviterUnresolved = changed.Inviter, changed.Joined, changed.Unresolved
+	return res
+}
+
+// fillDecision is what BackfillMembership fills on an existing membership. Unresolved counts a public
+// inviter with no auth user principal; nothing is written for it.
+type fillDecision struct{ Inviter, Joined, Unresolved bool }
+
+// decideFill is the whole fill rule: fill missing values only, and only on an active membership. A value
+// the auth row holds is never overwritten, whichever one is older. An inviter is written only when it is
+// an auth user principal.
+func decideFill(active bool, curInviter *uuid.UUID, curJoined *time.Time, want *uuid.UUID, resolved bool, wantJoined *time.Time) fillDecision {
+	if !active {
+		return fillDecision{}
+	}
+	var d fillDecision
+	if curInviter == nil && want != nil {
+		d.Inviter, d.Unresolved = resolved, !resolved
+	}
+	d.Joined = curJoined == nil && wantJoined != nil
+	return d
 }
 
 type memberAction int
@@ -228,50 +289,243 @@ func membershipAudit(eventType, reason string, t MembershipBackfillTarget, id uu
 	}
 }
 
-func (s *Store) insertMembership(ctx context.Context, t MembershipBackfillTarget) error {
+// insertOutcome is what the insert transaction did: Inserted is false when it lost ON CONFLICT, Inviter says invited_by
+// was written, Unresolved says the inviter was named but is no user principal under the lock.
+type insertOutcome struct{ Inserted, Inviter, Unresolved bool }
+
+// applyInsert sets the insert flags to what the insert transaction did, not to what the first read planned.
+func applyInsert(res MembershipBackfillResult, o insertOutcome) MembershipBackfillResult {
+	res.Inserted, res.InviterSet, res.InviterUnresolved = o.Inserted, o.Inviter, o.Unresolved
+	return res
+}
+
+// applyRole sets RoleUpdated to whether the update changed a row.
+func applyRole(res MembershipBackfillResult, changed bool) MembershipBackfillResult {
+	res.RoleUpdated = changed
+	return res
+}
+
+// afterInsertLock and afterRoleRead are test seams: nil in production, assigned only from _test.go files.
+var afterInsertLock, afterRoleRead func(context.Context)
+
+// insertMembership inserts the membership. It takes the principals FOR KEY SHARE first, as fillMembership does (the
+// auth lock order), and writes invited_by only when that locked read found a user principal; the INSERT's foreign-key
+// checks then take locks the transaction already holds.
+func (s *Store) insertMembership(ctx context.Context, t MembershipBackfillTarget) (insertOutcome, error) {
 	id := uuid.New()
+	var out insertOutcome
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			resolved, err := s.lockPrincipals(ctx, tx, t.InvitedBy, t.UserID)
+			if err != nil {
+				return err
+			}
+			if afterInsertLock != nil {
+				afterInsertLock(ctx)
+			}
+			var inviter *uuid.UUID
+			if t.InvitedBy != nil && resolved {
+				inviter = t.InvitedBy
+			}
 			var inserted uuid.UUID
-			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at)
-VALUES ($1, $2, $3, 'active', $4, $5)
+			err = tx.QueryRow(ctx, `INSERT INTO `+s.q+`.memberships (id, organization_id, principal_id, status, role, joined_at, invited_by)
+VALUES ($1, $2, $3, 'active', $4, $5, $6)
 ON CONFLICT (organization_id, principal_id) DO NOTHING
-RETURNING id`, id, t.OrgID, t.UserID, t.Role, t.JoinedAt).Scan(&inserted)
+RETURNING id`, id, t.OrgID, t.UserID, t.Role, t.JoinedAt, inviter).Scan(&inserted)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errMembershipExists
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			out = insertOutcome{Inserted: true, Inviter: inviter != nil, Unresolved: t.InvitedBy != nil && !resolved}
+			return nil
 		},
 		Audit: membershipAudit("auth.membership.projected", "membership_added", t, id),
 		Events: []audit.OutboxEvent{membershipEvent(id, "membership.activated",
 			map[string]any{"status": "active", "role_id": "rol_" + t.Role})},
 	})
 	switch {
-	case err == nil, errors.Is(err, errMembershipExists):
-		return nil
+	case err == nil:
+		return out, nil
+	case errors.Is(err, errMembershipExists):
+		return insertOutcome{}, nil
 	}
-	return s.storeErr(ctx, "insert membership", err)
+	return insertOutcome{}, s.storeErr(ctx, "insert membership", err)
 }
 
-// roleChangeAudit names the changed field; the audit vocabulary has no slot for a role value.
-func roleChangeAudit(t MembershipBackfillTarget, id uuid.UUID) audit.AuditEvent {
-	ev := membershipAudit("auth.membership.role_changed", "membership_status_changed", t, id)
+// roleChangeAudit names the changed field and both roles; previous is the stored role the update is guarded on.
+func roleChangeAudit(t MembershipBackfillTarget, id uuid.UUID, previous *string) audit.AuditEvent {
+	ev := membershipAudit("auth.membership.role_changed", "membership_role_changed", t, id)
 	ev.Attributes["changed_fields"] = []string{"role_key"}
+	if previous != nil {
+		ev.Attributes["previous_role"] = *previous
+	}
+	ev.Attributes["new_role"] = t.Role
 	return ev
 }
 
-func (s *Store) updateMembershipRole(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget) error {
+// updateMembershipRole is a compare-and-set on the role the backfill read: it writes the public role only while the
+// stored role is still expected, so a role any other writer set after that read (an ownership transfer, a role change)
+// is kept and the update changes no row. It reports whether a row changed.
+func (s *Store) updateMembershipRole(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, expected *string) (bool, error) {
+	if afterRoleRead != nil {
+		afterRoleRead(ctx)
+	}
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			_, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships SET role = $2, updated_at = clock_timestamp()
-WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2`, id, t.Role)
+WHERE id = $1 AND status = 'active' AND role IS DISTINCT FROM $2 AND role IS NOT DISTINCT FROM $3::text`, id, t.Role, expected)
 			return err
 		},
-		Audit:  roleChangeAudit(t, id),
+		Audit:  roleChangeAudit(t, id, expected),
 		Events: []audit.OutboxEvent{membershipEvent(id, "membership.role_changed", map[string]any{"role_id": "rol_" + t.Role})},
 	})
-	if err == nil || errors.Is(err, audit.ErrNoStateChange) {
-		return nil
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return false, nil
 	}
-	return s.storeErr(ctx, "update membership role", err)
+	return false, s.storeErr(ctx, "update membership role", err)
+}
+
+const (
+	fieldInvitedBy = "invited_by"
+	fieldJoinedAt  = "joined_at"
+)
+
+// fillFields names the changed columns from the closed set above, never from input.
+func fillFields(d fillDecision) []string {
+	var fields []string
+	if d.Inviter {
+		fields = append(fields, fieldInvitedBy)
+	}
+	if d.Joined {
+		fields = append(fields, fieldJoinedAt)
+	}
+	return fields
+}
+
+func fillAudit(t MembershipBackfillTarget, id uuid.UUID, d fillDecision) audit.AuditEvent {
+	ev := membershipAudit("auth.membership.projected", "membership_added", t, id)
+	ev.Attributes["changed_fields"] = fillFields(d)
+	return ev
+}
+
+// fillLockIDs is the step-1 lock set of the fill: the member and the inviter once each, ascending by id.
+func fillLockIDs(inviter *uuid.UUID, member uuid.UUID) []uuid.UUID {
+	ids := []uuid.UUID{member}
+	if inviter != nil && *inviter != member {
+		ids = append(ids, *inviter)
+	}
+	sort.Slice(ids, func(i, j int) bool { return bytes.Compare(ids[i][:], ids[j][:]) < 0 })
+	return ids
+}
+
+// lockedInviterResolved is the only way the fill resolves its inviter: the FOR KEY SHARE read of the principal row
+// returned a user principal. An inviter that appears after that read found nothing is unresolved for this run (no lock
+// is held on it, and writing invited_by would take its lock after the membership row); the next run fills it.
+func lockedInviterResolved(found bool, kind string) bool {
+	return found && kind == "user"
+}
+
+// afterFillRead and afterFillRowLock are test seams: nil in production, assigned only from _test.go files.
+var afterFillRead, afterFillRowLock func(context.Context)
+
+var errFillRows = errors.New("identity: the fill changed an unexpected number of membership rows")
+
+// lockPrincipals takes the member and the inviter principals FOR KEY SHARE, ascending by id: step 1 of the auth lock order
+// (membership.Store readPairs). The membership row and every foreign-key check come after it. It reports whether the
+// inviter's locked row is a user principal; an inviter that appears after its row was read stays unresolved for this
+// transaction.
+func (s *Store) lockPrincipals(ctx context.Context, tx audit.TxOps, inviter *uuid.UUID, member uuid.UUID) (bool, error) {
+	resolved := false
+	for _, p := range fillLockIDs(inviter, member) {
+		var kind string
+		err := tx.QueryRow(ctx, `SELECT kind::text FROM `+s.q+`.principals WHERE id = $1 FOR KEY SHARE`, p).Scan(&kind)
+		found := err == nil
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
+		}
+		if inviter != nil && p == *inviter {
+			resolved = lockedInviterResolved(found, kind)
+		}
+	}
+	return resolved, nil
+}
+
+// fillMembership fills the missing columns of one active membership and returns what it changed. The decision is
+// taken inside the transaction on the locked row, so the report and the audit changed_fields are what this
+// transaction wrote. The principals are locked FOR KEY SHARE before the membership row, as the auth lock order
+// (membership.Store readPairs) puts principals (step 1) before auth.memberships (step 6): the UPDATE's invited_by
+// foreign key would otherwise take that lock after the row lock, against a TransferOwnership holding both principals.
+// The placeholder changed_fields is replaced in Apply, after the audit validation, by values from fillFields.
+func (s *Store) fillMembership(ctx context.Context, id uuid.UUID, t MembershipBackfillTarget, planned fillDecision) (fillDecision, error) {
+	if afterFillRead != nil {
+		afterFillRead(ctx)
+	}
+	var done, decided fillDecision
+	placeholder := planned
+	if !placeholder.Inviter && !placeholder.Joined {
+		placeholder.Inviter = true
+	}
+	ev := fillAudit(t, id, placeholder)
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			resolved, err := s.lockPrincipals(ctx, tx, t.InvitedBy, t.UserID)
+			if err != nil {
+				return err
+			}
+			var status string
+			var curInviter *uuid.UUID
+			var curJoined *time.Time
+			err = tx.QueryRow(ctx, `SELECT status, invited_by, joined_at FROM `+s.q+`.memberships WHERE id = $1 FOR UPDATE`, id).
+				Scan(&status, &curInviter, &curJoined)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if afterFillRowLock != nil {
+				afterFillRowLock(ctx)
+			}
+			d := decideFill(status == "active", curInviter, curJoined, t.InvitedBy, resolved, t.JoinedAt)
+			decided = d
+			if !d.Inviter && !d.Joined {
+				return nil
+			}
+			var inviter *uuid.UUID
+			if d.Inviter {
+				inviter = t.InvitedBy
+			}
+			var joined *time.Time
+			if d.Joined {
+				joined = t.JoinedAt
+			}
+			tag, err := tx.Exec(ctx, `UPDATE `+s.q+`.memberships
+SET invited_by = COALESCE(invited_by, $2::uuid), joined_at = COALESCE(joined_at, $3::timestamptz), updated_at = clock_timestamp()
+WHERE id = $1 AND status = 'active'`, id, inviter, joined)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return errFillRows
+			}
+			done = fillDecision{Inviter: d.Inviter, Joined: d.Joined, Unresolved: d.Unresolved}
+			ev.Attributes["changed_fields"] = fillFields(done)
+			return nil
+		},
+		Audit: ev,
+		Events: []audit.OutboxEvent{membershipEvent(id, "membership.activated",
+			map[string]any{"status": "active", "role_id": "rol_" + t.Role})},
+	})
+	switch {
+	case err == nil:
+		return done, nil
+	case errors.Is(err, audit.ErrNoStateChange):
+		return fillDecision{Unresolved: decided.Unresolved}, nil
+	}
+	return fillDecision{}, s.storeErr(ctx, "fill membership", err)
 }

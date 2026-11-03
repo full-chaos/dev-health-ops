@@ -30,7 +30,10 @@ func BodyFrom(ctx context.Context) (pybody.Body, bool) {
 // success next runs behind Wrap(level, ...), with the decoded body
 // available to it via BodyFrom.
 func (g *Guard) BodyFirst(level Authz, next http.Handler) http.Handler {
-	guarded := g.Wrap(level, next)
+	return g.bodyFirstOver(g.Wrap(level, next))
+}
+
+func (g *Guard) bodyFirstOver(guarded http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, outcome, failure, err := pybody.Read(r)
 		if err != nil {
@@ -54,4 +57,14 @@ func (g *Guard) BodyFirst(level Authz, next http.Handler) http.Handler {
 		}
 		guarded.ServeHTTP(w, r.WithContext(WithBody(r.Context(), body)))
 	})
+}
+
+// BodyFirstPlatform is BodyFirst over WrapPlatform.
+func (g *Guard) BodyFirstPlatform(action string, next http.Handler) http.Handler {
+	return g.bodyFirstOver(g.WrapPlatform(action, next))
+}
+
+// BodyFirstAdminOr is BodyFirst over WrapAdminOr.
+func (g *Guard) BodyFirstAdminOr(action string, next http.Handler) http.Handler {
+	return g.bodyFirstOver(g.WrapAdminOr(action, next))
 }

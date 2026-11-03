@@ -65,12 +65,12 @@ func (h credentialHandlers) validateRegister(w http.ResponseWriter, r *http.Requ
 	var errs pybody.Errors
 	var input registerInput
 	if object, ok := errs.Object(body); ok {
-		input.email, _ = errs.RequiredEmailStr(object, "email")
+		input.email, _ = errs.RequiredRegisterEmailStr(object, "email")
 		input.password, _ = errs.RequiredString(object, "password", 8, 128)
-		if value, present := errs.OptionalUTF8String(object, "full_name"); present {
+		if value, present := errs.OptionalDisplayText(object, "full_name"); present {
 			input.fullName = &value
 		}
-		if value, present := errs.OptionalUTF8String(object, "org_name"); present {
+		if value, present := errs.OptionalDisplayText(object, "org_name"); present {
 			input.orgName = &value
 		}
 	}

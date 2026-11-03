@@ -30,11 +30,20 @@ import (
 // preflightStore is a live auth schema in a container of its own, written by
 // a session.Store that connects as the runtime role.
 type preflightStore struct {
-	admin *pgxpool.Pool
-	store *session.Store
+	admin   *pgxpool.Pool
+	runtime *pgxpool.Pool
+	schema  authschema.ValidatedIdentifier
+	store   *session.Store
 }
 
 func newPreflightStore(t *testing.T, ctx context.Context) *preflightStore {
+	t.Helper()
+	return newPreflightStoreOwned(t, ctx, false)
+}
+
+// newPreflightStoreOwned is newPreflightStore with auth-service owning the
+// users and the platform roles when owned is set.
+func newPreflightStoreOwned(t *testing.T, ctx context.Context, owned bool) *preflightStore {
 	t.Helper()
 	instance, err := containers.StartPostgres(ctx)
 	if err != nil {
@@ -62,7 +71,7 @@ func newPreflightStore(t *testing.T, ctx context.Context) *preflightStore {
 		t.Fatalf("create role: %v", err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role}); err != nil {
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: owned}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	cfg := admin.Config().Copy()
@@ -80,12 +89,12 @@ func newPreflightStore(t *testing.T, ctx context.Context) *preflightStore {
 	if _, err := rand.Read(key); err != nil {
 		t.Fatal(err)
 	}
-	store, err := session.New(session.Config{Pool: runtime, Schema: schema,
+	store, err := session.New(session.Config{Pool: runtime, Schema: schema, UsersOwned: owned, PlatformRolesOwned: owned,
 		SuccessorKey: contracts.NewSecretString(base64.RawURLEncoding.EncodeToString(key))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &preflightStore{admin: admin, store: store}
+	return &preflightStore{admin: admin, runtime: runtime, schema: schema, store: store}
 }
 
 func (p *preflightStore) principal(t *testing.T, ctx context.Context) uuid.UUID {

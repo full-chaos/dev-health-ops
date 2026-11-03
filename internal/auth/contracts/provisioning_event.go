@@ -1,6 +1,8 @@
 package contracts
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -59,7 +61,7 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 	// lexically valid. Timestamp parses the envelope's; the change object's
 	// timestamp members are parsed here, every one, not only the one known today.
 	for name, value := range event.Payload.Change {
-		if name != "expires_at" {
+		if name != "expires_at" && name != "revoked_before" {
 			continue
 		}
 		var text string
@@ -81,7 +83,22 @@ func ParseProvisioningEvent(root string, raw []byte) (ProvisioningEvent, error) 
 			"%s: idempotency_key %q does not equal %q (aggregate_type:aggregate_id:payload.revision)",
 			ProvisioningEventSurface, event.IdempotencyKey, want)
 	}
+	// A pattern cannot hash: a signing_key aggregate id is key_ and the base64url SHA-256 of change.kid, so an id that is
+	// not the derived one names a different key than the kid it carries. A test holds SigningKeyAggregateID equal to
+	// provisioning.SigningKeyID (this package cannot import it: that package's tests import this one).
+	if event.AggregateType == "signing_key" {
+		var kid string
+		if raw, ok := event.Payload.Change["kid"]; !ok || json.Unmarshal(raw, &kid) != nil || event.AggregateID != SigningKeyAggregateID(kid) {
+			return ProvisioningEvent{}, fmt.Errorf("%s: signing_key aggregate_id does not equal the derived id (key_ and the base64url SHA-256) of change.kid", ProvisioningEventSurface)
+		}
+	}
 	return event, nil
+}
+
+// SigningKeyAggregateID is the aggregate id of the signing key kid: "key_" and the unpadded base64url SHA-256 of the kid.
+func SigningKeyAggregateID(kid string) string {
+	sum := sha256.Sum256([]byte(kid))
+	return "key_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 // Disposition is what a consumer does with an event.
@@ -105,32 +122,88 @@ type ConsumerCursor struct{ last map[string]int64 }
 // NewConsumerCursor returns an empty cursor.
 func NewConsumerCursor() *ConsumerCursor { return &ConsumerCursor{last: map[string]int64{}} }
 
-// Observe classifies e and advances the cursor only on Apply.
-func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
-	key := e.AggregateType + ":" + e.AggregateID
-	last := c.last[key] // 0 for an aggregate never seen
+// Peek says what Observe would answer for e and moves nothing. A consumer that must act BEFORE the cursor moves
+// (invalidate a cache, then advance) classifies, acts, and advances with ResyncTo.
+func (c *ConsumerCursor) Peek(e ProvisioningEvent) Disposition {
+	last := c.last[AggregateKey(e.AggregateType, e.AggregateID)] // 0 for an aggregate never seen
 	rev := int64(e.Payload.Revision)
 	switch {
 	case rev <= last:
 		return Ignore
 	case rev == last+1:
-		c.last[key] = rev
 		return Apply
 	default:
 		return Gap
 	}
 }
 
+// Observe classifies e and advances the cursor only on Apply.
+func (c *ConsumerCursor) Observe(e ProvisioningEvent) Disposition {
+	d := c.Peek(e)
+	if d == Apply {
+		c.last[AggregateKey(e.AggregateType, e.AggregateID)] = int64(e.Payload.Revision)
+	}
+	return d
+}
+
+// AggregateKey is the key a ConsumerCursor keeps an aggregate's mark under.
+func AggregateKey(aggregateType, aggregateID string) string { return aggregateType + ":" + aggregateID }
+
+// ResyncTo moves the mark of key to revision, the revision of a Gap the consumer has resynchronised on. Without it a
+// gap repeats for every later revision (a delivered outbox row is never delivered again). It never lowers a mark: a
+// stale resync is a no-op.
+func (c *ConsumerCursor) ResyncTo(key string, revision int64) {
+	if revision > c.last[key] {
+		c.last[key] = revision
+	}
+}
+
 // AuditAttributes are the allowlisted audit attributes; every schema member is
-// carried, so a parser never silently drops data the schema admits.
+// carried, so a parser never silently drops data the schema admits. A key is
+// absent from a row unless its event writes it.
 type AuditAttributes struct {
-	ReasonCode        string    `json:"reason_code,omitempty"`
-	Action            string    `json:"action,omitempty"`
-	ResourceType      string    `json:"resource_type,omitempty"`
-	AggregateType     string    `json:"aggregate_type,omitempty"`
-	AggregateRevision *Revision `json:"aggregate_revision,omitempty"`
-	CredentialClass   string    `json:"credential_class,omitempty"`
-	DecisionID        string    `json:"decision_id,omitempty"`
+	ReasonCode                    string    `json:"reason_code,omitempty"`
+	Action                        string    `json:"action,omitempty"`
+	ResourceType                  string    `json:"resource_type,omitempty"`
+	AggregateType                 string    `json:"aggregate_type,omitempty"`
+	AggregateRevision             *Revision `json:"aggregate_revision,omitempty"`
+	CredentialClass               string    `json:"credential_class,omitempty"`
+	DecisionID                    string    `json:"decision_id,omitempty"`
+	DecisionReasonCode            string    `json:"decision_reason_code,omitempty"`
+	ActionKey                     string    `json:"action_key,omitempty"`
+	Actions                       []string  `json:"actions,omitempty"`
+	Amr                           []string  `json:"amr,omitempty"`
+	AssertionKeyID                string    `json:"assertion_key_id,omitempty"`
+	Audience                      string    `json:"audience,omitempty"`
+	BindingDisabled               string    `json:"binding_disabled,omitempty"`
+	BindingID                     string    `json:"binding_id,omitempty"`
+	CallerPrincipalID             string    `json:"caller_principal_id,omitempty"`
+	ChangedFields                 []string  `json:"changed_fields,omitempty"`
+	ClientClass                   string    `json:"client_class,omitempty"`
+	CredentialID                  string    `json:"credential_id,omitempty"`
+	JTI                           string    `json:"jti,omitempty"`
+	KeyID                         string    `json:"key_id,omitempty"`
+	NewRole                       string    `json:"new_role,omitempty"`
+	NewStatus                     string    `json:"new_status,omitempty"`
+	PolicyRevision                *Revision `json:"policy_revision,omitempty"`
+	PreviousRole                  string    `json:"previous_role,omitempty"`
+	PreviousStatus                string    `json:"previous_status,omitempty"`
+	PrincipalEnabled              string    `json:"principal_enabled,omitempty"`
+	PrincipalID                   string    `json:"principal_id,omitempty"`
+	Provider                      string    `json:"provider,omitempty"`
+	PurgedEmailVerificationTokens *Revision `json:"purged_email_verification_tokens,omitempty"`
+	PurgedPasswordResetTokens     *Revision `json:"purged_password_reset_tokens,omitempty"`
+	RelatedKeyID                  string    `json:"related_key_id,omitempty"`
+	ResourceID                    string    `json:"resource_id,omitempty"`
+	ResourceKind                  string    `json:"resource_kind,omitempty"`
+	Revision                      *Revision `json:"revision,omitempty"`
+	RotationRefusal               string    `json:"rotation_refusal,omitempty"`
+	RotationVerb                  string    `json:"rotation_verb,omitempty"`
+	RunID                         string    `json:"run_id,omitempty"`
+	Source                        string    `json:"source,omitempty"`
+	TargetID                      string    `json:"target_id,omitempty"`
+	TargetKind                    string    `json:"target_kind,omitempty"`
+	WorkloadJTI                   string    `json:"workload_jti,omitempty"`
 }
 
 // AuditEvent is one audit event, validated and parsed. Every schema member is

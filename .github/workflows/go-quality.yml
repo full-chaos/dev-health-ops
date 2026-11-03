@@ -110,11 +110,14 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          LEGS: ${{ steps.legs.outputs.legs }}
         run: |
           queue_file="${RUNNER_TEMP}/queue-tested-run-id"
           rm -f "${queue_file}"
           run_id=""
-          if QUEUE_TESTED_RUN_ID_FILE="${queue_file}" bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' 8; then
+          expected_file="${RUNNER_TEMP}/queue-expected-legs"
+          printf '%s' "${LEGS}" | jq -r '.[] | "go-quality-leg (" + .name + ")"' > "${expected_file}"
+          if QUEUE_TESTED_RUN_ID_FILE="${queue_file}" bash ci/queue_tested_sha.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}" go-quality.yml 'go-quality-leg (' 'Run Go quality leg' "@${expected_file}"; then
             run_id="$(cat "${queue_file}" 2>/dev/null || true)"
           fi
           case "${run_id}" in
@@ -188,7 +191,7 @@ jobs:
     strategy:
       # One red leg must not cancel the others: every leg reports its own signal.
       fail-fast: false
-      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-3, race-N-of-4; the tooling tests pin the
+      # CHAOS-11418: the legs live in ci/go_quality_legs.json (static, test-N-of-4, race-N-of-6; the tooling tests pin the
       # race and test counts there). go-quality-plan filters them with ci/go_quality_legs.sh: a pull request without the ci:full
       # label starts no race leg (a job cannot read its own matrix in an `if`, so the leg is left out, not started to report a
       # skip). The legs are not required status contexts (the ruleset requires the `go-quality` aggregate), so the count can
@@ -203,7 +206,7 @@ jobs:
     # restores the hosted runner with no code change. Fork PRs always stay
     # hosted -- same safety condition as go.yml's dual-leg jobs (a public
     # repo must never hand a fork's untrusted PR code a self-hosted runner).
-    # CHAOS-10294: the race legs flagged `pool` (race-1, race-2, race-3) run on the bigboy ARC pool
+    # CHAOS-10294: the race legs flagged `pool` (race-1, race-2, race-3, race-4, race-5, race-6) run on the bigboy ARC pool
     # named by the repo variable CI_RACE_RUNNER, on push to main of THIS repo only
     # (ops is public: a fork or PR event never reaches the pool through this term).
     # The variable unset or empty = hosted. SELF_HOSTED_RUNNERS keeps routing
@@ -218,6 +221,7 @@ jobs:
     # real completion times on ARC are known.
     timeout-minutes: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
     env:
+      CHECK_GO_JOB_CAP_MIN: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository_owner }}
       TESTCONTAINERS_RYUK_DISABLED: ${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 'true' || 'false' }}
       # The default 600 s per-package go test timeout is too small for the pool.
@@ -411,6 +415,8 @@ jobs:
           bash ci/pull_base_image_test.sh
           bash ci/retry_test.sh
           bash ci/ghcr_login_test.sh
+          bash ci/auth_rotation_probe_test.sh
+          bash ci/rehearse_auth_key_rotation_test.sh
 
       - name: Check the gqlgen output has not drifted from its hand-edits
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
@@ -636,6 +642,10 @@ jobs:
         if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
         run: bash ci/check_river_compat_static.sh
 
+      - name: Test the auth PITR drill phase helper
+        if: steps.relevance.outputs.relevant == 'true' && matrix.name == 'static'
+        run: bash scripts/drill-auth-pitr_test.sh
+
       - name: Log out of GitHub Container Registry
         if: always()
         run: docker logout ghcr.io
@@ -658,7 +668,7 @@ jobs:
           QUEUE_RUN: ${{ needs.go-quality-plan.outputs.queue_run }}
         run: |
           if [ -n "${QUEUE_RUN}" ]; then
-            summary="go-quality on this push: static ran; test-1-of-3, test-2-of-3, test-3-of-3, race-1-of-4, race-2-of-4, race-3-of-4, race-4-of-4 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
+            summary="go-quality on this push: static ran; test-1-of-4, test-2-of-4, test-3-of-4, test-4-of-4, race-1-of-6, race-2-of-6, race-3-of-6, race-4-of-6, race-5-of-6, race-6-of-6 skipped: queue-tested sha, merge_group run ${QUEUE_RUN}"
           else
             summary="go-quality on this push: every leg ran (no queue-tested sha)"
           fi
@@ -689,3 +699,31 @@ jobs:
         run: |
           chmod +x ci/aggregate_gate_results.sh
           ./ci/aggregate_gate_results.sh
+
+  # CHAOS-11733: a merge queue entry can fail first in any workflow, not only go.yml. When any job of this workflow fails on a
+  # merge_group run, cancel the runs stacked on this red entry (same job and script as go.yml). Not a required context
+  # (no job needs it), continue-on-error, and the checkout is the target branch's tip, never the merge group.
+  cancel-stacked-queue-children:
+    name: cancel-stacked-queue-children
+    needs: [go-quality-plan, go-quality-leg, go-quality]
+    if: failure() && github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.merge_group.base_ref }}
+          sparse-checkout: ci/cancel_stacked_queue_runs.sh
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+      - name: Cancel the runs stacked on this red entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: bash ci/cancel_stacked_queue_runs.sh

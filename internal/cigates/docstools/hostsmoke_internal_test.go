@@ -40,13 +40,11 @@ func TestHostSmokeRequestTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	start := time.Now()
+	// The server answers /use/ after 2 s and the client timeout is 300 ms, so a timeout that did not fire ends
+	// in a 200 answer: exit 0 and no "request failed" line. The exit code and the line carry the proof; no elapsed time is asserted.
 	code := hostSmokeVerb([]string{"--origin", srv.URL, "--redirects", tsv}, &stdout, &stderr)
 	if code != 1 || !strings.HasPrefix(stdout.String(), "ERROR: request failed: ") || strings.Count(stdout.String(), "\n") != 1 {
 		t.Errorf("exit %d stdout %q stderr %q", code, stdout.String(), stderr.String())
-	}
-	if time.Since(start) > 1500*time.Millisecond {
-		t.Errorf("took %s; the timeout did not fire", time.Since(start))
 	}
 }
 
@@ -136,7 +134,7 @@ func TestHostSmokeIdleDeadlineIsPerOperation(t *testing.T) {
 		time.Sleep(600 * time.Millisecond)
 		server.Close()
 	}()
-	conn := hsIdleConn{client}
+	conn := hsIdleConn{client, hsTimeout}
 	buf := make([]byte, 1)
 	for i := 0; i < 8; i++ {
 		if _, err := conn.Read(buf); err != nil {
@@ -221,5 +219,40 @@ func TestHostSmokeFollowBoundsEveryRequestChain(t *testing.T) {
 	requote := &hsFakeTransport{reply: func(string) (int, map[string]string) { return 302, map[string]string{"Location": "/new/?"} }}
 	if _, err := hsGet(requote, true, "https://h/"); err == nil || len(requote.requests) != 1 {
 		t.Errorf("re-quote: err %v requests %v", err, requote.requests)
+	}
+}
+
+// The transport closes a conn from its own goroutine (tls closeNotify writes), which can run after the caller restored
+// hsTimeout. A dialled conn keeps the timeout it was dialled with, so that write never reads the package variable.
+// The race detector reports the unsynchronised read when the conn reads hsTimeout per call.
+func TestHostSmokeDialledConnDoesNotReadTheTimeoutVariable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			defer c.Close()
+			_, _ = io.Copy(io.Discard, c)
+		}
+	}()
+	old := hsTimeout
+	hsTimeout = 300 * time.Millisecond
+	conn, err := hsDialPlain(context.Background(), "tcp", ln.Addr().String())
+	if err != nil {
+		hsTimeout = old
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	written := make(chan error, 1)
+	go func() {
+		_, err := conn.Write([]byte("x"))
+		written <- err
+	}()
+	hsTimeout = old
+	if err := <-written; err != nil {
+		t.Errorf("write: %v", err)
 	}
 }

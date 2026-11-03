@@ -34,7 +34,7 @@ func (r *gitRepo) childCommit(parent, path string) string {
 	index := filepath.Join(r.t.TempDir(), "index")
 	env := append(os.Environ(), "GIT_INDEX_FILE="+index)
 	run := func(stdin string, args ...string) string {
-		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"}, args...)...)
 		cmd.Dir = r.dir
 		cmd.Env = env
 		cmd.Stdin = strings.NewReader(stdin)

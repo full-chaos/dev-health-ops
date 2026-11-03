@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -389,6 +390,27 @@ const linkedElsewhereRuling = "CHAOS-10928: an installation another organization
 // linkedElsewherePinSHA256 is the digest of testdata/venue/github-app-install.go-pin.json.
 const linkedElsewherePinSHA256 = "55febfa8006a231224657d496fb99cbb3f75c911e0227564aca40f3ad22a5bf6"
 
+// headerDifferences lists every header outside venueoracle.Volatile that the two answers do not share.
+func headerDifferences(a, b venueoracle.Response) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, headers := range []map[string]string{a.Headers, b.Headers} {
+		for key := range headers {
+			if venueoracle.Volatile[key] || seen[key] {
+				continue
+			}
+			seen[key] = true
+			av, aok := a.Headers[key]
+			bv, bok := b.Headers[key]
+			if av != bv || aok != bok {
+				out = append(out, fmt.Sprintf("%s: %q (present %v) vs %q (present %v)", key, av, aok, bv, bok))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // runGitHubAppVariant sets the process environment both planes read, starts
 // a Go api under it, and diffs the requests.
 func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, stub *githubStub, stubClient *http.Client, name string, env map[string]string, full bool, orgs [2]string, pin *venueoracle.GoPin) string {
@@ -411,17 +433,24 @@ func runGitHubAppVariant(t *testing.T, ctx context.Context, golden *venueoracle.
 	pythonSeen := strings.Split(golden.InspectRows(t, "python github requests: "+name), "\n")
 	options := venueoracle.DiffOptions{Golden: golden, Normalize: normalizeGitHubState}
 	answers := map[string]string{}
+	responses := map[string]venueoracle.Response{}
 	if pin != nil {
 		options.Retire = func(request venueoracle.Request) bool { return request.Name == linkedElsewhereRequest }
 		options.Pin = pin
 		options.Inspect = func(request venueoracle.Request, goResponse venueoracle.Response) {
 			answers[request.Name] = venueoracle.PinText(goResponse)
+			responses[request.Name] = goResponse
 		}
 	}
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, options)
 	if pin != nil && answers[linkedElsewhereRequest] != answers["callback: installation not accessible"] {
 		t.Errorf("%s: an installation linked elsewhere is not answered like one the installer cannot access:\n elsewhere %s\n inaccessible %s",
 			name, answers[linkedElsewhereRequest], answers["callback: installation not accessible"])
+	}
+	if pin != nil {
+		for _, diff := range headerDifferences(responses[linkedElsewhereRequest], responses["callback: installation not accessible"]) {
+			t.Errorf("%s: an installation linked elsewhere is not answered like one the installer cannot access: header %s", name, diff)
+		}
 	}
 	pythonShape := golden.InspectRows(t, "python minted state: "+name)
 	goMinted, err := (githubapp.Signer{Secret: venueKey, Issuer: "dev-health-ops", Audience: "dev-health-api"}).Mint(orgs[0], &returnTo, time.Now())

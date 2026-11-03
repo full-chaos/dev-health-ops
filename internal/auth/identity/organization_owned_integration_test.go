@@ -40,7 +40,11 @@ func (e *env) seedAuthOwnedOrg(t *testing.T, ctx context.Context) uuid.UUID {
 	return id
 }
 
-func TestProjectOrganizationOwnedByAuthDoesNotReactivateASuspendedOrganization(t *testing.T) {
+// A suspended organization stays suspended in both switch states, while go-api's
+// row is active: with the switch on the projection writes nothing at all; with
+// it off the projection still takes go-api's name (it does write) but never
+// clears disabled_at (keepSuspended).
+func TestProjectOrganizationKeepsASuspendedOrganizationSuspendedInBothSwitchStates(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	id := e.seedAuthOwnedOrg(t, ctx)
@@ -52,12 +56,15 @@ func TestProjectOrganizationOwnedByAuthDoesNotReactivateASuspendedOrganization(t
 	if err := e.admin.QueryRow(ctx, `SELECT revision FROM auth.aggregate_revisions WHERE aggregate_type = 'organization' AND aggregate_id = $1`, "org_"+id.String()).Scan(&rev); err != nil {
 		t.Fatal(err)
 	}
-	// public.organizations is still active, as go-api would leave it.
+	// public.organizations is still active, as go-api would leave it, and go-api renames it.
+	if _, err := e.admin.Exec(ctx, `UPDATE public.organizations SET name = 'renamed-by-go-api' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.ownedOrgsStore(t).ProjectOrganization(ctx, id); err != nil {
 		t.Fatalf("ProjectOrganization with the switch on: %v", err)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, id); n != 1 {
-		t.Fatal("the projection cleared the suspension")
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL AND name <> 'renamed-by-go-api'`, id); n != 1 {
+		t.Fatal("the switch-on projection cleared the suspension or wrote go-api's name")
 	}
 	if got := e.outboxRows(t, ctx, "organization.reactivated", id.String()); got != reactivated {
 		t.Fatalf("reactivated events %d -> %d", reactivated, got)
@@ -69,12 +76,19 @@ func TestProjectOrganizationOwnedByAuthDoesNotReactivateASuspendedOrganization(t
 	if after != rev {
 		t.Fatalf("revision %d -> %d", rev, after)
 	}
-	// Control: the same call with the switch off does reactivate (the defect this closes).
+	// The switch-off projection does write (go-api's name, so the call is not a
+	// no-op), and still keeps the suspension.
 	if err := e.store.ProjectOrganization(ctx, id); err != nil {
 		t.Fatal(err)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, id); n != 1 {
-		t.Fatal("control failed: the switch-off projection no longer reactivates, so this test proves nothing")
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND name = 'renamed-by-go-api'`, id); n != 1 {
+		t.Fatal("control failed: the switch-off projection wrote nothing, so this test proves nothing")
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NOT NULL`, id); n != 1 {
+		t.Fatal("the switch-off projection cleared the suspension")
+	}
+	if got := e.outboxRows(t, ctx, "organization.reactivated", id.String()); got != reactivated {
+		t.Fatalf("reactivated events %d -> %d with the switch off", reactivated, got)
 	}
 }
 

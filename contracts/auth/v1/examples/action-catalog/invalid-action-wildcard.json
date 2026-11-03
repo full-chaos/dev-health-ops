@@ -8,7 +8,8 @@
       "scope": "organization",
       "resource_kind": "organization",
       "risk_class": "high",
-      "cache_class": "none"
+      "cache_class": "none",
+      "impersonation": "denied"
     }
   ]
 }

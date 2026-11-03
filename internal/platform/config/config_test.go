@@ -610,8 +610,8 @@ func TestQueueControlAndRetentionDefaults(t *testing.T) {
 	// because a process that serves the provider-unit queue must be able to
 	// serve the work-item family and no switch can say otherwise any more.
 	if cfg.WorkerGithubWorkItemsStatusMappingPath != "/app/config/status_mapping.yaml" ||
-		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "/app/config/investment_areas.yaml" {
-		t.Fatalf("work-item runtime artifact paths = %q, %q; want the packaged image defaults",
+		cfg.WorkerGithubWorkItemsInvestmentConfigPath != "" {
+		t.Fatalf("work-item runtime artifact paths = %q, %q; want the status mapping image default and no investment path",
 			cfg.WorkerGithubWorkItemsStatusMappingPath,
 			cfg.WorkerGithubWorkItemsInvestmentConfigPath)
 	}
@@ -1053,6 +1053,9 @@ func TestComponentKeysMatchesSpecFieldsMinusTheSharedDBException(t *testing.T) {
 			want := []string{spec.HostKey, spec.PortKey, spec.UserKey, spec.UserKey + "_FILE", spec.PasswordKey, spec.PasswordKey + "_FILE"}
 			if !spec.DBKeyShared {
 				want = append(want, spec.DBKey)
+			}
+			if spec.SecureKey != "" {
+				want = append(want, spec.SecureKey)
 			}
 			got := spec.componentKeys()
 			gotSet := make(map[string]bool, len(got))
@@ -2558,5 +2561,71 @@ func TestLinkTokenSecretsAreOptionalAndFileCapable(t *testing.T) {
 	both := load(map[string]string{"LINK_TOKEN_SECRET_FILE": secretFile, "LINK_TOKEN_SECRET_PREVIOUS": "link-old"})
 	if both.LinkTokenSecret.Reveal() != "link-from-file" || both.LinkTokenSecretPrevious.Reveal() != "link-old" {
 		t.Fatalf("link secrets = %q, %q", both.LinkTokenSecret.Reveal(), both.LinkTokenSecretPrevious.Reveal())
+	}
+}
+
+func TestPurposeStateSecretsAreOptionalFileCapableAndLongEnough(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	secretFile := filepath.Join(dir, "state")
+	fileValue := strings.Repeat("f", 40)
+	if err := os.WriteFile(secretFile, []byte(fileValue+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]string{
+		"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "JWT_SECRET_KEY": "jwt-key",
+	}
+	load := func(extra map[string]string) (Config, error) {
+		values := map[string]string{}
+		for k, v := range base {
+			values[k] = v
+		}
+		for k, v := range extra {
+			values[k] = v
+		}
+		return Load(Spec{Service: APIServiceName, LookupEnv: lookup(values)})
+	}
+	none, err := load(nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if none.SSOStateSecret.Configured() || none.GitHubAppStateSecret.Configured() {
+		t.Fatal("state secrets are configured with neither variable set")
+	}
+	long := strings.Repeat("g", 40)
+	both, err := load(map[string]string{"SSO_STATE_SECRET_FILE": secretFile, "GITHUB_APP_STATE_SECRET": long})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if both.SSOStateSecret.Reveal() != fileValue || both.GitHubAppStateSecret.Reveal() != long {
+		t.Fatal("state secrets do not carry the file value and the direct value")
+	}
+	for _, name := range []string{"SSO_STATE_SECRET", "GITHUB_APP_STATE_SECRET"} {
+		_, err := load(map[string]string{name: "short"})
+		if err == nil || !strings.Contains(err.Error(), name) || strings.Contains(err.Error(), "short") {
+			t.Fatalf("%s too short: got %v, want an error naming it and not its value", name, err)
+		}
+	}
+}
+
+func TestPurposeStateSecretsThatShareAValueAreRefused(t *testing.T) {
+	t.Parallel()
+
+	same := strings.Repeat("s", 40)
+	other := strings.Repeat("o", 40)
+	for name, extra := range map[string]map[string]string{
+		"sso equals github": {"SSO_STATE_SECRET": same, "GITHUB_APP_STATE_SECRET": same},
+		"sso equals jwt":    {"SSO_STATE_SECRET": other, "JWT_SECRET_KEY": other},
+		"github equals jwt": {"GITHUB_APP_STATE_SECRET": other, "JWT_SECRET_KEY": other},
+	} {
+		values := map[string]string{"POSTGRES_URI": "postgresql://app:app@db.internal:5432/appdb", "JWT_SECRET_KEY": "jwt-key"}
+		for k, v := range extra {
+			values[k] = v
+		}
+		_, err := Load(Spec{Service: APIServiceName, LookupEnv: lookup(values)})
+		if err == nil || strings.Contains(err.Error(), same) || strings.Contains(err.Error(), other) {
+			t.Fatalf("%s: got %v, want a refusal that does not print a value", name, err)
+		}
 	}
 }

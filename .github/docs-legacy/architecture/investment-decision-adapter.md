@@ -22,7 +22,7 @@ Code:
 | Shadow phase | `shadowphase.go`, `shadowsettings.go`, `shadowsanitize.go`, `shadowobserver.go` |
 | Served mode | `serveddecision.go`, `nativeexecutor.go` |
 | Table writers | `chwrite/shadow.go` |
-| Tables | `internal/chmigrate/sql/109_work_unit_investment_shadow.sql`, `110_llm_categorization_attempts.sql` |
+| Tables | `internal/chmigrate/archive/sql/109_work_unit_investment_shadow.sql`, `110_llm_categorization_attempts.sql` |
 
 ---
 

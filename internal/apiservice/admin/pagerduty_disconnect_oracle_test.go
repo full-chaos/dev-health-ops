@@ -110,7 +110,7 @@ func TestPagerDutyDisconnectVenueOracle(t *testing.T) {
 			"PAGER_DUTY_CLIENT_ID=" + pagerDutyDisconnectVenueClientID,
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
 		},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -205,7 +205,7 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`,
 				"admin_revoke_fails":     {"user_id": adminID.String(), "email": "pd-disc-admin@example.com", "org_id": orgs["revoke-fails"].id.String(), "role": "admin"},
 				"member":                 {"user_id": memberID.String(), "email": "pd-disc-member@example.com", "org_id": orgs["connected"].id.String(), "role": "member"},
 			}
-		},
+		}),
 	})
 
 	jsonAuth := func(name string) map[string]string {

@@ -1,5 +1,5 @@
 {
-  "description": "Golden corpus for authorization_decision.v1 (CHAOS-4932). reject_by_client documents VALIDATE against the schema and every client MUST still refuse them.",
+  "description": "Golden corpus for authorization_decision.v1 (CHAOS-4932). reject_by_client documents VALIDATE against the schema and every client MUST still refuse them. accept_not_cacheable documents VALIDATE and every client MUST accept them against a stated `now`, marked not cacheable (use once).",
   "accept": [
     {
       "file": "decision-valid-allow-with-obligations.json",
@@ -20,6 +20,106 @@
     {
       "file": "decision-valid-allow-without-obligations.json",
       "why": "An allow with no obligations is legal."
+    },
+    {
+      "file": "decision-valid-reason-allowed-by-role.json",
+      "why": "An allow by the member's organization role (5.2)."
+    },
+    {
+      "file": "decision-valid-reason-invalid-request.json",
+      "why": "A deny for a request the decision core cannot read in canonical form."
+    },
+    {
+      "file": "decision-valid-reason-unknown-action.json",
+      "why": "A deny for an action outside the catalog."
+    },
+    {
+      "file": "decision-valid-reason-resource-mismatch.json",
+      "why": "A deny for an action asked about the wrong resource kind."
+    },
+    {
+      "file": "decision-valid-reason-principal-inactive.json",
+      "why": "A deny for a principal that is not active."
+    },
+    {
+      "file": "decision-valid-reason-organization-inactive.json",
+      "why": "A deny for an organization that is not active."
+    },
+    {
+      "file": "decision-valid-reason-no-membership.json",
+      "why": "A deny for a principal with no membership in the organization."
+    },
+    {
+      "file": "decision-valid-reason-org-mismatch.json",
+      "why": "A deny for a membership of another organization."
+    },
+    {
+      "file": "decision-valid-reason-membership-inactive.json",
+      "why": "A deny for a membership that is not active."
+    },
+    {
+      "file": "decision-valid-reason-role-unknown.json",
+      "why": "A deny for a role outside the catalog."
+    },
+    {
+      "file": "decision-valid-reason-role-scope-mismatch.json",
+      "why": "A deny for a role of the other scope."
+    },
+    {
+      "file": "decision-valid-reason-role-lacks-action.json",
+      "why": "A deny for a role that does not hold the action."
+    },
+    {
+      "file": "decision-valid-reason-grant-expired.json",
+      "why": "A deny for a repository grant at or past its expiry (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-grant-revoked.json",
+      "why": "A deny for a revoked repository grant (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-workload-audience-denied.json",
+      "why": "A deny for a workload whose token audience the registry does not list (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-workload-action-denied.json",
+      "why": "A deny for a workload action the registry does not allow (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-service-account-inactive.json",
+      "why": "A deny for a service account that is not active in the organization (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-allowed-by-membership-default.json",
+      "why": "A repository allow by the membership default (5.3)."
+    },
+    {
+      "file": "decision-valid-reason-impersonation-denied.json",
+      "why": "Reserved for the actor-chain leaf: a deny under impersonation."
+    },
+    {
+      "file": "decision-valid-reason-delegation-invalid.json",
+      "why": "Reserved for the actor-chain leaf: a deny for an invalid delegation."
+    },
+    {
+      "file": "decision-valid-allow-allowlist-wildcard.json",
+      "why": "An org-wide allow is the explicit allowlist [\"*\"] plus a tenant scope: the PDP never relies on an absent member for 'no limit' (CHAOS-12656)."
+    },
+    {
+      "file": "decision-valid-allow-allowlist-several-keys.json",
+      "why": "A member limited to several repositories: sorted, unique canonical keys."
+    },
+    {
+      "file": "decision-valid-allow-redaction-every-class.json",
+      "why": "Every registered redaction class in one decision (contracts/auth/v1/vocabulary/redaction-classes.v1.json)."
+    },
+    {
+      "file": "decision-valid-allow-tenant-scope-only.json",
+      "why": "An allow of an action with no repository filter carries the tenant scope and no allowlist."
+    },
+    {
+      "file": "decision-valid-allowlist-at-the-bound.json",
+      "why": "256 keys is the largest allowlist the schema admits."
     }
   ],
   "reject": [
@@ -178,13 +278,21 @@
       "expect_instance_location": "/reason_code",
       "expect_keyword": "enum",
       "why": "A well-formed code no producer emits is refused: the vocabulary is closed."
+    },
+    {
+      "file": "decision-invalid-allowlist-over-the-bound.json",
+      "expect_instance_location": "/obligations/repository_allowlist",
+      "expect_keyword": "maxItems",
+      "why": "257 keys is over the bound: the PDP never truncates, a decision over the bound is a deny with its own reason, so a document that carries more is invalid."
+    },
+    {
+      "file": "decision-invalid-duplicate-redaction-class.json",
+      "expect_instance_location": "/obligations/redaction",
+      "expect_keyword": "uniqueItems",
+      "why": "A repeated redaction class is malformed, as a repeated allowlist key is."
     }
   ],
   "reject_by_client": [
-    {
-      "file": "decision-client-expired-allow.json",
-      "why": "An allow whose expires_at is long past. Valid for the schema (a timestamp is a timestamp); TRD section 14 makes expiry the bound on a stale allow, so a client that hands back allowed=true for it exposes a decision nobody may reuse. Both clients refuse it against a stated `now`."
-    },
     {
       "file": "decision-client-duplicate-allowed-member.json",
       "duplicate_member": true,
@@ -193,6 +301,12 @@
     {
       "file": "decision-client-decimal-form-policy-revision.json",
       "why": "42.0 is a valid JSON Schema integer, so all three validators accept it. A float64 reader has already rounded a decimal-form token, so it is indistinguishable from the integer it rounds to; both clients refuse it (wire-integer rule). Valid for the schema, refused by the client."
+    }
+  ],
+  "accept_not_cacheable": [
+    {
+      "file": "decision-valid-allow-expired-not-cacheable.json",
+      "why": "An allow whose expires_at is long past. It validates and the client ACCEPTS it: expires_at bounds REUSE, not the answer to the request it was issued for. The parsed decision is marked not cacheable (use once). Moved from reject_by_client by the 5.9 ruling."
     }
   ]
 }

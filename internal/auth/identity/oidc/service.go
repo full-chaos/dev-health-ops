@@ -3,6 +3,7 @@ package oidc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/emaildomain"
 	"log/slog"
 	"net/http"
@@ -18,8 +19,11 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity/ssoaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // ProviderKind is the go-api users.auth_provider value of an OIDC account.
@@ -66,6 +70,8 @@ type FederatedAccount struct {
 	// LegacyFullName is the public.users full_name: nil is NULL.
 	LegacyFullName *string
 	RequestID      *string
+	// LegacyProvider is the users.auth_provider value the new row carries.
+	LegacyProvider string
 }
 
 // IdentityStore is the identity store as this flow uses it.
@@ -123,6 +129,9 @@ type Tokens struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
+	// SessionAccessToken is auth-service's session-route token under the eddsa
+	// access token class, empty under hs256_compat.
+	SessionAccessToken string
 }
 
 // SessionIssuer creates the session and mints its tokens. Preflight reports
@@ -153,9 +162,19 @@ type Config struct {
 	// DefaultOAuthEndpoints. A self-hosted GitLab row's base_url overrides
 	// the GitLab base.
 	OAuthEndpoints *OAuthEndpoints
-	Now            func() time.Time
-	Logger         *slog.Logger
-	Meter          metric.Meter
+	// DenialAudit writes go-api's audit_logs row of an OAuth domain refusal
+	// (stage domain_check) before the refusal answers; nil writes none.
+	DenialAudit DenialAudit
+	// ProviderFailure records an OAuth provider error (the token exchange or
+	// the profile fetch failing: go-api's recordSSOFailure) before the
+	// refusal answers; nil records none.
+	ProviderFailure ssoaudit.ProviderFailure
+	// SignInRecord writes go-api's success record (finishSSOLogin) of an OIDC or
+	// OAuth sign-in once its session exists, before any token leaves.
+	SignInRecord ssoaudit.SignInRecord
+	Now          func() time.Time
+	Logger       *slog.Logger
+	Meter        metric.Meter
 }
 
 // Service runs the OIDC flow.
@@ -168,7 +187,7 @@ type Service struct {
 func New(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Providers == nil, cfg.Flows == nil, cfg.Identities == nil, cfg.Memberships == nil,
-		cfg.Entitlements == nil, cfg.Sessions == nil:
+		cfg.Entitlements == nil, cfg.Sessions == nil, cfg.SignInRecord == nil:
 		return nil, errors.New("oidc: a required dependency is missing")
 	case cfg.StateSecret.Reveal() == "":
 		return nil, errors.New("oidc: no state secret")
@@ -480,7 +499,20 @@ func (s *Service) callback(ctx context.Context, admitted StoredProvider, in Call
 	if failure != nil {
 		return Login{}, clear, failure
 	}
+	if failure := s.recordSignIn(ctx, row, login); failure != nil {
+		return Login{}, clear, failure
+	}
 	return login, clear, nil
+}
+
+// recordSignIn writes the success record of a sign-in whose session exists. A write error is the 500: the tokens are
+// withheld and the session stays undelivered, as on go-api's path.
+func (s *Service) recordSignIn(ctx context.Context, row Provider, login Login) *Error {
+	if err := s.cfg.SignInRecord.Succeeded(ctx, ssoaudit.Success{OrgID: row.OrgID, ProviderID: row.ID,
+		PrincipalID: login.PrincipalID, Protocol: row.Protocol}); err != nil {
+		return internal(ReasonStoreUnavailable, err)
+	}
+	return nil
 }
 
 type validated struct {
@@ -494,10 +526,11 @@ type validated struct {
 func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state flowState, code string) (validated, *Error) {
 	meta, err := resolveMetadata(ctx, s.cfg.HTTPClient, row.Config)
 	if err != nil {
-		return validated{}, authFailed(ReasonDependency, err)
+		return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 	}
 	if meta.Issuer == "" || row.Config.ClientID == "" || meta.JWKSURI == "" {
-		return validated{}, authFailed(ReasonMalformed, errors.New("provider configuration missing issuer, client_id or jwks_uri"))
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgOIDCConfig,
+			authFailed(ReasonMalformed, errors.New("provider configuration missing issuer, client_id or jwks_uri")))
 	}
 	oauthCfg := oauth2.Config{
 		ClientID: row.Config.ClientID, ClientSecret: clientSecret(s.cfg.Secrets, row.EncryptedSecrets),
@@ -506,23 +539,24 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}
 	token, err := exchangeCode(ctx, s.cfg.HTTPClient, oauthCfg, code, state.CodeVerifier)
 	if err != nil {
-		return validated{}, authFailed(ReasonDependency, err)
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgOIDCExchange, authFailed(ReasonDependency, err))
 	}
 	rawIDToken, _ := token.Extra("id_token").(string)
-	if token.AccessToken == "" || rawIDToken == "" {
-		return validated{}, authFailed(ReasonMalformed, errors.New("token response missing access_token or id_token"))
+	if text := missingTokenText(token.AccessToken, rawIDToken); text != "" {
+		return validated{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, text,
+			authFailed(ReasonMalformed, errors.New("token response missing access_token or id_token")))
 	}
 	keys := gooidc.NewRemoteKeySet(gooidc.ClientContext(ctx, s.cfg.HTTPClient), meta.JWKSURI)
 	claims, err := verifyIDToken(ctx, keys, rawIDToken, claimRules{
 		Issuer: meta.Issuer, ClientID: row.Config.ClientID, Nonce: state.Nonce, Now: s.cfg.Now(),
 	})
 	if err != nil {
-		return validated{}, authFailed(reasonOf(err), err)
+		return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(reasonOf(err), err))
 	}
 	var userinfo map[string]any
 	if meta.UserinfoEndpoint != "" {
 		if userinfo, err = fetchUserinfo(ctx, s.cfg.HTTPClient, meta.UserinfoEndpoint, token.AccessToken); err != nil {
-			return validated{}, authFailed(ReasonDependency, err)
+			return validated{}, s.recordedIfGoAPIRecords(ctx, row, err, authFailed(ReasonDependency, err))
 		}
 		if sub, _ := userinfo["sub"].(string); sub != claims.Subject {
 			return validated{}, authFailed(ReasonMalformed, errors.New("userinfo subject differs from the ID token subject"))
@@ -535,11 +569,28 @@ func (s *Service) exchangeAndValidate(ctx context.Context, row Provider, state f
 	}, nil
 }
 
-// resolve turns a validated identity into a session. The key decides; on a
-// hit the e-mail is not read. On a miss the e-mail must be verified, allowed
-// by the provider, and held by no account; then a new account is created
-// only if the provider and the identity store both allow it.
+// resolve turns a validated identity into a session. Before the key is
+// looked up, the asserted e-mail must be usable, present and allowed by the
+// provider's domain list, linked or not (go-api oidc.go). The key decides the
+// account. On a miss the e-mail must also be verified and held by no account;
+// then a new account is created only if the provider and the identity store
+// both allow it.
 func (s *Service) resolve(ctx context.Context, row Provider, v validated, requestID *string) (Login, *Error) {
+	if failure := refuseUnusableEmail(v.profile.Email); failure != nil {
+		return Login{}, failure
+	}
+	if failure := checkProviderEmail(row, v.profile.Email); failure != nil {
+		if v.profile.Email == "" && !strings.HasPrefix(row.Protocol, "oauth_") {
+			return Login{}, s.recordedProviderFailure(ctx, row, ProviderKind, stageNone, msgClaimsNoEmail, failure)
+		}
+		if failure.Reason == ReasonDomainNotAllowed && strings.HasPrefix(row.Protocol, "oauth_") {
+			if f := s.auditDenial(ctx, row, "domain_check",
+				fmt.Sprintf("Email domain '%s' is not allowed for this provider", emailDomain(v.profile.Email))); f != nil {
+				return Login{}, f
+			}
+		}
+		return Login{}, failure
+	}
 	principal, err := s.cfg.Identities.IdentityBySubject(ctx, v.key, LegacyMatch{AuthProvider: v.legacyAuthProvider, MembershipOrg: row.OrgID})
 	switch {
 	case err == nil:
@@ -572,18 +623,54 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	switch {
 	case found:
 		tokens, err = s.cfg.Sessions.Issue(ctx, req)
-	case s.cfg.MembershipJIT != nil:
+	case s.cfg.MembershipJIT != nil && row.AutoProvision:
+		var joined bool
+		if req.Role, joined = s.signInRole(ctx, row); !joined {
+			return Login{}, notMember()
+		}
 		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
+		if errors.Is(err, identity.ErrAlreadyMember) {
+			if req.Role, _, err = s.cfg.Memberships.Role(ctx, principal.ID, org); err == nil {
+				tokens, err = s.cfg.Sessions.Issue(ctx, req)
+			}
+		}
 	default:
 		return Login{}, notMember()
 	}
-	if errors.Is(err, ErrSessionUnavailable) {
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
-	}
-	if err != nil {
+	case errors.Is(err, ErrSignupNotAvailable):
+		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, notMember()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
+	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
-	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: role, Tokens: tokens}, nil
+	return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil
+}
+
+// signInRole is the provider row's role for a join; owner or an unknown value is
+// refused before any write.
+func (s *Service) signInRole(ctx context.Context, row Provider) (string, bool) {
+	role, ok := identity.SignInRole(row.DefaultRole)
+	if !ok {
+		s.cfg.Logger.WarnContext(ctx, "auth oidc: sign-in join refused", "branch", "default_role_not_granted", "provider_id", row.ID)
+	}
+	return role, ok
+}
+
+// refuseUnusableEmail answers an address the shared provider email rule refuses with go-api's 400
+// (internal/api/sso invalidProviderEmailDetail), before any identity lookup; the answer names no value.
+func refuseUnusableEmail(email string) *Error {
+	if identity.RefuseProviderEmail(email) == nil {
+		return nil
+	}
+	return deny(http.StatusBadRequest, ReasonMalformed,
+		map[string]any{"message": "The identity provider returned an unusable email address", "reason": "invalid_provider_email"})
 }
 
 func notMember() *Error {
@@ -601,11 +688,20 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	if s.cfg.MembershipJIT == nil {
 		return Login{}, notMember()
 	}
+	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
+	if len(row.AllowedDomains) == 0 {
+		return Login{}, s.provisioningOff(ctx, row)
+	}
+	role, ok := s.signInRole(ctx, row)
+	if !ok {
+		return Login{}, notMember()
+	}
 	p := v.profile
 	org := row.OrgID
-	req := SessionRequest{OrgID: &org, Role: "member", AMR: AMR}
+	req := SessionRequest{OrgID: &org, Role: role, AMR: AMR}
 	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
-		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID}, org, req)
+		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID,
+			LegacyProvider: v.legacyAuthProvider}, org, req)
 	switch {
 	case err == nil:
 		return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil
@@ -619,6 +715,10 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, authFailed(ReasonMalformed, err)
 	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
+	case errors.Is(err, ErrNotOrgMember):
+		return Login{}, notMember()
+	case errors.Is(err, ErrPrincipalDisabled):
+		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:
 		return Login{}, internal(ReasonStoreUnavailable, err)
 	}
@@ -626,14 +726,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 
 func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated) *Error {
 	p := v.profile
-	if p.Email == "" {
-		return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
-	}
 	if !p.EmailVerified {
 		return deny(http.StatusForbidden, ReasonEmailUnverified, "No verified email address is available from this OIDC provider")
-	}
-	if len(row.AllowedDomains) > 0 && !emaildomain.Allowed(row.AllowedDomains, emailDomain(p.Email)) {
-		return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
 	}
 	inUse, err := s.cfg.Identities.EmailInUse(ctx, p.Email)
 	if errors.Is(err, ErrInvalidEmail) {
@@ -646,7 +740,57 @@ func (s *Service) checkNewAccount(ctx context.Context, row Provider, v validated
 		return conflict()
 	}
 	if !row.AutoProvision {
+		return s.provisioningOff(ctx, row)
+	}
+	return nil
+}
+
+// provisioningOff is the refusal of a new account a provider row does not allow.
+func (s *Service) provisioningOff(ctx context.Context, row Provider) *Error {
+	if strings.HasPrefix(row.Protocol, "oauth_") {
 		return deny(http.StatusForbidden, ReasonProvisioningDisabled, "User not found and auto-provisioning is disabled")
+	}
+	return s.recordedProviderFailure(ctx, row, ProviderKind, stageProvisioning, msgAutoProvisionOff,
+		deny(http.StatusBadRequest, ReasonProvisioningDisabled, detailProvisioningFails))
+}
+
+// checkProviderEmail is go-api's e-mail block of the OIDC callback (oidc.go), run on every sign-in before the
+// lookup: a missing address is 400 (go-api's "OIDC claims missing email", answered as the authentication failure); with a domain list, an address with no "@" is 400 and a domain off the list 403.
+// go-api's OAuth callback (oauth.go) has no malformed branch: there an address with no "@" is the domain 403, and
+// the domain 403 carries its OAuth detail object (oauthDomainDeniedDetail).
+func checkProviderEmail(row Provider, email string) *Error {
+	if email == "" {
+		if strings.HasPrefix(row.Protocol, "oauth_") {
+			return deny(http.StatusBadRequest, ReasonMalformed, "Email address is missing from OIDC claims")
+		}
+		return authFailed(ReasonMalformed, errors.New("claims missing email"))
+	}
+	if len(row.AllowedDomains) == 0 {
+		return nil
+	}
+	oauth := strings.HasPrefix(row.Protocol, "oauth_")
+	if !strings.Contains(email, "@") && !oauth {
+		return deny(http.StatusBadRequest, ReasonMalformed, "Email address from OIDC claims is malformed")
+	}
+	if emaildomain.Allowed(row.AllowedDomains, emailDomain(email)) {
+		return nil
+	}
+	if oauth {
+		return deny(http.StatusForbidden, ReasonDomainNotAllowed,
+			map[string]string{"message": "Email domain is not allowed for this provider", "reason": "oauth_domain_not_allowed"})
+	}
+	return deny(http.StatusForbidden, ReasonDomainNotAllowed, "Email domain is not allowed for this provider")
+}
+
+// auditDenial writes go-api's OAuth denial row (recordSSOAuthenticatedDenial: protocol oauth, the stage, the
+// sanitized message) before the refusal answers; a write error is the 500 go-api answers.
+func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message string) *Error {
+	if s.cfg.DenialAudit == nil {
+		return nil
+	}
+	if err := s.cfg.DenialAudit.Denied(ctx, DenialRow{OrgID: row.OrgID, ProviderID: row.ID, Protocol: "oauth", Stage: stage,
+		ErrorMessage: pythonparity.SanitizeErrorTextHardened(message, 4000)}); err != nil {
+		return internal(ReasonStoreUnavailable, err)
 	}
 	return nil
 }

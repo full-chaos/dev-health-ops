@@ -21,13 +21,10 @@ package sso_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +34,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -47,116 +43,34 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/idpstub"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
 const testJWTKey = "oidc-6658-test-" + "0123456789abcdef0123456789abcdef"
 
-// fakeIdP is a minimal, real (RSA-signed) OIDC provider fixture: a JWKS
-// endpoint, a token endpoint that mints an id_token embedding whatever
-// nonce the test tells it to for the next exchange, and a userinfo
-// endpoint. One instance is shared by every subtest that needs a live
-// exchange; nextNonce/nextnEmail are set immediately before each callback.
+// fakeIdP is the shared idpstub OpenID provider on a plain HTTP server. It answers any code with the user and nonce
+// the test tells it to for the next exchange: set is called immediately before each callback.
 type fakeIdP struct {
-	key      *rsa.PrivateKey
-	server   *httptest.Server
-	mu       sync.Mutex
-	nonce    string
-	email    string
-	fullName string
-	sub      string
-	// receivedVerifier is the code_verifier the token endpoint actually
-	// received on the last exchange, for the PKCE round-trip assertion.
-	receivedVerifier string
-	// receivedSecret is the client_secret actually received, for the
-	// decrypt-and-forward assertion.
-	receivedSecret string
+	*idpstub.OIDC
+	server *httptest.Server
 }
 
 func startFakeIdP(t *testing.T) *fakeIdP {
 	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	stub, err := idpstub.NewOIDC(idpstub.OIDCOptions{AcceptAnyCode: true, NoPKCE: true, MinimalDiscovery: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	idp := &fakeIdP{key: key}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/jwks", idp.serveJWKS)
-	mux.HandleFunc("/token", idp.serveToken)
-	mux.HandleFunc("/userinfo", idp.serveUserinfo)
-	idp.server = httptest.NewServer(mux)
+	idp := &fakeIdP{OIDC: stub, server: httptest.NewServer(stub.Handler())}
+	stub.SetBaseURL(idp.server.URL)
+	stub.SetIssuer(idp.server.URL)
 	t.Cleanup(idp.server.Close)
 	return idp
 }
 
 func (idp *fakeIdP) set(nonce, email, fullName, sub string) {
-	idp.mu.Lock()
-	defer idp.mu.Unlock()
-	idp.nonce, idp.email, idp.fullName, idp.sub = nonce, email, fullName, sub
-}
-
-func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
-
-func (idp *fakeIdP) serveJWKS(w http.ResponseWriter, r *http.Request) {
-	pub := idp.key.PublicKey
-	jwk := map[string]any{
-		"kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test-key-1",
-		"n": b64url(pub.N.Bytes()),
-		"e": b64url(bigIntToBytes(pub.E)),
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{jwk}})
-}
-
-func bigIntToBytes(e int) []byte {
-	// Standard RSA public exponent 65537 = 0x010001.
-	if e == 65537 {
-		return []byte{0x01, 0x00, 0x01}
-	}
-	buf := []byte{byte(e >> 16), byte(e >> 8), byte(e)}
-	return buf
-}
-
-func (idp *fakeIdP) serveToken(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	idp.mu.Lock()
-	idp.receivedVerifier = r.Form.Get("code_verifier")
-	idp.receivedSecret = r.Form.Get("client_secret")
-	nonce, email, fullName, sub := idp.nonce, idp.email, idp.fullName, idp.sub
-	idp.mu.Unlock()
-
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"iss": idp.server.URL, "aud": r.Form.Get("client_id"), "sub": sub,
-		"exp": now.Add(5 * time.Minute).Unix(), "iat": now.Unix(), "nonce": nonce,
-		"email": email, "name": fullName,
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	token.Header["kid"] = "test-key-1"
-	idToken, err := token.SignedString(idp.key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"access_token": "test-access-token", "id_token": idToken, "token_type": "Bearer", "expires_in": 300,
-	})
-}
-
-func (idp *fakeIdP) serveUserinfo(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer test-access-token" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	idp.mu.Lock()
-	email, fullName, sub := idp.email, idp.fullName, idp.sub
-	idp.mu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"email": email, "name": fullName, "sub": sub})
+	idp.SetNext(idpstub.OIDCUser{Sub: sub, Email: email, Name: fullName}, nonce)
 }
 
 // testClock is a settable clock: real time until a test freezes/advances
@@ -195,6 +109,7 @@ type stack struct {
 	pool   *pgxpool.Pool
 	server *httptest.Server
 	clock  *testClock
+	logs   *syncBuffer // every log line of the stack's handlers
 }
 
 func startStack(t *testing.T, ctx context.Context) stack {
@@ -226,7 +141,8 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &syncBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +182,7 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return stack{pool: pool, server: server, clock: clock}
+	return stack{pool: pool, server: server, clock: clock, logs: logs}
 }
 
 // seedOrg inserts one organization at the given tier ("enterprise" is
@@ -386,9 +302,7 @@ func TestOIDCAuthorizeAndCallbackFullRoundTrip(t *testing.T) {
 	// The PKCE round trip actually ran: the verifier the callback sent to
 	// the token endpoint hashes to the challenge the authorize step gave
 	// the caller.
-	idp.mu.Lock()
-	verifier, secret := idp.receivedVerifier, idp.receivedSecret
-	idp.mu.Unlock()
+	verifier, secret := idp.Received()
 	sum := sha256.Sum256([]byte(verifier))
 	if got := base64.RawURLEncoding.EncodeToString(sum[:]); got != codeChallenge {
 		t.Fatalf("PKCE: code_verifier %q hashes to %q, want challenge %q", verifier, got, codeChallenge)
@@ -906,8 +820,8 @@ WHERE org_id = $1 AND action = 'sso_login' AND status = 'failure' ORDER BY creat
 	if lastError == nil || !strings.Contains(*lastError, "provisioning") {
 		t.Fatalf("last_error = %v, want a recorded provisioning-failure reason", lastError)
 	}
-	if providerStatus != "error" {
-		t.Fatalf("provider status = %q, want %q: a genuinely-authenticated later-stage failure must still flip it", providerStatus, "error")
+	if providerStatus != "active" {
+		t.Fatalf("provider status = %q, want %q: a failure record leaves the status as it was", providerStatus, "active")
 	}
 }
 
@@ -1018,6 +932,60 @@ func TestOIDCCallbackRefusesAWrongNonce(t *testing.T) {
 	}
 	if lastError == nil || !strings.Contains(*lastError, "nonce") {
 		t.Fatalf("last_error = %v, want a recorded nonce-mismatch reason", lastError)
+	}
+}
+
+// TestAFailedOIDCCallbackKeepsTheProviderActive: after a callback that fails
+// (an id_token for another nonce), the provider stays active, the failure is
+// recorded, and the next flow signs in.
+func TestAFailedOIDCCallbackKeepsTheProviderActive(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	st := startStack(t, ctx)
+	idp := startFakeIdP(t)
+	orgID := seedOrg(t, ctx, st.pool, "enterprise")
+	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
+		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
+	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
+		protocol: "oidc", status: "active", config: config, autoProvision: true,
+		clientSecretEncryptedFallback: "test-client-secret",
+	})
+	const email = "kept.active@allowed.example"
+	seedMember(t, ctx, st.pool, orgID, email, "oidc", "idp-subject-kept")
+	flow := func(rightNonce bool) (int, map[string]any) {
+		t.Helper()
+		client := newCookieClient(t)
+		status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
+		if status != http.StatusOK {
+			t.Fatalf("authorize: %d %v", status, authResp)
+		}
+		parsed, err := url.Parse(authResp["authorization_url"].(string))
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonce := "another-nonce"
+		if rightNonce {
+			nonce = parsed.Query().Get("nonce")
+		}
+		idp.set(nonce, email, "Kept Active", "idp-subject-kept")
+		return postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
+			map[string]any{"code": "test-auth-code", "state": authResp["state"]})
+	}
+
+	if status, body := flow(false); status != http.StatusBadRequest {
+		t.Fatalf("failed callback: status=%d body=%v, want 400", status, body)
+	}
+	var lastError *string
+	var providerStatus string
+	if err := st.pool.QueryRow(ctx, `SELECT last_error, status FROM sso_providers WHERE id = $1`, providerID).
+		Scan(&lastError, &providerStatus); err != nil {
+		t.Fatal(err)
+	}
+	if providerStatus != "active" || lastError == nil {
+		t.Fatalf("after a failed callback: status=%q last_error set=%v, want active and set", providerStatus, lastError != nil)
+	}
+	if status, body := flow(true); status != http.StatusOK || body["email"] != email {
+		t.Fatalf("the next flow: status=%d body=%v, want 200 for %s", status, body, email)
 	}
 }
 

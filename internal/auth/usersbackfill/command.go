@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -24,6 +25,9 @@ const (
 	dsnEnv    = authconfig.EnvDatabaseURI
 )
 
+// firstConnect bounds the wait for the first database connect.
+var firstConnect = pgstorage.DefaultFirstConnect()
+
 // connectFn is the database connect step; tests replace it to prove a gate refuses first.
 var connectFn = connect
 
@@ -32,8 +36,8 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, legacy-link-purge",
-		Children: []cli.Command{{
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, platform-role-grant, platform-role-revoke, platform-role-list",
+		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
 			Summary: "copy public.users into the auth schema (idempotent; counts only)",
@@ -41,7 +45,7 @@ func Command() cli.Command {
 		}, {
 			Name:    "users-reconcile",
 			Kind:    cli.Verb,
-			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff)",
+			Summary: "compare public.users with the auth schema in one read-only snapshot (counts only; exit 1 on any gated diff; -platform-roles-gate also gates no_active_platform_admin, run it before the platform roles flip)",
 			Run:     runReconcile,
 		}, {
 			Name:    "oauth-sso-count",
@@ -54,11 +58,16 @@ func Command() cli.Command {
 			Summary: "copy public.organizations and public.memberships into the auth schema (idempotent; counts only; run users-backfill first)",
 			Run:     runOrgs,
 		}, {
+			Name:    "orgs-reconcile",
+			Kind:    cli.Verb,
+			Summary: "compare public.organizations and public.memberships with the auth schema in one read-only snapshot (counts and org ids only; exit 1 on a gated diff; -exact gates every class)",
+			Run:     runOrgsReconcile,
+		}, {
 			Name:    "legacy-link-purge",
 			Kind:    cli.Verb,
 			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
 			Run:     runLegacyLinkPurge,
-		}},
+		}}, platformRoleVerbs()...),
 	}
 }
 
@@ -84,6 +93,11 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: refused: AUTH_USERS_OWNED is true, auth.users is the authority and this command copies from public.users")
 		return cli.ExitRefused
 	}
+	opts, err := usersBackfillOptions(env.Lookup, *dryRun, *batch)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
+		return cli.ExitFailure
+	}
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code
@@ -94,7 +108,6 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "users-backfill: could not build the identity store")
 		return cli.ExitFailure
 	}
-	opts := Options{DryRun: *dryRun, BatchSize: *batch}
 	rep, err := Run(ctx, PGSource{Pool: pool}, store, opts)
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
@@ -145,6 +158,16 @@ func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 	return cli.ExitOK
 }
 
+// usersBackfillOptions builds the users-backfill options from its flags and
+// the environment.
+func usersBackfillOptions(lookup secrets.LookupEnv, dryRun bool, batch int) (Options, error) {
+	owned, err := platformrole.OwnedFromLookup(lookup)
+	if err != nil {
+		return Options{}, err
+	}
+	return Options{DryRun: dryRun, BatchSize: batch, PlatformRolesOwned: owned}, nil
+}
+
 // connect resolves the schema and opens the auth runtime pool. A non-zero
 // code means the reason is already printed.
 func connect(ctx context.Context, env cli.Env, verb string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
@@ -168,6 +191,13 @@ func connect(ctx context.Context, env cli.Env, verb string) (*pgxpool.Pool, auth
 		fmt.Fprintf(env.Stderr, "%s: could not open the database pool: %v\n", verb, boundary.Redact(err))
 		return nil, schema, cli.ExitFailure
 	}
+	// The first connect waits (bounded): a new Job pod can be refused while its
+	// NetworkPolicy rules are programmed.
+	if err := firstConnect.WithReport(pgstorage.TextReport(env.Stderr, verb, "PostgreSQL")).Do(ctx, pool.Ping); err != nil {
+		pool.Close()
+		fmt.Fprintf(env.Stderr, "%s: could not connect to the database: %v\n", verb, boundary.Redact(err))
+		return nil, schema, cli.ExitFailure
+	}
 	return pool, schema, cli.ExitOK
 }
 
@@ -175,6 +205,7 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth users-reconcile", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", 500, "rows read per page")
+	platformGate := flags.Bool("platform-roles-gate", false, "gate no_active_platform_admin (exit 1 when no principal holds platform_admin)")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -196,7 +227,14 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rep, err := Reconcile(ctx, TxSource{Tx: tx}, TxTarget{Tx: tx, Schema: schema}, *batch)
+	target := TxTarget{Tx: tx, Schema: schema}
+	rep, err := Reconcile(ctx, TxSource{Tx: tx}, target, *batch)
+	if err == nil {
+		err = ReconcileMemberships(ctx, target, &rep)
+	}
+	if err == nil {
+		err = ReconcilePlatformAdmin(ctx, target, *platformGate, &rep)
+	}
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
 	}
@@ -334,6 +372,45 @@ func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
 	}
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
+	}
+	return cli.ExitOK
+}
+
+func runOrgsReconcile(ctx context.Context, env cli.Env) int {
+	flags := flag.NewFlagSet("dho auth orgs-reconcile", flag.ContinueOnError)
+	flags.SetOutput(env.Stderr)
+	flags.Usage = func() {
+		fmt.Fprintln(env.Stderr, "usage: dho auth orgs-reconcile [-exact]")
+		fmt.Fprintln(env.Stderr, "  default mode: exit 1 on an organization diff (missing, extra, slug, name, active), an auth membership public does not have, or a membership auth holds inactive while public has the member.")
+		fmt.Fprintln(env.Stderr, "                Role changes and removals go-api made in public are printed, not gated (go-api writes public until the flip).")
+		fmt.Fprintln(env.Stderr, "  -exact:       the cutover gate: exit 1 on EVERY class, role differences, public-only memberships and duplicate sources included.")
+	}
+	exact := flags.Bool("exact", false, "gate every diff class (the cutover gate); the default gates organization diffs, auth-only memberships and inactive-in-public")
+	if err := flags.Parse(env.Args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return cli.ExitOK
+		}
+		return cli.ExitUsage
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
+		return cli.ExitUsage
+	}
+	target, closeFn, code := orgsReconcileTargetFn(ctx, env, "orgs-reconcile")
+	if code != cli.ExitOK {
+		return code
+	}
+	defer closeFn()
+	rep, err := ReconcileOrgs(ctx, target, *exact)
+	if err != nil {
+		fmt.Fprintln(env.Stderr, "orgs-reconcile: stopped: reading the organization aggregates failed")
+		return cli.ExitFailure
+	}
+	for _, line := range rep.Lines() {
+		fmt.Fprintln(env.Stdout, line)
+	}
+	if rep.GatedTotal() > 0 {
+		return cli.ExitFailure
 	}
 	return cli.ExitOK
 }

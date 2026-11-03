@@ -428,7 +428,7 @@ func (h *handlers) getLLMSettingsModels(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg, err := h.loadReadinessBYOConfig(ctx, orgID)
 	if err != nil {
-		h.internalError(ctx, w, "read byo llm config", err)
+		h.byoReadFailed(ctx, w, "read byo llm config", err)
 		return
 	}
 	out, err := h.modelList(ctx, orgID, cfg, requested)

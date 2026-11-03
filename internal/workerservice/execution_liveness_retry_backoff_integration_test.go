@@ -317,6 +317,7 @@ func TestExecutionLivenessSeesIdempotencyFailuresSpacedByRiverRetryBackoff(t *te
 		available, running := f.queueReads(t)
 		readyErr := f.ready(context.Background())
 		blind := state == "retryable" && attempt >= 2 && available == 0 && running == 0 &&
+			//abstime:allow lower bound: the retry-backoff gap exists only once the liveness window has elapsed; this never fails a finished run for being slow
 			time.Since(started) > f.window
 		if blind {
 			blindPolls++

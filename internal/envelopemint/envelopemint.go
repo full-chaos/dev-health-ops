@@ -28,6 +28,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/auth/acraudience"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"os"
 	"strings"
@@ -216,6 +217,9 @@ func Mint(privateKey ed25519.PrivateKey, principal Principal, opts Options) (str
 		return "", errors.New("envelopemint: org id must not be empty")
 	}
 	opts = opts.withDefaults()
+	if err := acraudience.Refuse("envelopemint", opts.Audience); err != nil {
+		return "", err
+	}
 	now := time.Now()
 
 	permissions := principal.Permissions

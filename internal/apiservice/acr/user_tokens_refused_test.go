@@ -76,30 +76,48 @@ func (l *countingLLMConfig) OrgConfig(context.Context, string) (llmorgsettings.O
 	return llmorgsettings.OrgConfig{}, false, nil
 }
 
-const acrOrg = "11111111-1111-4111-8111-111111111111"
+type countingAccess struct {
+	mu    sync.Mutex
+	reads int
+}
+
+func (a *countingAccess) Access(context.Context, acr.AccessQuery) (acr.PrincipalAccess, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.reads++
+	return acr.PrincipalAccess{}, nil
+}
+
+const (
+	acrOrg  = "11111111-1111-4111-8111-111111111111"
+	acrUser = "22222222-2222-4222-8222-222222222222"
+)
 
 func acrRequest(path, authorization string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, path, nil)
 	r.SetPathValue("org_id", acrOrg)
+	r.SetPathValue("user_id", acrUser)
 	if authorization != "" {
 		r.Header.Set("Authorization", authorization)
 	}
 	return r
 }
 
-// The three internal acr routes (health, entitlement, org llm-config) check their own svc_acr_ bearer. A
-// user token of any kind is refused 401 "Unauthorized" at the bearer gate: no credential lookup (counted),
-// no last-used stamp, no entitlement or BYO-config read, no database connection, nothing echoed.
+// The four internal acr routes (health, entitlement, org llm-config, principal access) check their own
+// svc_acr_ bearer. A user token of any kind is refused 401 "Unauthorized" at the bearer gate: no credential
+// lookup (counted), no last-used stamp, no entitlement, BYO-config or principal access read, no database
+// connection, nothing echoed.
 func TestInternalACRRoutesRefuseUserTokens(t *testing.T) {
 	tokens := withissuer.All(t)
 	pool, connects := usertokens.CountingPool(t)
 	creds := &countingCredentials{}
 	entitlements := &countingEntitlements{}
 	llm := &countingLLMConfig{}
+	access := &countingAccess{}
 	var logs bytes.Buffer
 	routes := acr.Routes(acr.Deps{
 		Store: entitlements, Auth: creds, LLMConfig: llm, Credentials: acr.PostgresCredentialVerifier{Pool: pool},
-		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Access: access, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
 	byPattern := map[string]http.Handler{}
 	for _, route := range routes {
@@ -109,6 +127,10 @@ func TestInternalACRRoutesRefuseUserTokens(t *testing.T) {
 		{"health", "/api/v1/internal/acr/health", "/api/v1/internal/acr/health"},
 		{"entitlement", "/api/v1/internal/acr/entitlements/{org_id}", "/api/v1/internal/acr/entitlements/" + acrOrg},
 		{"llm", "/api/v1/internal/acr/orgs/{org_id}/llm-config", "/api/v1/internal/acr/orgs/" + acrOrg + "/llm-config"},
+		{"access", acr.PrincipalAccessPattern, "/api/v1/internal/acr/orgs/" + acrOrg + "/principals/" + acrUser + "/access"},
+	}
+	if len(targets) != len(routes) {
+		t.Fatalf("%d acr routes are mounted, %d are proved here: add the new route to targets", len(routes), len(targets))
 	}
 	for _, target := range targets {
 		handler := byPattern[target.pattern]
@@ -135,6 +157,9 @@ func TestInternalACRRoutesRefuseUserTokens(t *testing.T) {
 	}
 	if llm.reads != 0 {
 		t.Errorf("a user token read a BYO llm config: %d reads, want 0", llm.reads)
+	}
+	if access.reads != 0 {
+		t.Errorf("a user token read a principal's access: %d reads, want 0", access.reads)
 	}
 	if got := connects.Count(); got != 0 {
 		t.Errorf("a user token reached the database: %d connection attempt(s), want 0", got)

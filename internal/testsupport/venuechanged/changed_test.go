@@ -259,7 +259,7 @@ func TestAChangeToAFileALinkedPackageEmbedsSelectsTheTestsThatLinkIt(t *testing.
 	root := repoRoot(t)
 	for _, changed := range []string{
 		"internal/auth/passwordpolicy/data/common_passwords.txt",
-		"internal/pgmigrate/sql/0139_refunds_write_first_idempotency_key.sql",
+		"internal/pgmigrate/sql/README.md",
 	} {
 		rows, err, stderr := selected(t, root, "\x00", changed)
 		if err != nil {

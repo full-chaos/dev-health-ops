@@ -107,6 +107,11 @@ func (s *probeStore) Membership(_ context.Context, userID, orgID uuid.UUID) (str
 	return role, ok, nil
 }
 
+func (s *probeStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *probeStore) ActiveImpersonation(_ context.Context, adminID uuid.UUID) (*policy.Impersonation, error) {
 	return s.imperson[adminID], nil
 }
@@ -157,7 +162,7 @@ func probeRoutes(guard *policy.Guard) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: probeAuthenticated, Handler: guard.Wrap(policy.Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: probeAdmin, Handler: guard.Wrap(policy.Admin, echo)},
 		{Method: http.MethodGet, Pattern: probeOptional, Handler: guard.Wrap(policy.Optional, echo)},
-		{Method: http.MethodGet, Pattern: probeSuperuser, Handler: guard.Wrap(policy.Superuser, echo)},
+		{Method: http.MethodGet, Pattern: probeSuperuser, Handler: guard.WrapPlatform(policy.ActionAdminOrgs, echo)},
 		{Method: http.MethodGet, Pattern: probePublic, Handler: guard.Wrap(policy.Public, echo)},
 	}
 }
@@ -324,3 +329,5 @@ func probeAnswers(handler http.Handler, requests []probeRequest) []probeAnswer {
 	sort.SliceStable(answers, func(i, j int) bool { return strings.Compare(answers[i].Name, answers[j].Name) < 0 })
 	return answers
 }
+
+func (probeStore) ReadsPlatformRoles() bool { return false }

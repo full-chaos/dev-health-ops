@@ -29,10 +29,14 @@ type userRead struct {
 	err  error
 }
 
+// memberRead is one (user, org) membership read. orgRead says the read also
+// told whether the org exists (OrgMembership): orgFound is then its answer.
 type memberRead struct {
-	role   string
-	member bool
-	err    error
+	role     string
+	member   bool
+	err      error
+	orgRead  bool
+	orgFound bool
 }
 
 type sessionRead struct {

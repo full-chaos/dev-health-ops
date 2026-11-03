@@ -53,7 +53,7 @@ func TestCredentialDeleteVenueOracle(t *testing.T) {
 			"PAGER_DUTY_CLIENT_ID=" + pagerDutyDisconnectVenueClientID,
 			"SETTINGS_ENCRYPTION_KEY=" + pagerDutyDisconnectVenueEncryptionKey,
 		},
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -133,7 +133,7 @@ VALUES ($1, $2, $3, $4, 'sub-1', $5, 'v1', 'active', now(), now())`, nextID(), o
 				out["admin_"+slug] = admin_(slug)
 			}
 			return out
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

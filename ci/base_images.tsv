@@ -1,0 +1,13 @@
+# CHAOS-10366: the base images every Go image build starts from. Docker Hub official images, pulled today from mirror.gcr.io, which answers 429 under load.
+# CI takes them from the ghcr.io mirror instead, by digest. Same format and one reader as ci/builder_images.tsv:
+#   bash ci/builder_images.sh <owner> ci/base_images.tsv
+#
+# <name><TAB><upstream ref: namespace/repo:tag@sha256:<digest of the multi-arch INDEX>>
+#
+# mirror-test-images.yml reads this file next to ci/builder_images.tsv, copies each ref verbatim into ghcr.io/<owner>/<namespace>/<repo>:<tag>
+# (same digest), verifies the digest and that the index holds linux/amd64 and linux/arm64, then ci/verify_base_images.sh reads both the tag and the
+# digest back WITHOUT credentials and fails unless they serve the pin (a private or missing package fails there). The Dockerfile ARGs
+# (GO_BUILD_IMAGE, TOOLS_RUNTIME_IMAGE) carry these same refs; internal/cigates/workflows/workflows_base_images_test.go holds them equal.
+# To bump an image: put the new index digest here and in the Dockerfile ARGs, and let mirror-test-images.yml publish it.
+go-build	library/golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd
+tools-runtime	library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171

@@ -95,6 +95,9 @@ const (
 type RefusedError struct {
 	Reason string
 	Detail string
+	// NoConfirmation: a signed assertion with no SubjectConfirmation element, go-api's "SAML subject confirmation
+	// missing", which go-api records as a provider failure. Only-non-bearer confirmations are not this.
+	NoConfirmation bool
 }
 
 func (e *RefusedError) Error() string { return "saml: response refused: " + e.Reason }
@@ -290,6 +293,9 @@ func checkClaims(response crewsaml.Response, responseSigned bool, a crewsaml.Ass
 			return Verified{}, refused(ReasonInResponseTo, "bearer confirmations disagree")
 		}
 		inResponseTo = data.InResponseTo
+	}
+	if len(a.Subject.SubjectConfirmations) == 0 {
+		return Verified{}, &RefusedError{Reason: ReasonSubjectConfirmation, Detail: "no subject confirmation", NoConfirmation: true}
 	}
 	if bearer == 0 {
 		return Verified{}, refused(ReasonSubjectConfirmation, "no bearer subject confirmation")

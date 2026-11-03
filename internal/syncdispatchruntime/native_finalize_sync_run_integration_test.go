@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,11 +35,6 @@ func zeroUnitFinalizationCount(t *testing.T, collector *jobruntime.MetricsCollec
 		}
 	}
 	return 0
-}
-
-func createFinalizeTables(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
-	t.Helper()
-	pgschema.Apply(ctx, t, pool)
 }
 
 const (
@@ -103,17 +97,13 @@ func insertZeroUnitRun(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pl
 func TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertZeroUnitRun(t, ctx, pool,
 		`{"reason":"pagerduty_credential_unavailable","error_category":"pagerduty_credential_unavailable"}`,
@@ -191,17 +181,13 @@ func TestNativeFinalizeSyncRunPreservesPlannerZeroUnitCause(t *testing.T) {
 func TestNativeFinalizeSyncRunZeroUnitFallsBackToGenericCause(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertZeroUnitRun(t, ctx, pool, "", "")
 
@@ -255,17 +241,13 @@ func TestNativeFinalizeSyncRunZeroUnitFallsBackToGenericCause(t *testing.T) {
 func TestNativeFinalizeSyncRunAggregatesSuccessfulUnits(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertFinalizeRun(t, ctx, pool, 1, "", "")
 	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
@@ -381,17 +363,13 @@ WHERE sync_run_id=$1 AND sync_run_unit_id=$2 AND compute_type='work_graph'`,
 func TestNativeFinalizeSyncRunSurvivesAGenuineComputeCheckpointFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertFinalizeRun(t, ctx, pool, 2, "", "")
 	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
@@ -485,17 +463,13 @@ SELECT count(*) FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_
 func TestNativeFinalizeSyncRunCheckpointUsesUnitOrgIDNotRunOrgID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRoute(t, ctx, pool)
 	insertFinalizeRun(t, ctx, pool, 1, "", "")
 	pgseed.EnsureSyncIntegration(ctx, t, pool, finalizeTestOrg, finalizeTestIntegration, finalizeTestSource)
@@ -538,17 +512,13 @@ SELECT org_id FROM sync_compute_checkpoints WHERE sync_run_id=$1 AND sync_run_un
 func TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 	seedFinalizeRouteRow(t, ctx, pool)
 	// Mixed-case, whitespace-padded provider -- exactly what
 	// _run_provider's .strip().lower() normalizes away.
@@ -593,17 +563,13 @@ func TestNativeFinalizeSyncRunZeroUnitProviderIsNormalized(t *testing.T) {
 func TestCheckpointSuccessfulComputeInputsAbortsOnFatalSavepointFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	createFinalizeTables(t, ctx, pool)
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {

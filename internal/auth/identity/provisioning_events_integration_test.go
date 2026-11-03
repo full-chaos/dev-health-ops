@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 type wireEvent struct {
@@ -125,7 +127,14 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	if err := e.owned.SetPasswordHash(ctx, local, testBcrypt, Actor{}); err != nil {
 		t.Fatal(err)
 	}
-	e.wantEvents(t, ctx, "principal", "prn_"+local.String(), wireEvent{Verb: "principal.created", Change: status("active")})
+	// The password stamp ends every older session with no session row written, so the change tells the stream with one scope
+	// event whose revoked_before is the stamp the same UPDATE wrote.
+	var stamp time.Time
+	if err := e.admin.QueryRow(ctx, `SELECT password_updated_at FROM auth.users WHERE principal_id = $1`, local).Scan(&stamp); err != nil {
+		t.Fatal(err)
+	}
+	e.wantEvents(t, ctx, "principal", "prn_"+local.String(), wireEvent{Verb: "principal.created", Change: status("active")},
+		wireEvent{Verb: "principal.sessions_revoked", Change: map[string]any{"revoked_before": stamp.UTC().Format(sessionevent.BeforeLayout), "reason": "password_changed"}})
 	e.wantEvents(t, ctx, "user", "prn_"+local.String(),
 		wireEvent{Verb: "user.created"}, wireEvent{Verb: "user.email_verified"}, wireEvent{Verb: "user.credentials_changed"})
 
@@ -144,7 +153,9 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	e.wantEvents(t, ctx, "external_identity", "idn_"+identities[0].ID.String(),
 		wireEvent{Verb: "external_identity.linked", Change: map[string]any{"provider": "google", "principal_id": "prn_" + fed.String()}})
 
-	// Organizations: created, renamed, suspended, reactivated.
+	// Organizations: created, renamed, suspended; go-api's reactivation does
+	// not reactivate the auth organization (a suspension ends only by an
+	// auth-service verb).
 	org := e.seedOrg(t, ctx)
 	if err := e.store.ProjectOrganization(ctx, org); err != nil {
 		t.Fatal(err)
@@ -170,8 +181,7 @@ func TestEachProducerWritesItsMappedEvent(t *testing.T) {
 	e.wantEvents(t, ctx, "organization", "org_"+org.String(),
 		wireEvent{Verb: "organization.created", Change: map[string]any{"status": "active", "slug": "org-" + org.String()}},
 		wireEvent{Verb: "organization.updated"},
-		wireEvent{Verb: "organization.suspended", Change: status("suspended")},
-		wireEvent{Verb: "organization.reactivated", Change: status("active")})
+		wireEvent{Verb: "organization.suspended", Change: status("suspended")})
 
 	// A go-api slug the wire cannot carry is left out, never rewritten.
 	unicodeOrg := uuid.New()

@@ -1,0 +1,989 @@
+//go:build integration
+
+package authruntime
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+)
+
+const (
+	provisioningInviteSecret   = "provisioning-routes-invite-signing-key"
+	provisioningInvitePrevious = "provisioning-routes-invite-previous-key"
+)
+
+// newProvisioningEnv is the real stack with users owned and the provisioning
+// routes on, and a go-api credential holding both of its scopes.
+func newProvisioningEnv(t *testing.T, ctx context.Context) (*routesEnv, map[string]string) {
+	t.Helper()
+	e := newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvUsersOwned:                "true",
+		authconfig.EnvMembershipRoutes:          "true",
+		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
+	})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	return e, map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+}
+
+// account inserts a go-api user and projects its principal.
+func (e *routesEnv) account(t *testing.T, ctx context.Context, email string, superuser, active bool) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser,
+token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', $3, true, $4, 0, now(), now())`, id, email, active, superuser); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if err := e.identity.Project(ctx, id); err != nil {
+		t.Fatalf("project: %v", err)
+	}
+	return id
+}
+
+func acctMail() string { return "acct-" + uuid.NewString()[:8] + "@example.com" }
+
+func jsonBody(t *testing.T, body map[string]any) string {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func (e *routesEnv) memberRows(t *testing.T, ctx context.Context, org, user uuid.UUID) (publicRole, authStatus string) {
+	t.Helper()
+	if err := e.admin.QueryRow(ctx, `SELECT
+  COALESCE((SELECT role FROM public.memberships WHERE org_id = $1 AND user_id = $2), ''),
+  COALESCE((SELECT status FROM auth.memberships WHERE organization_id = $1 AND principal_id = $2), '')`, org, user).
+		Scan(&publicRole, &authStatus); err != nil {
+		t.Fatal(err)
+	}
+	return publicRole, authStatus
+}
+
+// The routes through configure, as the runtime role: only the go-api
+// credential holding memberships:write is served; a member is added, changed
+// and removed in both tables with its audit row naming the actor; go-api's
+// PEP rule is checked again by auth-service.
+func TestProvisioningMembershipRoutesThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	member := e.account(t, ctx, acctMail(), false, true)
+	add := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String(), "role": "member"})
+
+	for name, scopes := range map[string]string{"sessions:issue only": `["sessions:issue"]`, "no scope": `[]`} {
+		token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", scopes, false, false)
+		if got := e.doWith(t, "/internal/v1/memberships/add", add, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusUnauthorized {
+			t.Fatalf("%s: %d %s, want 401", name, got.status, got.body)
+		}
+	}
+	for name, cred := range map[string][2]any{"revoked": {true, false}, "expired": {false, true}} {
+		token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write"]`, cred[0].(bool), cred[1].(bool))
+		if got := e.doWith(t, "/internal/v1/memberships/add", add, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusUnauthorized {
+			t.Fatalf("%s: %d, want 401", name, got.status)
+		}
+	}
+	// memberships:write alone does not issue sessions.
+	writeOnly, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write"]`, false, false)
+	issue := `{"principal_id":"` + owner.String() + `","organization_id":null,"amr":["pwd"]}`
+	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + writeOnly}); got.status != http.StatusUnauthorized {
+		t.Fatalf("session issue with memberships:write only: %d, want 401", got.status)
+	}
+	if pub, auth := e.memberRows(t, ctx, org, member); pub != "" || auth != "" {
+		t.Fatalf("refused credentials wrote rows: %q %q", pub, auth)
+	}
+
+	got := e.doWith(t, "/internal/v1/memberships/add", add, header)
+	if got.status != http.StatusOK {
+		t.Fatalf("add: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["role"] != "member" || out["status"] != "active" || out["principal_id"] != member.String() {
+		t.Fatalf("add answer = %v", out)
+	}
+	if pub, auth := e.memberRows(t, ctx, org, member); pub != "member" || auth != "active" {
+		t.Fatalf("after add: public %q auth %q", pub, auth)
+	}
+	var actor string
+	if err := e.admin.QueryRow(ctx, `SELECT actor_principal_id::text FROM auth.security_audit_events
+WHERE event_type = 'auth.membership.added' AND organization_id = $1 AND subject_principal_id = $2`, org, member).Scan(&actor); err != nil || actor != owner.String() {
+		t.Fatalf("added audit actor = %q (%v), want the owner", actor, err)
+	}
+	role := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String(), "role": "admin"})
+	if got := e.doWith(t, "/internal/v1/memberships/role", role, header); got.status != http.StatusOK {
+		t.Fatalf("role: %d %s", got.status, got.body)
+	}
+	if pub, auth := e.memberRows(t, ctx, org, member); pub != "admin" || auth != "active" {
+		t.Fatalf("after role: public %q auth %q", pub, auth)
+	}
+
+	// go-api's PEP rule, again in auth-service.
+	viewer := e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, viewer, owner, "viewer")
+	inactive := e.account(t, ctx, acctMail(), false, false)
+	super := e.account(t, ctx, acctMail(), true, true)
+	e.addVia(t, header, org, super, super, "member")
+	third := e.account(t, ctx, acctMail(), false, true)
+	for name, tc := range map[string]struct {
+		actor, target uuid.UUID
+		reason        string
+	}{
+		"viewer actor":            {viewer, third, "admin_required"},
+		"inactive actor":          {inactive, third, "principal_deactivated"},
+		"a stranger to the org":   {third, viewer, "admin_required"},
+		"unknown actor principal": {uuid.New(), third, "principal_deactivated"},
+	} {
+		body := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": tc.target.String(), "actor_principal_id": tc.actor.String(), "role": "member"})
+		got := e.doWith(t, "/internal/v1/memberships/add", body, header)
+		if got.status != http.StatusForbidden || object(t, got)["reason_code"] != tc.reason {
+			t.Fatalf("%s: %d %s, want 403 %s", name, got.status, got.body, tc.reason)
+		}
+	}
+	if pub, auth := e.memberRows(t, ctx, org, third); pub != "" || auth != "" {
+		t.Fatalf("refused actors wrote rows: %q %q", pub, auth)
+	}
+	// An admin may not change a superuser member; a superuser may.
+	superRole := func(actor uuid.UUID) answer {
+		return e.doWith(t, "/internal/v1/memberships/role", jsonBody(t, map[string]any{"organization_id": org.String(),
+			"principal_id": super.String(), "actor_principal_id": actor.String(), "role": "admin"}), header)
+	}
+	if got := superRole(member); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("admin changes a superuser member: %d %s, want 403 superuser_required", got.status, got.body)
+	}
+	if pub, _ := e.memberRows(t, ctx, org, super); pub != "member" {
+		t.Fatalf("a refused change moved the superuser member to %q", pub)
+	}
+	if got := superRole(super); got.status != http.StatusOK {
+		t.Fatalf("superuser changes a superuser member: %d %s", got.status, got.body)
+	}
+
+	remove := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": member.String(), "actor_principal_id": owner.String()})
+	if got := e.doWith(t, "/internal/v1/memberships/remove", remove, header); got.status != http.StatusOK {
+		t.Fatalf("remove: %d %s", got.status, got.body)
+	}
+	if pub, auth := e.memberRows(t, ctx, org, member); pub != "" || auth != "removed" {
+		t.Fatalf("after remove: public %q auth %q", pub, auth)
+	}
+	lastOwner := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": owner.String(), "actor_principal_id": owner.String()})
+	if got := e.doWith(t, "/internal/v1/memberships/remove", lastOwner, header); got.status != http.StatusConflict || object(t, got)["reason_code"] != "last_owner" {
+		t.Fatalf("remove of the last owner: %d %s", got.status, got.body)
+	}
+	transfer := jsonBody(t, map[string]any{"organization_id": org.String(), "from_principal_id": owner.String(), "to_principal_id": viewer.String(),
+		"actor_principal_id": owner.String()})
+	if got := e.doWith(t, "/internal/v1/memberships/transfer", transfer, header); got.status != http.StatusOK {
+		t.Fatalf("transfer: %d %s", got.status, got.body)
+	}
+	if pub, _ := e.memberRows(t, ctx, org, viewer); pub != "owner" {
+		t.Fatalf("after transfer the target is %q, want owner", pub)
+	}
+}
+
+func (e *routesEnv) addVia(t *testing.T, header map[string]string, org, user, actor uuid.UUID, role string) {
+	t.Helper()
+	body := jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": user.String(), "actor_principal_id": actor.String(), "role": role})
+	if got := e.doWith(t, "/internal/v1/memberships/add", body, header); got.status != http.StatusOK {
+		t.Fatalf("add %s: %d %s", role, got.status, got.body)
+	}
+}
+
+// An admin's add races the admin's own demotion: each add is either served
+// (before the demotion) or refused as admin_required (after it), never a 5xx.
+func TestProvisioningActorRuleUnderAConcurrentDemotion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	outcomes := map[int]int{}
+	for round := range 20 {
+		admin := e.account(t, ctx, acctMail(), false, true)
+		e.addVia(t, header, org, admin, owner, "admin")
+		target := e.account(t, ctx, acctMail(), false, true)
+		var wg sync.WaitGroup
+		var added, demoted answer
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			added = e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(),
+				"principal_id": target.String(), "actor_principal_id": admin.String(), "role": "member"}), header)
+		}()
+		go func() {
+			defer wg.Done()
+			demoted = e.doWith(t, "/internal/v1/memberships/role", jsonBody(t, map[string]any{"organization_id": org.String(),
+				"principal_id": admin.String(), "actor_principal_id": owner.String(), "role": "viewer"}), header)
+		}()
+		wg.Wait()
+		if demoted.status != http.StatusOK {
+			t.Fatalf("round %d: demotion %d %s", round, demoted.status, demoted.body)
+		}
+		switch added.status {
+		case http.StatusOK:
+		case http.StatusForbidden:
+			if object(t, added)["reason_code"] != "admin_required" {
+				t.Fatalf("round %d: add refused %s", round, added.body)
+			}
+			if pub, auth := e.memberRows(t, ctx, org, target); pub != "" || auth != "" {
+				t.Fatalf("round %d: a refused add wrote rows", round)
+			}
+		default:
+			t.Fatalf("round %d: add %d %s", round, added.status, added.body)
+		}
+		outcomes[added.status]++
+	}
+	t.Logf("add outcomes: %v", outcomes)
+}
+
+// Invite create, accept and replay through the routes; the token is answered
+// once and is in no log line.
+func TestProvisioningInviteRoutesThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	address := acctMail()
+	created := e.doWith(t, "/internal/v1/invites/create", jsonBody(t, map[string]any{"organization_id": org.String(), "email": address,
+		"role": "member", "actor_principal_id": owner.String(), "description": "Organization invite created",
+		"request_metadata": map[string]any{"ip_address": "198.51.100.7"}}), header)
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	token, _ := object(t, created)["token"].(string)
+	if token == "" {
+		t.Fatal("no token answered")
+	}
+	var metadata, description string
+	if err := e.admin.QueryRow(ctx, `SELECT request_metadata::text, description FROM public.audit_logs WHERE org_id = $1 AND action = 'member_invited'`, org).
+		Scan(&metadata, &description); err != nil || !strings.Contains(metadata, "198.51.100.7") || description != "Organization invite created" {
+		t.Fatalf("go-api audit_logs row: %q %q (%v)", metadata, description, err)
+	}
+	invitee := e.account(t, ctx, address, false, true)
+	accept := jsonBody(t, map[string]any{"token": token, "principal_id": invitee.String()})
+	got := e.doWith(t, "/internal/v1/invites/accept", accept, header)
+	if got.status != http.StatusOK || object(t, got)["role"] != "member" {
+		t.Fatalf("accept: %d %s", got.status, got.body)
+	}
+	if pub, auth := e.memberRows(t, ctx, org, invitee); pub != "member" || auth != "active" {
+		t.Fatalf("after accept: public %q auth %q", pub, auth)
+	}
+	replay := e.doWith(t, "/internal/v1/invites/accept", accept, header)
+	unknown := e.doWith(t, "/internal/v1/invites/accept", jsonBody(t, map[string]any{"token": strings.Repeat("0", 32) + "." + strings.Repeat("0", 64),
+		"principal_id": invitee.String()}), header)
+	for name, refused := range map[string]answer{"replay": replay, "unknown": unknown} {
+		if refused.status != http.StatusBadRequest || object(t, refused)["reason_code"] != "invite_invalid" {
+			t.Fatalf("%s: %d %s, want 400 invite_invalid", name, refused.status, refused.body)
+		}
+	}
+	if logs := e.logs.String(); strings.Contains(logs, token) || strings.Contains(logs, address) || strings.Contains(logs, "198.51.100.7") {
+		t.Fatal("a log line carries the token, the address or the request metadata")
+	}
+}
+
+// A deprovision is a superuser's: it ends every membership and invite and
+// suspends the organization in one commit; after it, an add, an invite create
+// and an accept of a token minted before are refused.
+func TestProvisioningDeprovisionThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	member := e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, owner, "member")
+	address := acctMail()
+	created := e.doWith(t, "/internal/v1/invites/create", jsonBody(t, map[string]any{"organization_id": org.String(), "email": address,
+		"role": "member", "actor_principal_id": owner.String()}), header)
+	token, _ := object(t, created)["token"].(string)
+
+	deprovision := func(actor uuid.UUID) answer {
+		return e.doWith(t, "/internal/v1/organizations/deprovision", jsonBody(t, map[string]any{"organization_id": org.String(),
+			"actor_principal_id": actor.String()}), header)
+	}
+	if got := deprovision(owner); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("deprovision by the owner: %d %s", got.status, got.body)
+	}
+	got := deprovision(super)
+	if got.status != http.StatusOK {
+		t.Fatalf("deprovision: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["removed_memberships"] != float64(2) || out["revoked_invites"] != float64(1) || out["suspended"] != true {
+		t.Fatalf("deprovision answer = %v", out)
+	}
+	var live int
+	if err := e.admin.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM public.memberships WHERE org_id = $1) +
+  (SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status <> 'removed') +
+  (SELECT count(*) FROM auth.invites WHERE organization_id = $1 AND status = 'pending') +
+  (SELECT count(*) FROM public.org_invites WHERE org_id = $1 AND status = 'pending') +
+  (SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL)`, org).Scan(&live); err != nil || live != 0 {
+		t.Fatalf("%d live rows after the deprovision (%v), want 0", live, err)
+	}
+	late := e.account(t, ctx, acctMail(), false, true)
+	add := e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": late.String(),
+		"actor_principal_id": super.String(), "role": "member"}), header)
+	invite := e.doWith(t, "/internal/v1/invites/create", jsonBody(t, map[string]any{"organization_id": org.String(), "email": acctMail(),
+		"role": "member", "actor_principal_id": super.String()}), header)
+	for name, refused := range map[string]answer{"add": add, "invite": invite} {
+		if refused.status != http.StatusConflict || object(t, refused)["reason_code"] != "organization_suspended" {
+			t.Fatalf("%s after deprovision: %d %s", name, refused.status, refused.body)
+		}
+	}
+	invitee := e.account(t, ctx, address, false, true)
+	accepted := e.doWith(t, "/internal/v1/invites/accept", jsonBody(t, map[string]any{"token": token, "principal_id": invitee.String()}), header)
+	if accepted.status != http.StatusBadRequest || object(t, accepted)["reason_code"] != "invite_invalid" {
+		t.Fatalf("accept after deprovision: %d %s", accepted.status, accepted.body)
+	}
+	if again := deprovision(super); again.status != http.StatusOK || object(t, again)["suspended"] != false {
+		t.Fatalf("repeat deprovision: %d %s", again.status, again.body)
+	}
+}
+
+// With the switch off the routes are not served.
+func TestProvisioningRoutesOffByDefault(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvUsersOwned: "true"})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	for _, path := range []string{"/internal/v1/memberships/add", "/internal/v1/memberships/role", "/internal/v1/memberships/remove",
+		"/internal/v1/memberships/transfer", "/internal/v1/invites/create", "/internal/v1/invites/accept", "/internal/v1/organizations/deprovision",
+		"/internal/v1/organizations/reactivate", "/internal/v1/organizations/suspend", authapi.PatternServiceAccountCreate,
+		authapi.PatternServiceAccountDisable, authapi.PatternServiceAccountEnable, authapi.PatternServiceAccountOwner,
+		authapi.PatternServiceAccountKeyIssue, authapi.PatternServiceAccountKeyRotate, authapi.PatternServiceAccountKeyRevoke, authapi.PatternServiceAccountKeyList} {
+		if got := e.doWith(t, path, `{}`, map[string]string{"Authorization": "Bearer " + token}); got.status != http.StatusNotFound {
+			t.Fatalf("%s with the switch off: %d, want 404", path, got.status)
+		}
+	}
+}
+
+// After a deprovision, a sign-in that names the organization (a former
+// member's login with a wrong password, an unknown address, a session issue)
+// is refused and leaves the organization suspended, with no membership row.
+// Each sign-in path refreshes the organization from go-api's row, which stays
+// active until go-api's purge.
+func TestDeprovisionedOrganizationStaysSuspendedOnSignIn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	address := acctMail()
+	member := e.account(t, ctx, address, false, true)
+	e.addVia(t, header, org, member, owner, "member")
+	got := e.doWith(t, "/internal/v1/organizations/deprovision", jsonBody(t, map[string]any{"organization_id": org.String(),
+		"actor_principal_id": super.String()}), header)
+	if got.status != http.StatusOK {
+		t.Fatalf("deprovision: %d %s", got.status, got.body)
+	}
+	suspended := func(step string) {
+		t.Helper()
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT
+  (SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL) +
+  (SELECT count(*) FROM public.memberships WHERE org_id = $1) +
+  (SELECT count(*) FROM auth.memberships WHERE organization_id = $1 AND status <> 'removed')`, org).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("after %s: %d live organization or membership rows (%v), want 0", step, n, err)
+		}
+	}
+	suspended("the deprovision")
+	client := map[string]string{"Content-Type": "application/json"}
+	for name, body := range map[string]string{
+		"former member, wrong password": `{"email":"` + address + `","password":"not-the-password","org_id":"` + org.String() + `"}`,
+		"unknown address":               `{"email":"` + acctMail() + `","password":"not-the-password","org_id":"` + org.String() + `"}`,
+	} {
+		if got := e.doWith(t, "/api/v1/auth/login", body, client); got.status < 400 {
+			t.Fatalf("login, %s: %d %s, want a refusal", name, got.status, got.body)
+		}
+		suspended("a login, " + name)
+	}
+	issuer, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["sessions:issue"]`, false, false)
+	issue := `{"principal_id":"` + member.String() + `","organization_id":"` + org.String() + `","amr":["pwd"]}`
+	if got := e.doWith(t, "/internal/v1/sessions", issue, map[string]string{"Authorization": "Bearer " + issuer}); got.status != http.StatusForbidden {
+		t.Fatalf("session issue for a former member: %d %s, want 403", got.status, got.body)
+	}
+	suspended("a session issue")
+}
+
+// A reactivate ends a suspension, by a superuser only: the organization row is
+// active again (go-api's row stays as it was), one audit row names the actor,
+// a membership write is accepted again, and a repeat is a no-op with no second
+// audit row. A deprovision's removed memberships do not come back.
+func TestProvisioningReactivateThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	member := e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, owner, "member")
+	dep := e.doWith(t, "/internal/v1/organizations/deprovision", jsonBody(t, map[string]any{"organization_id": org.String(),
+		"actor_principal_id": super.String()}), header)
+	if dep.status != http.StatusOK {
+		t.Fatalf("deprovision: %d %s", dep.status, dep.body)
+	}
+	reactivate := func(actor, target uuid.UUID) answer {
+		return e.doWith(t, "/internal/v1/organizations/reactivate", jsonBody(t, map[string]any{"organization_id": target.String(),
+			"actor_principal_id": actor.String()}), header)
+	}
+	if got := reactivate(owner, org); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("reactivate by the owner: %d %s", got.status, got.body)
+	}
+	if got := reactivate(super, uuid.New()); got.status != http.StatusNotFound || object(t, got)["reason_code"] != "organization_not_found" {
+		t.Fatalf("reactivate of an unknown organization: %d %s", got.status, got.body)
+	}
+	var active int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, org).Scan(&active); err != nil || active != 0 {
+		t.Fatalf("a refused reactivate cleared the suspension (%d, %v)", active, err)
+	}
+	got := reactivate(super, org)
+	if got.status != http.StatusOK {
+		t.Fatalf("reactivate: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["organization_id"] != org.String() || out["status"] != "active" || out["reactivated"] != true {
+		t.Fatalf("reactivate answer = %v", out)
+	}
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.reactivated' AND organization_id = $1 AND actor_principal_id = $2`
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, org).Scan(&active); err != nil || active != 1 {
+		t.Fatalf("after the reactivate: %d active auth organizations (%v), want 1", active, err)
+	}
+	var rows int
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d reactivated audit rows naming the actor (%v), want 1", rows, err)
+	}
+	late := e.account(t, ctx, acctMail(), false, true)
+	add := e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": late.String(),
+		"actor_principal_id": super.String(), "role": "member"}), header)
+	if add.status != http.StatusOK {
+		t.Fatalf("add after the reactivate: %d %s", add.status, add.body)
+	}
+	if again := reactivate(super, org); again.status != http.StatusOK || object(t, again)["reactivated"] != false {
+		t.Fatalf("repeat reactivate: %d %s", again.status, again.body)
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
+	}
+}
+
+// withProfileRow makes the stack mount a dark provisioning route: the route is mounted only when the endpoint-profile
+// document holds its row, and the embedded document does not yet. The plant is the embedded document plus a copy of
+// the deprovision row for the route.
+func withProfileRow(t *testing.T, routes ...string) {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	rows := document["rows"].([]any)
+	for _, item := range rows {
+		row := item.(map[string]any)
+		if row["route"] == "/internal/v1/organizations/deprovision" && row["service"] == authapi.AccessService {
+			clone := map[string]any{}
+			for k, v := range row {
+				clone[k] = v
+			}
+			for _, route := range routes {
+				extra := map[string]any{}
+				for k, v := range clone {
+					extra[k] = v
+				}
+				extra["route"] = route
+				rows = append(rows, extra)
+			}
+			document["rows"] = rows
+			raw, err := json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			provisioningProfileRows = raw
+			t.Cleanup(func() { provisioningProfileRows = nil })
+			return
+		}
+	}
+	t.Fatal("no deprovision row in the embedded document")
+}
+
+// A suspend is a superuser's: the organization row is suspended in the auth schema (go-api's row stays as it was),
+// one audit row names the actor, membership writes are refused afterwards, and a repeat is a no-op with no second
+// audit row. An actor with no auth.principals row (a go-api superuser that was never projected) gets the fail-closed
+// 503 store_unavailable, never a 500, and the organization stays active.
+func TestProvisioningSuspendThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	owner, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	suspend := func(actor, target uuid.UUID) answer {
+		return e.doWith(t, authapi.PatternOrgSuspend, jsonBody(t, map[string]any{"organization_id": target.String(),
+			"actor_principal_id": actor.String()}), header)
+	}
+	activeRows := func(target uuid.UUID) int {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1 AND disabled_at IS NULL`, target).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if got := suspend(owner, org); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "superuser_required" {
+		t.Fatalf("suspend by the owner: %d %s", got.status, got.body)
+	}
+	if got := suspend(super, uuid.New()); got.status != http.StatusNotFound || object(t, got)["reason_code"] != "organization_not_found" {
+		t.Fatalf("suspend of an unknown organization: %d %s", got.status, got.body)
+	}
+	if activeRows(org) != 1 {
+		t.Fatal("a refused suspend suspended the organization")
+	}
+	got := suspend(super, org)
+	if got.status != http.StatusOK {
+		t.Fatalf("suspend: %d %s", got.status, got.body)
+	}
+	if out := object(t, got); out["organization_id"] != org.String() || out["status"] != "suspended" || out["suspended"] != true {
+		t.Fatalf("suspend answer = %v", out)
+	}
+	auditSQL := `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.suspended' AND organization_id = $1 AND actor_principal_id = $2`
+	var rows int
+	if activeRows(org) != 0 {
+		t.Fatal("the auth organization is still active after the suspend")
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d suspended audit rows naming the actor (%v), want 1", rows, err)
+	}
+	var publicActive bool
+	if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&publicActive); err != nil || !publicActive {
+		t.Fatalf("go-api's row changed (%v, %v): the route writes the auth schema only", publicActive, err)
+	}
+	late := e.account(t, ctx, acctMail(), false, true)
+	add := e.doWith(t, "/internal/v1/memberships/add", jsonBody(t, map[string]any{"organization_id": org.String(), "principal_id": late.String(),
+		"actor_principal_id": super.String(), "role": "member"}), header)
+	if add.status != http.StatusConflict || object(t, add)["reason_code"] != "organization_suspended" {
+		t.Fatalf("add after the suspend: %d %s", add.status, add.body)
+	}
+	if again := suspend(super, org); again.status != http.StatusOK || object(t, again)["suspended"] != false {
+		t.Fatalf("repeat suspend: %d %s", again.status, again.body)
+	}
+	if err := e.admin.QueryRow(ctx, auditSQL, org, super).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("a repeat wrote a second audit row (%d, %v)", rows, err)
+	}
+
+	// An actor that is a go-api superuser with no auth.principals row.
+	ghost := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser,
+token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, ghost, acctMail()); err != nil {
+		t.Fatalf("seed the unprojected superuser: %v", err)
+	}
+	_, other := e.seed(t, ctx)
+	got = suspend(ghost, other)
+	if got.status != http.StatusServiceUnavailable || object(t, got)["reason_code"] != "store_unavailable" {
+		t.Fatalf("suspend by an actor with no principal row: %d %s, want 503 store_unavailable", got.status, got.body)
+	}
+	if activeRows(other) != 1 {
+		t.Fatal("a failed suspend suspended the organization")
+	}
+}
+
+// The service account routes through configure with the embedded endpoint-profile document (the startup gate passes with the routes on), as the runtime role: an organization owner creates an account with a member as its owner, disables,
+// enables and moves it; each write has its audit row naming the actor, the owner and the caller credential; a viewer,
+// an unknown account and an unprojected actor are refused as named; a repeat disable is 409.
+func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	first, second, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
+	super, stranger := e.account(t, ctx, acctMail(), true, true), e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, first, boss, "member")
+	e.addVia(t, header, org, second, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	created := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": first.String(), "name": "ci-bot"})
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	out := object(t, created)
+	id, _ := out["service_account_id"].(string)
+	if id == "" || out["status"] != "active" || out["owner_principal_id"] != first.String() || out["name"] != "ci-bot" {
+		t.Fatalf("create answer = %v", out)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": viewer.String(),
+		"owner_principal_id": first.String(), "name": "other-bot"}); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("create by a viewer: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": first.String(), "name": "ci-bot"}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "name_taken" {
+		t.Fatalf("create with a taken name: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": stranger.String(), "name": "stranger-owned"}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "owner_not_member" {
+		t.Fatalf("create with a non-member owner: %d %s", got.status, got.body)
+	}
+	switchBody := map[string]any{"service_account_id": id, "actor_principal_id": boss.String()}
+	if got := post(authapi.PatternServiceAccountDisable, switchBody); got.status != http.StatusOK || object(t, got)["status"] != "disabled" {
+		t.Fatalf("disable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, switchBody); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_in_state" {
+		t.Fatalf("repeat disable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountOwner, map[string]any{"service_account_id": id, "actor_principal_id": boss.String(),
+		"owner_principal_id": second.String()}); got.status != http.StatusOK || object(t, got)["owner_principal_id"] != second.String() {
+		t.Fatalf("owner: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountEnable, switchBody); got.status != http.StatusOK || object(t, got)["status"] != "active" {
+		t.Fatalf("enable: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": super.String()}); got.status != http.StatusNotFound ||
+		object(t, got)["reason_code"] != "service_account_not_found" {
+		t.Fatalf("disable of an unknown account by a superuser: %d %s", got.status, got.body)
+	}
+	if got := post(authapi.PatternServiceAccountDisable, map[string]any{"service_account_id": uuid.NewString(), "actor_principal_id": boss.String()}); got.status != http.StatusForbidden ||
+		object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("disable of an unknown account by an owner: %d %s, want 403 admin_required (the answer for an account of another organization)", got.status, got.body)
+	}
+	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND subject_principal_id = $2
+AND actor_principal_id = $3 AND attributes ? 'credential_id'`, "auth.service_account."+event, id, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows naming the actor and the caller credential (%v), want %d", n, event, err, want)
+		}
+	}
+	ghost := uuid.New()
+	if _, err := e.admin.Exec(ctx, `INSERT INTO users (id, email, password_hash, auth_provider, is_active, is_verified, is_superuser,
+token_version, created_at, updated_at) VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, ghost, acctMail()); err != nil {
+		t.Fatalf("seed the unprojected superuser: %v", err)
+	}
+	before := 0
+	_ = e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&before)
+	if got := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": ghost.String(),
+		"owner_principal_id": first.String(), "name": "ghost-bot"}); got.status != http.StatusServiceUnavailable || object(t, got)["reason_code"] != "store_unavailable" {
+		t.Fatalf("create by an actor with no principal row: %d %s, want 503 store_unavailable", got.status, got.body)
+	}
+	after := 0
+	_ = e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&after)
+	if after != before {
+		t.Fatal("a failed create wrote an account")
+	}
+}
+
+// The key routes through the real stack, on the embedded document: issue, list, rotate and revoke on real rows, the issued
+// value resolves, the audit rows name the calling credential, the value is in the two receipts only, and the id of a
+// credential of another class answers key_not_found with nothing of that row on the wire.
+func TestProvisioningServiceAccountKeysThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	owner, viewer, super := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), true, true)
+	e.addVia(t, header, org, owner, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	created := post(authapi.PatternServiceAccountCreate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": owner.String(), "name": "key-bot"})
+	if created.status != http.StatusOK {
+		t.Fatalf("create: %d %s", created.status, created.body)
+	}
+	id, _ := object(t, created)["service_account_id"].(string)
+	account := map[string]any{"service_account_id": id, "actor_principal_id": boss.String()}
+
+	issued := post(authapi.PatternServiceAccountKeyIssue, account)
+	if issued.status != http.StatusOK {
+		t.Fatalf("issue: %d %s", issued.status, issued.body)
+	}
+	receipt := object(t, issued)
+	first, _ := receipt["secret"].(string)
+	credential, _ := receipt["credential"].(map[string]any)
+	key, _ := credential["id"].(string)
+	if !strings.HasPrefix(first, "fcsak_") || credential["status"] != "active" || credential["credential_class"] != "service_account_key" {
+		t.Fatalf("issue receipt: status %v class %v", credential["status"], credential["credential_class"])
+	}
+	if got := post(authapi.PatternServiceAccountKeyIssue, account); got.status != http.StatusConflict || object(t, got)["reason_code"] != "key_live" {
+		t.Fatalf("a second issue: %d %s", got.status, got.body)
+	}
+	viewerBody := map[string]any{"service_account_id": id, "actor_principal_id": viewer.String(), "overlap_seconds": 60}
+	if got := post(authapi.PatternServiceAccountKeyRotate, viewerBody); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("rotate by a viewer: %d %s", got.status, got.body)
+	}
+	rotated := post(authapi.PatternServiceAccountKeyRotate, map[string]any{"service_account_id": id, "actor_principal_id": boss.String(), "overlap_seconds": 60})
+	if rotated.status != http.StatusOK {
+		t.Fatalf("rotate: %d %s", rotated.status, rotated.body)
+	}
+	second, _ := object(t, rotated)["secret"].(string)
+	if second == "" || second == first {
+		t.Fatal("rotate gave no new value")
+	}
+	listed := post(authapi.PatternServiceAccountKeyList, account)
+	if listed.status != http.StatusOK || strings.Contains(string(listed.body), first) || strings.Contains(string(listed.body), second) {
+		t.Fatalf("list: %d", listed.status)
+	}
+	if items, _ := object(t, listed)["items"].([]any); len(items) != 2 {
+		t.Fatalf("list holds %d keys, want 2", len(items))
+	}
+	revoke := map[string]any{"credential_id": key, "actor_principal_id": boss.String(), "reason": "compromised"}
+	for i := 0; i < 2; i++ {
+		got := post(authapi.PatternServiceAccountKeyRevoke, revoke)
+		if got.status != http.StatusOK || object(t, got)["status"] != "revoked" || strings.Contains(string(got.body), first) {
+			t.Fatalf("revoke %d: %d", i, got.status)
+		}
+	}
+	for event, want := range map[string]int{"key_issued": 1, "key_rotated": 1, "key_revoked": 1} {
+		var n int
+		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND actor_principal_id = $2 AND attributes ? 'credential_id'`,
+			"auth.service_account."+event, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows (%v), want %d", n, event, err, want)
+		}
+	}
+	var live, leaks int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.credential_registry WHERE credential_class = 'service_account_key' AND revoked_at IS NULL`).Scan(&live); err != nil || live != 1 {
+		t.Fatalf("%d live keys (%v), want 1", live, err)
+	}
+	if err := e.admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM auth.security_audit_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')
++ (SELECT count(*) FROM auth.auth_outbox_events r WHERE to_jsonb(r)::text LIKE '%' || $1 || '%')`, second[len("fcsak_"):]).Scan(&leaks); err != nil || leaks != 0 {
+		t.Fatalf("%d rows hold the value (%v)", leaks, err)
+	}
+
+	other := uuid.New()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.Commit(ctx, e.admin, schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `INSERT INTO auth.credential_registry (id, principal_id, credential_class, secret_hash, hash_algorithm, fingerprint, expires_at)
+VALUES ($1, $2, 'workload_bootstrap_credential', decode(md5($1::uuid::text), 'hex'), 'sha256', substr(md5($1::uuid::text), 1, 16), now() + interval '1 hour')`, other, boss)
+			return err
+		},
+		Audit:     audit.AuditEvent{EventType: "credential.test", Outcome: audit.OutcomeAllowed},
+		OffStream: audit.OffStreamWorkloadRegistry,
+	}); err != nil {
+		t.Fatalf("seed a credential of another class: %v", err)
+	}
+	got := post(authapi.PatternServiceAccountKeyRevoke, map[string]any{"credential_id": "crd_" + other.String(), "actor_principal_id": super.String(), "reason": "compromised"})
+	if got.status != http.StatusNotFound || object(t, got)["reason_code"] != "key_not_found" || strings.Contains(string(got.body), other.String()) {
+		t.Fatalf("revoke of a credential of another class: %d %s", got.status, got.body)
+	}
+}
+
+// With auth-service not owning users, the routes are served and the verbs that need users refuse: create is 409
+// users_not_owned and writes nothing, while disable still works.
+func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	boss, org := e.seed(t, ctx)
+	got := e.doWith(t, authapi.PatternServiceAccountCreate, jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
+		"owner_principal_id": boss.String(), "name": "not-owned"}), header)
+	if got.status != http.StatusConflict || object(t, got)["reason_code"] != "users_not_owned" {
+		t.Fatalf("create while users are not owned: %d %s", got.status, got.body)
+	}
+	var n int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.service_accounts`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d accounts after a refused create (%v)", n, err)
+	}
+}
+
+// The grant routes, mounted by a row document the test plants, drive the real stores: create, create over a tuple whose only
+// row has expired (the expired row is ended in the same transaction), update, revoke, and the audit rows and events of each.
+func TestProvisioningGrantsThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e, header := newProvisioningEnv(t, ctx)
+	boss, org := e.seed(t, ctx)
+	member, viewer := e.account(t, ctx, acctMail(), false, true), e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, member, boss, "member")
+	e.addVia(t, header, org, viewer, boss, "viewer")
+	post := func(path string, body map[string]any) answer { return e.doWith(t, path, jsonBody(t, body), header) }
+	count := func(sql string, args ...any) int {
+		var n int
+		if err := e.admin.QueryRow(ctx, sql, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	create := map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "principal_id": member.String(),
+		"role": "viewer", "resource_key": "acme/api"}
+	first := post(authapi.PatternGrantCreate, create)
+	if first.status != http.StatusOK {
+		t.Fatalf("create: %d %s", first.status, first.body)
+	}
+	out := object(t, first)
+	firstID, _ := out["grant_id"].(string)
+	if firstID == "" || out["status"] != "active" || out["role"] != "viewer" || out["principal_id"] != member.String() {
+		t.Fatalf("create answer = %v", out)
+	}
+	if strings.Contains(string(first.body), "acme/api") || strings.Contains(string(first.body), "resource_key") {
+		t.Fatalf("the create answer carries the repository key: %s", first.body)
+	}
+	if got := post(authapi.PatternGrantCreate, create); got.status != http.StatusConflict || object(t, got)["reason_code"] != "already_granted" {
+		t.Fatalf("a second live grant: %d %s", got.status, got.body)
+	}
+	denied := map[string]any{"organization_id": org.String(), "actor_principal_id": viewer.String(), "principal_id": member.String(), "role": "viewer", "resource_key": "acme/web"}
+	if got := post(authapi.PatternGrantCreate, denied); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("create by a viewer: %d %s", got.status, got.body)
+	}
+	// The grant expires (SQL only: the API refuses a past expiry), then a create over the tuple ends it and grants again.
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE auth.resource_grants SET expires_at = now() - interval '1 minute' WHERE id = $1`, firstID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	again := post(authapi.PatternGrantCreate, create)
+	if again.status != http.StatusOK {
+		t.Fatalf("create over an expired tuple: %d %s", again.status, again.body)
+	}
+	secondID, _ := object(t, again)["grant_id"].(string)
+	if secondID == "" || secondID == firstID {
+		t.Fatalf("create over an expired tuple answered %s (first %s)", again.body, firstID)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_at IS NOT NULL AND revoked_by IS NULL`, firstID); n != 1 {
+		t.Fatal("the expired grant was not ended")
+	}
+	for event, want := range map[string]int{"resource_grant.expired": 1} {
+		if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = $1 AND aggregate_id = $2`, event, "grt_"+firstID); n != want {
+			t.Fatalf("%d %s events for the expired grant, want %d", n, event, want)
+		}
+	}
+	if n := count(`SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'resource_grant.created' AND aggregate_id = $1`, "grt_"+secondID); n != 1 {
+		t.Fatal("no created event for the new grant")
+	}
+	exp := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	upd := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"expires_at": exp, "expected_revision": 1})
+	if upd.status != http.StatusOK || object(t, upd)["revision"] != float64(2) {
+		t.Fatalf("update: %d %s", upd.status, upd.body)
+	}
+	if strings.Contains(string(upd.body), "acme/api") || strings.Contains(string(upd.body), "resource_key") {
+		t.Fatalf("the update answer carries the repository key: %s", upd.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
+AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'credential_id' AND actor_principal_id = $2`, secondID, boss); n != 1 {
+		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the caller credential, want 1", n)
+	}
+	if got := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
+		"role": "admin", "expected_revision": 1}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "revision_conflict" {
+		t.Fatalf("update with a stale revision: %d %s", got.status, got.body)
+	}
+	rev := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID})
+	if rev.status != http.StatusOK || object(t, rev)["status"] != "revoked" {
+		t.Fatalf("revoke: %d %s", rev.status, rev.body)
+	}
+	if strings.Contains(string(rev.body), "acme/api") || strings.Contains(string(rev.body), "resource_key") {
+		t.Fatalf("the revoke answer carries the repository key: %s", rev.body)
+	}
+	if n := count(`SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND revoked_by = $2`, secondID, boss); n != 1 {
+		t.Fatal("the revoked grant does not name its revoker")
+	}
+	if got := post(authapi.PatternGrantRevoke, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": uuid.NewString()}); got.status != http.StatusNotFound ||
+		object(t, got)["reason_code"] != "grant_not_found" {
+		t.Fatalf("revoke of an unknown grant: %d %s", got.status, got.body)
+	}
+}
+
+// With AUTH_ORGS_OWNED the suspend and reactivate routes, through configure, also write go-api's is_active in the
+// verb's commit.
+func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvUsersOwned:                "true",
+		authconfig.EnvOrgsOwned:                 "true",
+		authconfig.EnvMembershipRoutes:          "true",
+		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
+	})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	_, org := e.seed(t, ctx)
+	super := e.account(t, ctx, acctMail(), true, true)
+	publicActive := func() bool {
+		t.Helper()
+		var active bool
+		if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&active); err != nil {
+			t.Fatal(err)
+		}
+		return active
+	}
+	body := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
+	if got := e.doWith(t, authapi.PatternOrgSuspend, body, header); got.status != http.StatusOK {
+		t.Fatalf("suspend: %d %s", got.status, got.body)
+	}
+	if publicActive() {
+		t.Fatal("go-api's row is still active after the suspend with orgs owned")
+	}
+	if got := e.doWith(t, authapi.PatternOrgReactivate, body, header); got.status != http.StatusOK {
+		t.Fatalf("reactivate: %d %s", got.status, got.body)
+	}
+	if !publicActive() {
+		t.Fatal("go-api's row is still inactive after the reactivate with orgs owned")
+	}
+}
+
+// The rename route through configure with the embedded endpoint-profile document, as the runtime role with users and
+// organizations owned: an owner renames, both rows change in one commit with the audit row naming the actor; a viewer
+// is refused and changes nothing.
+func TestProvisioningRenameThroughConfigure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	e := newRoutesEnvWith(t, ctx, map[string]string{
+		authconfig.EnvUsersOwned:                "true",
+		authconfig.EnvOrgsOwned:                 "true",
+		authconfig.EnvMembershipRoutes:          "true",
+		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
+		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
+	})
+	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
+	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	owner, org := e.seed(t, ctx)
+	viewer := e.account(t, ctx, acctMail(), false, true)
+	e.addVia(t, header, org, viewer, owner, "viewer")
+	names := func() (public, auth string) {
+		t.Helper()
+		if err := e.admin.QueryRow(ctx, `SELECT (SELECT name FROM public.organizations WHERE id = $1), (SELECT name FROM auth.organizations WHERE id = $1)`, org).
+			Scan(&public, &auth); err != nil {
+			t.Fatal(err)
+		}
+		return public, auth
+	}
+	rename := func(actor uuid.UUID, name string) answer {
+		return e.doWith(t, authapi.PatternOrgRename, jsonBody(t, map[string]any{"organization_id": org.String(),
+			"actor_principal_id": actor.String(), "name": name}), header)
+	}
+	if got := rename(viewer, "Viewer Name"); got.status != http.StatusForbidden || object(t, got)["reason_code"] != "admin_required" {
+		t.Fatalf("rename by a viewer: %d %s", got.status, got.body)
+	}
+	if public, auth := names(); public != "Routes Org" || auth != "Routes Org" {
+		t.Fatalf("names after the refused rename: public %q, auth %q", public, auth)
+	}
+	got := rename(owner, "  Renamed Org ")
+	if got.status != http.StatusOK || object(t, got)["name"] != "Renamed Org" || object(t, got)["renamed"] != true {
+		t.Fatalf("rename by the owner: %d %s", got.status, got.body)
+	}
+	if public, auth := names(); public != "Renamed Org" || auth != "Renamed Org" {
+		t.Fatalf("names after the rename: public %q, auth %q, want both Renamed Org", public, auth)
+	}
+	var rows int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.renamed'
+AND organization_id = $1 AND actor_principal_id = $2`, org, owner).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("%d renamed audit rows naming the owner (%v), want 1", rows, err)
+	}
+}

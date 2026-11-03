@@ -57,6 +57,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "true while auth-service owns sessions (go-api's flag): the role posture then also requires the read of the auth schema's sessions; unset or false = off, any other value refuses readiness",
 		},
 		{
+			Flag: "auth-platform-roles-owned", Env: "AUTH_PLATFORM_ROLES_OWNED", Kind: KindString,
+			Services: q, Group: GroupDatabase,
+			Usage: "true while auth-service owns the platform roles: is_superuser is read from the auth platform role assignments and the role posture also requires that read (needs AUTH_PROXY_SESSIONS); unset or false = off, any other value refuses startup",
+		},
+		{
 			Flag: "auth-database-schema", Env: "AUTH_DATABASE_SCHEMA", Kind: KindString,
 			Services: q, Group: GroupDatabase,
 			Usage: "schema of the auth tables (default auth) that session checks and the role posture read",
@@ -90,6 +95,11 @@ var queryAPIOptions = func() []Option {
 			Flag: "edge-jwt-audience", Env: "GO_API_EDGE_JWT_AUDIENCE", Kind: KindString,
 			Services: q, Group: GroupRoutes,
 			Usage: "audience of the edge JWT the proof route verifies",
+		},
+		{
+			Flag: "access-token-issuer", Env: "AUTH_ACCESS_TOKEN_ISSUER", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
 		},
 		{
 			Flag: "drilldown-issues-enabled", Env: "GO_API_DRILLDOWN_ISSUES_ENABLED", Kind: KindBool,

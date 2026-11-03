@@ -316,7 +316,7 @@ func (h *handlers) persistPagerDutyOAuthBinding(ctx context.Context, orgID, cred
 		if err != nil {
 			return err
 		}
-		if previousToken, err = pagerDutyRevokeToken(plaintext); err != nil {
+		if previousToken, err = providerfoundation.PagerDutyStoredRevokeToken(plaintext); err != nil {
 			return err
 		}
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -19,7 +20,7 @@ type IdentityStore interface {
 	ByEmail(ctx context.Context, normalizedEmail string) (*identity.Principal, error)
 	ByID(ctx context.Context, id uuid.UUID) (*identity.Principal, error)
 	ProvisionLocal(ctx context.Context, req identity.LocalProvisionRequest) (uuid.UUID, error)
-	SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor) error
+	SetEmailVerifiedWith(ctx context.Context, principal uuid.UUID, at time.Time, actor identity.Actor, end func(context.Context, audit.TxOps) error) error
 	SetPasswordHashFor(ctx context.Context, principal uuid.UUID, hash string, actor identity.Actor, cause identity.PasswordCause, end func(context.Context, audit.TxOps) error) (int64, error)
 }
 
@@ -35,6 +36,8 @@ type SessionEnder interface {
 // (*PGLinks).
 type ResetLinks interface {
 	PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error)
+	PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error)
+	ConsumeVerificationLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
 	ConsumeBoundResetLinkInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, tokenHash [32]byte) error
 	EndResetLinksInTx(ctx context.Context, tx audit.TxOps, principalID uuid.UUID) (int64, error)
 }
@@ -54,6 +57,10 @@ type IdentityAccounts struct {
 	Links ResetLinks
 	// Now is the verification time; nil means time.Now.
 	Now func() time.Time
+	// PasswordRow writes a password write's go-api public.audit_logs row in its
+	// transaction, with the organization of the session the write issues (nil:
+	// none); nil means passwordPublicRow. A test of the call sequence replaces it.
+	PasswordRow func(ctx context.Context, tx audit.TxOps, req PasswordEnd, sessionOrg *uuid.UUID) error
 }
 
 func (a IdentityAccounts) actor(ctx context.Context) identity.Actor {
@@ -90,12 +97,22 @@ func (a IdentityAccounts) ProvisionLocal(ctx context.Context, req ProvisionLocal
 	return a.Store.ProvisionLocal(ctx, identity.LocalProvisionRequest{Email: req.Email, FullName: req.FullName, PasswordHash: &hash, Actor: a.actor(ctx), Organization: org})
 }
 
-func (a IdentityAccounts) SetEmailVerified(ctx context.Context, id uuid.UUID) error {
+func (a IdentityAccounts) PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
+	return a.Links.PeekVerificationLink(ctx, tokenHash)
+}
+
+func (a IdentityAccounts) SetEmailVerifiedConsuming(ctx context.Context, id uuid.UUID, link [32]byte) error {
 	now := time.Now
 	if a.Now != nil {
 		now = a.Now
 	}
-	return a.Store.SetEmailVerified(ctx, id, now(), a.actor(ctx))
+	err := a.Store.SetEmailVerifiedWith(ctx, id, now(), a.actor(ctx), func(ctx context.Context, tx audit.TxOps) error {
+		return a.Links.ConsumeVerificationLinkInTx(ctx, tx, id, link)
+	})
+	if errors.Is(err, identity.ErrLinkUnusable) {
+		return ErrVerificationLinkUnusable
+	}
+	return err
 }
 
 func (a IdentityAccounts) PeekResetLink(ctx context.Context, tokenHash [32]byte) (uuid.UUID, bool, error) {
@@ -104,11 +121,12 @@ func (a IdentityAccounts) PeekResetLink(ctx context.Context, tokenHash [32]byte)
 
 func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req PasswordEnd) (PasswordEndResult, error) {
 	var (
-		ended   session.Ended
-		links   int64
-		result  PasswordEndResult
-		cause   = identity.PasswordChanged
-		endFunc = func(ctx context.Context, tx audit.TxOps) error {
+		ended      session.Ended
+		links      int64
+		result     PasswordEndResult
+		sessionOrg *uuid.UUID
+		cause      = identity.PasswordChanged
+		endFunc    = func(ctx context.Context, tx audit.TxOps) error {
 			if req.ResetLink != nil {
 				if err := a.Links.ConsumeBoundResetLinkInTx(ctx, tx, req.ID, *req.ResetLink); err != nil {
 					return err
@@ -122,13 +140,28 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 				return err
 			}
 			if req.NewSession != nil {
-				issued, err := a.Sessions.CreateInTx(ctx, tx, req.ID, req.NewSession.OrganizationID, req.NewSession.AMR)
+				org := req.NewSession.OrganizationID
+				if org != nil {
+					var member bool
+					if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.memberships WHERE user_id = $1 AND org_id = $2)`, req.ID, *org).Scan(&member); err != nil {
+						return err
+					}
+					if !member {
+						org = nil
+					}
+				}
+				issued, err := a.Sessions.CreateInTx(ctx, tx, req.ID, org, req.NewSession.AMR)
 				if err != nil {
 					return err
 				}
 				result.Issued = &issued
+				sessionOrg = issued.Session.OrganizationID
 			}
-			return nil
+			write := a.PasswordRow
+			if write == nil {
+				write = passwordPublicRow
+			}
+			return write(ctx, tx, req, sessionOrg)
 		}
 	)
 	if req.ResetLink != nil {
@@ -145,6 +178,23 @@ func (a IdentityAccounts) SetPasswordEndingSessions(ctx context.Context, req Pas
 	slog.InfoContext(ctx, "password changed; credentials ended", "principal_id", req.ID.String(),
 		"sessions", ended.Sessions, "refresh_tokens", ended.RefreshTokens, "reset_links", links, "token_version", version)
 	return result, nil
+}
+
+// passwordPublicRow is go-api's row of a password write (internal/api/session verify.go:286 reset,
+// changepassword.go:178 change): password_reset "User reset password" or password_changed "User changed own
+// password", resource user/<user>, changes {}, in the organization of the session the change issues, else the
+// user's first public membership in the login order; no row for a user with no organization (CHAOS-11400). It
+// commits with the password and its auth event, or fails the write.
+func passwordPublicRow(ctx context.Context, tx audit.TxOps, req PasswordEnd, sessionOrg *uuid.UUID) error {
+	org, err := publicaudit.OrganizationOr(ctx, tx, sessionOrg, req.ID)
+	if err != nil || org == nil {
+		return err
+	}
+	action, description := "password_changed", "User changed own password"
+	if req.ResetLink != nil {
+		action, description = "password_reset", "User reset password"
+	}
+	return publicaudit.UserRow(ctx, tx, *org, req.ID, action, description, nil)
 }
 
 var _ Accounts = IdentityAccounts{}

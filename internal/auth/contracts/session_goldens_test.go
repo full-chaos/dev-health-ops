@@ -45,14 +45,34 @@ type sessionSurface struct {
 	name  string
 	dir   string
 	parse func(root string, raw []byte) error
+	// wire turns a stored fixture into its wire bytes; nil is the identity.
+	wire func(raw []byte) ([]byte, error)
+}
+
+// fixtureBytes reads a stored fixture of s as wire bytes.
+func (s sessionSurface) fixtureBytes(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.wire == nil {
+		return raw
+	}
+	wire, err := s.wire(raw)
+	if err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	return wire
 }
 
 func sessionSurfaces() []sessionSurface {
 	return []sessionSurface{
-		{SessionSurface, "session", func(r string, b []byte) error { _, err := ParseSession(r, b); return err }},
-		{RefreshRequestSurface, "refresh-request", func(r string, b []byte) error { _, err := ParseRefreshRequest(r, b); return err }},
-		{RefreshResponseSurface, "refresh-response", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }},
-		{AuthOutcomeSurface, "auth-outcome", func(r string, b []byte) error { _, err := ParseAuthOutcome(r, b); return err }},
+		{SessionSurface, "session", func(r string, b []byte) error { _, err := ParseSession(r, b); return err }, nil},
+		{RefreshRequestSurface, "refresh-request", func(r string, b []byte) error { _, err := ParseRefreshRequest(r, b); return err }, nil},
+		{RefreshResponseSurface, "refresh-response", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }, nil},
+		{RefreshResponseV2Surface, "refresh-response.v2", func(r string, b []byte) error { _, err := ParseRefreshResponse(r, b); return err }, assembleV2Fixture},
+		{AuthOutcomeSurface, "auth-outcome", func(r string, b []byte) error { _, err := ParseAuthOutcome(r, b); return err }, nil},
 	}
 }
 
@@ -115,10 +135,7 @@ func TestSessionSurfaceAcceptFixturesValidateAndParse(t *testing.T) {
 		dir, m := loadSessionCorpus(t, s)
 		for _, e := range m.Accept {
 			t.Run(s.dir+"/"+e.File, func(t *testing.T) {
-				raw, err := os.ReadFile(filepath.Join(dir, e.File))
-				if err != nil {
-					t.Fatal(err)
-				}
+				raw := s.fixtureBytes(t, filepath.Join(dir, e.File))
 				if err := s.parse(root, raw); err != nil {
 					t.Fatalf("accept fixture refused: %v", err)
 				}
@@ -137,15 +154,12 @@ func TestSessionSurfaceRejectFixturesFailByTheDeclaredKeyword(t *testing.T) {
 				if !ok {
 					t.Fatalf("no Go message token for keyword %q", e.ExpectKeyword)
 				}
-				raw, err := os.ReadFile(filepath.Join(dir, e.File))
-				if err != nil {
-					t.Fatal(err)
-				}
+				raw := s.fixtureBytes(t, filepath.Join(dir, e.File))
 				var doc any
 				if err := json.Unmarshal(raw, &doc); err != nil {
 					t.Fatal(err)
 				}
-				err = Validate(root, s.name, doc)
+				err := Validate(root, s.name, doc)
 				if err == nil {
 					t.Fatalf("validated cleanly; want %s at %s", e.ExpectKeyword, e.ExpectInstanceLocation)
 				}
@@ -166,10 +180,7 @@ func TestSessionSurfaceClientRejectedFixturesPassTheSchemaButAreRefused(t *testi
 		dir, m := loadSessionCorpus(t, s)
 		for _, e := range m.RejectByClient {
 			t.Run(s.dir+"/"+e.File, func(t *testing.T) {
-				raw, err := os.ReadFile(filepath.Join(dir, e.File))
-				if err != nil {
-					t.Fatal(err)
-				}
+				raw := s.fixtureBytes(t, filepath.Join(dir, e.File))
 				var doc any
 				if err := json.Unmarshal(raw, &doc); err != nil {
 					t.Fatalf("fixture is not valid JSON: %v", err)

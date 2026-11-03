@@ -79,7 +79,8 @@ func customerPushSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) cus
 			[]any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.licAdmin, f.superuser}},
 		{`INSERT INTO memberships (id, user_id, org_id, role) VALUES
 			(md5('customerpush_v-row-3')::uuid,$1,$5,'admin'), (md5('customerpush_v-row-4')::uuid,$2,$5,'member'), (md5('customerpush_v-row-5')::uuid,$3,$6,'owner'),
-			(md5('customerpush_v-row-6')::uuid,$4,$7,'admin')`, []any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.orgTeam, f.orgCommunity, f.orgDisabled}},
+			(md5('customerpush_v-row-6')::uuid,$4,$7,'admin'), (md5('customerpush_v-row-lic')::uuid,$8,$9,'admin')`,
+			[]any{f.admin, f.member, f.communityOwner, f.disabledAdmin, f.orgTeam, f.orgCommunity, f.orgDisabled, f.licAdmin, f.orgLicenseWins}},
 		{`INSERT INTO external_ingest_sources (id, org_id, system, instance, entity_family, display_name, mode, enabled,
 			webhook_mode, matched_integration_source_id, created_at, updated_at) VALUES
 			($1,$5,'github','Acme/API','legacy','Acme API','customer_push',true,'disabled',NULL,'2026-09-01T10:00:00.123456Z','2026-09-02T11:00:00Z'),

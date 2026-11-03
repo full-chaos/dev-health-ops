@@ -597,8 +597,9 @@ func TestGitLabProjectTargetCountsGroupMilestones(t *testing.T) {
 		if strings.Contains(request, "/projects/100/milestones") {
 			calls++
 			query := mustParseRequestQuery(t, request)
-			if query.Get("include_ancestors") != "true" || query.Get("include_parent_milestones") != "true" {
-				t.Fatalf("milestone read %q does not ask for the ancestor groups' milestones by both names", request)
+			// CHAOS-12145: the two names are mutually exclusive on GitLab (HTTP 400 when both are sent).
+			if query.Get("include_ancestors") != "true" || query.Has("include_parent_milestones") {
+				t.Fatalf("milestone read %q must ask for the ancestor groups' milestones by include_ancestors alone", request)
 			}
 		}
 	}

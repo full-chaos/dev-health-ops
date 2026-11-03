@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
@@ -41,7 +42,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 	"github.com/full-chaos/dev-health-ops/internal/auth/keyrotation"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
@@ -52,6 +55,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/token"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,6 +71,10 @@ var keyStateSource = func(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 const (
 	CheckPostgres   = "postgres"
 	CheckSigningKey = "signing_key"
+	// CheckRestoreFence holds auth-service not ready while the database is on a
+	// timeline that has no restore-fence record (a restore or promote that
+	// auth-migrate restore-fence apply has not covered).
+	CheckRestoreFence = "restore_fence"
 )
 
 // IO is the process's stream set, injectable for tests.
@@ -95,7 +103,7 @@ func sessionRoutes(
 		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned,
+		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {
@@ -105,17 +113,25 @@ func sessionRoutes(
 	if err != nil {
 		return nil, err
 	}
+	if issuer, err = withAccessCheck(cfg, logger, accessSigner, issuer); err != nil {
+		return nil, err
+	}
 	routes, err := authapi.Routes(authapi.Deps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger,
 	})
 	if err != nil {
 		return nil, err
 	}
-	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer, limits)
+	compat, err := compatRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
 	if err != nil {
 		return nil, err
 	}
-	return append(routes, compat...), nil
+	routes = append(routes, compat...)
+	oauth, err := oauthRoutes(cfg, logger, pool, schema, sessions, issuer, limits, accessSigner)
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, oauth...), nil
 }
 
 // logAPIRoutes states what the API listener serves. The refresh and logout
@@ -138,7 +154,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 	case authconfig.AccessClassEdDSA:
 		return authapi.NewEdDSAIssuer(
 			cfg.Session.AccessSecret.Reveal(), cfg.Session.AccessIssuer, cfg.Session.AccessAudience,
-			signer, cfg.TokenIssuerURL,
+			signer, cfg.TokenIssuerURL, authapi.WithLegacyAudience(cfg.Session.LegacyAudience), authapi.WithAccessLifetime(cfg.Session.AccessLifetime),
 		)
 	}
 	return nil, fmt.Errorf("authruntime: unknown access token class %q", cfg.Session.AccessClass)
@@ -148,7 +164,7 @@ func newAccessIssuer(cfg authconfig.Config, signer authapi.AccessSigner) (*autha
 // the social provider client and the append-only audit writer.
 func compatRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits,
+	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits, signer authapi.AccessSigner,
 ) ([]httpapi.Route, error) {
 	identities, err := identity.New(identityConfig(cfg, logger, pool, schema))
 	if err != nil {
@@ -171,13 +187,24 @@ func compatRoutes(
 	if err != nil {
 		return nil, err
 	}
+	issueWorkload, err := sessionIssueWorkload(cfg, signer)
+	if err != nil {
+		return nil, err
+	}
 	deps := authapi.CompatDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, IssueWorkload: issueWorkload,
 		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},
-		Limits: limits,
+		AppendAuditWith: func(ctx context.Context, event audit.AuditEvent, apply func(ctx context.Context, tx audit.TxOps) error) error {
+			return audit.AppendWith(ctx, pool, schema, event, apply)
+		},
+		PublicAuditTx: func(ctx context.Context, fn func(ctx context.Context, tx publicaudit.Tx) error) error {
+			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(ctx, tx) })
+		},
+		Limits:   limits,
+		Validate: validateConfig(cfg, pool, schema, signer), SwitchOrg: &authapi.SwitchOrgConfig{Sessions: sessions, Reads: pgUsers(cfg, pool, schema)},
 	}
 	if cfg.Session.LoginEnabled {
 		deps.Login = &authapi.LoginConfig{
@@ -198,16 +225,32 @@ func compatRoutes(
 		link = socialService
 	}
 	links, err := authapi.SocialLinkRoutes(authapi.SocialLinkDeps{
-		Sessions: sessions, Users: authapi.PGUsers{Pool: pool}, Issuer: issuer, Logger: logger, Social: link, Limits: limits,
+		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, Social: link, Limits: limits,
 	})
 	if err != nil {
 		return nil, err
 	}
-	sso, err := ssoRoutes(cfg, logger, pool, schema, identities, deps)
+	sso, err := ssoRoutes(cfg, logger, pool, schema, identities, deps, oidcSeamOf(cfg, logger, identities, sessions))
 	if err != nil {
 		return nil, err
 	}
-	return append(append(routes, links...), sso...), nil
+	provisioning, err := provisioningRoutes(cfg, logger, pool, schema, identities, issueWorkload, sessions)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(append(routes, links...), sso...), provisioning...), nil
+}
+
+// validateConfig is the validate route's go-api session read over the auth
+// schema (policy.PGStore, read for its session row only) and, when the EdDSA
+// discovery issuer is set, the EdDSA user token check with the key set this
+// service signs with.
+func validateConfig(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier, signer authapi.AccessSigner) *authapi.ValidateConfig {
+	config := &authapi.ValidateConfig{Sessions: policy.PGStore{Pool: pool, AuthSchema: schema.String()}}
+	if keys, ok := signer.(authapi.KeySetSource); ok && cfg.TokenIssuerURL != "" {
+		config.IssuerURL, config.Keys = cfg.TokenIssuerURL, keys
+	}
+	return config
 }
 
 // Main runs the command and exits with its status.
@@ -270,8 +313,8 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 	if err != nil {
 		logger.ErrorContext(
 			ctx, "configure runtime dependencies",
-			"error_category", "dependency_configuration_failed",
-			"reason", reasonOf(err),
+			append([]any{"error_category", "dependency_configuration_failed",
+				"reason", reasonOf(err)}, detailsOf(err)...)...,
 		)
 		return 1
 	}
@@ -402,6 +445,7 @@ func configureWithRoutes(
 	// The error is logged here, unredacted-by-category, so an operator can
 	// diagnose without shell access while the response stays detail-free:
 	// the same split cmd/query-api landed for CHAOS-4724.
+	var schemaChecked atomic.Bool
 	if err := registry.RegisterRequired(CheckPostgres, func(ctx context.Context) error {
 		if probeErr := store.Probe(ctx); probeErr != nil {
 			logger.ErrorContext(
@@ -409,6 +453,9 @@ func configureWithRoutes(
 				"check", CheckPostgres, "reason", authstore.ReasonOf(probeErr),
 			)
 			return probeErr
+		}
+		if schemaChecked.CompareAndSwap(false, true) {
+			logSchemaChecked(ctx, logger, cfg.DatabaseSchema)
 		}
 		return nil
 	}); err != nil {
@@ -422,6 +469,20 @@ func configureWithRoutes(
 				"check", CheckSigningKey, "reason", token.ReasonOf(checkErr),
 			)
 			return checkErr
+		}
+		return nil
+	}); err != nil {
+		closeStore()
+		return nil, err
+	}
+
+	if err := registry.RegisterRequired(CheckRestoreFence, func(ctx context.Context) error {
+		if fenceErr := restorefence.Check(ctx, store.Pool(), schemaID); fenceErr != nil {
+			logger.ErrorContext(
+				ctx, "readiness check failed",
+				"check", CheckRestoreFence, "reason", fenceReason(fenceErr),
+			)
+			return fenceErr
 		}
 		return nil
 	}); err != nil {
@@ -498,7 +559,7 @@ func configureWithRoutes(
 			return nil, err
 		}
 	}
-	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits)
+	credRoutes, credComponents, err := credentialRoutes(cfg, logger, store.Pool(), schemaID, limits, signer)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -517,6 +578,27 @@ func configureWithRoutes(
 		return nil, err
 	}
 	routes = append(routes, workloadRoutes...)
+	// The revision feed is built before the authorize routes: with it on, they ask its decision cache. The loop is built
+	// with no sink unless AUTH_REVISION_FEED=on (default off): publishing then stays off (a sink-less publisher would mark
+	// events delivered that nobody received) and the reaper runs. On, the sink feeds the revision feed (revisionfeed), and
+	// the subscriber component runs beside the loop.
+	feed, err := revisionFeed(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	decisionRoutes, err := authorizeRoutes(cfg, logger, store.Pool(), schemaID, signer, feed.decisions)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, decisionRoutes...)
+	acrRoutes, err := acrEventRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, acrRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
@@ -529,13 +611,20 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	// No consumer of auth outbox events exists yet, so the loop is built with no
-	// sink: publishing stays off (a sink-less publisher would mark events
-	// delivered that nobody received) and the reaper runs. A sink is injected
-	// here when the first consumer lands.
 	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
 	loopConfig.Logger = logger
-	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), nil, loopConfig)
+	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), feed.publisher, loopConfig)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+
+	projectOrg, err := organizationProjectorFor(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	projectionComponents, err := pushProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -544,6 +633,8 @@ func configureWithRoutes(
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
+	components = append(components, feed.components...)
+	components = append(components, projectionComponents...)
 	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},
@@ -607,6 +698,18 @@ func reasonOf(err error) string {
 		return coded.DependencyReason()
 	}
 	return "dependency_configuration_failed"
+}
+
+// detailsOf is the start log's detail for a dependency-construction failure
+// whose error names it: DependencyAttrs is slog key/value pairs of names and
+// counts only (a route pattern, credential class names), never a value, a DSN or
+// a secret. Any other failure adds nothing.
+func detailsOf(err error) []any {
+	var detailed interface{ DependencyAttrs() []any }
+	if errors.As(err, &detailed) {
+		return detailed.DependencyAttrs()
+	}
+	return nil
 }
 
 // optionValue backs every declared flag. It stores the RAW string rather than
@@ -719,7 +822,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// carry X-Auth-Request-ID as route answers do. The client address
 		// (every audit row and session) and the user agent (every session)
 		// are bound by internal/auth/clientaddr.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies)},
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), publicaudit.Middleware},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
@@ -777,3 +880,16 @@ func runHealthcheck(parent context.Context, cfg authconfig.Config, streams IO) i
 // healthcheckSlack is added to the per-check readiness deadline so the probe
 // outlasts a readiness evaluation that runs to its own bound.
 const healthcheckSlack = time.Second
+
+// pgUsers is the routes' read of the go-api users, with the platform roles switch.
+func pgUsers(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) authapi.PGUsers {
+	return authapi.PGUsers{Pool: pool, AuthSchema: schema, PlatformRolesOwned: cfg.PlatformRolesOwned, UsersOwned: cfg.UsersOwned}
+}
+
+// fenceReason is the closed token the restore-fence check logs: never the error text.
+func fenceReason(err error) string {
+	if errors.Is(err, restorefence.ErrNotFenced) {
+		return "timeline_not_fenced"
+	}
+	return "fence_state_unreadable"
+}

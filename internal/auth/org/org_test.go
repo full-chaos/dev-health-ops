@@ -10,6 +10,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestCreateRefusesBadSlugBeforeAnyWrite(t *testing.T) {
@@ -99,13 +101,16 @@ func TestRepeatedSuspendIsNoopWithoutEventOrRevisionBump(t *testing.T) {
 
 func TestMetricLabelsAreClosedSetsWithoutIDs(t *testing.T) {
 	closed := map[string]bool{"ok": true, "noop": true, "not_found": true, "slug_taken": true, "conflict": true,
-		"invalid": true, "suspended": true, "error": true}
+		"invalid": true, "suspended": true, "denied": true, "error": true}
 	for _, err := range []error{nil, audit.ErrNoStateChange, ErrNotFound, ErrSlugTaken, ErrRevisionConflict,
-		ErrSlugInvalid, ErrNameInvalid, ErrSuspended, ErrStore, errors.New("uuid " + uuid.NewString())} {
+		ErrSlugInvalid, ErrNameInvalid, ErrSuspended, ErrDenied, ErrStore, errors.New("uuid " + uuid.NewString())} {
 		got := outcomeLabel(err)
 		if !closed[got] {
 			t.Errorf("outcomeLabel(%v) = %q, outside the closed set", err, got)
 		}
+	}
+	if outcomeLabel(ErrDenied) != "denied" {
+		t.Error("outcomeLabel(ErrDenied) must be denied")
 	}
 	if outcomeLabel(nil) != "ok" || outcomeLabel(ErrSlugTaken) != "slug_taken" || outcomeLabel(errors.New("x")) != "error" {
 		t.Error("outcomeLabel mapping is wrong")
@@ -143,6 +148,7 @@ func TestAuditRowsPassTheClosedAttributeRules(t *testing.T) {
 	actor := uuid.New()
 	for _, v := range []verb{verbCreate, verbRename, verbSuspend, verbReactivate} {
 		a := auditFor(v, id, Actor{PrincipalID: &actor}, StatusActive, StatusSuspended)
+		auditwire.MustValidate(t, a)
 		if err := audit.ValidateAttributes(a.Attributes); err != nil {
 			t.Errorf("%s: %v", v, err)
 		}
@@ -162,5 +168,185 @@ func TestStaleIfRevisionIsRefusedAndWritesNothing(t *testing.T) {
 	}
 	if err := checkRevision(3, nil); err != nil {
 		t.Fatalf("absent = %v", err)
+	}
+}
+
+func allowAll(context.Context, audit.TxOps, uuid.UUID) error { return nil }
+
+// A nil Authorize refuses before the commit is built: no row is read and no
+// write is planned.
+func TestReactivateAuthorizedWithoutAuthorizeIsDeniedBeforeAnyCommit(t *testing.T) {
+	committed := false
+	s := newTestStore(func(context.Context, audit.Mutation) error { committed = true; return nil })
+	changed, err := s.ReactivateAuthorized(context.Background(), uuid.New(), nil, Actor{}, nil)
+	if !errors.Is(err, ErrDenied) || changed || committed {
+		t.Fatalf("nil Authorize: changed=%v err=%v committed=%v, want denied and no commit", changed, err, committed)
+	}
+}
+
+func TestReactivateAuthorizedReportsChangedAndNoop(t *testing.T) {
+	for name, tc := range map[string]struct {
+		commitErr error
+		changed   bool
+	}{"a change": {nil, true}, "an already active org": {audit.ErrNoStateChange, false}} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return tc.commitErr })
+		changed, err := s.ReactivateAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if err != nil || changed != tc.changed {
+			t.Fatalf("%s: changed=%v err=%v, want changed=%v and no error", name, changed, err, tc.changed)
+		}
+	}
+}
+
+func TestReactivateAuthorizedAnswersDenialAndMissingOrgAsTheyAre(t *testing.T) {
+	for _, want := range []error{ErrDenied, ErrNotFound, ErrRevisionConflict} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return want })
+		_, err := s.ReactivateAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if !errors.Is(err, want) || errors.Is(err, ErrStore) {
+			t.Fatalf("commit error %v came back as %v", want, err)
+		}
+	}
+	s := newTestStore(func(context.Context, audit.Mutation) error { return errors.New("down") })
+	if _, err := s.ReactivateAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); !errors.Is(err, ErrStore) {
+		t.Fatalf("an unknown commit error = %v, want ErrStore", err)
+	}
+}
+
+// The mutation is the one Reactivate plans: the same audit row and event, with
+// the actor on the audit row.
+func TestReactivateAuthorizedPlansTheReactivateAuditAndEvent(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	org, actor := uuid.New(), uuid.New()
+	if _, err := s.ReactivateAuthorized(context.Background(), org, nil, Actor{PrincipalID: &actor}, allowAll); err != nil {
+		t.Fatal(err)
+	}
+	if got.Audit.EventType != "auth.organization.reactivated" || got.Audit.ActorPrincipalID == nil || *got.Audit.ActorPrincipalID != actor.String() ||
+		got.Audit.Attributes["reason_code"] != "organization_updated" || got.Audit.Attributes["previous_status"] != "suspended" ||
+		got.Audit.Attributes["new_status"] != "active" {
+		t.Fatalf("audit = %+v", got.Audit)
+	}
+	if len(got.Events) != 1 || got.Events[0].EventType != "organization.reactivated" || got.Events[0].Change["status"] != "active" {
+		t.Fatalf("events = %+v", got.Events)
+	}
+}
+
+// A nil Authorize refuses before the commit is built: no row is read and no write is planned.
+func TestSuspendAuthorizedWithoutAuthorizeIsDeniedBeforeAnyCommit(t *testing.T) {
+	committed := false
+	s := newTestStore(func(context.Context, audit.Mutation) error { committed = true; return nil })
+	changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, nil)
+	if !errors.Is(err, ErrDenied) || changed || committed {
+		t.Fatalf("nil Authorize: changed=%v err=%v committed=%v, want denied and no commit", changed, err, committed)
+	}
+}
+
+func TestSuspendAuthorizedReportsChangedAndNoop(t *testing.T) {
+	for name, tc := range map[string]struct {
+		commitErr error
+		changed   bool
+	}{"a change": {nil, true}, "an already suspended org": {audit.ErrNoStateChange, false}} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return tc.commitErr })
+		changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if err != nil || changed != tc.changed {
+			t.Fatalf("%s: changed=%v err=%v, want changed=%v and no error", name, changed, err, tc.changed)
+		}
+	}
+}
+
+func TestSuspendAuthorizedAnswersDenialAndMissingOrgAsTheyAre(t *testing.T) {
+	for _, want := range []error{ErrDenied, ErrNotFound, ErrRevisionConflict} {
+		s := newTestStore(func(context.Context, audit.Mutation) error { return want })
+		_, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+		if !errors.Is(err, want) || errors.Is(err, ErrStore) {
+			t.Fatalf("commit error %v came back as %v", want, err)
+		}
+	}
+	s := newTestStore(func(context.Context, audit.Mutation) error { return errors.New("down") })
+	if _, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); !errors.Is(err, ErrStore) {
+		t.Fatalf("an unknown commit error = %v, want ErrStore", err)
+	}
+}
+
+// The mutation is the one Suspend plans: the same audit row and event, with the actor on the audit row.
+func TestSuspendAuthorizedPlansTheSuspendAuditAndEvent(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	org, actor := uuid.New(), uuid.New()
+	if _, err := s.SuspendAuthorized(context.Background(), org, nil, Actor{PrincipalID: &actor}, allowAll); err != nil {
+		t.Fatal(err)
+	}
+	if got.Audit.EventType != "auth.organization.suspended" || got.Audit.ActorPrincipalID == nil || *got.Audit.ActorPrincipalID != actor.String() ||
+		got.Audit.Attributes["reason_code"] != "organization_updated" || got.Audit.Attributes["previous_status"] != "active" ||
+		got.Audit.Attributes["new_status"] != "suspended" {
+		t.Fatalf("audit = %+v", got.Audit)
+	}
+	if len(got.Events) != 1 || got.Events[0].EventType != "organization.suspended" || got.Events[0].Change["status"] != "suspended" {
+		t.Fatalf("events = %+v", got.Events)
+	}
+}
+
+// A suspend that finds a session busy runs again, a bounded number of times, then answers ErrStore.
+func TestSuspendRetriesBusySessionsThenAnswersErrStore(t *testing.T) {
+	attempts := 0
+	s := newTestStore(func(context.Context, audit.Mutation) error { attempts++; return errSessionsBusy })
+	changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll)
+	if !errors.Is(err, ErrStore) || changed || attempts != session.BusyAttempts {
+		t.Fatalf("changed=%v err=%v attempts=%d, want ErrStore after %d attempts", changed, err, attempts, session.BusyAttempts)
+	}
+	attempts = 0
+	s = newTestStore(func(context.Context, audit.Mutation) error {
+		attempts++
+		if attempts < session.BusyAttempts {
+			return errSessionsBusy
+		}
+		return nil
+	})
+	if changed, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); err != nil || !changed || attempts != session.BusyAttempts {
+		t.Fatalf("changed=%v err=%v attempts=%d, want the last attempt to win", changed, err, attempts)
+	}
+}
+
+func TestABusySuspendIsADomainRefusalOfItsCommit(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	if _, err := s.SuspendAuthorized(context.Background(), uuid.New(), nil, Actor{}, allowAll); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Refusals) != 1 || !errors.Is(got.Refusals[0], errSessionsBusy) {
+		t.Fatalf("refusals %v", got.Refusals)
+	}
+}
+
+// A nil Authorize or a bad name refuses before the commit is built.
+func TestRenameAuthorizedRefusesBeforeAnyCommit(t *testing.T) {
+	committed := false
+	s := newTestStore(func(context.Context, audit.Mutation) error { committed = true; return nil })
+	if changed, err := s.RenameAuthorized(context.Background(), uuid.New(), "Name", nil, Actor{}, nil); !errors.Is(err, ErrDenied) || changed {
+		t.Fatalf("nil Authorize: changed=%v err=%v, want denied", changed, err)
+	}
+	for _, name := range []string{"   ", strings.Repeat("x", 101)} {
+		if _, err := s.RenameAuthorized(context.Background(), uuid.New(), name, nil, Actor{}, allowAll); !errors.Is(err, ErrNameInvalid) {
+			t.Fatalf("name %q: err=%v, want ErrNameInvalid", name, err)
+		}
+	}
+	if committed {
+		t.Fatal("a refused rename reached the commit")
+	}
+}
+
+// The mutation is the one Rename plans: the renamed audit row with the actor, and organization.updated with no name.
+func TestRenameAuthorizedPlansTheRenameAuditAndEvent(t *testing.T) {
+	var got audit.Mutation
+	s := newTestStore(func(_ context.Context, m audit.Mutation) error { got = m; return nil })
+	actor := uuid.New()
+	changed, err := s.RenameAuthorized(context.Background(), uuid.New(), "New", nil, Actor{PrincipalID: &actor}, allowAll)
+	if err != nil || !changed {
+		t.Fatalf("rename: changed=%v err=%v", changed, err)
+	}
+	if got.Audit.EventType != "auth.organization.renamed" || got.Audit.ActorPrincipalID == nil || *got.Audit.ActorPrincipalID != actor.String() {
+		t.Fatalf("audit = %+v", got.Audit)
+	}
+	if len(got.Events) != 1 || got.Events[0].EventType != "organization.updated" || len(got.Events[0].Change) != 0 {
+		t.Fatalf("events = %+v", got.Events)
 	}
 }

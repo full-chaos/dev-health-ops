@@ -20,25 +20,25 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-// ssoRoutes mounts the federated sign-in routes with just-in-time
-// provisioning off: no MembershipJIT is set on either service, so a sign-in
-// that resolves no account is refused and writes nothing. A protocol whose
-// settings are incomplete mounts no route.
+// ssoRoutes mounts the federated sign-in routes. With AUTH_SSO_JIT off no
+// MembershipJIT is set on either service, so a sign-in that resolves no account
+// is refused and writes nothing. A protocol whose settings are incomplete
+// mounts no route.
 func ssoRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	identities *identity.Store, deps authapi.CompatDeps,
+	identities *identity.Store, deps authapi.CompatDeps, jit oidcSeam,
 ) ([]httpapi.Route, error) {
 	if !cfg.SSO.OIDCEnabled() && !cfg.SSO.SAMLEnabled() {
 		logger.Info("federated sign-in routes are not mounted: their settings are incomplete")
 		return nil, nil
 	}
-	sessions, err := authapi.NewSSOSessions(deps)
+	sessions, err := authapi.NewSSOSessions(deps, signInRecord(pool))
 	if err != nil {
 		return nil, err
 	}
 	var routes []httpapi.Route
 	if cfg.SSO.OIDCEnabled() {
-		service, err := oidcService(cfg, logger, pool, schema, identities, sessions)
+		service, err := oidcService(cfg, logger, pool, schema, identities, sessions, jit(sessions))
 		if err != nil {
 			return nil, err
 		}
@@ -73,7 +73,7 @@ func (d providerSecrets) Decrypt(stored string) (string, error) {
 
 func oidcService(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	identities *identity.Store, sessions authapi.SSOSessions,
+	identities *identity.Store, sessions authapi.SSOSessions, jit oidc.MembershipJIT,
 ) (*oidc.Service, error) {
 	flows, err := oidc.NewPGFlowStore(pool, schema)
 	if err != nil {
@@ -92,8 +92,8 @@ func oidcService(
 		Sessions:     sessions.OIDC(),
 		Secrets:      providerSecrets{cipher},
 		StateSecret:  contracts.NewSecretString(cfg.SSO.StateKey.Reveal()),
-		AppBaseURL:   cfg.SSO.AppBaseURL,
-		Logger:       logger,
+		AppBaseURL:   cfg.SSO.AppBaseURL, DenialAudit: oidc.PGDenialAudit{Exec: pool}, ProviderFailure: providerFailure(pool), SignInRecord: signInRecord(pool),
+		Logger: logger, MembershipJIT: jit,
 	})
 }
 
@@ -135,7 +135,7 @@ func samlService(
 		Store:        samlIdentities{identities},
 		Memberships:  store,
 		BaseURL:      func() string { return base },
-		Logger:       logger,
+		Logger:       logger, ProviderFailure: providerFailure(pool), JIT: samlJIT(cfg, logger, identities),
 	}, nil
 }
 

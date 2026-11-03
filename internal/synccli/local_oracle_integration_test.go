@@ -48,7 +48,13 @@ type fixture struct {
 
 func newFixture(t *testing.T, name string) *fixture {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), name)
+	return newFixtureIn(t, t.TempDir(), name)
+}
+
+// newFixtureIn is newFixture under root.
+func newFixtureIn(t *testing.T, root, name string) *fixture {
+	t.Helper()
+	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +68,7 @@ func newFixture(t *testing.T, name string) *fixture {
 
 func (f *fixture) run(env []string, stdin string, args ...string) string {
 	f.t.Helper()
-	command := exec.Command("git", args...)
+	command := exec.Command("git", append([]string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)...)
 	command.Dir = f.dir
 	command.Env = append(os.Environ(), env...)
 	if stdin != "" {

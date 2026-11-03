@@ -81,12 +81,25 @@ type ColumnGrant struct {
 	Privilege  string
 }
 
-// SessionReadGrant names the auth session columns query-api may read: USAGE on
-// Schema and column SELECT on Schema.Table(Columns).
+// SessionReadGrant names the auth columns query-api may read: USAGE on Schema
+// and column SELECT on each of Tables: the sessions table (Table, Columns),
+// then Also (the platform role read while auth-service owns the platform roles).
 type SessionReadGrant struct {
 	Schema  string
 	Table   string
 	Columns []string
+	Also    []SessionReadTable
+}
+
+// SessionReadTable is one auth table of a SessionReadGrant.
+type SessionReadTable struct {
+	Table   string
+	Columns []string
+}
+
+// Tables is the whole read: the sessions table, then Also.
+func (g SessionReadGrant) Tables() []SessionReadTable {
+	return append([]SessionReadTable{{Table: g.Table, Columns: g.Columns}}, g.Also...)
 }
 
 type MigrationOptions struct {
@@ -156,6 +169,10 @@ type MigrationOptions struct {
 	// skipped (resolveQueryAPISessionRead) and the query-api readiness check stays
 	// not-ready until a later run grants it.
 	QueryAPISessionRead *SessionReadGrant
+	// AuthSchema is the auth migrator's schema (AUTH_DATABASE_SCHEMA, default "auth"). When the migration login is
+	// neither a superuser nor the owner of that schema it cannot grant or revoke there: the query-api leg then leaves
+	// the session read to auth-grants (sessionReaders) and revokes nothing in that schema (resolveAuthLeg).
+	AuthSchema string
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -194,6 +211,9 @@ type MigrationOptions struct {
 	// moves nothing.
 	RiverSyncDispatchRoutes []string
 	Logger                  *slog.Logger
+
+	// revokeSkipSchema is set by resolveAuthLeg: the query-api role's grants in it are not revoked.
+	revokeSkipSchema string
 }
 
 // postureManifestAppliedTable mirrors postgres.PostureManifestAppliedTable's
@@ -356,6 +376,18 @@ func ApplyPinnedMigrations(
 		)
 		if err != nil {
 			return MigrationResult{}, err
+		}
+	}
+
+	if options.QueryAPIRole != "" {
+		var canGrantAuth bool
+		if err := lockConnection.QueryRow(ctx, authGrantableSQL, options.authSchema()).Scan(&canGrantAuth); err != nil {
+			return MigrationResult{}, migrationStageError("read the auth schema owner")
+		}
+		var skipped bool
+		if options, skipped = resolveAuthLeg(options, canGrantAuth); skipped && options.Logger != nil {
+			options.Logger.WarnContext(ctx, "the migration login cannot grant in the auth schema; query-api's session read is left to auth-grants",
+				"class", "auth_schema_not_grantable", "query_api_role", options.QueryAPIRole, "auth_schema", options.authSchema())
 		}
 	}
 
@@ -655,7 +687,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		}
 		seenSyncRoutes[kind] = struct{}{}
 	}
-	if options.DomainRole == options.QueueRole {
+	if options.DomainRole == options.QueueRole || (options.AuthSchema != "" && !validIdentifier(options.AuthSchema)) {
 		return ErrMigrationConfiguration
 	}
 	if err := validateCoordinatorOptions(options); err != nil {
@@ -690,12 +722,17 @@ func validateQueryAPIOptions(options MigrationOptions) error {
 		return ErrMigrationConfiguration
 	}
 	if read := options.QueryAPISessionRead; read != nil {
-		if !validIdentifier(read.Schema) || !validIdentifier(read.Table) || len(read.Columns) == 0 {
+		if !validIdentifier(read.Schema) {
 			return ErrMigrationConfiguration
 		}
-		for _, column := range read.Columns {
-			if !validIdentifier(column) {
+		for _, table := range read.Tables() {
+			if !validIdentifier(table.Table) || len(table.Columns) == 0 {
 				return ErrMigrationConfiguration
+			}
+			for _, column := range table.Columns {
+				if !validIdentifier(column) {
+					return ErrMigrationConfiguration
+				}
 			}
 		}
 	}
@@ -908,14 +945,47 @@ func resolveQueryAPISessionRead(options MigrationOptions, tablePresent bool) (Mi
 	return options, true
 }
 
+// authGrantableSQL is true when the login is a superuser or owns the auth schema ($1).
+const authGrantableSQL = `SELECT rolsuper OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1 AND nspowner = r.oid)
+FROM pg_catalog.pg_roles r WHERE r.rolname = current_user`
+
+func (options MigrationOptions) authSchema() string {
+	if options.AuthSchema != "" {
+		return options.AuthSchema
+	}
+	if options.QueryAPISessionRead != nil && options.QueryAPISessionRead.Schema != "" {
+		return options.QueryAPISessionRead.Schema
+	}
+	return "auth"
+}
+
+// resolveAuthLeg drops the query-api session read and marks the auth schema out of the role's revokes when the
+// migration login cannot grant there (a NOSUPERUSER login that does not own the auth schema). It reports whether a
+// session read was dropped.
+func resolveAuthLeg(options MigrationOptions, canGrantAuth bool) (MigrationOptions, bool) {
+	if canGrantAuth || options.QueryAPIRole == "" {
+		return options, false
+	}
+	options.revokeSkipSchema = options.authSchema()
+	if options.QueryAPISessionRead == nil {
+		return options, false
+	}
+	options.QueryAPISessionRead = nil
+	return options, true
+}
+
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
 	if err := aclguard.Lock(ctx, tx); err != nil {
 		return fmt.Errorf("take the privilege writer lock")
 	}
 	if read := options.QueryAPISessionRead; read != nil && options.QueryAPIRole != "" {
-		var present bool
-		if err := tx.QueryRow(ctx, "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL", read.Schema, read.Table).Scan(&present); err != nil {
-			return fmt.Errorf("read whether the auth sessions table exists")
+		present := true
+		for _, table := range read.Tables() {
+			var exists bool
+			if err := tx.QueryRow(ctx, "SELECT to_regclass(format('%I.%I', $1::text, $2::text)) IS NOT NULL", read.Schema, table.Table).Scan(&exists); err != nil {
+				return fmt.Errorf("read whether the auth sessions table exists")
+			}
+			present = present && exists
 		}
 		var skipped bool
 		if options, skipped = resolveQueryAPISessionRead(options, present); skipped && options.Logger != nil {
@@ -930,7 +1000,7 @@ func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions
 		// then grant exactly the manifest below: its posture is a function of this
 		// migration alone. PUBLIC's grants are not the role's to lose and stay for
 		// the check to name.
-		revokes, err := roleacl.RevokeStatements(ctx, tx, options.QueryAPIRole)
+		revokes, err := roleacl.RevokeStatementsOutside(ctx, tx, options.QueryAPIRole, options.revokeSkipSchema)
 		if err != nil {
 			return fmt.Errorf("enumerate the query-api role's grants")
 		}
@@ -962,13 +1032,15 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		"DO $$ BEGIN IF to_regclass('public.integrations') IS NOT NULL THEN GRANT SELECT ON TABLE public.integrations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_sources') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_sources TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.integration_datasets') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.integration_datasets TO " + domainRole + "; END IF; END $$",
-		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; GRANT UPDATE (is_active, updated_at) ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
+		"DO $$ BEGIN IF to_regclass('public.integration_credentials') IS NOT NULL THEN GRANT SELECT ON TABLE public.integration_credentials TO " + domainRole + "; GRANT UPDATE (is_active, updated_at, last_test_at, last_test_success, last_test_error) ON TABLE public.integration_credentials TO " + domainRole + "; END IF; END $$",
 		// CHAOS-6695: the webhook worker's installation routing read and
 		// installation upsert, and its scoped-sync request row. Each flag list
 		// is exactly what domainPosture() declares.
 		"DO $$ BEGIN IF to_regclass('public.github_app_installations') IS NOT NULL THEN GRANT SELECT, INSERT, UPDATE ON TABLE public.github_app_installations TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.webhook_sync_requests') IS NOT NULL THEN GRANT SELECT, INSERT ON TABLE public.webhook_sync_requests TO " + domainRole + "; END IF; END $$",
 		"DO $$ BEGIN IF to_regclass('public.provider_oauth_credentials') IS NOT NULL THEN GRANT SELECT, UPDATE ON TABLE public.provider_oauth_credentials TO " + domainRole + "; END IF; END $$",
+		// CHAOS-12010: the revocation worker's claim, delete and attempt update; no INSERT.
+		"DO $$ BEGIN IF to_regclass('public.provider_oauth_revocations') IS NOT NULL THEN GRANT SELECT, UPDATE, DELETE ON TABLE public.provider_oauth_revocations TO " + domainRole + "; END IF; END $$",
 		// worker_job_routes, scheduled_sync_occurrences, and
 		// fixed_schedule_occurrences are coordinator-exclusive under the
 		// Option B two-role split (role-partition manifest, removed in
@@ -1198,14 +1270,15 @@ func queryAPIGrantStatements(options MigrationOptions) []string {
 		)
 	}
 	if read := options.QueryAPISessionRead; read != nil {
-		columns := make([]string, len(read.Columns))
-		for i, column := range read.Columns {
-			columns[i] = pgx.Identifier{column}.Sanitize()
+		statements = append(statements, "GRANT USAGE ON SCHEMA "+pgx.Identifier{read.Schema}.Sanitize()+" TO "+role)
+		for _, table := range read.Tables() {
+			columns := make([]string, len(table.Columns))
+			for i, column := range table.Columns {
+				columns[i] = pgx.Identifier{column}.Sanitize()
+			}
+			statements = append(statements,
+				"GRANT SELECT ("+strings.Join(columns, ", ")+") ON TABLE "+pgx.Identifier{read.Schema, table.Table}.Sanitize()+" TO "+role)
 		}
-		statements = append(statements,
-			"GRANT USAGE ON SCHEMA "+pgx.Identifier{read.Schema}.Sanitize()+" TO "+role,
-			"GRANT SELECT ("+strings.Join(columns, ", ")+") ON TABLE "+pgx.Identifier{read.Schema, read.Table}.Sanitize()+" TO "+role,
-		)
 	}
 	return statements
 }

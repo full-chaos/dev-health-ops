@@ -38,47 +38,61 @@ func downgradeFixture(t *testing.T) (Baseline, []ChainFile, []DownFile, DownRang
 
 // Every chain revision has down SQL, one file each and named alike: a revision added
 // to sql/ without its sql/down file fails here, so the ported range cannot silently
-// stop short of the head.
+// stop short of the head. The archived chain keeps the same pairing.
 func TestDownChainCoversEveryChainRevision(t *testing.T) {
-	_, chain, down, r, _ := downgradeFixture(t)
-	if len(chain) == 0 {
-		t.Fatal("the chain is empty: the check measures nothing")
-	}
-	if len(down) != len(chain) {
-		t.Fatalf("%d down files for %d chain files", len(down), len(chain))
-	}
-	for index, file := range chain {
-		if down[index].Name != file.Name {
-			t.Errorf("sql/down/%s does not pair with sql/%s", down[index].Name, file.Name)
+	baseline, chain, down, r, _ := downgradeFixture(t)
+	pairs := func(where string, chain []ChainFile, down []DownFile) {
+		if len(down) != len(chain) {
+			t.Fatalf("%s: %d down files for %d chain files", where, len(down), len(chain))
 		}
-		if strings.TrimSpace(down[index].SQL) == "" || !regexp.MustCompile(`(?im)^\s*(CREATE|DROP|ALTER|UPDATE|DELETE)\b`).MatchString(down[index].SQL) {
-			t.Errorf("sql/down/%s holds no statement", down[index].Name)
+		for index, file := range chain {
+			if down[index].Name != file.Name {
+				t.Errorf("%s: down/%s does not pair with %s", where, down[index].Name, file.Name)
+			}
+			if strings.TrimSpace(down[index].SQL) == "" || !regexp.MustCompile(`(?im)^\s*(CREATE|DROP|ALTER|UPDATE|DELETE)\b`).MatchString(down[index].SQL) {
+				t.Errorf("%s: down/%s holds no statement", where, down[index].Name)
+			}
 		}
 	}
-	if len(r.Covered) != len(chain) || r.Floor != "0138" || r.Covered[0] != "0139" {
-		t.Errorf("range %+v, want floor 0138 and every chain revision from 0139", r)
+	pairs("sql", chain, down)
+	archived := archivedChainFiles(t)
+	if len(archived) == 0 {
+		t.Fatal("the archive is empty: the check measures nothing")
+	}
+	pairs("archive/sql", archived, archivedDownFiles(t))
+	if len(r.Covered) != len(chain) || r.Floor != applicationHead(baseline) {
+		t.Errorf("range %+v, want floor %s and every chain revision above it", r, applicationHead(baseline))
 	}
 }
 
 func TestDownRevision0152DropsTheCheckedAtColumn(t *testing.T) {
-	_, chain, down, _, _ := downgradeFixture(t)
-	for index, file := range chain {
+	down := archivedDownFiles(t)
+	for index, file := range archivedChainFiles(t) {
 		if file.Revision != "0152" {
 			continue
 		}
 		if !regexp.MustCompile(`(?i)ALTER TABLE daily_metrics_runs DROP COLUMN touched_checked_at;`).MatchString(down[index].SQL) {
-			t.Fatalf("sql/down/%s does not drop daily_metrics_runs.touched_checked_at:\n%s", down[index].Name, down[index].SQL)
+			t.Fatalf("archive/sql/down/%s does not drop daily_metrics_runs.touched_checked_at:\n%s", down[index].Name, down[index].SQL)
 		}
 		return
 	}
-	t.Fatal("the chain holds no revision 0152")
+	t.Fatal("the archive holds no revision 0152")
 }
 
 // PlanDowngrade and ParseDowngradeTarget enumerate every cell: each refusal code and
 // each accepted shape is pinned with its exact steps.
 func TestPlanDowngradeCells(t *testing.T) {
-	UseFrozenChain(t) // the cells below are the frozen prefix: their literals name 0152 as the top
-	_, _, _, r, known := downgradeFixture(t)
+	// The cells run on the range the build had at FrozenHead (floor 0138, covered 0139..0152): PlanDowngrade and
+	// ParseDowngradeTarget are pure, and their literals name 0152 as the top.
+	entries, err := LoadHistory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := DownRange{Floor: "0138"}
+	for _, file := range ChainThrough(archivedChainFiles(t), FrozenHead) {
+		r.Covered = append(r.Covered, file.Revision)
+	}
+	known := KnownRevisions(entries, Baseline{Heads: []string{cutoverRevision, "0138"}}, nil)
 	top := r.Covered[len(r.Covered)-1]
 	steps := func(from, to string) []DownStep {
 		order := append([]string{r.Floor}, r.Covered...)

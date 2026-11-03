@@ -9,7 +9,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/api/registerorg"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // ErrInvalidPasswordHash reports a password verifier that is not a bcrypt
@@ -27,9 +31,8 @@ type LocalProvisionRequest struct {
 	FullName     *string
 	PasswordHash *string
 	Actor        Actor
-	// Organization, when set, adds a new public organization named so and the
-	// user's owner membership in the same transaction (go-api's register does
-	// the same). Only new rows are written.
+	// Organization, when set, adds a new organization named so and the user's
+	// owner membership, in both schemas, in the same transaction.
 	Organization *NewOrganization
 }
 
@@ -41,15 +44,15 @@ type NewOrganization struct{ Name string }
 // and is available only after the users cutover (ErrSignupNotAvailable
 // before). An email another principal holds is ErrEmailTaken. The email is
 // stored as its login key (NormalizeEmail), as the go-api register route
-// stores it. With req.Organization the public organization and the owner
-// membership are written in the same transaction, so an email collision leaves
-// neither.
+// stores it. With req.Organization the organization and the owner membership
+// of both schemas are written in the same transaction, so an email collision
+// leaves neither. A slug collision is ErrOrganizationSlugCollision.
 func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (_ uuid.UUID, err error) {
 	defer func() { s.countLink(ctx, "provision", err) }()
 	if !s.ownsUsers {
 		return uuid.Nil, ErrSignupNotAvailable
 	}
-	email, err := NormalizeEmail(req.Email)
+	email, err := NormalizeLocalRegisterEmail(req.Email)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -63,6 +66,23 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 	}
 	principal := uuid.New()
 	subject := principal.String()
+	events := []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")}
+	var birth *organizationBirth
+	var birthAudits []audit.AuditEvent
+	if req.Organization != nil {
+		slug, err := s.freeOrganizationSlug(ctx, registerorg.Slug(req.Organization.Name, principal))
+		if errors.Is(err, ErrOrganizationSlugCollision) {
+			return uuid.Nil, err
+		}
+		if err != nil {
+			return uuid.Nil, s.storeErr(ctx, "read the organization slug", err)
+		}
+		b := newOrganizationBirth(slug, req.Organization.Name, &principal)
+		birth = &b
+		var birthEvents []audit.OutboxEvent
+		birthAudits, birthEvents = s.birthRecords(ctx, b, provisionAudit(subject, req.Actor, true).ActorPrincipalID, req.Actor.RequestID, audit.Caller{})
+		events = append(events, birthEvents...)
+	}
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			// The 0013 create guard counts these two rows as the state change.
@@ -80,18 +100,33 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 			if err := insertPublicUser(ctx, tx, publicUser{ID: principal, Email: email, PasswordHash: req.PasswordHash, FullName: req.FullName, AuthProvider: provider}); err != nil {
 				return err
 			}
-			if req.Organization == nil {
+			if birth == nil {
 				return nil
 			}
-			return insertPublicOwnedOrganization(ctx, tx, principal, req.Organization.Name)
+			if err := s.insertOrganizationBirth(ctx, tx, *birth); err != nil {
+				return err
+			}
+			// go-api's register row (internal/api/session register.go:167) names the organization this same commit
+			// gives birth to, after its row (audit_logs_org_id_fkey is not deferrable) (CHAOS-11400).
+			changes := pyjson.NewObject()
+			changes.Set("email", email)
+			changes.Set("organization_id", birth.ID.String())
+			encoded, err := publicaudit.Changes(changes)
+			if err != nil {
+				return err
+			}
+			return publicaudit.UserRow(ctx, tx, birth.ID, principal, "create", "User registered", encoded)
 		},
-		Audit:  localAudit("auth.principal.provisioned", "principal_provisioned", subject, req.Actor),
-		Events: []audit.OutboxEvent{principalEvent(subject, "principal.created", true), userEvent(subject, "user.created")},
+		Audit:  provisionAudit(subject, req.Actor, req.Organization != nil),
+		Also:   birthAudits,
+		Events: events,
 	})
 	switch {
 	case err == nil:
 	case isEmailCollision(err), isPublicEmailCollision(err):
 		return uuid.Nil, ErrEmailTaken
+	case errors.Is(err, ErrOrganizationSlugCollision):
+		return uuid.Nil, ErrOrganizationSlugCollision
 	default:
 		return uuid.Nil, s.storeErr(ctx, "provision local user", err)
 	}
@@ -102,10 +137,22 @@ VALUES ($1, $2, $2, $3, $4, CASE WHEN $3::text IS NULL THEN NULL ELSE clock_time
 // SetEmailVerified sets auth.users.email_verified_at (a guarded column) in one
 // audit.Commit (reason email_verified). Setting the value it already holds
 // writes nothing. Available only after the users cutover.
-func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor) (err error) {
+func (s *Store) SetEmailVerified(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor) error {
+	return s.SetEmailVerifiedWith(ctx, principal, at, actor, nil)
+}
+
+// SetEmailVerifiedWith is SetEmailVerified with end, when not nil, run in the
+// same transaction after the address is marked verified: an error from end
+// rolls the verification back with everything else, and the transaction always
+// holds a guarded write, so its one audit row is written.
+func (s *Store) SetEmailVerifiedWith(ctx context.Context, principal uuid.UUID, at time.Time, actor Actor, end func(context.Context, audit.TxOps) error) (err error) {
 	defer func() { s.countLink(ctx, "verify_email", err) }()
 	if !s.ownsUsers {
 		return ErrSignupNotAvailable
+	}
+	org, err := AuditOrganization(ctx, s.pool, s.q, principal)
+	if err != nil {
+		return s.storeErr(ctx, "read the membership of a verified user", err)
 	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
@@ -118,10 +165,17 @@ WHERE principal_id = $1 AND email_verified_at IS DISTINCT FROM $2`, principal, a
 			if err != nil {
 				return err
 			}
-			return updatePublicVerified(ctx, tx, principal)
+			if err := updatePublicVerified(ctx, tx, principal); err != nil {
+				return err
+			}
+			if end != nil {
+				return end(ctx, tx)
+			}
+			return nil
 		},
-		Audit:  withChangedFields(localAudit("auth.user.email_verified", "email_verified", subject, actor), "email_verified_at"),
-		Events: []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
+		Audit:    verifiedAudit(subject, actor, org),
+		Events:   []audit.OutboxEvent{userEvent(subject, "user.email_verified")},
+		Refusals: []error{ErrLinkUnusable},
 	})
 	return s.localErr(ctx, "set email verified", err)
 }
@@ -169,16 +223,27 @@ func (s *Store) SetPasswordHashFor(ctx context.Context, principal uuid.UUID, has
 	if !validBcrypt(hash) {
 		return 0, ErrInvalidPasswordHash
 	}
+	org, err := AuditOrganization(ctx, s.pool, s.q, principal)
+	if err != nil {
+		return 0, s.storeErr(ctx, "read the membership of a password writer", err)
+	}
 	subject := principal.String()
 	err = audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			if err := s.lockUser(ctx, tx, principal); err != nil {
 				return err
 			}
-			if _, err := tx.Exec(ctx, `UPDATE `+s.q+`.users
+			// The stamp ends every older session of the principal with no session row written (session.Store reads it as
+			// their revoke), so the same transaction tells the stream: one scope event whose revoked_before is the stamp.
+			// A session created between the stamp and this UPDATE is decided by the server's row, not by the event.
+			var stamp time.Time
+			if err := tx.QueryRow(ctx, `UPDATE `+s.q+`.users
 SET password_hash = $2, password_algorithm = $3, password_updated_at = clock_timestamp(),
     legacy_token_version = legacy_token_version + 1, updated_at = clock_timestamp()
-WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
+WHERE principal_id = $1 RETURNING password_updated_at`, principal, hash, passwordAlgorithm).Scan(&stamp); err != nil {
+				return err
+			}
+			if err := tx.AddEvent(sessionevent.Principal(principal.String(), sessionevent.ReasonPasswordChange, stamp)); err != nil {
 				return err
 			}
 			var err error
@@ -190,15 +255,25 @@ WHERE principal_id = $1`, principal, hash, passwordAlgorithm); err != nil {
 			}
 			return nil
 		},
-		Audit:  localAudit(cause.eventType, cause.reason, subject, actor),
-		Events: []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Audit:    passwordAudit(cause, subject, actor, org),
+		Events:   []audit.OutboxEvent{userEvent(subject, "user.credentials_changed")},
+		Refusals: []error{ErrLinkUnusable},
 	})
 	return version, s.localErr(ctx, "set password hash", err)
 }
 
 func (s *Store) lockUser(ctx context.Context, tx audit.TxOps, principal uuid.UUID) error {
+	// Lock order step 1 (principals) before any public.users row: a membership writer holds principals and then waits for public.users.
+	var key uuid.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM `+s.q+`.principals WHERE id = $1 FOR KEY SHARE`, principal).Scan(&key)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
 	var locked uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT principal_id FROM `+s.q+`.users WHERE principal_id = $1 FOR UPDATE`, principal).Scan(&locked)
+	err = tx.QueryRow(ctx, `SELECT principal_id FROM `+s.q+`.users WHERE principal_id = $1 FOR UPDATE`, principal).Scan(&locked)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrUserNotFound
 	}

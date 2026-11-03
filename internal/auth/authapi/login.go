@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/local"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // EventLoginSucceeded is a sign-in that started a session. It commits with
@@ -82,6 +83,11 @@ func (h compatHandlers) readLogin(w http.ResponseWriter, r *http.Request) (login
 // local.Service decides the credential check and calls Sessions.Create only
 // on success, so the choice is made there, with the principal known.
 type loginAttempt struct {
+	// email is the address as the request gave it, for go-api's login_failed row.
+	email string
+	// kind is the refused credential check's outcome, for go-api's login_failed row: Reason alone does not tell
+	// a user with no password from a wrong password.
+	kind       local.Kind
 	requested  *uuid.UUID
 	membership *Membership
 	user       UserState
@@ -120,7 +126,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 			requested = &parsed
 		}
 	}
-	attempt := &loginAttempt{requested: requested}
+	attempt := &loginAttempt{email: input.email, requested: requested}
 	ctx := context.WithValue(r.Context(), loginAttemptKey{}, attempt)
 	outcome, err := h.login.Login(ctx, local.Credentials{Email: input.email, Password: input.password, OrganizationID: requested})
 	var notMember *notMemberError
@@ -144,6 +150,7 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		h.loginUnverified(w, r, outcome, requested)
 		return
 	}
+	attempt.kind = outcome.Kind
 	if err := h.auditSignInFailed(ctx, outcome.PrincipalID, requested, string(outcome.Reason), providerLocal); err != nil {
 		h.fail(w, r, opCompatLogin, err)
 		return
@@ -170,7 +177,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 	if attempt.membership != nil {
 		org, role = &attempt.membership.OrgID, roleText(attempt.membership.Role, true)
 	}
-	access, err := h.Issuer.AccessContext(r.Context(), Grant{
+	tokens, err := h.Issuer.Tokens(r.Context(), Grant{
 		PrincipalID: outcome.PrincipalID, OrganizationID: org, Role: role, SessionID: issued.Session.ID, User: attempt.user,
 	})
 	if err != nil {
@@ -178,7 +185,7 @@ func (h compatHandlers) loginSucceeded(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	h.rec.record(r.Context(), opCompatLogin, "success", string(outcome.Reason), nil)
-	writeCompatModel(w, loginResponse(access, issued.Credential, attempt.membership == nil && !attempt.user.IsSuperuser,
+	writeCompatModel(w, loginResponse(tokens, h.Issuer.ExpiresIn(), issued.Credential, attempt.membership == nil && !attempt.user.IsSuperuser,
 		userInfo(outcome.PrincipalID, attempt.user, attempt.membership), nil))
 }
 
@@ -218,38 +225,54 @@ func (h compatHandlers) loginUnverified(w http.ResponseWriter, r *http.Request, 
 	writeCompatModel(w, out)
 }
 
-// auditOrganization is go-api's _resolve_login_audit_org_id: the requested
-// organization when it exists, else the user's first membership's, else
-// none. It is projected into the auth schema, which the audit row's
-// organization_id references.
-func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UUID, requested *uuid.UUID) (*uuid.UUID, error) {
-	if requested != nil {
-		// Projected even when the sign-in is refused: the audit row's
-		// organization must exist, and the projection mirrors go-api's own
-		// organization row, idempotently.
-		err := h.Projector.ProjectOrganization(ctx, *requested)
-		switch {
-		case err == nil:
-			return requested, nil
-		case !errors.Is(err, identity.ErrOrganizationNotFound):
-			return nil, err
-		}
-	}
+// auditOrganization is the organization of a refused sign-in's audit row:
+// the requested organization when the user is a member of it and it exists,
+// else the user's first membership's, else none. An unknown account names
+// none. The organization is projected into the auth schema, which the audit
+// row's organization_id references; a requested organization is projected
+// only after the membership check passes, so a refused request cannot copy an
+// organization it does not belong to into the auth schema.
+//
+// Only a known account reads its memberships and projects an organization, so
+// a failure of either must not change the refusal: the row is then written
+// with no organization and the failure is logged (refusalStepFailed), and the
+// answer stays the one an unknown address gets.
+func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UUID, requested *uuid.UUID) *uuid.UUID {
 	if principal == uuid.Nil {
-		return nil, nil
+		return nil
 	}
 	memberships, err := h.Users.Memberships(ctx, principal)
 	if err != nil {
-		return nil, err
+		h.refusalStepFailed(ctx, "memberships", err)
+		return nil
+	}
+	if requested != nil && chooseMembership(memberships, requested) != nil {
+		err := h.Projector.ProjectOrganization(ctx, *requested)
+		switch {
+		case err == nil:
+			return requested
+		case !errors.Is(err, identity.ErrOrganizationNotFound):
+			h.refusalStepFailed(ctx, "organization projection", err)
+			return nil
+		}
 	}
 	first := chooseMembership(memberships, nil)
 	if first == nil {
-		return nil, nil
+		return nil
 	}
 	if err := h.Projector.ProjectOrganization(ctx, first.OrgID); err != nil {
-		return nil, err
+		h.refusalStepFailed(ctx, "organization projection", err)
+		return nil
 	}
-	return &first.OrgID, nil
+	return &first.OrgID
+}
+
+// refusalStepFailed logs a failed step of a refused sign-in's audit that only a
+// known account takes. The line names the step and the error class only, never
+// the address or an organization.
+func (h compatHandlers) refusalStepFailed(ctx context.Context, step string, err error) {
+	h.rec.logger.ErrorContext(ctx, "sign-in refusal audit step failed; the refusal is audited without it",
+		"step", step, logging.ErrorAttr(err))
 }
 
 // auditSignInFailed is the one path every refused sign-in (password or
@@ -259,10 +282,7 @@ func (h compatHandlers) auditOrganization(ctx context.Context, principal uuid.UU
 // account whose go-api user can be projected, on purpose (go-api parity);
 // TestCompatLoginRefusalsTakeOneStepSequence pins the steps.
 func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UUID, requested *uuid.UUID, reason, provider string) error {
-	org, err := h.auditOrganization(ctx, principal, requested)
-	if err != nil {
-		return err
-	}
+	org := h.auditOrganization(ctx, principal, requested)
 	event := audit.AuditEvent{
 		EventType: audit.EventLoginFailed, Outcome: audit.OutcomeDenied, RequestID: requestid.Audit(ctx),
 		Attributes: map[string]any{"reason_code": reason},
@@ -284,7 +304,18 @@ func (h compatHandlers) auditSignInFailed(ctx context.Context, principal uuid.UU
 			text := principal.String()
 			event.SubjectPrincipalID = &text
 		case !errors.Is(err, identity.ErrUserNotFound):
-			return err
+			// The subject and the organization reference auth-schema rows that
+			// may not exist without this projection, so the row takes the shape
+			// of an unknown address's, with the principal id as an attribute,
+			// and the refusal answers as an unknown address's does.
+			h.refusalStepFailed(ctx, "principal projection", err)
+			event.OrganizationID = nil
+			event.Attributes["principal_id"] = principal.String()
+		}
+	}
+	if provider == providerLocal && h.AppendAuditWith != nil {
+		if public := loginFailedRow(ctx, principal, requested, reason); public != nil {
+			return h.AppendAuditWith(ctx, event, public)
 		}
 	}
 	return h.AppendAudit(ctx, event)
@@ -323,7 +354,7 @@ func (s loginSessions) Create(ctx context.Context, principalID uuid.UUID, _ *uui
 	if !found {
 		return session.Issued{}, errors.New("authapi: a login's user is gone")
 	}
-	issued, err := s.h.startSession(ctx, principalID, membership, attempt.requested, amr, providerLocal)
+	issued, err := s.h.startSession(ctx, principalID, membership, amr, providerLocal)
 	if err != nil {
 		return session.Issued{}, err
 	}
@@ -332,9 +363,10 @@ func (s loginSessions) Create(ctx context.Context, principalID uuid.UUID, _ *uui
 }
 
 // startSession creates a sign-in's session for membership's organization
-// with its auth.login.succeeded row. The row's organization is go-api's
-// successful-login audit org: the requested one, else the membership's.
-func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID, membership *Membership, requested *uuid.UUID,
+// with its auth.login.succeeded row, under the same organization. A user with
+// no membership gets a session and a row with no organization, whatever
+// organization the request names: it is not projected.
+func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID, membership *Membership,
 	amr []string, provider string) (session.Issued, error) {
 	var sessionOrg *uuid.UUID
 	if membership != nil {
@@ -343,16 +375,16 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 			return session.Issued{}, fmt.Errorf("authapi: projecting the session organization: %w", err)
 		}
 	}
-	auditOrg := sessionOrg
-	if auditOrg == nil && requested != nil {
-		err := h.Projector.ProjectOrganization(ctx, *requested)
-		switch {
-		case err == nil:
-			auditOrg = requested
-		case !errors.Is(err, identity.ErrOrganizationNotFound):
-			return session.Issued{}, err
-		}
+	event := loginSucceeded(ctx, principalID, sessionOrg, provider)
+	if provider == providerLocal {
+		// go-api's login row commits with the session and its auth.login.succeeded row.
+		ctx = session.WithPublicRow(ctx, compatLoginRow)
 	}
+	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
+}
+
+// loginSucceeded is the audit row of a session a sign-in started.
+func loginSucceeded(ctx context.Context, principalID uuid.UUID, org *uuid.UUID, provider string) audit.AuditEvent {
 	principal := principalID.String()
 	event := audit.AuditEvent{
 		EventType: EventLoginSucceeded, Outcome: audit.OutcomeAllowed,
@@ -362,11 +394,11 @@ func (h compatHandlers) startSession(ctx context.Context, principalID uuid.UUID,
 	if provider != "" {
 		event.Attributes["provider"] = provider
 	}
-	if auditOrg != nil {
-		text := auditOrg.String()
+	if org != nil {
+		text := org.String()
 		event.OrganizationID = &text
 	}
-	return h.Sessions.CreateAudited(session.WithSignIn(ctx), principalID, sessionOrg, amr, event)
+	return event
 }
 
 // userInfo is go-api's _to_user_info(user, membership).
@@ -396,16 +428,26 @@ func optionalText(value *string) pyjson.Value {
 
 // loginResponse is go-api's LoginResponse; isNewUser appends
 // SocialLoginResponse's is_new_user when non-nil.
-func loginResponse(access string, refresh contracts.SecretString, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
+func loginResponse(tokens Tokens, expiresIn int, refresh contracts.SecretString, needsOnboarding bool, user *pyjson.Object, isNewUser *bool) *pyjson.Object {
 	out := pyjson.NewObject()
-	out.Set("access_token", access)
+	out.Set("access_token", tokens.Access)
 	out.Set("refresh_token", refresh.Reveal())
 	out.Set("token_type", "bearer")
-	out.Set("expires_in", pyjson.IntOf(int64(AccessExpiresIn)))
+	out.Set("expires_in", pyjson.IntOf(int64(expiresIn)))
 	out.Set("needs_onboarding", needsOnboarding)
 	out.Set("user", user)
 	if isNewUser != nil {
 		out.Set("is_new_user", *isNewUser)
 	}
+	setSessionAccessToken(out, tokens)
 	return out
+}
+
+// setSessionAccessToken adds session_access_token to a go-api-wire answer
+// under the eddsa class, as the last member; an hs256_compat answer keeps
+// go-api's exact member list.
+func setSessionAccessToken(out *pyjson.Object, tokens Tokens) {
+	if tokens.Session != "" {
+		out.Set("session_access_token", tokens.Session)
+	}
 }

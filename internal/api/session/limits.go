@@ -15,11 +15,14 @@ import (
 // The session routes' @limiter.limit decorators (api/middleware/rate_limit.py
 // AUTH_LOGIN_IP_LIMIT, AUTH_REFRESH_LIMIT, AUTH_VALIDATE_LIMIT). Each runs
 // through httpapi.ValidateThenLimit: FastAPI validates the body before
-// slowapi counts the request, so a refused body costs nothing.
+// slowapi counts the request, so a refused body costs nothing. The validate
+// count is not Python's 30: it is the count shared with auth-service's
+// compatibility route (httpapi.ValidateLimitCount), sized for web's session
+// checks (python_divergence_test.go).
 var (
 	loginLimit    = httpapi.Limit{ID: "auth_login_ip", Count: 20, Window: 15 * time.Minute}
 	refreshLimit  = httpapi.Limit{ID: "auth_refresh", Count: 10, Window: 15 * time.Minute}
-	validateLimit = httpapi.Limit{ID: "auth_validate", Count: 30, Window: 15 * time.Minute}
+	validateLimit = httpapi.Limit{ID: "auth_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow}
 	// verify.py and password_reset.py's literal limits, keyed by
 	// get_auth_key; reset-password has none.
 	verifyLimit = httpapi.Limit{ID: "auth_verify", Count: 10, Window: time.Hour}

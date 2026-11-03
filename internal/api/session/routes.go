@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/api/ratelimit"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
@@ -37,7 +39,7 @@ func (h handlers) me(w http.ResponseWriter, r *http.Request) {
 		role := session.TargetRole
 		targetRole = &role
 	}
-	permissions := userPermissions(targetRole, user.IsSuperuser, user.Role)
+	permissions := userPermissions(targetRole, user)
 	list := make([]pyjson.Value, len(permissions))
 	for index, permission := range permissions {
 		list[index] = permission
@@ -150,7 +152,12 @@ func (h handlers) switchOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rows, err := tx.Query(ctx, `SELECT `+prefixed("u", userColumns)+`, m.org_id, m.role, m.joined_at, m.created_at
+	columns, err := h.userColumnsFor("u")
+	if err != nil {
+		h.fail(w, r, "load membership", err)
+		return
+	}
+	rows, err := tx.Query(ctx, `SELECT `+columns+`, m.org_id, m.role, m.joined_at, m.created_at
 FROM users u JOIN memberships m ON m.user_id = u.id JOIN organizations o ON m.org_id = o.id
 WHERE u.id = $1::uuid AND u.is_active IS true AND m.org_id = $2::uuid AND o.is_active IS true`, *userID, *orgID)
 	if err != nil {
@@ -184,7 +191,17 @@ WHERE u.id = $1::uuid AND u.is_active IS true AND m.org_id = $2::uuid AND o.is_a
 		refuse(w, http.StatusForbidden, "User is not a member of the selected organization")
 		return
 	}
-	pair, err := h.issueMembershipTokens(ctx, tx, r, user, membership)
+	// The switch supersedes the caller's own session (CHAOS-12085):
+	// auth-service revokes it in the transaction that creates the new one, so
+	// one browser login has one live session and a sign-out ends it. Other
+	// sessions of the user (other devices) are not touched.
+	pair, err := h.issueMembershipTokensSuperseding(ctx, tx, r, user, membership, caller.SessionID)
+	if errors.Is(err, sessionissue.ErrSessionEnded) {
+		h.Logger.WarnContext(ctx, "api switch-org refused: the caller's session ended before the switch",
+			slog.String("user_id", caller.UserID), slog.String("org_id", orgID.String()))
+		policy.WriteAuthFailure(w, "Invalid or expired token", nil)
+		return
+	}
 	if err != nil {
 		h.fail(w, r, "issue tokens", err)
 		return

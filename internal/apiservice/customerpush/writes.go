@@ -510,6 +510,9 @@ func (h *handlers) createToken(ctx context.Context, tx pgx.Tx, r *http.Request, 
 	if err := h.writeAudit(ctx, tx, entry); err != nil {
 		return nil, err
 	}
+	if err := h.lifecycle.created(ctx, tx, token); err != nil {
+		return nil, err
+	}
 	return tokenCreateResponse(token), nil
 }
 
@@ -607,14 +610,9 @@ func (h *handlers) rotateToken(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(ctx, `UPDATE external_ingest_tokens SET revoked_at = $2 WHERE id = $1`, old.ID, now); err != nil {
 			return nil, err
 		}
-		scopes, err := scopesValue(old.Scopes)
+		names, err := scopeNames(old.Scopes)
 		if err != nil {
 			return nil, err
-		}
-		list := scopes.([]pyjson.Value)
-		names := make([]string, len(list))
-		for index, scope := range list {
-			names[index] = scope.(string)
 		}
 		plaintext, err := generateToken()
 		if err != nil {
@@ -638,6 +636,9 @@ func (h *handlers) rotateToken(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		if err := h.writeAudit(ctx, tx, entry); err != nil {
+			return nil, err
+		}
+		if err := h.lifecycle.rotated(ctx, tx, old, token); err != nil {
 			return nil, err
 		}
 		response = tokenCreateResponse(token)
@@ -678,6 +679,9 @@ func (h *handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			if err := h.writeAudit(ctx, tx, entry); err != nil {
+				return nil, err
+			}
+			if err := h.lifecycle.revoked(ctx, tx, token); err != nil {
 				return nil, err
 			}
 		}

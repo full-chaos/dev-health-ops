@@ -10,19 +10,29 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/orgactivity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // UserState is the live public.users state an access token is minted from.
 type UserState struct {
-	Email        string
-	Username     *string
-	FullName     *string
-	IsActive     bool
-	IsSuperuser  bool
+	Email       string
+	Username    *string
+	FullName    *string
+	IsActive    bool
+	IsSuperuser bool
+	// Platform is the platform action set held when it is not the one
+	// IsSuperuser means; nil carries only the flag.
+	Platform     *rule.Platform
 	TokenVersion int64
 	AuthProvider *string
+}
+
+// Holds reports whether the user holds the platform action now.
+func (s UserState) Holds(action string) bool {
+	return rule.Holds(s.Platform, s.IsSuperuser, action)
 }
 
 // Users reads the go-api-owned user and membership rows. Until the users
@@ -51,7 +61,32 @@ type Membership struct {
 // is_superuser, token_version, auth_provider) and memberships (user_id, org_id, role,
 // joined_at, created_at), and nothing else (authschema.PublicReadColumns). The schema is named, so the role's search_path
 // does not decide which table is read.
-type PGUsers struct{ Pool *pgxpool.Pool }
+type PGUsers struct {
+	Pool *pgxpool.Pool
+	// AuthSchema is the validated auth schema, read while PlatformRolesOwned.
+	AuthSchema authschema.ValidatedIdentifier
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
+	// from the auth platform role assignments (rule.HoldsSQL).
+	PlatformRolesOwned bool
+	// UsersOwned is AUTH_USERS_OWNED: the runtime role then holds UPDATE on
+	// public.memberships (authschema.MembershipWriteGrants), which a row
+	// lock needs (MemberRoleLockedOn).
+	UsersOwned bool
+}
+
+// stateSQL is StateOn's statement: is_superuser is public users.is_superuser,
+// or while PlatformRolesOwned the platform role rule over the auth schema in
+// the same statement (a failure of it fails the read).
+func (p PGUsers) stateSQL() string {
+	superuser := `COALESCE(is_superuser, false)`
+	if p.PlatformRolesOwned {
+		superuser = rule.HoldsSQL(authschema.Quote(p.AuthSchema), "public.users.id", "'"+rule.PlatformAdmin+"'")
+	}
+	return `
+		SELECT email, username, full_name, COALESCE(is_active, false), ` + superuser + `,
+		       COALESCE(token_version, 0), auth_provider
+		FROM public.users WHERE id = $1`
+}
 
 // errMultipleRows is a lookup that must match at most one row matching more.
 var errMultipleRows = errors.New("authapi: more than one row where one or none was expected")
@@ -69,10 +104,7 @@ func (p PGUsers) State(ctx context.Context, userID uuid.UUID) (UserState, bool, 
 // StateOn is State on q: the caller's connection or transaction.
 func (p PGUsers) StateOn(ctx context.Context, q session.Queryer, userID uuid.UUID) (UserState, bool, error) {
 	var s UserState
-	err := q.QueryRow(ctx, `
-		SELECT email, username, full_name, COALESCE(is_active, false), COALESCE(is_superuser, false),
-		       COALESCE(token_version, 0), auth_provider
-		FROM public.users WHERE id = $1`, userID).
+	err := q.QueryRow(ctx, p.stateSQL(), userID).
 		Scan(&s.Email, &s.Username, &s.FullName, &s.IsActive, &s.IsSuperuser, &s.TokenVersion, &s.AuthProvider)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return UserState{}, false, nil
@@ -109,6 +141,22 @@ func (p PGUsers) Role(ctx context.Context, userID, orgID uuid.UUID) (*string, bo
 		return nil, false, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
 	}
 	return role, found, nil
+}
+
+// RoleOn is go-api's membershipRole (internal/apiservice/admin/guards.go,
+// ensureOrgAdminAccess) on q, the caller's connection or transaction: the
+// first matching row's role; found is false without one. A NULL role is
+// found with a nil role.
+func (p PGUsers) RoleOn(ctx context.Context, q session.Queryer, userID, orgID uuid.UUID) (*string, bool, error) {
+	var role *string
+	err := q.QueryRow(ctx, `SELECT role FROM public.memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`, userID, orgID).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: reading public.memberships: %w", errUsersStore, err)
+	}
+	return role, true, nil
 }
 
 // Memberships is go-api's orderedMemberships (internal/api/session/store.go).

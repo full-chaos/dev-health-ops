@@ -41,6 +41,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -76,6 +77,18 @@ const (
 	// iss and the discovery document names. Unset, the discovery route is not
 	// mounted (the JWKS route still is).
 	EnvTokenIssuerURL = "AUTH_TOKEN_ISSUER_URL"
+	// EnvOAuthResourceACRAPI and EnvOAuthResourceACRMCP are the RFC 8707 resource
+	// URIs of the two ACR audiences: absolute https URLs, compared byte for byte with
+	// a request's resource, never normalised. Unset leaves that audience unservable
+	// at request time, with no start refusal. A contract row cannot hold them: a row
+	// holds no environment value (acp, CHAOS-12251).
+	EnvOAuthResourceACRAPI = "AUTH_OAUTH_RESOURCE_ACR_API"
+	EnvOAuthResourceACRMCP = "AUTH_OAUTH_RESOURCE_ACR_MCP"
+	// EnvOAuthWebOrigin is web's https origin, no path. It resolves first-party
+	// redirect paths and the consent page URL. Unset is a no-redirect refusal at
+	// request time, with no start refusal. APP_BASE_URL cannot serve: it names
+	// go-api and carries IdP callbacks. AUTH_URL cannot: it is web's own env.
+	EnvOAuthWebOrigin = "AUTH_OAUTH_WEB_ORIGIN"
 	// EnvSigningKeyDirect is the PROHIBITED spelling. ACP-ADR-02 §4:
 	// "Direct-value secret env vars are prohibited for signing material."
 	// Load rejects it when present rather than ignoring it, because an
@@ -87,9 +100,14 @@ const (
 	EnvAccessTokenSecret   = "AUTH_JWT_SECRET_KEY"
 	EnvAccessTokenIssuer   = "AUTH_JWT_ISSUER"
 	EnvAccessTokenAudience = "AUTH_JWT_AUDIENCE"
+	// EnvLegacyJWTAudience is the audience of go-api's HS256 compatibility access token under the eddsa class.
+	EnvLegacyJWTAudience = "AUTH_LEGACY_JWT_AUDIENCE"
 	// EnvAccessTokenClass picks the one class of access token this service
 	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
+	// EnvAccessTokenLifetime is the eddsa access token's lifetime (exp - iat): whole minutes from 5 to 60, default 60
+	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting). Not used under hs256_compat.
+	EnvAccessTokenLifetime = "AUTH_ACCESS_TOKEN_LIFETIME"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
 	// ruling Q-B1-1). Secret: environment or _FILE only.
@@ -98,11 +116,19 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvRateLimitKey is the key the rate-limit counters digest identifiers
+	// with (HKDF input). Optional; unset, the limiter is keyed from
+	// EnvAccessTokenSecret. Secret: environment or _FILE only.
+	EnvRateLimitKey = "AUTH_RATE_LIMIT_KEY"
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
 	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
 	EnvOrgsOwned = "AUTH_ORGS_OWNED"
+	// EnvRevisionFeed is the revision feed switch (on or off, default off).
+	EnvRevisionFeed = "AUTH_REVISION_FEED"
+	// EnvPushProjection is the External Push projection switch (on or off, default off).
+	EnvPushProjection = "AUTH_PUSH_PROJECTION"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -210,6 +236,11 @@ type Config struct {
 
 	// TokenIssuerURL is EnvTokenIssuerURL, "" when unset.
 	TokenIssuerURL string
+	// OAuthResourceACRAPI, OAuthResourceACRMCP and OAuthWebOrigin are their
+	// settings, "" when unset.
+	OAuthResourceACRAPI string
+	OAuthResourceACRMCP string
+	OAuthWebOrigin      string
 
 	// Session holds the session routes' token settings. Session.Enabled is
 	// false when neither secret is set: the service then mounts no session
@@ -230,6 +261,19 @@ type Config struct {
 	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
 	// auth.organizations; the legacy login projection writes nothing.
 	OrgsOwned bool
+	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
+	RevisionFeed bool
+	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
+	// external_push_credential rows of the auth outbox and projects them). Mounts no route.
+	PushProjection bool
+
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
+	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
+	// the auth platform role assignments.
+	PlatformRolesOwned bool
+
+	// Provisioning mounts the internal membership and invite routes.
+	Provisioning Provisioning
 
 	// SSO holds the federated sign-in settings; a protocol without all of its
 	// values mounts no route.
@@ -237,6 +281,17 @@ type Config struct {
 
 	// WorkloadExchange is the workload-token exchange (off by default).
 	WorkloadExchange WorkloadExchange
+
+	// SessionIssueWorkloadSubject is the one workload principal (prn_) whose
+	// workload token the session issue route accepts; empty = off.
+	SessionIssueWorkloadSubject string
+	// AcrEventsWorkloadSubject is the one acr-api workload principal (prn_) whose
+	// token the acr events route accepts. Empty leaves the route unmounted.
+	AcrEventsWorkloadSubject string
+
+	// AuthorizeCallerSubjects are the workload principals (prn_) whose
+	// workload token the authorize routes accept; empty = none.
+	AuthorizeCallerSubjects []string
 
 	// EnvOnlySettings names the non-secret settings that were resolved from
 	// the environment although a canonical flag exists for them. A deployment
@@ -247,7 +302,7 @@ type Config struct {
 
 // Access token classes (EnvAccessTokenClass).
 const (
-	AccessClassHS256Compat = "hs256_compat"
+	AccessClassHS256Compat = "hs256_compat" // gitleaks:allow
 	AccessClassEdDSA       = "eddsa"
 )
 
@@ -260,7 +315,14 @@ type SessionTokens struct {
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
+	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime); go-api's 60 minutes under
+	// hs256_compat.
+	AccessLifetime time.Duration
+	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
+	LegacyAudience string
 	SuccessorKey   secrets.Value
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret.
+	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value
@@ -318,11 +380,17 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("api_routes_enabled", c.Session.Enabled),
 		slog.Bool("login_route_enabled", c.Session.LoginEnabled),
 		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
+		slog.Bool("membership_routes_enabled", c.Provisioning.Routes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
+		slog.String("access_lifetime", c.Session.AccessLifetime.String()),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
+		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
+		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
+		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
+		slog.Bool("acr_events_workload_enabled", c.AcrEventsWorkloadSubject != ""),
 	}
 }
 
@@ -396,13 +464,11 @@ func Load(spec Spec) (Config, error) {
 	); err != nil {
 		return Config{}, err
 	}
-	burst, err := integer(
-		lookup, EnvRateLimitBurst, int64(defaultRateLimitBurst), minRateLimitBurst, maxRateLimitBurst,
-	)
-	if err != nil {
+	if cfg.RateLimit.Burst, err = smallInteger(
+		lookup, EnvRateLimitBurst, defaultRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
+	); err != nil {
 		return Config{}, err
 	}
-	cfg.RateLimit.Burst = int(burst)
 	if cfg.Public.MaxInFlight, err = smallInteger(
 		lookup, EnvPublicMaxInFlight, defaultPublicMaxInFlight, minPublicMaxInFlight, maxPublicMaxInFlight,
 	); err != nil {
@@ -455,6 +521,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.SigningKeySetPath, cfg.SigningKeyPath, cfg.SigningKeyID, err = signingKey(lookup); err != nil {
 		return Config{}, err
 	}
+	if err := oauthSettings(lookup, &cfg); err != nil {
+		return Config{}, err
+	}
 	if cfg.TokenIssuerURL, err = tokenIssuerURL(lookup); err != nil {
 		return Config{}, err
 	}
@@ -474,9 +543,17 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, fmt.Errorf("%s=%s needs %s", EnvAccessTokenClass, AccessClassEdDSA, EnvTokenIssuerURL)
 		}
 		if _, ok := contracts.AccessTokenScope(cfg.Session.AccessAudience); !ok {
-			return Config{}, fmt.Errorf("%s=%s needs %s to name a user access token audience",
-				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience)
+			return Config{}, fmt.Errorf("%s=%s needs %s to name a session token audience (%s or %s)",
+				EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 		}
+	}
+	if cfg.Session.Enabled && cfg.Session.AccessClass == AccessClassEdDSA && cfg.Session.AccessAudience == contracts.SessionRouteAudience {
+		// Under eddsa the configured audience is the API token's, and the session routes' token of audience
+		// auth-service is minted beside it. An API token of audience auth-service would be refused at every go-api
+		// and query-api row.
+		return Config{}, fmt.Errorf("%s=%s with %s=%s: %s names the API token's audience (%s); the session-route token of audience %s is minted beside it",
+			EnvAccessTokenClass, AccessClassEdDSA, EnvAccessTokenAudience, cfg.Session.AccessAudience, EnvAccessTokenAudience,
+			contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
@@ -490,16 +567,64 @@ func Load(spec Spec) (Config, error) {
 	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
 		return Config{}, err
 	}
+	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.Provisioning, err = provisioning(lookup, cfg.Session.Enabled); err != nil {
+		return Config{}, err
+	}
 	if cfg.SSO, err = ssoSettings(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.WorkloadExchange, err = workloadExchange(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
+	if cfg.SessionIssueWorkloadSubject, err = sessionIssueWorkloadSubject(lookup, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.AuthorizeCallerSubjects, err = authorizeCallerSubjects(lookup, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.AcrEventsWorkloadSubject, err = workloadSubject(lookup, EnvAcrEventsWorkloadSubject, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
+		return Config{}, err
+	}
+	if cfg.PushProjection, err = pushProjection(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
 		return Config{}, err
 	}
+	if cfg.RevisionFeed && !cfg.ValkeyURI.Configured() {
+		return Config{}, fmt.Errorf("%s=on needs %s or %s_FILE: the revision feed has no store without it", EnvRevisionFeed, EnvValkeyURI, EnvValkeyURI)
+	}
 	return cfg, nil
+}
+
+// revisionFeed reads AUTH_REVISION_FEED: unset or empty is off; only on and off (any case) are values. The refusal does
+// not quote the value.
+func revisionFeed(lookup secrets.LookupEnv) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvRevisionFeed))) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be on or off", EnvRevisionFeed)
+}
+
+// pushProjection reads AUTH_PUSH_PROJECTION: unset or empty is off; only on and off (any case) are values. The refusal
+// does not quote the value.
+func pushProjection(lookup secrets.LookupEnv) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvPushProjection))) {
+	case "", "off":
+		return false, nil
+	case "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s must be on or off", EnvPushProjection)
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared
@@ -560,6 +685,21 @@ func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
 	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
 }
 
+// accessTokenLifetime reads EnvAccessTokenLifetime: unset is the access-token.v1 ceiling (60 minutes); a set value
+// is a Go duration of whole minutes from 5 to 60, written without surrounding whitespace.
+func accessTokenLifetime(lookup secrets.LookupEnv) (time.Duration, error) {
+	raw, set := lookup(EnvAccessTokenLifetime)
+	if !set {
+		return contracts.AccessTokenLifetimeCeiling, nil
+	}
+	lifetime, err := time.ParseDuration(raw)
+	if err != nil || raw != strings.TrimSpace(raw) || lifetime%time.Minute != 0 ||
+		lifetime < 5*time.Minute || lifetime > contracts.AccessTokenLifetimeCeiling {
+		return 0, fmt.Errorf("%s must be whole minutes from 5m to 60m", EnvAccessTokenLifetime)
+	}
+	return lifetime, nil
+}
+
 // sessionTokens resolves the session routes' settings. The two secrets come
 // together or not at all: a deployment with one of them meant to serve the
 // session routes, and silently serving none would hide that.
@@ -572,6 +712,29 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		AccessClass:    class,
 		AccessIssuer:   stringOr(lookup, EnvAccessTokenIssuer, defaultAccessTokenIssuer),
 		AccessAudience: stringOr(lookup, EnvAccessTokenAudience, defaultAccessTokenAudience),
+		AccessLifetime: contracts.AccessTokenLifetimeCeiling,
+	}
+	if class == AccessClassEdDSA {
+		if out.AccessLifetime, err = accessTokenLifetime(lookup); err != nil {
+			return SessionTokens{}, err
+		}
+	}
+	out.LegacyAudience = contracts.PlatformAPIAudience
+	if raw, set := lookup(EnvLegacyJWTAudience); set {
+		if raw == "" || raw != strings.TrimSpace(raw) {
+			return SessionTokens{}, fmt.Errorf("%s is set but empty or has surrounding whitespace: unset it for go-api's default audience", EnvLegacyJWTAudience)
+		}
+		out.LegacyAudience = raw
+	}
+	// No auth-service token carries an ACR audience, under either class: acr-api
+	// and acr-mcp have a separate mint (ACP-ADR-13 decision 3, CHAOS-12248).
+	for _, setting := range []struct{ name, audience string }{
+		{EnvAccessTokenAudience, out.AccessAudience},
+		{EnvLegacyJWTAudience, out.LegacyAudience},
+	} {
+		if _, acr := contracts.ACRAccessTokenScope(setting.audience); acr {
+			return SessionTokens{}, fmt.Errorf("%s names an ACR audience; no auth-service token carries one (ACP-ADR-13)", setting.name)
+		}
 	}
 	access, hasAccess, err := secrets.ResolveSecret(EnvAccessTokenSecret, lookup)
 	if err != nil {
@@ -591,6 +754,10 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
+	rateKey, hasRateKey, err := secrets.ResolveSecret(EnvRateLimitKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	linkRoutes, err := strictBool(lookup, EnvSocialLinkRoutes)
 	if err != nil {
 		return SessionTokens{}, err
@@ -604,7 +771,19 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
 		}
+		if hasRateKey {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvRateLimitKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		return out, nil
+	}
+	if hasRateKey && rateKey.Reveal() == access.Reveal() {
+		return SessionTokens{}, fmt.Errorf("%s must differ from %s: one key per purpose", EnvRateLimitKey, EnvAccessTokenSecret)
+	}
+	if hasRateKey && len([]rune(rateKey.Reveal())) < minAccessTokenSecretLength {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be at least %d characters", EnvRateLimitKey, minAccessTokenSecretLength,
+		)
 	}
 	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
 		return SessionTokens{}, fmt.Errorf(
@@ -617,6 +796,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		)
 	}
 	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.RateLimitKey = rateKey
 	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {
@@ -916,6 +1096,36 @@ func logLevel(lookup secrets.LookupEnv) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("%s must be one of debug, info, warn, error", EnvLogLevel)
 	}
+}
+
+// oauthWebOriginPattern is an https origin with no path, query, userinfo or
+// fragment and a lowercase ASCII host.
+var oauthWebOriginPattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?$`)
+
+// oauthResourcePattern is an absolute https URL with an optional path, and no
+// userinfo, query or fragment.
+var oauthResourcePattern = regexp.MustCompile(`^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*$`)
+
+// oauthSettings reads the OAuth settings. Unset is valid: the routes refuse at
+// request time, so a dark deployment starts. A value of the wrong form is an
+// operator error and refuses the start, as AUTH_TOKEN_ISSUER_URL does.
+func oauthSettings(lookup secrets.LookupEnv, cfg *Config) error {
+	for _, setting := range []struct {
+		name    string
+		pattern *regexp.Regexp
+		into    *string
+	}{
+		{EnvOAuthResourceACRAPI, oauthResourcePattern, &cfg.OAuthResourceACRAPI},
+		{EnvOAuthResourceACRMCP, oauthResourcePattern, &cfg.OAuthResourceACRMCP},
+		{EnvOAuthWebOrigin, oauthWebOriginPattern, &cfg.OAuthWebOrigin},
+	} {
+		value := valueOf(lookup, setting.name)
+		if value != "" && !setting.pattern.MatchString(value) {
+			return fmt.Errorf("%s has the wrong form", setting.name)
+		}
+		*setting.into = value
+	}
+	return nil
 }
 
 // issuerURLPattern is discovery.v1's issuer pattern: an https origin with an

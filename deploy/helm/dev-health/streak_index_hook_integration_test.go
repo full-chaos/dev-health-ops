@@ -14,8 +14,8 @@ import (
 )
 
 // The streak-index hook Job, RENDERED by helm with the flag on, is executed with its own args and the environment its pod
-// would see, on a database one revision before 0159. It exits 0 and the index ends valid and ready; revision 0159 then
-// finds it and does nothing.
+// would see, on a database at the head without the index. It exits 0 and the index ends valid and ready; the upgrade
+// then has nothing to do.
 func TestRenderedStreakIndexHookBuildsAValidIndex(t *testing.T) {
 	ctx := context.Background()
 	instance, err := containers.StartPostgres(ctx)
@@ -36,17 +36,12 @@ func TestRenderedStreakIndexHookBuildsAValidIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	position := -1
-	for i, file := range chain {
-		if file.Revision == "0159" {
-			position = i
-		}
+	// The index is in the baseline (revision 0159, squashed into it): drop it, so the hook has an index to build.
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("upgrade to the head: %v", err)
 	}
-	if position < 0 {
-		t.Fatal("the chain holds no revision 0159")
-	}
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain[:position]); err != nil {
-		t.Fatalf("upgrade to the revision before 0159: %v", err)
+	if _, err := conn.Exec(ctx, "DROP INDEX public.ix_sync_run_units_failure_streak"); err != nil {
+		t.Fatal(err)
 	}
 
 	args, environment := renderedStreakIndexArgs(t, "migrations.hook.secretData.MIGRATION_DATABASE_URI="+instance.URI)
@@ -65,7 +60,7 @@ WHERE c.relname = 'ix_sync_run_units_failure_streak' AND c.relnamespace = 'publi
 	}
 	t.Logf("hook stdout: %s", stdout.String())
 	result, err := pgmigrate.Upgrade(ctx, conn, baseline, chain)
-	if err != nil || len(result.Applied) == 0 || result.Applied[0] != "0159" {
-		t.Fatalf("upgrade after the hook: %+v err %v", result, err)
+	if err != nil || result.Action != "up_to_date" || len(result.Applied) != 0 {
+		t.Fatalf("upgrade after the hook: %+v err %v, want up_to_date with nothing applied", result, err)
 	}
 }

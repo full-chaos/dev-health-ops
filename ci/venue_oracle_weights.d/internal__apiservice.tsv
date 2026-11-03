@@ -1,7 +1,5 @@
 internal/apiservice	TestExternalIngestPayloadHashVenueOracle	242
 internal/apiservice	TestExternalIngestVenueOracle	67
-internal/apiservice	TestLegacyIngestTelemetryVenueOracle	54
-internal/apiservice	TestLegacyIngestVenueOracle	56
 internal/apiservice	TestVenueOracleCredentialAdmin	84
 internal/apiservice	TestVenueOracleCredentialConnectionTest	81
 internal/apiservice	TestVenueOracleCredentialGitHubRepos	223

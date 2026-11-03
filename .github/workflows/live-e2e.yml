@@ -121,6 +121,7 @@ jobs:
               - 'internal/**/*.md'
               - 'internal/**/*.html'
               - 'internal/chmigrate/history/**'
+              - 'internal/chmigrate/archive/**'
               - 'internal/fixturescli/testdata/**'
               - 'go.mod'
               - 'go.sum'

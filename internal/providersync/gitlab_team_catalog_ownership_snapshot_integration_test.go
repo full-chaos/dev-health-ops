@@ -123,6 +123,8 @@ func newGitLabSnapshotServer(t *testing.T) *gitlabSnapshotServer {
 		defer fake.mu.Unlock()
 		path := r.URL.EscapedPath()
 		switch {
+		case path == "/api/v4/version":
+			writeGitLabTeamCatalogJSON(t, w, map[string]any{"version": "17.0.0", "revision": "0000000"})
 		case path == "/api/v4/groups/org":
 			writeGitLabTeamCatalogJSON(t, w, group(1, "org"))
 		case path == "/api/v4/groups/org/subgroups":

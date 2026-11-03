@@ -81,6 +81,12 @@ const (
 	verbAddBinding     verb = "add_binding"
 	verbDisableBinding verb = "disable_binding"
 	verbEnableBinding  verb = "enable_binding"
+	verbRebindBinding  verb = "rebind_binding"
+
+	verbBootstrapCreate  verb = "bootstrap_create"
+	verbBootstrapRotate  verb = "bootstrap_rotate"
+	verbBootstrapRevoke  verb = "bootstrap_revoke"
+	verbBootstrapDisable verb = "bootstrap_disable"
 )
 
 func outcomeLabel(err error) string {
@@ -89,11 +95,18 @@ func outcomeLabel(err error) string {
 		return "ok"
 	case errors.Is(err, audit.ErrNoStateChange):
 		return "noop"
-	case errors.Is(err, ErrNotFound), errors.Is(err, ErrBindingNotFound):
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrBindingNotFound), errors.Is(err, ErrBootstrapNotFound), errors.Is(err, ErrBootstrapNone):
 		return "not_found"
-	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrBindingTaken):
+	case errors.Is(err, ErrNameTaken), errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBootstrapLive), errors.Is(err, ErrBootstrapRotating),
+		errors.Is(err, ErrEnableLiveBootstrap):
 		return "taken"
-	case errors.Is(err, ErrNameInvalid), errors.Is(err, ErrAudienceInvalid), errors.Is(err, ErrActionInvalid), errors.Is(err, ErrBindingInvalid):
+	case errors.Is(err, ErrNameInvalid), errors.Is(err, ErrAudienceInvalid), errors.Is(err, ErrActionInvalid), errors.Is(err, ErrBindingInvalid),
+		errors.Is(err, ErrBootstrapValue), errors.Is(err, ErrBootstrapExpiry), errors.Is(err, ErrBootstrapOverlap), errors.Is(err, ErrBootstrapReason),
+		errors.Is(err, ErrBootstrapWorkloadDisabled), errors.Is(err, ErrBootstrapPrincipalDisabled),
+		errors.Is(err, ErrAssertionKeyInvalid), errors.Is(err, ErrAssertionKeyActiveExists), errors.Is(err, ErrAssertionKeyTerminal),
+		errors.Is(err, ErrAssertionKeyTransition), errors.Is(err, ErrAssertionKeyOverlap), errors.Is(err, ErrAssertionKeyNoActive), errors.Is(err, ErrAssertionKeyLastActive), errors.Is(err, ErrAssertionKeyWorkloadDisabled),
+		errors.Is(err, ErrOperatorNotFound), errors.Is(err, ErrOperatorDisabled), errors.Is(err, ErrOperatorIsSubject),
+		errors.Is(err, ErrPrincipalNotWorkload), errors.Is(err, ErrEnableStateChanged), errors.Is(err, ErrRebindStateChanged):
 		return "invalid"
 	}
 	return "error"
@@ -113,7 +126,7 @@ func (s *Store) run(ctx context.Context, v verb, m audit.Mutation) (err error) {
 	err = s.commit(ctx, m)
 	switch {
 	case err == nil, errors.Is(err, audit.ErrNoStateChange), errors.Is(err, ErrNotFound), errors.Is(err, ErrNameTaken),
-		errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBindingNotFound):
+		errors.Is(err, ErrBindingTaken), errors.Is(err, ErrBindingNotFound), errors.Is(err, ErrRebindStateChanged), isAssertionKeyRefusal(err):
 		return err
 	}
 	s.logger.ErrorContext(ctx, "workload: store failure", "verb", string(v), logging.ErrorAttr(err))
@@ -177,6 +190,25 @@ func (s *Store) Lookup(ctx context.Context, name string) (*Info, error) {
 	var i Info
 	err := s.pool.QueryRow(ctx, `SELECT principal_id, name, audiences, allowed_actions, disabled_at IS NOT NULL
 FROM `+s.q+`.workloads WHERE organization_id IS NULL AND name = $1`, name).
+		Scan(&i.PrincipalID, &i.Name, &i.Audiences, &i.AllowedActions, &i.Disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "workload: read failure", logging.ErrorAttr(err))
+		return nil, fmt.Errorf("%w: read: %w", ErrStore, err)
+	}
+	return &i, nil
+}
+
+// LookupPrincipal reads a platform workload by principal. Disabled holds both
+// the workload row and its principal.
+func (s *Store) LookupPrincipal(ctx context.Context, principal uuid.UUID) (*Info, error) {
+	var i Info
+	err := s.pool.QueryRow(ctx, `SELECT w.principal_id, w.name, w.audiences, w.allowed_actions,
+w.disabled_at IS NOT NULL OR p.disabled_at IS NOT NULL
+FROM `+s.q+`.workloads w JOIN `+s.q+`.principals p ON p.id = w.principal_id
+WHERE w.organization_id IS NULL AND w.principal_id = $1`, principal).
 		Scan(&i.PrincipalID, &i.Name, &i.Audiences, &i.AllowedActions, &i.Disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

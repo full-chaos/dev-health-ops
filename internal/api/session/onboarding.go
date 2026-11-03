@@ -80,7 +80,7 @@ func (h handlers) buildOnboardingState(w http.ResponseWriter, r *http.Request, t
 		refuseText(w, http.StatusUnauthorized, "invalid_user")
 		return nil
 	}
-	user, err := userByID(ctx, tx, *id)
+	user, err := h.userByID(ctx, tx, *id)
 	if err != nil {
 		h.fail(w, r, "load user", err)
 		return nil

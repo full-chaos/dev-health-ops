@@ -42,6 +42,11 @@ func (s *plantedStore) Membership(context.Context, uuid.UUID, uuid.UUID) (string
 	return "", false, nil
 }
 
+func (s *plantedStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
+	role, member, err := s.Membership(ctx, user, org)
+	return role, member, true, err
+}
+
 func (s *plantedStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,7 +159,7 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 // TestGoAPIScopeDeclaresTheEndpointProfileRows: the api listener's scope
 // decides with the go-api endpoint-profile rows.
 func TestGoAPIScopeDeclaresTheEndpointProfileRows(t *testing.T) {
-	protected, err := newProtection(apiTestConfig(), nil, quietLogger())
+	protected, err := newProtection(apiTestConfig(), nil, false, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,3 +167,5 @@ func TestGoAPIScopeDeclaresTheEndpointProfileRows(t *testing.T) {
 		t.Fatal("the api listener's scope has no endpoint-profile rows")
 	}
 }
+
+func (*plantedStore) ReadsPlatformRoles() bool { return false }

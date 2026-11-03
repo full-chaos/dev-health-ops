@@ -517,12 +517,31 @@ func TestEveryAccessAudienceTheMinterKnowsIsAUserTokenRowOfTheVocabulary(t *test
 			}
 		}
 	}
-	if len(user) != 2 {
-		t.Fatalf("vocabulary user-token audiences %v; this minter knows two", user)
+	// Four user-token audiences: the two this minter knows, and the two ACR
+	// audiences, which have a separate mint (ACP-ADR-13 decision 3) and which
+	// this minter must refuse.
+	if len(user) != 4 {
+		t.Fatalf("vocabulary user-token audiences %v; want this minter's two and the two ACR audiences", user)
 	}
+	minted := map[string]bool{}
 	for audience := range user {
-		if _, ok := contracts.AccessTokenScope(audience); !ok {
-			t.Errorf("vocabulary audience %q has no scope", audience)
+		_, session := contracts.AccessTokenScope(audience)
+		_, acr := contracts.ACRAccessTokenScope(audience)
+		if session == acr {
+			t.Errorf("vocabulary audience %q: session scope %v, ACR scope %v; want exactly one", audience, session, acr)
+		}
+		minted[audience] = session
+	}
+	if !minted[contracts.PlatformAPIAudience] || !minted[contracts.SessionRouteAudience] {
+		t.Fatalf("this minter knows %v", minted)
+	}
+	signer, _, _ := fileSigner(t)
+	for _, audience := range []string{contracts.ACRAPIAudience, contracts.ACRMCPAudience} {
+		if minted[audience] {
+			t.Errorf("this minter knows the ACR audience %q", audience)
+		}
+		if _, err := NewEdDSAIssuer(testSecret, testIssuer, audience, signer, goldenIssuer); err == nil {
+			t.Errorf("an EdDSA session issuer was built for the ACR audience %q", audience)
 		}
 	}
 	for _, audience := range []string{"query-api", "", "x"} {

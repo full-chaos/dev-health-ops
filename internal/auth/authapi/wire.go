@@ -86,6 +86,8 @@ type errorDocument struct {
 type recorder struct {
 	logger   *slog.Logger
 	outcomes metric.Int64Counter
+	// compatUses counts accepted svc_authsess_ uses of the session issue route.
+	compatUses metric.Int64Counter
 }
 
 func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
@@ -94,7 +96,13 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 	if err != nil {
 		return recorder{}, err
 	}
-	return recorder{logger: logger, outcomes: outcomes}, nil
+	compatUses, err := meter.Int64Counter(compatUsesMetric,
+		metric.WithDescription("Accepted svc_authsess_ uses of the session issue route, by credential class."))
+	if err != nil {
+		return recorder{}, err
+	}
+	compatUses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("class", compatClass)))
+	return recorder{logger: logger, outcomes: outcomes, compatUses: compatUses}, nil
 }
 
 func (rec recorder) record(ctx context.Context, operation, result, reason string, err error) {
@@ -142,6 +150,15 @@ func failureClass(err error) string {
 // refuse writes the error.v1 answer and records it.
 func (rec recorder) refuse(w http.ResponseWriter, r *http.Request, operation string, answer refusal, err error) {
 	result := "denied"
+	if answer.status == http.StatusServiceUnavailable || answer.status == http.StatusTooManyRequests {
+		result = "error"
+	}
+	rec.record(r.Context(), operation, result, answer.reason, err)
+	writeRefusal(w, r, answer)
+}
+
+// writeRefusal writes the error.v1 answer.
+func writeRefusal(w http.ResponseWriter, r *http.Request, answer refusal) {
 	doc := errorDocument{
 		SchemaVersion: contracts.ErrorSurface,
 		Status:        answer.status,
@@ -150,12 +167,10 @@ func (rec recorder) refuse(w http.ResponseWriter, r *http.Request, operation str
 		OccurredAt:    contracts.Timestamp{Time: time.Now().UTC()},
 	}
 	if answer.status == http.StatusServiceUnavailable || answer.status == http.StatusTooManyRequests {
-		result = "error"
 		retry := retryAfterSeconds
 		doc.RetryAfterSeconds = &retry
 		w.Header().Set("Retry-After", "1")
 	}
-	rec.record(r.Context(), operation, result, answer.reason, err)
 	if answer.status == http.StatusUnauthorized {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 	}

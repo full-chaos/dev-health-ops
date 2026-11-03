@@ -375,7 +375,7 @@ func TestUpgradeVerbRefusesADatabaseBelowTheHeadAsUnsupported(t *testing.T) {
 		t.Fatalf("error code %q, want below_head", body["error"]["code"])
 	}
 	message := body["error"]["detail"]
-	for _, want := range []string{"is unsupported", "re-create the database from the head", "Ordering contract 1"} {
+	for _, want := range []string{"is unsupported", "re-create the database from the head", "Ordering contract 1", "squashed", "pre-squash build", "Nothing was changed"} {
 		if !strings.Contains(message, want) {
 			t.Errorf("message %q does not say %q", message, want)
 		}

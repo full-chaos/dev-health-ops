@@ -1,11 +1,17 @@
 package contracts
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -135,15 +141,410 @@ func hasAllCharacterClasses(value string) bool {
 	return upper && lower && digit
 }
 
-// syntheticJWS matches a compact JWS whose payload and signature segments both
-// begin with EXAMPLE: unmistakably synthetic, and the only shape the
-// refresh-response access_token pattern lets a fixture take (it pins the HS256
-// header segment, which starts with the JWS marker eyJ).
-var syntheticJWS = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.(?:EXAMPLE[A-Za-z0-9_-]*)?\.EXAMPLE[A-Za-z0-9_-]*\b`)
+// jwsShape matches anything shaped like a compact JWS: a header segment that
+// begins with the JWS marker eyJ, a payload segment (possibly empty) and a
+// signature segment.
+var jwsShape = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+`)
 
-func scanFixtureContent(name, content string) []string {
+// syntheticSignatures is the closed list of signature placeholders a fixture
+// may use; no real signature is any of them. A signature that is anything else
+// (EXAMPLE followed by more text included) makes the token an ordinary
+// string, scanned raw.
+var syntheticSignatures = map[string]bool{
+	"EXAMPLE": true, "EXAMPLEOTHER": true, "EXAMPLESIGNATURE": true,
+	"EXAMPLESIGNATURE0": true, "EXAMPLESIGNATUREAB": true,
+}
+
+// syntheticPayloadPlaceholders are the payloads of the HS256-shaped fixtures,
+// which carry no JSON: nothing is hidden in a placeholder.
+var syntheticPayloadPlaceholders = map[string]bool{"": true, "EXAMPLE": true, "EXAMPLEOTHER": true}
+
+// strictDecodeWaivers is the closed, reviewed list of fixtures whose token may
+// have a header or payload that is not strict base64url JSON, keyed by exact
+// path and the sha256 of the file content: they are client-reject vectors that
+// the other language verifiers read from this corpus, and the not-strict
+// segment is the very thing they pin. The waiver covers only the strict-decode
+// requirement: the signature must still be a closed placeholder, the raw
+// segments still get the prefix and pattern rules, every lenient reading of a
+// segment is still decoded and scanned, and the fixture must still produce no
+// finding. A different path, or a file with one byte changed, has no waiver.
+var strictDecodeWaivers = map[string]string{}
+
+func hasStrictDecodeWaiver(path string, content []byte) bool {
+	sum := sha256.Sum256(content)
+	want, listed := strictDecodeWaivers[path]
+	return listed && want == hex.EncodeToString(sum[:])
+}
+
+// maxDecodeDepth bounds the base64 inside a decoded segment that the scanner
+// follows (a payload that carries a base64 string that carries a base64 string).
+const maxDecodeDepth = 4
+
+var base64Decoders = []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding}
+
+// base64Run is a candidate base64 or base64url run inside text.
+var base64Run = regexp.MustCompile(`[A-Za-z0-9_+/=-]{8,}`)
+
+// strictJSONObject decodes a JWS segment as strict base64url and returns the
+// text when it is exactly one JSON object made only of printable ASCII.
+func strictJSONObject(segment string) (string, bool) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(segment)
+	if err != nil {
+		return "", false
+	}
+	for _, b := range raw {
+		if b < 0x20 || b > 0x7e {
+			return "", false // noise, not text: a secret can hide in JSON-safe noise
+		}
+	}
+	var object map[string]any
+	if json.Unmarshal(raw, &object) != nil {
+		return "", false
+	}
+	return string(raw), true
+}
+
+// decodeCandidates returns every base64 reading of run: all four alphabets,
+// every start offset of 0 to 3 characters (a prefix such as EXAMPLE shifts the
+// alignment) and every trailing trim of 0 to 3 characters.
+func decodeCandidates(run string) []string {
+	var out []string
+	for start := 0; start < 4 && start < len(run); start++ {
+		for trim := 0; trim < 4 && start+trim < len(run); trim++ {
+			piece := run[start : len(run)-trim]
+			for _, encoding := range base64Decoders {
+				if raw, err := encoding.DecodeString(piece); err == nil && len(raw) >= 6 {
+					out = append(out, string(raw))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// maxScanCalls and maxScanBytes bound the decoding work for one fixture file. Running out FAILS the fixture:
+// a scan that stops quietly is a scan that passes while checking nothing.
+const (
+	maxScanCalls = 200000
+	maxScanBytes = 64 << 20
+	// decodeReadingsPerRun is the most decodes decodeCandidates makes for one run (4 starts x 4 trims x 4 alphabets).
+	decodeReadingsPerRun = 64
+)
+
+type scanBudget struct {
+	calls, bytes int
+	exhausted    bool
+}
+
+func (b *scanBudget) charge(bytes int) bool {
+	if b.exhausted {
+		return false
+	}
+	b.calls++
+	b.bytes += bytes
+	if b.calls > maxScanCalls || b.bytes > maxScanBytes {
+		b.exhausted = true
+		return false
+	}
+	return true
+}
+
+// decodeCharged is decodeCandidates under the budget; it returns nothing once the budget is spent.
+func decodeCharged(budget *scanBudget, run string) []string {
+	if !budget.charge(decodeReadingsPerRun * len(run)) {
+		return nil
+	}
+	return decodeCandidates(run)
+}
+
+// lineBreakJoin is a line break plus the indent after it: how a wrapped base64 block is laid out inside one string.
+// A bare space or tab is not removed: that would join the words of prose.
+var lineBreakJoin = regexp.MustCompile(`[\r\n]+[ \t]*`)
+
+// scanWholeValue applies the entropy rule to one whole value with punctuation allowed. tokenLikeRun stops at the first
+// punctuation mark, so a printable secret such as a service password is never one run. A value qualifies only when it
+// is printable ASCII with no whitespace, which keeps prose and decoded binary out.
+func scanWholeValue(name, value string) []string {
+	if len(value) < entropyScanThreshold || isDerivedPublicValue(value) {
+		return nil
+	}
+	if _, embedded, _ := embeddedDocuments(value); embedded {
+		return nil
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x21 || value[i] > 0x7e {
+			return nil
+		}
+	}
+	bits := shannonEntropyBitsPerChar(value)
+	if bits <= maxFixtureEntropyBits || !hasAllCharacterClasses(value) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s contains a high-entropy %d-character value (%.2f bits/char, ceiling %.2f, mixed case and digits, "+
+			"punctuation allowed): %.16s... Fixture values must be unmistakably synthetic",
+		name, len(value), bits, maxFixtureEntropyBits, value)}
+}
+
+// maxEmbeddedDocuments bounds the documents read from one string value; more is a finding, not a long read.
+const maxEmbeddedDocuments = 1000
+
+// embeddedDocuments reads a string value that is JSON text: one or more JSON documents with only whitespace between
+// them (a token header stored as text, a request body followed by a second object). A value that is not wholly such
+// text, or a malformed one, is not read this way and is judged as one value. tooMany reports a value with more than
+// maxEmbeddedDocuments documents.
+func embeddedDocuments(value string) (documents []any, ok, tooMany bool) {
+	// Only JSON whitespace is skipped: a value led by \f, \v or a no-break space is not JSON text and is judged whole.
+	text := strings.TrimLeft(value, " \t\r\n")
+	if len(text) < 2 || (text[0] != '{' && text[0] != '[') {
+		return nil, false, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(text))
+	for {
+		var document any
+		err := decoder.Decode(&document)
+		if err == io.EOF {
+			return documents, len(documents) > 0, false
+		}
+		if err != nil {
+			return nil, false, false
+		}
+		if len(documents) == maxEmbeddedDocuments {
+			return nil, false, true
+		}
+		documents = append(documents, document)
+	}
+}
+
+func tooManyDocumentsFinding(name string) string {
+	return fmt.Sprintf("%s holds more than %d JSON documents in one string value: refused rather than read", name, maxEmbeddedDocuments)
+}
+
+// scanFollowing applies the plain rules to a string value as it is and joined across line breaks, then decodes every
+// base64 run of the joined text (under every alignment) and scans what that gives, to maxDecodeDepth.
+func scanFollowing(budget *scanBudget, name, value string, depth int) []string {
+	findings := append(scanPlain(name, value), scanWholeValue(name, value)...)
+	joined := lineBreakJoin.ReplaceAllString(value, "")
+	if joined != value {
+		findings = append(findings, scanPlain(name+" (lines joined)", joined)...)
+		findings = append(findings, scanWholeValue(name+" (lines joined)", joined)...)
+	}
+	if depth >= maxDecodeDepth {
+		return findings
+	}
+	documents, embedded, tooMany := embeddedDocuments(value)
+	if tooMany {
+		findings = append(findings, tooManyDocumentsFinding(name))
+	}
+	if embedded {
+		for _, document := range documents {
+			for _, inner := range jsonStrings(document, nil) {
+				findings = append(findings, scanFollowing(budget, name+" (embedded JSON)", inner, depth+1)...)
+			}
+		}
+	}
+	for _, run := range base64Run.FindAllString(joined, -1) {
+		for _, decoded := range decodeCharged(budget, run) {
+			findings = append(findings, scanDecoded(budget, name+" (base64)", decoded, depth+1)...)
+		}
+	}
+	return findings
+}
+
+// scanDecoded scans text decoded from a JWS segment or a JSON string with the plain rules, then follows what hides
+// inside it: every string value and member name of a JSON document (unescaped, so \u0041KIA is AKIA) and every
+// base64-looking run in the text and in those strings, under every alignment, to maxDecodeDepth. Decoded text that
+// is not JSON is also read field by field for a punctuated secret.
+func scanDecoded(budget *scanBudget, name, text string, depth int) []string {
+	if !budget.charge(len(text)) {
+		return nil
+	}
+	findings := scanPlain(name, text)
+	sources := []string{text}
+	var document any
+	if json.Unmarshal([]byte(text), &document) == nil {
+		for _, value := range jsonStrings(document, nil) {
+			findings = append(findings, scanPlain(name+" (JSON string)", value)...)
+			findings = append(findings, scanWholeValue(name+" (JSON string)", value)...)
+			sources = append(sources, value)
+			if depth < maxDecodeDepth {
+				if documents, embedded, tooMany := embeddedDocuments(value); embedded {
+					for _, document := range documents {
+						if text, err := json.Marshal(document); err == nil {
+							findings = append(findings, scanDecoded(budget, name+" (embedded JSON)", string(text), depth+1)...)
+						}
+					}
+				} else if tooMany {
+					findings = append(findings, tooManyDocumentsFinding(name))
+				}
+			}
+		}
+	} else {
+		for _, field := range strings.Fields(text) {
+			findings = append(findings, scanWholeValue(name+" (field)", field)...)
+		}
+	}
+	if depth >= maxDecodeDepth {
+		return findings
+	}
+	for _, source := range sources {
+		joined := lineBreakJoin.ReplaceAllString(source, "")
+		if joined != source {
+			findings = append(findings, scanPlain(name+" (lines joined)", joined)...)
+			findings = append(findings, scanWholeValue(name+" (lines joined)", joined)...)
+		}
+		for _, run := range base64Run.FindAllString(joined, -1) {
+			for _, decoded := range decodeCharged(budget, run) {
+				findings = append(findings, scanDecoded(budget, name+" (base64)", decoded, depth+1)...)
+			}
+		}
+	}
+	return findings
+}
+
+// scanJoinedSegments reads every string of the decoded header (member names and values) followed by every string of
+// the decoded payload (a key with half in each segment), under the budget. Pairs across the two segments only, not the
+// concatenation of all strings: merging unrelated strings of one segment would invent runs that no secret has.
+func scanJoinedSegments(budget *scanBudget, name, headerText, payloadText string) []string {
 	var findings []string
-	content = syntheticJWS.ReplaceAllString(content, "SYNTHETIC-JWS")
+	tails := orderedStrings(payloadText)
+	for _, head := range orderedStrings(headerText) {
+		for _, tail := range tails {
+			if !budget.charge(len(head) + len(tail)) {
+				return findings
+			}
+			joined := head + tail
+			findings = append(findings, scanPlain(name+" (token header|payload joined)", joined)...)
+			findings = append(findings, scanWholeValue(name+" (token header|payload joined)", joined)...)
+		}
+	}
+	return findings
+}
+
+// orderedStrings is every string of a JSON document, member names and values, in document order. Text that is not
+// JSON gives nothing.
+func orderedStrings(text string) []string {
+	decoder := json.NewDecoder(strings.NewReader(text))
+	var out []string
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return out
+		}
+		if value, isString := token.(string); isString {
+			out = append(out, value)
+		}
+	}
+}
+
+func jsonStrings(node any, out []string) []string {
+	switch value := node.(type) {
+	case string:
+		out = append(out, value)
+	case []any:
+		for _, item := range value {
+			out = jsonStrings(item, out)
+		}
+	case map[string]any:
+		for key, item := range value {
+			out = append(out, key)
+			out = jsonStrings(item, out)
+		}
+	}
+	return out
+}
+
+// scanFixtureContent fails closed. A token is erased as a synthetic JWS only
+// when its header and payload strict-decode to JSON objects (or the payload is
+// a fixed placeholder) AND its signature is one of syntheticSignatures; before
+// it is erased, every raw segment and the signature get the prefix and pattern
+// rules, and the decoded header and payload get every rule plus the base64 and
+// JSON-string following of scanDecoded. Any other token-shaped text is scanned
+// raw, with every rule, and its segments are also searched for hidden base64.
+func scanFixtureContent(name, content string) []string {
+	return scanFixtureContentWaiving(name, content, false)
+}
+
+// scanFixtureContentWaiving is scanFixtureContent with the strict-decode
+// requirement waived for a listed fixture (hasStrictDecodeWaiver).
+func scanFixtureContentWaiving(name, content string, waiveStrictDecode bool) []string {
+	findings, _ := scanFixtureBudgeted(name, content, waiveStrictDecode)
+	return findings
+}
+
+// scanFixtureBudgeted is scanFixtureContentWaiving that also returns the decode budget it spent.
+func scanFixtureBudgeted(name, content string, waiveStrictDecode bool) ([]string, *scanBudget) {
+	var findings []string
+	budget := &scanBudget{}
+	erased := jwsShape.ReplaceAllStringFunc(content, func(token string) string {
+		segments := strings.Split(token, ".")
+		header, payload, signature := segments[0], segments[1], segments[2]
+		headerText, headerOK := strictJSONObject(header)
+		payloadText, payloadOK := strictJSONObject(payload)
+		payloadOK = payloadOK || syntheticPayloadPlaceholders[payload]
+		strict := headerOK && payloadOK
+		if !syntheticSignatures[signature] || (!strict && !waiveStrictDecode) {
+			for _, segment := range segments {
+				for _, decoded := range decodeCharged(budget, segment) {
+					findings = append(findings, scanDecoded(budget, name+" (token segment)", decoded, 1)...)
+				}
+			}
+			return token
+		}
+		for _, segment := range segments {
+			findings = append(findings, scanPrefixesAndPatterns(name+" (token segment)", segment)...)
+			if !strict {
+				for _, decoded := range decodeCharged(budget, segment) {
+					findings = append(findings, scanDecoded(budget, name+" (token segment)", decoded, 1)...)
+				}
+			}
+		}
+		if headerText != "" {
+			findings = append(findings, scanDecoded(budget, name+" (token header)", headerText, 0)...)
+		}
+		if payloadText != "" {
+			findings = append(findings, scanDecoded(budget, name+" (token payload)", payloadText, 0)...)
+		}
+		// A key split across the two decoded segments reads as one value only when a header value and a payload
+		// value are joined.
+		// Only a token that is erased as strict synthetic JWS reaches this join: a waived (non-strict) token gets no header|payload join.
+		findings = append(findings, scanJoinedSegments(budget, name, headerText, payloadText)...)
+		return "SYNTHETIC-JWS"
+	})
+	findings = append(findings, scanPlain(name, erased)...)
+	findings = append(findings, scanStringValues(budget, name, erased)...)
+	if budget.exhausted {
+		findings = append(findings, fmt.Sprintf(
+			"%s exceeds the decode budget (%d scans, %d bytes): a fixture string this large cannot be read in bounded "+
+				"time and is refused rather than skipped", name, maxScanCalls, maxScanBytes))
+	}
+	sort.Strings(findings)
+	return slices.Compact(findings), budget
+}
+
+// scanStringValues reads every string value and member name of a JSON fixture as the plain rules, unescaped, joined
+// across line breaks and with its base64 decoded. A fixture that is not JSON is read as one string.
+func scanStringValues(budget *scanBudget, name, content string) []string {
+	values := []string{content}
+	var document any
+	if json.Unmarshal([]byte(content), &document) == nil {
+		values = jsonStrings(document, nil)
+	}
+	var findings []string
+	for _, value := range values {
+		findings = append(findings, scanFollowing(budget, name+" (JSON string)", value, 0)...)
+	}
+	return findings
+}
+
+// scanPlain applies the prefix, pattern and entropy rules to text as it is.
+func scanPlain(name, content string) []string {
+	return append(scanPrefixesAndPatterns(name, content), scanEntropy(name, content)...)
+}
+
+// scanPrefixesAndPatterns applies the named-prefix and structured-pattern rules.
+func scanPrefixesAndPatterns(name, content string) []string {
+	var findings []string
 	for _, prefix := range forbiddenFixturePrefixes {
 		if strings.Contains(content, prefix) {
 			findings = append(findings, fmt.Sprintf(
@@ -157,7 +558,42 @@ func scanFixtureContent(name, content string) []string {
 				"%s contains a %s (%.24s...)", name, label, match))
 		}
 	}
+	return findings
+}
+
+// derivedPublicIDs are the only high-entropy runs the scanner lets through: a signing_key aggregate id is the SHA-256 of
+// a public kid (provisioning-event.v1, CHAOS-11816), so the golden that proves the derivation must carry the real hash.
+// The closed list names the kid each hash is of; nothing else is exempt, and a secret does not hash to one of these.
+var derivedPublicIDs = map[string]string{
+	SigningKeyAggregateID("example.key-2026-09"): "the id of the public example kid example.key-2026-09",
+	SigningKeyAggregateID("other.key"):           "the id of the public example kid other.key",
+}
+
+// isDerivedPublicValue is true for a derived id of derivedPublicIDs and for the idempotency key built on it
+// (signing_key:<id>:<revision>).
+func isDerivedPublicValue(value string) bool {
+	if _, ok := derivedPublicIDs[value]; ok {
+		return true
+	}
+	rest, found := strings.CutPrefix(value, "signing_key:")
+	if !found {
+		return false
+	}
+	id, _, found := strings.Cut(rest, ":")
+	if !found {
+		return false
+	}
+	_, ok := derivedPublicIDs[id]
+	return ok
+}
+
+// scanEntropy applies the high-entropy rule.
+func scanEntropy(name, content string) []string {
+	var findings []string
 	for _, run := range tokenLikeRun.FindAllString(content, -1) {
+		if _, derived := derivedPublicIDs[run]; derived {
+			continue
+		}
 		bits := shannonEntropyBitsPerChar(run)
 		if bits <= maxFixtureEntropyBits || !hasAllCharacterClasses(run) {
 			continue
@@ -168,7 +604,6 @@ func scanFixtureContent(name, content string) []string {
 				"repeated EXAMPLE bodies and zero-padded counters, not plausible randomness",
 			name, len(run), bits, maxFixtureEntropyBits, run))
 	}
-	sort.Strings(findings)
 	return findings
 }
 
@@ -188,7 +623,7 @@ func TestNoFixtureCarriesARealLookingSecret(t *testing.T) {
 		}
 		scanned++
 		relative, _ := filepath.Rel(root, path)
-		for _, finding := range scanFixtureContent(relative, string(raw)) {
+		for _, finding := range scanFixtureContentWaiving(relative, string(raw), hasStrictDecodeWaiver(relative, raw)) {
 			t.Error(finding)
 		}
 		return nil
@@ -306,12 +741,33 @@ func TestTheFixtureScannerDoesNotFireOnSyntheticValues(t *testing.T) {
 
 func TestTheFixtureScannerAllowsOnlyTheSyntheticHS256Token(t *testing.T) {
 	seg := func(parts ...string) string { return strings.Join(parts, "") }
-	synthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "EXAMPLESIGNATURE") + `"}`
+	synthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLE", ".", "EXAMPLESIGNATURE") + `"}`
 	if findings := scanFixtureContent("synthetic.json", synthetic); len(findings) != 0 {
 		t.Fatalf("a synthetic EXAMPLE token was flagged: %v", findings)
 	}
-	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLEPAYLOAD", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
+	halfSynthetic := `{"t": "` + seg("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9", ".", "EXAMPLE", ".", "dBjftJeZ4CVPmB92K27uhbUJU1p1r") + `"}`
 	if findings := scanFixtureContent("half.json", halfSynthetic); len(findings) == 0 {
 		t.Fatal("a token with a real-looking signature segment passed the scanner")
+	}
+}
+
+// TestFixtureScannerReadsInsideASyntheticJWS: the EXAMPLE-signature allowance
+// hides nothing, because the header and payload segments are decoded and
+// scanned as text; a secret-shaped value in a payload is still a finding, and
+// a token whose signature does not begin EXAMPLE is not admitted at all.
+func TestFixtureScannerReadsInsideASyntheticJWS(t *testing.T) {
+	segment := func(text string) string { return base64.RawURLEncoding.EncodeToString([]byte(text)) }
+	header := segment(`{"alg":"EdDSA","typ":"at+jwt","kid":"auth-example-2026-10"}`)
+	clean := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("clean", clean); len(findings) != 0 {
+		t.Fatalf("a synthetic token was refused: %v", findings)
+	}
+	hidden := header + "." + segment(`{"key":"AKIA`+`ABCDEFGHIJKLMNOP"}`) + ".EXAMPLESIGNATURE"
+	if findings := scanFixtureContent("hidden", hidden); len(findings) == 0 {
+		t.Error("a secret-shaped value inside a synthetic token's payload was not reported")
+	}
+	real := header + "." + segment(`{"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`) + ".Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6QUJDREVGR0g"
+	if findings := scanFixtureContent("real", real); len(findings) == 0 {
+		t.Error("a token with a non-EXAMPLE signature was admitted")
 	}
 }

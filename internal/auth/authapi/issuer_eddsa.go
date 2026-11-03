@@ -17,7 +17,7 @@ import (
 // AccessExpiresIn is refresh-response.v1 expires_in: go-api's accessExpiresIn.
 const AccessExpiresIn = int(edgetoken.AccessLifetime / time.Second)
 
-// EdDSAAccessLifetime is the exp - iat of an EdDSA access token (60 min, the
+// EdDSAAccessLifetime is the default exp - iat of an EdDSA access token (60 min, the
 // ceiling access-token.v1 allows).
 const EdDSAAccessLifetime = contracts.AccessTokenLifetimeCeiling
 
@@ -37,14 +37,48 @@ type eddsaMinter struct {
 	issuer   string
 	audience string
 	scope    string
+	lifetime time.Duration
 	check    signerCheck
 }
 
+// sessionRouteScope is the scope of the token the session routes accept.
+var sessionRouteScope, _ = contracts.AccessTokenScope(contracts.SessionRouteAudience)
+
+// EdDSAOption adjusts NewEdDSAIssuer.
+type EdDSAOption func(*eddsaSettings)
+
+type eddsaSettings struct {
+	legacyAudience string
+	lifetime       time.Duration
+}
+
+// WithAccessLifetime sets exp - iat of both minted tokens (and so every answer's expires_in): at least one minute,
+// at most the access-token.v1 ceiling (ACP-ADR-03). Without it the lifetime is the ceiling, EdDSAAccessLifetime.
+func WithAccessLifetime(lifetime time.Duration) EdDSAOption {
+	return func(s *eddsaSettings) { s.lifetime = lifetime }
+}
+
+// WithLegacyAudience sets the audience the HS256 compatibility token is verified
+// with (go-api's JWT_AUDIENCE). An empty value keeps go-api's default audience.
+func WithLegacyAudience(audience string) EdDSAOption {
+	return func(s *eddsaSettings) {
+		if audience != "" {
+			s.legacyAudience = audience
+		}
+	}
+}
+
 // NewEdDSAIssuer builds an Issuer whose access tokens are access-token.v1
-// EdDSA tokens. secret and legacyIssuer only verify HS256 compatibility
-// tokens (the session routes, legacy refresh); this Issuer never signs with
-// them. issuerURL is the iss claim, byte for byte.
-func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string) (*Issuer, error) {
+// EdDSA tokens. audience is the access token's; Tokens also mints the token
+// of audience auth-service the session routes accept. secret and
+// legacyIssuer only verify HS256 compatibility tokens (the session routes,
+// legacy refresh); this Issuer never signs with them. issuerURL is the iss
+// claim, byte for byte.
+func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, issuerURL string, options ...EdDSAOption) (*Issuer, error) {
+	settings := eddsaSettings{legacyAudience: contracts.PlatformAPIAudience, lifetime: EdDSAAccessLifetime}
+	for _, option := range options {
+		option(&settings)
+	}
 	scope, ok := contracts.AccessTokenScope(audience)
 	if !ok {
 		return nil, errors.New("authapi: the EdDSA access token audience is not a user access token audience")
@@ -52,36 +86,54 @@ func NewEdDSAIssuer(secret, legacyIssuer, audience string, signer AccessSigner, 
 	if signer == nil {
 		return nil, errors.New("authapi: the EdDSA access token needs a signer")
 	}
+	if settings.lifetime < time.Minute || settings.lifetime > contracts.AccessTokenLifetimeCeiling || settings.lifetime%time.Second != 0 {
+		return nil, errors.New("authapi: the EdDSA access token lifetime must be whole seconds from one minute to the access-token.v1 ceiling")
+	}
 	if issuerURL == "" {
 		return nil, errors.New("authapi: the EdDSA access token needs an issuer URL")
 	}
-	verifier, err := edgetoken.New(secret, legacyIssuer, audience)
+	// The HS256 compatibility token is go-api's: it carries go-api's audience, whatever audience this issuer mints.
+	verifier, err := edgetoken.New(secret, legacyIssuer, settings.legacyAudience)
 	if err != nil {
 		return nil, err
 	}
 	return &Issuer{
-		eddsa:    &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope},
+		eddsa:    &eddsaMinter{signer: signer, issuer: issuerURL, audience: audience, scope: scope, lifetime: settings.lifetime},
 		verifier: verifier,
 		now:      time.Now,
 	}, nil
 }
 
-func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now time.Time) (string, string, error) {
+func (m *eddsaMinter) mint(ctx context.Context, grant Grant, now, expires time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, expires, m.audience, m.scope)
+}
+
+// mintSession mints the token of audience auth-service (scope auth:session)
+// for the session routes: the same claims as the access token but the
+// audience, the scope and the jti.
+func (m *eddsaMinter) mintSession(ctx context.Context, grant Grant, now, expires time.Time) (string, string, error) {
+	return m.mintFor(ctx, grant, now, expires, contracts.SessionRouteAudience, sessionRouteScope)
+}
+
+func (m *eddsaMinter) mintFor(ctx context.Context, grant Grant, now, expires time.Time, audience, scope string) (string, string, error) {
 	claims := contracts.AccessTokenClaims{
 		Iss:           m.issuer,
-		Aud:           m.audience,
+		Aud:           audience,
 		Sub:           session.WirePrincipalID(grant.PrincipalID),
 		PrincipalType: "human",
 		Sid:           session.WireSessionID(grant.SessionID),
 		Jti:           uuid.NewString(),
 		Iat:           now.Unix(),
 		Nbf:           now.Unix(),
-		Exp:           now.Add(EdDSAAccessLifetime).Unix(),
-		Scope:         m.scope,
+		Exp:           expires.Unix(),
+		Scope:         scope,
 	}
 	if grant.OrganizationID != nil {
 		org := grant.OrganizationID.String()
 		claims.OrgID = &org
+	}
+	if grant.Actor != nil {
+		claims.Act = &contracts.AccessTokenActor{Sub: session.WirePrincipalID(*grant.Actor)}
 	}
 	if err := checkAccessClaims(claims); err != nil {
 		return "", "", fmt.Errorf("%w: %w", errIssue, err)

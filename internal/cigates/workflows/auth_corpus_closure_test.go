@@ -261,7 +261,7 @@ func TestAuthCorpusClosureHasNoTableAndNoGenerator(t *testing.T) {
 			t.Errorf("%s still exists", gone)
 		}
 	}
-	cmd := exec.Command("git", "grep", "-l", "-e", "auth_corpus_closure", "--", ".", ":(exclude)internal/cigates")
+	cmd := exec.Command("git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "grep", "-l", "-e", "auth_corpus_closure", "--", ".", ":(exclude)internal/cigates")
 	cmd.Dir = root
 	out, err := cmd.Output() // exit status 1 = no match = what we want
 	if exit, ok := err.(*exec.ExitError); err != nil && !(ok && exit.ExitCode() == 1) {

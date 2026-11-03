@@ -422,8 +422,15 @@ func TestGitLabWorkItemsRouteWritesGroupMilestoneSprintRows(t *testing.T) {
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/milestones") {
 			query := request.URL.Query()
-			if query.Get("include_ancestors") != "true" || query.Get("include_parent_milestones") != "true" {
-				t.Fatalf("milestone read %s lacks the ancestor parameters", request.URL.String())
+			// CHAOS-12145: GitLab declares include_ancestors and its deprecated alias
+			// include_parent_milestones mutually exclusive (lib/api/milestone_responses.rb,
+			// GitLab 16.7+); a request that sends both is refused with HTTP 400. Send
+			// include_ancestors only.
+			if query.Get("include_ancestors") != "true" {
+				t.Fatalf("milestone read %s lacks include_ancestors", request.URL.String())
+			}
+			if query.Has("include_parent_milestones") {
+				t.Fatalf("milestone read %s sends include_parent_milestones with include_ancestors (mutually exclusive on GitLab: HTTP 400)", request.URL.String())
 			}
 		}
 	}

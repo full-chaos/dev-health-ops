@@ -1,0 +1,16 @@
+{
+  "expect": {
+    "outcome": "accepted",
+    "question": {
+      "action": "acr.context.read",
+      "organization_id": "org_EXAMPLE0000000000000001",
+      "resource_key": "acme/api",
+      "resource_type": "repository"
+    },
+    "refusal": ""
+  },
+  "id": "pep-accepted-control",
+  "layer": "pep",
+  "request_raw": "{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"prf_EXAMPLE0000000000000001\",\"action\":\"acr.context.read\",\"resource\":{\"type\":\"repository\",\"key\":\"acme/api\",\"organization_id\":\"org_EXAMPLE0000000000000001\"},\"context\":{\"request_id\":\"req_EXAMPLE0000000000000000001\",\"client_service\":\"dev-health-web\"}}",
+  "why": "a well-formed request is decoded; it carries no identity."
+}

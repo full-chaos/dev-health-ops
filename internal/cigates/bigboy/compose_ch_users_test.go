@@ -49,6 +49,16 @@ func other() {
 }
 `
 
+// composeCHProjectScopeFunc is the manifest's flag-on row (CHAOS-12268): with ACR_ACCESS_PROJECT_SCOPE on, go-api
+// requires APIPostureFor(db, true), APIPosture plus this grant.
+const composeCHProjectScopeFunc = "\nfunc ProjectScopeGrant(database string) TableGrant {\n" +
+	"\treturn TableGrant{Database: database, Table: \"projects\", AllowSelect: true}\n}\n"
+
+// composeCHXMLProjects is the flag-on users file: the flag-off grants, then the projects grant.
+func composeCHXMLProjects(hash string) string {
+	return strings.Replace(composeCHXML(hash), "</grants>", "<query>GRANT SELECT ON default.projects</query></grants>", 1)
+}
+
 func composeSHA(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 
 func composeCHXML(hash string) string {
@@ -200,6 +210,11 @@ type composeCHOpts struct {
 	opsRepo   string
 	direct    bool
 	posture   string
+	// goAPIEnv is go-api's env file ($BIGBOY_ROOT/.go-api-dev/go-api.env; empty by default), noGoAPIEnv leaves it out,
+	// projectScopeRow adds ProjectScopeGrant to the default manifest.
+	goAPIEnv        string
+	noGoAPIEnv      bool
+	projectScopeRow bool
 }
 
 type composeCHRun struct {
@@ -269,15 +284,18 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 	}
 	composeWrite(g, creds, body, 0o600)
 	check := g.path(composeCHCheck)
+	root := filepath.Join(dir, "bigboy-root")
+	if !o.noGoAPIEnv {
+		composeWrite(g, filepath.Join(root, ".go-api-dev", "go-api.env"), o.goAPIEnv, 0o600)
+	}
 	if o.direct {
-		env := []string{"PATH=" + bin, "TMPDIR=" + scratch, "DHO_API_CH_POSTURE_GO=" + o.posture, "BIGBOY_CIGATE=" + prebuiltCigate}
+		env := []string{"PATH=" + bin, "TMPDIR=" + scratch, "DHO_API_CH_POSTURE_GO=" + o.posture, "BIGBOY_CIGATE=" + prebuiltCigate, "BIGBOY_ROOT=" + root}
 		r, err := composeExec(dir, env, 30*time.Second, "/bin/bash", check, o.file, creds)
 		if err != nil {
 			g.failf("run %s: %v", composeCHCheck, err)
 		}
 		return composeCHRun{dir, r}
 	}
-	root := filepath.Join(dir, "bigboy-root")
 	composeWrite(g, filepath.Join(root, "_records", "images.env"), "", 0o644)
 	composeWrite(g, filepath.Join(root, "ops", ".env"), "", 0o644)
 	env := append([]string{"PATH=" + bin, "BIGBOY_CIGATE=" + prebuiltCigate, "BIGBOY_ROOT=" + root, "XT=" + filepath.Join(dir, "xtrace.log"),
@@ -289,7 +307,11 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 	env = append(env, "TMPDIR="+tmpdir)
 	if o.opsRepo == "" {
 		manifest := filepath.Join(dir, "authorization.go")
-		composeWrite(g, manifest, composeCHManifest, 0o644)
+		text := composeCHManifest
+		if o.projectScopeRow {
+			text += composeCHProjectScopeFunc
+		}
+		composeWrite(g, manifest, text, 0o644)
 		env = append(env, "DHO_API_CH_POSTURE_GO="+manifest)
 	} else {
 		env = append(env, "BIGBOY_OPS_REPO="+o.opsRepo)
@@ -306,6 +328,46 @@ func composeCHRunCheck(g *guard, o composeCHOpts) composeCHRun {
 }
 
 func composeCHCanon(g *guard) string { return composeCHUsers(g, 0o644, composeCHXML(composeCHHash)) }
+
+// With go-api's ACR_ACCESS_PROJECT_SCOPE on, the canonical file also grants SELECT on projects (CHAOS-12268): the
+// flag-off file is refused before any live check, and the flag-on file passes.
+func composeCHFlagOnNeedsTheProjectsGrant(g *guard) {
+	on := "OTHER=1\nACR_ACCESS_PROJECT_SCOPE=true\n"
+	r := composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g), goAPIEnv: on, projectScopeRow: true})
+	g.expect(r.code == 4 && strings.Contains(r.stderr, "CH_API_USER_FILE_MISMATCH") && strings.Contains(r.stderr, "project_scope=true"),
+		"a flag-off users file under a flag-on go-api exits %d, want 4 naming the mismatch and project_scope=true: %s", r.code, r.stderr)
+	g.expect(!r.has("docker-args.log"), "a flag-off users file under a flag-on go-api reached the live checks")
+	r = composeCHRunCheck(g, composeCHOpts{file: composeCHUsers(g, 0o644, composeCHXMLProjects(composeCHHash)), goAPIEnv: on, projectScopeRow: true})
+	g.expect(r.code == 0 && strings.Contains(r.stdout, "canonical=yes project_scope=true"),
+		"a flag-on users file under a flag-on go-api exits %d, want 0 with canonical=yes project_scope=true: %s %s", r.code, r.stdout, r.stderr)
+}
+
+// With the flag off (or unset), the projects grant is an extra grant go-api's readiness refuses: the file holding it
+// is refused, and the flag-off file passes.
+func composeCHFlagOffRefusesTheProjectsGrant(g *guard) {
+	for _, env := range []string{"ACR_ACCESS_PROJECT_SCOPE=false\n", ""} {
+		r := composeCHRunCheck(g, composeCHOpts{file: composeCHUsers(g, 0o644, composeCHXMLProjects(composeCHHash)), goAPIEnv: env, projectScopeRow: true})
+		g.expect(r.code == 4 && strings.Contains(r.stderr, "project_scope=false"),
+			"env %q: a users file with the projects grant under a flag-off go-api exits %d, want 4 naming project_scope=false: %s", env, r.code, r.stderr)
+		r = composeCHRunCheck(g, composeCHOpts{file: composeCHCanon(g), goAPIEnv: env, projectScopeRow: true})
+		g.expect(r.code == 0 && strings.Contains(r.stdout, "canonical=yes project_scope=false"),
+			"env %q: the flag-off users file under a flag-off go-api exits %d, want 0 with project_scope=false: %s %s", env, r.code, r.stdout, r.stderr)
+	}
+}
+
+// A flag the check cannot read is a failure, never "off": an invalid value or a missing env file stops the check
+// before any live check, naming the flag and the file.
+func composeCHUnreadableFlagIsRefused(g *guard) {
+	for name, o := range map[string]composeCHOpts{
+		"an invalid value": {file: composeCHCanon(g), goAPIEnv: "ACR_ACCESS_PROJECT_SCOPE=maybe\n"},
+		"no env file":      {file: composeCHCanon(g), noGoAPIEnv: true},
+	} {
+		r := composeCHRunCheck(g, o)
+		g.expect(r.code == 1 && strings.Contains(r.stderr, "ACR_ACCESS_PROJECT_SCOPE") && strings.Contains(r.stderr, "go-api.env"),
+			"%s: the check exits %d, want 1 naming the flag and go-api.env: %s", name, r.code, r.stderr)
+		g.expect(!r.has("docker-args.log"), "%s: an unreadable flag reached the live checks", name)
+	}
+}
 
 func composeCHRefuses0600(g *guard) {
 	r := composeCHRunCheck(g, composeCHOpts{file: composeCHUsers(g, 0o600, composeCHXML(composeCHHash))})
@@ -626,6 +688,9 @@ var composeCHChecks = []check{
 	{"the_cut_hands_the_check_an_absolute_ops_repo_for_a_relative_setting", composeCutAbsoluteOpsRepo},
 	{"the_cut_hands_the_check_absolute_paths_for_relative_settings", composeCutAbsoluteCreds},
 	{"a_clone_without_the_manifest_is_refused_naming_the_clone", composeCHCloneWithoutManifest},
+	{"a_flag_on_go_api_needs_the_projects_grant_in_the_users_file", composeCHFlagOnNeedsTheProjectsGrant},
+	{"a_flag_off_go_api_refuses_the_projects_grant_in_the_users_file", composeCHFlagOffRefusesTheProjectsGrant},
+	{"an_unreadable_project_scope_flag_is_refused_not_taken_as_off", composeCHUnreadableFlagIsRefused},
 	{"the_cut_hands_the_plane_split_generator_an_absolute_deploy_repo", composeCutAbsoluteDeployRepo},
 }
 
@@ -651,6 +716,10 @@ func TestComposeCHUsersPlanted(t *testing.T) {
 			mutate: m(`[ -f "$FILE" ] && [ ! -L "$FILE" ] ||`, `[ -e "$FILE" ] ||`)},
 		{name: "tmp accepted", copy: chk, check: composeCHRefusesTmpTmpdir, want: `TMPDIR "/tmp`,
 			mutate: all(m(`""|/|/tmp|/tmp/*|/var/tmp|/var/tmp/*)`, `"")`), m(`if [ "$(stat -c '%a %u' "$tmp_root")" != "700 $(id -u)" ]; then`, "if false; then"))},
+		{name: "project scope flag ignored", copy: chk, check: composeCHFlagOnNeedsTheProjectsGrant, want: "project_scope=true",
+			mutate: m("    true) render_opt=(--project-scope) ;;", "    true) ;;")},
+		{name: "unreadable project scope flag taken as off", copy: chk, check: composeCHUnreadableFlagIsRefused, want: "naming the flag",
+			mutate: m(`2>>"$canon_dir/render.err") || project_scope=""`, `2>>"$canon_dir/render.err") || project_scope="false"`)},
 		{name: "manifest presence not checked", copy: chk, check: composeCHManifestRefusedNotSkipped, want: "cannot be computed",
 			mutate: m(`[ -f "$POSTURE" ] ||`, "true ||")},
 		{name: "refusal does not name the clone", copy: chk, check: composeCHCloneWithoutManifest, want: "empty clone",

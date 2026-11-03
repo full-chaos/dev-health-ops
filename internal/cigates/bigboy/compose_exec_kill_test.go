@@ -121,16 +121,24 @@ func TestComposeExecKillIsBoundedForAChildOutsideTheGroup(t *testing.T) {
 
 // On a kill the failure holds a snapshot of the process group taken BEFORE the
 // kill: the planted step is in it by its command name, with its state, and no
-// argument or environment value is printed.
+// argument or environment value is printed. The planted step is a copy of the
+// multi-call stand-in (multicallMain): like a multi-call coreutils it picks its
+// applet from argv[0], so the script runs it with `exec -a sleep`: argv[0] is
+// sleep, and the command name stays planted-step.
 func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing.T) {
+	standIn, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir, script := composeHangScript(t,
-		"cp /bin/sleep \"$PWD/planted-step\"\n"+
+		"cp \"$"+multicallBinEnv+"\" \"$PWD/planted-step\"\n"+
 			"echo \"STEP snapshot rc=0 00:00:00\"\n"+
-			"exec \"$PWD/planted-step\" 31337\n")
+			"exec -a sleep \"$PWD/planted-step\" 31337\n")
 	// Clean time about 1.1 s; ceiling 20 s.
-	_, err := composeExecWithin(t, 20*time.Second, dir, time.Second, script, "HANG_SECRET="+composeCHSentinel)
+	r, err := composeExecWithin(t, 20*time.Second, dir, time.Second, script,
+		"HANG_SECRET="+composeCHSentinel, multicallEnv+"=1", multicallBinEnv+"="+standIn)
 	if err == nil {
-		t.Fatal("a step that never returns gave no error")
+		t.Fatalf("a step that never returns gave no error: exit code %d, stderr %.300q", r.code, r.stderr)
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "process group at the kill") {
@@ -153,6 +161,15 @@ func TestComposeExecKillPrintsTheProcessGroupSnapshotWithoutArguments(t *testing
 	}
 	if len(groups) != 1 {
 		t.Errorf("the snapshot lists %d process groups, want only the group of the script: %q", len(groups), snapshot)
+	}
+	planted := false
+	for _, row := range strings.Split(rows, "\n") {
+		if f := strings.Fields(row); len(f) >= 7 && f[len(f)-1] == "planted-step" {
+			planted = true
+		}
+	}
+	if !planted {
+		t.Errorf("no process in the snapshot has the command name planted-step: %q", snapshot)
 	}
 	if strings.Contains(snapshot, "31337") || strings.Contains(msg, composeCHSentinel) {
 		t.Errorf("the snapshot prints an argument or an environment value: %q", snapshot)

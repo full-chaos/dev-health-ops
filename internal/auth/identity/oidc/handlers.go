@@ -307,9 +307,13 @@ func (s *Service) writeLogin(w http.ResponseWriter, login Login, clear *http.Coo
 	if login.OrgID != nil {
 		orgID = login.OrgID.String()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"access_token": login.Tokens.AccessToken, "refresh_token": login.Tokens.RefreshToken,
 		"token_type": "bearer", "expires_in": login.Tokens.ExpiresIn,
 		"user_id": login.PrincipalID.String(), "email": login.Email, "org_id": orgID, "role": login.Role,
-	})
+	}
+	if login.Tokens.SessionAccessToken != "" {
+		answer["session_access_token"] = login.Tokens.SessionAccessToken
+	}
+	writeJSON(w, http.StatusOK, answer)
 }

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
 var addrLimitedRoutes = []string{"/api/v1/auth/resend-verification", "/api/v1/auth/forgot-password"}
@@ -215,5 +217,23 @@ func TestTheAggregateNeverCountsAValidationFailureOrAPerEmailRefusal(t *testing.
 		if got := post(h, pattern, "198.51.100.30:1", emailBody(19), nil).Code; got != http.StatusTooManyRequests {
 			t.Fatalf("%s: the 21st served request = %d, want 429", pattern, got)
 		}
+	}
+}
+
+func validateBody(i int) string { return fmt.Sprintf(`{"token":"token-%d"}`, i) }
+
+func TestValidateLimitIsTheSharedCountPerToken(t *testing.T) {
+	h := routeAt(t, "/api/v1/auth/validate")
+	const peer = "192.0.2.1:1234"
+	for hit := 1; hit <= httpapi.ValidateLimitCount; hit++ {
+		if w := post(h, "/api/v1/auth/validate", peer, validateBody(1), nil); w.Code != http.StatusAccepted {
+			t.Fatalf("hit %d of %d answered %d", hit, httpapi.ValidateLimitCount, w.Code)
+		}
+	}
+	if w := post(h, "/api/v1/auth/validate", peer, validateBody(1), nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("hit %d answered %d, want 429", httpapi.ValidateLimitCount+1, w.Code)
+	}
+	if w := post(h, "/api/v1/auth/validate", peer, validateBody(2), nil); w.Code != http.StatusAccepted {
+		t.Fatalf("another token answered %d: the budget is per token", w.Code)
 	}
 }

@@ -124,13 +124,34 @@ type orgUpdate struct {
 	Settings    []byte
 	Tier        *string
 	IsActive    *bool
+	// authOwned is AUTH_ORGS_OWNED: auth-service has written name and is_active, so the write leaves both alone and
+	// reads no auth state.
+	authOwned bool
 }
 
 // updateOrganization is OrganizationService.update, minus the license-tier
 // sync side effect (org_licenses is out of this route's scope; a tier
 // change here does not touch OrgLicense -- see RISK-NOTES).
-func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate) (*organization, error) {
-	existing, err := s.orgByID(ctx, id)
+func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch orgUpdate, authActive orgAuthStateFunc) (*organization, error) {
+	var tx pgx.Tx
+	var existing *organization
+	var err error
+	if patch.authOwned {
+		authActive = nil
+	}
+	if authActive != nil {
+		// With an auth state hook the row is locked first, and auth is read while the lock is held: the writes of
+		// two PATCHes of one organization are ordered by the lock, so the last write read auth last. NO KEY UPDATE
+		// lets foreign key checks through during the re-read.
+		tx, err = s.Pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		existing, err = scanOrganization(tx.QueryRow(ctx, `SELECT `+orgColumns+` FROM organizations WHERE id = $1 FOR NO KEY UPDATE`, id))
+	} else {
+		existing, err = s.orgByID(ctx, id)
+	}
 	if err != nil || existing == nil {
 		return existing, err
 	}
@@ -158,15 +179,28 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 	if patch.IsActive != nil {
 		isActive = *patch.IsActive
 	}
+	if authActive != nil {
+		if isActive, err = authActive(ctx); err != nil {
+			return nil, err
+		}
+	}
 	now := s.now().UTC()
 
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return nil, err
+	if tx == nil {
+		tx, err = s.Pool.Begin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, `
+	if patch.authOwned {
+		if _, err := tx.Exec(ctx, `
+UPDATE organizations SET description = $2, settings = $3, tier = $4, managed_by = $5, updated_at = $6
+WHERE id = $1`, id, description, settings, tier, managedBy, now); err != nil {
+			return nil, err
+		}
+	} else if _, err := tx.Exec(ctx, `
 UPDATE organizations SET name = $2, description = $3, settings = $4, tier = $5, managed_by = $6, is_active = $7, updated_at = $8
 WHERE id = $1`, id, name, description, settings, tier, managedBy, isActive, now); err != nil {
 		return nil, err
@@ -398,8 +432,21 @@ func (s pgStore) removeMembership(ctx context.Context, orgID, userID uuid.UUID) 
 			return false, errLastOwner
 		}
 	}
-	_, err = s.Pool.Exec(ctx, `DELETE FROM memberships WHERE org_id = $1 AND user_id = $2`, orgID, userID)
+	// The removed member's refresh tokens for this org end with the
+	// membership, in one transaction (D6507); their tokens for other orgs stay.
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM memberships WHERE org_id = $1 AND user_id = $2`, orgID, userID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked_at = $3 WHERE user_id = $1 AND org_id = $2 AND revoked_at IS NULL`,
+		userID, orgID, s.now().UTC()); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return false, err
 	}
 	return true, nil

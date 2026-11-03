@@ -37,3 +37,17 @@ func TestNameAndSlugFollowGoAPIsRule(t *testing.T) {
 		t.Fatalf("long slug = %q, want 50 code points then the user id prefix", got)
 	}
 }
+
+func TestOnboardSlugMatchesTheLocalPath(t *testing.T) {
+	id := uuid.MustParse("0a1b2c3d-1111-2222-3333-444455556666")
+	for name, want := range map[string]string{
+		"Acme Ops!":             "acme-ops-0a1b2c3d",
+		"  --Café__Team--  ":    "caf-team-0a1b2c3d",
+		"###":                   "my-organization-0a1b2c3d",
+		strings.Repeat("a", 60): strings.Repeat("a", 50) + "-0a1b2c3d",
+	} {
+		if got := OnboardSlug(name, id); got != want {
+			t.Errorf("OnboardSlug(%q) = %q, want %q", name, got, want)
+		}
+	}
+}

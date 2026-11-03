@@ -17,6 +17,18 @@ one. The platform ConfigMap in particular is NOT inherited by default: it pins
 OTEL_SERVICE_NAME=dev-health-ops, and this service names itself
 dev-health-api.
 */ -}}
+{{- /* CHAOS-11813: the legacy /api/v1/ingest/* routes of go-api are retired and go-api reads no legacy ingest setting.
+A value that asks for the routes fails the render whether go-api renders or not; the pin that keeps them off
+(legacyIngest.enabled: false, no sunset, as dev-health-deploy's prod values carry it) still renders. */}}
+{{- if hasKey .Values "legacyIngest" }}
+{{- $legacyIngest := .Values.legacyIngest }}
+{{- if not (kindIs "map" $legacyIngest) }}{{- fail "legacyIngest is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); only legacyIngest.enabled: false may remain" }}{{- end }}
+{{- if and (hasKey $legacyIngest "enabled") (ne (toString $legacyIngest.enabled) "false") }}{{- fail "legacyIngest.enabled is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); set it false or remove it" }}{{- end }}
+{{- if and (hasKey $legacyIngest "sunset") (ne (trim (toString $legacyIngest.sunset)) "") }}{{- fail "legacyIngest.sunset is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); remove it" }}{{- end }}
+{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if has (upper (trim (toString .name))) (list "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET") }}{{- fail (printf "goApi.extraEnv must not set %s: the legacy ingest routes are retired (CHAOS-11813) and go-api reads no such setting" .name) }}{{- end }}
+{{- end }}
 {{- if .Values.goApi.enabled }}
 {{- if and .Values.goApi.internal.enabled (or (eq (int .Values.goApi.internal.port) (int .Values.goApi.port)) (eq (int .Values.goApi.internal.port) (int .Values.goApi.operatorPort))) }}
 {{- fail "goApi.internal.port must differ from goApi.port and goApi.operatorPort: each listener has its own port" }}
@@ -80,7 +92,6 @@ ranges (the fenced ports and the internal port), zero-padded so a string sort is
 {{- end }}
 {{- $closed := append $fenced (printf "%05d" (int .Values.goApi.internal.port)) }}
 {{- range .Values.goApi.extraEnv }}
-{{- if has .name (list "DEV_HEALTH_LEGACY_INGEST_ENABLED" "DEV_HEALTH_LEGACY_INGEST_SUNSET") }}{{- fail (printf "goApi.extraEnv must not set %s: use legacyIngest.enabled and legacyIngest.sunset" .name) }}{{- end }}
 {{- if eq .name "TRUSTED_PROXIES_NETWORK_FENCED" }}{{- fail "goApi.extraEnv must not set TRUSTED_PROXIES_NETWORK_FENCED: the chart sets it only where the request-port fence renders (goApi.networkPolicy.enabled)" }}{{- end }}
 {{- /* go-api reads TRUSTED_PROXIES with the auth-service parser and refuses to start on a list it cannot read, so a literal value
 is checked here with the authService.trustedProxies rules (one helper); a valueFrom source is the deploy chart's to check. */}}
@@ -109,7 +120,7 @@ authService.sso). Each renders only when on, so phases 0 and 1 carry no AUTH_PRO
 every route (its own default is off). The URL is this release's auth-service.
 */}}
 {{- $sessionsOn := eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true" }}
-{{- $proxyFlags := list (list "AUTH_PROXY_SESSIONS" $sessionsOn) (list "AUTH_PROXY_LOCAL_LOGIN" (eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true")) (list "AUTH_PROXY_CREDENTIALS" (eq (include "dev-health.authOn" (dict "flag" "credentials" "context" .)) "true")) (list "AUTH_PROXY_SOCIAL" (eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true")) (list "AUTH_PROXY_OIDC" (eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true")) (list "AUTH_PROXY_SAML" (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true")) }}
+{{- $proxyFlags := list (list "AUTH_PROXY_SESSIONS" $sessionsOn) (list "AUTH_PROXY_LOCAL_LOGIN" (eq (include "dev-health.authOn" (dict "flag" "goApiLocalLogin" "context" .)) "true")) (list "AUTH_PROXY_CREDENTIALS" (eq (include "dev-health.authOn" (dict "flag" "credentials" "context" .)) "true")) (list "AUTH_PROXY_SOCIAL" (eq (include "dev-health.authOn" (dict "flag" "goApiSocial" "context" .)) "true")) (list "AUTH_PROXY_OIDC" (eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true")) (list "AUTH_PROXY_SAML" (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true")) }}
 {{- $proxyOn := eq (include "dev-health.authProxyOn" .) "true" }}
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
 {{- /*
@@ -146,6 +157,7 @@ shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (
 {{- range .Values.goApi.extraEnv }}
 {{- if hasPrefix "AUTH_PROXY_" (upper (trim .name)) }}{{- fail "goApi.extraEnv must not set AUTH_PROXY_*: authService.phase renders them, and the chart checks the phase" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_USERS_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_USERS_OWNED: authService.phase renders it, for auth-service and the auth-migrate and auth-grants Jobs too" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_PLATFORM_ROLES_OWNED" }}{{- fail "goApi.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for auth-service, query-api and the auth Jobs too" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_ACCESS_TOKEN_ISSUER" }}{{- fail "goApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service too" }}{{- end }}
 {{- if has (upper (trim (toString .name))) (include "dev-health.goApiEnvNames" $ | fromJsonArray) }}{{- fail (printf "goApi.extraEnv must not set %s: the chart renders it for go-api, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
 {{- if include "dev-health.secretLikeLiteralEnv" . }}{{- fail (printf "goApi.extraEnv must not set %s as a literal value: the name looks like a secret, and a literal would put it in the manifest; reference it with valueFrom.secretKeyRef" .name) }}{{- end }}
@@ -265,6 +277,11 @@ spec:
             - name: {{ index . 0 }}
               value: {{ ternary "true" "false" (index . 1) | quote }}
             {{- end }}
+            {{- /* CHAOS-11858: rendered only when on, so the default manifest carries no trace of it. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).orgProvisioning) true }}
+            - name: AUTH_PROXY_ORG_PROVISIONING
+              value: "true"
+            {{- end }}
             {{- if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on
@@ -277,6 +294,10 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            - name: AUTH_PLATFORM_ROLES_OWNED
+              value: "true"
+            {{- end }}
             {{- with $eddsaIssuer }}
             {{- /* The eddsa access-token issuer go-api verifies against its JWKS: the same value auth-service signs. */}}
             - name: AUTH_ACCESS_TOKEN_ISSUER
@@ -285,14 +306,6 @@ spec:
             {{- /* CHAOS-10743: always rendered, so an env entry beats a same-named variable from goApi.envFrom: "true" only where the request-port fence renders, "false" everywhere else (goApi.extraEnv may not set it: refused above). go-api reads only the exact string "true". */}}
             - name: TRUSTED_PROXIES_NETWORK_FENCED
               value: {{ ternary "true" "false" (and $fence true) | quote }}
-            {{- /* The legacy ingest routes: always rendered ("false" by default), so an env entry beats a same-named variable from goApi.envFrom. The sunset date is an RFC 8594 HTTP-date; go-api refuses to start on a value that does not parse. */}}
-            {{- if not (has (toString .Values.legacyIngest.enabled) (list "true" "false")) }}{{- fail "legacyIngest.enabled must be true or false: any other value would leave the routes off without saying so" }}{{- end }}
-            - name: DEV_HEALTH_LEGACY_INGEST_ENABLED
-              value: {{ ternary "true" "false" (eq (toString .Values.legacyIngest.enabled) "true") | quote }}
-            {{- with .Values.legacyIngest.sunset }}
-            - name: DEV_HEALTH_LEGACY_INGEST_SUNSET
-              value: {{ . | quote }}
-            {{- end }}
           {{- with .Values.goApi.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -305,6 +318,14 @@ spec:
           resources:
             {{- toYaml .Values.goApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
+          {{- with .Values.goApi.extraVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.goApi.extraVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.goApi.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

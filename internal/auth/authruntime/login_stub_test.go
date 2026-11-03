@@ -113,7 +113,7 @@ func TestRuntimeLoginKeyOnMountsRealHandler(t *testing.T) {
 	}
 }
 
-func TestRuntimeSessionDisabledMountsOnlyTheRefreshLogoutStubs(t *testing.T) {
+func TestRuntimeSessionDisabledMountsOnlyTheRefreshLogoutValidateSwitchOrgStubs(t *testing.T) {
 	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestRuntimeSessionDisabledMountsOnlyTheRefreshLogoutStubs(t *testing.T) {
 	for _, route := range routes {
 		got = append(got, route.Method+" "+route.Pattern)
 	}
-	if want := "POST /api/v1/auth/refresh,POST /api/v1/auth/logout"; strings.Join(got, ",") != want {
+	if want := "POST /api/v1/auth/refresh,POST /api/v1/auth/logout,POST /api/v1/auth/validate,POST /api/v1/auth/switch-org"; strings.Join(got, ",") != want {
 		t.Fatalf("routes %v; want exactly %s", got, want)
 	}
 }
@@ -216,7 +216,7 @@ func TestUnthrottledSetOfTheFullRouteSetIsExactlyTheStubs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t))
+			credentials, _, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

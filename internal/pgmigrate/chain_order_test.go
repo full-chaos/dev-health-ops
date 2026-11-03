@@ -60,7 +60,8 @@ func TestLoadDownChainSortsRevisionsAsIntegers(t *testing.T) {
 }
 
 // Production records two alembic_version rows: the cutover head 0066 and the application head. Decide reads the rows
-// as a set, so neither the row order nor the row that comes first changes the plan.
+// as a set, so neither the row order nor the row that comes first changes the plan; a database one archived revision
+// behind is below the baseline.
 func TestDecideTwoHeadsAtTheRealChainHead(t *testing.T) {
 	baseline, err := LoadBaseline()
 	if err != nil {
@@ -75,24 +76,24 @@ func TestDecideTwoHeadsAtTheRealChainHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	known := KnownRevisions(history, baseline, chain)
-	last, before := chain[len(chain)-1], chain[len(chain)-2]
-	for name, test := range map[string]struct {
-		versions []string
-		head     string
-		pending  []string
-	}{
-		"cutover row first, last chain revision second": {[]string{cutoverRevision, last.Revision}, last.Revision, []string{}},
-		"last chain revision first":                     {[]string{last.Revision, cutoverRevision}, last.Revision, []string{}},
-		"one revision behind":                           {[]string{cutoverRevision, before.Revision}, before.Revision, []string{last.Revision}},
+	head := Heads(baseline, chain)
+	application := head[0]
+	if application == cutoverRevision {
+		application = head[1]
+	}
+	for name, versions := range map[string][]string{
+		"cutover row first":     {cutoverRevision, application},
+		"application row first": {application, cutoverRevision},
 	} {
 		t.Run(name, func(t *testing.T) {
-			plan := Decide(Observation{HasVersionTable: true, Versions: test.versions, PublicTables: baseline.Tables()}, baseline, chain, known)
-			if plan.State != StateAtHead || plan.ApplicationHead != test.head {
-				t.Fatalf("state %d, application head %q; want StateAtHead at %s", plan.State, plan.ApplicationHead, test.head)
-			}
-			if got := revisionsOf(plan.Pending); !reflect.DeepEqual(got, test.pending) {
-				t.Errorf("pending %v, want %v", got, test.pending)
+			plan := Decide(Observation{HasVersionTable: true, Versions: versions, PublicTables: baseline.Tables()}, baseline, chain, known)
+			if plan.State != StateAtHead || plan.ApplicationHead != application || len(plan.Pending) != 0 {
+				t.Fatalf("state %d, application head %q, pending %v; want StateAtHead at %s", plan.State, plan.ApplicationHead, revisionsOf(plan.Pending), application)
 			}
 		})
+	}
+	behind := Decide(Observation{HasVersionTable: true, Versions: []string{cutoverRevision, "0161"}, PublicTables: baseline.Tables()}, baseline, chain, known)
+	if behind.State != StateBelowHead || !reflect.DeepEqual(behind.Missing, []string{applicationHead(baseline)}) {
+		t.Fatalf("one archived revision behind: state %d, missing %v; want below the head missing %s", behind.State, behind.Missing, applicationHead(baseline))
 	}
 }

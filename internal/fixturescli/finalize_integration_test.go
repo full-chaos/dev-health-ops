@@ -5,12 +5,9 @@ package fixturescli
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"reflect"
 	"regexp"
 	"sort"
@@ -25,10 +22,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/cacheinvalidation"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	valkeystore "github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -47,58 +44,13 @@ var (
 	testBefore = time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)
 )
 
-func startDatabase(t *testing.T) (*containers.Instance, *pgx.Conn) {
+// freshDatabase is a private PostgreSQL database with the migrated schema and the seed rows the real chain
+// builds: a clone of the shared template (pgschema.Start), dropped when the test ends.
+func freshDatabase(t *testing.T) string {
 	t.Helper()
-	instance, err := containers.StartPostgres(context.Background())
-	if err != nil {
-		t.Fatalf("start postgres: %v", err)
-	}
+	instance := pgschema.Start(context.Background(), t)
 	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	conn, err := pgx.Connect(context.Background(), instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	return instance, conn
-}
-
-// freshDatabase creates a database and applies the PostgreSQL head baseline
-// to it: the schema and seed rows the real chain builds.
-func freshDatabase(t *testing.T, instance *containers.Instance, admin *pgx.Conn) string {
-	t.Helper()
-	suffix := make([]byte, 6)
-	if _, err := rand.Read(suffix); err != nil {
-		t.Fatal(err)
-	}
-	name := "dho_synthetic_" + hex.EncodeToString(suffix)
-	if _, err := admin.Exec(context.Background(), "CREATE DATABASE "+name); err != nil {
-		t.Fatalf("create %s: %v", name, err)
-	}
-	t.Cleanup(func() { _, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") })
-	parsed, err := url.Parse(instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed.Path = "/" + name
-	uri := parsed.String()
-
-	conn, err := pgx.Connect(context.Background(), uri)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(context.Background())
-	baseline, err := pgmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := pgmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pgmigrate.Upgrade(context.Background(), conn, baseline, chain); err != nil {
-		t.Fatalf("apply the baseline: %v", err)
-	}
-	return uri
+	return instance.URI
 }
 
 // snapshot reads every row of every public table as jsonb text, plus the text
@@ -282,7 +234,6 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 		PythonBuild: finalizePythonBuild,
 		SHA256:      "892a51290a37d0c16672821bebb87ed97e87721cb0246ef28dd81a1f369fde0c",
 	})
-	instance, admin := startDatabase(t)
 	targets := Targets
 	input, err := json.Marshal(map[string]any{
 		"targets": targets, "org_id": testOrg, "repo_name": testRepoName,
@@ -301,7 +252,7 @@ func TestFinalizeSyntheticWritesTheFrozenPythonRows(t *testing.T) {
 	// A golden of empty tables would pass for any implementation.
 	requireNonVacuous(t, "the frozen Python producer", frozen, targets)
 
-	uri := freshDatabase(t, instance, admin)
+	uri := freshDatabase(t)
 	before := snapshot(t, uri)
 	goRun(t, uri, targets)
 	got := added(t, before, snapshot(t, uri))
@@ -400,8 +351,7 @@ func renderAsJSONDumps(t *testing.T, text any) any {
 // verb is not idempotent, as the Python verb was not), and both runs share the
 // one integration, source and dataset.
 func TestFinalizeSyntheticVerbFinalizesARunFromTheEnvironment(t *testing.T) {
-	instance, admin := startDatabase(t)
-	uri := freshDatabase(t, instance, admin)
+	uri := freshDatabase(t)
 	env := map[string]string{
 		"MIGRATION_DATABASE_URI": uri, "ORG_ID": testOrg, AllowEnvVar: "1",
 	}
@@ -463,8 +413,7 @@ func TestFinalizeSyntheticVerbFinalizesARunFromTheEnvironment(t *testing.T) {
 // the org becomes unreachable); without it the run still finalizes, the skip is
 // logged at Info, and no cache failure is logged as a warning.
 func TestFinalizeSyntheticBumpsTheCoverageCacheEpochWhenValkeyIsConfigured(t *testing.T) {
-	instance, admin := startDatabase(t)
-	uri := freshDatabase(t, instance, admin)
+	uri := freshDatabase(t)
 	valkey, err := containers.StartValkey(context.Background())
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)

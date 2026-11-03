@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // prebuiltCigate is the cigate binary the shell callers run through BIGBOY_CIGATE. It is built once per test
@@ -13,7 +15,32 @@ import (
 var prebuiltCigate string
 
 func TestMain(m *testing.M) {
+	if os.Getenv(multicallEnv) == "1" {
+		os.Exit(multicallMain(os.Args))
+	}
 	os.Exit(runMain(m))
+}
+
+// multicallEnv makes this test binary a stand-in for a multi-call coreutils (uutils, ubuntu-26.04): it picks its applet
+// from the base name of argv[0] and knows only sleep. multicallBinEnv carries its path to a script that copies it.
+const (
+	multicallEnv    = "BIGBOY_MULTICALL_STANDIN"
+	multicallBinEnv = "BIGBOY_MULTICALL_BIN"
+)
+
+func multicallMain(args []string) int {
+	applet := filepath.Base(args[0])
+	if applet != "sleep" || len(args) != 2 {
+		fmt.Fprintf(os.Stderr, "%s: function/utility not found\n", applet)
+		return 1
+	}
+	seconds, err := strconv.Atoi(args[1])
+	if err != nil || seconds < 0 {
+		fmt.Fprintf(os.Stderr, "sleep: invalid time interval\n")
+		return 1
+	}
+	time.Sleep(time.Duration(seconds) * time.Second)
+	return 0
 }
 
 func runMain(m *testing.M) int {

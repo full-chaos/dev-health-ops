@@ -129,7 +129,6 @@ const (
 	defaultOTelEndpoint       = "localhost:4317"
 	defaultOTelSampleRate     = 0.1
 	localStatusMappingPath    = "/app/config/status_mapping.yaml"
-	localInvestmentAreasPath  = "/app/config/investment_areas.yaml"
 	localComplexityConfigPath = "/app/config/complexity.yaml"
 )
 
@@ -174,6 +173,9 @@ type Spec struct {
 
 // Config contains typed runtime settings. Sensitive values use secrets.Value,
 // which redacts itself from formatting, slog, and JSON.
+// minPurposeStateSecretLength is the floor of SSO_STATE_SECRET and GITHUB_APP_STATE_SECRET.
+const minPurposeStateSecretLength = 32
+
 type Config struct {
 	Service string
 	Profile string
@@ -373,6 +375,11 @@ type Config struct {
 	// (dho api only): JWT_SECRET_KEY, JWT_ISSUER and JWT_AUDIENCE, the same
 	// variables the Python api reads.
 	APIJWTSecret secrets.Value
+	// SSOStateSecret and GitHubAppStateSecret (SSO_STATE_SECRET,
+	// GITHUB_APP_STATE_SECRET) key the SSO login state and the GitHub App
+	// install state, one key per purpose. Optional (dho api only).
+	SSOStateSecret       secrets.Value
+	GitHubAppStateSecret secrets.Value
 	// LinkTokenSecret signs invite, verification and reset link tokens;
 	// LinkTokenSecretPrevious is a retired signing key still accepted during a
 	// rotation overlap (dho api only). Both are optional.
@@ -505,7 +512,7 @@ func Load(spec Spec) (Config, error) {
 	cfg.WorkerGithubWorkItemsInvestmentConfigPath = envOrDefault(
 		lookup,
 		"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
-		localInvestmentAreasPath,
+		"",
 	)
 	// CHAOS-4291: same reasoning as the two work-items paths above -- the
 	// native complexity executor needs this artifact wherever the worker
@@ -982,6 +989,33 @@ func Load(spec Spec) (Config, error) {
 		cfg.APIJWTSecret, _, err = secrets.ResolveSecret("JWT_SECRET_KEY", lookup)
 		if err != nil {
 			return Config{}, err
+		}
+		for _, state := range []struct {
+			env   string
+			field *secrets.Value
+		}{{"SSO_STATE_SECRET", &cfg.SSOStateSecret}, {"GITHUB_APP_STATE_SECRET", &cfg.GitHubAppStateSecret}} {
+			value, set, resolveErr := secrets.ResolveSecret(state.env, lookup)
+			if resolveErr != nil {
+				return Config{}, resolveErr
+			}
+			if set && len([]rune(value.Reveal())) < minPurposeStateSecretLength {
+				return Config{}, fmt.Errorf("%s must be at least %d characters", state.env, minPurposeStateSecretLength)
+			}
+			*state.field = value
+		}
+		if cfg.SSOStateSecret.Configured() {
+			for _, other := range []struct {
+				env   string
+				value secrets.Value
+			}{{"GITHUB_APP_STATE_SECRET", cfg.GitHubAppStateSecret}, {"JWT_SECRET_KEY", cfg.APIJWTSecret}} {
+				if other.value.Configured() && other.value.Reveal() == cfg.SSOStateSecret.Reveal() {
+					return Config{}, fmt.Errorf("SSO_STATE_SECRET must differ from %s: one key per purpose", other.env)
+				}
+			}
+		}
+		if cfg.GitHubAppStateSecret.Configured() && cfg.APIJWTSecret.Configured() &&
+			cfg.GitHubAppStateSecret.Reveal() == cfg.APIJWTSecret.Reveal() {
+			return Config{}, errors.New("GITHUB_APP_STATE_SECRET must differ from JWT_SECRET_KEY: one key per purpose")
 		}
 		cfg.LinkTokenSecret, _, err = secrets.ResolveSecret("LINK_TOKEN_SECRET", lookup)
 		if err != nil {
@@ -1567,6 +1601,12 @@ type ComponentSpec struct {
 	// or migrate's own), has no such ambiguity and stays in the sweep.
 	DBKeyShared bool
 	Scheme      string
+	// SecureKey, when the spec names one, is the optional TLS switch of the
+	// component form: "true" adds secure=true to the assembled DSN, "false"
+	// or unset leaves the DSN exactly as without the key, any other value is
+	// refused. ClickHouse Cloud's native port needs TLS, and the component
+	// form is the one that carries a password with reserved characters.
+	SecureKey string
 }
 
 // componentKeys returns every env var name this spec's component form can
@@ -1707,6 +1747,7 @@ var (
 		HostKey: "DEV_HEALTH_CH_HOST", PortKey: "DEV_HEALTH_CH_PORT", DefaultPort: "9000",
 		UserKey: "DEV_HEALTH_CH_USER", PasswordKey: "DEV_HEALTH_CH_PASSWORD",
 		DBKey: "DEV_HEALTH_CH_DB", DefaultDB: "default", Scheme: "clickhouse",
+		SecureKey: "DEV_HEALTH_CH_SECURE",
 	}
 	// APIClickHouseSpec is the dho api Service's own ClickHouse component
 	// form (CHAOS-6310), the ClickHouse analog of APIDatabaseSpec: a
@@ -1770,10 +1811,17 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	if password.Configured() && !user.Configured() {
 		return secrets.Value{}, true, fmt.Errorf("%s is set without %s", spec.PasswordKey, spec.UserKey)
 	}
+	secure, secureErr := componentSecure(lookup, spec)
+	if secureErr != nil {
+		return secrets.Value{}, true, secureErr
+	}
 	target := &url.URL{
 		Scheme: spec.Scheme,
 		Host:   net.JoinHostPort(host, port),
 		Path:   "/" + db,
+	}
+	if secure {
+		target.RawQuery = "secure=true"
 	}
 	if user.Configured() {
 		if password.Configured() {
@@ -1784,7 +1832,7 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 	}
 	assembled := target.String()
 	if driverErr := acceptedByDriver(spec, assembled, componentValues{
-		host: host, port: port, database: db, user: user, password: password,
+		host: host, port: port, database: db, user: user, password: password, secure: secure,
 	}); driverErr != nil {
 		return secrets.Value{}, true, driverErr
 	}
@@ -1796,6 +1844,28 @@ func ResolveDSNFromComponents(lookup secrets.LookupEnv, spec ComponentSpec) (bui
 type componentValues struct {
 	host, port, database string
 	user, password       secrets.Value
+	secure               bool
+}
+
+// componentSecure reads spec's optional TLS switch. Only the exact words
+// "true" and "false" are taken: the value decides whether the login goes
+// over TLS, so a typo must not quietly mean plaintext.
+func componentSecure(lookup secrets.LookupEnv, spec ComponentSpec) (bool, error) {
+	if spec.SecureKey == "" {
+		return false, nil
+	}
+	value, present := lookup(spec.SecureKey)
+	if !present || value == "" {
+		return false, nil
+	}
+	switch value {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	}
+	// The value is not quoted: a misplaced credential must not reach the error.
+	return false, fmt.Errorf("%s must be true or false; the value set is neither (not printed)", spec.SecureKey)
 }
 
 // parsedDSN is what a driver made of an assembled DSN: the identity it
@@ -1803,6 +1873,7 @@ type componentValues struct {
 type parsedDSN struct {
 	host, port, user, password, database string
 	endpoints                            int
+	secure                               bool
 }
 
 // acceptedByDriver is the component form's only validation: hand the
@@ -1875,6 +1946,7 @@ func identicalAfterRoundTrip(spec ComponentSpec, configured componentValues, par
 		{key: spec.DBKey, want: configured.database, got: parsed.database, compare: true, quote: true},
 		{key: spec.UserKey, want: configured.user.Reveal(), got: parsed.user, compare: configured.user.Configured(), quote: true},
 		{key: spec.PasswordKey, want: configured.password.Reveal(), got: parsed.password, compare: configured.password.Configured(), quote: false},
+		{key: spec.SecureKey, want: strconv.FormatBool(configured.secure), got: strconv.FormatBool(parsed.secure), compare: spec.SecureKey != "", quote: true},
 	} {
 		if !field.compare || field.want == field.got {
 			continue
@@ -1941,6 +2013,7 @@ func parseWithDriver(scheme, dsn string) (parsedDSN, error) {
 			password:  options.Auth.Password,
 			database:  options.Auth.Database,
 			endpoints: len(options.Addr),
+			secure:    options.TLS != nil,
 		}
 		if parsed.endpoints == 1 {
 			// SplitHostPort also unwraps the brackets net.JoinHostPort

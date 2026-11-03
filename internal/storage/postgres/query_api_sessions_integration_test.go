@@ -51,7 +51,8 @@ func startQueryAPISessionsHarness(t *testing.T, ctx context.Context, withAuthSch
 		statements = append(statements,
 			"CREATE SCHEMA auth",
 			"CREATE TABLE auth.sessions (id uuid PRIMARY KEY, principal_id uuid, revoked_at timestamptz, legacy_token_version bigint, token_hash text)",
-			"CREATE TABLE auth.principals (id uuid PRIMARY KEY)",
+			"CREATE TABLE auth.principals (id uuid PRIMARY KEY, kind text, disabled_at timestamptz, display_name text)",
+			"CREATE TABLE auth.platform_role_assignments (id uuid PRIMARY KEY, principal_id uuid, role_key text, expires_at timestamptz, granted_by uuid)",
 		)
 	}
 	for _, statement := range statements {
@@ -78,7 +79,11 @@ func (h *queryAPISessionsHarness) applyLeg(ctx context.Context, sessions *QueryA
 		QueryAPIRole: h.role, QueryAPIGrants: grants, QueryAPIColumnGrants: columnGrants,
 	}
 	if sessions != nil {
-		options.QueryAPISessionRead = &riverstore.SessionReadGrant{Schema: sessions.Schema, Table: sessions.Table, Columns: sessions.Columns}
+		grant := &riverstore.SessionReadGrant{Schema: sessions.Schema, Table: sessions.Table, Columns: sessions.Columns}
+		for _, table := range sessions.Also {
+			grant.Also = append(grant.Also, riverstore.SessionReadTable{Table: table.Table, Columns: table.Columns})
+		}
+		options.QueryAPISessionRead = grant
 	}
 	_, err := riverstore.ApplyPinnedMigrations(ctx, h.admin, options)
 	return err
@@ -88,8 +93,13 @@ func (h *queryAPISessionsHarness) applyLeg(ctx context.Context, sessions *QueryA
 // applied as the other writer of the same grant.
 func (h *queryAPISessionsHarness) applyAuthMigrateGrant(t *testing.T, ctx context.Context) {
 	t.Helper()
+	h.applyAuthMigrateGrantOwned(t, ctx, false)
+}
+
+func (h *queryAPISessionsHarness) applyAuthMigrateGrantOwned(t *testing.T, ctx context.Context, platformRolesOwned bool) {
+	t.Helper()
 	statements, err := authschema.SessionReaderStatements(ctx, h.admin,
-		authschema.Options{Schema: "auth", SessionReaderRoles: []string{h.role}})
+		authschema.Options{Schema: "auth", SessionReaderRoles: []string{h.role}, PlatformRolesOwned: platformRolesOwned})
 	if err != nil {
 		t.Fatalf("auth-migrate session reader statements: %v", err)
 	}
@@ -125,7 +135,7 @@ func TestQueryAPIMigrateLegEndsWithExactlyTheManifestPlusTheSessionRead(t *testi
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	if err := h.applyLeg(ctx, &read); err != nil {
 		t.Fatalf("the migrate leg: %v", err)
 	}
@@ -149,7 +159,7 @@ func TestQueryAPIMigrateLegSkipsTheSessionReadWhenTheAuthSessionsTableIsAbsent(t
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	h := startQueryAPISessionsHarness(t, ctx, false)
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	if err := h.applyLeg(ctx, &read); err != nil {
 		t.Fatalf("an absent auth schema must not abort the migration: %v", err)
 	}
@@ -167,7 +177,7 @@ func TestQueryAPIPostureHoldsAfterAuthMigrateAndRiverMigrateInEitherOrder(t *tes
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	h := startQueryAPISessionsHarness(t, ctx, true)
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	steps := []struct {
 		name string
 		run  func()
@@ -199,7 +209,7 @@ func TestQueryAPIRoleCannotReadOtherAuthColumnsOrTables(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	h := startQueryAPISessionsHarness(t, ctx, true)
-	read := QueryAPISessionReadFor("auth")
+	read := QueryAPISessionReadFor("auth", false)
 	if err := h.applyLeg(ctx, &read); err != nil {
 		t.Fatalf("the migrate leg: %v", err)
 	}
@@ -217,6 +227,64 @@ func TestQueryAPIRoleCannotReadOtherAuthColumnsOrTables(t *testing.T) {
 		var pgErr *pgconn.PgError
 		if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
 			t.Errorf("%s: %v, want SQLSTATE 42501", statement, err)
+		}
+	}
+}
+
+// While auth-service owns the platform roles the manifest is the session read
+// plus the platform role read, exactly: an extra or a missing platform column
+// refuses readiness, and both writers of the grant (the river leg and
+// auth-migrate) end in the ready state in either order.
+func TestQueryAPIPostureRefusesAnExtraOrMissingPlatformColumn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	h := startQueryAPISessionsHarness(t, ctx, true)
+	on, off := QueryAPISessionReadFor("auth", true), QueryAPISessionReadFor("auth", false)
+	if err := h.applyLeg(ctx, &on); err != nil {
+		t.Fatalf("the migrate leg, owned: %v", err)
+	}
+	if err := h.check(t, ctx, &on); err != nil {
+		t.Fatalf("exactly the manifest plus the session and platform reads must be ready: %v", err)
+	}
+	pool := connectAs(t, ctx, h.uri, h.role, queryAPISessionsPassword)
+	if _, err := pool.Exec(ctx, `SELECT a.principal_id, a.role_key, a.expires_at, p.id, p.kind, p.disabled_at
+	FROM auth.platform_role_assignments a JOIN auth.principals p ON p.id = a.principal_id`); err != nil {
+		t.Fatalf("the platform role read as the role: %v", err)
+	}
+	if err := h.check(t, ctx, &off); err == nil || !strings.Contains(err.Error(), "outside the manifest") {
+		t.Fatalf("not owned, the platform read is outside the manifest: %v", err)
+	}
+	for _, c := range []struct {
+		statement, want string
+	}{
+		{"GRANT SELECT (display_name) ON auth.principals TO " + h.role, "outside the manifest"},
+		{"GRANT SELECT (granted_by) ON auth.platform_role_assignments TO " + h.role, "outside the manifest"},
+		{"REVOKE SELECT (kind) ON auth.principals FROM " + h.role, "lacks"},
+		{"REVOKE SELECT (expires_at) ON auth.platform_role_assignments FROM " + h.role, "lacks"},
+	} {
+		if _, err := h.admin.Exec(ctx, c.statement); err != nil {
+			t.Fatalf("%s: %v", c.statement, err)
+		}
+		if err := h.check(t, ctx, &on); err == nil || !errors.Is(err, ErrPostureRefused) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("after %q: %v, want %q", c.statement, err, c.want)
+		}
+		if err := h.applyLeg(ctx, &on); err != nil {
+			t.Fatalf("re-apply: %v", err)
+		}
+		if err := h.check(t, ctx, &on); err != nil {
+			t.Fatalf("after re-apply: %v", err)
+		}
+	}
+	for _, order := range [][]bool{{true, false}, {false, true}} {
+		for _, authMigrate := range order {
+			if authMigrate {
+				h.applyAuthMigrateGrantOwned(t, ctx, true)
+			} else if err := h.applyLeg(ctx, &on); err != nil {
+				t.Fatalf("river leg: %v", err)
+			}
+		}
+		if err := h.check(t, ctx, &on); err != nil {
+			t.Fatalf("order %v (auth-migrate first = %v): %v", order, order[0], err)
 		}
 	}
 }

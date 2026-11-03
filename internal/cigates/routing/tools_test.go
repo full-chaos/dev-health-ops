@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/routing"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/bigboydir"
 )
 
 // ---- route coverage (R467): every routed path has a handler in the running build ----
@@ -194,7 +195,7 @@ func prodWeb() m {
 }
 
 func trackedOverlay(t *testing.T) string {
-	return filepath.Join(routingRepoRoot(t), "ci", "bigboy", "compose.bigboy.yml")
+	return bigboydir.Path(t, routingRepoRoot(t), "compose.bigboy.yml")
 }
 
 // overlayWith is the tracked compose file with one web.environment line replaced ("" drops it).

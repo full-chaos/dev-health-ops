@@ -17,7 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -85,10 +85,7 @@ func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pg
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	instance := pgschema.Start(ctx, t)
 	defer instance.Close(context.Background())
 	pool, err := pgxpool.New(ctx, instance.URI)
 	if err != nil {
@@ -99,7 +96,6 @@ func withDispatchServicePool(t *testing.T, fn func(ctx context.Context, pool *pg
 	// canonical-incident gate read them), the producer's worker_job_outbox, and the rate-limit
 	// observations table activeCooldowns reads. A missing relation would poison the whole enclosing
 	// transaction (25P02), so the real tables must exist -- and now they do, with their real shape.
-	createReferenceDiscoveryTables(t, ctx, pool)
 	pgseed.Org(ctx, t, pool, discoveryTestOrg, "community")
 	fn(ctx, pool)
 }

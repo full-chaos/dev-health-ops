@@ -36,7 +36,7 @@ func TestPagerDutyStatusAndPreflightVenueOracle(t *testing.T) {
 		Golden: golden,
 		Root:   root,
 		JWTKey: jwtKey,
-		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
+		Seed: withTokenMemberships(func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, v *venueoracle.Venue) map[string]map[string]any {
 			t.Helper()
 			exec := func(sql string, args ...any) {
 				t.Helper()
@@ -98,7 +98,7 @@ VALUES ($1, 'pagerduty', $2, 'v1:not-decryptable-here', 1, now(), now(), $3, $4,
 				"member":           {"user_id": memberID.String(), "email": "pd-member@example.com", "org_id": orgs["oauth"].id.String(), "role": "member"},
 				"super":            {"user_id": superID.String(), "email": "pd-super@example.com", "is_superuser": true},
 			}
-		},
+		}),
 	})
 
 	auth := func(name string) map[string]string {

@@ -70,7 +70,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		// on whenever an issuer is set.
 		exchangeEnvironment(t, env)
 	}
-	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(ssoEnvironment(compatEnvironment(env)))})
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
@@ -114,16 +114,17 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t))
+	credentials, _, err := credentialRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}
 	for _, route := range append(routes, credentials...) {
 		registered["api"] = append(registered["api"], route.Pattern)
 	}
-	if cfg.WorkloadExchange.Enabled {
+	if cfg.WorkloadExchange.Mounted() {
 		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
+	registered["api"] = append(registered["api"], authapi.PatternAuthorize, authapi.PatternAuthorizeBatch)
 	seenWellKnown := map[string]bool{}
 	for _, route := range authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: issuer}) {
 		if !seenWellKnown[route.Pattern] {
@@ -236,9 +237,10 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 }
 
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
-// four compatibility routes, the session issue route, the eight federated sign-in routes, the six credentials routes and the three operator
-// paths on GET and HEAD, and GET and HEAD of the JWKS and the discovery document.
-const servedAuthRouteCount = 36
+// four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
+// the twenty-five provisioning routes, the two authorize routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
+// discovery document.
+const servedAuthRouteCount = 68
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -303,6 +305,19 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachCompatibilityRoute(t *testing
 	}
 }
 
+// TestTheRowGateRefusesAPlantedMissingRowForEachProvisioningRoute: each
+// provisioning route is served by the probe, and its row removed in memory is
+// named alone.
+func TestTheRowGateRefusesAPlantedMissingRowForEachProvisioningRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	for _, key := range provisioningServedRoutes {
+		if !served[key] {
+			t.Fatalf("probe does not serve %s: the provisioning mounts are missing from the probe", key)
+		}
+		plantedMissingRow(t, served, key)
+	}
+}
+
 // TestTheRowGateRefusesARowForARouteNothingServes is the stale-row control: a
 // row for an unmounted route is reported.
 func TestTheRowGateRefusesARowForARouteNothingServes(t *testing.T) {
@@ -342,6 +357,16 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/api/v1/auth/verify": "PatternVerifyEmail", "/api/v1/auth/resend-verification": "PatternResendVerification",
 		"/api/v1/auth/forgot-password": "PatternForgotPassword", "/api/v1/auth/reset-password": "PatternResetPassword",
 		"/api/v1/auth/change-password": "PatternChangePassword", "/api/v1/auth/register": "PatternRegister",
+		"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
+		"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
+		"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
+		"/internal/v1/organizations/deprovision": "PatternOrgDeprovision",
+		"/internal/v1/organizations/reactivate":  "PatternOrgReactivate",
+		"/internal/v1/invites/revoke":            "PatternInviteRevoke",
+		"/internal/v1/organizations/suspend":     "PatternOrgSuspend",
+		"/internal/v1/organizations/state":       "PatternOrgState",
+		"/internal/v1/organizations/onboard":     "PatternOrgOnboard",
+		"/internal/v1/organizations/create":      "PatternOrgCreate",
 	}
 	checked := 0
 	var walk func(node any, where string)
@@ -509,9 +534,10 @@ func TestAWellKnownRowWithNoRouteIsStale(t *testing.T) {
 	}
 }
 
-// exchangeEnvironment turns the workload-token exchange on for the probe: a
-// throwaway CA bundle and reviewer token file, so configure builds the route.
-// The probe sends no valid request, so nothing reaches TokenReview.
+// exchangeEnvironment turns the workload-token exchange on for the probe, with
+// both subjects: a throwaway CA bundle and reviewer token file, so configure
+// builds the route. The probe sends no valid request, so nothing reaches
+// TokenReview or the bootstrap registry.
 func exchangeEnvironment(t *testing.T, env map[string]string) {
 	t.Helper()
 	tls := httptest.NewTLSServer(http.NotFoundHandler())
@@ -527,6 +553,7 @@ func exchangeEnvironment(t *testing.T, env map[string]string) {
 		t.Fatal(err)
 	}
 	env[authconfig.EnvWorkloadExchange] = "true"
+	env[authconfig.EnvWorkloadBootstrap] = "true"
 	env[authconfig.EnvWorkloadTrustDomain] = "cluster.example.test"
 	env[authconfig.EnvWorkloadClusterIssuer] = "https://kubernetes.default.svc.cluster.local"
 	env[authconfig.EnvWorkloadKubeAPIURL] = "https://kubernetes.default.svc"

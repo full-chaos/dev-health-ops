@@ -38,7 +38,7 @@ func rewrite(t *testing.T, path, content string) {
 func urlEscape(s string) string { return url.QueryEscape(s) }
 
 // collectCounter returns every data point of the named Int64 sum as
-// "outcome/reason/audience" -> value.
+// "subject|outcome/reason/audience" -> value.
 func collectCounter(t *testing.T, reader *sdkmetric.ManualReader, name string) map[string]int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -60,10 +60,10 @@ func collectCounter(t *testing.T, reader *sdkmetric.ManualReader, name string) m
 					v, _ := point.Attributes.Value(attribute.Key(key))
 					return v.AsString()
 				}
-				if point.Attributes.Len() != 3 {
-					t.Fatalf("%s point carries %d attributes, want outcome, reason, audience", name, point.Attributes.Len())
+				if point.Attributes.Len() != 4 {
+					t.Fatalf("%s point carries %d attributes, want subject, outcome, reason, audience", name, point.Attributes.Len())
 				}
-				out[get("outcome")+"/"+get("reason")+"/"+get("audience")] = point.Value
+				out[get("subject")+"|"+get("outcome")+"/"+get("reason")+"/"+get("audience")] = point.Value
 			}
 		}
 	}

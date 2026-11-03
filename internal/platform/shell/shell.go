@@ -490,8 +490,8 @@ func Execute(
 	return 0
 }
 
-// metricsFlush stops the OTLP metric push on shutdown, after every component
-// registered after it has stopped producing, so the last interval is flushed.
+// metricsFlush exports the OTLP metric push once at start, before the listeners, and stops it on shutdown,
+// after every component registered after it has stopped producing, so the last interval is flushed.
 // It is a no-op without a push. A flush that cannot reach the collector is
 // logged and bounded, never a shutdown failure: the process stopped cleanly.
 type metricsFlush struct {
@@ -508,7 +508,36 @@ type metricsShutdowner interface {
 
 func (metricsFlush) Name() string { return "otlp-metrics" }
 
-func (metricsFlush) Start(context.Context) error { return nil }
+// metricsForceFlusher is the startup half of the metrics source: one export of what the push holds now.
+type metricsForceFlusher interface {
+	ForceFlush(context.Context) error
+}
+
+// Start exports the series created at construction once, before the components after it (operator HTTP and the
+// service listeners) start, so a series seeded at 0 reaches the collector at 0 rather than first at the reader's
+// first tick, already holding the first requests. Bounded and fail-soft as Shutdown is: an unreachable collector
+// costs the start at most metricsFlushTimeout and a warning, never a failed start.
+func (m metricsFlush) Start(ctx context.Context) error {
+	flusher, ok := m.source.(metricsForceFlusher)
+	if !ok {
+		return nil
+	}
+	flushCtx, cancel := context.WithTimeout(ctx, metricsFlushTimeout)
+	defer cancel()
+	// Beside the wait for the same reason as in Shutdown: the SDK reader may not return when flushCtx ends.
+	flushed := make(chan error, 1)
+	go func() { flushed <- flusher.ForceFlush(flushCtx) }()
+	select {
+	case err := <-flushed:
+		if err != nil {
+			m.logger.Warn("otlp metrics startup flush failed", "error", err)
+		}
+	case <-flushCtx.Done():
+		m.logger.Warn("otlp metrics startup flush abandoned: the flush did not return within its budget",
+			"budget", metricsFlushTimeout, "cause", context.Cause(flushCtx))
+	}
+	return nil
+}
 
 func (m metricsFlush) Shutdown(ctx context.Context) error {
 	// Half of what is left of the shutdown budget, at most metricsFlushTimeout:

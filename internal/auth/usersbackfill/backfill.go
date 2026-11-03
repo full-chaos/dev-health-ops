@@ -74,7 +74,13 @@ type Report struct {
 	LastLoginDrift   int
 	RoleGranted      int
 	RoleRevoked      int
-	Skipped          map[string]int
+	// RoleSkippedOwned counts users whose platform role differs from
+	// is_superuser and was left alone because platform roles are owned.
+	RoleSkippedOwned int
+	// ExpiredGranted are the ids of expired assignments a person granted to a
+	// superuser; the backfill leaves them and reports them.
+	ExpiredGranted []uuid.UUID
+	Skipped        map[string]int
 
 	// IdentityRelinkPending counts the not-carried SSO accounts the owned store re-links at their first sign-in
 	// (identity.IsSSORelinkable).
@@ -114,8 +120,18 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("last_login_drift=%d", r.LastLoginDrift),
 		fmt.Sprintf("platform_role_granted=%d", r.RoleGranted),
 		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
-		fmt.Sprintf("skipped=%d", r.SkippedTotal()),
+		fmt.Sprintf("platform_role_skipped_owned=%d", r.RoleSkippedOwned),
+		fmt.Sprintf("platform_role_expired_granted=%d", len(r.ExpiredGranted)),
 	}
+	expired := make([]string, 0, len(r.ExpiredGranted))
+	for _, id := range r.ExpiredGranted {
+		expired = append(expired, id.String())
+	}
+	sort.Strings(expired)
+	for _, id := range expired {
+		lines = append(lines, "platform_role_expired_granted.assignment="+id)
+	}
+	lines = append(lines, fmt.Sprintf("skipped=%d", r.SkippedTotal()))
 	classes := make([]string, 0, len(r.Skipped))
 	for c := range r.Skipped {
 		classes = append(classes, c)
@@ -131,6 +147,9 @@ func (r Report) Lines() []string {
 type Options struct {
 	DryRun    bool
 	BatchSize int
+	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: the platform role leg
+	// writes nothing and counts each difference.
+	PlatformRolesOwned bool
 }
 
 // Run copies every user. Per-user failures are counted by class and the run
@@ -169,6 +188,7 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 					rep.SSOSubjectUnverifiable++
 				}
 			}
+			target.PlatformRolesOwned = opts.PlatformRolesOwned
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
 				rep.Skipped[classify(err)]++
@@ -196,6 +216,12 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 			}
 			if res.RoleRevoked {
 				rep.RoleRevoked++
+			}
+			if res.RoleSkipped {
+				rep.RoleSkippedOwned++
+			}
+			if res.RoleExpiredGranted != nil {
+				rep.ExpiredGranted = append(rep.ExpiredGranted, *res.RoleExpiredGranted)
 			}
 		}
 		last := rows[len(rows)-1].ID

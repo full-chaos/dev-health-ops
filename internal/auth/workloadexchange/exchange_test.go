@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/redirectprobe"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -182,6 +183,7 @@ func TestTheAuditRowBindsTheTokenToItsBindingAndRevision(t *testing.T) {
 			t.Errorf("audit %s = %s, want %s", key, got, exp)
 		}
 	}
+	auditwire.MustValidate(t, row)
 	if err := audit.ValidateAttributes(row.Attributes); err != nil {
 		t.Fatalf("the audit allowlist refuses the row: %v", err)
 	}

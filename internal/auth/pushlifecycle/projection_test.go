@@ -107,9 +107,12 @@ func sameState(a, b State) bool {
 
 func TestProjectionGapIsRefused(t *testing.T) {
 	state := mustApply(t, State{}, created(credA, "ingest:write"), nil)
-	next, outcome := Apply(state, revoked(credA, 3), nil)
+	next, outcome := Apply(state, scoped(credA, 3, "ingest:write"), nil)
 	if outcome != Gap || !sameState(next, state) {
 		t.Fatalf("gap: outcome %s, changed=%v", outcome, !sameState(next, state))
+	}
+	if next, outcome := Apply(state, revoked(credA, 3), nil); outcome != Applied || next.Status != StatusRevoked || next.Revision != 3 {
+		t.Fatalf("a revoke over a gap: outcome %s status %s r%d, want applied revoked r3", outcome, next.Status, next.Revision)
 	}
 	if _, outcome := Apply(State{}, scoped(credA, 2, "ingest:write"), nil); outcome != Gap {
 		t.Fatalf("a first sight at revision 2 is %s, want gap", outcome)
@@ -338,8 +341,11 @@ func TestProjectionNeverAppliesToATerminalAggregateAndNeverPanics(t *testing.T) 
 				if before.Status.Terminal() && outcome == Applied {
 					t.Fatalf("run %d: applied %s to a terminal credential", run, e.EventType)
 				}
-				if next.Revision < before.Revision {
-					t.Fatalf("run %d: revision went from %d to %d", run, before.Revision, next.Revision)
+				if next.Revision < before.Revision || next.Decided < before.Decided {
+					t.Fatalf("run %d: revision went from %d/%d to %d/%d", run, before.Revision, before.Decided, next.Revision, next.Decided)
+				}
+				if before.Status.Terminal() && (next.Status != before.Status || Live(next, t0)) {
+					t.Fatalf("run %d: a %s credential moved to %s", run, before.Status, next.Status)
 				}
 				if outcome != Applied && !sameState(next, before) {
 					t.Fatalf("run %d: %s changed the state", run, outcome)
@@ -473,8 +479,8 @@ func TestProjectionScopesOnlyNarrowWhateverTheDeliveryOrder(t *testing.T) {
 	if outcome != RefusedWiden || !sameState(next, in) {
 		t.Fatalf("in order: later widen outcome %s, want refused_widen with state unchanged", outcome)
 	}
-	if _, outcome := Apply(next, widen, nil); outcome != RefusedWiden {
-		t.Fatalf("a redelivered refused widen is %s, want refused_widen again", outcome)
+	if _, outcome := Apply(next, widen, nil); outcome != Duplicate {
+		t.Fatalf("a redelivered refused widen is %s, want duplicate: the refusal decided its revision", outcome)
 	}
 
 	state := base

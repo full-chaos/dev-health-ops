@@ -302,7 +302,7 @@ func (h handlers) requireMembership(ctx context.Context, userID uuid.UUID, orgID
 
 func membershipRequiredDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
-	detail.Set("message", "A membership in this organization is required")
+	detail.Set("message", identity.MembershipRequiredMessage)
 	detail.Set("reason", "membership_required")
 	return detail
 }
@@ -368,9 +368,9 @@ func (h handlers) createAccountAndMembership(ctx context.Context, row *providerR
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, `INSERT INTO users
-	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified, is_superuser,
+	(id, email, username, full_name, avatar_url, auth_provider, auth_provider_id, sso_provider_id, is_active, is_verified,
 	 token_version, last_login_at, created_at, updated_at, saml_nameid_format, saml_sp_name_qualifier)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, false, 0, $8, $8, $8, $10, $11)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $9, true, true, 0, $8, $8, $8, $10, $11)`,
 		newID, account.email, account.username, account.fullName, account.avatarURL, account.authProvider, account.externalID, now, account.ssoProviderID,
 		account.saml.formatArg(), account.saml.qualifierArg()); err != nil {
 		if isUniqueViolation(err) {

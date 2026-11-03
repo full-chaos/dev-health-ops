@@ -60,6 +60,7 @@ var jobPermAllowlist = map[jobKey]jobPermRow{
 	{"go-auth-service.yml", "auth-cancel-stacked-queue-children"}: {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
 	{"go-quality.yml", "cancel-stacked-queue-children"}:           {map[string]string{"actions": "write", "contents": "read"}, "cancels the runs stacked on a red queue entry"},
 	{"governance.yml", "governance"}:                              {map[string]string{"contents": "read", "pull-requests": "read"}, "reads pull requests for the governance gate"},
+	{"pr-title.yml", "pr-title"}:                                  {map[string]string{"contents": "read", "pull-requests": "read"}, "reads the queued pull request title by REST on merge_group"},
 	{"live-e2e.yml", "live-e2e-run"}:                              {map[string]string{"contents": "read", "packages": "read"}, "pulls images from ghcr"},
 	{"live-e2e.yml", "metrics-executed-proof-run"}:                {map[string]string{"contents": "read", "packages": "read"}, "pulls images from ghcr"},
 	{"mirror-test-images.yml", "precheck"}:                        {map[string]string{"contents": "read", "packages": "read"}, "reads the mirror packages, writes nothing"},

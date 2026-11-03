@@ -100,6 +100,26 @@
     {
       "file": "decision-valid-reason-delegation-invalid.json",
       "why": "Reserved for the actor-chain leaf: a deny for an invalid delegation."
+    },
+    {
+      "file": "decision-valid-allow-allowlist-wildcard.json",
+      "why": "An org-wide allow is the explicit allowlist [\"*\"] plus a tenant scope: the PDP never relies on an absent member for 'no limit' (CHAOS-12656)."
+    },
+    {
+      "file": "decision-valid-allow-allowlist-several-keys.json",
+      "why": "A member limited to several repositories: sorted, unique canonical keys."
+    },
+    {
+      "file": "decision-valid-allow-redaction-every-class.json",
+      "why": "Every registered redaction class in one decision (contracts/auth/v1/vocabulary/redaction-classes.v1.json)."
+    },
+    {
+      "file": "decision-valid-allow-tenant-scope-only.json",
+      "why": "An allow of an action with no repository filter carries the tenant scope and no allowlist."
+    },
+    {
+      "file": "decision-valid-allowlist-at-the-bound.json",
+      "why": "256 keys is the largest allowlist the schema admits."
     }
   ],
   "reject": [
@@ -258,6 +278,18 @@
       "expect_instance_location": "/reason_code",
       "expect_keyword": "enum",
       "why": "A well-formed code no producer emits is refused: the vocabulary is closed."
+    },
+    {
+      "file": "decision-invalid-allowlist-over-the-bound.json",
+      "expect_instance_location": "/obligations/repository_allowlist",
+      "expect_keyword": "maxItems",
+      "why": "257 keys is over the bound: the PDP never truncates, a decision over the bound is a deny with its own reason, so a document that carries more is invalid."
+    },
+    {
+      "file": "decision-invalid-duplicate-redaction-class.json",
+      "expect_instance_location": "/obligations/redaction",
+      "expect_keyword": "uniqueItems",
+      "why": "A repeated redaction class is malformed, as a repeated allowlist key is."
     }
   ],
   "reject_by_client": [

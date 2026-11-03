@@ -11,6 +11,12 @@ type Obligations struct {
 	MinimumAssurance string `json:"minimum_assurance,omitempty"`
 	// RepositoryAllowlist is the one repository key of a repository request.
 	RepositoryAllowlist []string `json:"repository_allowlist,omitempty"`
+	// RepositoryRestricted is true when the allowlist member is present, an
+	// empty list included: an empty allowlist means NONE, and a slice that is
+	// empty cannot say it was present.
+	RepositoryRestricted bool `json:"-"`
+	// Redaction is the field classes the consumer must remove.
+	Redaction []string `json:"redaction,omitempty"`
 }
 
 // DelegationAudit is the impersonation context of an exempted allow.

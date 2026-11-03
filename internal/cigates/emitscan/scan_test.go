@@ -460,3 +460,52 @@ func TestOnlyConversionsAndConstantFormattersFoldIntoAKey(t *testing.T) {
 		t.Fatalf("findings = %v, want one R2 dynamic key", got)
 	}
 }
+
+func TestRiverConfigBuilder(t *testing.T) {
+	client := "func g() { _, _ = river.NewClient(nil, build()) }\n"
+	cases := []struct {
+		name, body, want string
+	}{
+		{"accept: builder returns a literal with Logger", client + "func build() *river.Config { return &river.Config{Logger: slog.Default()} }", ""},
+		{"accept: every return is a literal with Logger", client + "func build() *river.Config { if true { return &river.Config{Logger: slog.Default()} }; return &river.Config{Logger: slog.Default(), Schema: \"s\"} }", ""},
+		{"refuse: builder literal without Logger", client + "func build() *river.Config { return &river.Config{Schema: \"s\"} }", "R5"},
+		{"refuse: one return without Logger", client + "func build() *river.Config { if true { return &river.Config{Logger: slog.Default()} }; return &river.Config{} }", "R5"},
+		{"refuse: built in a var then returned", client + "func build() *river.Config { c := &river.Config{Logger: slog.Default()}; return c }", "R5"},
+		{"refuse: returns another call", client + "func build() *river.Config { return other() }\nfunc other() *river.Config { return &river.Config{Logger: slog.Default()} }", "R5"},
+		{"refuse: bare return of a named result", client + "func build() (c *river.Config) { return }", "R5"},
+		{"refuse: no declaration", client, "R5"},
+		{"refuse: another package", "func g() { _, _ = river.NewClient(nil, other.Build()) }\n", "R5"},
+		{"refuse: a method", client + "type t struct{}\nfunc (t) build() *river.Config { return &river.Config{Logger: slog.Default()} }", "R5"},
+		{"refuse: a func value", client + "var build = func() *river.Config { return &river.Config{Logger: slog.Default()} }", "R5"},
+		{"refuse: a parameter shadows the name", "func g(build func() *river.Config) { _, _ = river.NewClient(nil, build()) }\nfunc build() *river.Config { return &river.Config{Logger: slog.Default()} }", "R5"},
+		{"refuse: literal of another type", client + "func build() *other.Config { return &other.Config{Logger: slog.Default()} }", "R5"},
+		{"refuse: no return", client + "func build() *river.Config { panic(\"x\") }", "R5"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rules(scanSource(t, header+c.body)); got != c.want {
+				t.Fatalf("rules = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRiverConfigBuilderDeclaredTwice(t *testing.T) {
+	got := scanFiles(t, map[string]string{
+		"a.go": header + "func g() { _, _ = river.NewClient(nil, build()) }\nfunc build() *river.Config { return &river.Config{Logger: slog.Default()} }\n",
+		"b.go": "package sample\n\nimport \"github.com/riverqueue/river\"\n\nfunc build() *river.Config { return &river.Config{} }\n",
+	})
+	if got != "R5" {
+		t.Fatalf("rules = %q, want R5", got)
+	}
+}
+
+func TestRiverConfigBuilderInAnotherFile(t *testing.T) {
+	got := scanFiles(t, map[string]string{
+		"a.go": header + "func g() { _, _ = river.NewClient(nil, build()) }\n",
+		"b.go": "package sample\n\nimport (\n\t\"log/slog\"\n\triverx \"github.com/riverqueue/river\"\n)\n\nfunc build() *riverx.Config { return &riverx.Config{Logger: slog.Default()} }\n",
+	})
+	if got != "" {
+		t.Fatalf("rules = %q, want none", got)
+	}
+}

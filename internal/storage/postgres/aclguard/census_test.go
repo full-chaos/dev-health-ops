@@ -115,6 +115,7 @@ func TestEveryPrivilegeWriterOfTheSharedDatabaseTakesTheLock(t *testing.T) {
 		"internal/storage/postgres/authschema/grants.go",
 		"internal/storage/postgres/authschema/ownermove.go",
 		"internal/storage/postgres/authschema/push_lifecycle_writer.go",
+		"internal/storage/postgres/ownermove/ownermove.go",
 		"internal/storage/river/migrate.go",
 		"internal/storage/roleprovision/roleprovision.go",
 	}

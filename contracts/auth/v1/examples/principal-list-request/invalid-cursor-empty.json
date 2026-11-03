@@ -1,0 +1,7 @@
+{
+  "schema_version": "principal-list-request.v1",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "kind": "service_account",
+  "limit": 100,
+  "cursor": ""
+}

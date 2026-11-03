@@ -39,9 +39,11 @@ var (
 // issuer and audience (the values the Python api signs its access tokens
 // with).
 type Signer struct {
-	Secret   string
-	Issuer   string
-	Audience string
+	Secret string
+	// FallbackSecret is the key in use before Secret: Verify accepts it, Mint never uses it.
+	FallbackSecret string
+	Issuer         string
+	Audience       string
 }
 
 // State is a verified install state.
@@ -101,7 +103,12 @@ func (s Signer) Verify(state string, now time.Time) (State, error) {
 	}
 	var claims jwt.MapClaims
 	parser := jwt.NewParser(append(options, jwt.WithoutClaimsValidation())...)
-	if _, err := parser.ParseWithClaims(state, &claims, func(*jwt.Token) (any, error) { return []byte(s.Secret), nil }); err != nil {
+	_, err := parser.ParseWithClaims(state, &claims, func(*jwt.Token) (any, error) { return []byte(s.Secret), nil })
+	if err != nil && s.FallbackSecret != "" && s.FallbackSecret != s.Secret {
+		claims = nil
+		_, err = parser.ParseWithClaims(state, &claims, func(*jwt.Token) (any, error) { return []byte(s.FallbackSecret), nil })
+	}
+	if err != nil {
 		return State{}, errInvalidState
 	}
 	for _, name := range []string{"exp", "nbf", "iat"} {

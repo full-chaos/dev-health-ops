@@ -1,0 +1,12 @@
+{
+  "id": "request-principals-list-needs-organization",
+  "kind": "request",
+  "operation": "principals_list",
+  "request": {
+    "schema_version": "principal-list-request.v1"
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "No platform-wide principal list."
+}

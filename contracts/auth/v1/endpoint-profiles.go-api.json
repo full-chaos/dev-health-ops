@@ -1,6 +1,32 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 29,
+      "now": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/members\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.addMember)))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/members\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 36,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.updateMemberRole)))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 37,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.guard.Wrap(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.removeMember)))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 38,
+      "now": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/transfer-ownership\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.transferOwnership)))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/transfer-ownership\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -17,6 +43,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/credentialdelete.go:59; internal/apiservice/admin/credentialdelete.go:72); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -27,7 +54,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -87,6 +114,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
@@ -97,7 +125,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -157,6 +185,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:576; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -167,7 +196,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -227,6 +256,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -235,7 +265,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -295,6 +325,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:494)",
       "gaps": [],
       "graphql_field_name": null,
@@ -303,7 +334,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -363,6 +394,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -373,7 +405,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -433,6 +465,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
@@ -443,7 +476,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -503,6 +536,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/settings.go:404; internal/apiservice/admin/settings.go:91); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -511,7 +545,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -571,6 +605,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -581,7 +616,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -641,6 +676,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:337; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -649,7 +685,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -709,6 +745,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)",
@@ -720,7 +757,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -819,6 +856,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -830,7 +868,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -890,6 +928,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:428); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -901,7 +940,7 @@
       "method": "DELETE",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -961,6 +1000,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers audit log (this leaf does not extend the vocabulary)"
@@ -971,7 +1011,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1031,6 +1071,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers audit log (this leaf does not extend the vocabulary)",
@@ -1042,7 +1083,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1102,6 +1143,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers audit log (this leaf does not extend the vocabulary)",
@@ -1113,7 +1155,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1173,6 +1215,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/auditlogs.go:343; internal/apiservice/admin/auditlogs.go:337); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers audit log (this leaf does not extend the vocabulary)"
@@ -1183,7 +1226,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1243,6 +1286,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
@@ -1253,7 +1297,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1313,6 +1357,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/backfill_detail.go:36; internal/api/syncadmin/store.go:461 (backfillJobByID WHERE id=$1 AND org_id=$2, called at backfill_detail.go:30)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers backfill job (this leaf does not extend the vocabulary)"
@@ -1323,7 +1368,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1383,6 +1428,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -1393,7 +1439,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1453,6 +1499,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:247; internal/api/credentials/credentials.go:221); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -1463,7 +1510,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1523,6 +1570,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:347; internal/api/externalingest/status.go:183); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest batch (this leaf does not extend the vocabulary)"
@@ -1533,7 +1581,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1593,6 +1641,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest schema (this leaf does not extend the vocabulary)"
@@ -1603,7 +1652,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1663,6 +1712,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest schema (this leaf does not extend the vocabulary)"
@@ -1673,7 +1723,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1733,6 +1783,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
@@ -1743,7 +1794,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1803,6 +1854,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
@@ -1813,7 +1865,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1873,6 +1925,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest batch (this leaf does not extend the vocabulary)"
@@ -1883,7 +1936,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -1943,6 +1996,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -1953,7 +2007,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2013,6 +2067,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -2023,7 +2078,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2083,6 +2138,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -2091,7 +2147,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2151,6 +2207,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers identity (this leaf does not extend the vocabulary)"
@@ -2161,7 +2218,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2221,6 +2278,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: cache-aside of the impersonation session keyed by the caller (internal/apiservice/admin/impersonationcache.go:175): a missing client, an open circuit or an absent key reads Postgres, a Valkey error opens a short circuit that bypasses the cache, a stored negative entry answers without Postgres (impersonationcache.go:126)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: any authenticated caller may call it; a caller who does not hold admin.impersonate (a superuser holds it) answers 200 with is_impersonating false and no cache or database read (internal/apiservice/admin/impersonation.go:321)",
       "gaps": [
         "action: the route is open to any authenticated caller and looks a session up only for a caller holding admin.impersonate (internal/apiservice/admin/impersonation.go:321); it is not a platform-only route, so the row keeps no action"
@@ -2231,7 +2289,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2291,6 +2349,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2299,7 +2358,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2359,6 +2418,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2367,7 +2427,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2427,6 +2487,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2435,7 +2496,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2495,6 +2556,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:499; internal/apiservice/admin/pagerduty_bindings.go:497); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2503,7 +2565,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2563,6 +2625,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2571,7 +2634,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2631,6 +2694,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2639,7 +2703,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2699,6 +2763,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -2707,7 +2772,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2767,6 +2832,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
@@ -2777,7 +2843,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2837,6 +2903,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
@@ -2847,7 +2914,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2907,6 +2974,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -2917,7 +2985,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -2977,6 +3045,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -2987,7 +3056,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3047,6 +3116,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route reads the in-process model list cache (internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3057,7 +3127,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3117,6 +3187,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3127,7 +3198,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3187,6 +3258,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3197,7 +3269,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3257,6 +3329,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3267,7 +3340,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3327,6 +3400,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3337,7 +3411,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3397,6 +3471,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -3407,7 +3482,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3467,6 +3542,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -3475,7 +3551,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3535,6 +3611,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:150)",
       "gaps": [],
       "graphql_field_name": null,
@@ -3543,7 +3620,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3603,6 +3680,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -3611,7 +3689,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3671,6 +3749,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -3681,7 +3760,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3741,6 +3820,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.audit (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -3749,7 +3829,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3809,6 +3889,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.stats (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -3817,7 +3898,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3877,6 +3958,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
@@ -3887,7 +3969,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -3947,6 +4029,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
@@ -3957,7 +4040,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4017,6 +4100,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -4025,7 +4109,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4085,6 +4169,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/settings.go:222; internal/apiservice/admin/settings.go:66); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -4093,7 +4178,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4153,6 +4238,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers setup status (this leaf does not extend the vocabulary)"
@@ -4163,7 +4249,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4223,6 +4309,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers the sync configuration domain (this leaf does not extend the vocabulary)"
@@ -4233,7 +4320,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4293,6 +4380,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers auto-import capability table (this leaf does not extend the vocabulary)"
@@ -4303,7 +4391,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4363,6 +4451,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -4373,7 +4462,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4433,6 +4522,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -4443,7 +4533,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4503,6 +4593,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -4513,7 +4604,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4573,6 +4664,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -4583,7 +4675,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4643,6 +4735,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/runs.go:560 (malformed uuid 404 at :551); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at runs.go:554)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync run (this leaf does not extend the vocabulary)"
@@ -4653,7 +4746,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4713,6 +4806,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/units.go:65 (malformed uuid 404 at :54); internal/api/syncadmin/store.go:312 (syncRunByID WHERE id=$1 AND org_id=$2, called at units.go:59); units read store runUnits org=$2 (units.go:68)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync run units (this leaf does not extend the vocabulary)"
@@ -4723,7 +4817,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4783,6 +4877,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync targets (this leaf does not extend the vocabulary)"
@@ -4793,7 +4888,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4853,6 +4948,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -4861,7 +4957,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4921,6 +5017,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:529; internal/api/teamsidentity/store.go:125); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -4929,7 +5026,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -4989,6 +5086,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_discover.go:726; internal/api/teamsidentity/members_discover.go:720 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers team member discovery (provider call) (this leaf does not extend the vocabulary)"
@@ -4999,7 +5097,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5059,6 +5157,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/members_infer.go:392; internal/api/teamsidentity/members_infer.go:386 (GetTeam -> store.go:125)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers team member inference (provider call) (this leaf does not extend the vocabulary)"
@@ -5069,7 +5168,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5129,6 +5228,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
@@ -5139,7 +5239,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5199,6 +5299,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)",
@@ -5210,7 +5311,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5270,6 +5371,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -5280,7 +5382,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5340,6 +5442,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -5350,7 +5453,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5451,6 +5554,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -5461,7 +5565,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5562,6 +5666,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
@@ -5572,7 +5677,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5632,6 +5737,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -5643,7 +5749,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5744,6 +5850,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:139); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
@@ -5754,7 +5861,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5814,6 +5921,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:214); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -5825,7 +5933,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5885,6 +5993,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
@@ -5895,7 +6004,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -5955,6 +6064,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [],
       "graphql_field_name": null,
@@ -5963,7 +6073,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6023,6 +6133,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
@@ -6033,7 +6144,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6093,6 +6204,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:87)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "action: the plan catalog read is open to anonymous callers (policy.Optional, internal/api/billing/routes.go:87); no role-held catalog action fits a read that needs no role",
@@ -6104,7 +6216,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6164,6 +6276,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/billing/routes.go:96)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "action: the plan catalog read is open to anonymous callers (policy.Optional, internal/api/billing/routes.go:96); no role-held catalog action fits a read that needs no role",
@@ -6175,7 +6288,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6235,6 +6348,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:570); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
@@ -6245,7 +6359,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6305,6 +6419,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:632); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -6316,7 +6431,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6376,6 +6491,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [],
       "graphql_field_name": null,
@@ -6384,7 +6500,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6444,6 +6560,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [],
       "graphql_field_name": null,
@@ -6452,7 +6569,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -6512,6 +6629,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [],
       "graphql_field_name": null,
@@ -6520,7 +6638,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7019,6 +7137,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
@@ -7029,7 +7148,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7089,6 +7208,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
@@ -7099,7 +7219,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7160,6 +7280,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
@@ -7170,7 +7291,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7269,6 +7390,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "allowed",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the build identity read (this leaf does not extend the vocabulary)"
@@ -7279,7 +7401,7 @@
       "method": "GET",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7724,6 +7846,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/credentials.go:518; internal/api/credentials/credentials.go:221); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -7734,7 +7857,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7794,6 +7917,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
@@ -7804,7 +7928,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7864,6 +7988,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:535)",
       "gaps": [],
       "graphql_field_name": null,
@@ -7872,7 +7997,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -7932,6 +8057,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -7940,7 +8066,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8000,6 +8126,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; internal/api/integrationsadmin/store.go:64); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -8008,7 +8135,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8068,6 +8195,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161; source: internal/api/integrationsadmin/routes.go:479 and internal/api/integrationsadmin/routes.go:486; internal/api/integrationsadmin/store.go:64; source: internal/api/integrationsadmin/store.go:143); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -8076,7 +8204,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8136,6 +8264,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/ipallowlist.go:275; internal/apiservice/admin/ipallowlist.go:269); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
@@ -8146,7 +8275,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8206,6 +8335,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/orgs.go:370)",
       "gaps": [],
       "graphql_field_name": null,
@@ -8214,7 +8344,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8274,6 +8404,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:403)",
       "gaps": [],
       "graphql_field_name": null,
@@ -8282,7 +8413,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8342,6 +8473,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -8352,7 +8484,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8412,6 +8544,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/retention.go:288; internal/apiservice/admin/retention.go:296); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
@@ -8422,7 +8555,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8482,6 +8615,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses in-process sync.Map operatorControlledKeySets dataset_selection.go:176 (static provider registry, not org data) (not an authorization-decision cache)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/update_config.go:106 (missing, errConfigNotFound; malformed uuid :96; body writeConfigNotFound syncadmin.go:188); internal/api/syncadmin/update_config.go:147 (SELECT ... WHERE org_id=$1 AND id=$2, re-read :165)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -8492,7 +8626,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8552,6 +8686,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:591; internal/api/teamsidentity/teamsidentity.go:585 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -8560,7 +8695,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8620,6 +8755,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)",
@@ -8631,7 +8767,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8691,6 +8827,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -8702,7 +8839,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8762,6 +8899,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -8773,7 +8911,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8833,6 +8971,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
@@ -8843,7 +8982,7 @@
       "method": "PATCH",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8903,6 +9042,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -8913,7 +9053,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -8973,6 +9113,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/credentials/connection.go:180 (by id) and :202 (by name); internal/api/credentials/connection.go:92 (by id) and :120 (by name)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers credential (this leaf does not extend the vocabulary)"
@@ -8983,7 +9124,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9043,6 +9184,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
@@ -9053,7 +9195,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9113,6 +9255,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -9123,7 +9266,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9183,6 +9326,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/reads.go:174; internal/apiservice/customerpush/reads.go:172); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest source (this leaf does not extend the vocabulary)"
@@ -9193,7 +9337,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9253,6 +9397,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -9263,7 +9408,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9323,6 +9468,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:583; internal/apiservice/customerpush/writes.go:581); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -9333,7 +9479,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9393,6 +9539,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/customerpush/writes.go:583; internal/apiservice/customerpush/writes.go:581); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers ingest token (this leaf does not extend the vocabulary)"
@@ -9403,7 +9550,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9463,6 +9610,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/teamsidentity.go:718; internal/api/teamsidentity/teamsidentity.go:708 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers identity (this leaf does not extend the vocabulary)"
@@ -9473,7 +9621,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9533,6 +9681,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: after the commit the route writes the impersonation-session cache entry through (internal/apiservice/admin/impersonation.go:220; internal/apiservice/admin/impersonationcache.go:197); the route does not read the cache; a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:115, :203)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the target user is looked up by id and a missing target answers 404 (internal/apiservice/admin/impersonation.go:138); the caller's own organization is not read",
       "gaps": [],
       "graphql_field_name": null,
@@ -9541,7 +9690,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9601,6 +9750,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "valkey: the route reads the open session from Postgres (internal/apiservice/admin/impersonation.go:260) and after the commit writes the negative cache entry through (internal/apiservice/admin/impersonationcache.go:149); a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (impersonationcache.go:203)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",
       "gaps": [],
       "graphql_field_name": null,
@@ -9609,7 +9759,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9669,6 +9819,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -9677,7 +9828,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9737,6 +9888,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route also uses Valkey key github_app_install_state:<jti> GET internal/api/githubapp/routes.go:331, SET :339 (replay guard; unavailable cache is logged and request proceeds) (not an authorization-decision cache)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -9747,7 +9899,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9807,6 +9959,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers GitHub App install state (this leaf does not extend the vocabulary)"
@@ -9817,7 +9970,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9877,6 +10030,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -9885,7 +10039,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -9945,6 +10099,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -9953,7 +10108,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10013,6 +10168,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -10021,7 +10177,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10081,6 +10237,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -10089,7 +10246,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10149,6 +10306,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -10157,7 +10315,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10217,6 +10375,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers PagerDuty dataset scope preflight (this leaf does not extend the vocabulary)"
@@ -10227,7 +10386,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10287,6 +10446,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -10297,7 +10457,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10357,6 +10517,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/apiservice/admin/pagerduty_bindings.go:402; internal/apiservice/admin/pagerduty_bindings.go:411); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -10365,7 +10526,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10425,6 +10586,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -10435,7 +10597,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10495,6 +10657,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -10505,7 +10668,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10565,6 +10728,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers integration backfill trigger (this leaf does not extend the vocabulary)"
@@ -10575,7 +10739,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10635,6 +10799,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and 161 (via discover.go:67); internal/api/integrationsadmin/store.go:64 (via discover.go:67)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers integration source (this leaf does not extend the vocabulary)"
@@ -10645,7 +10810,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10705,6 +10870,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/integrationsadmin/routes.go:154 and internal/api/integrationsadmin/routes.go:161 (via handoff.go:150); internal/api/integrationsadmin/store.go:64 (via handoff.go:150)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers integration sync trigger (this leaf does not extend the vocabulary)"
@@ -10715,7 +10881,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10775,6 +10941,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist entry (this leaf does not extend the vocabulary)"
@@ -10785,7 +10952,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10845,6 +11012,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers IP allowlist check (this leaf does not extend the vocabulary)"
@@ -10855,7 +11023,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10915,6 +11083,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -10925,7 +11094,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -10985,6 +11154,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.orgs (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization",
       "gaps": [],
       "graphql_field_name": null,
@@ -10993,7 +11163,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11053,6 +11223,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.flags (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the handler does not scope by the caller's organization; a missing target answers 404 (internal/apiservice/admin/featureflags.go:299)",
       "gaps": [],
       "graphql_field_name": null,
@@ -11061,7 +11232,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11121,6 +11292,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -11131,7 +11303,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11191,6 +11363,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -11201,7 +11374,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11261,6 +11434,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the answers for a missing id and for another organization's id are not shown to be equal on this route; no claim is recorded"
@@ -11271,7 +11445,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11331,6 +11505,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)"
@@ -11341,7 +11516,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11401,6 +11576,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers retention policy (this leaf does not extend the vocabulary)",
@@ -11412,7 +11588,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11472,6 +11648,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -11480,7 +11657,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11540,6 +11717,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -11550,7 +11728,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11610,6 +11788,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -11620,7 +11799,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11680,6 +11859,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -11690,7 +11870,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11750,6 +11930,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -11760,7 +11941,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11820,6 +12001,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -11828,7 +12010,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11888,6 +12070,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers team import (this leaf does not extend the vocabulary)"
@@ -11898,7 +12081,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -11958,6 +12141,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers team drift change (this leaf does not extend the vocabulary)",
@@ -11969,7 +12153,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12029,6 +12213,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:377; internal/api/teamsidentity/member_confirm.go:371 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers team members (inferred) (this leaf does not extend the vocabulary)"
@@ -12039,7 +12224,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12099,6 +12284,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/teamsidentity/member_confirm.go:272; internal/api/teamsidentity/member_confirm.go:266 (GetTeam -> store.go:125)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers team members (this leaf does not extend the vocabulary)"
@@ -12109,7 +12295,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12169,6 +12355,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers team drift change (this leaf does not extend the vocabulary)",
@@ -12180,7 +12367,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12240,6 +12427,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)"
@@ -12250,7 +12438,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12310,6 +12498,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers user (this leaf does not extend the vocabulary)",
@@ -12321,7 +12510,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12381,6 +12570,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -12391,7 +12581,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12451,6 +12641,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -12461,7 +12652,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12600,6 +12791,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:151)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)",
@@ -12615,7 +12807,7 @@
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
-        "description": "h.logout: the handler reads an optional bearer access token (optionalUser) and revokes the refresh token in the body; it refuses neither when absent."
+        "description": "h.logout: the handler reads an optional bearer access token (optionalUser) and revokes the refresh token in the body; it refuses neither when absent. A delegated session's bearer is the Guard's refusal (Guard.RefuseDelegated in optionalUser)."
       },
       "public_rationale": null,
       "reachable_validators": [
@@ -12671,6 +12863,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
@@ -12681,7 +12874,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12864,6 +13057,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -12874,7 +13068,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -12934,6 +13128,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -12944,7 +13139,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13287,6 +13482,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
@@ -13297,7 +13493,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13357,6 +13553,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -13368,7 +13565,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13428,6 +13625,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)",
@@ -13439,7 +13637,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13499,6 +13697,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
@@ -13509,11 +13708,11 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
-        "description": "policy.Authenticated: a valid access token for an active user."
+        "description": "policy.Authenticated: a valid access token for an active user, while AUTH_PROXY_SESSIONS is off. With AUTH_PROXY_SESSIONS on, go-api forwards the request unread (no guard, body validator or rate limiter; the scope layers skip the exact route) and auth-service authenticates, validates and limits it on its own switch-org row; go-api validates no token it forwards."
       },
       "public_rationale": null,
       "reachable_validators": [
@@ -13523,7 +13722,7 @@
             "note": "func (s *Scope) OrgScope",
             "path": "internal/api/policy/scope.go"
           },
-          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it. With AUTH_PROXY_SESSIONS on, this route is scope-exempt: forwarded unread, it never reaches this layer.",
           "is_intended_validator": false,
           "reachable_but_not_owner": true
         },
@@ -13533,7 +13732,7 @@
             "note": "func (s *Scope) Impersonation",
             "path": "internal/api/policy/scope.go"
           },
-          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route. With AUTH_PROXY_SESSIONS on, this route is scope-exempt: forwarded unread, it never reaches this layer.",
           "is_intended_validator": false,
           "reachable_but_not_owner": true
         }
@@ -13640,6 +13839,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:306); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -13651,7 +13851,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13711,6 +13911,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:109, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
@@ -13721,7 +13922,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13781,6 +13982,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "disclosure_behavior: the by-id or unauthenticated answer of this route is not traced in this record"
@@ -13791,7 +13993,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13851,6 +14053,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:137); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
@@ -13861,7 +14064,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -13921,6 +14124,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.billing (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:169); the caller's own organization is not read",
       "gaps": [],
       "graphql_field_name": null,
@@ -13929,7 +14133,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14028,6 +14232,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/plansync.go:25); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -14039,7 +14244,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14099,6 +14304,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:110, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
@@ -14109,7 +14315,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14169,6 +14375,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/reconcile.go:413); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
@@ -14179,7 +14386,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14239,6 +14446,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:71); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
@@ -14249,7 +14457,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14309,6 +14517,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -14317,7 +14526,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14377,6 +14586,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -14385,7 +14595,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14445,6 +14655,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26); a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -14453,7 +14664,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14737,6 +14948,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
@@ -14747,7 +14959,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14808,6 +15020,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
@@ -14818,7 +15031,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -14879,6 +15092,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:147; internal/api/policy/orgless.go:26), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:38)",
       "gaps": [
         "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:35) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
@@ -14889,7 +15103,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15019,6 +15233,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:548; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -15029,7 +15244,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15089,6 +15304,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -15099,7 +15315,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15159,6 +15375,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -15169,7 +15386,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15229,6 +15446,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers LLM settings (this leaf does not extend the vocabulary)"
@@ -15239,7 +15457,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15299,6 +15517,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the path segment is a fixed mode, not a resource id; the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [],
       "graphql_field_name": null,
@@ -15307,7 +15526,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15367,6 +15586,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": "by-id route, behaviour today: a missing id and another organization's id take the same organization-scoped lookup and answer 404 (internal/api/syncadmin/syncadmin.go:368 (missing; malformed uuid 404s at :359; body via writeConfigNotFound :188); internal/api/syncadmin/store.go:114 (configByID: WHERE org_id=$1 AND id=$2, called with orgID(r) at syncadmin.go:362)); once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:161)",
       "gaps": [
         "action: no catalog action covers sync configuration (this leaf does not extend the vocabulary)"
@@ -15377,7 +15597,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },
@@ -15476,6 +15696,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:340); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action",
@@ -15487,7 +15708,7 @@
       "method": "PUT",
       "primary_validator": {
         "anchor": {
-          "line": 121,
+          "line": 122,
           "note": "func (g *Guard) Wrap",
           "path": "internal/api/policy/guard.go"
         },

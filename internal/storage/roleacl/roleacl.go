@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -397,6 +398,40 @@ func enumerate(ctx context.Context, q Querier, role string, disabled map[string]
 	return grants, nil
 }
 
+// InSchema reports whether the grant is on an object of schema, which must be a plain lowercase identifier (format's
+// %I then leaves it unquoted in Object): a relation, column, routine or type of it, the schema itself, or a default
+// privilege row scoped to it.
+func (g Grant) InSchema(schema string) bool {
+	switch g.Class {
+	case "relation", "column", "function", "type":
+		return strings.HasPrefix(g.Object, schema+".")
+	case "schema":
+		return g.Object == schema
+	case "default privileges":
+		return strings.HasSuffix(g.Object, " in "+schema)
+	}
+	return false
+}
+
+// RevokeStatementsOutside is RevokeStatements without the grants on objects of schema (InSchema); an empty schema
+// skips nothing.
+func RevokeStatementsOutside(ctx context.Context, q Querier, role, schema string) ([]string, error) {
+	grants, err := Enumerate(ctx, q, role)
+	if err != nil {
+		return nil, err
+	}
+	if schema != "" {
+		kept := grants[:0:0]
+		for _, grant := range grants {
+			if !grant.InSchema(schema) {
+				kept = append(kept, grant)
+			}
+		}
+		grants = kept
+	}
+	return revokeStatements(grants)
+}
+
 // RevokeStatements returns the distinct statements that remove every grant the
 // role holds in its OWN name (never PUBLIC's), in enumeration order. Run them,
 // then grant the manifest: the role's posture becomes a function of the migration
@@ -406,6 +441,10 @@ func RevokeStatements(ctx context.Context, q Querier, role string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
+	return revokeStatements(grants)
+}
+
+func revokeStatements(grants []Grant) ([]string, error) {
 	seen := map[string]struct{}{}
 	var statements []string
 	for _, grant := range grants {

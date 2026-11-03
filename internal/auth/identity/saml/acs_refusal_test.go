@@ -21,7 +21,7 @@ import (
 const refusalBase = "https://sp.example.test/api/v1/auth"
 
 const (
-	detailNotMember = "This account is not a member of the provider's organization."
+	detailNotMember = `{"message":"A membership in this organization is required","reason":"membership_required"}`
 	detailAmbiguous = "More than one account carries this sign-in. Contact your organization administrator."
 )
 
@@ -175,10 +175,15 @@ func postACSAuto(t *testing.T, store *lookupStore, members *memberSet, jit saml.
 	mux.ServeHTTP(rec, req)
 
 	var body struct {
-		Detail string `json:"detail"`
+		Detail json.RawMessage `json:"detail"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
-	return acsRun{status: rec.Code, detail: body.Detail, logs: logs.String(), store: store, members: members, sessions: sessions, org: p.OrgID}
+	detail := string(body.Detail)
+	var text string
+	if json.Unmarshal(body.Detail, &text) == nil {
+		detail = text
+	}
+	return acsRun{status: rec.Code, detail: detail, logs: logs.String(), store: store, members: members, sessions: sessions, org: p.OrgID}
 }
 
 func (r acsRun) refused(t *testing.T, status int, detail, reason string) {

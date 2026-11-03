@@ -1,0 +1,6 @@
+{
+  "schema_version": "membership-get-request.v1",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "email": "a@example.invalid"
+}

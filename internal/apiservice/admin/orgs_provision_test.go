@@ -153,6 +153,9 @@ var errReadFailed = errors.New("provisionDB: the read failed")
 // provTarget into every uuid.UUID: a row whose columns the test does not read.
 type zeroFill struct{}
 
+// idFill is zeroFill with the given id in every uuid.UUID target.
+type idFill struct{ id uuid.UUID }
+
 func scanValues(values, dest []any) error {
 	if len(values) == 1 && values[0] == (failRead{}) {
 		return errReadFailed
@@ -166,6 +169,18 @@ func scanValues(values, dest []any) error {
 			}
 		}
 		return nil
+	}
+	if len(values) == 1 {
+		if fill, ok := values[0].(idFill); ok {
+			for _, target := range dest {
+				v := reflect.ValueOf(target).Elem()
+				v.Set(reflect.Zero(v.Type()))
+				if id, ok := target.(*uuid.UUID); ok {
+					*id = fill.id
+				}
+			}
+			return nil
+		}
 	}
 	if len(values) != len(dest) {
 		return errProvNoDB

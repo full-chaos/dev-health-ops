@@ -260,6 +260,11 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 		t.Fatalf("no verb %v", args)
 	}
 	env := map[string]string{"MIGRATION_DATABASE_URI": db.uri}
+	if needsProvisioning(args) {
+		env["AUTH_PROXY_URL"] = startFakeAuthService(t, db.uri)
+		env["AUTH_SESSION_ISSUE_TOKEN"] = fakeToken
+		args = append(append([]string(nil), args...), "--actor", fakeActor)
+	}
 	for key, value := range extra {
 		env[key] = value
 	}

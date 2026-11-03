@@ -15,8 +15,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -215,6 +218,27 @@ func orgProvisioningFromEnv(env cli.Env) (bool, error) {
 		return false, errors.New("AUTH_PROXY_ORG_PROVISIONING must be true or false")
 	}
 	return on, nil
+}
+
+// provisionerFromEnv builds the client of auth-service's provisioning routes
+// the way go-api does: AUTH_PROXY_URL and the AUTH_SESSION_ISSUE_TOKEN service
+// credential of the workload the CLI runs in. Either missing gives a nil client
+// (the Operator then refuses by name); a malformed one is a configuration error.
+func provisionerFromEnv(env cli.Env) (authprovision.Provisioner, int) {
+	cfg, err := apiservice.ParseAuthProxyConfig(env.Lookup)
+	if err != nil {
+		return nil, writeError(env.Stderr, "auth_proxy_invalid", err.Error())
+	}
+	token, _ := env.Lookup(sessionissue.EnvToken)
+	token = strings.TrimSpace(token)
+	if cfg.Upstream == nil || token == "" {
+		return nil, 0
+	}
+	client, err := authprovision.New(cfg.Upstream, token, cfg.Timeout)
+	if err != nil {
+		return nil, writeError(env.Stderr, "provisioning_credential_invalid", err.Error())
+	}
+	return client, 0
 }
 
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
@@ -427,7 +451,7 @@ func runUsersList(ctx context.Context, env cli.Env) int {
 
 func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users update")
-	var id, email, username, newEmail, newUsername, fullName, password, org, role, removeFromOrg optString
+	var id, email, username, newEmail, newUsername, fullName, password, org, role, removeFromOrg, actor optString
 	flags.Var(&id, "id", "user id to update (identifier)")
 	flags.Var(&email, "email", "email of the user to update (identifier)")
 	flags.Var(&username, "username", "username of the user to update (identifier)")
@@ -441,6 +465,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&org, "org", "org slug or id: add the user to this org, or update their role")
 	flags.Var(&role, "role", "membership role to set with --org: owner, admin, member or viewer")
 	flags.Var(&removeFromOrg, "remove-from-org", "org slug or id: remove the user's membership from this org")
+	flags.Var(&actor, "actor", "id or email of the user that acts for --org / --remove-from-org: an active owner or admin of the org, or a superuser (required with them)")
 	passwordStdin := flags.Bool("password-stdin", false, "read the new password from the first line of standard input (instead of --password)")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
@@ -460,12 +485,19 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 		ID: id.ptr(), Email: email.ptr(), Username: username.ptr(),
 		NewEmail: newEmail.ptr(), NewUsername: newUsername.ptr(), FullName: fullName.ptr(), Password: password.ptr(),
 		Active: active.ptr(), Verified: verified.ptr(), Superuser: superuser.ptr(),
-		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
+		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(), Actor: actor.ptr(),
 	}
 	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers(), update.Superuser != nil)
 	defer closePool()
 	if code != 0 {
 		return code
+	}
+	if update.MembershipOrg != nil || update.RemoveFromOrg != nil {
+		provisioner, code := provisionerFromEnv(env)
+		if code != 0 {
+			return code
+		}
+		op.Provisioner = provisioner
 	}
 	result, err := op.UpdateUser(ctx, update)
 	if err != nil {

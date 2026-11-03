@@ -57,7 +57,7 @@ func TestResourceGrantsPageMatchesTheGrantPackage(t *testing.T) {
 	assertGuard(t, resourceGrantsGuard, []plantCase{
 		{"a role row is dropped", edit("| `admin` |\n", ""), "missing row"},
 		{"a role the package refuses is added", edit("| `viewer` |\n", "| `viewer` |\n| `owner` |\n"), "not in the source"},
-		{"the key pattern drifts", edit("{0,99}/[a-z0-9]", "{0,98}/[a-z0-9]"), "key pattern block"},
+		{"the key pattern drifts", edit(`|\*)$`, `|\+)$`), "key pattern block"},
 		{"the key pattern block is gone", edit("```text", "~~~text"), "key pattern block"},
 		{"the page is gone", func(t *testing.T, d docTree) docTree { return d.removed(resourceGrantsPage) }, resourceGrantsPage},
 	})

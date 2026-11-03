@@ -103,7 +103,7 @@ func revokedEvent(old tokenRow) (audit.PushLifecycleEvent, error) {
 	if err != nil {
 		return audit.PushLifecycleEvent{}, err
 	}
-	names, err := pushevent.ScopeNames(old.Scopes)
+	names, err := scopeNames(old.Scopes)
 	if err != nil {
 		return audit.PushLifecycleEvent{}, err
 	}
@@ -132,3 +132,6 @@ func rotatedEvents(old tokenRow, next newToken) ([]audit.PushLifecycleEvent, err
 
 // credentialFingerprint is the shared fingerprint (internal/auth/pushevent).
 func credentialFingerprint(id uuid.UUID) string { return pushevent.Fingerprint(id) }
+
+// scopeNames is the shared scope-name reader (internal/auth/pushevent).
+func scopeNames(raw []byte) ([]string, error) { return pushevent.ScopeNames(raw) }

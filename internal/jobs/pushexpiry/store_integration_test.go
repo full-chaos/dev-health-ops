@@ -134,7 +134,7 @@ func (e *sweepEnv) token(t *testing.T, ctx context.Context, expires string, revo
 		revokedAt = "now() - interval '2 hours'"
 	}
 	sql := fmt.Sprintf(`INSERT INTO external_ingest_tokens (id, org_id, source_id, name, token_hash, token_prefix, scopes, expires_at, revoked_at, created_at)
-		VALUES ($1, $2, $3, 'SENTINEL-NAME', 'SENTINEL-HASH-'||$1::text, 'SENTINEL-PFX', '["ingest:write"]', %s, %s, now())`, expires, revokedAt)
+		VALUES ($1, $2, $3, 'SENTINEL-NAME', 'SENTINEL-HASH-'||gen_random_uuid()::text, 'SENTINEL-PFX', '["ingest:write"]', %s, %s, now())`, expires, revokedAt)
 	if _, err := e.admin.Exec(ctx, sql, id, e.org.String(), source); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func (e *sweepEnv) sweep(t *testing.T, ctx context.Context, on bool) error {
 }
 
 type outboxEvent struct {
-	eventType, key string
+	eventType, wireType, key string
 	revision       int64
 	payload        []byte
 	createdAt      time.Time
@@ -178,6 +178,8 @@ func (e *sweepEnv) outbox(t *testing.T, ctx context.Context, id uuid.UUID) []out
 		if err := rows.Scan(&r.eventType, &r.key, &r.revision, &r.payload, &r.createdAt); err != nil {
 			t.Fatal(err)
 		}
+		r.wireType = r.eventType
+		r.eventType = strings.TrimPrefix(r.eventType, externalpush.Aggregate+".")
 		out = append(out, r)
 	}
 	return out
@@ -197,7 +199,7 @@ func (e *sweepEnv) replay(t *testing.T, ctx context.Context, id uuid.UUID) pushl
 	for _, row := range e.outbox(t, ctx, id) {
 		raw, _ := json.Marshal(map[string]any{
 			"schema_version": contracts.ExternalPushLifecycleEventSurface, "aggregate_type": contracts.ExternalPushCredentialAggregate,
-			"aggregate_id": id.String(), "event_type": row.eventType, "idempotency_key": row.key,
+			"aggregate_id": id.String(), "event_type": row.wireType, "idempotency_key": row.key,
 			"created_at": row.createdAt.UTC().Format(time.RFC3339Nano), "payload": json.RawMessage(row.payload),
 		})
 		event, err := contracts.ParseExternalPushLifecycleEvent(repoRoot(t), raw)

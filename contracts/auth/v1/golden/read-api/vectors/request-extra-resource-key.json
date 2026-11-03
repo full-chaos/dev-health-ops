@@ -1,0 +1,14 @@
+{
+  "id": "request-extra-resource-key",
+  "kind": "request",
+  "operation": "grants_list",
+  "request": {
+    "schema_version": "grant-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "resource_key": "acme/widgets"
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "A grant list takes no repository key filter."
+}

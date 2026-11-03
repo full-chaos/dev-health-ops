@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/principal-read.v1.schema.json",
+  "title": "Auth Control Plane principal read (v1 wire format)",
+  "description": "A principal as the versioned read API serves it: its id, kind, status and revision, nothing else. Read-only, and it returns no email, display name, password hash, identity, session or credential. The object is closed, so a personal field is unrepresentable here, not merely absent. A disabled principal keeps its row.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "principal_id",
+    "kind",
+    "status",
+    "revision"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "principal-read.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "The principal."
+    },
+    "kind": {
+      "enum": [
+        "user",
+        "service_account",
+        "workload"
+      ],
+      "description": "Closed set; equal to the principals kind CHECK."
+    },
+    "status": {
+      "enum": [
+        "active",
+        "disabled"
+      ],
+      "description": "Current state."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Aggregate revision. 0 means the aggregate has no revision row yet; a caller treats 0 as 'none' and never as a version to send back. Integer token only; a decimal-form token is refused by every client (README, integer guard)."
+    }
+  }
+}

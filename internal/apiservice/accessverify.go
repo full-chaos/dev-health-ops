@@ -66,12 +66,19 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 // (contracts/auth/v1/jsonschema/credential-entry.v1.schema.json).
 var principalIDPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{1,64}$`)
 
+// acrWorkloadSubjectInvalidMetric is the gauge of a configured AUTH_ACR_WORKLOAD_SUBJECT that is not in the session
+// wire form (CHAOS-12402): 1 when it is not, else 0. Tests replace the recorder.
+const acrWorkloadSubjectInvalidMetric = "dev_health_api_acr_workload_subject_config_invalid"
+
+var recordACRWorkloadSubjectInvalid = func(context.Context, bool) {}
+
 // buildACRWorkload builds the workload-token verifier of the internal acr
 // routes: the access-token issuer and keys, audience dev-health-api only (a
 // token for any other audience is refused), leeway 0. No issuer or no
 // AUTH_ACR_WORKLOAD_SUBJECT means no workload path (nil): the routes then
 // refuse every workload token as not_configured and svc_acr_ is unchanged.
-func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySource) (*acr.WorkloadAuth, error) {
+func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySource, logger *slog.Logger) (*acr.WorkloadAuth, error) {
+	_ = logger
 	issuer, _ := lookup(envAccessTokenIssuer)
 	issuer = strings.TrimSpace(issuer)
 	subject, _ := lookup(envACRWorkloadSubject)
@@ -105,3 +112,6 @@ func legacyVerifier(authenticate func(context.Context, string) (*policy.User, er
 		}
 	}
 }
+
+// isACRWorkloadSubjectSessionForm reports whether subject is the session wire form of a principal id.
+func isACRWorkloadSubjectSessionForm(string) bool { return false }

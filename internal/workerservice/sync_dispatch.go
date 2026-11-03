@@ -926,6 +926,15 @@ func buildSyncCoordinatorWorker(
 	if providerRevocations != nil {
 		handlers = append(handlers, *providerRevocations)
 	}
+	// CHAOS-12332: the expired event of External Push credentials.
+	pushExpiry, err := registerPushExpiryWorker(registry, postgresDatabase, observer, logger, workers)
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if pushExpiry != nil {
+		handlers = append(handlers, *pushExpiry)
+	}
 	return workerFamily{
 		handlers: handlers,
 		queues:   queues,

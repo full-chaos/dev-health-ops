@@ -137,7 +137,7 @@ func TestOneRequestOnASeededAuthProxySeriesIsAVisiblePlusOne(t *testing.T) {
 	}
 }
 
-func TestTheSeededRouteSeedsAreExactlyThePinnedSixteenInOrder(t *testing.T) {
+func TestTheSeededRouteSeedsAreExactlyThePinnedSeventeenInOrder(t *testing.T) {
 	wantSeeds := []httpapi.RequestSeed{
 		{Method: "POST", Route: "/api/v1/auth/change-password"},
 		{Method: "POST", Route: "/api/v1/auth/forgot-password"},
@@ -153,6 +153,7 @@ func TestTheSeededRouteSeedsAreExactlyThePinnedSixteenInOrder(t *testing.T) {
 		{Method: "POST", Route: "/api/v1/auth/saml/{provider_id}/initiate"},
 		{Method: "GET", Route: "/api/v1/auth/saml/{provider_id}/metadata"},
 		{Method: "POST", Route: "/api/v1/auth/social-login"},
+		{Method: "POST", Route: "/api/v1/auth/switch-org"},
 		{Method: "POST", Route: "/api/v1/auth/validate"},
 		{Method: "GET", Route: "/api/v1/auth/verify"},
 	}
@@ -176,9 +177,9 @@ func TestTheSeededRouteSeriesFollowTheRegisteredProxiedRoutes(t *testing.T) {
 		keep   func(AuthAggregate) bool
 		series int
 	}{
-		{"every proxied route registered: 16 x 4", func(AuthAggregate) bool { return true }, 64},
+		{"every proxied route registered: 17 x 4", func(AuthAggregate) bool { return true }, 68},
 		{"SSO routes only: 5 x 4", func(a AuthAggregate) bool { return ssoAggregates[a] }, 20},
-		{"session routes only: 11 x 4", func(a AuthAggregate) bool { return sessionAggregates[a] }, 44},
+		{"session routes only: 12 x 4", func(a AuthAggregate) bool { return sessionAggregates[a] }, 48},
 		{"no proxied route registered", func(AuthAggregate) bool { return false }, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {

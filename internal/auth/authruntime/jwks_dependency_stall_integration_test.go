@@ -167,11 +167,33 @@ func TestJWKSAnswersWhileTheDatabaseIsBlackholed(t *testing.T) {
 		_ = response.Body.Close()
 		return response.StatusCode, time.Since(start)
 	}
-	// The first login is cold (pool connect, key-state read, the bcrypt dummy hash): under -race on a loaded host it can pass
-	// the 4 s request timeout and is answered with the retryable 503. A retry is warm. Only a 503 is retried.
-	if status := firstLoginAnswer(func() int { status, _ := login(0); return status }, time.Minute, time.Second, time.Sleep); status != http.StatusUnauthorized {
-		t.Fatalf("login before the fault = %d, want 401 through the proxy", status)
+	// The pre-fault control proves that a login request reaches the database through the proxy and is answered. It is a body
+	// the route refuses at the schema (422) and audits: a database write, no password hash. A wrong-password login runs a
+	// bcrypt-12 compare that takes no context and, under -race on a loaded host, can take as long as the 4 s request timeout
+	// on every try. A 503 (retryable) is retried within a short guard; every try is charged to the per-address login limit
+	// (20 per 15 min), so the guard stays well under it.
+	var controlHeader http.Header
+	control := func() int {
+		request, err := http.NewRequest(http.MethodPost, e.front.URL+"/api/v1/auth/login", strings.NewReader(preFaultControlBody))
+		if err != nil {
+			t.Error(err)
+			return 0
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Forwarded-For", preFaultControlAddress)
+		response, err := client.Do(request)
+		if err != nil {
+			return 0
+		}
+		_ = response.Body.Close()
+		controlHeader = response.Header
+		return response.StatusCode
 	}
+	if status := firstLoginAnswer(control, 10*time.Second, time.Second, time.Sleep); status != http.StatusUnprocessableEntity {
+		t.Fatalf("control login before the fault = %d, want 422 through the proxy", status)
+	}
+	// The refusal's audit row is in the database (read through the admin pool, not the proxy) and is this request's.
+	e.auditOf(t, ctx, "auth.login.failed", controlHeader.Get("X-Auth-Request-ID"))
 
 	// Prime the key-state snapshot, then let it become due for a refresh so
 	// the first request after the fault is the one that reads the database.

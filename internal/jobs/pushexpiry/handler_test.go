@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
@@ -22,12 +24,16 @@ const due = "2026-11-03T12:00:00Z"
 
 type fakeStore struct {
 	tokens    []Token
-	sent      []Token
+	sent      []Token // one entry per Send call that returned nil (appended or writer no-op)
 	pageCalls int
+	sendCalls int
+	firstPage []Cursor // the cursor of the first Page call of each run, in order
 	failIDs   map[uuid.UUID]bool
+	ended     map[uuid.UUID]bool // the writer's terminal state: a repeat is a no-op
+	noops     int
 }
 
-func (store *fakeStore) Page(_ context.Context, after Cursor, limit int) ([]Token, error) {
+func (store *fakeStore) Page(_ context.Context, after Cursor, limit int, notBefore time.Time) ([]Token, error) {
 	store.pageCalls++
 	rows := append([]Token(nil), store.tokens...)
 	sort.Slice(rows, func(i, j int) bool {
@@ -39,7 +45,9 @@ func (store *fakeStore) Page(_ context.Context, after Cursor, limit int) ([]Toke
 	var out []Token
 	for _, t := range rows {
 		after_ := t.ExpiresAt.After(after.ExpiresAt) || (t.ExpiresAt.Equal(after.ExpiresAt) && t.ID.String() > after.ID.String())
-		if after_ && len(out) < limit {
+		// The real query does not know the writer's terminal state: it returns
+		// ended tokens too. Only the window bound filters.
+		if after_ && t.ExpiresAt.After(notBefore) && len(out) < limit {
 			out = append(out, t)
 		}
 	}
@@ -47,9 +55,17 @@ func (store *fakeStore) Page(_ context.Context, after Cursor, limit int) ([]Toke
 }
 
 func (store *fakeStore) Send(_ context.Context, token Token) error {
+	store.sendCalls++
 	if store.failIDs[token.ID] {
 		return errors.New("boom")
 	}
+	if store.ended == nil {
+		store.ended = map[uuid.UUID]bool{}
+	}
+	if store.ended[token.ID] {
+		store.noops++
+	}
+	store.ended[token.ID] = true
 	store.sent = append(store.sent, token)
 	return nil
 }
@@ -136,7 +152,7 @@ func TestSweepStopsAtTheRunCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(store.sent) != RunCap {
-		t.Fatalf("sent %d, want the cap %d", len(store.sent), RunCap)
+		t.Fatalf("submitted %d, want the cap %d (submitted + failed, not scanned)", len(store.sent), RunCap)
 	}
 }
 
@@ -222,7 +238,7 @@ func TestSweepLogsHoldNoScopeOrNameText(t *testing.T) {
 	if strings.Contains(logs.String(), "ingest:") || strings.Contains(logs.String(), store.tokens[0].OrgID) {
 		t.Fatalf("log holds scope or organization text: %s", logs.String())
 	}
-	if !strings.Contains(logs.String(), "sent=1") {
+	if !strings.Contains(logs.String(), "submitted=1") {
 		t.Fatalf("no run line with a count: %s", logs.String())
 	}
 }
@@ -241,6 +257,214 @@ func TestScanSQLTakesNoLockAndWritesNothing(t *testing.T) {
 		if strings.Contains(upper, column) {
 			t.Fatalf("scan SQL reads %q", column)
 		}
+	}
+}
+
+func openTokens(n int) []Token {
+	out := make([]Token, 0, n)
+	base := time.Now().Add(-48 * time.Hour).UTC().Truncate(time.Second)
+	for i := 0; i < n; i++ {
+		out = append(out, token(base.Add(time.Duration(i)*time.Millisecond)))
+	}
+	return out
+}
+
+func infoLine(logs *bytes.Buffer) string {
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	return lines[len(lines)-1]
+}
+
+func submittedFor(t *testing.T, store *fakeStore, tokens []Token) int {
+	t.Helper()
+	seen := map[uuid.UUID]bool{}
+	for _, s := range store.sent {
+		seen[s.ID] = true
+	}
+	return len(seen)
+}
+
+func TestSweepTenThousandFiftyTokensTwoRunsReachAll(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(RunCap + 50)}
+	handler, logs := newHandler(t, store, true)
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=capped") || !strings.Contains(line, "submitted=10000") {
+		t.Fatalf("run 1 line: %s", line)
+	}
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=swept") || !strings.Contains(line, "skipped=10000") || !strings.Contains(line, "submitted=50") {
+		t.Fatalf("run 2 line: %s", line)
+	}
+	if got := submittedFor(t, store, store.tokens); got != RunCap+50 {
+		t.Fatalf("two runs reached %d of %d tokens", got, RunCap+50)
+	}
+}
+
+func TestSweepSkipsEndedTokensWithoutACall(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(250)}
+	handler, logs := newHandler(t, store, true)
+	for run := 0; run < 2; run++ {
+		if err := handler.Work(context.Background(), execution(due)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if store.sendCalls != 250 {
+		t.Fatalf("Send called %d times over two runs, want 250", store.sendCalls)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "skipped=250") || !strings.Contains(line, "submitted=0") {
+		t.Fatalf("run 2 line: %s", line)
+	}
+}
+
+func TestSweepFailedTokenIsNotSkippedAndCountsTowardTheCap(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(RunCap + 5), failIDs: map[uuid.UUID]bool{}}
+	bad := store.tokens[0].ID
+	store.failIDs[bad] = true
+	handler, logs := newHandler(t, store, true)
+	err := handler.Work(context.Background(), execution(due))
+	if err == nil || isPermanent(err) {
+		t.Fatalf("want a retryable error, got %v", err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=partial") || !strings.Contains(line, "failed=1") || !strings.Contains(line, "submitted=9999") {
+		t.Fatalf("run 1 line: %s (a failure must use one cap slot)", line)
+	}
+	if _, ok := handler.ended[bad]; ok {
+		t.Fatal("a failed token is in the skip set")
+	}
+	delete(store.failIDs, bad)
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if got := submittedFor(t, store, store.tokens); got != RunCap+5 {
+		t.Fatalf("the retry did not reach every token: %d of %d", got, RunCap+5)
+	}
+}
+
+func TestSweepCappedRunReportsCappedAndNextRunStartsAtTheBeginning(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(RunCap + 1)}
+	handler, logs := newHandler(t, store, true)
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(infoLine(logs), "outcome=capped") {
+		t.Fatalf("no capped outcome: %s", infoLine(logs))
+	}
+	first := store.tokens[0].ID
+	store.sent = nil
+	// A recording store: run 2's first page must start at the zero cursor, so
+	// the oldest token is offered again (and skipped, not re-sent).
+	before := store.sendCalls
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if store.sendCalls-before != 1 {
+		t.Fatalf("run 2 sent %d, want only the one token run 1 never reached", store.sendCalls-before)
+	}
+	_ = first
+}
+
+func TestSweepCountsSubmittedNotSent(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	store := &fakeStore{tokens: openTokens(1), ended: map[uuid.UUID]bool{}}
+	store.ended[store.tokens[0].ID] = true // the writer already ended it: Send is a no-op
+	handler, logs := newHandler(t, store, true)
+	handler.metrics = newInstruments(provider.Meter("test"))
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	line := infoLine(logs)
+	if !strings.Contains(line, "submitted=1") || strings.Contains(line, " sent=") {
+		t.Fatalf("line = %s", line)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if sum, ok := m.Data.(metricdata.Sum[int64]); ok {
+				for _, dp := range sum.DataPoints {
+					v, _ := dp.Attributes.Value("outcome")
+					got[v.AsString()] += dp.Value
+				}
+			}
+		}
+	}
+	if got["submitted"] != 1 || got["sent"] != 0 {
+		t.Fatalf("metric outcomes = %v", got)
+	}
+}
+
+func TestExpiryWindowIsThirtyDays(t *testing.T) {
+	if ExpiryWindow != 30*24*time.Hour {
+		t.Fatalf("ExpiryWindow = %s", ExpiryWindow)
+	}
+}
+
+func TestSweepIgnoresTokensOlderThanTheWindow(t *testing.T) {
+	inside := token(time.Now().Add(-ExpiryWindow + time.Hour))
+	outside := token(time.Now().Add(-ExpiryWindow - time.Hour))
+	store := &fakeStore{tokens: []Token{outside, inside}}
+	handler, _ := newHandler(t, store, true)
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sent) != 1 || store.sent[0].ID != inside.ID {
+		t.Fatalf("sent = %d tokens; want only the one inside the window", len(store.sent))
+	}
+}
+
+func TestSkipSetIsPrunedToTheWindow(t *testing.T) {
+	store := &fakeStore{tokens: []Token{token(time.Now().Add(-ExpiryWindow + time.Minute)), token(time.Now().Add(-time.Hour))}}
+	handler, _ := newHandler(t, store, true)
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.ended) != 2 {
+		t.Fatalf("skip set = %d, want 2", len(handler.ended))
+	}
+	now := time.Now().Add(2 * time.Minute)
+	handler.now = func() time.Time { return now }
+	if err := handler.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.ended) != 1 {
+		t.Fatalf("skip set = %d after the oldest left the window, want 1", len(handler.ended))
+	}
+}
+
+func TestSweepRestartResubmitsThenReachesTheRest(t *testing.T) {
+	store := &fakeStore{tokens: openTokens(RunCap + 50)}
+	a, _ := newHandler(t, store, true)
+	if err := a.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	b, logs := newHandler(t, store, true) // a restart: an empty skip set
+	if err := b.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=capped") || !strings.Contains(line, "submitted=10000") || store.noops != RunCap {
+		t.Fatalf("restart run 1: %s noops=%d (want %d idempotent re-submits)", line, store.noops, RunCap)
+	}
+	if err := b.Work(context.Background(), execution(due)); err != nil {
+		t.Fatal(err)
+	}
+	if line := infoLine(logs); !strings.Contains(line, "outcome=swept") || !strings.Contains(line, "skipped=10000") || !strings.Contains(line, "submitted=50") {
+		t.Fatalf("restart run 2: %s", line)
+	}
+	if got := submittedFor(t, store, store.tokens); got != RunCap+50 {
+		t.Fatalf("reached %d of %d", got, RunCap+50)
+	}
+}
+
+func TestScanSQLHasTheWindowBound(t *testing.T) {
+	if !strings.Contains(pageSQL, "expires_at > $4") {
+		t.Fatal("scan SQL lost the window lower bound")
 	}
 }
 

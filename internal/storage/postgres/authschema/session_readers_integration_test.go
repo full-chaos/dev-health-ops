@@ -165,3 +165,49 @@ func TestSessionReaderRolesAreRefusedWhenUnusable(t *testing.T) {
 		t.Errorf("an unusable role name: err = %v, want ErrInvalidOptions", err)
 	}
 }
+
+// A reader that holds a NOINHERIT membership in the runtime role can SET ROLE
+// to it, and has_*_privilege never shows that. The posture names it. A reader
+// with a risky role attribute is named too.
+func TestSessionReaderPostureNamesSetOnlyMembershipsAndRiskyAttributes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	env := newAuthFixture(t, ctx)
+	member, _ := newSessionReader(t, ctx, env, "rdr_setonly")
+	if _, err := env.admin.Exec(ctx, fmt.Sprintf("GRANT %s TO %s WITH INHERIT FALSE, SET TRUE",
+		Quote(mustValidatedIdentifier(env.runtimeRole)), Quote(mustValidatedIdentifier(member)))); err != nil {
+		t.Fatalf("grant membership: %v", err)
+	}
+	attributeRoles := map[string]string{}
+	for _, attribute := range []string{"CREATEROLE", "CREATEDB", "BYPASSRLS", "REPLICATION"} {
+		role, _ := newSessionReader(t, ctx, env, "rdr_"+strings.ToLower(attribute))
+		if _, err := env.admin.Exec(ctx, fmt.Sprintf("ALTER ROLE %s %s", Quote(mustValidatedIdentifier(role)), attribute)); err != nil {
+			t.Fatalf("alter %s: %v", attribute, err)
+		}
+		attributeRoles[attribute] = role
+	}
+	clean, _ := newSessionReader(t, ctx, env, "rdr_clean")
+	has := func(found []Violation, kind, object, privilege string) bool {
+		for _, v := range found {
+			if v.Kind == kind && v.Object == object && v.Privilege == privilege {
+				return true
+			}
+		}
+		return false
+	}
+	found := readerViolations(t, ctx, env, member)
+	if !has(found, "session_reader", env.runtimeRole, "MEMBER") {
+		t.Fatalf("SET-only membership in the runtime role not reported: %v", found)
+	}
+	for attribute, role := range attributeRoles {
+		found := readerViolations(t, ctx, env, role)
+		if !has(found, "session_reader", role, attribute) {
+			t.Errorf("%s not reported for %s: %v", attribute, role, found)
+		}
+	}
+	for _, v := range readerViolations(t, ctx, env, clean) {
+		if v.Kind == "session_reader" && (v.Privilege == "MEMBER" || v.Object == clean) {
+			t.Errorf("clean reader reported: %v", v)
+		}
+	}
+}

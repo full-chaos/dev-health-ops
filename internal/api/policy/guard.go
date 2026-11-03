@@ -222,6 +222,9 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz,
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
 	}
+	if g.RefuseDelegated(w, r, user) {
+		return nil, false
+	}
 	switch {
 	case level == Superuser:
 		countRoleSource(r.Context(), kindRolePlatformGate)
@@ -276,6 +279,9 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	switch {
 	case err == nil:
+		if g.RefuseDelegated(w, r, user) {
+			return nil, false
+		}
 		return user, true
 	case isRefusal(err):
 		return nil, true

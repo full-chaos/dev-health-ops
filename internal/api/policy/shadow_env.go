@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -102,6 +103,10 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 	}
 	decider, err := deps.NewDecider()
 	if err != nil || decider == nil {
+		var input *ShadowInputError
+		if errors.As(err, &input) && input.Variable != "" {
+			return disabled(input.Variable)
+		}
 		return disabled("decider")
 	}
 	cfg.Decider = decider

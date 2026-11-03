@@ -29,12 +29,16 @@ func newShadow(cfg AuthProxyConfig, lookup func(string) (string, bool), shared *
 	}
 	return policy.ShadowFromEnv(lookup, policy.ShadowEnvDeps{Rows: rows, Logger: logger, NewDecider: func() (pep.Decider, error) {
 		if cfg.Upstream == nil {
-			return nil, errors.New("shadow pdp: no auth-service URL")
+			return nil, &policy.ShadowInputError{Variable: EnvAuthProxyURL}
 		}
 		client := shared
 		if client == nil {
 			built, err := newWorkloadClient(cfg, lookup, []workloadAsk{{flag: policy.EnvShadowPDP, selector: "the shadow PDP credential"}})
 			if err != nil {
+				var input *workloadInputError
+				if errors.As(err, &input) && input.variable != "" {
+					return nil, &policy.ShadowInputError{Variable: input.variable}
+				}
 				return nil, err
 			}
 			client = built

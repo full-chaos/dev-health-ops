@@ -87,7 +87,7 @@ What the rollback does:
 What the rollback does not do:
 
 - It does not change a key state. A key that was `compromised` stays out of the JWKS and denied. A key that
-  was `retired` stays retired.
+  was `retired` stays retired. The key states and moves are in [planned rotation](auth-signing-key-planned-rotation.md) and [emergency rotation and rollback](auth-signing-key-emergency-rotation-and-rollback.md).
 - It does not restore a revoked session. A session that was revoked stays refused under both classes.
 - It does not change the order of the flip. The way forward is the same roll back to `eddsa`, with the
   preconditions above checked again.

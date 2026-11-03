@@ -1,0 +1,26 @@
+{
+  "base_url": "http://127.0.0.1:8095",
+  "targets": [
+    {
+      "name": "authorize-batch-10",
+      "method": "POST",
+      "path": "/v1/authorize:batch",
+      "weight": 1,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "header_env": {
+        "Authorization": {
+          "env": "AUTH_LOADTEST_WORKLOAD_TOKEN",
+          "prefix": "Bearer "
+        }
+      },
+      "body": "{\"schema_version\":\"authorization_batch_request.v1\",\"requests\":[{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b0\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b1\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b2\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b3\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b4\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b5\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"analytics.read\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-b6\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"settings.write\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-h0\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"settings.write\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-h1\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}},{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"admin.users\",\"resource\":{\"type\":\"platform\",\"key\":\"platform\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}}]}",
+      "expect_status": [
+        200
+      ],
+      "forbid_5xx": true,
+      "max_error_rate": 0
+    }
+  ]
+}

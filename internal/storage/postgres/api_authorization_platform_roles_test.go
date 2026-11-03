@@ -458,11 +458,11 @@ func TestGoAPIUsersWritesStayWithinTheOwnedGrant(t *testing.T) {
 // The census parser reads the statement shapes go-api uses and refuses the rest.
 func TestUsersStatementColumnsReadsItsShapes(t *testing.T) {
 	for sql, want := range map[string][2][]string{
-		"INSERT INTO users\n\t(id, email, is_active)\nVALUES ($1, $2, true)":                      {{"id", "email", "is_active"}, nil},
+		"INSERT INTO users\n\t(id, email, is_active)\nVALUES ($1, $2, true)":                       {{"id", "email", "is_active"}, nil},
 		`UPDATE users SET full_name = $2, last_login_at = $3, updated_at = $3 WHERE id = $1::uuid`: {nil, {"full_name", "last_login_at", "updated_at"}},
 		`UPDATE users SET a = COALESCE($4::text, a), b = b + 1 WHERE id = $1`:                      {nil, {"a", "b"}},
-		`UPDATE public.users u SET (email, "is_superuser") = ($2, $3) WHERE u.id = $1`:              {nil, {"email", "is_superuser"}},
-		`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET is_superuser = true`:     {{"id"}, {"is_superuser"}},
+		`UPDATE public.users u SET (email, "is_superuser") = ($2, $3) WHERE u.id = $1`:             {nil, {"email", "is_superuser"}},
+		`INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET is_superuser = true`:    {{"id"}, {"is_superuser"}},
 	} {
 		insert, update, ok := usersStatementColumns(sql)
 		if !ok || !reflect.DeepEqual(insert, want[0]) || !reflect.DeepEqual(update, want[1]) {

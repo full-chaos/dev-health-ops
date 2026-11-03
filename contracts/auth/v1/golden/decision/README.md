@@ -18,7 +18,7 @@ no floats, no repeated member. Ids are synthetic; no real credential appears.
 Every row is run by exactly one runner. A runner refuses a row of the other layer.
 
 - `pdp`: `state` (the GrantSnapshot input, incl. the clock) and `request` (the PDP Request fields) go through the real
-  Evaluator. `expect` = `{allowed, reason, cache_class, expires_in_seconds, policy_revision}`; every field is compared.
+  Evaluator. `expect` = `{allowed, reason, wire_reason_code, cache_class, expires_in_seconds, policy_revision}`; every field is compared.
   Runner: `internal/auth/authorization/golden_decision_test.go`. It fails when a manifest row is not run and when an
   `AllReasons()` token has no pdp vector. There is no skip list.
 - `pep`: `request_raw` (the body text) goes through `authapi.DecodeAuthorizationRequest`. `expect` = `{outcome, refusal, question}`:
@@ -35,11 +35,19 @@ defined for them here.
 `acr.context.read`, so the repository rows ran on a planted catalog; version 6 gives the action to viewer, member, admin and owner
 and every row runs on the shipped catalog. `manifest.json` keeps an empty `catalogs` list for a catalog data file a future row may name.
 
-## expect.reason is INTERNAL
+## expect.reason is INTERNAL, expect.wire_reason_code is the wire value
 
-`expect.reason` is an internal `authorization.Reason` token, not a wire value. The wire `reason_code` enum has 4 values. The
-Reason-to-wire map and the widened enum come from CHAOS-10841 (5.7). A later follow-up leaf adds `expect.wire_reason_code` to
-these files.
+`expect.reason` is an internal `authorization.Reason` token. `expect.wire_reason_code` is the decision `reason_code` the authorize
+routes send for it, and every pdp row carries the member. Both come from `authapi.wireReasonCode` (CHAOS-10841): the wire code is
+the Reason's own token, and the closed enum is `reason_code` in `jsonschema/authorization_decision.v1.schema.json`
+(= `decision_reason_code` in `vocabulary/reason-codes.json`).
+
+- A string: the Reason reaches the wire as a decision. The string equals `wireReasonCode(reason)` and is in the enum.
+- `null`: the Reason is in `authorizeStateFailures` (`grant_read_failed`, `clock_unavailable`). The call answers 503; no decision and
+  no `reason_code` reach the wire.
+
+The member is `null` if and only if the reason is in `authorizeStateFailures`. The check is
+`TestGoldenDecisionPDPRowsAssertTheirWireReason` in `internal/auth/authapi`. pep rows have no reason and no wire member.
 
 ## Not in this directory yet
 

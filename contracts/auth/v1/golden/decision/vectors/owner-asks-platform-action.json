@@ -4,7 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 9,
-    "reason": "platform_role_absent"
+    "reason": "platform_role_absent",
+    "wire_reason_code": "platform_role_absent"
   },
   "id": "owner-asks-platform-action",
   "layer": "pdp",

@@ -316,6 +316,10 @@ func apiPosture() RolePosture {
 			// credentials_deleted's count. The SSO activate and deactivate
 			// routes set a provider's status (UPDATE).
 			{"sso_providers", false, true, true},
+			// The SAML ACS replay guard (internal/api/sso/saml.go) consumes an
+			// assertion with one plain INSERT; a replayed pair is the primary
+			// key's 23505, so no conflict read or cleanup runs in go-api.
+			{"saml_assertion_replays", true, false, false},
 			// The admin IP-allowlist routes create, update and delete
 			// entries.
 			{"org_ip_allowlist", true, true, true},

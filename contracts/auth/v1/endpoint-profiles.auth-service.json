@@ -1,6 +1,14 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-29T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/auth/session/signin.go",
+      "line": 73,
+      "now": "func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,",
+      "was": "func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [

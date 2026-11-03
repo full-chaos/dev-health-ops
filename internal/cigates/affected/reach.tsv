@@ -117,6 +117,7 @@ internal/auth/contracts	contracts.go	internal/auth/contracts
 internal/auth/contracts	contracts.go	internal/auth/contracts/provisioning
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
+internal/auth/contracts	contracts.go	internal/auth/copyproject
 internal/auth/contracts	contracts.go	internal/auth/decisioncache
 internal/auth/contracts	contracts.go	internal/auth/decisionstate
 internal/auth/contracts	contracts.go	internal/auth/delegationend

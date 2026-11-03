@@ -135,8 +135,13 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
-	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureOrganizationIn", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.users", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertOrganizationSQL", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertPrincipalSQL", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertUserSQL", Table: "auth.users", Verb: "INSERT"},
 	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
 	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
@@ -192,8 +197,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/platformrole/owner.go", Func: "Store.RevokeOwner", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.users", Verb: "INSERT"},
 	// The signing-key rotation operator (auth-migrate keys, migration role): key states, and the sessions a compromise revokes.
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},

@@ -457,3 +457,49 @@ func TestOIDCOverrideLeavesTheStoredUserinfoAnswerUnchanged(t *testing.T) {
 		t.Fatalf("the stored explicit answer changed: %v", explicit)
 	}
 }
+
+func TestOIDCOverrideLeavesNestedStoredUserinfoUnchanged(t *testing.T) {
+	cases := map[string]struct {
+		claim any
+		edit  func(map[string]any)
+		want  func(map[string]any) bool
+	}{
+		"nested map": {
+			claim: map[string]any{"k": "v"},
+			edit:  func(c map[string]any) { c["n"].(map[string]any)["k"] = "edited" },
+			want:  func(m map[string]any) bool { n, _ := m["n"].(map[string]any); return len(n) == 1 && n["k"] == "v" },
+		},
+		"slice": {
+			claim: []any{"a", "b"},
+			edit:  func(c map[string]any) { c["n"].([]any)[0] = "edited" },
+			want:  func(m map[string]any) bool { n, _ := m["n"].([]any); return len(n) == 2 && n[0] == "a" && n[1] == "b" },
+		},
+	}
+	for name, tc := range cases {
+		for mode, setup := range map[string]func() (*idpstub.OIDC, *httptest.Server){
+			"Override option": func() (*idpstub.OIDC, *httptest.Server) {
+				return startOIDC(t, idpstub.OIDCOptions{Override: tc.edit})
+			},
+			"SetOverride": func() (*idpstub.OIDC, *httptest.Server) {
+				o, srv := startOIDC(t, idpstub.OIDCOptions{})
+				o.SetOverride(tc.edit)
+				return o, srv
+			},
+		} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				o, srv := setup()
+				explicit := map[string]any{"sub": "explicit", "n": tc.claim}
+				o.SetUserinfo(explicit)
+				getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+				if !tc.want(explicit) {
+					t.Fatalf("the stored explicit answer changed: %v", explicit)
+				}
+				o.SetOverride(nil)
+				_, info := getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+				if !tc.want(info) {
+					t.Fatalf("userinfo after clearing the override = %v", info)
+				}
+			})
+		}
+	}
+}

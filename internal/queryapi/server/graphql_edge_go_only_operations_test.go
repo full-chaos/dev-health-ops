@@ -31,6 +31,17 @@ var edgeGoOnlyFromBirth = map[string]edgeGoOnlyDocument{
 		document: registeredCoverageScopeBaselineDocument,
 		root:     "coverageScopeBaseline",
 	},
+	// CHAOS-12698: acr's team- and repository-scoped names for the
+	// investmentBreakdown body, over the existing analytics root. No client
+	// sent them before the golden was frozen.
+	"investmentBreakdownTeam": {
+		document: registeredInvestmentBreakdownTeamDocument,
+		root:     "analytics",
+	},
+	"investmentBreakdownRepository": {
+		document: registeredInvestmentBreakdownRepositoryDocument,
+		root:     "analytics",
+	},
 	// CHAOS-8104 is a dedicated operation over the existing analytics root.
 	// The operation key is deliberately not the selected field name.
 	"investmentEvidenceQuality": {

@@ -1,6 +1,13 @@
 package session
 
 import (
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -153,5 +160,33 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 		if !found[k] {
 			t.Errorf("livenessAllowlist entry %s matches no statement; remove it", k)
 		}
+	}
+}
+
+// The store's effective expressions are the shared rule's, over its own schema and lifetime.
+func TestTheStoreReadsTheSharedRule(t *testing.T) {
+	keyText, _ := testKey(t)
+	pool, err := pgxpool.New(context.Background(), "postgres://u@127.0.0.1:1/none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	schema, err := authschema.NewValidatedIdentifier("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(Config{Pool: pool, Schema: schema, SuccessorKey: keyText, RefreshTTL: 90 * time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := sessionrule.New(authschema.Quote(schema), 90*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.effectiveRevokedAt() != rule.Revoked("s") || store.effectiveExpiry() != rule.Expiry("s") || store.effectiveCap() != rule.Cap("s") {
+		t.Error("a store expression is not the shared rule's")
+	}
+	if store.RefreshTTL() != 90*time.Minute {
+		t.Errorf("RefreshTTL = %v", store.RefreshTTL())
 	}
 }

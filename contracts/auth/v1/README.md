@@ -25,7 +25,7 @@ transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds Catalog version 12 adds `reports.write`, held by every organization role as the saved-report writes are open to every organization member today (CHAOS-12657).
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -33,11 +33,27 @@ action a `risk_class` and a `cache_class` (a high-risk action is never cached), 
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
 `vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
+
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
 `invite.v1`, `invite-create-request.v1` and `invite-accept-request.v1`
 (CHAOS-10640) are pure schema documents. Their OpenAPI components are listed
 here; the operations arrive with the routes that serve them. Rules:
+
+The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
+has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
+`organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
+(an organization's principals, each with its membership), `organization-list.v1`
+(a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
+`*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
+(`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
+`next_cursor`). A principal read holds an id, a kind, a status and a revision and no personal field. A grant read
+carries the repository `resource_key`; an error body never does. A read holds a read scope (`principals:read`,
+`organizations:read`, `memberships:read`, `grants:read`, on `internal_svc_authsess_token`); a write scope never
+satisfies one. The ids are the wire form of `provisioning-event.v1` (a prefix and 1 to 64 id characters). The
+rules a schema cannot say (the answer is the one asked for, ascending ids, a cursor that is the last item's) are
+`ParseReadRequest` and `ParseReadResponse`; their cells run on `golden/read-api`.
 
 `oauth-clients.v1` is the OAuth authorization server's static client registry
 (ACP-ADR-13 decision 7, CHAOS-12398): `oauth-clients.v1.json` is the one file, with
@@ -306,6 +322,21 @@ boundary (TRD §9, §13).
   excluded with a reason, or a member has no column. Excluded: surrogate ids,
   delivery bookkeeping (`available_at`, `published_at`, `attempts`,
   `last_error`) and `client_ip`.
+* **`audit-event.v1` `attributes` is the producer allowlist, one vocabulary.**
+  Every key `internal/audit/allowlist.go` accepts is a member of `attributes`
+  with the same closed rule (same enum, same id pattern, same list and integer
+  bounds), and `TestAuditAllowlistKeysEqualSchemaAttributeKeys` and
+  `TestAuditAttributeRulesMatchTheSchemaTypes` fail on any difference in either
+  direction. The members no producer writes (`action`, `aggregate_type`,
+  `aggregate_revision`) stay in v1 and are named, with a reason, in
+  `schemaOnlyAuditKeys`. An allowlist key that no producer writes and no open
+  change plans is deleted (`TestEveryAuditAllowlistKeyHasAWriter`). The
+  database row keeps uuid text for every id; the wire document prefixes
+  the envelope ids (`prn_` for the actor and the subject, `org_` for the
+  organization) and re-encodes `request_id` as `req_` plus 26 base32
+  characters (`requestid.WireOf`); an attribute id is the row's uuid text.
+  `internal/testsupport/auditwire` projects a producer row that way and the
+  producer unit tests validate it against the schema.
 * **The idempotency key is `(aggregate_type, aggregate_id, payload.revision)`,
   and `revision` is per aggregate.** Nothing implies an ordering across
   aggregates, so a consumer that sorts the whole stream is wrong. The

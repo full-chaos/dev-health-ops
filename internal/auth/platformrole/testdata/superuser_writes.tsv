@@ -1,4 +1,4 @@
-# The writes of public users.is_superuser that are not a constant false, by file and function, with the values they
+# The writes of public users.is_superuser (a constant false is not allowed: the column defaults to false, so an INSERT omits it), by file and function, with the values they
 # write and the proof of their owned behaviour: the tests (comma-separated, in the same package) that hold the write
 # refused or the column left out while AUTH_PLATFORM_ROLES_OWNED, or "fixture" under internal/testsupport.
 # TestEverySuperuserWriteIsProvenWhileOwned holds this list.

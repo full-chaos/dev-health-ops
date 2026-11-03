@@ -136,6 +136,12 @@ have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor, the request id and the calling
 credential (`caller_principal_id` and `workload_jti` of the go-api workload token).
 
+Four read scopes name the versioned read API (CHAOS-10995; contracts only, no
+route serves them yet): `principals:read`, `organizations:read`,
+`memberships:read` and `grants:read`. A read holds its read scope and a write
+scope never satisfies one (`contracts.ReadScopeAllows`). A mint verb that issues
+them and the routes that check them come with the routes.
+
 **`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
 characters), stored only as its SHA-256 digest. go-api mints it

@@ -78,6 +78,8 @@ func TestOnlyACollectingReaderGivesDependencies(t *testing.T) {
 func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 	marks := map[string]string{
 		"table:sessions":                  "gate: Session, every call before the cache",
+		"table:credential_registry":       "gate: ServiceAccountKey, every call before the cache",
+		"table:service_accounts":          "bypass: read for a service-account principal only, whose decisions never use the cache",
 		"table:principals":                "dep principal (prn_)",
 		"table:organizations":             "dep organization (org_)",
 		"table:memberships":               "dep membership (mbr_) + tag membership",

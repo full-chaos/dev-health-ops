@@ -116,6 +116,10 @@ const (
 	// padding): the HMAC key of the lockout identifier (local.Config). Set,
 	// with the session secrets, it mounts the login route. Secret.
 	EnvLoginLockoutKey = "AUTH_LOGIN_LOCKOUT_KEY"
+	// EnvRateLimitKey is the key the rate-limit counters digest identifiers
+	// with (HKDF input). Optional; unset, the limiter is keyed from
+	// EnvAccessTokenSecret. Secret: environment or _FILE only.
+	EnvRateLimitKey = "AUTH_RATE_LIMIT_KEY"
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
@@ -281,6 +285,9 @@ type Config struct {
 	// SessionIssueWorkloadSubject is the one workload principal (prn_) whose
 	// workload token the session issue route accepts; empty = off.
 	SessionIssueWorkloadSubject string
+	// AcrEventsWorkloadSubject is the one acr-api workload principal (prn_) whose
+	// token the acr events route accepts. Empty leaves the route unmounted.
+	AcrEventsWorkloadSubject string
 
 	// AuthorizeCallerSubjects are the workload principals (prn_) whose
 	// workload token the authorize routes accept; empty = none.
@@ -295,7 +302,7 @@ type Config struct {
 
 // Access token classes (EnvAccessTokenClass).
 const (
-	AccessClassHS256Compat = "hs256_compat"
+	AccessClassHS256Compat = "hs256_compat" // gitleaks:allow
 	AccessClassEdDSA       = "eddsa"
 )
 
@@ -314,6 +321,8 @@ type SessionTokens struct {
 	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
 	LegacyAudience string
 	SuccessorKey   secrets.Value
+	// RateLimitKey is EnvRateLimitKey; unset, the rate limiter keys from AccessSecret.
+	RateLimitKey secrets.Value
 	// LoginEnabled is set with LockoutKey: the login route is mounted.
 	LoginEnabled bool
 	LockoutKey   secrets.Value
@@ -381,6 +390,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
 		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
+		slog.Bool("acr_events_workload_enabled", c.AcrEventsWorkloadSubject != ""),
 	}
 }
 
@@ -575,6 +585,9 @@ func Load(spec Spec) (Config, error) {
 	if cfg.AuthorizeCallerSubjects, err = authorizeCallerSubjects(lookup, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
+	if cfg.AcrEventsWorkloadSubject, err = workloadSubject(lookup, EnvAcrEventsWorkloadSubject, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
 		return Config{}, err
 	}
@@ -741,6 +754,10 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 	if err != nil {
 		return SessionTokens{}, err
 	}
+	rateKey, hasRateKey, err := secrets.ResolveSecret(EnvRateLimitKey, lookup)
+	if err != nil {
+		return SessionTokens{}, err
+	}
 	linkRoutes, err := strictBool(lookup, EnvSocialLinkRoutes)
 	if err != nil {
 		return SessionTokens{}, err
@@ -754,7 +771,19 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
 				EnvLoginLockoutKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
 		}
+		if hasRateKey {
+			return SessionTokens{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
+				EnvRateLimitKey, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+		}
 		return out, nil
+	}
+	if hasRateKey && rateKey.Reveal() == access.Reveal() {
+		return SessionTokens{}, fmt.Errorf("%s must differ from %s: one key per purpose", EnvRateLimitKey, EnvAccessTokenSecret)
+	}
+	if hasRateKey && len([]rune(rateKey.Reveal())) < minAccessTokenSecretLength {
+		return SessionTokens{}, fmt.Errorf(
+			"%s must be at least %d characters", EnvRateLimitKey, minAccessTokenSecretLength,
+		)
 	}
 	if len([]rune(access.Reveal())) < minAccessTokenSecretLength {
 		return SessionTokens{}, fmt.Errorf(
@@ -767,6 +796,7 @@ func sessionTokens(lookup secrets.LookupEnv) (SessionTokens, error) {
 		)
 	}
 	out.Enabled, out.AccessSecret, out.SuccessorKey = true, access, successor
+	out.RateLimitKey = rateKey
 	out.SocialLinkRoutes = linkRoutes
 	lockout, _, err := secrets.ResolveSecret(EnvLoginLockoutKey, lookup)
 	if err != nil {

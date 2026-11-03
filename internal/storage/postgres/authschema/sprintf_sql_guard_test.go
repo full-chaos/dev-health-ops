@@ -117,7 +117,7 @@ var sqlOperandExemptions = []sqlOperandExemption{
 		reason: "read holds only quoteIdentifier results of the validated ImpersonationLegacyReadColumns names",
 	},
 	{
-		file: "session_readers.go", fn: "sessionReaderStatements", operand: `strings.Join(columns, ", ")`,
+		file: "session_readers.go", fn: "readerStatements", operand: `strings.Join(columns, ", ")`,
 		reason: "columns holds only quoteIdentifier results of the validated SessionReaderReads names",
 	},
 	{

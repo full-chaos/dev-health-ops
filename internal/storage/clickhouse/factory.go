@@ -96,6 +96,13 @@ func clickHouseOptions(config Config) (*clickhouse.Options, error) {
 }
 
 func Open(ctx context.Context, config Config) (driver.Conn, error) {
+	return OpenWith(ctx, config, func(ctx context.Context, ping func(context.Context) error) error { return ping(ctx) })
+}
+
+// OpenWith is Open with its readiness Ping run through wait, which may run the
+// ping more than once (a bounded first-connect wait). On failure it returns
+// the same redacted ErrUnavailable error Open returns.
+func OpenWith(ctx context.Context, config Config, wait func(context.Context, func(context.Context) error) error) (driver.Conn, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -112,7 +119,7 @@ func Open(ctx context.Context, config Config) (driver.Conn, error) {
 	if err != nil {
 		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}
-	if err := connection.Ping(ctx); err != nil {
+	if err := wait(ctx, connection.Ping); err != nil {
 		_ = connection.Close()
 		return nil, secrets.WithRedactedCauseAlso(ErrUnavailable, config.DSN, err, resolved...)
 	}

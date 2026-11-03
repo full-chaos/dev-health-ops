@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 // fakeAudit records each call of the audit sink: one slice per call.
@@ -120,6 +121,7 @@ func TestAuthorizeHighRiskDenyRecordsTheWireReason(t *testing.T) {
 		if got := attrString(t, rows[len(rows)-1], "decision_reason_code"); got != d.ReasonCode {
 			t.Errorf("%s: row reason %s, response reason %s", name, got, d.ReasonCode)
 		}
+		auditwire.MustValidate(t, rows[len(rows)-1])
 	}
 }
 
@@ -170,6 +172,7 @@ func TestAuthorizeAuditRowShapeIsClosed(t *testing.T) {
 		if err := audit.ValidateAttributes(e.Attributes); err != nil {
 			t.Errorf("row %d: %v", i, err)
 		}
+		auditwire.MustValidate(t, e)
 	}
 	if attrString(t, rows[1], "resource_id") != "acme/widget" {
 		t.Errorf("repository key %v", rows[1].Attributes)
@@ -386,7 +389,7 @@ func TestAuthorizeHighRiskDecisionsAreNeverCachedSoEachIsAudited(t *testing.T) {
 			t.Errorf("%s: %d decisions stored for a high-risk action", a.action, stored)
 		}
 	}
-	if high != 22 {
-		t.Fatalf("walked %d high-risk actions, want 22", high)
+	if high != 25 {
+		t.Fatalf("walked %d high-risk actions, want 25", high)
 	}
 }

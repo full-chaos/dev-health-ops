@@ -38,10 +38,15 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
 dev_health_api_legacy_path_total	kind,surface	code: internal/api/policy/legacycounters.go
+dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
@@ -293,6 +298,7 @@ devhealth_scheduler_zero_planned_occurrences_total		code: internal/scheduler/syn
 devhealth_sync_coverage_cache_invalidations_consumed_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_coverage_cache_invalidations_emitted_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_run_zero_unit_finalizations_total	provider,reason	code: internal/jobruntime/telemetry.go
+external_push_expiry_sweep_tokens_total	outcome	code: internal/jobs/pushexpiry/handler.go
 fixed_scheduler_cold_starts_total	schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_consecutive_failures		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_failures_total		code: internal/scheduler/fixed/loop.go

@@ -536,7 +536,7 @@ func (h handlers) exchangeAndValidate(ctx context.Context, w http.ResponseWriter
 	// fails authentication here, before any parsing, identically to a
 	// tampered ciphertext -- not merely detected afterward by comparing
 	// a decrypted field (state.go's own doc comment).
-	state, err := verifyOIDCState(h.StateSecret, stateToken, providerID.String(), now)
+	state, err := verifyOIDCStateKeys(h.stateKeys(), stateToken, providerID.String(), now)
 	if err != nil {
 		if errors.Is(err, errOIDCStateExpired) {
 			return oidcClaims{}, ssoAuthErr("OIDC state expired")

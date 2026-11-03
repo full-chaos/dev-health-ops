@@ -15,7 +15,7 @@ import (
 const clickhousePackage = "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 
 // classifiedOpenSites is the closed list of the places that open a ClickHouse
-// connection (a call to the storage package's Open), keyed by file relative to
+// connection (a call to the storage package's Open or OpenWith), keyed by file relative to
 // internal/ or cmd/, with the number of calls and why what the place prints is
 // safe. A verb's family is proved by TestNoVerbPrintsTheClickHouseLoginOrPassword
 // (verbs_integration_test.go) or, for `dho sync`, by synccli's
@@ -49,7 +49,7 @@ var classifiedOpenSites = map[string]struct {
 }
 
 // TestEveryClickHouseOpenSiteIsClassified lists every call to the ClickHouse
-// storage package's Open in non-test code and requires each place to be on
+// storage package's Open or OpenWith in non-test code and requires each place to be on
 // classifiedOpenSites with the same number of calls.
 func TestEveryClickHouseOpenSiteIsClassified(t *testing.T) {
 	module, err := filepath.Abs(filepath.Join("..", ".."))
@@ -96,7 +96,7 @@ func TestEveryClickHouseOpenSiteIsClassified(t *testing.T) {
 					return true
 				}
 				selector, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "Open" {
+				if !ok || (selector.Sel.Name != "Open" && selector.Sel.Name != "OpenWith") {
 					return true
 				}
 				if pkg, ok := selector.X.(*ast.Ident); ok && aliases[pkg.Name] {

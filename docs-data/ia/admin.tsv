@@ -10,6 +10,7 @@ admin-teams-repos	admin-identities	/admin/teams-and-identities/teams-and-reposit
 admin-users	admin-identities	/admin/teams-and-identities/users-and-memberships/	Manage users and memberships	task-guide	true	public	planned	false	
 admin-mapping	admin-identities	/admin/teams-and-identities/identity-mapping/	Review identity and membership mapping	task-guide	true	public	planned	false	
 admin-roles	admin-identities	/admin/teams-and-identities/roles-and-access/	Manage roles and access	task-guide	true	public	planned	false	
+admin-org-members	admin-identities	/admin/teams-and-identities/manage-org-members/	Manage organization members	task-guide	true	public	active	false	Invite a person, change a role, remove a member and transfer ownership of an organization.
 admin-sources	admin	/admin/data-sources/	Connect data sources	landing	true	public	planned	false	
 admin-source-prereq	admin-sources	/admin/data-sources/prerequisites/	Data-source prerequisites	task-guide	true	public	planned	false	
 admin-github	admin-sources	/admin/data-sources/github/	Connect GitHub	task-guide	true	public	planned	false	
@@ -24,6 +25,7 @@ admin-backfills	admin-sync	/admin/sync-and-coverage/backfills/	Request and monit
 admin-coverage	admin-sync	/admin/sync-and-coverage/coverage/	Understand coverage	concept	true	public	planned	false	
 admin-security	admin	/admin/security-and-audit/	Administration security and audit	landing	true	public	planned	false	
 admin-credential-resp	admin-security	/admin/security-and-audit/credentials/	Credential responsibilities	concept	true	public	planned	false	
+admin-service-accounts	admin-security	/admin/security-and-audit/service-accounts/	Manage service accounts	task-guide	true	public	active	false	What an organization service account is, who may manage it, and the lifecycle an administrator runs on it.
 admin-audit	admin-security	/admin/security-and-audit/audit-events/	Audit administrative changes	task-guide	true	public	planned	false	
 admin-privacy	admin-security	/admin/security-and-audit/privacy/	Privacy and data-handling responsibilities	concept	true	public	planned	false	
 admin-troubleshooting	admin	/admin/troubleshooting/	Troubleshoot administration	troubleshooting-index	true	public	planned	false	

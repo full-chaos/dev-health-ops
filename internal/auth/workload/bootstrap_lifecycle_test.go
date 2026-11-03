@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestMintBootstrapIsCanonicalAndUnique(t *testing.T) {
@@ -200,6 +201,7 @@ func TestBootstrapAuditAndEventsAreInsideTheVocabularies(t *testing.T) {
 		{"auth.workload.bootstrap_disabled", "compromised", uuid.Nil, []string{"revoked_at"}, "revoked"},
 	} {
 		a := s.bootstrapAudit(ev.event, ev.reason, w, ev.credential, Actor{}, ev.fields, "", ev.next)
+		auditwire.MustValidate(t, a)
 		if err := audit.ValidateAttributes(a.Attributes); err != nil {
 			t.Errorf("%s/%s attributes refused: %v", ev.event, ev.reason, err)
 		}

@@ -113,6 +113,14 @@ Under eddsa the access token and the session-route token carry
 it gates answers `403`, and a later caller of it is denied by default. The
 `delegated_bearer` field of the endpoint profile holds the same list.
 
+At go-api the token's actor (`impersonating_user_id` under `hs256_compat`,
+`act.sub` under eddsa) is the caller's `ImpersonatedBy`. The Guard refuses the
+bearer `403` on every row whose `delegated_bearer` is not `allowed`: no route
+under `/api/v1/admin` and no write admits it (see the endpoint profiles). At
+query-api the caller is `Delegated`: every GraphQL operation but a query is
+refused, and `/query/proof-write` refuses it. Ask Dev reads the session's
+actor, so a delegated session is impersonating.
+
 A switch of organization from a delegated session is refused `403 not_entitled`,
 as it would mint the target a full session with a refresh credential.
 

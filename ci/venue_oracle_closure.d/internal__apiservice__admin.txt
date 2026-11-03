@@ -62,6 +62,7 @@ internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/pushevent
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session
@@ -73,6 +74,7 @@ internal/cli
 internal/edgetokenmint
 internal/egressguard
 internal/entitlements
+internal/envelopemint
 internal/httpguard
 internal/identityalias
 internal/jobcontract
@@ -134,6 +136,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey
@@ -161,8 +164,10 @@ internal/testsupport/platformroleseam
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/smtpcapture
+internal/testsupport/superuserwriter
 internal/testsupport/venueoracle
 internal/workitemcontract
+~contracts/auth/v1/jsonschema
 ~internal/api/externalingest/testdata
 ~internal/api/recordvalidation/testdata
 ~internal/apiservice/customerpush/testdata

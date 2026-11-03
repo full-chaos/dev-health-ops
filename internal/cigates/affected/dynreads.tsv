@@ -20,6 +20,7 @@ deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
+internal/api/policy	delegated_test.go
 internal/api/policy	principalonce_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -95,6 +96,7 @@ internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
+internal/auth/contracts	repokey_cells_test.go
 internal/auth/contracts	retired_credential_class_test.go
 internal/auth/contracts	retired_legacy_ingest_test.go
 internal/auth/contracts	schema_dialect_test.go

@@ -23,7 +23,7 @@ With the switch on, no runtime role writes `public.users.is_superuser` (CHAOS-10
 
 All of these hold:
 
-1. Users are owned and live (CHAOS-10231, the users-owned runbook): `authService.phase: 4` with `usersOwnedStage: owned`.
+1. Users are owned and live (CHAOS-10231, the users-owned runbook): `authService.phase: 4` with `usersOwnedStage: owned`. `public.organizations` and `public.memberships` stay the authority (D6651: orgs owned, CHAOS-10998, is cancelled and is not a step before this flip).
 2. Every go-api pod runs a build with the column omission of CHAOS-10993 (ops #5531, f1440088) and one full go-api roll of such a build is done. The REVOKE with an older pod live gives that pod 42501 on a user write, and its readiness check fails on the exact posture.
 3. The release that removes the auth runtime role's INSERT (`is_superuser`) on `public.users` (CHAOS-10993) is rolled. Its grants pass is a narrowing: it refuses and prints the digest until `authService.migrate.acknowledgeGrantNarrowing` carries it.
 4. The users backfill ran, so every public superuser has an assignment. Run `dho auth users-reconcile -platform-roles-gate`. It must print `gated_diffs=0`, including `diff.no_active_platform_admin=0`. Without the flag the class prints as `info.no_active_platform_admin` and cannot fail the run, so always pass the flag here.

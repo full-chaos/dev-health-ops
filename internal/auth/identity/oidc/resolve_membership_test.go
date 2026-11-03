@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
@@ -221,6 +222,31 @@ func TestResolveMatchedAccountOfAnotherOrganizationIsRefusedEvenWithJIT(t *testi
 			wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
 			if len(jit.calls) != 0 || len(sessions.issued) != 0 {
 				t.Fatalf("jit calls %d sessions %d, want 0 and 0", len(jit.calls), len(sessions.issued))
+			}
+		})
+	}
+}
+
+const goAPIMembershipRefusalBody = `{"detail":{"message":"A membership in this organization is required","reason":"membership_required"}}`
+
+// TestNotMemberRefusalBodyIsGoAPIs: every non-member refusal answers 403 with go-api's detail object
+// (message and reason), the body internal/api/sso writes, so a client reads one shape on either plane.
+func TestNotMemberRefusalBodyIsGoAPIs(t *testing.T) {
+	for name, tc := range map[string]struct {
+		ids *resolveIdentities
+		jit MembershipJIT
+	}{
+		"matched account of another organization": {&resolveIdentities{err: ErrNotOrgMember}, &resolveJIT{}},
+		"key hit without a membership":            {&resolveIdentities{principal: Principal{ID: uuid.New(), Active: true}}, nil},
+		"new account, no membership seam":         {&resolveIdentities{err: ErrIdentityNotFound}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, failure, _ := resolveRun("oidc", tc.ids, resolveMembers{}, tc.jit)
+			wantRefused(t, failure, http.StatusForbidden, ReasonMembershipRequired)
+			rec := httptest.NewRecorder()
+			(&Service{}).writeError(rec, failure)
+			if rec.Code != http.StatusForbidden || rec.Body.String() != goAPIMembershipRefusalBody {
+				t.Fatalf("answer = %d %s, want 403 %s", rec.Code, rec.Body, goAPIMembershipRefusalBody)
 			}
 		})
 	}

@@ -454,3 +454,43 @@ func TestTheCorpusPinsTheDecisionOrder(t *testing.T) {
 		})
 	}
 }
+
+// TestEveryDelegatedVectorCarriesACanonicalActor: an accepted vector with an
+// act claim names its actor as every issuer writes it ("prn_" and the unpadded
+// base64url of 16 bytes, no stray trailing bits), so every service accepts
+// it. The delegated vectors are the named set.
+func TestEveryDelegatedVectorCarriesACanonicalActor(t *testing.T) {
+	committed, err := Load(filepath.Join(testRoot(t), Dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*Corpus{"generated": mustGenerate(t, "a"), "committed": committed} {
+		var delegated []string
+		for _, e := range c.Manifest.Vectors {
+			if e.Expect != Accept {
+				continue
+			}
+			var payload struct {
+				Act *struct {
+					Sub string `json:"sub"`
+				} `json:"act"`
+			}
+			if err := json.Unmarshal([]byte(c.Vectors[e.File].PayloadJSON), &payload); err != nil {
+				t.Fatalf("%s %s: %v", name, e.File, err)
+			}
+			if payload.Act == nil {
+				continue
+			}
+			delegated = append(delegated, e.File)
+			text, prefixed := strings.CutPrefix(payload.Act.Sub, "prn_")
+			raw, err := base64.RawURLEncoding.Strict().DecodeString(text)
+			if !prefixed || err != nil || len(raw) != 16 {
+				t.Errorf("%s %s: act.sub %q is not a canonical principal id", name, e.File, payload.Act.Sub)
+			}
+		}
+		sort.Strings(delegated)
+		if want := []string{"valid-act-auth-service.json", "valid-act-canonical.json"}; !reflect.DeepEqual(delegated, want) {
+			t.Errorf("%s: delegated vectors %v, want %v", name, delegated, want)
+		}
+	}
+}

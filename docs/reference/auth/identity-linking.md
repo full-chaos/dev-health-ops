@@ -175,6 +175,9 @@ answers 500 and the tokens are withheld. The reason codes are:
 | `principal_deactivated` | The account is disabled. |
 | `replayed` | A SAML assertion or flow was already used. |
 
+A `membership_required` refusal answers 403 with `{"detail": {"message": ..., "reason": "membership_required"}}` on
+auth-service and on go-api alike; a client reads `reason`.
+
 Provider text never reaches an auth-service response.
 
 Link, unlink and creation through auth-service write audit records

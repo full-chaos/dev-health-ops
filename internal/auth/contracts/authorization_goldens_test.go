@@ -60,11 +60,12 @@ type authorizationManifest struct {
 
 // Tokens read off google/jsonschema-go for the keywords this corpus asserts.
 var goAuthorizationKeywordTokens = map[string]string{
-	"maxItems": "maxItems:",
-	"minItems": "minItems:",
-	"maximum":  "maximum:",
-	"not":      "not:",
-	"type":     "type:",
+	"maxItems":  "maxItems:",
+	"maxLength": "maxLength:",
+	"minItems":  "minItems:",
+	"maximum":   "maximum:",
+	"not":       "not:",
+	"type":      "type:",
 }
 
 func authorizationTokenFor(keyword string) (string, bool) {

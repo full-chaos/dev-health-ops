@@ -734,9 +734,31 @@ serve it).
 {{- end -}}
 
 {{/*
+Refuses AUTH_ORGS_OWNED in any extraEnv list of the values, at any depth, through maps and lists of maps. The key is removed (D6651): no workload reads it.
+Call with (dict "node" <values subtree> "path" "").
+*/}}
+{{- define "dev-health.refuseOrgsOwnedEnv" -}}
+{{- $path := .path -}}
+{{- if kindIs "map" .node -}}
+{{- range $key, $child := .node -}}
+{{- if and (eq $key "extraEnv") (kindIs "slice" $child) -}}
+{{- range $child }}{{- if and (kindIs "map" .) (eq (upper (trim (toString (get . "name")))) "AUTH_ORGS_OWNED") }}{{- fail (printf "%s.extraEnv must not set AUTH_ORGS_OWNED: AUTH_ORGS_OWNED is removed (D6651), orgs owned (phase 5) is cancelled and no workload reads it; remove the entry" $path) }}{{- end }}{{- end -}}
+{{- else if kindIs "map" $child -}}
+{{- include "dev-health.refuseOrgsOwnedEnv" (dict "node" $child "path" (printf "%s.%s" $path $key | trimPrefix ".")) -}}
+{{- else if kindIs "slice" $child -}}
+{{- $listPath := printf "%s.%s" $path $key | trimPrefix "." -}}
+{{- range $i, $item := $child }}{{- if kindIs "map" $item -}}
+{{- include "dev-health.refuseOrgsOwnedEnv" (dict "node" $item "path" (printf "%s[%d]" $listPath $i)) -}}
+{{- end }}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 authService.phase, the one auth cutover key (values.yaml lists the phases). It refuses the keys it replaces, refuses
-any value that is not a whole number from 0 to 5, refuses phase 5 (D6358: orgs owned waits for its own public-table writer
-leaf), and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
+any value that is not a whole number from 0 to 4, refuses phase 5 (D6651: orgs owned is cancelled; public.organizations and
+public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEnv list, and renders the phase. Every ladder read goes through dev-health.authOn, so every render runs these checks.
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
@@ -748,15 +770,16 @@ leaf), and renders the phase. Every ladder read goes through dev-health.authOn, 
 {{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
-{{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned is phase 5; remove authService.orgsOwned" }}{{- end -}}
+{{- if hasKey $v.authService "orgsOwned" }}{{- fail "authService.orgsOwned is replaced by authService.phase: orgs owned (phase 5) is cancelled (D6651); remove authService.orgsOwned" }}{{- end -}}
+{{- include "dev-health.refuseOrgsOwnedEnv" (dict "node" $v "path" "") -}}
 {{- $p := $v.authService.phase -}}
-{{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 5, got %s %v" (kindOf $p) $p) }}{{- end -}}
+{{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 4, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
 {{- end -}}
-{{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358): auth-service does not yet write the existing public organizations and memberships tables, so phase 4 is the highest phase this chart renders" (int $p)) }}{{- end -}}
+{{- if ge (int $p) 5 }}{{- fail (printf "authService.phase %d: phase 5 (orgs owned) is cancelled (D6651): public.organizations and public.memberships stay the authority, so phase 4 is the highest phase; set authService.phase to 4 or lower" (int $p)) }}{{- end -}}
 {{- $stage := toString (default "" $v.authService.usersOwnedStage) -}}
 {{- if not (has $stage (list "" "goApi" "owned")) }}{{- fail (printf "authService.usersOwnedStage must be goApi or owned, got %q" $stage) }}{{- end -}}
 {{- if and (eq (int $p) 4) (eq $stage "") }}{{- fail "authService.phase 4 needs authService.usersOwnedStage: goApi first (go-api forwards the credential routes, auth-service does not own users yet), then owned after the barrier (docs/operate/runbooks/auth-users-owned-flip-and-rollback.md)" }}{{- end -}}
@@ -862,7 +885,7 @@ and the other enable flags say. templates/auth-service.yaml includes it once, ou
 {{/*
 "true" when authService.phase turns the ladder flag on, else "". Call with (dict "flag" <name> "context" $).
 The ladder (each flag is on from its phase up): service 1, sessions 2, localLogin 3, social 3, credentials 4,
-usersOwned 4, orgsOwned 5. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
+usersOwned 4. credentials moves with go-api's users switch: go-api refuses AUTH_USERS_OWNED unless the credential routes
 go to auth-service. auth-service mounts them from phase 2 (a 503 stub until users are owned).
 Phase 3 has two stages (authService.loginStage, CHAOS-12532): localLogin and social (auth-service: the lockout key and the social client env)
 are on at both; goApiLocalLogin and goApiSocial (go-api's AUTH_PROXY_LOCAL_LOGIN and AUTH_PROXY_SOCIAL) are off at stage authService, so go-api
@@ -871,11 +894,11 @@ Phase 4 has two stages (authService.usersOwnedStage): goApiUsersOwned (go-api's 
 the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and auth-service owns users after (CHAOS-11606).
 */}}
 {{- define "dev-health.authOn" -}}
-{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "goApiLocalLogin" 3 "goApiSocial" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 "orgsOwned" 5 -}}
+{{- $ladder := dict "service" 1 "sessions" 2 "localLogin" 3 "social" 3 "goApiLocalLogin" 3 "goApiSocial" 3 "credentials" 4 "goApiUsersOwned" 4 "usersOwned" 4 -}}
 {{- if not (hasKey $ladder .flag) }}{{- fail (printf "dev-health.authOn: %s is not a ladder flag" .flag) }}{{- end -}}
 {{- $phase := int (include "dev-health.authPhase" .context) -}}
 {{- if ge $phase (int (get $ladder .flag)) -}}
-{{- if and (or (ne .flag "usersOwned") (ge $phase 5) (eq (toString .context.Values.authService.usersOwnedStage) "owned")) (or (not (has .flag (list "goApiLocalLogin" "goApiSocial"))) (ne (toString .context.Values.authService.loginStage) "authService")) -}}true{{- end -}}
+{{- if and (or (ne .flag "usersOwned") (eq (toString .context.Values.authService.usersOwnedStage) "owned")) (or (not (has .flag (list "goApiLocalLogin" "goApiSocial"))) (ne (toString .context.Values.authService.loginStage) "authService")) -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -908,14 +931,13 @@ true
 {{- end -}}
 
 {{/*
-"true" when authService.ssoJit is on, else "". The one read of the switch.
+"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused (CHAOS-12678).
 */}}
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- if ne (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}{{- fail "authService.ssoJit needs orgs owned (authService.phase 5): below it go-api's own sign-in join still writes, and two writers would race" }}{{- end -}}
-true
+{{- fail "authService.ssoJit=true is refused at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race; phase 5 (orgs owned) is cancelled (D6651)" -}}
 {{- end -}}
 {{- end -}}
 

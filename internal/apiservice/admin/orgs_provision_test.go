@@ -358,6 +358,18 @@ var switchOffSQL = map[string][]string{
 		"COMMIT", "ROLLBACK"},
 }
 
+const memberByPairSQL = "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2"
+
+// A same-role change with the switch off reads the membership and writes nothing.
+func TestProvisionSwitchOffSameRoleWritesNothing(t *testing.T) {
+	db := &provisionDB{rows: provisionRowsFor()}
+	callRoute(newProvisionHandlers(db, nil), provisionRoutes[1])
+	want := []string{"BEGIN", "tx:SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE", "tx:" + memberByPairSQL, "COMMIT", "ROLLBACK"}
+	if !reflect.DeepEqual(db.log, want) {
+		t.Fatalf("same-role SQL:\n got %q\nwant %q", db.log, want)
+	}
+}
+
 func TestProvisionSwitchOffMakesNoAuthCallAndTheSameSQL(t *testing.T) {
 	for _, route := range provisionRoutes {
 		t.Run(route.name, func(t *testing.T) {
@@ -365,6 +377,10 @@ func TestProvisionSwitchOffMakesNoAuthCallAndTheSameSQL(t *testing.T) {
 			if route.name == "add" {
 				// a new member, so the add runs to its insert
 				delete(db.rows, "SELECT id, org_id, user_id, role, invited_by_id, joined_at, created_at, updated_at FROM memberships WHERE org_id = $1 AND user_id = $2")
+			}
+			if route.name == "role" {
+				// a different stored role, so the change runs to its update
+				db.rows[memberByPairSQL][3] = "member"
 			}
 			h := newProvisionHandlers(db, nil)
 			callRoute(h, route)

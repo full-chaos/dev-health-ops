@@ -399,7 +399,10 @@ func configureWith(
 	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		var onlyShadow bool
+		if authProxy, onlyShadow = shadowOnlyProxyFault(envsecrets.ProcessLookup); !onlyShadow {
+			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		}
 	}
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
@@ -456,6 +459,11 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
+		sharedWorkload := provisioningCred.workload
+		if sharedWorkload == nil {
+			sharedWorkload = sessionCred.workload
+		}
+		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
@@ -704,6 +712,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, err
 	}
+	delegated, err := goAPIDelegatedRows()
+	if err != nil {
+		return protection{}, err
+	}
+	auth.DelegatedRows(delegated)
 	rows, err := goAPIScopeRows()
 	if err != nil {
 		return protection{}, err

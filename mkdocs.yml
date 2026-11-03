@@ -239,6 +239,7 @@ nav:
       - Auth service configuration: reference/auth/configuration.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
+      - Auth organization and membership authority: reference/auth/org-membership-authority.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md
       - Auth identity linking: reference/auth/identity-linking.md

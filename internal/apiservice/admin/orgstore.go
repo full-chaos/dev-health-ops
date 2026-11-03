@@ -394,7 +394,10 @@ var validMemberRoles = map[string]bool{"owner": true, "admin": true, "member": t
 
 var errInvalidRole = errors.New("invalid role")
 
-// updateMembershipRole is MembershipService.update_role.
+// updateMembershipRole is MembershipService.update_role. A same-role change
+// writes nothing. Demoting an owner counts the organization's owners with
+// their rows locked (ownerCountLocked), so two concurrent demotes cannot both
+// pass the last-owner check.
 func (s pgStore) updateMembershipRole(ctx context.Context, orgID, userID uuid.UUID, role string) (*membership, error) {
 	existing, err := s.membershipByOrgUser(ctx, orgID, userID)
 	if err != nil || existing == nil {
@@ -402,6 +405,24 @@ func (s pgStore) updateMembershipRole(ctx context.Context, orgID, userID uuid.UU
 	}
 	if !validMemberRoles[role] {
 		return nil, errInvalidRole
+	}
+	if existing.Role == role {
+		return existing, nil
+	}
+	if existing.Role == "owner" {
+		owners, err := s.ownerCountLocked(ctx, orgID)
+		if err != nil {
+			return nil, err
+		}
+		if owners <= 1 {
+			return nil, errLastOwnerDemote
+		}
+		if existing, err = s.membershipByOrgUser(ctx, orgID, userID); err != nil || existing == nil {
+			return existing, err
+		}
+		if existing.Role == role {
+			return existing, nil
+		}
 	}
 	now := s.now().UTC()
 	_, err = s.Pool.Exec(ctx, `UPDATE memberships SET role = $3, updated_at = $4 WHERE org_id = $1 AND user_id = $2`,
@@ -413,6 +434,23 @@ func (s pgStore) updateMembershipRole(ctx context.Context, orgID, userID uuid.UU
 	return existing, nil
 }
 
+// ownerCountLocked counts the organization's owners and locks their rows
+// (FOR UPDATE, in id order) until the caller's transaction ends.
+func (s pgStore) ownerCountLocked(ctx context.Context, orgID uuid.UUID) (int, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT id FROM memberships WHERE org_id = $1 AND role = 'owner' ORDER BY id FOR UPDATE`, orgID)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		n++
+	}
+	return n, rows.Err()
+}
+
+var errLastOwnerDemote = errors.New("cannot demote the last owner of an organization")
+
 var errLastOwner = errors.New("cannot remove the last owner of an organization")
 
 // removeMembership is MembershipService.remove_member: refuses to remove an
@@ -423,12 +461,11 @@ func (s pgStore) removeMembership(ctx context.Context, orgID, userID uuid.UUID) 
 		return false, err
 	}
 	if existing.Role == "owner" {
-		owner := "owner"
-		owners, err := s.listMemberships(ctx, orgID, &owner)
+		owners, err := s.ownerCountLocked(ctx, orgID)
 		if err != nil {
 			return false, err
 		}
-		if len(owners) <= 1 {
+		if owners <= 1 {
 			return false, errLastOwner
 		}
 	}

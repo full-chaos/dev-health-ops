@@ -84,3 +84,18 @@ func TestEmptyTrustMiddlewareIgnoresForwardedFromAnyPeer(t *testing.T) {
 		t.Fatalf("Text = %v, want the peer 10.0.0.5", got)
 	}
 }
+
+// An empty list trusts no address as a proxy: the walk alone cannot show it (every hop skipped still ends at the peer),
+// so TrustsPeer and Contains, which the request-id and wide-trust checks read, must say no.
+func TestEmptyTrustTrustsNoPeerAndContainsNothing(t *testing.T) {
+	trust, err := ParseTrust("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if trust.TrustsPeer(request("10.0.0.5:4000", "198.51.100.7")) {
+		t.Fatal("an empty list trusts the peer")
+	}
+	if trust.Contains(netip.MustParseAddr("10.0.0.5")) {
+		t.Fatal("an empty list contains an address")
+	}
+}

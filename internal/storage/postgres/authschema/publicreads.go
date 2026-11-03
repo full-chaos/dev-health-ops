@@ -117,10 +117,12 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 // sso_provider_id (ops revision 0155) is inserted only: the provider row an OIDC or
 // SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
+// is_superuser is never written (CHAOS-10993): the column defaults to false and the
+// platform roles live in auth.platform_role_assignments.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id",
+			"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id",
 		},
 		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }

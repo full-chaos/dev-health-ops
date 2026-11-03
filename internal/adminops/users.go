@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +20,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
-	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -225,16 +225,19 @@ func orgProvisioningFromEnv(env cli.Env) (bool, error) {
 // credential of the workload the CLI runs in. Either missing gives a nil client
 // (the Operator then refuses by name); a malformed one is a configuration error.
 func provisionerFromEnv(env cli.Env) (authprovision.Provisioner, int) {
-	cfg, err := apiservice.ParseAuthProxyConfig(env.Lookup)
-	if err != nil {
-		return nil, writeError(env.Stderr, "auth_proxy_invalid", err.Error())
-	}
+	raw, _ := env.Lookup("AUTH_PROXY_URL")
+	raw = strings.TrimSpace(raw)
 	token, _ := env.Lookup(sessionissue.EnvToken)
 	token = strings.TrimSpace(token)
-	if cfg.Upstream == nil || token == "" {
+	if raw == "" || token == "" {
 		return nil, 0
 	}
-	client, err := authprovision.New(cfg.Upstream, token, cfg.Timeout)
+	upstream, err := url.Parse(raw)
+	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" || upstream.User != nil ||
+		(upstream.Path != "" && upstream.Path != "/") || upstream.RawQuery != "" || upstream.Fragment != "" || upstream.Opaque != "" {
+		return nil, writeError(env.Stderr, "auth_proxy_invalid", "AUTH_PROXY_URL must be an http(s) origin such as http://auth-service:8095, with no path, query or credentials")
+	}
+	client, err := authprovision.New(&url.URL{Scheme: upstream.Scheme, Host: upstream.Host}, token, 0)
 	if err != nil {
 		return nil, writeError(env.Stderr, "provisioning_credential_invalid", err.Error())
 	}

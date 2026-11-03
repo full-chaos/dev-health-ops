@@ -176,6 +176,7 @@ third_party/vendor/atlassian/atlassian
 third_party/vendor/atlassian/atlassian/graph
 third_party/vendor/atlassian/atlassian/graph/gen
 third_party/vendor/atlassian/atlassian/graph/mappers
+~contracts/auth/v1/jsonschema
 ~internal/api/recordvalidation/testdata
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql

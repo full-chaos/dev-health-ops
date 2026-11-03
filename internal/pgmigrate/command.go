@@ -9,13 +9,15 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
+
+// firstConnect bounds the wait for the first database connect: a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed.
+var firstConnect = pgstorage.DefaultFirstConnect()
 
 // ResolveDSN finds the elevated migration DSN. The migrate group passes the
 // River migrator's resolver, so both verbs read MIGRATION_DATABASE_URI (or its
@@ -135,7 +137,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return cli.ExitFailure
 	}
 	boundary := pgstorage.Boundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	conn, err := pgstorage.ConnectWaiting(ctx, dsn.Reveal(), firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate postgres "+verb, "PostgreSQL")))
 	if err != nil {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
@@ -260,7 +262,7 @@ func recordedRevisions(ctx context.Context, resolve ResolveDSN, env cli.Env) (re
 		return nil, cli.ExitFailure, false
 	}
 	boundary := pgstorage.Boundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	conn, err := pgstorage.ConnectWaiting(ctx, dsn.Reveal(), firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate postgres current", "PostgreSQL")))
 	if err != nil {
 		return nil, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error()), false
 	}

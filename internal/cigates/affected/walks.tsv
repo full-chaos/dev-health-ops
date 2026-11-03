@@ -69,6 +69,10 @@ internal/auth/contracts	principal_contract_goldens_test.go	contracts/auth/v1/exa
 internal/auth/contracts	provisioning_event_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	provisioning_resources_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/contracts	provisioning_resources_test.go	unexpressed	-	-
+internal/auth/contracts	read_api_test.go	contracts/auth/v1/golden/read-api	tree	*
+internal/auth/contracts	read_api_test.go	contracts/auth/v1/golden/read-api/vectors	dir	*
+internal/auth/contracts	read_api_test.go	internal/storage/postgres/authschema/migrations	dir	*
+internal/auth/contracts	read_api_test.go	unexpressed	-	-
 internal/auth/contracts	reason_code_vocabulary_test.go	unexpressed	-	-
 internal/auth/contracts	refresh_response_v2_test.go	contracts/auth/v1/examples/refresh-response.v2	dir	*
 internal/auth/contracts	reject_location_test.go	contracts/auth/v1/examples	tree	*
@@ -434,6 +438,7 @@ internal/storage/postgres	posture_identity_sites_test.go	internal	tree	*.go
 internal/storage/postgres	venue_posture_coverage_test.go	.	tree	*_test.go
 internal/storage/postgres	venue_posture_coverage_test.go	unexpressed	-	-
 internal/storage/postgres/aclguard	census_test.go	.	tree	*.go
+internal/storage/postgres/aclguard	projection_reader_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/aclguard	public_audit_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/aclguard	sso_provider_write_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir	*

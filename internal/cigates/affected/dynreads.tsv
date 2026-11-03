@@ -59,6 +59,7 @@ internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
+internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
@@ -89,6 +90,8 @@ internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
+internal/auth/contracts	read_api_grant_test.go
+internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go

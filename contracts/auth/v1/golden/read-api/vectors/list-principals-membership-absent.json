@@ -1,0 +1,28 @@
+{
+  "id": "list-principals-membership-absent",
+  "kind": "exchange",
+  "operation": "principals_list",
+  "request": {
+    "schema_version": "principal-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 50
+  },
+  "response": {
+    "schema_version": "principal-list.v1",
+    "items": [
+      {
+        "principal": {
+          "schema_version": "principal-read.v1",
+          "principal_id": "prn_EXAMPLE0000000000000001",
+          "kind": "user",
+          "status": "active",
+          "revision": 3
+        }
+      }
+    ]
+  },
+  "response_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "An item without membership evidence."
+}

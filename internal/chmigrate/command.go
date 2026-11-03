@@ -13,11 +13,17 @@ import (
 	platformconfig "github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // ClickHouseURIKey is the DSN this verb reads, through config.ResolveDSN, so
 // the DEV_HEALTH_CH_* component form works too.
 const ClickHouseURIKey = "CLICKHOUSE_URI"
+
+// firstConnect bounds the wait for the first ClickHouse connect: a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed. The
+// loop and the dial classes are the shared PostgreSQL ones; both are TCP.
+var firstConnect = pgstorage.DefaultFirstConnect()
 
 // migrationReadTimeout bounds one statement. A baseline table rebuild or a
 // chain file's DDL can run far longer than a query.
@@ -117,7 +123,8 @@ func run(ctx context.Context, verb string, env cli.Env) int {
 	}
 	boundary := secrets.NewBoundary(dsn.Reveal())
 	config := migrationConfig(dsn.Reveal())
-	conn, err := chstorage.Open(ctx, config)
+	wait := firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate clickhouse "+verb, "ClickHouse"))
+	conn, err := chstorage.OpenWith(ctx, config, wait.Do)
 	if err != nil {
 		return writeError(env.Stderr, "clickhouse_unavailable", boundary.Redact(err).Error())
 	}

@@ -179,10 +179,9 @@ authService:
   #      4  users owned: the credential routes too (AUTH_PROXY_CREDENTIALS) and
   #         AUTH_USERS_OWNED. Meaning (D6358): auth-service writes the existing
   #         public users table; no auth-schema copy, no projection.
-  #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
-  #         the existing public organizations and memberships tables.
-  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #      5  cancelled (D6651): public.organizations and public.memberships stay the
+  #         authority. Phase 5 and AUTH_ORGS_OWNED (any extraEnv list) are refused at render.
+  #    Phase 4 is the highest phase. Rollback from phase 4 is NOT one upgrade: stage goApi,
   #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
   #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
@@ -209,8 +208,8 @@ authService:
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
-  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true is refused at every phase until
+  #    CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -443,6 +442,9 @@ authService:
   #    run by the service at startup.
   migrate:
     enabled: true
+    # -- The finished Job and its pod log stay this long (the next hook run replaces them sooner), so a roll readback
+    #    can read `kubectl logs job/<release>-auth-migrate` ("auth schema current at version N") without exec.
+    ttlSecondsAfterFinished: 86400
     image:
       # -- docker/go-worker.Dockerfile target `auth-migrate`.
       repository: ghcr.io/full-chaos/dev-health-go-auth-migrate
@@ -536,7 +538,7 @@ authService:
     runId: ""
     activeDeadlineSeconds: 1800
     ttlSecondsAfterFinished: 86400
-    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED are refused here.
+    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED (removed, D6651) are refused here.
     extraEnv: []
     resources:
       requests:
@@ -1390,6 +1392,19 @@ migrations:
         name: ""
         secretName: ""
         secretKey: "API_DATABASE_PASSWORD"
+      # -- CHAOS-12614: optional ops migration LOGIN (e.g. devhealth_migrator) that owns the database and the ops
+      #    schemas after `dho migrate owner-move`. EMPTY name = OFF. When set, `dho migrate roles` creates it if missing
+      #    (LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, CONNECT on the application database,
+      #    nothing else) with the password from an OPERATOR-CREATED Secret named by secretName / secretKey (the render
+      #    fails if name is set while either is empty). An existing login keeps its password.
+      migratorRole:
+        name: ""
+        secretName: ""
+        secretKey: "OPS_MIGRATOR_DATABASE_PASSWORD"
+      # -- CHAOS-12614: the Secret this Job envFroms when secrets.create=false. EMPTY MEANS
+      #    migrations.hook.externalSecretName. Set it to a Secret with the superuser DSN when the other ops hooks move
+      #    to the migration login: creating roles needs CREATEROLE.
+      externalSecretName: ""
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:
@@ -1510,13 +1525,14 @@ migrations:
     openUnitsIndex:
       enabled: false
       # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
-      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    streakIndex 2400 + openUnitsIndex 700 + the migrate Job 1800 + a 500 s rollout margin = 5400 s, the
       #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
-      activeDeadlineSeconds: 600
+      activeDeadlineSeconds: 700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      # -- window of the whole build in seconds; deadlineSeconds + 430 (the 70 s first-connect wait, startup and
+      #    cleanup) must not exceed activeDeadlineSeconds.
       deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15
@@ -1545,6 +1561,12 @@ migrations:
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""
+    # -- CHAOS-12614: the owner pin of the ops migrators (MIGRATION_OWNER_ROLE on the migrate, open-units-index,
+    #    streak-index and river-migrate Jobs). EMPTY = OFF (today's behaviour). Set, dho refuses to run any DDL unless
+    #    it is connected AS this role, the role is NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, and it
+    #    owns the database, schema river and every object of public and river (`dho migrate owner-move` first). While
+    #    auth-service owns sessions, authService.migrate.sessionReaders.queryApi must name the query-api login.
+    ownerRole: ""
 
 # =============================================================================
 # Ingress

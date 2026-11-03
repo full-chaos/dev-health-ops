@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "3954ee30e5194f152b8653f03704a703ee321d818295eec407630d439c98e3e7"
-	rolesSHA   = "f1a45054d839858215d813b8024cbd8a84c8d914dc6a80aa8e4ffa3a2546b390"
+	actionsSHA = "6acad56c3cd363da906e8098710cf9f307272aa756c885cfc186dcc283a2aa83"
+	rolesSHA   = "cc9587bbaf7a72a88f677f9c2e6211b013ca1aadfc7a6e9736a4073fb4ed2739"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,8 +222,9 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
+	"credentials.project": true,
 }
 
 type sessionEntry struct {
@@ -393,6 +394,31 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 	}
 }
 
+// reports.write covers the saved-report writes query-api serves as the GraphQL mutations createSavedReport, updateSavedReport,
+// deleteSavedReport, cloneSavedReport and triggerReport. Parity with today's guard: the only check on those writes is
+// requireMutationOrg (internal/queryapi/graph/reports_mutations.go:38), which reads the organization and no role, so
+// every organization role that can read can write; the platform roles hold no organization action.
+func TestReportsWriteIsHeldByEveryOrganizationRoleAsTodaysWritersAre(t *testing.T) {
+	c := Default()
+	a, err := c.Action("reports.write")
+	if err != nil {
+		t.Fatalf("action reports.write: %v", err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "organization" || a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.Impersonation != ImpersonationDenied {
+		t.Errorf("reports.write = %+v, want organization scope and kind, high risk, cache none, impersonation denied", a)
+	}
+	var got []string
+	for _, r := range c.Roles() {
+		if c.Allows(r.ID, "reports.write") {
+			got = append(got, r.ID)
+		}
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "admin,member,owner,viewer" {
+		t.Errorf("reports.write is held by %v, want admin,member,owner,viewer", got)
+	}
+}
+
 // acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
 func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
 	a, err := Default().Action("acr.context.read")
@@ -467,12 +493,12 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
-		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
-		"members.update": true, "authz.decide": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true, "reports.write": true,
+		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 34 {
-		t.Fatalf("%d actions, want 34", len(actions))
+	if len(actions) != 38 {
+		t.Fatalf("%d actions, want 38", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -524,9 +550,11 @@ func TestDelegatedActionsAreTheAllowedActionsOfAnOrganizationRole(t *testing.T) 
 
 func TestImpersonationValuesOfTheRepositoryReadAndTheTwoDeniedActions(t *testing.T) {
 	want := map[string]string{
-		"acr.context.read": ImpersonationAllowed,
-		"authz.decide":     ImpersonationDenied,
-		"members.update":   ImpersonationDenied,
+		"acr.context.read":     ImpersonationAllowed,
+		"acr.evidence.read":    ImpersonationAllowed,
+		"acr.credential.issue": ImpersonationDenied,
+		"authz.decide":         ImpersonationDenied,
+		"members.update":       ImpersonationDenied,
 	}
 	for id, v := range want {
 		a, err := Default().Action(id)
@@ -604,6 +632,36 @@ func TestPlatformActionsAreHeldOnlyByPlatformAdmin(t *testing.T) {
 	for _, a := range want {
 		if !c.Allows("platform_admin", a) {
 			t.Errorf("platform_admin does not hold %s", a)
+		}
+	}
+}
+
+// acr.evidence.read reads evidence at a revision like acr.context.read; acr.credential.issue mints a credential and is never cached.
+func TestEmbeddedCatalogHoldsTheAcrEvidenceReadAndCredentialIssueRows(t *testing.T) {
+	want := map[string]Action{
+		"acr.evidence.read":    {Scope: ScopeOrganization, ResourceKind: "repository", RiskClass: RiskLow, CacheClass: CacheResourceRevisionBound, Impersonation: ImpersonationAllowed},
+		"acr.credential.issue": {Scope: ScopeOrganization, ResourceKind: "organization", RiskClass: RiskHigh, CacheClass: CacheNone, Impersonation: ImpersonationDenied},
+	}
+	for id, w := range want {
+		a, err := Default().Action(id)
+		if err != nil {
+			t.Errorf("%s: %v", id, err)
+			continue
+		}
+		if a.Scope != w.Scope || a.ResourceKind != w.ResourceKind || a.RiskClass != w.RiskClass || a.CacheClass != w.CacheClass || a.Impersonation != w.Impersonation {
+			t.Errorf("%s = %+v, want %+v", id, a, w)
+		}
+	}
+}
+
+// No role holds the two new actions until a roles change grants them.
+func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
+	c := Default()
+	for _, r := range c.Roles() {
+		for _, id := range []string{"acr.evidence.read", "acr.credential.issue"} {
+			if c.Allows(r.ID, id) {
+				t.Errorf("role %s holds %s", r.ID, id)
+			}
 		}
 	}
 }

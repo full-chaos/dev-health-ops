@@ -202,9 +202,9 @@ So the unfenced baseline `b` is larger than in the 2026-10-29 run below. The att
 `attempt-secrets.json` of the evidence directory (mode 0600, values made for the drill; nothing prints or passes them as an argument).
 
 From CHAOS-11834 the drill also proves the password reset. Before T it creates two users with a password: one through the
-auth-service identity store (`ProvisionLocal`: `auth.users` and the `public.users` mirror) and one go-api-only user
+auth-service identity store (`ProvisionLocal`: `auth.users` and its `public.users` row) and one go-api-only user
 (`public.users` only). After T both change the password: the first through `SetPasswordHashFor` (the real write:
-`password_updated_at`, `legacy_token_version` and the mirror's `token_version`), the second with the statement of go-api's
+`password_updated_at`, `legacy_token_version` and the `public.users` row's `token_version`), the second with the statement of go-api's
 change-password route (`internal/api/session/changepassword.go`; a unit cell pins the statement, so a change of the handler
 turns it red). On each restored copy the drill runs the login decision of auth-service (`local.Service.Login`) as the
 unprivileged runtime role, four tries: the old and the new password of each user. The end-of-WAL copy must accept the new

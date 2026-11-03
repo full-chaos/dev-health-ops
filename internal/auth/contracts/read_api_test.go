@@ -117,7 +117,7 @@ const readAPIGoldenDir = "contracts/auth/v1/golden/read-api"
 
 // readAPICorpusDigest pins every file of golden/read-api. Moving it is a
 // deliberate edit beside the corpus change.
-const readAPICorpusDigest = "sha256:12ab7d91dcad08e4a119bff4325861f5cdb3a90a013fd916c25d580a677041c7"
+const readAPICorpusDigest = "sha256:75d9df449af79340eb0e7e0bb7f99d696bfc9b0555b5a5012a740aecff68cb63"
 
 func readAPIGoldenFiles(t *testing.T) []decisionFile {
 	t.Helper()

@@ -9,10 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 	"unicode"
-
-	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/cigates/livee2e"
 )
@@ -196,41 +193,6 @@ func TestEdgeRequest(t *testing.T) {
 	}
 }
 
-func TestJWTSecretIsTheHexSha256(t *testing.T) {
-	if got, want := livee2e.JWTSecret("dev-key-not-for-prod"), "96dcb17571b53273398be201758373495565e7dbea74a9540b791ad6d0b42581"; got != want {
-		t.Fatalf("got %s want %s", got, want)
-	}
-}
-
-func TestMintTokenIsAnHS256AdminToken(t *testing.T) {
-	secret := livee2e.JWTSecret("k")
-	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	raw, err := livee2e.MintToken(secret, livee2e.E2EUserID, livee2e.DefaultOrgID, now, "jti-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims := jwt.MapClaims{}
-	tok, err := jwt.ParseWithClaims(raw, claims, func(*jwt.Token) (any, error) { return []byte(secret), nil },
-		jwt.WithValidMethods([]string{"HS256"}), jwt.WithTimeFunc(func() time.Time { return now.Add(time.Minute) }))
-	if err != nil || !tok.Valid {
-		t.Fatalf("token does not verify: %v", err)
-	}
-	for k, want := range map[string]any{
-		"sub": livee2e.E2EUserID, "email": "e2e@test.local", "org_id": livee2e.DefaultOrgID, "role": "admin",
-		"is_superuser": false, "type": "access", "jti": "jti-1",
-	} {
-		if claims[k] != want {
-			t.Errorf("claim %s = %v, want %v", k, claims[k], want)
-		}
-	}
-	if claims["exp"] != float64(now.Add(time.Hour).Unix()) || claims["iat"] != float64(now.Unix()) {
-		t.Errorf("exp/iat = %v/%v", claims["exp"], claims["iat"])
-	}
-	if _, err := jwt.Parse(raw, func(*jwt.Token) (any, error) { return []byte("other"), nil }); err == nil {
-		t.Error("a token signed with one key must not verify with another")
-	}
-}
-
 // serveRedis answers each command with the next reply in order, then closes.
 func serveRedis(t *testing.T, replies ...string) (url string, received func() []string) {
 	t.Helper()
@@ -340,18 +302,11 @@ func TestRunAssertVerbs(t *testing.T) {
 	}
 }
 
-func TestRunEdgeRequestJWTSecretAndUsage(t *testing.T) {
+func TestRunEdgeRequestAndUsage(t *testing.T) {
 	docs := writeTemp(t, "documents.json", mustJSON(t, []m{{"operation": "featureFlags", "document": "query X { featureFlags }"}}))
 	rc, out, _ := run(t, nil, "edge-request", docs, "featureFlags", "org-9")
 	if rc != 0 || !strings.Contains(out, `"orgId":"org-9"`) {
 		t.Fatalf("rc=%d out=%q", rc, out)
-	}
-	rc, out, _ = run(t, map[string]string{"ENC_KEY_INPUT": "dev-key-not-for-prod"}, "jwt-secret")
-	if rc != 0 || out != "96dcb17571b53273398be201758373495565e7dbea74a9540b791ad6d0b42581\n" {
-		t.Fatalf("rc=%d out=%q", rc, out)
-	}
-	if rc, _, _ := run(t, nil, "jwt-secret"); rc != 1 {
-		t.Errorf("an empty ENC_KEY_INPUT must fail, rc=%d", rc)
 	}
 	for _, args := range [][]string{nil, {"bogus"}, {"edge-request", "a"}, {"mint-token", "extra"}} {
 		if rc, _, stderr := run(t, nil, args...); rc != 2 || !strings.Contains(stderr, "usage: cigate live-e2e") {
@@ -362,30 +317,6 @@ func TestRunEdgeRequestJWTSecretAndUsage(t *testing.T) {
 	url = strings.TrimSuffix(url, "/1") + "/0"
 	if rc, _, stderr := run(t, map[string]string{"REDIS_URL": url}, "valkey-ping"); rc != 0 {
 		t.Errorf("valkey-ping rc=%d %q", rc, stderr)
-	}
-}
-
-func TestRunMintTokenPrintsAnHS256TokenForTheEncryptionKey(t *testing.T) {
-	rc, out, stderr := run(t, map[string]string{"E2E_USER_ID": "user-7", "E2E_ORG_ID": "org-7", "SETTINGS_ENCRYPTION_KEY": "k"}, "mint-token")
-	if rc != 0 || stderr != "" {
-		t.Fatalf("rc=%d stderr=%q", rc, stderr)
-	}
-	claims := jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(strings.TrimSpace(out), claims, func(*jwt.Token) (any, error) { return []byte(livee2e.JWTSecret("k")), nil }, jwt.WithValidMethods([]string{"HS256"})); err != nil {
-		t.Fatalf("printed token does not verify with the secret of the encryption key: %v", err)
-	}
-	if claims["org_id"] != "org-7" || claims["sub"] != "user-7" {
-		t.Errorf("claims %v", claims)
-	}
-	rc, out, _ = run(t, nil, "mint-token")
-	if rc != 0 {
-		t.Fatalf("defaults must mint: rc=%d", rc)
-	}
-	claims = jwt.MapClaims{}
-	if _, err := jwt.ParseWithClaims(strings.TrimSpace(out), claims, func(*jwt.Token) (any, error) {
-		return []byte(livee2e.JWTSecret(livee2e.DefaultEncryptionKey)), nil
-	}, jwt.WithValidMethods([]string{"HS256"})); err != nil || claims["org_id"] != livee2e.DefaultOrgID {
-		t.Errorf("default token: %v %v", err, claims)
 	}
 }
 

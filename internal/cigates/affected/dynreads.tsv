@@ -20,6 +20,7 @@ deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
+internal/api/policy	delegated_test.go
 internal/api/policy	principalonce_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -48,6 +49,7 @@ internal/audit	drill_pitr_integration_test.go
 internal/auth/acrlisting	client.go
 internal/auth/acrmint	acrmint_test.go
 internal/auth/acrmint	census_test.go
+internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
 internal/auth/authapi	authorize_request_test.go
@@ -57,10 +59,12 @@ internal/auth/authapi	issuer_eddsa_test.go
 internal/auth/authconfig	config_test.go
 internal/auth/authorization	golden_decision_test.go
 internal/auth/authruntime	audit_request_id_scan_test.go
+internal/auth/authruntime	authorize_corpus_test.go
 internal/auth/authruntime	endpoint_profile_rows_test.go
 internal/auth/authruntime	fixed_credential_scan_test.go
 internal/auth/authruntime	kidwiring_callers_test.go
 internal/auth/contracts	access_token_goldens_test.go
+internal/auth/contracts	audit_attribute_parity_test.go
 internal/auth/contracts	authorization_goldens_test.go
 internal/auth/contracts	authorization_schema_test.go
 internal/auth/contracts	contracts.go
@@ -175,6 +179,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
+internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
@@ -234,6 +239,7 @@ internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/frozengoldens	reads.go
 internal/cigates/frozengoldens	reads_guard_test.go
+internal/cigates/gitleaksignore	gitleaksignore_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_run_tee_bound_test.go
@@ -246,6 +252,7 @@ internal/cigates/nopython	tests_python_test.go
 internal/cigates/nopython	trackedfiles_test.go
 internal/cigates/proofteardown	harness_test.go
 internal/cigates/queuecreds	gate_test.go
+internal/cigates/queuecreds	queuerows_flow_test.go
 internal/cigates/queuecreds	queuerows_test.go
 internal/cigates/queuecreds	scan.go
 internal/cigates/queuecreds	scan_test.go
@@ -421,6 +428,7 @@ internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
 internal/llmorgsettings	relation_test.go
+internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
 internal/localgit	blame.go
 internal/localgit	git.go
@@ -612,6 +620,8 @@ internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/idpstub/cmd/idpstub	main.go
+internal/testsupport/issuerstub	issuerstub.go
+internal/testsupport/issuerstub	issuerstub_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
 internal/testsupport/providerstub	corpus_social_test.go

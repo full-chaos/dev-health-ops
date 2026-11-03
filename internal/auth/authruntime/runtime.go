@@ -204,7 +204,7 @@ func compatRoutes(
 			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(ctx, tx) })
 		},
 		Limits:   limits,
-		Validate: validateConfig(cfg, pool, schema, signer),
+		Validate: validateConfig(cfg, pool, schema, signer), SwitchOrg: &authapi.SwitchOrgConfig{Sessions: sessions, Reads: pgUsers(cfg, pool, schema)},
 	}
 	if cfg.Session.LoginEnabled {
 		deps.Login = &authapi.LoginConfig{
@@ -445,6 +445,7 @@ func configureWithRoutes(
 	// The error is logged here, unredacted-by-category, so an operator can
 	// diagnose without shell access while the response stays detail-free:
 	// the same split cmd/query-api landed for CHAOS-4724.
+	var schemaChecked atomic.Bool
 	if err := registry.RegisterRequired(CheckPostgres, func(ctx context.Context) error {
 		if probeErr := store.Probe(ctx); probeErr != nil {
 			logger.ErrorContext(
@@ -452,6 +453,9 @@ func configureWithRoutes(
 				"check", CheckPostgres, "reason", authstore.ReasonOf(probeErr),
 			)
 			return probeErr
+		}
+		if schemaChecked.CompareAndSwap(false, true) {
+			logSchemaChecked(ctx, logger, cfg.DatabaseSchema)
 		}
 		return nil
 	}); err != nil {
@@ -589,6 +593,12 @@ func configureWithRoutes(
 		return nil, err
 	}
 	routes = append(routes, decisionRoutes...)
+	acrRoutes, err := acrEventRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, acrRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
@@ -873,7 +883,7 @@ const healthcheckSlack = time.Second
 
 // pgUsers is the routes' read of the go-api users, with the platform roles switch.
 func pgUsers(cfg authconfig.Config, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) authapi.PGUsers {
-	return authapi.PGUsers{Pool: pool, AuthSchema: schema, PlatformRolesOwned: cfg.PlatformRolesOwned}
+	return authapi.PGUsers{Pool: pool, AuthSchema: schema, PlatformRolesOwned: cfg.PlatformRolesOwned, UsersOwned: cfg.UsersOwned}
 }
 
 // fenceReason is the closed token the restore-fence check logs: never the error text.

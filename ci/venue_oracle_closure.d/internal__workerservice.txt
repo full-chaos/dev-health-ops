@@ -1,4 +1,5 @@
 contracts/auth/v1
+contracts/auth/v1/vocabulary
 internal/aftercommit
 internal/api/apimetrics
 internal/api/externalurl
@@ -9,11 +10,17 @@ internal/api/pyjson
 internal/api/pytime
 internal/api/recordvalidation
 internal/atlassianteams
+internal/audit
 internal/auth/acraudience
+internal/auth/clientaddr
+internal/auth/contracts/externalpush
+internal/auth/contracts/provisioning
 internal/auth/edgetoken
 internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule
+internal/auth/policycatalog
+internal/auth/pushevent
 internal/auth/sessionid
 internal/cacheinvalidation
 internal/chmigrate
@@ -69,6 +76,7 @@ internal/jobs/metrics/workitemmetrics
 internal/jobs/operational
 internal/jobs/providerrevocation
 internal/jobs/providerunit
+internal/jobs/pushexpiry
 internal/jobs/report
 internal/jobs/synccoverage
 internal/jobs/system
@@ -134,6 +142,8 @@ internal/storage/clickhouse/latestrow
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/postgres/pgconfig
 internal/storage/river
 internal/storage/roleacl
@@ -176,6 +186,7 @@ third_party/vendor/atlassian/atlassian
 third_party/vendor/atlassian/atlassian/graph
 third_party/vendor/atlassian/atlassian/graph/gen
 third_party/vendor/atlassian/atlassian/graph/mappers
+~contracts/auth/v1/jsonschema
 ~internal/api/recordvalidation/testdata
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
@@ -185,4 +196,5 @@ third_party/vendor/atlassian/atlassian/graph/mappers
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations
 ~internal/testsupport/chschema/testdata

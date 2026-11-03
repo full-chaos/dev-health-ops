@@ -201,6 +201,25 @@ FROM `+s.q+`.workloads WHERE organization_id IS NULL AND name = $1`, name).
 	return &i, nil
 }
 
+// LookupPrincipal reads a platform workload by principal. Disabled holds both
+// the workload row and its principal.
+func (s *Store) LookupPrincipal(ctx context.Context, principal uuid.UUID) (*Info, error) {
+	var i Info
+	err := s.pool.QueryRow(ctx, `SELECT w.principal_id, w.name, w.audiences, w.allowed_actions,
+w.disabled_at IS NOT NULL OR p.disabled_at IS NOT NULL
+FROM `+s.q+`.workloads w JOIN `+s.q+`.principals p ON p.id = w.principal_id
+WHERE w.organization_id IS NULL AND w.principal_id = $1`, principal).
+		Scan(&i.PrincipalID, &i.Name, &i.Audiences, &i.AllowedActions, &i.Disabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		s.logger.ErrorContext(ctx, "workload: read failure", logging.ErrorAttr(err))
+		return nil, fmt.Errorf("%w: read: %w", ErrStore, err)
+	}
+	return &i, nil
+}
+
 // PlatformNames lists the names of every platform workload, sorted.
 func (s *Store) PlatformNames(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT name FROM `+s.q+`.workloads WHERE organization_id IS NULL ORDER BY name`)

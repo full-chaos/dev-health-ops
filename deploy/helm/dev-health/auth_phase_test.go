@@ -218,7 +218,7 @@ func TestAuthPhase5Refused(t *testing.T) {
 				if err == nil {
 					t.Fatal("rendered; phase 5 must be refused")
 				}
-				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358)", phase)) {
+				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) is cancelled (D6651)", phase)) {
 					t.Fatalf("the refusal does not name the decision: %.400s", out)
 				}
 			})
@@ -237,10 +237,10 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase 6":                 {phaseArgs(1, "--set", "authService.phase=6"), "/authService/phase"},
 		"phase string":            {phaseArgs(1, "--set-string", "authService.phase=1"), "/authService/phase"},
 		"phase fraction":          {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=1.5"), "/authService/phase"},
-		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 5"},
+		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 4"},
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
-		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"},
+		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"}, // gitleaks:allow
 		"eddsa class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example"), "authService.accessToken.class needs authService.phase >= 2"},
 		"token class unknown":     {phaseArgs(2, "--set", "authService.accessToken.class=rs256"), "must be empty, hs256_compat or eddsa"},
 		"token class not string":  {phaseArgs(2, "--set-json", "authService.accessToken.class=true"), "must be strings"},
@@ -293,7 +293,7 @@ func TestAuthPhaseNamedKeys(t *testing.T) {
 	envOf := func(docs []map[string]any, kind, name, env string) (string, bool) {
 		return containerEnvValue(t, authDoc(docs, kind, name), env)
 	}
-	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat")
+	docs := renderPhase(t, 2, "--set", "authService.socialLinkRoutes=true", "--set", "authService.accessToken.class=hs256_compat") // gitleaks:allow
 	if v, _ := envOf(docs, "Deployment", "a-dev-health-auth-service", "AUTH_SOCIAL_LINK_ROUTES"); v != "true" {
 		t.Errorf("AUTH_SOCIAL_LINK_ROUTES = %q, want true", v)
 	}
@@ -534,7 +534,7 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5 (refused at render), so the renders above show neither.
+	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED is removed (D6651), so the renders above show neither.
 	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
 		names[name] = configs["phase 3 with link routes"]
 	}

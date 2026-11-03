@@ -2,7 +2,7 @@
 ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
-deploy/helm/dev-health	auth_orgs_owned_jobs_test.go	deploy/helm/dev-health/templates	tree	*
+deploy/helm/dev-health	auth_orgs_owned_removed_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_switch_strict_test.go	deploy/helm/dev-health/templates	dir	*
@@ -13,6 +13,8 @@ internal/adminops	usersowned_test.go	internal/adminops	dir	*
 internal/api/billing	platform_action_test.go	internal/api/billing	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/policy	accessroute_test.go	.	tree	*.go
+internal/api/policy	delegated_test.go	internal/api	tree	*
+internal/api/policy	delegated_test.go	internal/apiservice	tree	*
 internal/api/policy	principalonce_test.go	internal/api/policy	dir	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
@@ -37,6 +39,9 @@ internal/atlassianteams	vendored_patch_chain_test.go	third_party/vendor/atlassia
 internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-	-
 internal/audit	writer_guard_test.go	.	tree	*.go
 internal/auth/acrmint	census_test.go	.	tree	*.go
+internal/auth/authapi	acr_events_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
+internal/auth/authapi	acr_events_test.go	internal/auth/outboxprojection	dir	*
+internal/auth/authapi	authorize_loadprofile_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/auth/authapi	register_test.go	unexpressed	-	-
 internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
@@ -45,7 +50,9 @@ internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/access-token	dir	*
+internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
+internal/auth/contracts	audit_producer_census_test.go	internal	tree	*
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	credential_class_service_account_token_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
@@ -109,12 +116,14 @@ internal/auth/platformrole	superuser_sites_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
+internal/auth/pushlifecycle	acr_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/pushprojection	import_guard_test.go	unexpressed	-	-
 internal/auth/restorefence	consumers_reader_test.go	internal	tree	*.go
 internal/auth/restorefence	consumers_test.go	internal	tree	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
+internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
@@ -140,6 +149,7 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
+internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed	-	*.go
 internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
 internal/cigates/checkgo	support_test.go	unexpressed	-	-
 internal/cigates/checkgoshards	race_excluded_receipts_test.go	unexpressed	-	-
@@ -172,13 +182,9 @@ internal/cigates/integrationshards	support_test.go	unexpressed	-	-
 internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	unexpressed	-	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*.go
+internal/cigates/queuecreds	queuerows_flow_test.go	unexpressed	-	*.go
 internal/cigates/queuecreds	queuerows_test.go	cmd	tree	*.go
 internal/cigates/queuecreds	queuerows_test.go	internal	tree	*.go
-internal/cigates/queuecreds	queuerows_test.go	internal/joboperator	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/joboutbox	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/jobruntime	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/syncreconciler	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/workersctl	dir	*
 internal/cigates/queuecreds	scan.go	unexpressed	-	*.go
 internal/cigates/queuecreds	scan.go	unexpressed	-	*.json
 internal/cigates/queuecreds	scan.go	unexpressed	-	-
@@ -319,6 +325,7 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	*.go
+internal/loadharness	pdp_profiles_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
 internal/localgit	blame.go	unexpressed	-	-
@@ -434,6 +441,7 @@ internal/storage/postgres	posture_identity_sites_test.go	internal	tree	*.go
 internal/storage/postgres	venue_posture_coverage_test.go	.	tree	*_test.go
 internal/storage/postgres	venue_posture_coverage_test.go	unexpressed	-	-
 internal/storage/postgres/aclguard	census_test.go	.	tree	*.go
+internal/storage/postgres/aclguard	projection_reader_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/aclguard	public_audit_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/aclguard	sso_provider_write_grant_census_test.go	internal/storage/postgres/authschema	dir	*
 internal/storage/postgres/authschema	sprintf_sql_guard_test.go	internal/storage/postgres/authschema	dir	*

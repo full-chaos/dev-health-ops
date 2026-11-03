@@ -22,7 +22,7 @@ import (
 // authenticated") from "a bearer that is not valid" ("Invalid or expired token") as go-api does, because go-api
 // forwards them unread under AUTH_PROXY_CREDENTIALS. There the bootstrap credential must get exactly the answer of any
 // invalid bearer: it is no credential, and it is told apart from nothing else.
-var goAPIWireBearerRoutes = map[string]bool{"POST /api/v1/auth/change-password@api": true}
+var goAPIWireBearerRoutes = map[string]bool{"POST /api/v1/auth/change-password@api": true, "POST /api/v1/auth/switch-org@api": true}
 
 // perRequestFields are the error envelope members two requests never share
 // (the request id and the time); the census compares answers without them.

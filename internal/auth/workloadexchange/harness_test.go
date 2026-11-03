@@ -29,6 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workload"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -347,6 +348,7 @@ func (h *harness) writeAudit(_ context.Context, event audit.AuditEvent) error {
 	if h.auditErr != nil {
 		return h.auditErr
 	}
+	auditwire.MustValidate(h.t, event)
 	if err := audit.ValidateAttributes(event.Attributes); err != nil {
 		return err
 	}

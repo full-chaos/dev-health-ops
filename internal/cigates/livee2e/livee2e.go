@@ -8,8 +8,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +24,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 type doc = map[string]any
@@ -254,36 +256,38 @@ func EdgeRequest(documents []byte, operation, org string) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// JWTSecret is the signing key the e2e token and the api share: the hex sha256 of the settings encryption key.
-func JWTSecret(encKey string) string {
-	sum := sha256.Sum256([]byte(encKey))
-	return hex.EncodeToString(sum[:])
-}
-
 // E2E identities the access token names.
 const (
 	E2EUserID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	e2eEmail  = "e2e@test.local"
 	// DefaultOrgID is the organization the harness seeds and measures.
 	DefaultOrgID = "11111111-2222-4333-8444-555555555555"
-	// DefaultEncryptionKey is the settings encryption key the harness runs with when none is set.
-	DefaultEncryptionKey = "dev-key-not-for-prod"
+	// DefaultIssuerKeyID is the kid of the CI issuer stub's key (internal/testsupport/issuerstub).
+	DefaultIssuerKeyID = "ci-e2e-1"
+	// AccessTokenAudience is the audience go-api verifies user access tokens for.
+	AccessTokenAudience = "dev-health-api"
 )
 
-// MintToken signs the e2e admin access token (HS256, one hour).
-func MintToken(secret, userID, orgID string, now time.Time, jti string) (string, error) {
-	claims := jwt.MapClaims{
-		"sub":          userID,
-		"email":        e2eEmail,
-		"org_id":       orgID,
-		"role":         "admin",
-		"is_superuser": false,
-		"type":         "access",
-		"exp":          now.Add(time.Hour).Unix(),
-		"iat":          now.Unix(),
-		"jti":          jti,
+// MintToken signs the e2e user access token: an access-token.v1 token (EdDSA, one hour) for the user, in the
+// organization, bound to the live session sessionID, issued by the CI issuer stub whose key is key.
+func MintToken(key ed25519.PrivateKey, kid, issuer string, userID, orgID, sessionID uuid.UUID, now time.Time, jti string) (string, error) {
+	if len(key) != ed25519.PrivateKeySize {
+		return "", errors.New("signing key is not an Ed25519 private key")
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	header, err := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "at+jwt", "kid": kid})
+	if err != nil {
+		return "", err
+	}
+	claims, err := json.Marshal(map[string]any{
+		"iss": issuer, "aud": AccessTokenAudience, "sub": "prn_" + base64.RawURLEncoding.EncodeToString(userID[:]),
+		"principal_type": "human", "sid": sessionid.Wire(sessionID), "jti": jti,
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+		"org_id": orgID.String(), "scope": "api:access",
+	})
+	if err != nil {
+		return "", err
+	}
+	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
+	return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, []byte(signing))), nil
 }
 
 // ValkeyPing answers whether the Valkey at the redis:// URL replies PONG.

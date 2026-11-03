@@ -3,7 +3,7 @@
   "accept": [
     {
       "file": "valid-first-page.json",
-      "why": "A first page: items in id order and an opaque next_cursor."
+      "why": "A first page: items in id order, each a principal with its membership, and an opaque next_cursor."
     },
     {
       "file": "valid-last-page.json",
@@ -41,9 +41,15 @@
     },
     {
       "file": "invalid-item-email.json",
-      "expect_instance_location": "/items/0",
+      "expect_instance_location": "/items/0/principal",
       "expect_keyword": "additionalProperties",
-      "why": "An item is a principal-read body: no email."
+      "why": "The principal body holds no email."
+    },
+    {
+      "file": "invalid-item-membership-absent.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "required",
+      "why": "An item pairs both bodies: a principal without its membership says nothing of the organization."
     },
     {
       "file": "invalid-items-absent.json",

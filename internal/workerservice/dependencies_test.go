@@ -356,6 +356,11 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if !ok {
 		t.Fatal("sync.provider_oauth_revocations descriptor missing")
 	}
+	// sync.external_push_expiry_sweep (CHAOS-12332) is on queue "sync" too.
+	pushExpirySpec, ok := runtimeRegistry.Descriptor(jobcontract.KindExternalPushExpirySweep)
+	if !ok {
+		t.Fatal("sync.external_push_expiry_sweep descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -368,7 +373,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		jobruntime.Observer, *slog.Logger, *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec},
+			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec, pushExpirySpec},
 			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
 		}, nil
 	}
@@ -2811,6 +2816,10 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.provider_oauth_revocations descriptor missing")
 	}
+	pushExpirySpec, ok := runtimeRegistry.Descriptor(jobcontract.KindExternalPushExpirySweep)
+	if !ok {
+		t.Fatal("sync.external_push_expiry_sweep descriptor missing")
+	}
 
 	syncConfig := config.Config{
 		Queues:                 []string{"sync", "sync_provider"},
@@ -2861,7 +2870,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			) (workerFamily, error) {
 				family := workerFamily{}
 				if test.reported {
-					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec}
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec, pushExpirySpec}
 					family.queues = []jobruntime.QueueBudget{
 						{Queue: "sync", MaxWorkers: 4},
 					}

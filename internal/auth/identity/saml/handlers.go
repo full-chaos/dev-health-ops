@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -278,7 +279,8 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrAccountDisabled):
 		writeDetail(w, http.StatusForbidden, "Account is disabled")
 	case errors.Is(err, ErrNotOrgMember):
-		writeDetail(w, http.StatusForbidden, "This account is not a member of the provider's organization.")
+		writeJSON(w, http.StatusForbidden, map[string]any{"detail": map[string]string{
+			"message": identity.MembershipRequiredMessage, "reason": "membership_required"}})
 	case errors.Is(err, ErrIdentityAmbiguous):
 		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
 	case errors.Is(err, ErrSessionUnavailable):

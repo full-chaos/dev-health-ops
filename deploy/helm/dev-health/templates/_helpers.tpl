@@ -734,7 +734,7 @@ serve it).
 {{- end -}}
 
 {{/*
-Refuses AUTH_ORGS_OWNED in any extraEnv list of the values, at any depth. The key is removed (D6651): no workload reads it.
+Refuses AUTH_ORGS_OWNED in any extraEnv list of the values, at any depth, through maps and lists of maps. The key is removed (D6651): no workload reads it.
 Call with (dict "node" <values subtree> "path" "").
 */}}
 {{- define "dev-health.refuseOrgsOwnedEnv" -}}
@@ -745,6 +745,11 @@ Call with (dict "node" <values subtree> "path" "").
 {{- range $child }}{{- if and (kindIs "map" .) (eq (upper (trim (toString (get . "name")))) "AUTH_ORGS_OWNED") }}{{- fail (printf "%s.extraEnv must not set AUTH_ORGS_OWNED: AUTH_ORGS_OWNED is removed (D6651), orgs owned (phase 5) is cancelled and no workload reads it; remove the entry" $path) }}{{- end }}{{- end -}}
 {{- else if kindIs "map" $child -}}
 {{- include "dev-health.refuseOrgsOwnedEnv" (dict "node" $child "path" (printf "%s.%s" $path $key | trimPrefix ".")) -}}
+{{- else if kindIs "slice" $child -}}
+{{- $listPath := printf "%s.%s" $path $key | trimPrefix "." -}}
+{{- range $i, $item := $child }}{{- if kindIs "map" $item -}}
+{{- include "dev-health.refuseOrgsOwnedEnv" (dict "node" $item "path" (printf "%s[%d]" $listPath $i)) -}}
+{{- end }}{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

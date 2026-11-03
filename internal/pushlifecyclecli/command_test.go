@@ -3,6 +3,8 @@ package pushlifecyclecli
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 )
+
+var gotDSN string
 
 type call struct {
 	apply  bool
@@ -21,7 +25,8 @@ func runVerb(t *testing.T, args []string, lookup map[string]string) (code int, o
 	t.Helper()
 	oldConnect, oldBackfill := connectFn, backfillFn
 	t.Cleanup(func() { connectFn, backfillFn = oldConnect, oldBackfill })
-	connectFn = func(context.Context, string) (*pgxpool.Pool, error) { return nil, nil }
+	gotDSN = ""
+	connectFn = func(_ context.Context, dsn string) (*pgxpool.Pool, error) { gotDSN = dsn; return nil, nil }
 	backfillFn = func(_ context.Context, _ *pgxpool.Pool, schema string, apply bool, _ int) (customerpush.BackfillReport, error) {
 		calls = append(calls, call{apply, schema})
 		return customerpush.BackfillReport{Candidates: 3, SourceBound: 2, OrganizationWide: 1, Revoked: 1, Written: map[bool]int{true: 3}[apply]}, nil
@@ -72,5 +77,50 @@ func TestBackfillCreatedExitsNonZeroWhenATokenFailed(t *testing.T) {
 	env := cli.Env{Args: []string{"-apply"}, Stdout: &so, Stderr: &se, Lookup: func(k string) (string, bool) { return "postgres://x", k == "POSTGRES_URI" }}
 	if code := run(context.Background(), env); code != cli.ExitFailure {
 		t.Fatalf("code %d, want %d", code, cli.ExitFailure)
+	}
+}
+
+func TestBackfillCreatedDefaultReadsPostgresURI(t *testing.T) {
+	code, _, _, calls := runVerb(t, nil, map[string]string{"POSTGRES_URI": "postgres://default", "API_DATABASE_URI": "postgres://other"})
+	if code != cli.ExitOK || len(calls) != 1 || gotDSN != "postgres://default" {
+		t.Fatalf("code %d calls %d dsn-match %v", code, len(calls), gotDSN == "postgres://default")
+	}
+}
+
+func TestBackfillCreatedDSNEnvFlagReadsTheNamedVariable(t *testing.T) {
+	code, _, _, calls := runVerb(t, []string{"-dsn-env", "API_DATABASE_URI"}, map[string]string{"API_DATABASE_URI": "postgres://api"})
+	if code != cli.ExitOK || len(calls) != 1 || gotDSN != "postgres://api" {
+		t.Fatalf("code %d calls %d dsn-match %v", code, len(calls), gotDSN == "postgres://api")
+	}
+}
+
+func TestBackfillCreatedDSNEnvFlagReadsTheNamedFileForm(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "dsn")
+	if err := os.WriteFile(f, []byte("postgres://fromfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _, calls := runVerb(t, []string{"-dsn-env", "API_DATABASE_URI"}, map[string]string{"API_DATABASE_URI_FILE": f})
+	if code != cli.ExitOK || len(calls) != 1 || gotDSN != "postgres://fromfile" {
+		t.Fatalf("code %d calls %d dsn-match %v", code, len(calls), gotDSN == "postgres://fromfile")
+	}
+}
+
+func TestBackfillCreatedDSNEnvFlagMissingVariableNamesTheNameAndDoesNotConnect(t *testing.T) {
+	code, _, errOut, calls := runVerb(t, []string{"-dsn-env", "NOPE_URI"}, map[string]string{"POSTGRES_URI": "postgres://x"})
+	if code != cli.ExitFailure || len(calls) != 0 || gotDSN != "" {
+		t.Fatalf("code %d calls %d", code, len(calls))
+	}
+	if !strings.Contains(errOut, "NOPE_URI") || strings.Contains(errOut, "postgres://") {
+		t.Fatalf("stderr %q", errOut)
+	}
+}
+
+func TestBackfillCreatedDSNEnvFlagRefusesImplausibleNames(t *testing.T) {
+	lookup := map[string]string{"POSTGRES_URI": "postgres://x"}
+	for _, name := range []string{"", "lower", "1BAD", "A-B", "A B", "A=B", "postgres://x"} {
+		code, _, errOut, calls := runVerb(t, []string{"-dsn-env", name}, lookup)
+		if code != cli.ExitUsage || len(calls) != 0 || gotDSN != "" || !strings.Contains(errOut, "argument error: -dsn-env") {
+			t.Errorf("name %q: code %d calls %d stderr %q", name, code, len(calls), errOut)
+		}
 	}
 }

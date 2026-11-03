@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
+
+// shadowOnlyProxyFault reports a malformed AUTH_PROXY_URL that only the shadow asked for: the switch is on, and the
+// proxy config parses with the URL unset (so no AUTH_PROXY_* flag needs it). It returns that config, whose Upstream
+// is nil, so newShadow turns the shadow off naming AUTH_PROXY_URL. Every other fault keeps stopping the start.
+func shadowOnlyProxyFault(lookup func(string) (string, bool)) (AuthProxyConfig, bool) {
+	raw, _ := lookup(policy.EnvShadowPDP)
+	if on, err := strconv.ParseBool(strings.TrimSpace(raw)); err != nil || !on {
+		return AuthProxyConfig{}, false
+	}
+	cfg, err := ParseAuthProxyConfig(func(key string) (string, bool) {
+		if key == EnvAuthProxyURL {
+			return "", false
+		}
+		return lookup(key)
+	})
+	return cfg, err == nil
+}
 
 const shadowPDPTimeout = 2 * time.Second
 

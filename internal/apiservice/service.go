@@ -397,7 +397,10 @@ func configureWith(
 	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		var onlyShadow bool
+		if authProxy, onlyShadow = shadowOnlyProxyFault(envsecrets.ProcessLookup); !onlyShadow {
+			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		}
 	}
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {

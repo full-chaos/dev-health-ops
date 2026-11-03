@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 // The one audit row carries ids and closed values only: the organization and,
@@ -19,6 +20,7 @@ func TestAuditRowIsInTheAllowlist(t *testing.T) {
 	in := Input{OrgID: uuid.New(), Actor: Actor{PrincipalID: &actor, RequestID: &request}}
 	for _, wasActive := range []bool{true, false} {
 		ev := auditFor(in, wasActive)
+		auditwire.MustValidate(t, ev)
 		if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 			t.Fatalf("active=%v ValidateAttributes: %v", wasActive, err)
 		}

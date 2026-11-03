@@ -160,14 +160,14 @@ func TestCompatRoutesThroughConfigure(t *testing.T) {
 		t.Fatalf("refresh after logout = %d %s", got.status, got.body)
 	}
 
-	// A forwarded chain is not one proxy's answer: the peer is the client.
+	// A forwarded chain is read from the right: the right-most untrusted hop is the client, what is left of it is never read.
 	got = e.doWith(t, "/api/v1/auth/login", `{"email":"`+email+`","password":"wrong"}`,
 		map[string]string{"X-Forwarded-For": "203.0.113.5, 198.51.100.7", "Content-Type": "application/json"})
 	chained := e.auditOf(t, ctx, "auth.login.failed", got.header.Get("X-Auth-Request-ID"))
-	if text(chained.clientIP) != "127.0.0.1" {
-		t.Fatalf("a forwarded chain recorded %s, want the peer", text(chained.clientIP))
+	if text(chained.clientIP) != "198.51.100.7" {
+		t.Fatalf("a forwarded chain recorded %s, want its right-most untrusted hop", text(chained.clientIP))
 	}
-	t.Logf("%s login=200 wrong=401 refresh=200 logout=200 after_logout=401 audit_client_ip=forwarded chain=peer", compatRoutesMarker)
+	t.Logf("%s login=200 wrong=401 refresh=200 logout=200 after_logout=401 audit_client_ip=forwarded chain=rightmost", compatRoutesMarker)
 }
 
 // The refresh route counts in the live shared store through configure: ten refusals of an unknown credential from one

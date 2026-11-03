@@ -43,6 +43,7 @@ internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/auth/lockorder
 internal/api/credentials	probes.go	internal/billingcli
 internal/api/credentials	probes.go	internal/clicredentials
+internal/api/credentials	probes.go	internal/pushlifecyclecli
 internal/apiservice	githubapp_config.go	cmd/dho
 internal/apiservice	githubapp_config.go	deploy/helm/dev-health
 internal/apiservice	githubapp_config.go	internal/api/githubapp
@@ -118,8 +119,10 @@ internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus
 internal/auth/contracts	contracts.go	internal/auth/contracts/tokencorpus/gen
 internal/auth/contracts	contracts.go	internal/auth/decisioncache
 internal/auth/contracts	contracts.go	internal/auth/decisionstate
+internal/auth/contracts	contracts.go	internal/auth/delegationend
 internal/auth/contracts	contracts.go	internal/auth/delegationinput
 internal/auth/contracts	contracts.go	internal/auth/grant
+internal/auth/contracts	contracts.go	internal/auth/grantend
 internal/auth/contracts	contracts.go	internal/auth/httpapi
 internal/auth/contracts	contracts.go	internal/auth/identity
 internal/auth/contracts	contracts.go	internal/auth/identity/local
@@ -136,14 +139,17 @@ internal/auth/contracts	contracts.go	internal/auth/org
 internal/auth/contracts	contracts.go	internal/auth/orgdeprovision
 internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
+internal/auth/contracts	contracts.go	internal/auth/platformrole
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/pushprojection
+internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred
 internal/auth/contracts	contracts.go	internal/auth/session
 internal/auth/contracts	contracts.go	internal/auth/usersbackfill
+internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/workflows
@@ -519,6 +525,7 @@ internal/platform/secrets	source.go	internal/platform/logging
 internal/platform/secrets	source.go	internal/platform/secrets
 internal/platform/secrets	source.go	internal/platform/shell
 internal/platform/secrets	source.go	internal/pushcli
+internal/platform/secrets	source.go	internal/pushlifecyclecli
 internal/platform/secrets	source.go	internal/queryapiservice
 internal/platform/secrets	source.go	internal/reconcilerservice
 internal/platform/secrets	source.go	internal/rivermigrate
@@ -578,6 +585,7 @@ internal/providerfoundation	clients.go	internal/operationalbackfill
 internal/providerfoundation	clients.go	internal/platform/otlpmetrics
 internal/providerfoundation	clients.go	internal/providerfoundation
 internal/providerfoundation	clients.go	internal/providersync
+internal/providerfoundation	clients.go	internal/pushlifecyclecli
 internal/providerfoundation	clients.go	internal/queryapi/server
 internal/providerfoundation	clients.go	internal/queryapiservice
 internal/providerfoundation	clients.go	internal/reconcilerservice

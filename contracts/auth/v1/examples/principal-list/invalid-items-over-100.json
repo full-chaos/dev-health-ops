@@ -1,0 +1,2127 @@
+{
+  "schema_version": "principal-list.v1",
+  "items": [
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000100",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000000",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000100",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000101",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000001",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000101",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000102",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000002",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000102",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000103",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000003",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000103",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000104",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000004",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000104",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000105",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000005",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000105",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000106",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000006",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000106",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000107",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000007",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000107",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000108",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000008",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000108",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000109",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000009",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000109",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000110",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000010",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000110",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000111",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000011",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000111",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000112",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000012",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000112",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000113",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000013",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000113",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000114",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000014",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000114",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000115",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000015",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000115",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000116",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000016",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000116",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000117",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000017",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000117",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000118",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000018",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000118",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000119",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000019",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000119",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000120",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000020",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000120",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000121",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000021",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000121",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000122",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000022",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000122",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000123",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000023",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000123",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000124",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000024",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000124",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000125",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000025",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000125",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000126",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000026",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000126",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000127",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000027",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000127",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000128",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000028",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000128",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000129",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000029",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000129",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000130",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000030",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000130",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000131",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000031",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000131",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000132",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000032",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000132",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000133",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000033",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000133",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000134",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000034",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000134",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000135",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000035",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000135",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000136",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000036",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000136",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000137",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000037",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000137",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000138",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000038",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000138",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000139",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000039",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000139",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000140",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000040",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000140",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000141",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000041",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000141",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000142",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000042",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000142",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000143",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000043",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000143",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000144",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000044",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000144",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000145",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000045",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000145",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000146",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000046",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000146",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000147",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000047",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000147",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000148",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000048",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000148",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000149",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000049",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000149",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000150",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000050",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000150",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000151",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000051",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000151",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000152",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000052",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000152",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000153",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000053",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000153",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000154",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000054",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000154",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000155",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000055",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000155",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000156",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000056",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000156",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000157",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000057",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000157",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000158",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000058",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000158",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000159",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000059",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000159",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000160",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000060",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000160",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000161",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000061",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000161",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000162",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000062",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000162",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000163",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000063",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000163",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000164",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000064",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000164",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000165",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000065",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000165",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000166",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000066",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000166",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000167",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000067",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000167",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000168",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000068",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000168",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000169",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000069",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000169",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000170",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000070",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000170",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000171",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000071",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000171",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000172",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000072",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000172",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000173",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000073",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000173",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000174",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000074",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000174",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000175",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000075",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000175",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000176",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000076",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000176",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000177",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000077",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000177",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000178",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000078",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000178",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000179",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000079",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000179",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000180",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000080",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000180",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000181",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000081",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000181",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000182",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000082",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000182",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000183",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000083",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000183",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000184",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000084",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000184",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000185",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000085",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000185",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000186",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000086",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000186",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000187",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000087",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000187",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000188",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000088",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000188",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000189",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000089",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000189",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000190",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000090",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000190",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000191",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000091",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000191",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000192",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000092",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000192",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000193",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000093",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000193",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000194",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000094",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000194",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000195",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000095",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000195",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000196",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000096",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000196",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000197",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000097",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000197",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000198",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000098",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000198",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000199",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000099",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000199",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    },
+    {
+      "principal": {
+        "schema_version": "principal-read.v1",
+        "principal_id": "prn_EXAMPLE0000000000000200",
+        "kind": "user",
+        "status": "active",
+        "revision": 3
+      },
+      "membership": {
+        "schema_version": "membership-read.v1",
+        "membership_id": "mbr_EXAMPLE0000000000000000",
+        "organization_id": "org_EXAMPLE0000000000000001",
+        "principal_id": "prn_EXAMPLE0000000000000200",
+        "role": "member",
+        "status": "active",
+        "revision": 2,
+        "created_at": "2026-11-02T10:00:00Z",
+        "updated_at": "2026-11-02T11:30:00.123456Z",
+        "joined_at": "2026-11-02T11:30:00.123456Z"
+      }
+    }
+  ],
+  "next_cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAy"
+}

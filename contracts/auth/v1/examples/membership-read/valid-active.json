@@ -1,0 +1,12 @@
+{
+  "schema_version": "membership-read.v1",
+  "membership_id": "mbr_EXAMPLE0000000000000001",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "role": "member",
+  "status": "active",
+  "revision": 2,
+  "created_at": "2026-11-02T10:00:00Z",
+  "updated_at": "2026-11-02T11:30:00.123456Z",
+  "joined_at": "2026-11-02T11:30:00.123456Z"
+}

@@ -138,7 +138,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	for _, caller := range options.PushLifecycleCallerRoles {
 		executors[caller] = true
 	}
-	for _, other := range append([]string{options.RuntimeRole}, options.SessionReaderRoles...) {
+	for _, other := range append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.ProjectionReaderRoles...) {
 		if executors[other] {
 			continue
 		}
@@ -330,7 +330,7 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 	}
 	rows, err = conn.Query(ctx, `SELECT r.rolname, has_function_privilege(r.oid, $1::regprocedure, 'EXECUTE')
 		FROM pg_roles r WHERE r.rolname = ANY($2) AND r.rolname <> $3`,
-		function, append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.PushLifecycleCallerRoles...), writer)
+		function, append(append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.ProjectionReaderRoles...), options.PushLifecycleCallerRoles...), writer)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading who can execute the append function", ErrMigrationFailed)
 	}

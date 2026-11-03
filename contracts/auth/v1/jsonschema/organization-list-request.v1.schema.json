@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/organization-list-request.v1.schema.json",
+  "title": "Auth Control Plane organization list request (v1 wire format)",
+  "description": "Request body of a versioned read. Names one principal; the answer holds the organizations the principal is a member of. The route names the operation; the body carries no operation member and no credential. Closed: any other member fails.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "principal_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "organization-list-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "The principal."
+    },
+    "membership_status": {
+      "enum": [
+        "invited",
+        "active",
+        "suspended",
+        "removed"
+      ],
+      "description": "Only organizations where the membership has this status."
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Page size. Absent means 50. A value over 100 (and one under 1) is refused, never clamped, so a caller is never silently given less than it asked for."
+    },
+    "cursor": {
+      "type": "string",
+      "pattern": "^k1_[A-Za-z0-9_-]{4,120}$",
+      "description": "The opaque keyset cursor of the previous page's next_cursor: 'k1_' and the base64url (no padding) of the last id that page held. The server returns items whose id sorts after it. A caller never builds or reads one."
+    }
+  }
+}

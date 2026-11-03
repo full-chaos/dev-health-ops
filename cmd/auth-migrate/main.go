@@ -59,6 +59,9 @@ const (
 	// envSessionReaders names the roles (comma-separated) of the services that
 	// end an access token when its session is revoked: go-api and query-api.
 	envSessionReaders = "AUTH_SESSION_READER_ROLES"
+	// envProjectionReaders names the roles (comma-separated) that read the acr rows of the credential projection:
+	// the worker login that runs the acr reconcile.
+	envProjectionReaders = "AUTH_PROJECTION_READER_ROLES"
 	// envPushWriter is the NOLOGIN role that owns the External Push lifecycle
 	// append function, and envPushCallers the logins that may execute it
 	// (go-api's). Both empty leaves the function unexecutable.
@@ -234,6 +237,12 @@ func execute(
 		return 1
 	}
 
+	projectionReaders, err := projectionReaderRoles(lookup)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+
 	pushWriter := valueOr(lookup, envPushWriter, "")
 	pushCallers, err := roleList(lookup, envPushCallers)
 	if err != nil {
@@ -259,6 +268,7 @@ func execute(
 			Schema:                   schema,
 			RuntimeRole:              runtimeRole,
 			SessionReaderRoles:       readers,
+			ProjectionReaderRoles:    projectionReaders,
 			Logger:                   logger,
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
@@ -281,6 +291,7 @@ func execute(
 		Schema:                   schema,
 		RuntimeRole:              runtimeRole,
 		SessionReaderRoles:       readers,
+		ProjectionReaderRoles:    projectionReaders,
 		Logger:                   logger,
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
@@ -311,6 +322,11 @@ func execute(
 // commas, blanks ignored. Unset or empty means none.
 func sessionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
 	return roleList(lookup, envSessionReaders)
+}
+
+// projectionReaderRoles reads AUTH_PROJECTION_READER_ROLES, parsed as the session readers are.
+func projectionReaderRoles(lookup secrets.LookupEnv) ([]string, error) {
+	return roleList(lookup, envProjectionReaders)
 }
 
 // roleList reads a comma-separated list of role names from the environment.

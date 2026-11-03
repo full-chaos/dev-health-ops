@@ -35,9 +35,9 @@ If the same address already has a pending invite, revoke it or wait for it to ex
 ## Change a role
 
 1. Send `PATCH /api/v1/admin/orgs/{org_id}/members/{user_id}` with the new `role`.
-2. The answer is the updated membership. The same role again changes nothing.
+2. The answer is the updated membership. With `AUTH_PROXY_ORG_PROVISIONING=true` the same role again changes nothing. With the switch off, it is written again.
 
-A role outside `viewer`, `member`, `admin` and `owner` is refused. You cannot take the last owner out of the `owner` role.
+A role outside `viewer`, `member`, `admin` and `owner` is refused. With `AUTH_PROXY_ORG_PROVISIONING=true` you cannot take the last owner out of the `owner` role. With the switch off, go-api does not check this on a role change, so keep at least one owner yourself.
 
 ## Remove a member
 

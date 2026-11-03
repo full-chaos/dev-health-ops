@@ -35,7 +35,7 @@ The closed list is `contracts/auth/v1/vocabulary/roles.v1.json`.
 - Only a user principal holds a platform role. A service account or a workload does not.
 - Granting or revoking `platform_admin` needs the platform action `admin.users` now, held by the granter at the time of the call.
 - A revoke that would leave no active platform administrator is refused.
-- `platform_owner` is granted and revoked only by `auth-migrate`. The API and `dho auth` refuse it and write a `denied` audit row.
+- `platform_owner` is granted and revoked only by `auth-migrate`. The API refuses it and writes a `denied` audit row. With `AUTH_PLATFORM_ROLES_OWNED=false`, the `dho auth` write verbs `platform-role-grant` and `platform-role-revoke` refuse (exit 3) before they open the store, so they write no `denied` audit row.
 
 ## Two sources of authority
 

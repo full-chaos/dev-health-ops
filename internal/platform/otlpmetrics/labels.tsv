@@ -42,6 +42,10 @@ dev_health_api_http_request_duration_seconds	listener,method,route,status_class	
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
 dev_health_api_legacy_path_total	kind,surface	code: internal/api/policy/legacycounters.go
+dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go

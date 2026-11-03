@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -16,8 +17,9 @@ import (
 // ClassMarker is one way a credential class announces itself on the request
 // head, in the vocabulary of endpoint-auth-profile.v1's class_disambiguator.
 type ClassMarker struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Shape string `json:"shape,omitempty"`
 }
 
 // selectorNameMax is the schemas' maxLength for a selector name (code points).
@@ -27,8 +29,10 @@ const selectorNameMax = 64
 // endpoint-profile.schema.json (a test holds the two equal).
 var selectorKinds = []string{
 	"authorization_scheme", "credential_prefix", "dedicated_header", "jwt_header_alg", "jwt_header_typ",
-	"signature_header", "content_type", "subject_token_type", "grant_type",
+	"signature_header", "content_type", "subject_token_type", "grant_type", "body_field",
 }
+
+const bodyFieldKind = "body_field"
 
 // RegistryClass is the part of a credential-classes.json entry the profile
 // selector gate reads.
@@ -79,6 +83,7 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 		return fmt.Errorf("selector %s name is %d characters, longer than %d", kind, n, selectorNameMax)
 	}
 	var owners []string
+	var bodyMarkers []bodyCarried
 	for _, entry := range accepted {
 		id, _ := entry.(string)
 		class, found := registry[id]
@@ -88,9 +93,19 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 		if len(class.Markers) == 0 {
 			return fmt.Errorf("accepted class %q has no marker (%s), so no selector can pick it", id, class.MarkersNoneReason)
 		}
+		body, err := bodyMarkersOf(id, class)
+		if err != nil {
+			return err
+		}
+		if len(body) > 0 {
+			bodyMarkers = append(bodyMarkers, bodyCarried{id: id, markers: body})
+		}
 		if slices.ContainsFunc(class.Markers, func(marker ClassMarker) bool { return markerMatches(marker, kind, name) }) {
 			owners = append(owners, id)
 		}
+	}
+	if err := checkBodyClassesApart(bodyMarkers); err != nil {
+		return err
 	}
 	switch len(owners) {
 	case 1:
@@ -100,6 +115,66 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	default:
 		return fmt.Errorf("selector %s/%s is shared by accepted classes %v, so it does not distinguish them", kind, name, owners)
 	}
+}
+
+var bodyPrefixShape = regexp.MustCompile(`^prefix:[A-Za-z0-9_-]+$`)
+
+type bodyCarried struct {
+	id      string
+	markers []ClassMarker
+}
+
+// bodyMarkersOf returns a class's body_field markers. A class is carried in the
+// head or in the body, never both, and a body marker names its shape.
+func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
+	var body []ClassMarker
+	for _, marker := range class.Markers {
+		if marker.Kind == bodyFieldKind {
+			body = append(body, marker)
+		}
+	}
+	if len(body) == 0 {
+		return nil, nil
+	}
+	if len(body) != len(class.Markers) {
+		return nil, fmt.Errorf("accepted class %q has a body_field marker and a request-head marker: a class is carried in one place", id)
+	}
+	for _, marker := range body {
+		if marker.Shape != "jwt" && !bodyPrefixShape.MatchString(marker.Shape) {
+			return nil, fmt.Errorf("accepted class %q body_field %s has shape %q, want jwt or prefix:<value>", id, marker.Name, marker.Shape)
+		}
+	}
+	return body, nil
+}
+
+// checkBodyClassesApart proves no two body-carried classes of a route can be
+// confused: the same body field with the same shape, or with prefixes where
+// one begins with the other, is refused. A jwt is any three dot-separated
+// parts (credential-classes.schema.json, shape), and an opaque value after a
+// prefix may hold dots, so a jwt overlaps every prefix: jwt and prefix:<v> on
+// one field are refused.
+func checkBodyClassesApart(classes []bodyCarried) error {
+	for i, a := range classes {
+		for _, b := range classes[i+1:] {
+			for _, ma := range a.markers {
+				for _, mb := range b.markers {
+					if ma.Name == mb.Name && shapesOverlap(ma.Shape, mb.Shape) {
+						return fmt.Errorf("body classes %q and %q both carry body field %s in a shape (%s, %s) that does not tell them apart", a.id, b.id, ma.Name, ma.Shape, mb.Shape)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func shapesOverlap(a, b string) bool {
+	pa, aPrefix := strings.CutPrefix(a, "prefix:")
+	pb, bPrefix := strings.CutPrefix(b, "prefix:")
+	if aPrefix && bPrefix {
+		return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
+	}
+	return a == b || aPrefix != bPrefix
 }
 
 // mediaType is a Content-Type value's media type: parameters (; charset=...) dropped, trimmed, lower-cased.
@@ -119,7 +194,7 @@ func markerMatches(marker ClassMarker, kind, name string) bool {
 	if kind == "content_type" {
 		return mediaType(marker.Name) == mediaType(name)
 	}
-	if kind == "credential_prefix" || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" || kind == "grant_type" {
+	if kind == "credential_prefix" || kind == bodyFieldKind || kind == "jwt_header_alg" || kind == "jwt_header_typ" || kind == "subject_token_type" || kind == "grant_type" {
 		return marker.Name == name
 	}
 	return strings.EqualFold(marker.Name, name)

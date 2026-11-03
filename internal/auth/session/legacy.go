@@ -15,7 +15,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
 // LegacyRefresh is a go-api refresh token whose signature, type and expiry the
@@ -325,16 +324,7 @@ func (s *Store) revokeLegacyFamily(ctx context.Context, principalID uuid.UUID, f
 			revoked, err = s.revokeFamilyTx(ctx, tx, familyID, revokedByReuse)
 			return err
 		},
-		Audit: audit.AuditEvent{
-			EventType:          "auth.session.refresh_reuse_revoked",
-			Outcome:            audit.OutcomeDenied,
-			SubjectPrincipalID: &principal,
-			RequestID:          requestid.Audit(ctx),
-			Attributes: map[string]any{
-				"reason_code": "session_revoked", "target_kind": "principal", "target_id": principal,
-				"credential_class": "refresh_credential",
-			},
-		},
+		Audit:     reuseRevokedEvent(ctx, principal, "principal", principal),
 		OffStream: audit.OffStreamSessionLifecycle,
 	})
 	switch {

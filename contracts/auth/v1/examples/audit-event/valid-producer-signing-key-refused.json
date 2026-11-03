@@ -1,0 +1,13 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "auth.signing_key.refused",
+  "occurred_at": "2026-11-02T10:00:00Z",
+  "outcome": "denied",
+  "attributes": {
+    "target_kind": "signing_key",
+    "rotation_verb": "retire",
+    "rotation_refusal": "wrong_state",
+    "key_id": "kid-2026.11",
+    "related_key_id": "kid-2026.10"
+  }
+}

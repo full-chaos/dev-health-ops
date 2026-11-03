@@ -600,7 +600,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
 			"More than one account carries this sign-in. Contact your organization administrator.")
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrIdentityNotFound):
 		return s.newAccount(ctx, row, v, requestID)
 	default:
@@ -626,7 +626,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case s.cfg.MembershipJIT != nil && row.AutoProvision:
 		var joined bool
 		if req.Role, joined = s.signInRole(ctx, row); !joined {
-			return Login{}, notMember()
+			return Login{}, notMember(row)
 		}
 		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
 		if errors.Is(err, identity.ErrAlreadyMember) {
@@ -635,7 +635,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 			}
 		}
 	default:
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	switch {
 	case err == nil:
@@ -644,7 +644,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrSignupNotAvailable):
 		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrPrincipalDisabled):
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:
@@ -673,9 +673,14 @@ func refuseUnusableEmail(email string) *Error {
 		map[string]any{"message": "The identity provider returned an unusable email address", "reason": "invalid_provider_email"})
 }
 
-func notMember() *Error {
+// notMember keeps OAuth's earlier plain detail; OIDC answers go-api's structured detail.
+func notMember(row Provider) *Error {
+	if strings.HasPrefix(row.Protocol, "oauth_") {
+		return deny(http.StatusForbidden, ReasonMembershipRequired,
+			"This account is not a member of the provider's organization.")
+	}
 	return deny(http.StatusForbidden, ReasonMembershipRequired,
-		"This account is not a member of the provider's organization.")
+		map[string]any{"message": identity.MembershipRequiredMessage, "reason": string(ReasonMembershipRequired)})
 }
 
 // newAccount runs the e-mail checks. With JIT off it then refuses, writing
@@ -686,7 +691,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, failure
 	}
 	if s.cfg.MembershipJIT == nil {
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
 	if len(row.AllowedDomains) == 0 {
@@ -694,7 +699,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	}
 	role, ok := s.signInRole(ctx, row)
 	if !ok {
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	p := v.profile
 	org := row.OrgID
@@ -716,7 +721,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrPrincipalDisabled):
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:

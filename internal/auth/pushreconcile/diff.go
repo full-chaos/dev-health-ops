@@ -85,10 +85,10 @@ func knownStatus(s pushlifecycle.Status) bool {
 }
 
 // Diff compares the domain tokens with the projection at now. Not drift: a
-// terminal projected credential the domain no longer holds; a projected
-// "active" credential past its expiry (Live already fails it closed); both
-// sides terminal, whichever kind; any revision difference. Findings are sorted
-// by id, then class.
+// terminal projected credential the domain no longer holds; any pair of
+// credentials that are both non-live at now, whatever the kind; any revision
+// difference. One finding per credential at most (see classify). Findings are
+// sorted by id.
 func Diff(domain []Token, projected []Projected, now time.Time) ([]Finding, error) {
 	d := make(map[string]Token, len(domain))
 	for _, t := range domain {
@@ -118,17 +118,8 @@ func Diff(domain []Token, projected []Projected, now time.Time) ([]Finding, erro
 			out = append(out, Finding{ClassMissing, id})
 			continue
 		}
-		if t.Organization != r.Organization || t.SourceID != r.SourceID {
-			out = append(out, Finding{ClassBinding, id})
-		}
-		if statusDrifts(t, r, now) {
-			out = append(out, Finding{ClassStatus, id})
-		}
-		if !sameScopes(t.Scopes, r.Scopes) {
-			out = append(out, Finding{ClassScopes, id})
-		}
-		if !sameInstant(t.ExpiresAt, r.ExpiresAt) {
-			out = append(out, Finding{ClassExpiry, id})
+		if class := classify(t, r, now); class != "" {
+			out = append(out, Finding{class, id})
 		}
 	}
 	for id, r := range p {
@@ -145,22 +136,37 @@ func Diff(domain []Token, projected []Projected, now time.Time) ([]Finding, erro
 	return out, nil
 }
 
-// statusDrifts compares liveness. A revoked domain token with a live
-// projection, and a live domain token with a revoked projection or with an
-// expired one before its expiry, drift. Both terminal never drifts (Apply
-// refuses the second terminal event). A live projection past expiry never
-// drifts: Live ends it without the event.
-func statusDrifts(t Token, r Projected, now time.Time) bool {
-	if t.Revoked {
-		return r.Status == pushlifecycle.StatusActive
+// classify returns the one drift class of a credential present on both sides,
+// or "" for none. Precedence, highest first: status, scopes, binding, expiry.
+// A credential never gets two findings: the class of the most serious
+// difference is the one an operator must act on first, and the next pass names
+// the rest once it is fixed. missing, extra and unwireable are decided before
+// this call and are exclusive.
+func classify(t Token, r Projected, now time.Time) Class {
+	switch {
+	case domainLive(t, now) != projectedLive(r, now):
+		return ClassStatus
+	case !sameScopes(t.Scopes, r.Scopes):
+		return ClassScopes
+	case t.Organization != r.Organization || t.SourceID != r.SourceID:
+		return ClassBinding
+	case !sameInstant(t.ExpiresAt, r.ExpiresAt):
+		return ClassExpiry
 	}
-	switch r.Status {
-	case pushlifecycle.StatusRevoked:
-		return true
-	case pushlifecycle.StatusExpired:
-		return t.ExpiresAt == nil || now.Before(*t.ExpiresAt)
-	}
-	return false
+	return ""
+}
+
+// domainLive and projectedLive are each side's effective liveness at now:
+// not revoked or expired by state, and not past its own expiry. A projected
+// "active" credential past its expiry is not live (Live fails it closed), so it
+// agrees with a domain token that is revoked or past expiry. A difference of
+// the expiry instant itself stays in ClassExpiry.
+func domainLive(t Token, now time.Time) bool {
+	return !t.Revoked && (t.ExpiresAt == nil || now.Before(*t.ExpiresAt))
+}
+
+func projectedLive(r Projected, now time.Time) bool {
+	return r.Status == pushlifecycle.StatusActive && (r.ExpiresAt == nil || now.Before(*r.ExpiresAt))
 }
 
 func sameScopes(a, b []string) bool {

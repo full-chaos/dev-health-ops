@@ -153,6 +153,21 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 
   The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`.
 
+### Shadow PDP (go-api)
+
+go-api can ask the policy decision point (`POST /v1/authorize` on auth-service) beside its own guard and compare the two answers. It is telemetry only: the legacy answer always wins, no response changes, and the shadow reads no database. It is off by default. A bad or missing input turns it off, logs an ERROR naming the variable (never its value), sets `dev_health_api_shadow_config_invalid` to 1 (see [readiness and SLO](readiness-and-slo.md#metrics)) and never fails the start.
+
+| Environment | Rule |
+| --- | --- |
+| `AUTH_SHADOW_PDP` | `true` or `false`; unset or empty is `false`. Any other value turns the shadow off and counts as a bad value. |
+| `AUTH_SHADOW_PDP_HIGH_RISK` | `true` or `false`; unset is `false`. High-risk rows write one PDP audit row per decision, so keep it off. |
+| `AUTH_SHADOW_PDP_SAMPLE` | Whole number, 1 to 100: the share of covered requests that ask. Unset is 100. |
+| `AUTH_SHADOW_PDP_MAX_IN_FLIGHT` | Whole number, 1 or more: the bound on calls in flight; a call over it is dropped and counted. Unset is 32. |
+
+With `AUTH_SHADOW_PDP=true` the call goes to the origin of `AUTH_PROXY_URL` (required; when it is malformed and no `AUTH_PROXY_*` flag is on, only the shadow turns off, with an ERROR naming `AUTH_PROXY_URL`, and the start goes on; with the shadow off, or with a flag on, a malformed `AUTH_PROXY_URL` still stops the start) and presents go-api's workload token (audience `auth-service`), with each call limited to 2 seconds. The workload client is the one the provisioning and session issue credentials share when one of them chose `workload`; otherwise go-api builds one from `AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one) and `AUTH_WORKLOAD_ISSUER`, as for the provisioning credential above. None of those inputs is read while the shadow is off. An unreachable PDP does not matter at start: the client is lazy, and a failed call counts as `error`.
+
+The shadow covers only requests that carry an EdDSA user access token; a legacy HS256 token, an impersonation and a request with no organization are `skipped`, so a zero mismatch count is no proof of parity for those callers. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS` before the shadow is turned on, and its per-pod rate limit applies to the PDP route.
+
 ### Workload token exchange
 
 The route `POST /internal/v1/token/exchange` is internal: go-api never forwards it. It is mounted while

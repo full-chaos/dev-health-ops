@@ -391,6 +391,16 @@ SELECT
 			OR (
 				NOT required.allow_insert
 				AND 'INSERT' = ANY (held.any_column)
+				-- CHAOS-10993: the INSERT twin of the UPDATE carve-out below.
+				-- A mixed table's column INSERT the posture declares is held
+				-- on top of the table-wide flags; the column sweeps above
+				-- still refuse an INSERT on any column that is not declared.
+				AND NOT EXISTS (
+					SELECT 1
+					FROM column_scoped_privileges AS declared
+					WHERE declared.table_name = required.table_name
+						AND declared.privilege = 'INSERT'
+				)
 			)
 			OR (
 				required.allow_insert

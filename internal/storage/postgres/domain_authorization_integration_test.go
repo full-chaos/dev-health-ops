@@ -127,6 +127,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY, status text)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_tokens (id bigint PRIMARY KEY, org_id text, source_id bigint, scopes text[], expires_at timestamptz, revoked_at timestamptz, token_hash text)",
 		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",

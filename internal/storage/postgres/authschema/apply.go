@@ -68,6 +68,10 @@ type Options struct {
 	// token when its session is revoked (go-api and query-api read
 	// SessionReaderColumns, and nothing else in the schema). Empty means none.
 	SessionReaderRoles []string
+	// ProjectionReaderRoles are the roles that read the acr rows of the credential projection (the worker login that
+	// runs the acr reconcile, CHAOS-11199): column SELECT on ProjectionReaderReads, and nothing else in the schema.
+	// Empty means none.
+	ProjectionReaderRoles []string
 	// Logger receives one structured line per applied migration. Optional.
 	Logger *slog.Logger
 	// AcknowledgeNarrowing is the one-shot operator acknowledgement of a
@@ -205,6 +209,16 @@ func (o Options) Validate(migrationRole string) error {
 		}
 		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
 			return fmt.Errorf("%w: session reader role %q must differ from the runtime role, the migration role and every other reader",
+				ErrInvalidOptions, reader)
+		}
+		seen[reader] = true
+	}
+	for _, reader := range o.ProjectionReaderRoles {
+		if err := ValidateIdentifier(reader); err != nil {
+			return err
+		}
+		if reader == o.RuntimeRole || (migrationRole != "" && reader == migrationRole) || seen[reader] {
+			return fmt.Errorf("%w: projection reader role %q must differ from the runtime role, the migration role and every other reader",
 				ErrInvalidOptions, reader)
 		}
 		seen[reader] = true

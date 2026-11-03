@@ -1,0 +1,8 @@
+{
+  "schema_version": "grant-list-request.v1",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "principal_id": "prn_EXAMPLE0000000000000002",
+  "include_revoked": "yes",
+  "limit": 100,
+  "cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+}

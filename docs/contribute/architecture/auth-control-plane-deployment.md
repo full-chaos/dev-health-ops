@@ -135,7 +135,7 @@ Roll order, each step before the next:
    `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>,<worker domain login>` (production:
    `devhealth_api,devhealth_domain`; Helm: `authService.migrate.pushLifecycle.writerRole` and
    `callerRoles`, both the migrate and the grants Job; the chart refuses callers without a writer
-   role, a writer without callers, and a repeated or colliding role). Both logins must exist.
+   role, a writer without callers, any caller count other than two, a blank or invalid caller, and a repeated or colliding role, at every authService.phase). Both logins must exist.
    The change is values only: no migration adds the grant, and a plain SQL `GRANT` would be revoked by
    the next grant pass, which keeps `EXECUTE` on exactly the callers (a session reader that is not a
    caller is revoked, and a holder that is not a caller fails the posture check). Migration

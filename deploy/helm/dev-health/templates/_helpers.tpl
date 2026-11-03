@@ -1169,9 +1169,13 @@ differ from the runtime login, and no caller repeats. Renders nothing.
 {{- if $writer }}
 {{- if not $callers }}{{- fail "authService.migrate.pushLifecycle.writerRole is set while callerRoles is empty: auth-migrate refuses a writer role with no caller; list the logins that may execute the function" }}{{- end -}}
 {{- if eq $writer (trim (toString $m.runtimeRole)) }}{{- fail "authService.migrate.pushLifecycle.writerRole must differ from authService.migrate.runtimeRole" }}{{- end -}}
+{{- if ne (len $callers) 2 }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles must list exactly two logins (go-api's API database role and the worker domain login), got %d" (len $callers)) }}{{- end -}}
 {{- $seen := dict -}}
 {{- range $callers }}
-{{- $c := trim (toString .) -}}
+{{- $raw := toString . -}}
+{{- $c := trim $raw -}}
+{{- if not $c }}{{- fail "authService.migrate.pushLifecycle.callerRoles has a blank entry; list two non-blank logins" }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
 {{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (hasKey $seen $c) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q must differ from the writer role, the runtime role and every other caller" $c) }}{{- end -}}
 {{- $_ := set $seen $c true -}}
 {{- end -}}

@@ -22,6 +22,10 @@ const (
 	PushLifecycleFunctionSignature = "(text, text, jsonb, jsonb)"
 )
 
+// PushLifecycleCallerCount is the number of runtime logins that may execute the
+// function: go-api's API database role and the worker domain login.
+const PushLifecycleCallerCount = 2
+
 // ErrPushLifecycleWriter reports a push lifecycle writer role that is missing
 // or not set up as the migration needs; the message says which step to run.
 var ErrPushLifecycleWriter = errors.New("push lifecycle writer role")
@@ -44,8 +48,9 @@ func (o Options) validatePushLifecycle(migrationRole string) error {
 	if err := ValidateIdentifier(o.PushLifecycleWriterRole); err != nil {
 		return err
 	}
-	if len(o.PushLifecycleCallerRoles) == 0 {
-		return fmt.Errorf("%w: the push lifecycle writer role needs at least one caller role", ErrInvalidOptions)
+	if n := len(o.PushLifecycleCallerRoles); n != PushLifecycleCallerCount {
+		return fmt.Errorf("%w: the push lifecycle writer role needs exactly %d caller roles (go-api's login and the worker domain login), got %d",
+			ErrInvalidOptions, PushLifecycleCallerCount, n)
 	}
 	if w := o.PushLifecycleWriterRole; w == o.RuntimeRole || (migrationRole != "" && w == migrationRole) {
 		return fmt.Errorf("%w: the push lifecycle writer role %q must differ from the runtime role and the migration role", ErrInvalidOptions, w)
@@ -132,7 +137,11 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	}
 
 	// EXECUTE: the callers and nobody else. PUBLIC, the runtime role and every
-	// other session reader are revoked by name, so a drifted grant is corrected.
+	// other session reader are revoked by name, so a drifted grant is corrected;
+	// any other direct grantee found in the function's ACL is revoked inside the
+	// transaction, after the owner change (revokeUndeclaredExecuteGrants).
+	preStatements := statements
+	statements = nil
 	statements = append(statements, fmt.Sprintf(`REVOKE ALL ON FUNCTION %s FROM PUBLIC`, function))
 	executors := map[string]bool{}
 	for _, caller := range options.PushLifecycleCallerRoles {
@@ -167,10 +176,30 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	if err := aclguard.Lock(ctx, tx); err != nil {
 		return fmt.Errorf("%w: taking the privilege writer lock", ErrMigrationFailed)
 	}
-	for _, statement := range statements {
-		if _, err := tx.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
+	run := func(list []string) error {
+		for _, statement := range list {
+			if _, err := tx.Exec(ctx, statement); err != nil {
+				return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
+			}
 		}
+		return nil
+	}
+	if err := run(preStatements); err != nil {
+		return err
+	}
+	undeclared, err := undeclaredExecuteGrantees(ctx, tx, function, options.PushLifecycleCallerRoles)
+	if err != nil {
+		return err
+	}
+	revokes := make([]string, 0, len(undeclared))
+	for _, role := range undeclared {
+		revokes = append(revokes, fmt.Sprintf(`REVOKE ALL ON FUNCTION %s FROM %s`, function, pgx.Identifier{role}.Sanitize()))
+	}
+	if err := run(revokes); err != nil {
+		return err
+	}
+	if err := run(statements); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing the push lifecycle writer grants", ErrMigrationFailed)
@@ -178,6 +207,42 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	logger.InfoContext(ctx, "applied push lifecycle writer grants", "schema", options.Schema,
 		"writer_role", options.PushLifecycleWriterRole, "callers", len(options.PushLifecycleCallerRoles))
 	return nil
+}
+
+// executeGranteeQuery lists every named role (PUBLIC excluded) that holds a
+// direct EXECUTE entry in the function's ACL, with the function's owner.
+const executeGranteeQuery = `SELECT r.rolname, a.grantee = p.proowner
+	FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+	JOIN pg_roles r ON r.oid = a.grantee
+	WHERE p.oid = $1::regprocedure AND a.privilege_type = 'EXECUTE' ORDER BY r.rolname`
+
+type queryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// undeclaredExecuteGrantees returns the roles that hold a direct EXECUTE grant
+// on the function and are neither a declared caller nor its owner.
+func undeclaredExecuteGrantees(ctx context.Context, q queryer, function string, callers []string) ([]string, error) {
+	rows, err := q.Query(ctx, executeGranteeQuery, function)
+	if err != nil {
+		return nil, fmt.Errorf("%w: reading the append function's ACL", ErrMigrationFailed)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		var owner bool
+		if err := rows.Scan(&name, &owner); err != nil {
+			return nil, fmt.Errorf("%w: reading an ACL entry of the append function", ErrMigrationFailed)
+		}
+		if !owner && !listContains(callers, name) {
+			out = append(out, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: reading the append function's ACL", ErrMigrationFailed)
+	}
+	return out, nil
 }
 
 func sortedKeys(m map[string][]string) []string {
@@ -327,6 +392,13 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 	}
 	if public {
 		add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", "PUBLIC can execute the append function")
+	}
+	undeclared, err := undeclaredExecuteGrantees(ctx, conn, function, options.PushLifecycleCallerRoles)
+	if err != nil {
+		return nil, err
+	}
+	for _, role := range undeclared {
+		add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", role+" holds a direct EXECUTE grant on the append function and is not a caller")
 	}
 	rows, err = conn.Query(ctx, `SELECT r.rolname, has_function_privilege(r.oid, $1::regprocedure, 'EXECUTE')
 		FROM pg_roles r WHERE r.rolname = ANY($2) AND r.rolname <> $3`,

@@ -66,6 +66,10 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	peerRole, err := containers.RoleName("sweep_peer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writerRole, err := containers.RoleName("sweep_writer", instance)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +78,7 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	for _, statement := range []string{
 		fmt.Sprintf("CREATE ROLE %q", runtimeRole),
 		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", sweeperRole, password),
+		fmt.Sprintf("CREATE ROLE %q NOLOGIN", peerRole),
 		fmt.Sprintf("CREATE ROLE %q NOLOGIN", writerRole),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
@@ -82,12 +87,13 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	}
 	t.Cleanup(func() {
 		containers.DropRole(admin, writerRole, t.Logf)
+		containers.DropRole(admin, peerRole, t.Logf)
 		containers.DropRole(admin, sweeperRole, t.Logf)
 		containers.DropRole(admin, runtimeRole, t.Logf)
 	})
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{
 		Schema: "auth", RuntimeRole: runtimeRole, SessionReaderRoles: []string{sweeperRole},
-		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{sweeperRole},
+		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{sweeperRole, peerRole},
 	}); err != nil {
 		t.Fatalf("auth schema: %v", err)
 	}

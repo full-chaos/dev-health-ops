@@ -2,8 +2,10 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
 
@@ -239,5 +242,35 @@ func TestRollbackCannotReactivateRevokedAccess(t *testing.T) {
 				t.Fatalf("revoked, cell flipped off: %d %q, the legacy path gave the access back", got.status, got.body)
 			}
 		})
+	}
+}
+
+// The decision point judges user principals only. A route whose profile row names an action is enforceable, so its
+// row may accept the two user access-token classes and nothing else: a row that gains a service-account, workload or
+// push class must keep its namespace off until the decision point judges that kind.
+func TestEveryMappedRowAcceptsOnlyUserTokenClasses(t *testing.T) {
+	var document struct {
+		Rows []struct {
+			Method, Route, Action string
+			Classes               []string `json:"accepted_credential_classes"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	mapped := 0
+	for _, row := range document.Rows {
+		if row.Action == "" {
+			continue
+		}
+		mapped++
+		for _, class := range row.Classes {
+			if class != "ops_access_token_hs256" && class != "user_access_token" {
+				t.Errorf("%s %s (%s) accepts %s: keep the %s namespace off, or teach the decision point that principal kind", row.Method, row.Route, row.Action, class, strings.SplitN(row.Action, ".", 2)[0])
+			}
+		}
+	}
+	if mapped == 0 {
+		t.Fatal("no row names an action")
 	}
 }

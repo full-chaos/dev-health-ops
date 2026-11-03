@@ -67,6 +67,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -418,7 +419,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
 	}
-	deps.PushLifecycleEvents, err = ParsePushLifecycleEvents(envsecrets.ProcessLookup)
+	deps.PushLifecycleEvents, err = pushevent.ParsePushLifecycleEvents(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_push_lifecycle_events", "api_push_lifecycle_events_config_invalid", err)

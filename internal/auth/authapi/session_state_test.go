@@ -211,8 +211,8 @@ func TestSessionStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if code, answer := doState(t, server, stateBody(w.record.ID.String()), header); code != http.StatusOK || answer["principal_id"] != w.principal.String() {
 		t.Fatalf("%d %v, want 200 for the go-api workload token", code, answer)
 	}
-	if len(w.creds.seen) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", w.creds.seen)
+	if len(w.creds.checked()) != 0 {
+		t.Fatalf("the workload path checked a service credential: %v", w.creds.checked())
 	}
 	wrongAudience, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
 	if code, _ := doState(t, server, stateBody(w.record.ID.String()), wrongAudience); code != http.StatusUnauthorized {

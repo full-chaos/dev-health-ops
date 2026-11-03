@@ -1,4 +1,4 @@
-package apiservice
+package pushevent
 
 import "testing"
 

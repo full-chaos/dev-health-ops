@@ -60,6 +60,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/pushevent
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/sessionevent
@@ -71,6 +72,7 @@ internal/cli
 internal/edgetokenmint
 internal/egressguard
 internal/entitlements
+internal/envelopemint
 internal/httpguard
 internal/identityalias
 internal/jobcontract

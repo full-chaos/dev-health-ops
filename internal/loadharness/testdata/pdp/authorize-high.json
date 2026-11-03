@@ -1,0 +1,26 @@
+{
+  "base_url": "http://127.0.0.1:8095",
+  "targets": [
+    {
+      "name": "authorize-high",
+      "method": "POST",
+      "path": "/v1/authorize",
+      "weight": 1,
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "header_env": {
+        "Authorization": {
+          "env": "AUTH_LOADTEST_WORKLOAD_TOKEN",
+          "prefix": "Bearer "
+        }
+      },
+      "body": "{\"schema_version\":\"authorization_request.v1\",\"principal_reference\":\"${ENV:AUTH_LOADTEST_PRINCIPAL_REFERENCE}\",\"action\":\"settings.write\",\"resource\":{\"type\":\"organization\",\"key\":\"acme-${SEQ}\",\"organization_id\":\"${ENV:AUTH_LOADTEST_ORG_ID}\"},\"context\":{\"request_id\":\"req_LOADTEST0000000000000PDP01\",\"client_service\":\"dev-health-ops-api\"}}",
+      "expect_status": [
+        200
+      ],
+      "forbid_5xx": true,
+      "max_error_rate": 0
+    }
+  ]
+}

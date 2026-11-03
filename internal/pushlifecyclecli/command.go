@@ -12,7 +12,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
-	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -70,7 +69,7 @@ func run(ctx context.Context, env cli.Env) int {
 	}
 	pool, err := connectFn(ctx, dsn.Reveal())
 	if err != nil {
-		fmt.Fprintf(env.Stderr, "backfill-created: could not open the database pool: %v\n", pgstorage.Boundary(dsn.Reveal()).Redact(err))
+		fmt.Fprintf(env.Stderr, "backfill-created: could not open the database pool (the DSN did not parse, or the connect failed); check %s\n", *dsnEnv)
 		return cli.ExitFailure
 	}
 	if pool != nil {

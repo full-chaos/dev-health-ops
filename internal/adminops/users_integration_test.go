@@ -260,8 +260,9 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 		t.Fatalf("no verb %v", args)
 	}
 	env := map[string]string{"MIGRATION_DATABASE_URI": db.uri}
+	var served *fakeCalls
 	if needsProvisioning(args) {
-		env["AUTH_PROXY_URL"] = startFakeAuthService(t, db.uri)
+		env["AUTH_PROXY_URL"], served = startFakeAuthService(t, db.uri)
 		env["AUTH_SESSION_ISSUE_TOKEN"] = fakeToken
 		args = append(append([]string(nil), args...), "--actor", fakeActor)
 	}
@@ -273,6 +274,18 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 	code := run(context.Background(), cli.Env{Args: args[2:], Stdin: strings.NewReader(stdin), Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
 	if strings.Contains(stdout.String()+stderr.String(), "postgres://") {
 		t.Fatal("the output carries the DSN")
+	}
+	if served != nil && code == 0 && args[0] == "orgs" {
+		if paths := served.served(); len(paths) != 1 || paths[0] != "/internal/v1/organizations/deprovision" {
+			t.Fatalf("%v: auth-service calls %v, want the one deprovision", args, paths)
+		}
+	}
+	if served != nil && args[0] == "users" {
+		for _, path := range served.served() {
+			if !strings.HasPrefix(path, "/internal/v1/memberships/") {
+				t.Fatalf("%v: membership verb called %s", args, path)
+			}
+		}
 	}
 	return code, stdout.String()
 }

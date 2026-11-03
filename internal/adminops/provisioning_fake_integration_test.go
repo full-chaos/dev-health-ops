@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,13 +47,17 @@ func needsProvisioning(args []string) bool {
 	return false
 }
 
-// startFakeAuthService serves the provisioning routes the CLI calls over the
-// database at uri, doing what the in-process membership writes did before the
+// startFakeAuthService is a test-only stand-in for auth-service's provisioning
+// routes (the real route behaviour is covered by the auth-service tests). It
+// fails the test on a call that carries a wrong bearer token or an actor other
+// than fakeActor, and returns the paths it served. It serves the routes the CLI
+// calls over the database at uri, doing what the in-process membership writes did before the
 // CLI went through auth-service, so every verb's stdout and rows stay the
 // ones the frozen Python session recorded.
-func startFakeAuthService(t *testing.T, uri string) string {
+func startFakeAuthService(t *testing.T, uri string) (string, *fakeCalls) {
 	t.Helper()
 	mux := http.NewServeMux()
+	calls := &fakeCalls{}
 	answer := func(w http.ResponseWriter, status int, body any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -63,7 +68,8 @@ func startFakeAuthService(t *testing.T, uri string) string {
 	}
 	handle := func(path string, run func(ctx context.Context, conn *pgx.Conn, in map[string]string) (int, any)) {
 		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer "+fakeToken {
+			if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer "+fakeToken {
+				t.Errorf("%s %s: method or bearer token is not the CLI's own service credential", r.Method, path)
 				refuse(w, http.StatusUnauthorized, "invalid_credentials")
 				return
 			}
@@ -72,6 +78,12 @@ func startFakeAuthService(t *testing.T, uri string) string {
 				refuse(w, http.StatusBadRequest, "malformed")
 				return
 			}
+			if in["actor_principal_id"] != fakeActor {
+				t.Errorf("%s: actor_principal_id %q, want the --actor %q", path, in["actor_principal_id"], fakeActor)
+				refuse(w, http.StatusBadRequest, "malformed")
+				return
+			}
+			calls.add(path)
 			conn, err := pgx.Connect(r.Context(), uri)
 			if err != nil {
 				refuse(w, http.StatusServiceUnavailable, "store_unavailable")
@@ -180,5 +192,23 @@ VALUES ($1, $2, $3, $4, NULL, $5, $5, $5)`, uuid.New(), in["organization_id"], i
 	})
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	return strings.TrimSuffix(server.URL, "/")
+	return strings.TrimSuffix(server.URL, "/"), calls
+}
+
+// fakeCalls are the route paths the fake served, in order.
+type fakeCalls struct {
+	mu    sync.Mutex
+	paths []string
+}
+
+func (c *fakeCalls) add(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.paths = append(c.paths, path)
+}
+
+func (c *fakeCalls) served() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.paths...)
 }

@@ -77,6 +77,8 @@ var pythonFieldDeletedOutright = map[string]bool{
 	"capacityCompletionDistribution": true,
 	"coverageBaselines":              true,
 	"coverageScopeBaseline":          true,
+	"investmentBreakdownTeam":        true,
+	"investmentBreakdownRepository":  true,
 	"investmentEvidenceQuality":      true,
 	"sourceHealth":                   true,
 	"testopsJobFailures":             true,

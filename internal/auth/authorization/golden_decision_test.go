@@ -100,6 +100,8 @@ type goldenExpect struct {
 	CacheClass     string  `json:"cache_class"`
 	ExpiresIn      *int64  `json:"expires_in_seconds"`
 	PolicyRevision int     `json:"policy_revision"`
+	// Obligations is the allow's obligations in wire form, or null; a row without the member is refused.
+	Obligations json.RawMessage `json:"obligations"`
 }
 
 type goldenVector struct {
@@ -295,6 +297,11 @@ func TestGoldenDecisionPDPRowsReachTheirVerdict(t *testing.T) {
 		if d.PolicyRevision != v.Expect.PolicyRevision {
 			t.Errorf("%s: policy_revision %d, want %d", v.ID, d.PolicyRevision, v.Expect.PolicyRevision)
 		}
+		if len(v.Expect.Obligations) == 0 {
+			t.Errorf("%s: expect.obligations is absent", v.ID)
+		} else if got, want := goldenObligationsJSON(t, d.Obligations), goldenCanonical(t, v.Expect.Obligations); got != want {
+			t.Errorf("%s: obligations %s, want %s", v.ID, got, want)
+		}
 		switch {
 		case v.Expect.ExpiresIn == nil && d.ExpiresAtUnixNano != 0:
 			t.Errorf("%s: expires_at %d, want none", v.ID, d.ExpiresAtUnixNano)
@@ -328,4 +335,45 @@ func TestGoldenDecisionPolicyRevisionIsTheCatalogVersion(t *testing.T) {
 	if v.Layer != "pdp" || v.Expect.PolicyRevision != policycatalog.Default().Version() {
 		t.Fatalf("policy_revision %d, layer %q; catalog version %d", v.Expect.PolicyRevision, v.Layer, policycatalog.Default().Version())
 	}
+}
+
+// goldenObligationsJSON is the wire form of a decision's obligations: absent members are left out, an
+// empty restricted allowlist is [], and nil obligations are null.
+func goldenObligationsJSON(t *testing.T, o *Obligations) string {
+	t.Helper()
+	if o == nil {
+		return "null"
+	}
+	m := map[string]any{}
+	if o.TenantScope != "" {
+		m["tenant_scope"] = o.TenantScope
+	}
+	if o.RepositoryRestricted || len(o.RepositoryAllowlist) > 0 {
+		keys := append([]string{}, o.RepositoryAllowlist...)
+		m["repository_allowlist"] = keys
+	}
+	if len(o.Redaction) > 0 {
+		m["redaction"] = o.Redaction
+	}
+	if o.MinimumAssurance != "" {
+		m["minimum_assurance"] = o.MinimumAssurance
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func goldenCanonical(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

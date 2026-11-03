@@ -167,6 +167,8 @@ type azExpect struct {
 	PolicyRevision int    `json:"policy_revision"`
 	// WireReasonCode, when a row carries it, is compared instead of Reason.
 	WireReasonCode *string `json:"wire_reason_code"`
+	// Obligations is the decision's obligations in wire form, or null.
+	Obligations json.RawMessage `json:"obligations"`
 }
 
 type azVector struct {

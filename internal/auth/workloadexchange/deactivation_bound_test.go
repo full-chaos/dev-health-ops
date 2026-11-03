@@ -22,12 +22,16 @@ func TestDeactivationBound_Workload_Exchange_StoreRefusalEndsAccessAtOnce(t *tes
 			}
 			h.registry.err = refusedBecause(reason)
 			issuedBefore := len(h.auditRows())
+			before := h.metricPoints()["refused/"+reason+"/auth-service"]
 			rec := h.post(form(h.validSubject(), "auth-service", "").Encode())
 			if rec.Code != http.StatusBadRequest || rec.Body.String() != "{\"error\":\"invalid_grant\"}\n" {
 				t.Fatalf("after %s: %d %q, want the uniform 400", reason, rec.Code, rec.Body.String())
 			}
 			if got := len(h.auditRows()); got != issuedBefore {
 				t.Fatalf("a refused exchange wrote %d audit rows", got-issuedBefore)
+			}
+			if got := h.metricPoints()["refused/"+reason+"/auth-service"]; got != before+1 {
+				t.Fatalf("counter refused/%s = %d, want %d; points %v", reason, got, before+1, h.metricPoints())
 			}
 			h.registry.err = nil
 			if rec := h.post(form(h.validSubject(), "auth-service", "").Encode()); rec.Code != http.StatusOK {

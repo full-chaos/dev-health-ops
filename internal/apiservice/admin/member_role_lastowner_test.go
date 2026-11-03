@@ -156,4 +156,6 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, u, fmt.Sprintf("guard-race
 			}
 		}
 	})
+
+	venueoracle.WriteGoOnlyProof(t, "Go-only guard: the Python member routes are not run; the local role change is asserted directly against the rows it leaves")
 }

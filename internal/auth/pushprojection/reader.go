@@ -543,14 +543,18 @@ func (r *Reader) countParked(ctx context.Context) error {
 	return nil
 }
 
-// mutate runs one guarded write inside audit.Commit with one audit row and no outbox event.
-func (r *Reader) mutate(ctx context.Context, eventType string, revision int64, apply func(context.Context, audit.TxOps) error) error {
+func mutationRow(eventType string, revision int64) audit.AuditEvent {
 	attrs := map[string]any{"target_kind": "credential", "credential_class": "external_push"}
 	if revision > 0 {
 		attrs["revision"] = revision
 	}
+	return audit.AuditEvent{EventType: eventType, Outcome: audit.OutcomeAllowed, Attributes: attrs}
+}
+
+// mutate runs one guarded write inside audit.Commit with one audit row and no outbox event.
+func (r *Reader) mutate(ctx context.Context, eventType string, revision int64, apply func(context.Context, audit.TxOps) error) error {
 	err := audit.Commit(ctx, r.cfg.Pool, r.cfg.Schema, audit.Mutation{
-		Apply: apply, Audit: audit.AuditEvent{EventType: eventType, Outcome: audit.OutcomeAllowed, Attributes: attrs},
+		Apply: apply, Audit: mutationRow(eventType, revision),
 		OffStream: audit.OffStreamCredentialProjection,
 	})
 	if err != nil && !errors.Is(err, audit.ErrNoStateChange) {

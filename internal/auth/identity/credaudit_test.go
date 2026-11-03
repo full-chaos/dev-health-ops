@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/authrows"
 )
 
@@ -69,6 +70,7 @@ func TestCredentialAuditEventsAreValidAndHoldNoAddress(t *testing.T) {
 		"change":          passwordAudit(PasswordChanged, subject, actor, nil),
 	}
 	for name, e := range events {
+		auditwire.MustValidate(t, e)
 		if err := audit.ValidateAttributes(e.Attributes); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

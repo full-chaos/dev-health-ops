@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-obligations
-summary: The authorization decision wire contract - the fields of a decision, the five closed obligations, the fail-closed parsing rules the Go client enforces, and the status of the decision point that would issue them.
+summary: The authorization decision wire contract - the fields of a decision, the five closed obligations, the redaction class registry, the fail-closed parsing rules the Go client enforces, and the status of the decision point that issues them.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -10,6 +10,7 @@ source_of_truth:
   - contracts/auth/v1/jsonschema/authorization_batch_response.v1.schema.json
   - contracts/auth/v1/jsonschema/principal.v1.schema.json
   - contracts/auth/v1/vocabulary/reason-codes.json
+  - contracts/auth/v1/vocabulary/redaction-classes.v1.json
   - internal/auth/contracts/authorization.go
 applicability: current
 lifecycle: active
@@ -20,8 +21,8 @@ lifecycle: active
 An authorization decision answers one question: may this principal perform this action on this resource. A decision that allows may carry obligations. An obligation is a condition the resource service must enforce on the allowed request.
 {: .fc-page-lede }
 
-!!! warning "Contract only"
-    The wire contract and the Go parser exist on `main`. No service issues a decision and no service enforces an obligation. The auth-service has no authorize route (`contracts/auth/v1/openapi/auth-v1.openapi.json` lists the session, identity and discovery routes only). The decision point is planned in CHAOS-10841 (`POST /v1/authorize` and `POST /v1/authorize:batch`) and obligations in CHAOS-10839. See [Status](#status).
+!!! warning "The decision point does not send obligations yet"
+    The wire contract and the Go parser exist on `main`. The auth-service serves `POST /v1/authorize` and `POST /v1/authorize:batch` (`contracts/auth/v1/openapi/auth-v1.openapi.json`), but the decision document the routes write has no `obligations` member yet, so every allow arrives without one. The decision point will send them (CHAOS-12656). No service enforces an obligation. See [Status](#status).
 
 ## Request
 
@@ -41,7 +42,7 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | Member | Rule |
 | --- | --- |
 | `allowed` | Required. A strict JSON boolean. No default. Missing, null, `"true"` or `1` is invalid. |
-| `reason_code` | A closed enum: `allowed_by_repository_grant`, `grant_absent`, `repository_not_granted`, `platform_role_absent`. |
+| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum. |
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |
@@ -55,12 +56,24 @@ The set is closed. `additionalProperties` is false. A decision that carries an o
 | Obligation | Type | The resource service must |
 | --- | --- | --- |
 | `tenant_scope` | organization id | Keep every read and write inside that organization. |
-| `repository_allowlist` | array of `owner/repo` keys, or `*` | Touch only those repositories. `*` means organization-wide. An empty array means none, not unrestricted. Unrestricted is the absence of the member plus a tenant scope. |
+| `repository_allowlist` | array of at most 256 `owner/repo` keys, or `*` | Touch only those repositories. `*` means organization-wide. An empty array means none, not unrestricted. Unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit `["*"]` and sends the member (an empty one included) on every allow of an action that filters by repository; a consumer reads an absent allowlist on such an action as a deny. A list is never truncated. |
 | `redaction` | array of `personal_identifiers`, `contact_details`, `free_text` | Remove those field classes from the response. An unknown class makes the whole decision invalid. |
 | `minimum_assurance` | `aal1`, `aal2` or `aal3` | Deny when the principal's authenticator assurance level is lower. |
 | `step_up` | boolean | Make the caller complete step-up authentication before the action proceeds. |
 
 Ignoring an obligation is ignoring a denial (guardrail G-29 in the schema text).
+
+### Redaction classes
+
+The class set is closed and lives in `contracts/auth/v1/vocabulary/redaction-classes.v1.json`. The file also holds the (role, action) rules that say which role gets which class on which action. It equals the schema enum, and a test holds both equal. The rules ship empty: no policy is set until a ruling names rows.
+
+| Class | Covers |
+| --- | --- |
+| `personal_identifiers` | Fields that name or identify a person: a display name, a login, an author id, an external user id. |
+| `contact_details` | Fields that reach a person: an email address, a phone number, a chat handle. |
+| `free_text` | Fields that hold text a person typed: titles and bodies of pull requests and issues, commit messages, comments. |
+
+A class is added in this order: schema enum, registry file, then the dev-health-go client release. The client compiles the class list in and denies a decision with a class it does not know. Which response field belongs to which class is the table of the consumer, not of the registry.
 
 In Go (`internal/auth/contracts/authorization.go`, `AuthorizationObligations`) every member is a pointer. Absent and empty stay different, so a client that re-marshals obligations sends what it received.
 
@@ -81,8 +94,8 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | Part | State |
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
-| `POST /v1/authorize` and `POST /v1/authorize:batch` | Planned, CHAOS-10841. No route exists. |
-| Actor chain, delegation limits and obligations in the decision point | Planned, CHAOS-10839. |
+| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document has no `obligations` member yet. |
+| Actor chain, delegation limits and obligations in the decision point | Planned, CHAOS-10839. The decision point sends `tenant_scope`, `repository_allowlist` and `redaction` on the wire: CHAOS-12656. |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10846 (TypeScript server-only decision client) and CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
 | Entitlement-derived obligation | Planned, CHAOS-10837 (entitlement adapter) and CHAOS-10862 (billing and licensing enforcement point). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |

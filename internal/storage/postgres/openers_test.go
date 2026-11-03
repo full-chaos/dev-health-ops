@@ -71,6 +71,7 @@ var openers = map[string]struct {
 	"internal/goapicli/restprove/main.go":                       {kindGeneric, "a failed connect is the fixed message"},
 	"internal/migrationmatrix/restproven.go":                    {kindGeneric, "a failed connect is the fixed message"},
 	"internal/storage/postgres/factory.go":                      {kindHelper, "Open and New: WithRedactedCauseAlso with the resolved credentials"},
+	"internal/storage/postgres/first_connect.go":                {kindHelper, "OpenWaiting: WithRedactedCauseAlso with the resolved credentials; ConnectWaiting returns pgx's error unchanged and each caller is scanned as an opener"},
 	"internal/synccli/dblookup.go":                              {kindDiscarded, "a connect or query error is swallowed into 'not found'"},
 	"internal/providersync/repository_postgres.go":              {kindDiscarded, "the lease renewal pool copies the running work pool's already-resolved config and dials lazily: the constructor's only failure is config validation, which carries no login, and a failed renewal is dropped into ErrLeaseLost, never printed (CHAOS-6889)"},
 	"internal/rivermigrate/roles.go":                            {kindDiscarded, "migrate roles' Authenticate closure: the connect error is inspected for SQLSTATE 28P01 only (a wrong password) and its text is never printed or logged; the message names a role label"},
@@ -82,6 +83,7 @@ var openers = map[string]struct {
 	"internal/testsupport/pgschema/pgschema.go":                 {kindTest, "test schema helper"},
 	"internal/testsupport/pinrig/pinrig.go":                     {kindTest, "pin proof: pools as the runtime and session reader roles"},
 	"internal/testsupport/platformroleseam/platformroleseam.go": {kindTest, "platform role seam: the migrated schemas, a pool as the session reader role"},
+	"internal/testsupport/superuserwriter/superuserwriter.go":   {kindTest, "superuser-write proof: a pool as a role that may write every public column except users.is_superuser"},
 	"internal/testsupport/usertokens/usertokens.go":             {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":           {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":           {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
@@ -152,7 +154,8 @@ func TestEveryPostgresOpenerIsClassified(t *testing.T) {
 			return nil
 		}
 		calls := fileCalls(t, path)
-		for _, opener := range []string{"pgx.Connect", "pgx.ConnectConfig", "pgxpool.New", "pgxpool.NewWithConfig"} {
+		// ConnectWaiting returns pgx's own error unchanged, so a caller is an opener like a pgx.Connect caller.
+		for _, opener := range []string{"pgx.Connect", "pgx.ConnectConfig", "pgxpool.New", "pgxpool.NewWithConfig", "pgstorage.ConnectWaiting", "postgres.ConnectWaiting", "postgresstore.ConnectWaiting"} {
 			if calls[opener] > 0 {
 				relative, _ := filepath.Rel(root, path)
 				opened[filepath.ToSlash(relative)] = true

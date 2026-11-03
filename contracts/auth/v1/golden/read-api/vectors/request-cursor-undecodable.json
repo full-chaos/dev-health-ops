@@ -1,0 +1,14 @@
+{
+  "id": "request-cursor-undecodable",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "cursor": "k1_AAAAA"
+  },
+  "request_schema": "accept",
+  "parse": "reject",
+  "rule": "cursor_undecodable",
+  "why": "Alphabet is right; the payload is not base64url of an id."
+}

@@ -1,0 +1,55 @@
+{
+  "description": "Golden corpus for organization-read.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-active.json",
+      "why": "An active organization."
+    },
+    {
+      "file": "valid-suspended.json",
+      "why": "A suspended organization."
+    },
+    {
+      "file": "valid-revision-zero.json",
+      "why": "Revision 0: no revision row yet."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    },
+    {
+      "file": "invalid-organization-id-prefix.json",
+      "expect_instance_location": "/organization_id",
+      "expect_keyword": "pattern",
+      "why": "A principal id as the organization."
+    },
+    {
+      "file": "invalid-slug-uppercase.json",
+      "expect_instance_location": "/slug",
+      "expect_keyword": "pattern",
+      "why": "Slugs are lowercase."
+    },
+    {
+      "file": "invalid-status-unknown.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "Closed status set."
+    },
+    {
+      "file": "invalid-name-empty.json",
+      "expect_instance_location": "/name",
+      "expect_keyword": "minLength",
+      "why": "A name is not empty."
+    },
+    {
+      "file": "invalid-updated-at-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "updated_at is required."
+    }
+  ]
+}

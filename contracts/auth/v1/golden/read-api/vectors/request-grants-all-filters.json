@@ -1,0 +1,17 @@
+{
+  "id": "request-grants-all-filters",
+  "kind": "request",
+  "operation": "grants_list",
+  "request": {
+    "schema_version": "grant-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "principal_id": "prn_EXAMPLE0000000000000001",
+    "include_revoked": true,
+    "limit": 10,
+    "cursor": "k1_Z3J0X0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAz"
+  },
+  "request_schema": "accept",
+  "parse": "accept",
+  "rule": null,
+  "why": "Every member of the grant list request."
+}

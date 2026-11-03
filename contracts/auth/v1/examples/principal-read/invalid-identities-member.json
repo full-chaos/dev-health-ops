@@ -1,0 +1,8 @@
+{
+  "schema_version": "principal-read.v1",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "kind": "user",
+  "status": "active",
+  "revision": 3,
+  "identities": []
+}

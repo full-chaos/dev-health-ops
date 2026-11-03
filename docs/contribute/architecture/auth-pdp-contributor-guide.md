@@ -16,7 +16,7 @@ applicability: current
 lifecycle: active
 ---
 
-# Auth policy decision: contributor guide
+# Auth policy decision: change guide
 
 How to change the closed action catalog and its readers without breaking a gate. The reference pages hold the facts; this page is the order of work.
 {: .fc-page-lede }
@@ -39,7 +39,7 @@ An action is a row in `contracts/auth/v1/vocabulary/actions.v1.json`: name, scop
 
 Two pull requests that both add an action collide on the version number and the DIGEST. The second one merges main and takes the next number; row and data conflicts only, never a rebase.
 
-## 2. Map a route to the action
+## 2. Find the action for a route
 
 Add `action` to the route's row in the endpoint profile file of its service (go-api, query-api or auth-service): see [registering a new route](../../reference/auth/endpoint-profiles.md#contributor-guide-registering-a-new-route-or-credential-class). The profile gate (`CheckActionCachePolicy`) refuses a cached profile whose action is not in the catalog, or is high risk, or whose cache class is not `none` or the catalog's.
 

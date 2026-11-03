@@ -47,8 +47,8 @@ func TestAuthPDPRateLimitDefaultsRender(t *testing.T) {
 
 func TestAuthPDPRateLimitOverridesRender(t *testing.T) {
 	docs, out, err := renderAuth(t, authWith(
-		"--set", "authService.pdpRateLimit.callerPerSecond=0.5", "--set", "authService.pdpRateLimit.callerBurst=100",
-		"--set", "authService.pdpRateLimit.routePerSecond=100000", "--set", "authService.pdpRateLimit.routeBurst=100")...)
+		"--set-json", `authService.pdpRateLimit.callerPerSecond=0.5`, "--set", "authService.pdpRateLimit.callerBurst=100",
+		"--set-json", `authService.pdpRateLimit.routePerSecond=100000`, "--set", "authService.pdpRateLimit.routeBurst=100")...)
 	if err != nil {
 		t.Fatalf("render: %v\n%.400s", err, out)
 	}
@@ -79,7 +79,7 @@ func TestAuthPDPRateLimitBurstUnderTheLargestBatchFailsTheRender(t *testing.T) {
 
 func TestAuthPDPRateLimitOutOfRangeFailsTheSchema(t *testing.T) {
 	for _, set := range []string{"callerPerSecond=0", "callerBurst=100001", "routePerSecond=100001", "routeBurst=0"} {
-		if _, _, err := renderAuth(t, authWith("--set", "authService.pdpRateLimit."+set)...); err == nil {
+		if _, _, err := renderAuth(t, authWith("--set-json", "authService.pdpRateLimit."+set)...); err == nil {
 			t.Errorf("%s rendered, want a schema refusal", set)
 		}
 	}

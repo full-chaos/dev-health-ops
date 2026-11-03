@@ -39,6 +39,7 @@ var proxiedAuthRoutes = []proxiedAuthRoute{
 	{"POST /api/v1/auth/refresh", "AuthSessions", 2},
 	{"POST /api/v1/auth/logout", "AuthSessions", 2},
 	{"POST /api/v1/auth/validate", "AuthSessions", 2},
+	{"POST /api/v1/auth/switch-org", "AuthSessions", 2},
 	{"POST /api/v1/auth/login", "AuthLocalLogin", 3},
 	{"POST /api/v1/auth/register", "AuthCredentials", 4},
 	{"GET /api/v1/auth/verify", "AuthCredentials", 4},

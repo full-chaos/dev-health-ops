@@ -110,6 +110,7 @@ internal/platform/logging
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol
+internal/platform/removedenv
 internal/platform/secrets
 internal/platform/shell
 internal/platform/timeoutclass

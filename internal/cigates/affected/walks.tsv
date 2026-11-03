@@ -351,6 +351,7 @@ internal/platform/dialclass	dialclass_import_test.go	internal/platform/dialclass
 internal/platform/dialclass	dialclass_import_test.go	unexpressed	-	-
 internal/platform/fernet	fernet_test.go	.	tree	*.go
 internal/platform/otlpmetrics	labelcensus_test.go	.	tree	*.go
+internal/platform/removedenv	census_test.go	unexpressed	-	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
 internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*

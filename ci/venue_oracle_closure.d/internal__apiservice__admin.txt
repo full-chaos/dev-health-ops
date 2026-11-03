@@ -62,6 +62,7 @@ internal/auth/platformrole
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/pushevent
 internal/auth/pushlifecycle
 internal/auth/pushreconcile
 internal/auth/ratelimitvalkey

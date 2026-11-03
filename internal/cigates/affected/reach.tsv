@@ -172,6 +172,7 @@ internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/workflows
+internal/auth/contracts	contracts.go	internal/jobs/pushexpiry
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/pushlifecyclecli
 internal/auth/contracts	contracts.go	internal/queryapi/server

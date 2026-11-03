@@ -19,7 +19,7 @@ EOS
 cat >>"${T}/bin/kubectl" <<'EOS'
   *"auth can-i create clusterroles"*) echo "${FAKE_CAN_I_CLUSTERROLES:-no}" ;;
   *"get configmap rehearsal-owner"*) printf '%s' "${FAKE_OWNER_TOKEN-0123456789abcdef0123}" ;;
-  *"get namespace "*) printf '%s' "${FAKE_NS_LABEL-0123456789abcdef0123}" ;;
+  *"get namespace "*) if [ -n "${FAKE_NS_DENIED:-}" ]; then echo 'Error from server (Forbidden): namespaces is forbidden' >&2; exit 1; fi; printf '%s' "${FAKE_NS_LABEL-0123456789abcdef0123}" ;;
   *) exit 98 ;;
 esac
 EOS
@@ -111,6 +111,10 @@ if no_write_calls; then ok unlabelled-namespace-refused-before-any-write; else b
 refused unlabelled-namespace-with-matching-configmap-refused 'does not carry this run' FAKE_NS_LABEL= FAKE_OWNER_TOKEN="${TOKEN}"
 if no_write_calls; then ok unlabelled-namespace-with-matching-configmap-refused-before-any-write; else bad unlabelled-namespace-with-matching-configmap-refused-before-any-write; fi
 if grep -qF 'metadata.labels.rehearsal-run' "${FAKE_LOG}"; then ok guard-reads-the-rehearsal-run-label; else bad guard-reads-the-rehearsal-run-label; fi
+# a denied or failed namespace read fails loudly with its own message, before any write (not the "does not carry" message)
+refused ns-read-denied-refused 'the namespace read of authrot-test was denied or failed' FAKE_NS_DENIED=1
+if no_write_calls; then ok ns-read-denied-refused-before-any-write; else bad ns-read-denied-refused-before-any-write; fi
+if ! grep -qF 'does not carry this run' <<<"${out}"; then ok ns-read-denied-message-is-not-the-label-message; else bad ns-read-denied-message-is-not-the-label-message; fi
 # the label matches: the guard passes and the run reaches its first write, which the fake stops
 : >"${FAKE_LOG}"
 go FAKE_OWNER_TOKEN= REHEARSAL_DIR="${T}/labelled"
@@ -150,15 +154,25 @@ for cell in rollback-a-still-absent-from-the-jwks rollback-a-still-compromised r
 done
 if grep -qE '^hm rollback "\$\{RELEASE\}" "\$\{EVIDENCE_EDDSA_REVISION\}"' <<<"${body}"; then ok chart-rollback-targets-the-eddsa-revision; else bad chart-rollback-targets-the-eddsa-revision; fi
 
-# The ServiceAccount of the rehearsal gets one namespaced Role from a fixture the lead applies (pm 11-02): no cluster-scoped kind, no RBAC
-# resource in any rule, no wildcard resource or group; the only kinds are Role and RoleBinding. The driver's own manifests stay clear of RBAC kinds.
+# The ServiceAccount of the rehearsal gets one namespaced Role (Role + RoleBinding) and, for the one cluster-scoped read of its own Namespace object,
+# one ClusterRole + ClusterRoleBinding named with the run namespace: verbs [get], resources [namespaces], resourceNames = that namespace, bound to the
+# driver ServiceAccount only (pm 11-03). The lead applies the fixture. No RBAC resource in the Role rules, no wildcard resource or group.
 ROLE="${ROOT}/ci/auth_k8s/rotation_rehearsal_role.yaml"
+doc_of() { awk -v k="$1" '/^---$/ { n++; next } { d[n] = d[n] $0 "\n" } END { for (i in d) if (d[i] ~ ("(^|\n)kind: " k "\n")) printf "%s", d[i] }'; }
 if [ -f "${ROLE}" ]; then
-  role_kinds="$(sed -n 's/^kind: //p' "${ROLE}" | sort -u | tr '\n' ' ')"
-  if [ "${role_kinds}" = "Role RoleBinding " ]; then ok role-fixture-kinds-are-role-and-rolebinding; else bad "role-fixture-kinds-are-role-and-rolebinding (${role_kinds})"; fi
-  if ! grep -qiE 'clusterrole|clusterrolebinding' "${ROLE}"; then ok role-fixture-has-no-cluster-kind; else bad role-fixture-has-no-cluster-kind; fi
-  if ! grep -qE 'rbac\.authorization\.k8s\.io' <(sed -n '/^rules:/,/^---/p' "${ROLE}"); then ok role-fixture-rules-grant-no-rbac; else bad role-fixture-rules-grant-no-rbac; fi
-  if ! grep -qE 'resources: \[[^]]*\*|apiGroups: \[[^]]*\*|^ *- \*' <(sed -n '/^rules:/,/^---/p' "${ROLE}"); then ok role-fixture-has-no-wildcard-resource-or-group; else bad role-fixture-has-no-wildcard-resource-or-group; fi
+  fixture="$(NS=authrot-test envsubst '${NS}' <"${ROLE}")"
+  role_kinds="$(sed -n 's/^kind: //p' <<<"${fixture}" | sort -u | tr '\n' ' ')"
+  if [ "${role_kinds}" = "ClusterRole ClusterRoleBinding Role RoleBinding " ]; then ok role-fixture-kinds-are-the-four-expected; else bad "role-fixture-kinds-are-the-four-expected (${role_kinds})"; fi
+  role_rules="$(doc_of Role <<<"${fixture}" | sed -n '/^rules:/,$p')"
+  if ! grep -qE 'rbac\.authorization\.k8s\.io' <<<"${role_rules}"; then ok role-fixture-rules-grant-no-rbac; else bad role-fixture-rules-grant-no-rbac; fi
+  if ! grep -qE 'resources: \[[^]]*\*|apiGroups: \[[^]]*\*|^ *- \*' <<<"${role_rules}"; then ok role-fixture-has-no-wildcard-resource-or-group; else bad role-fixture-has-no-wildcard-resource-or-group; fi
+  cr="$(doc_of ClusterRole <<<"${fixture}" | grep -vE '^[[:space:]]*#' || true)"
+  crb="$(doc_of ClusterRoleBinding <<<"${fixture}" | grep -vE '^[[:space:]]*#' || true)"
+  want_rules="$(printf '%s\n' 'rules:' '  - apiGroups: [""]' '    resources: [namespaces]' '    resourceNames: [authrot-test]' '    verbs: [get]')"
+  if [ "$(sed -n '/^rules:/,$p' <<<"${cr}")" = "${want_rules}" ]; then ok clusterrole-is-get-namespaces-of-the-one-namespace; else bad clusterrole-is-get-namespaces-of-the-one-namespace; fi
+  if grep -qxF 'metadata: {name: rehearsal-ns-authrot-test}' <<<"${cr}"; then ok clusterrole-named-with-the-run-namespace; else bad clusterrole-named-with-the-run-namespace; fi
+  if grep -qxF 'metadata: {name: rehearsal-ns-authrot-test}' <<<"${crb}" && grep -qxF 'roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: rehearsal-ns-authrot-test}' <<<"${crb}"; then ok clusterrolebinding-binds-that-clusterrole; else bad clusterrolebinding-binds-that-clusterrole; fi
+  if [ "$(sed -n '/^subjects:/,$p' <<<"${crb}")" = 'subjects: [{kind: ServiceAccount, name: rehearsal, namespace: authrot-test}]' ]; then ok clusterrolebinding-has-the-driver-serviceaccount-only; else bad clusterrolebinding-has-the-driver-serviceaccount-only; fi
 else
   bad role-fixture-exists
 fi

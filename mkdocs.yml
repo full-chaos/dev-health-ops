@@ -102,6 +102,7 @@ nav:
           - admin/teams-and-identities/index.md
           - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
           - Roles and access: admin/teams-and-identities/roles-and-access.md
+          - Organization members: admin/teams-and-identities/manage-org-members.md
       - Data sources:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
@@ -116,6 +117,7 @@ nav:
       - Security:
           - admin/security-and-audit/index.md
           - Credentials: admin/security-and-audit/credentials.md
+          - Service accounts: admin/security-and-audit/service-accounts.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
       - Troubleshooting:
           - admin/troubleshooting/index.md
@@ -235,6 +237,8 @@ nav:
       - Auth decisions and obligations: reference/auth/obligations.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
+      - Auth organization roles and members: reference/auth/org-member-roles.md
+      - Auth platform administrator: reference/auth/platform-admin.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md
       - Auth identity linking: reference/auth/identity-linking.md

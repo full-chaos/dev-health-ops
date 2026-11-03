@@ -807,8 +807,8 @@ func TestSwitchOrgNoSecretInLogs(t *testing.T) {
 }
 
 // O-F1: the route mounts only when the endpoint-profile document holds its
-// row with the classes the issuer verifies; the embedded document has none
-// yet (the row is PR-2's), so the route is a 404 and the service builds.
+// row with the classes the issuer verifies. The embedded document holds it
+// (PR-2), so CompatRoutes mounts the route once, with no not-mounted line.
 func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 	f := newSwitchFixture(t)
 	if r := f.post(orgBody(f.orgB), f.bearer()); r.Code != http.StatusOK {
@@ -819,13 +819,17 @@ func TestSwitchOrgNotMountedWithoutRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mounted := 0
 	for _, route := range routes {
-		if route.Pattern == PatternCompatSwitchOrg {
-			t.Fatalf("mounted without its row: %s %s", route.Method, route.Pattern)
+		if route.Method == http.MethodPost && route.Pattern == PatternCompatSwitchOrg {
+			mounted++
 		}
 	}
-	if !strings.Contains(f.logs.String(), `"msg":"auth switch-org route not mounted: no endpoint-profile row","route":"`+PatternCompatSwitchOrg+`"`) {
-		t.Fatalf("no not-mounted line: %s", f.logs)
+	if mounted != 1 {
+		t.Fatalf("mounted %d times on the embedded document, want 1", mounted)
+	}
+	if strings.Contains(f.logs.String(), "auth switch-org route not mounted") {
+		t.Fatalf("not-mounted line with the embedded row present: %s", f.logs)
 	}
 	for name, document := range map[string][]byte{
 		"empty":                   []byte(`{"rows":[]}`),
@@ -912,4 +916,34 @@ func goAPISwitchHandler(t *testing.T, v *validateFixture) http.Handler {
 	}
 	t.Fatal("go-api mounts no switch-org route")
 	return nil
+}
+
+// The route over the production flag table (MarkResponseModels on the
+// embedded document's route set) writes its success answer with no writer
+// violation, in the hs256_compat class.
+func TestSwitchOrgProductionResponseModelRaisesNoWriterViolation(t *testing.T) {
+	f := newSwitchFixture(t)
+	routes, err := CompatRoutes(f.deps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range MarkResponseModels(routes) {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
+	}
+	expectNoViolation(t, "switch-org", http.StatusOK, func() int {
+		request := httptest.NewRequest(http.MethodPost, PatternCompatSwitchOrg, strings.NewReader(orgBody(f.orgB)))
+		for k, v := range f.bearer() {
+			request.Header.Set(k, v)
+		}
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		return response.Code
+	})
+}
+
+func TestSwitchOrgResponseModelIsTheSameAsGoAPIs(t *testing.T) {
+	if !ResponseModelRoutes()["POST "+PatternCompatSwitchOrg] {
+		t.Fatal("POST " + PatternCompatSwitchOrg + " is not a response-model route; go-api's twin is")
+	}
 }

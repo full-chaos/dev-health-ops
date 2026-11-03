@@ -13,6 +13,7 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/auth/logout":                        true,
 	"POST /api/v1/auth/social-login":                  true,
 	"POST /api/v1/auth/validate":                      true,
+	"POST /api/v1/auth/switch-org":                    true,
 	"GET /api/v1/auth/verify":                         true,
 	"POST /api/v1/auth/register":                      true,
 	"POST /api/v1/auth/resend-verification":           true,

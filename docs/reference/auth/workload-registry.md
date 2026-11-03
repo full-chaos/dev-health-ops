@@ -52,6 +52,19 @@ A workload token carries only an audience whose classes include `workload_token`
 
 The audience `query-api` is a different class (`effective_principal_envelope`). A workload token never carries it.
 
+## Why each workload has its own identity
+
+The platform has no shared internal principal. Each service, or each materially distinct worker class, gets its own
+workload row with exact audiences and an allowlist of actions. A shared credential would let one stolen secret act as
+every service.
+
+- A workload row grants no access to an organization. A workload token carries no `org_id`, no `sid` and no scope
+  ([Credential classes](credential-classes.md)). It names one workload principal and one audience.
+- A row can narrow what a token carries. It never widens it: the exchange issues an audience in the row and at most the actions in the row.
+- A binding ties a row to a cluster identity (Kubernetes) or to a bootstrap file (Compose). The row alone proves nothing.
+- A workload is auth-native data (D6651). It is neither a user nor an organization member, and it has no public record.
+- A workload token does not replace database roles, TLS or network policy.
+
 ## Seed the registry
 
 ```sh

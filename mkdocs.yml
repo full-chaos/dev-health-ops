@@ -103,7 +103,7 @@ nav:
           - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
           - Roles and access: admin/teams-and-identities/roles-and-access.md
           - Organization members: admin/teams-and-identities/manage-org-members.md
-          - Repository access: admin/teams-and-identities/grant-repository-access.md
+          - Grant access to repositories: admin/teams-and-identities/grant-repository-access.md
       - Data sources:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
@@ -240,7 +240,7 @@ nav:
       - Auth service configuration: reference/auth/configuration.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
-      - Auth repository grants: reference/auth/resource-grants.md
+      - Auth resource grants: reference/auth/resource-grants.md
       - Auth organization and membership authority: reference/auth/org-membership-authority.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md

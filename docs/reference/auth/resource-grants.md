@@ -14,14 +14,14 @@ applicability: current
 lifecycle: active
 ---
 
-# Repository grants
+# Resource grants
 
 A repository grant lets one member of an organization act on one repository, or on every repository of the
 organization, with a role and an optional expiry. This page lists what a grant holds, how it ends, how the decision
 reads it, and what the write routes accept and refuse.
 {: .fc-page-lede }
 
-For the steps an administrator follows, see [Grant repository access](../../admin/teams-and-identities/grant-repository-access.md).
+For the steps an administrator follows, see [Grant access to repositories](../../admin/teams-and-identities/grant-repository-access.md).
 For the organization roles a membership holds, see [Organization roles, members and invites](org-member-roles.md).
 
 ## Which table decides
@@ -36,7 +36,7 @@ Grants live in `auth.resource_grants`. They are auth-native data: there is no pu
 | Organization | A grant belongs to one organization. A grant of another organization never applies. |
 | Principal | The grantee. It must be an active member of the organization when the grant is made. |
 | Resource kind | `repository`. This is the only kind. |
-| Repository key | One repository path, or the explicit organization-wide `*`. See [Repository key](#repository-key). |
+| Repository key | One repository path, or the explicit organization-wide `*`. See [Key format](#key-format). |
 | Role | One of the roles in [Roles](#roles). |
 | Expiry | Optional. It must lie in the future when it is set. |
 | Origin | `api` or `backfill`. An `api` grant names the principal that made it. |
@@ -121,7 +121,7 @@ The answer is the same for all three: `grant_id`, `organization_id`, `principal_
 
 There is no go-api `audit_logs` row for a grant write. The auth audit row and the provisioning event are the record.
 
-## Repository key
+## Key format
 
 The key is `*` for every repository of the organization, or a lowercase repository path of 2 to 20 segments, such as
 `owner/repo` or `group/subgroup/repo`, in at most 255 bytes. Every segment but the last is a group name of 1 to 100

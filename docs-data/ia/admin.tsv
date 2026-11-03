@@ -11,7 +11,7 @@ admin-users	admin-identities	/admin/teams-and-identities/users-and-memberships/	
 admin-mapping	admin-identities	/admin/teams-and-identities/identity-mapping/	Review identity and membership mapping	task-guide	true	public	planned	false	
 admin-roles	admin-identities	/admin/teams-and-identities/roles-and-access/	Manage roles and access	task-guide	true	public	planned	false	
 admin-org-members	admin-identities	/admin/teams-and-identities/manage-org-members/	Manage organization members	task-guide	true	public	active	false	Invite a person, change a role, remove a member and transfer ownership of an organization.
-admin-grant-repository-access	admin-identities	/admin/teams-and-identities/grant-repository-access/	Grant repository access	task-guide	true	public	active	false	Give a member access to one repository or to every repository of an organization, with an optional expiry, then change or end it.
+admin-grant-repository-access	admin-identities	/admin/teams-and-identities/grant-repository-access/	Grant access to repositories	task-guide	true	public	active	false	Give a member access to one repository or to every repository of an organization, with an optional expiry, then change or end it.
 admin-sources	admin	/admin/data-sources/	Connect data sources	landing	true	public	planned	false	
 admin-source-prereq	admin-sources	/admin/data-sources/prerequisites/	Data-source prerequisites	task-guide	true	public	planned	false	
 admin-github	admin-sources	/admin/data-sources/github/	Connect GitHub	task-guide	true	public	planned	false	

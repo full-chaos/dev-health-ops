@@ -34,9 +34,9 @@ func resourceGrantsGuard(d docTree) []string {
 		out = append(out, diffSets("roles table", got, grant.Roles())...)
 	}
 
-	key, found := sectionOf(page, "## Repository key")
+	key, found := sectionOf(page, "## Key format")
 	if !found {
-		return append(out, resourceGrantsPage+": no ## Repository key section")
+		return append(out, resourceGrantsPage+": no ## Key format section")
 	}
 	var patterns []string
 	for _, l := range fencedBlocks(key) {

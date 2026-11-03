@@ -12,6 +12,6 @@ lifecycle: active
 - [Configure teams and repository scope](teams-and-repositories.md)
 - [Manage roles and access](roles-and-access.md)
 - [Manage organization members](manage-org-members.md)
-- [Grant repository access](grant-repository-access.md)
+- [Grant access to repositories](grant-repository-access.md)
 
 Keep product membership, provider identity, team attribution, and repository scope as separate concepts. A person can have several provider identities, and a repository can contribute to more than one operational question.

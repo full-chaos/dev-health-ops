@@ -12,7 +12,7 @@ applicability: current
 lifecycle: active
 ---
 
-# Grant repository access
+# Grant access to repositories
 
 Use a repository grant to give a member a role on one repository, or on every repository of the organization. The
 [repository grants reference](../../reference/auth/resource-grants.md) has the full rules.
@@ -33,7 +33,7 @@ needs, or give `*`, so that the member does not lose access to a repository the 
 
 Connecting a repository or syncing one never creates a grant. A credential rotation never widens one.
 
-## Give access to one repository
+## Give access to one repo
 
 1. Send `POST /internal/v1/grants/create` with the organization, your principal, the member's principal, a `role` of `viewer`, `member` or `admin`, and the key as a lowercase repository path (`owner/repo`, or `group/subgroup/repo` for nested groups).
 2. Keep the `grant_id` and the `revision` of the answer. The answer does not repeat the key.
@@ -46,7 +46,7 @@ curl -sS -X POST "$AUTH_SERVICE_URL/internal/v1/grants/create" \
   -d '{"organization_id":"<org-id>","actor_principal_id":"<your-principal-id>","principal_id":"<member-principal-id>","role":"viewer","resource_key":"<owner>/<repo>"}'
 ```
 
-## Give access to every repository
+## Give access to all repos
 
 Send the same request with `"resource_key":"*"`. The key `*` is the only organization-wide key. No default grant exists:
 nothing creates a `*` grant for you.
@@ -89,4 +89,4 @@ back. Give a new grant when the member needs access again.
 | 409 | `organization_suspended` | Reactivate the organization first. |
 | 409 | `users_not_owned` | Auth-service does not own users in this deployment. |
 
-Every write leaves one audit row and one provisioning event. See [Repository grants](../../reference/auth/resource-grants.md#life-of-a-grant).
+Every write leaves one audit row and one provisioning event. See [Resource grants](../../reference/auth/resource-grants.md#life-of-a-grant).

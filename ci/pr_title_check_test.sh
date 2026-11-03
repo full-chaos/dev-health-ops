@@ -30,6 +30,21 @@ run human-same-title fail chaos 'Bump actions/checkout from 4 to 5'
 # 4. two ids fail (different and repeated)
 run two-ids fail chaos 'fix(ci): CHAOS-1 CHAOS-2 roll web'
 run same-id-twice fail chaos 'fix(ci): CHAOS-1 roll web for CHAOS-1'
+# every allowed type passes (the full type set is pinned)
+for ty in feat bug enhancement chore fix docs; do
+  run "every-type-$ty" pass chaos "$ty(ci): CHAOS-1 add the check"
+done
+# the exemption is exactly dependabot[bot]
+run other-bot-invalid fail 'otherbot[bot]' 'Bump x from 1 to 2'
+run other-bot-valid pass 'otherbot[bot]' 'chore(ci): CHAOS-1 add x'
+# the first word of the description is not an article, determiner or pronoun
+run declarative-the fail chaos 'fix(ci): CHAOS-7 the process sometimes exits incorrectly'
+run declarative-we fail chaos 'fix(ci): CHAOS-7 we need the title rule'
+run declarative-upper fail chaos 'fix(ci): CHAOS-7 The title rule is wrong'
+run declarative-its fail chaos 'fix(ci): CHAOS-7 its exit code is wrong'
+run imperative-add pass chaos 'fix(ci): CHAOS-7 add a required check'
+run imperative-make pass chaos 'fix(ci): CHAOS-7 make the check required'
+run imperative-keep pass chaos 'fix(ci): CHAOS-7 keep the pattern in one place'
 # extras
 run bad-type fail chaos 'feature(ci): CHAOS-1 roll web'
 run no-description fail chaos 'fix(ci): CHAOS-1'

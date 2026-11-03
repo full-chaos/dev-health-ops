@@ -133,7 +133,8 @@ const (
 	grantRepoComplexityExact = "GRANT SELECT ON default.repo_complexity_daily"
 	grantCompoundingExact    = "GRANT SELECT ON default.compounding_risk_daily"
 
-	// POST /api/v1/ingest/telemetry inserts its signal buckets (CHAOS-6501).
+	// The retired POST /api/v1/ingest/telemetry's insert grant: optional in the manifest
+	// (present in prod's users.d until it is dropped).
 	grantTelemetryExact = "GRANT INSERT ON default.telemetry_signal_bucket"
 
 	// GET /llm-settings/spend reads an org's token usage and categorization
@@ -162,7 +163,16 @@ var grantMetricsExact = []string{
 // the whole manifest is met.
 func importGrants() []string {
 	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantProjectOwnershipExact, grantRepoOwnershipExact, grantFallbacksExact,
-		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact, grantReposExact}, grantMetricsExact...)
+		grantRepoComplexityExact, grantCompoundingExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact, grantReposExact}, grantMetricsExact...)
+}
+
+// TestCheckPostureAcceptsTheRetiredTelemetryGrant proves the optional grant: held, the posture passes.
+func TestCheckPostureAcceptsTheRetiredTelemetryGrant(t *testing.T) {
+	h := startPostureHarness(t)
+	conn := h.newUser(t, append([]string{grantTeamsExact, grantIdentitiesExact, grantTelemetryExact}, importGrants()...)...)
+	if err := CheckAPIClickHouseAuthorization(h.ctx, conn); err != nil {
+		t.Fatalf("the retired telemetry insert grant must pass: %v", err)
+	}
 }
 
 // TestCheckPostureAcceptsExactMatch proves the happy path: a user granted

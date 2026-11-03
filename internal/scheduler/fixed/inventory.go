@@ -23,6 +23,7 @@ const (
 	ProducerDimensionFold          = "dimension_fold"
 	ProducerLLMBudgetStale         = "llm_budget_stale_reservations"
 	ProducerProviderRevocations    = "provider_oauth_revocations"
+	ProducerPushExpirySweep        = "external_push_expiry_sweep"
 	ProducerRetentionCleanup       = "retention_cleanup"
 )
 

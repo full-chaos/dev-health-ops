@@ -176,6 +176,18 @@ func (ProviderRevocationsProducer) Produce(
 	return Outcome{Requests: []JobRequest{{Kind: jobcontract.KindProviderOAuthRevocations, Envelope: envelope}}}, nil
 }
 
+// PushExpirySweepProducer emits one expiry sweep of the External Push tokens.
+type PushExpirySweepProducer struct{}
+
+// NewPushExpirySweepProducer constructs the push expiry sweep producer.
+func NewPushExpirySweepProducer() Producer { return PushExpirySweepProducer{} }
+
+func (PushExpirySweepProducer) ID() string { return ProducerPushExpirySweep }
+
+func (PushExpirySweepProducer) Produce(context.Context, pgx.Tx, Schedule, Occurrence) (Outcome, error) {
+	return Outcome{}, nil
+}
+
 // DimensionFoldProducer emits one fold of the declared dimension tables. The
 // worker owns the table list and every guard, so the envelope carries only the
 // due time.

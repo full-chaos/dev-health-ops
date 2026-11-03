@@ -438,7 +438,7 @@ func TestPDPLoadK3sRunOneChecksEveryStepItself(t *testing.T) {
 		if m == "" {
 			continue
 		}
-		seen[strings.TrimSpace(strings.Trim(m, " ()>\""))] = true
+		seen[strings.TrimSpace(strings.Trim(m, " ($"))] = true
 		if !strings.Contains(l, "||") && !strings.HasPrefix(code, "if !") {
 			t.Errorf("run_one step without its own check: %q", code)
 		}
@@ -449,7 +449,7 @@ func TestPDPLoadK3sRunOneChecksEveryStepItself(t *testing.T) {
 		}
 	}
 	sites := 0
-	call := regexp.MustCompile(`^\s*run_one `)
+	call := regexp.MustCompile(`^\s*(for .*; do )?run_one `)
 	for i, l := range lines {
 		if i > start && i < end || !strings.Contains(l, "run_one ") || strings.HasPrefix(strings.TrimSpace(l), "#") {
 			continue

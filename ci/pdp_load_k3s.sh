@@ -282,22 +282,39 @@ set_env() { # lift|keep: the caller subject always, the route limiter lifted or 
 
 SLO_FAILED=0
 # run_one LEG PROFILE LOAD NAME... : mint, run loadtest, copy the report out, write its sha256 into the summary. SLO names gate.
+# Callers use it in && chains and || lists, where bash ignores set -e inside it: every step is checked here, and a failed step is
+# named on stderr, marks the row FAILED(step), sets SLO_FAILED and returns 1.
 run_one() {
-  local leg=$1 profile=$2 load=$3 report out slo=() args=() name rc=0 sha
+  local leg=$1 profile=$2 load=$3 report out slo=() args=() name rc=0 sha="" step=""
   shift 3
   report="${leg}-${profile}-${load//:/-}.json"
   for name in "$@"; do slo+=(--slo "${name}:p95=${SLO_P95},p99=${SLO_P99},err=${SLO_ERR}"); done
   args=(--config "/work/profiles/${profile}.json" --profile "${load%%:*}" --base-url "http://${SVC_HOST}:${SVC_PORT}" --allow-host "${SVC_HOST}" --out "/work/${report}")
   case "${load}" in *:*) args+=(--rate "${load#*:}" --duration "${KNEE_SECONDS}s") ;; esac
-  pod mint >/dev/null
-  pod run "${args[@]}" "${slo[@]}" || rc=$?
-  K cp "${NS}/pdp-runner:/work/${report}" "${OUT_DIR}/${report}" >/dev/null
-  sha="$(sha256sum "${OUT_DIR}/${report}" | cut -d' ' -f1)"
+  pod mint >/dev/null || step="mint"
+  if [ -z "${step}" ]; then
+    pod run "${args[@]}" "${slo[@]}" || rc=$?
+    K cp "${NS}/pdp-runner:/work/${report}" "${OUT_DIR}/${report}" >/dev/null || step="copy"
+  fi
+  if [ -z "${step}" ]; then
+    sha="$(sha256sum "${OUT_DIR}/${report}" | cut -d' ' -f1)" || step="hash"
+    [ -n "${sha}" ] || step="hash"
+  fi
   out="recorded"
   [ "${#slo[@]}" -eq 0 ] || out="gated"
   [ "${rc}" -eq 0 ] || out="${out}-FAILED(exit ${rc})"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${leg}" "${profile}" "${load}" "${report}" "${sha}" "${out}" >>"${SUMMARY}"
+  [ -z "${step}" ] || out="${out}-FAILED(${step})"
+  if ! printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${leg}" "${profile}" "${load}" "${report}" "${sha}" "${out}" >>"${SUMMARY}"; then
+    printf 'FAIL: %s %s %s: step summary failed\n' "${leg}" "${profile}" "${load}" >&2
+    SLO_FAILED=1
+    return 1
+  fi
   printf '%s %s %s: %s, report sha256 %s\n' "${leg}" "${profile}" "${load}" "${out}" "${sha}"
+  if [ -n "${step}" ]; then
+    printf 'FAIL: %s %s %s: step %s failed\n' "${leg}" "${profile}" "${load}" "${step}" >&2
+    SLO_FAILED=1
+    return 1
+  fi
   [ "${rc}" -eq 0 ] || { SLO_FAILED=1; return 1; }
 }
 

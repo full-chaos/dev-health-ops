@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"context"
 	"errors"
 	"net/url"
 	"regexp"
@@ -9,6 +10,9 @@ import (
 
 // RedactedMarker replaces every value a Boundary redacts.
 const RedactedMarker = "[REDACTED]"
+
+// UnparsableMarker is all an unparsable-DSN Boundary lets through.
+const UnparsableMarker = "[redacted: connection string cannot be parsed]"
 
 // keywordPasswordPattern matches a PostgreSQL keyword/value connection
 // string's password parameter: password=VALUE or password = 'VALUE',
@@ -98,7 +102,19 @@ func RedactValues(s string, values ...string) string {
 // resolved and apply it to whatever error eventually surfaces, no matter
 // how many layers wrapped it or which one actually dialled.
 type Boundary struct {
-	values []string
+	values     []string
+	unparsable bool
+}
+
+// NewUnparsableBoundary is the Boundary of a DSN the driver cannot parse: the
+// driver's parse error echoes the DSN with only its password masked, and the
+// login cannot be found in a string that does not parse, so this Boundary fails
+// closed. Redact returns the fixed UnparsableMarker (no driver text, no DSN
+// fragment); a context cancellation or deadline keeps its identity. RedactText
+// keeps the DSN-only redaction: it filters whole log streams, which must stay
+// readable.
+func NewUnparsableBoundary(dsn string) Boundary {
+	return Boundary{values: CredentialComponents(dsn), unparsable: true}
 }
 
 // NewBoundary derives the substrings the returned Boundary redacts, from
@@ -126,6 +142,15 @@ func NewBoundaryWith(dsn string, resolved ...string) Boundary {
 // replaced by RedactedMarker, or err unchanged if it is nil or contains
 // none of them.
 func (b Boundary) Redact(err error) error {
+	if b.unparsable && err != nil {
+		switch {
+		case errors.Is(err, context.Canceled):
+			return context.Canceled
+		case errors.Is(err, context.DeadlineExceeded):
+			return context.DeadlineExceeded
+		}
+		return errors.New(UnparsableMarker)
+	}
 	if err == nil || len(b.values) == 0 {
 		return err
 	}
@@ -189,7 +214,3 @@ func appendKeywordValue(out []string, value string) []string {
 	}
 	return append(out, value)
 }
-
-const UnparsableMarker = "[redacted: connection string cannot be parsed]"
-
-func NewUnparsableBoundary(dsn string) Boundary { return NewBoundary(dsn) }

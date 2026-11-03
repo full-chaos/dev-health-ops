@@ -298,8 +298,7 @@ run_one() {
   [ "${rc}" -eq 0 ] || out="${out}-FAILED(exit ${rc})"
   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${leg}" "${profile}" "${load}" "${report}" "${sha}" "${out}" >>"${SUMMARY}"
   printf '%s %s %s: %s, report sha256 %s\n' "${leg}" "${profile}" "${load}" "${out}" "${sha}"
-  if [ "${rc}" -ne 0 ]; then SLO_FAILED=1; fi
-  return 0
+  [ "${rc}" -eq 0 ] || { SLO_FAILED=1; return 1; }
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -307,22 +306,22 @@ printf '=== leg 2: KNEE (default route limiter, recorded) ===\n'
 set_env keep
 pod mint >/dev/null
 pod preflight || die "leg 2: the pre-flight decisions are not what their names say"
-run_one knee authorize-knee "peak:${KNEE_RATE}"
-[ "${SLO_FAILED}" = 0 ] || die "leg 2: the knee run failed an assertion (a 5xx or a status outside 200 and 429)"
+run_one knee authorize-knee "peak:${KNEE_RATE}" || die "leg 2: the knee run failed an assertion (a 5xx or a status outside 200 and 429)"
 
 printf '=== leg 3: GATED (route limiter lifted, cache off) ===\n'
 set_env lift
 pod mint >/dev/null
 pod preflight || die "leg 3: the pre-flight decisions are not what their names say"
 for load in normal peak; do
-  run_one gated authorize-low "${load}" authorize-low
-  run_one gated authorize-low-hot "${load}" authorize-low-hot
-  run_one gated authorize-high "${load}" authorize-high
-  run_one gated authorize-deny "${load}" authorize-deny
-  run_one gated authorize-mix "${load}" authorize-low authorize-low-hot authorize-high authorize-deny
-  run_one gated authorize-batch-10 "${load}" authorize-batch-10
-  run_one recorded authorize-batch-100 "${load}"
-  if [ "${SLO_FAILED}" != 0 ]; then
+  if ! {
+    run_one gated authorize-low "${load}" authorize-low &&
+      run_one gated authorize-low-hot "${load}" authorize-low-hot &&
+      run_one gated authorize-high "${load}" authorize-high &&
+      run_one gated authorize-deny "${load}" authorize-deny &&
+      run_one gated authorize-mix "${load}" authorize-low authorize-low-hot authorize-high authorize-deny &&
+      run_one gated authorize-batch-10 "${load}" authorize-batch-10 &&
+      run_one recorded authorize-batch-100 "${load}"
+  }; then
     printf 'REPORT: a gated objective or assertion failed at %s load; the run stops here, nothing is loosened\n' "${load}"
     break
   fi
@@ -333,7 +332,7 @@ if [ "${AUTH_PDP_CACHE_ON:-0}" = 1 ] && [ "${SLO_FAILED}" = 0 ]; then
   set_env lift --set authService.revisionFeed.enabled=true
   sleep 20
   pod mint >/dev/null
-  for load in normal peak; do run_one cacheon authorize-mix "${load}"; done
+  for load in normal peak; do run_one cacheon authorize-mix "${load}" || break; done
 fi
 
 printf 'summary %s sha256 %s\n' "${SUMMARY}" "$(sha256sum "${SUMMARY}" | cut -d' ' -f1)"

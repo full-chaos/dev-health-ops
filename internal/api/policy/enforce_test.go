@@ -1,10 +1,13 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -13,14 +16,17 @@ import (
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
 
 type enforceRecorder struct {
-	mu   sync.Mutex
-	hits []string
+	mu       sync.Mutex
+	hits     []string
+	unjudged []string
 }
 
 func recordEnforce(t *testing.T) *enforceRecorder {
@@ -32,8 +38,20 @@ func recordEnforce(t *testing.T) *enforceRecorder {
 		defer rec.mu.Unlock()
 		rec.hits = append(rec.hits, namespace+"/"+outcome)
 	}
-	t.Cleanup(func() { enforceDecisionAdd = previous })
+	previousUnjudged := enforceUnjudgedAdd
+	enforceUnjudgedAdd = func(_ context.Context, route, reason string) {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		rec.unjudged = append(rec.unjudged, route+"/"+reason)
+	}
+	t.Cleanup(func() { enforceDecisionAdd, enforceUnjudgedAdd = previous, previousUnjudged })
 	return rec
+}
+
+func (r *enforceRecorder) unjudgedSnapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.unjudged)
 }
 
 func (r *enforceRecorder) snapshot() []string {
@@ -187,22 +205,164 @@ func TestAnAllowThatCarriesAnObligationIsADeny(t *testing.T) {
 	}
 }
 
-func TestACallerThePDPCannotJudgeKeepsTheLegacyAnswer(t *testing.T) {
-	rec := recordEnforce(t)
-	pdp := newTestPDP(t, denyWith("role_lacks_action"))
+func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
+	t.Helper()
 	store := newStore()
 	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	auth := authenticator(t, store)
-	guard := NewGuard(auth, quiet())
-	guard.SetEnforcer(newEnforcerFor(t, pdp.client(t), onFor("teams")))
+	guard := NewGuard(authenticator(t, store), quiet())
+	guard.SetEnforcer(enf)
 	mux := http.NewServeMux()
 	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
-	got := serve(mux, http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	return mux
+}
+
+// A caller the decision point cannot judge keeps the legacy answer, counted with its own counter by route and reason.
+func TestALegacyHS256CallerKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, denyWith("role_lacks_action"))
+	got := serve(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 	if got.status != http.StatusOK {
 		t.Fatalf("legacy HS256 token on an enforced cell: %d %q, want the legacy 200", got.status, got.body)
 	}
-	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.snapshot(), []string{"teams/unjudged_legacy"}) {
-		t.Fatalf("%d PDP calls, counted %v, want 0 and [teams/unjudged_legacy]", n, rec.snapshot())
+	if n := len(pdp.calls()); n != 0 || len(rec.snapshot()) != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/hs256"}) {
+		t.Fatalf("%d PDP calls, decisions %v, unjudged %v, want 0, none and [GET /api/v1/admin/teams/hs256]", n, rec.snapshot(), rec.unjudgedSnapshot())
+	}
+}
+
+func TestADelegatedSessionKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, denyWith("role_lacks_action"))
+	inner := enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams")))
+	delegated := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := &Impersonation{ID: uuid.New(), AdminUserID: userID, TargetUserID: uuid.New(), TargetOrgID: ownOrgID, TargetRole: "admin", ExpiresAt: time.Now().Add(time.Hour)}
+		inner.ServeHTTP(w, r.WithContext(WithImpersonation(r.Context(), session)))
+	})
+	base := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), nil), "GET", "/api/v1/admin/teams")
+	got := enforceRequest(delegated, "GET", "/api/v1/admin/teams")
+	if got.status != base.status || got.body != base.body {
+		t.Fatalf("delegated: %d %q, want the legacy %d %q", got.status, got.body, base.status, base.body)
+	}
+	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/delegated"}) {
+		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/delegated]", n, rec.unjudgedSnapshot())
+	}
+}
+
+func TestAnOrganizationRouteWithNoOrganizationKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, denyWith("role_lacks_action"))
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	base := enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, nil), "GET", "/api/v1/admin/teams")
+	got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, newEnforcerFor(t, pdp.client(t), onFor("teams"))), "GET", "/api/v1/admin/teams")
+	if got.status != base.status || got.body != base.body {
+		t.Fatalf("no organization: %d %q, want the legacy %d %q", got.status, got.body, base.status, base.body)
+	}
+	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/no_org"}) {
+		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/no_org]", n, rec.unjudgedSnapshot())
+	}
+}
+
+// A platform route needs no organization, so a caller with none is judged.
+func TestAPlatformRouteWithNoOrganizationIsJudged(t *testing.T) {
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), noOrg, newEnforcerFor(t, pdp.client(t), onFor("admin"))), "GET", "/api/v1/admin/orgs")
+	if got.status != http.StatusOK || len(rec.unjudgedSnapshot()) != 0 || !slices.Equal(rec.snapshot(), []string{"admin/allow"}) {
+		t.Fatalf("%d %q unjudged %v decisions %v, want 200, none and [admin/allow]", got.status, got.body, rec.unjudgedSnapshot(), rec.snapshot())
+	}
+	calls := pdp.calls()
+	if len(calls) != 1 || calls[0].Type != "platform" || calls[0].HasOrg {
+		t.Fatalf("PDP saw %+v, want one platform question with no organization", calls)
+	}
+}
+
+func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
+	recordEnforce(t)
+	var logs bytes.Buffer
+	enf, err := NewEnforcer(EnforceConfig{Decider: newTestPDP(t, allowAll).client(t), Rows: shadowTestRows, Switch: onFor("teams"),
+		Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" })
+	serve(hs256Handler(t, enf), http.MethodGet, "/api/v1/admin/teams", token)
+	line := logs.String()
+	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=hs256") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
+		t.Fatalf("log %q: want one DEBUG line with the route and reason hs256", line)
+	}
+	if strings.Contains(line, strings.TrimPrefix(token["Authorization"], "Bearer ")) {
+		t.Fatalf("the log quotes the token: %q", line)
+	}
+}
+
+// Both counters carry closed label sets: the decision counter has a namespace, the service and an outcome; the
+// unjudged counter a route row and one of three reasons.
+func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test")
+	newEnforceDecisionAdder(meter)(context.Background(), "teams", "allow")
+	newEnforceUnjudgedAdder(meter)(context.Background(), "GET /api/v1/admin/teams", "hs256")
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string][]string{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				var names []string
+				for _, kv := range point.Attributes.ToSlice() {
+					names = append(names, string(kv.Key))
+				}
+				sort.Strings(names)
+				keys[m.Name] = names
+			}
+		}
+	}
+	if got := keys["dev_health_authz_enforcement_decisions_total"]; !slices.Equal(got, []string{"namespace", "outcome", "service"}) {
+		t.Fatalf("decision counter labels %v", got)
+	}
+	if got := keys["dev_health_authz_enforcement_unjudged_total"]; !slices.Equal(got, []string{"reason", "route"}) {
+		t.Fatalf("unjudged counter labels %v", got)
+	}
+	reasons := []string{enforceUnjudgedHS256, enforceUnjudgedDelegated, enforceUnjudgedNoOrg}
+	if !slices.Equal(reasons, []string{"hs256", "delegated", "no_org"}) {
+		t.Fatalf("reasons %v, want the closed set hs256, delegated, no_org", reasons)
+	}
+}
+
+// Every obligation kind of an allow is a deny, not only the tenant scope.
+func TestAnAllowThatCarriesAnyObligationIsADeny(t *testing.T) {
+	for name, obligations := range map[string]map[string]any{
+		"repository allowlist": {"repository_allowlist": []any{"acme/widget"}},
+		"redaction":            {"redaction": []any{"personal_identifiers"}},
+		"minimum assurance":    {"minimum_assurance": "aal2"},
+		"step up":              {"step_up": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			pdp.obligations = obligations
+			got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams"))), "GET", "/api/v1/admin/teams")
+			if got.status != http.StatusForbidden {
+				t.Fatalf("%d %q, want 403: an obligation go-api cannot carry out is not met", got.status, got.body)
+			}
+		})
+	}
+}
+
+// The question the decision point sees is the row's action on the caller's organization, for the caller's token.
+func TestTheQuestionIsTheRowsActionOnTheCallersOrganization(t *testing.T) {
+	recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams"))), "GET", "/api/v1/admin/teams")
+	calls := pdp.calls()
+	if len(calls) != 1 || calls[0].Action != "teams.read" || calls[0].Type != "organization" || !calls[0].HasOrg || calls[0].Org != ownOrg || calls[0].Key != ownOrg || calls[0].Principal != shadowBearer {
+		t.Fatalf("PDP saw %+v, want teams.read on organization %s for the bearer", calls, ownOrg)
 	}
 }
 

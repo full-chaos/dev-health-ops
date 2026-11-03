@@ -38,3 +38,17 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 		enforceDecisionAdd(ctx, namespace, outcome)
 	}
 }
+
+const (
+	enforceUnjudgedHS256     = "hs256"
+	enforceUnjudgedDelegated = "delegated"
+	enforceUnjudgedNoOrg     = "no_org"
+)
+
+type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
+
+var enforceUnjudgedAdd = newEnforceUnjudgedAdder(otel.Meter(shadowMeterName))
+
+func newEnforceUnjudgedAdder(meter metric.Meter) enforceUnjudgedAdder {
+	return func(context.Context, string, string) {}
+}

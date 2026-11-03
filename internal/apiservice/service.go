@@ -454,6 +454,11 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
+		sharedWorkload := provisioningCred.workload
+		if sharedWorkload == nil {
+			sharedWorkload = sessionCred.workload
+		}
+		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.

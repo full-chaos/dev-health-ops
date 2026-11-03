@@ -207,6 +207,15 @@ func (v corpusVector) compact() string {
 	return enc.EncodeToString([]byte(v.HeaderJSON)) + "." + enc.EncodeToString([]byte(v.PayloadJSON)) + "." + enc.EncodeToString(signature)
 }
 
+// corpusDelegatedAtQueryAPI are query-api's decisions of the corpus's delegated
+// tokens (CHAOS-10991): policy maps act.sub to the caller's ImpersonatedBy and
+// refuses an actor that is not a canonical principal id (the vector's
+// "prn_BBBBBBBBBBBBBBBBBBBBBB" has non-zero trailing bits), as it refuses such
+// a sub. The verifier still accepts the token; the per-request check refuses.
+var corpusDelegatedAtQueryAPI = map[string]string{
+	"valid-act-api.json": "reject",
+}
+
 // corpusAtAnotherAudience are the rows decided at another audience
 // (auth-service, acr-api, acr-mcp), with query-api's decision of the same token
 // at the same clock (query-api shares go-api's audience): the dev-health-api
@@ -269,7 +278,9 @@ func TestA2CorpusThroughQueryAPI(t *testing.T) {
 	for _, row := range manifest.Vectors {
 		t.Run(strings.TrimSuffix(row.File, ".json"), func(t *testing.T) {
 			expect := row.Expect
-			if row.Audience != accessTokenAudienceAPI {
+			if decided, known := corpusDelegatedAtQueryAPI[row.File]; known {
+				expect = decided
+			} else if row.Audience != accessTokenAudienceAPI {
 				var known bool
 				if expect, known = corpusAtAnotherAudience[row.File]; !known {
 					t.Fatalf("a corpus row decided at %s that this test does not place at query-api", row.Audience)

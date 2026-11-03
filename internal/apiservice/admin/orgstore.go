@@ -124,6 +124,9 @@ type orgUpdate struct {
 	Settings    []byte
 	Tier        *string
 	IsActive    *bool
+	// authOwned is AUTH_ORGS_OWNED: auth-service has written name and is_active, so the write leaves both alone and
+	// reads no auth state.
+	authOwned bool
 }
 
 // updateOrganization is OrganizationService.update, minus the license-tier
@@ -133,6 +136,9 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 	var tx pgx.Tx
 	var existing *organization
 	var err error
+	if patch.authOwned {
+		authActive = nil
+	}
 	if authActive != nil {
 		// With an auth state hook the row is locked first, and auth is read while the lock is held: the writes of
 		// two PATCHes of one organization are ordered by the lock, so the last write read auth last. NO KEY UPDATE
@@ -188,7 +194,13 @@ func (s pgStore) updateOrganization(ctx context.Context, id uuid.UUID, patch org
 		defer func() { _ = tx.Rollback(ctx) }()
 	}
 
-	if _, err := tx.Exec(ctx, `
+	if patch.authOwned {
+		if _, err := tx.Exec(ctx, `
+UPDATE organizations SET description = $2, settings = $3, tier = $4, managed_by = $5, updated_at = $6
+WHERE id = $1`, id, description, settings, tier, managedBy, now); err != nil {
+			return nil, err
+		}
+	} else if _, err := tx.Exec(ctx, `
 UPDATE organizations SET name = $2, description = $3, settings = $4, tier = $5, managed_by = $6, is_active = $7, updated_at = $8
 WHERE id = $1`, id, name, description, settings, tier, managedBy, isActive, now); err != nil {
 		return nil, err

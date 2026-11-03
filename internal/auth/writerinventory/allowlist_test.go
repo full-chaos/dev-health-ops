@@ -14,7 +14,7 @@ var Allowlist = []Entry{
 	{File: "internal/api/billing/subscription.go", Func: "handlers.syncOrgLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/subscriptionhooks.go", Func: "handlers.revokeLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/webhook.go", Func: "handlers.persistLicense", Table: "public.organizations", Verb: "UPDATE"},
-	{File: "internal/api/orgs/orgs.go", Func: "handlers.updateOwnOrg", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/orgs/orgs_owned.go", Func: "handlers.ownUpdateSQL", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/changepassword.go", Func: "handlers.changePassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/invites.go", Func: "handlers.acceptInvite", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/api/session/linktokens.go", Func: "deleteLinkTokens", Table: "public.email_verification_tokens", Verb: "DELETE"},
@@ -214,6 +214,12 @@ var Allowlist = []Entry{
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.narrowScopes", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.revokeRegistry", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/outboxprojection/store.go", Func: "Engine.upsertProjection", Table: "auth.credential_projection", Verb: "UPSERT"},
+	// CHAOS-10896 (acp answers-10896-3): the push projection reader moves its low-water mark and parks, retimes and releases rows of
+	// its retry table, each inside audit.Commit.
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.advance", Table: "auth.projection_cursor", Verb: "UPDATE"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
+	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},

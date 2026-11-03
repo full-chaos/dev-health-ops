@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // revokeAllLive revokes every effectively live session of the principal inside
@@ -47,7 +48,11 @@ func (s *Store) revokeAllLive(ctx context.Context, tx audit.TxOps, principal str
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return len(ids), s.revokeSessions(ctx, tx, ids, revokedByCaller)
+	at, err := s.revokeSessionsBulk(ctx, tx, ids, revokedByCaller, false)
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), tx.AddEvent(sessionevent.Principal(principal, sessionevent.ReasonCaller, at))
 }
 
 // Ended is what EndAllInTx ended: the auth sessions it revoked and the go-api

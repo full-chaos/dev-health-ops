@@ -65,6 +65,7 @@ internal/auth/publicaudit
 internal/auth/ratelimitvalkey
 internal/auth/requestid
 internal/auth/session
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
@@ -160,6 +161,7 @@ internal/testsupport/platformroleseam
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/smtpcapture
+internal/testsupport/superuserwriter
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/api/externalingest/testdata

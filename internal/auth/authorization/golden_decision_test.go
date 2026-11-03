@@ -93,11 +93,13 @@ type goldenRequest struct {
 }
 
 type goldenExpect struct {
-	Allowed        bool   `json:"allowed"`
-	Reason         string `json:"reason"`
-	CacheClass     string `json:"cache_class"`
-	ExpiresIn      *int64 `json:"expires_in_seconds"`
-	PolicyRevision int    `json:"policy_revision"`
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason"`
+	// WireReasonCode is checked against the wire map in internal/auth/authapi.
+	WireReasonCode *string `json:"wire_reason_code"`
+	CacheClass     string  `json:"cache_class"`
+	ExpiresIn      *int64  `json:"expires_in_seconds"`
+	PolicyRevision int     `json:"policy_revision"`
 }
 
 type goldenVector struct {

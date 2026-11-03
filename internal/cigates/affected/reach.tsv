@@ -91,6 +91,7 @@ internal/apiservice	provisioning_credential.go	internal/apiservice/ownershipvenu
 internal/apiservice	provisioning_credential.go	internal/apiservice/ssovenue
 internal/apiservice	provisioning_credential.go	internal/auth/authapi
 internal/apiservice	provisioning_credential.go	internal/auth/authruntime
+internal/auth/acrlisting	client.go	internal/auth/acrlisting
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
@@ -106,6 +107,7 @@ internal/auth/contracts	contracts.go	internal/apiservice/acr
 internal/auth/contracts	contracts.go	internal/apiservice/admin
 internal/auth/contracts	contracts.go	internal/audit
 internal/auth/contracts	contracts.go	internal/auth/acrmint
+internal/auth/contracts	contracts.go	internal/auth/acrreconcile
 internal/auth/contracts	contracts.go	internal/auth/authapi
 internal/auth/contracts	contracts.go	internal/auth/authconfig
 internal/auth/contracts	contracts.go	internal/auth/authorization
@@ -136,6 +138,7 @@ internal/auth/contracts	contracts.go	internal/auth/outboxprojection
 internal/auth/contracts	contracts.go	internal/auth/passwordpolicy
 internal/auth/contracts	contracts.go	internal/auth/policycatalog
 internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
+internal/auth/contracts	contracts.go	internal/auth/pushprojection
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
 internal/auth/contracts	contracts.go	internal/auth/servicecred

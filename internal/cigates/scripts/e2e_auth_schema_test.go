@@ -35,3 +35,32 @@ func TestLiveE2EAppliesTheAuthSchemaBeforeSeedingASession(t *testing.T) {
 		}
 	}
 }
+
+// SSL_CERT_FILE replaces the system roots of every process that reads it. The runner sets it for the api and
+// query-api processes only, inside their subshells (indented), never for the whole run.
+func TestE2EScriptsScopeSSLCertFileToTheApiAndQueryApi(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]int{"ci/run_live_backend_e2e.sh": 1, "ci/lib/go_api_prove_e2e.sh": 1} {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for i, line := range strings.Split(string(raw), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#") || !strings.Contains(line, "SSL_CERT_FILE") {
+				continue
+			}
+			n++
+			if !strings.HasPrefix(line, "  ") {
+				t.Errorf("%s:%d sets SSL_CERT_FILE outside a subshell", rel, i+1)
+			}
+		}
+		if n != want {
+			t.Errorf("%s names SSL_CERT_FILE on %d lines, want %d", rel, n, want)
+		}
+	}
+}

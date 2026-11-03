@@ -366,7 +366,8 @@ Create each rule in SigNoz (Alerts, New alert, import JSON). PromQL rules do not
 
 1. In the metrics explorer, query each of the four instruments over the last hour: `devhealth_auth_push_reconcile_drift`, `devhealth_auth_push_reconcile_runs_total`, `devhealth_auth_push_projection_parked_rows`, `devhealth_auth_push_projection_final_rows`.
 2. Expected with the probe on and no drift: the drift gauge has no sample, the run counter has `outcome = ok` rising, parked and final rows are 0.
-3. A query that returns "no data" means that the metric is not scraped or pushed, the probe is off, or the collector is down. Stop and report; do not save the rule.
+3. An absent drift gauge is expected when the run counter is advancing (`outcome = ok` rising). It is the healthy no-drift state: do not stop for it.
+4. No data for the run counter, the parked rows or the final rows, or an absent drift gauge while the run counter is not advancing, means that the metric is not scraped or pushed, the probe is off, or the collector is down. Stop and report; do not save the rule.
 
 ## Step 3: drift rule fires
 

@@ -25,6 +25,7 @@ const (
 type AuthorizationObligations struct {
 	TenantScope         *string   `json:"tenant_scope,omitempty"`
 	RepositoryAllowlist *[]string `json:"repository_allowlist,omitempty"`
+	RepositoryScope     *string   `json:"repository_scope,omitempty"`
 	Redaction           *[]string `json:"redaction,omitempty"`
 	MinimumAssurance    *string   `json:"minimum_assurance,omitempty"`
 	StepUp              *bool     `json:"step_up,omitempty"`

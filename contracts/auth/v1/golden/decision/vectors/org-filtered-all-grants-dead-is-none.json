@@ -7,7 +7,7 @@
       "repository_allowlist": [],
       "tenant_scope": "org-a"
     },
-    "policy_revision": 11,
+    "policy_revision": 12,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },

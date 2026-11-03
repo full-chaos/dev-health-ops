@@ -163,7 +163,7 @@ func TestEveryAuthServiceBearerRowAcceptsTheUserTokenAndKeepsTheLegacyOptIn(t *t
 	}
 	want := []string{
 		"GET " + PatternCurrent, "POST " + PatternRevoke, "POST " + PatternRevokeAll,
-		"POST " + PatternSocialLink, "DELETE " + PatternSocialUnlink, "POST " + PatternChangePassword,
+		"POST " + PatternSocialLink, "DELETE " + PatternSocialUnlink, "POST " + PatternChangePassword, "POST " + PatternCompatSwitchOrg,
 	}
 	if len(byProfile) != len(want) {
 		t.Fatalf("%d access rows, want %d: %v", len(byProfile), len(want), byProfile)

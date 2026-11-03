@@ -90,7 +90,59 @@ func knownStatus(s pushlifecycle.Status) bool {
 // sides terminal, whichever kind; any revision difference. Findings are sorted
 // by id, then class.
 func Diff(domain []Token, projected []Projected, now time.Time) ([]Finding, error) {
-	return nil, nil
+	d := make(map[string]Token, len(domain))
+	for _, t := range domain {
+		if _, dup := d[t.ID]; dup {
+			return nil, fmt.Errorf("%w (domain)", ErrDuplicate)
+		}
+		d[t.ID] = t
+	}
+	p := make(map[string]Projected, len(projected))
+	for _, r := range projected {
+		if !knownStatus(r.Status) {
+			return nil, fmt.Errorf("%w: %q (projection)", ErrUnknownStatus, r.Status)
+		}
+		if _, dup := p[r.ID]; dup {
+			return nil, fmt.Errorf("%w (projection)", ErrDuplicate)
+		}
+		p[r.ID] = r
+	}
+	var out []Finding
+	for id, t := range d {
+		if t.Unwireable {
+			out = append(out, Finding{ClassUnwireable, id})
+			continue
+		}
+		r, ok := p[id]
+		if !ok {
+			out = append(out, Finding{ClassMissing, id})
+			continue
+		}
+		if t.Organization != r.Organization || t.SourceID != r.SourceID {
+			out = append(out, Finding{ClassBinding, id})
+		}
+		if statusDrifts(t, r, now) {
+			out = append(out, Finding{ClassStatus, id})
+		}
+		if !sameScopes(t.Scopes, r.Scopes) {
+			out = append(out, Finding{ClassScopes, id})
+		}
+		if !sameInstant(t.ExpiresAt, r.ExpiresAt) {
+			out = append(out, Finding{ClassExpiry, id})
+		}
+	}
+	for id, r := range p {
+		if _, ok := d[id]; !ok && !r.Status.Terminal() {
+			out = append(out, Finding{ClassExtra, id})
+		}
+	}
+	slices.SortFunc(out, func(a, b Finding) int {
+		if c := strings.Compare(a.ID, b.ID); c != 0 {
+			return c
+		}
+		return strings.Compare(string(a.Class), string(b.Class))
+	})
+	return out, nil
 }
 
 // statusDrifts compares liveness. A revoked domain token with a live
@@ -132,9 +184,12 @@ func sameInstant(a, b *time.Time) bool {
 // Confirm keeps the findings of the first pass that the second pass, run after
 // a delay, reports again with the same class. Only those are alerted: an event
 // that landed between the passes clears a finding.
-func Confirm(first, second []Finding) []Finding { return nil }
-
-var (
-	_ = fmt.Sprint
-	_ = strings.Compare
-)
+func Confirm(first, second []Finding) []Finding {
+	var out []Finding
+	for _, f := range first {
+		if slices.Contains(second, f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}

@@ -12,7 +12,7 @@ import (
 var (
 	mixedInsertReadiness = regexp.MustCompile(`NOT required\.allow_insert\s+AND 'INSERT' = ANY \(held\.any_column\)(?:[^O]|O[^R])*?declared\.privilege = 'INSERT'`)
 	// The diagnostic carve-out is exact: a column INSERT is excess unless the (table, column) pair is declared ($7, $8).
-	mixedInsertDiagnosis = regexp.MustCompile(`(?s)NOT allow_insert AND \(\s*has_table_privilege\(\$1, relation, 'INSERT'\)\s+OR EXISTS \(.*?pg_attribute.*?has_column_privilege\(\$1, relation, \w+\.attname, 'INSERT'\).*?unnest\(\$7::text\[\], \$8::text\[\]\).*?declared\.table_name = resolved\.table_name AND declared\.column_name = attribute\.attname.*?\) AS excess_insert`)
+	mixedInsertDiagnosis = regexp.MustCompile(`(?s)NOT allow_insert AND \(\s*has_table_privilege\(\$1, relation, 'INSERT'\)\s+OR EXISTS \(.*?pg_attribute.*?has_column_privilege\(\$1, relation, \w+\.attname, 'INSERT'\)\s+AND NOT EXISTS \(\s+SELECT 1 FROM unnest\(\$7::text\[\], \$8::text\[\]\).*?declared\.table_name = resolved\.table_name AND declared\.column_name = attribute\.attname.*?\) AS excess_insert`)
 	// The column sweep refuses an INSERT on any undeclared column; only a table-wide INSERT flag exempts it.
 	undeclaredInsertSweep = regexp.MustCompile(`privilege_type\.privilege = 'INSERT' AND mixed\.allow_insert`)
 )

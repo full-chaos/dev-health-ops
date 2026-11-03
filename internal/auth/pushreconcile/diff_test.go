@@ -213,15 +213,16 @@ func TestC12bNotDriftActivePastExpiryNoEvent(t *testing.T) {
 }
 
 func TestC12cNotDriftBothTerminalDifferentKind(t *testing.T) {
-	a, b := tok("a"), tok("b")
-	a.Revoked, b.ExpiresAt = true, &past
-	pa, pb := proj("a"), proj("b")
-	pa.Status, pb.Status = pushlifecycle.StatusExpired, pushlifecycle.StatusRevoked
-	pb.ExpiresAt = &past
-	// b: domain not revoked and past expiry, projection revoked: the domain reads live, so that is drift.
-	want(t, run(t, []Token{a, b}, []Projected{pa, pb}), Finding{ClassStatus, "b"})
-	// a: domain revoked, projection expired: both dead, no drift.
+	a := tok("a")
+	a.Revoked = true
+	pa := proj("a")
+	pa.Status = pushlifecycle.StatusExpired
 	want(t, run(t, []Token{a}, []Projected{pa}))
+	// Domain past expiry (dead), projection revoked (dead): both non-live, no status drift.
+	b, pb := tok("b"), proj("b")
+	b.ExpiresAt, pb.ExpiresAt = &past, &past
+	pb.Status = pushlifecycle.StatusRevoked
+	want(t, run(t, []Token{b}, []Projected{pb}))
 }
 
 func TestC13ConfirmKeepsOnlyTheSameFindingInBothPasses(t *testing.T) {
@@ -235,10 +236,10 @@ func TestC13ConfirmKeepsOnlyTheSameFindingInBothPasses(t *testing.T) {
 func TestC14FindingsSortedByIdThenClass(t *testing.T) {
 	a, b := tok("b"), tok("a")
 	pa, pb := proj("b"), proj("a")
-	pa.Scopes, pa.Organization = []string{"x"}, orgB
+	pa.Scopes, pa.Organization = []string{"x"}, orgB // scopes and binding: one finding, the higher class
 	pb.Organization = orgB
 	got := run(t, []Token{a, b}, []Projected{pa, pb})
-	want(t, got, Finding{ClassBinding, "a"}, Finding{ClassBinding, "b"}, Finding{ClassScopes, "b"})
+	want(t, got, Finding{ClassBinding, "a"}, Finding{ClassScopes, "b"})
 }
 
 func TestC14bClassesAreTheClosedSetOfSevenLabels(t *testing.T) {
@@ -252,4 +253,76 @@ func TestC14bClassesAreTheClosedSetOfSevenLabels(t *testing.T) {
 		}
 		seen[c] = true
 	}
+}
+
+// The effective-liveness matrix (r1 P1 1): revoked_at unset/set x expiry nil/future/past x projected
+// active/revoked/expired, every other field equal. Status drifts exactly when the two sides'
+// liveness at now differs; each side's liveness is its revocation or status AND its expiry.
+func TestC16StatusComparesEffectiveLivenessMatrix(t *testing.T) {
+	type expiry struct {
+		name string
+		at   *time.Time
+	}
+	expiries := []expiry{{"no_expiry", nil}, {"future_expiry", &future}, {"past_expiry", &past}}
+	statuses := []pushlifecycle.Status{pushlifecycle.StatusActive, pushlifecycle.StatusRevoked, pushlifecycle.StatusExpired}
+	// wantStatus[revoked][expiry index][status index]
+	wantStatus := map[bool][3][3]bool{
+		false: {{false, true, true}, {false, true, true}, {false, false, false}},
+		true:  {{true, false, false}, {true, false, false}, {false, false, false}},
+	}
+	for _, revoked := range []bool{false, true} {
+		for ei, e := range expiries {
+			for si, st := range statuses {
+				d, p := tok("c"), proj("c")
+				d.Revoked, d.ExpiresAt, p.ExpiresAt, p.Status = revoked, e.at, e.at, st
+				got := run(t, []Token{d}, []Projected{p})
+				if wantStatus[revoked][ei][si] {
+					want(t, got, Finding{ClassStatus, "c"})
+				} else if len(got) != 0 {
+					t.Errorf("revoked=%v %s/%s: findings = %v, want none", revoked, e.name, st, got)
+				}
+				if wantStatus[revoked][ei][si] && len(got) != 1 {
+					t.Errorf("revoked=%v %s/%s: %v", revoked, e.name, st, got)
+				}
+			}
+		}
+	}
+}
+
+// One class per credential (r1 P1 2): the 15 non-empty combinations of binding, status, scopes and
+// expiry differences each yield exactly one finding, the highest-precedence class:
+// status > scopes > binding > expiry.
+func TestC17OneClassPerCredentialByPrecedence(t *testing.T) {
+	later := future.Add(time.Hour)
+	for mask := 1; mask < 16; mask++ {
+		d, p := tok("c"), proj("c")
+		var wantClass Class
+		if mask&8 != 0 { // expiry (both sides stay live)
+			p.ExpiresAt, wantClass = &later, ClassExpiry
+		}
+		if mask&1 != 0 { // binding
+			p.Organization, wantClass = orgB, ClassBinding
+		}
+		if mask&4 != 0 { // scopes
+			p.Scopes, wantClass = []string{"ingest:write"}, ClassScopes
+		}
+		if mask&2 != 0 { // status
+			p.Status, wantClass = pushlifecycle.StatusRevoked, ClassStatus
+		}
+		got := run(t, []Token{d}, []Projected{p})
+		if len(got) != 1 || got[0].Class != wantClass || got[0].ID != "c" {
+			t.Errorf("mask %04b: findings = %v, want exactly one %s", mask, got, wantClass)
+		}
+	}
+}
+
+func TestC17bMissingExtraAndUnwireableAreExclusive(t *testing.T) {
+	d := tok("u")
+	d.Unwireable, d.Revoked = true, true
+	p := proj("u")
+	p.Scopes, p.Organization = nil, orgB
+	want(t, run(t, []Token{d}, []Projected{p}), Finding{ClassUnwireable, "u"})
+	x := proj("x")
+	x.Scopes, x.Organization = nil, orgB
+	want(t, run(t, nil, []Projected{x}), Finding{ClassExtra, "x"})
 }

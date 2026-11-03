@@ -219,10 +219,11 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		t.Errorf("pt: accepted bounded event: %s", problem)
 	}
 	acceptedEntries := newStreamEntries(parseStreamEntries(goStream), parseStreamEntries(venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")))
-	if len(acceptedEntries) != 1 {
-		t.Errorf("pt: accepted bounded event added %d stream entries, want 1", len(acceptedEntries))
+	entryProblem := acceptedEntryProblem(acceptedEntries)
+	if entryProblem != "" {
+		t.Errorf("pt: accepted bounded event stream entry: %s", entryProblem)
 	}
-	fmt.Fprintf(&receipt, "%-58s go-only     go=%d %s\n", "pt: accepted bounded event", accepted.Status, venueoracle.Mark(problem == "" && len(acceptedEntries) == 1))
+	fmt.Fprintf(&receipt, "%-58s go-only     go=%d %s\n", "pt: accepted bounded event", accepted.Status, venueoracle.Mark(problem == "" && entryProblem == ""))
 	// The fixture's qa and design teams have two holders, so their drift and
 	// member happy paths answer 409; one team with one holder and a project
 	// key pins those paths, Go-only, after every Python-compared request and

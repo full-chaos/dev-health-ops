@@ -39,6 +39,33 @@ func acceptedTelemetryProblem(status int, body string) string {
 	return ""
 }
 
+// acceptedEntryProblem is empty when the new stream entries are exactly one entry, in the
+// anonymous stream, holding the submitted event id.
+func acceptedEntryProblem(entries []string) string {
+	if len(entries) != 1 {
+		return fmt.Sprintf("%d new stream entries, want 1", len(entries))
+	}
+	entry := entries[0]
+	if key := streamKeyOfEntry(entry); key != "anonymous" {
+		return fmt.Sprintf("entry is in stream %q, want anonymous", key)
+	}
+	_, rest, found := strings.Cut(entry, ": events=")
+	if !found {
+		return "entry has no events field"
+	}
+	text, _, _ := strings.Cut(rest, " ingestion_id=")
+	var events []struct {
+		EventID string `json:"eventId"`
+	}
+	if err := json.Unmarshal([]byte(text), &events); err != nil {
+		return fmt.Sprintf("entry events are not JSON: %v", err)
+	}
+	if len(events) != 1 || events[0].EventID != "e-accepted" {
+		return fmt.Sprintf("entry events are %s, want one event with eventId e-accepted", text)
+	}
+	return ""
+}
+
 // requestEntries are the stream entries one request added to the Go plane.
 type requestEntries struct {
 	request string
@@ -254,6 +281,27 @@ func TestAcceptedTelemetryProblem(t *testing.T) {
 		{"not JSON", 202, `x`, true},
 	} {
 		if got := acceptedTelemetryProblem(c.status, c.body); (got != "") != c.bad {
+			t.Errorf("%s: problem %q, bad=%v", c.name, got, c.bad)
+		}
+	}
+}
+
+func TestAcceptedEntryProblem(t *testing.T) {
+	const good = `product-telemetry:anonymous:events: events=[{"eventId":"e-accepted"}] ingestion_id=<blank> org_id_hash= source=dev-health-web`
+	const otherStream = `product-telemetry:h2:events: events=[{"eventId":"e-accepted"}] ingestion_id=<blank> org_id_hash=h2 source=dev-health-web`
+	const otherEvent = `product-telemetry:anonymous:events: events=[{"eventId":"other"}] ingestion_id=<blank> org_id_hash= source=dev-health-web`
+	for _, c := range []struct {
+		name    string
+		entries []string
+		bad     bool
+	}{
+		{"anonymous with the event", []string{good}, false},
+		{"other stream with the event", []string{otherStream}, true},
+		{"anonymous with other event id", []string{otherEvent}, true},
+		{"no entries", nil, true},
+		{"two entries", []string{good, otherEvent}, true},
+	} {
+		if got := acceptedEntryProblem(c.entries); (got != "") != c.bad {
 			t.Errorf("%s: problem %q, bad=%v", c.name, got, c.bad)
 		}
 	}

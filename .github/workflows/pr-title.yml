@@ -1,0 +1,38 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [ opened, edited, synchronize, reopened, ready_for_review ]
+  merge_group:
+
+concurrency:
+  # Canonical fleet shape (see governance.yml): PR number on pull_request, commit sha on merge_group so a queue entry is never cancelled.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the PR title check
+        run: bash ci/pr_title_check_test.sh
+
+      - name: Check the PR title
+        env:
+          EVENT: ${{ github.event_name }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash ci/pr_title_check.sh

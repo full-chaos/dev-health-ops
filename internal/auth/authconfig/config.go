@@ -298,7 +298,7 @@ type Config struct {
 
 // Access token classes (EnvAccessTokenClass).
 const (
-	AccessClassHS256Compat = "hs256_compat"
+	AccessClassHS256Compat = "hs256_compat" // gitleaks:allow
 	AccessClassEdDSA       = "eddsa"
 )
 

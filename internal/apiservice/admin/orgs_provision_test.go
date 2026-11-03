@@ -608,6 +608,25 @@ func TestProvisionClientRefusalsAre4xx(t *testing.T) {
 	})
 }
 
+// CHAOS-11800 (pm 2026-11-03): the strict role rule stays. With the proxy on, an
+// empty or non-catalog role is a 400 and auth-service is never called; the
+// legacy row orgs_crud.json "add member empty role" (201, proxy OFF) is an
+// accepted divergence: no role outside the catalog.
+func TestProvisionAddEmptyRoleIsRefusedWithProxyOn(t *testing.T) {
+	for name, role := range map[string]string{"empty": "", "banana": "banana"} {
+		t.Run(name, func(t *testing.T) {
+			route := provisionRoutes[0]
+			route.body = `{"user_id": "` + provTarget.String() + `", "role": "` + role + `"}`
+			db := &provisionDB{rows: provisionRowsFor()}
+			auth := &fakeProvisioner{db: db}
+			code, body := callRoute(newProvisionHandlers(db, auth), route)
+			if code != 400 || body != provDetail("Invalid role: "+role) || len(auth.calls) != 0 {
+				t.Errorf("role %q: %d %s calls %v, want 400 Invalid role and no auth call", role, code, body, auth.calls)
+			}
+		})
+	}
+}
+
 func indexOf(log []string, step string) int {
 	for i, s := range log {
 		if s == step {

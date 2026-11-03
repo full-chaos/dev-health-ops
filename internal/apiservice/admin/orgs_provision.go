@@ -22,7 +22,7 @@ import (
 // transaction or row lock across the call and writes nothing of its own; a
 // success body is read back from the row auth-service projected. Each auth
 // refusal maps to the answer go-api gives today (PARITY-10988); any other
-// refusal or failure is the 503 of the reactivate route.
+// refusal or a real dependency failure is the 503 of the reactivate route.
 
 // provisionAnswer is the go-api answer of one auth reason code.
 type provisionAnswer struct {
@@ -35,12 +35,25 @@ type provisionAnswer struct {
 var actorAnswers = map[string]provisionAnswer{
 	"superuser_required": {http.StatusForbidden, "Superuser access required"},
 	"admin_required":     {http.StatusForbidden, "Admin access required for organization"},
+	// CHAOS-11800: a suspended org and a deactivated actor are client errors,
+	// never a 503.
+	"organization_suspended": {http.StatusForbidden, "Organization is suspended"},
+	"deactivated":            {http.StatusForbidden, "Account is deactivated"},
 }
+
+// principalNotFound is the auth reason for a user with no principal row; each
+// route answers it as go-api answers the same fact today.
+const principalNotFound = "principal_not_found"
 
 // writeProvisionRefusal writes the answer of err: the route's own table, then
 // the actor refusals, else 503.
 func (h *handlers) writeProvisionRefusal(ctx context.Context, w http.ResponseWriter, route string, err error, answers map[string]provisionAnswer) {
 	reason := authprovision.ReasonOf(err)
+	// A 5xx refusal is a dependency failure: always the 503, whatever its code.
+	var refused *authprovision.Refused
+	if errors.As(err, &refused) && refused.Status >= http.StatusInternalServerError {
+		reason = ""
+	}
 	if answer, ok := answers[reason]; ok && reason != "" {
 		policy.WriteDetail(w, answer.status, answer.detail, nil)
 		return
@@ -70,6 +83,9 @@ func (h *handlers) addMemberInAuth(ctx context.Context, w http.ResponseWriter, u
 	if _, err := h.orgProvision.AddMember(ctx, orgID, target, user.ID, role, invitedBy); err != nil {
 		answers := invalidRole(role)
 		answers["already_member"] = provisionAnswer{http.StatusBadRequest, "User is already a member of this organization"}
+		answers[principalNotFound] = provisionAnswer{http.StatusNotFound, "User not found"}
+		answers["inviter_not_found"] = provisionAnswer{http.StatusNotFound, "Inviter not found"}
+		answers["membership_suspended"] = provisionAnswer{http.StatusConflict, "Membership is suspended"}
 		h.writeProvisionRefusal(ctx, w, "add_member", err, answers)
 		return
 	}
@@ -80,6 +96,8 @@ func (h *handlers) updateMemberRoleInAuth(ctx context.Context, w http.ResponseWr
 	if _, err := h.orgProvision.ChangeRole(ctx, orgID, target, user.ID, role); err != nil {
 		answers := invalidRole(role)
 		answers["membership_not_found"] = provisionAnswer{http.StatusNotFound, "Membership not found"}
+		answers[principalNotFound] = provisionAnswer{http.StatusNotFound, "Membership not found"}
+		answers["membership_suspended"] = provisionAnswer{http.StatusNotFound, "Membership not found"}
 		answers["last_owner"] = provisionAnswer{http.StatusBadRequest, "Cannot remove the last owner of an organization"}
 		h.writeProvisionRefusal(ctx, w, "update_member_role", err, answers)
 		return
@@ -109,6 +127,7 @@ func (h *handlers) removeMemberInAuth(ctx context.Context, w http.ResponseWriter
 	if err := h.orgProvision.RemoveMember(ctx, orgID, target, user.ID); err != nil {
 		h.writeProvisionRefusal(ctx, w, "remove_member", err, map[string]provisionAnswer{
 			"membership_not_found": {http.StatusNotFound, "Membership not found"},
+			principalNotFound:      {http.StatusNotFound, "Membership not found"},
 			"last_owner":           {http.StatusBadRequest, "Cannot remove the last owner of an organization"},
 		})
 		return
@@ -139,6 +158,7 @@ func (h *handlers) transferOwnershipInAuth(ctx context.Context, w http.ResponseW
 		h.writeProvisionRefusal(ctx, w, "transfer_ownership", err, map[string]provisionAnswer{
 			"not_owner":         {http.StatusBadRequest, "Source user is not an owner"},
 			"target_not_member": {http.StatusBadRequest, "Target user is not a member"},
+			principalNotFound:   {http.StatusBadRequest, "Target user is not a member"},
 		})
 		return
 	}

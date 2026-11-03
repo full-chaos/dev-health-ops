@@ -11,6 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestCreateRefusesBadSlugBeforeAnyWrite(t *testing.T) {
@@ -147,6 +148,7 @@ func TestAuditRowsPassTheClosedAttributeRules(t *testing.T) {
 	actor := uuid.New()
 	for _, v := range []verb{verbCreate, verbRename, verbSuspend, verbReactivate} {
 		a := auditFor(v, id, Actor{PrincipalID: &actor}, StatusActive, StatusSuspended)
+		auditwire.MustValidate(t, a)
 		if err := audit.ValidateAttributes(a.Attributes); err != nil {
 			t.Errorf("%s: %v", v, err)
 		}

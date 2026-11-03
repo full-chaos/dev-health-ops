@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -67,11 +66,7 @@ func RevokeUnpinned(ctx context.Context, pool *pgxpool.Pool, schema authschema.V
 					WHERE id = ANY($1::uuid[]) AND revoked_at IS NULL`, ids, revokedUnpinned)
 				return err
 			},
-			Audit: audit.AuditEvent{
-				EventType: "auth.session.revoked", Outcome: audit.OutcomeAllowed,
-				Attributes: map[string]any{"reason_code": "session_revoked", "target_kind": "session"},
-				RequestID:  requestid.Audit(ctx),
-			},
+			Audit:     unpinnedRevokedEvent(ctx),
 			OffStream: audit.OffStreamSessionLifecycle,
 		})
 		if errors.Is(err, audit.ErrNoStateChange) {

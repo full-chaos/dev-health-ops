@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestResetRequestedEventOfAKnownPrincipal(t *testing.T) {
@@ -59,6 +60,7 @@ func TestResetRequestedEventsAreValidAndHoldNoAddress(t *testing.T) {
 		"no org":  resetRequestedEvent(uuid.New(), true, nil),
 		"unknown": resetRequestedEvent(uuid.New(), false, nil),
 	} {
+		auditwire.MustValidate(t, e)
 		if err := audit.ValidateAttributes(e.Attributes); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

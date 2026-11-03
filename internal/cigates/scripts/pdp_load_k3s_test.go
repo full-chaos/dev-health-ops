@@ -230,6 +230,10 @@ for i in "${!args[@]}"; do
   if [ "${args[$i]##*/}" = "pod.sh" ] && [ "${args[$((i-1))]}" = sh ]; then
     verb="${args[$((i+1))]}"
     if [ "${verb}" = run ]; then exec loadtest "${args[@]:$((i+2))}"; fi
+    if [ "${verb}" = mint ]; then
+      echo m >>"${PDP_FAKE_DIR}/mint.log"
+      [ "$(wc -l <"${PDP_FAKE_DIR}/mint.log")" -ne "${PDP_FAIL_MINT:-0}" ] || { echo 'fake mint failed' >&2; exit 42; }
+    fi
     exit 0
   fi
 done
@@ -238,6 +242,7 @@ case "$*" in
   *"get namespace"*) exit 1 ;;
   *" cp "*"pdp-runner:/work/"*.json*)
     dest="${args[$((${#args[@]}-1))]}"; src="${args[$((${#args[@]}-2))]}"
+    [ "$(basename "${src}")" != "${PDP_FAIL_COPY:-}" ] || { echo 'fake kubectl cp failed' >&2; exit 42; }
     cp "${PDP_FAKE_DIR}/$(basename "${src}")" "${dest}"; exit 0 ;;
   *" psql "*) cat >/dev/null; printf 'prn_AAAAAAAAAAAAAAAAAAAAAA'; exit 0 ;;
 esac
@@ -275,7 +280,8 @@ func pdpFakeRun(t *testing.T, fail string, extra ...string) (res cmdResult, ran 
 	if err := os.MkdirAll(fake, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{"kubectl": pdpFakeKubectl, "loadtest": pdpFakeLoadtest, "helm": "#!/usr/bin/env bash\nexit 0\n"} {
+	fakeSum := "#!/usr/bin/env bash\n[ \"$(basename \"${1:-}\")\" != \"${PDP_FAIL_HASH:-}\" ] || { echo 'fake sha256sum failed' >&2; exit 42; }\nexec /usr/bin/sha256sum \"$@\"\n"
+	for name, body := range map[string]string{"kubectl": pdpFakeKubectl, "loadtest": pdpFakeLoadtest, "helm": "#!/usr/bin/env bash\nexit 0\n", "sha256sum": fakeSum} {
 		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -345,5 +351,119 @@ func TestPDPLoadK3sStopsAtTheFirstBreachOfEveryRun(t *testing.T) {
 				t.Errorf("cache-on breach at %s: exit %d, %d runs; want a failure after %d runs\n%v", load, res.code, len(ran), want, ran)
 			}
 		})
+	}
+}
+
+// A step inside run_one that fails (mint, report copy, hash) stops the run at once, names the step, marks the row, and
+// never ends in PASS: run_one is called in && chains and || lists, where bash ignores set -e inside it.
+func TestPDPLoadK3sAFailedStepInsideRunOneStopsTheRun(t *testing.T) {
+	type cell struct{ leg, profile, load, extra string }
+	var cells []cell
+	cells = append(cells, cell{"knee", "authorize-knee", "peak-100", ""})
+	for _, load := range []string{"normal", "peak"} {
+		for _, p := range []string{"authorize-low", "authorize-low-hot", "authorize-high", "authorize-deny", "authorize-mix", "authorize-batch-10", "authorize-batch-100"} {
+			leg := "gated"
+			if p == "authorize-batch-100" {
+				leg = "recorded"
+			}
+			cells = append(cells, cell{leg, p, load, ""})
+		}
+	}
+	cells = append(cells, cell{"cacheon", "authorize-mix", "normal", "AUTH_PDP_CACHE_ON=1"}, cell{"cacheon", "authorize-mix", "peak", "AUTH_PDP_CACHE_ON=1"})
+	for i, c := range cells {
+		report := fmt.Sprintf("%s-%s-%s.json", c.leg, c.profile, c.load)
+		mintNo := 3 + i
+		if i == 0 {
+			mintNo = 2
+		} else if i >= 15 {
+			mintNo = 19 + i - 15
+		}
+		for _, step := range []string{"mint", "copy", "hash"} {
+			t.Run(step+"_"+report, func(t *testing.T) {
+				extra := []string{"PDP_FAIL_MINT=" + fmt.Sprint(mintNo)}
+				ranWant := i + 1
+				switch step {
+				case "copy":
+					extra = []string{"PDP_FAIL_COPY=" + report}
+				case "hash":
+					extra = []string{"PDP_FAIL_HASH=" + report}
+				default:
+					ranWant = i
+				}
+				if c.extra != "" {
+					extra = append(extra, c.extra)
+				}
+				res, ran, summary := pdpFakeRun(t, "", extra...)
+				if res.code == 0 || strings.Contains(res.stdout, "RUN PASSED") {
+					t.Fatalf("exit %d after a failed %s\n%s", res.code, step, res.stdout)
+				}
+				if len(ran) != ranWant && !(ranWant == 0 && len(ran) == 0) {
+					t.Errorf("ran %d runs %v; want %d", len(ran), ran, ranWant)
+				}
+				if want := "step " + step + " failed"; !strings.Contains(res.stderr, want) {
+					t.Errorf("stderr lacks %q\n%s", want, res.stderr)
+				}
+				if want := "FAILED(" + step + ")"; !strings.Contains(summary, want) {
+					t.Errorf("summary lacks %q\n%s", want, summary)
+				}
+			})
+		}
+	}
+}
+
+// run_one is called in && chains, || lists and `if !` lists, where bash ignores set -e inside it: every step in its body
+// must carry its own check, and every call site must be one of those conditional forms (9 sites in the source, 17 runs).
+func TestPDPLoadK3sRunOneChecksEveryStepItself(t *testing.T) {
+	lines := strings.Split(readText(t, filepath.Join(rootOf(t), pdpScript)), "\n")
+	start, end := -1, -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "run_one() {") {
+			start = i
+		}
+		if start >= 0 && end < 0 && i > start && l == "}" {
+			end = i
+		}
+	}
+	if start < 0 || end < 0 {
+		t.Fatal("run_one body not found")
+	}
+	steps := regexp.MustCompile(`(^|[^A-Za-z_])(pod |K |kc |sha256sum)|>>"\$\{SUMMARY\}"`)
+	seen := map[string]bool{}
+	for _, l := range lines[start+1 : end] {
+		code := strings.TrimSpace(l)
+		if strings.HasPrefix(code, "printf '%s %s %s: ") {
+			continue
+		}
+		m := steps.FindString(l)
+		if m == "" {
+			continue
+		}
+		seen[strings.TrimSpace(strings.Trim(m, " ()>\""))] = true
+		if !strings.Contains(l, "||") && !strings.HasPrefix(code, "if !") {
+			t.Errorf("run_one step without its own check: %q", code)
+		}
+	}
+	for _, want := range []string{"pod", "K", "sha256sum", `>>"${SUMMARY}"`} {
+		if !seen[want] {
+			t.Errorf("the census saw no %q step in run_one", want)
+		}
+	}
+	sites := 0
+	call := regexp.MustCompile(`^\s*run_one `)
+	for i, l := range lines {
+		if i > start && i < end || !strings.Contains(l, "run_one ") || strings.HasPrefix(strings.TrimSpace(l), "#") {
+			continue
+		}
+		sites++
+		prev := ""
+		if i > 0 {
+			prev = strings.TrimSpace(lines[i-1])
+		}
+		if !call.MatchString(l) || !(strings.Contains(l, "&&") || strings.Contains(l, "||") || strings.HasSuffix(prev, "&&")) {
+			t.Errorf("run_one call outside a checked list: %q", strings.TrimSpace(l))
+		}
+	}
+	if sites != 9 {
+		t.Errorf("%d run_one call sites; want 9 (knee 1, gated 7, cache-on 1), run 17 times", sites)
 	}
 }

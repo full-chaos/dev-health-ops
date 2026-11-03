@@ -64,9 +64,9 @@ type decisionDocument struct {
 	Obligations *wireObligations `json:"obligations,omitempty"`
 }
 
-// maxRepositoryAllowlist is the bound of repository_allowlist in
-// authorization_decision.v1 (maxItems); a test holds the two equal.
-const maxRepositoryAllowlist = 256
+// maxRepositoryAllowlist is the bound of repository_allowlist in authorization_decision.v1 (maxItems), held
+// equal to the schema by a test; the decision core denies a list over it, this is the second check.
+const maxRepositoryAllowlist = authorization.MaxRepositoryAllowlist
 
 // wireObligations is the obligations member of a decision. Every member is a
 // pointer: RepositoryAllowlist points at a non-nil slice, so an empty list (NONE)
@@ -125,7 +125,7 @@ func wireObligationsOf(d authorization.Decision, organizationID string) (*wireOb
 		}
 		keys := make([]string, 0, len(o.RepositoryAllowlist))
 		for _, key := range o.RepositoryAllowlist {
-			if !authorizeRepositoryKeyPattern.MatchString(key) || slices.Contains(keys, key) {
+			if key == "*" || !authorizeRepositoryKeyPattern.MatchString(key) || slices.Contains(keys, key) {
 				return nil, errObligationsInvalid
 			}
 			keys = append(keys, key)

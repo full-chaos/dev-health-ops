@@ -12765,6 +12765,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "none: no authorization read (internal/api/session/session.go:151)",
+      "delegated_bearer": "denied",
       "disclosure_behavior": null,
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)",
@@ -12780,7 +12781,7 @@
           "note": "Pattern:",
           "path": "internal/api/session/session.go"
         },
-        "description": "h.logout: the handler reads an optional bearer access token (optionalUser) and revokes the refresh token in the body; it refuses neither when absent."
+        "description": "h.logout: the handler reads an optional bearer access token (optionalUser) and revokes the refresh token in the body; it refuses neither when absent. A delegated session's bearer is the Guard's refusal (Guard.RefuseDelegated in optionalUser)."
       },
       "public_rationale": null,
       "reachable_validators": [

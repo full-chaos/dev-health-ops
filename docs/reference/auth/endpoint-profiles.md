@@ -356,11 +356,15 @@ with an action the catalog marks `impersonation: denied`, and only for a `GET`
 or `HEAD` or an action the catalog marks `allowed`. Every other row is
 `denied`, the writes with no action included: a support need comes as a row
 with a catalog action. The deny applies to every delegated bearer,
-`platform_owner` too, until 6.12. `POST /api/v1/auth/validate` and
-`POST /api/v1/auth/logout` read the bearer outside the Guard and omit the
-field. The test `TestDelegatedBearerRowsFollowTheRule` holds the values equal
-to the rule; `TestEveryBearerReadOutsideTheGuardIsNamed` fails on a bearer
-read outside the Guard that is not named.
+`platform_owner` too, until 6.12. `POST /api/v1/auth/logout` reads its
+optional bearer outside the Guard and takes it to a write (the refresh revoke
+and the audit line), so its handler applies the Guard's refusal
+(`Guard.RefuseDelegated`) and its row is `denied`. `POST /api/v1/auth/validate`
+reads a token in the body, writes nothing and omits the field. The test
+`TestDelegatedBearerRowsFollowTheRule` holds the values equal to the rule;
+`TestEveryBearerReadOutsideTheGuardIsNamed` fails on a bearer read outside the
+Guard that is not named, and on a named reader that takes the bearer to a write
+without `Guard.RefuseDelegated`.
 
 This field is not `impersonation_policy`. That field says whether go-api's
 org-context override reaches a route.

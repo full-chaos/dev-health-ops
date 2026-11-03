@@ -222,7 +222,7 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz,
 		authFailure(w, "Invalid or expired token", err)
 		return nil, false
 	}
-	if g.refuseDelegated(w, r, user) {
+	if g.RefuseDelegated(w, r, user) {
 		return nil, false
 	}
 	switch {
@@ -279,7 +279,7 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	switch {
 	case err == nil:
-		if g.refuseDelegated(w, r, user) {
+		if g.RefuseDelegated(w, r, user) {
 			return nil, false
 		}
 		return user, true

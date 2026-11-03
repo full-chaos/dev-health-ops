@@ -375,7 +375,7 @@
           ]
         },
         "delegated_bearer": {
-          "description": "Whether a delegated session's bearer passes this route's gate: allowed or denied. On an auth-service row that authenticateWith gates, the row of the Go allowlist delegatedBearerOperations reads allowed. On a go-api row the Guard gates for a user bearer, go-api's Guard reads the value at start: allowed only outside /api/v1/admin, never with a catalog-denied action, and only for a GET or HEAD or a catalog-allowed action. A row neither gate reaches omits the field. It is not impersonation_policy: that field says whether go-api's org-context override reaches a route.",
+          "description": "Whether a delegated session's bearer passes this route's gate: allowed or denied. On an auth-service row that authenticateWith gates, the row of the Go allowlist delegatedBearerOperations reads allowed. On a go-api row the Guard gates for a user bearer, go-api's Guard reads the value at start: allowed only outside /api/v1/admin, never with a catalog-denied action, and only for a GET or HEAD or a catalog-allowed action. POST /api/v1/auth/logout reads its optional bearer outside the Guard and applies the Guard's refusal to it: denied. A row no gate reaches omits the field. It is not impersonation_policy: that field says whether go-api's org-context override reaches a route.",
           "enum": [
             "allowed",
             "denied"

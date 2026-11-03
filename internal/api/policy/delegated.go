@@ -21,12 +21,14 @@ func (a *Authenticator) DelegatedAllowed(profile string) bool {
 	return a.delegated != nil && a.delegated(profile)
 }
 
-// refuseDelegated answers 403 to a delegated session's bearer (the caller has
+// RefuseDelegated answers 403 to a delegated session's bearer (the caller has
 // ImpersonatedBy) on a route whose row does not admit it, and reports whether
 // it did. It applies to every delegated bearer, platform_owner's too, until the
 // PEP decides by action (6.12). Today's impersonation, the admin's own token
-// beside the admin's row, carries no ImpersonatedBy and passes.
-func (g *Guard) refuseDelegated(w http.ResponseWriter, r *http.Request, user *User) bool {
+// beside the admin's row, carries no ImpersonatedBy and passes. The Guard's
+// wraps call it; a handler that reads its bearer outside the Guard and takes
+// it to a write calls it too (logout).
+func (g *Guard) RefuseDelegated(w http.ResponseWriter, r *http.Request, user *User) bool {
 	if user == nil || user.ImpersonatedBy == nil || g.auth.DelegatedAllowed(r.Pattern) {
 		return false
 	}

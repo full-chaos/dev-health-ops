@@ -143,6 +143,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/postgres/pgconfig
 internal/storage/river
 internal/storage/roleacl

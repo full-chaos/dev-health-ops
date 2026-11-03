@@ -67,6 +67,9 @@ const kedaLabel = "keda"
 // errors and Verify (CHAOS-9369).
 const monitorLabel = "monitor"
 
+// migratorLabel is the label (never the name) the ops migration login carries in errors and Verify.
+const migratorLabel = "migrator"
+
 // monitorBuiltinRole is the one role the monitor login is a member of: the built-in
 // pg_monitor, which is what the OpenTelemetry collector's postgresql receiver needs
 // (pg_stat_* views) and nothing more.
@@ -99,7 +102,11 @@ type Options struct {
 	// Monitor is the OpenTelemetry collector's postgresql-receiver login (CHAOS-9369):
 	// LOGIN, CONNECT on the application database, member of the built-in pg_monitor,
 	// and nothing else -- no schema USAGE, no table privilege of any kind.
-	Monitor     Role
+	Monitor Role
+	// Migrator is the ops migration login (CHAOS-12614): LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION
+	// NOBYPASSRLS and CONNECT on the application database, nothing else. It owns the ops schemas only after
+	// `dho migrate owner-move`, so Verify does not judge what it owns or grants.
+	Migrator    Role
 	RiverSchema string
 	// Authenticate, when set, is asked to log in as a role with the password it was
 	// given; Verify uses it to notice a supplied password that does not work for a
@@ -122,7 +129,7 @@ type labelled struct {
 func (o Options) configured() []labelled {
 	all := []labelled{
 		{"domain", o.Domain}, {"queue", o.Queue}, {"coordinator", o.Coordinator},
-		{"api", o.API}, {"query_api", o.QueryAPI}, {"keda", o.Keda}, {monitorLabel, o.Monitor},
+		{"api", o.API}, {"query_api", o.QueryAPI}, {"keda", o.Keda}, {monitorLabel, o.Monitor}, {migratorLabel, o.Migrator},
 	}
 	out := make([]labelled, 0, len(all))
 	for index, entry := range all {
@@ -368,6 +375,15 @@ func Apply(ctx context.Context, pool interface {
 		}
 	}
 
+	if options.Migrator.Name != "" {
+		if err := create(labelled{migratorLabel, options.Migrator}); err != nil {
+			return err
+		}
+		if err := step("grant connect", run.exec(ctx, "GRANT CONNECT ON DATABASE "+db+" TO "+ident(options.Migrator.Name))); err != nil {
+			return err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: commit", ErrProvisioning)
 	}
@@ -442,6 +458,16 @@ func Verify(ctx context.Context, q roleacl.Querier, options Options) (problems [
 		}
 		if !connect {
 			problems = append(problems, Problem{entry.label, "cannot CONNECT to the application database"})
+		}
+		if entry.label == migratorLabel {
+			var memberFree bool
+			if err := q.QueryRow(ctx, `SELECT `+roleacl.MembershipFreeSQL, entry.role.Name).Scan(&memberFree); err != nil {
+				return nil, nil, fmt.Errorf("%w: cannot read role membership", ErrProvisioning)
+			}
+			if !memberFree {
+				problems = append(problems, Problem{entry.label, "is a member of another role"})
+			}
+			continue
 		}
 		if temporary {
 			problems = append(problems, Problem{entry.label, "holds TEMPORARY on the application database"})

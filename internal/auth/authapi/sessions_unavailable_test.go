@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-var sessionsStubPaths = []string{"/api/v1/auth/refresh", "/api/v1/auth/logout"}
+var sessionsStubPaths = []string{"/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/auth/validate"}
 
-func TestSessionsNotEnabledRoutesAreExactlyRefreshAndLogoutUnthrottled(t *testing.T) {
+func TestSessionsNotEnabledRoutesAreExactlyRefreshLogoutAndValidateUnthrottled(t *testing.T) {
 	routes := SessionsNotEnabledRoutes()
 	if len(routes) != len(sessionsStubPaths) {
 		t.Fatalf("%d routes; want %d", len(routes), len(sessionsStubPaths))

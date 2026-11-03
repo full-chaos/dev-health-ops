@@ -418,3 +418,42 @@ func TestOIDCAuthorizeRedirectsToExactlyTheRegisteredURIWithCodeAndState(t *test
 		}
 	}
 }
+
+func TestOIDCOverrideEditsExplicitUserinfo(t *testing.T) {
+	edit := func(c map[string]any) { c["sub"] = "overridden" }
+	for name, setup := range map[string]func() (*idpstub.OIDC, *httptest.Server){
+		"Override option": func() (*idpstub.OIDC, *httptest.Server) {
+			return startOIDC(t, idpstub.OIDCOptions{Override: edit})
+		},
+		"SetOverride": func() (*idpstub.OIDC, *httptest.Server) {
+			o, srv := startOIDC(t, idpstub.OIDCOptions{})
+			o.SetOverride(edit)
+			return o, srv
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, srv := setup()
+			explicit := map[string]any{"sub": "explicit", "email": "e@example.test"}
+			o.SetUserinfo(explicit)
+			_, info := getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+			if info["sub"] != "overridden" || info["email"] != "e@example.test" {
+				t.Fatalf("userinfo = %v", info)
+			}
+			if explicit["sub"] != "explicit" {
+				t.Fatalf("the stored explicit answer was edited: %v", explicit)
+			}
+		})
+	}
+}
+
+func TestOIDCOverrideLeavesTheStoredUserinfoAnswerUnchanged(t *testing.T) {
+	o, srv := startOIDC(t, idpstub.OIDCOptions{Override: func(c map[string]any) { c["sub"] = "overridden"; delete(c, "email") }})
+	explicit := map[string]any{"sub": "explicit", "email": "e@example.test"}
+	o.SetUserinfo(explicit)
+	for i := 0; i < 2; i++ {
+		getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+	}
+	if explicit["sub"] != "explicit" || explicit["email"] != "e@example.test" || len(explicit) != 2 {
+		t.Fatalf("the stored explicit answer changed: %v", explicit)
+	}
+}

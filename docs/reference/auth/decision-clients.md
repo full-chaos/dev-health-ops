@@ -41,7 +41,7 @@ A request has these limits in both clients:
 | `resource.type` | One of the ten closed types. |
 | `resource.key` | A repository: `owner/repo` or `*`. Every other type: `^[a-z0-9][a-z0-9._:-]{0,255}$`. |
 | `resource.organization_id` | The resource's organization. Empty for a platform resource. The decision point verifies it. |
-| `context.request_id` | `^req_[A-Za-z0-9_-]{26}$`. Names one call in the audit row. The response never echoes it. |
+| `context.request_id` | `^req_[A-Za-z0-9_-]{26}$`. Names one call. The audit row of a high-risk decision carries it. A low-risk decision writes no audit row (`auditHighRisk`, `internal/auth/authapi/authorize.go:372`). The response never echoes it. |
 | `context.client_service` | A label from a closed set. It confers nothing. The Go set is `dev-health-ops-api`, `dev-health-ops-billing-edge`, `dev-health-web`, `dev-health-acr-api`, `dev-health-acr-mcp`, `dev-health-query-api` and `dev-health-auth-service`. The TypeScript client sends `dev-health-web`. |
 
 A request that fails these rules is a local deny. It is never sent.
@@ -154,7 +154,7 @@ Only the Go client has a cache. `pep.NewCachedClient(client, pep.CacheConfig)` w
 | Size | `MaxEntries`, default 10000, tombstones included. |
 | Revision watermark | The cache keeps the highest `policy_revision` it has seen. When it rises, every entry below it is dropped. An allow below the watermark goes to its caller and is not stored. |
 | Invalidation | The wire carries no resource, membership or grant revision. `Invalidate` and `InvalidateAll` drop every entry. Without a call, expiry bounds reuse. `Close` drops all entries, and afterwards every call goes to the decision point. |
-| No single flight | Each miss is its own call with its own request id and its own audit row. A hit makes no call. |
+| No single flight | Each miss is its own call with its own request id. A high-risk decision writes its own audit row. A low-risk decision writes none. A hit makes no call. |
 | Batch | Hits are served and misses go as one batch. If a hit is below the watermark once the misses are answered, every hit is asked again. A failure of either call denies every item. |
 | Obligations | An allow with an unknown obligation is a local deny, so it is never stored. When the client learns an audit obligation, an allow that carries it must not be stored. |
 
@@ -175,7 +175,7 @@ A cached allow is bound to its policy revision. The class names `decision_bound`
 
 ### The server's own cache
 
-The decision point has its own allow cache (`internal/auth/decisioncache`, used by the authorize routes). It stores allows only, never an allow of a high-risk or `none` action, and never an allow that carries an audit obligation. Each entry is bound three ways: expiry (at most 30 s), eviction when a revision feed event moves an aggregate the decision read, and a watermark check. Its key holds the principal, the session, the actor chain of a delegated session, the organization, the action, the resource, the assurance, the policy revision, the entitlement revision and a digest of the row versions read. A delegated session, and any call while the feed is not ready, bypass it. The cache and its entries are not visible to a client, except through `expires_at`.
+The decision point has its own allow cache (`internal/auth/decisioncache`, used by the authorize routes). It stores allows only, never an allow of a high-risk or `none` action, and never an allow that carries an audit obligation. Each entry is bound three ways: expiry (at most 30 s), eviction when a revision feed event moves an aggregate the decision read, and a watermark check. The key type has fields for the principal, the session, an actor chain, the organization, the action, the resource, an assurance level, the policy revision, an entitlement revision and a digest of the row versions read. The authorize route fills the principal, the session, the organization, the action, the resource, the policy revision, the values no feed event covers and the state digest. It leaves the actor chain, the assurance level and the entitlement revision empty or 0 (`cacheKey`, `internal/auth/authapi/authorize_cache.go:123-133`). A delegated session, and any call while the feed is not ready, bypass the cache. The cache and its entries are not visible to a client, except through `expires_at`.
 
 ### Rules for a future TypeScript cache
 

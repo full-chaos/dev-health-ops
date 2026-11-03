@@ -50,7 +50,7 @@ A deny from the first gate is final. An allow from it does not mean the feature 
 
 | Property | Value |
 | --- | --- |
-| Source | `PGSource` reads `public.org_licenses` and `public.organizations`, the columns the auth runtime role may select. A missing row or an unknown tier holds nothing. A database error is returned, never read as "no entitlement". |
+| Source | `PGSource` reads `public.org_licenses` and `public.organizations`, the columns the auth runtime role may select. With no `org_licenses` row, it falls back to `organizations.tier`. With no row in either table, or with an unknown tier, it holds nothing (`internal/auth/entitlement/source_pg.go`, `Load`). A database error is returned, never read as "no entitlement". |
 | Snapshot | Per organization: tier, features, source revision, fetched time, expiry. |
 | Staleness bound | `MaxTTL` is 60 s. A longer TTL is refused. A failed refresh never extends a snapshot. |
 | Size | 4096 organizations by default, least recently used first. Refreshes of one organization share one read. |
@@ -62,7 +62,7 @@ Three tests hold the boundary in code (`internal/auth/entitlement/deps_test.go`)
 
 - The adapter does not import `internal/auth/authorization`, and `authorization` does not import the adapter.
 - The adapter imports no token, session, credential or claims package.
-- No package under `internal/auth` imports the adapter. The decision point reaches it through its own interface.
+- No package under `internal/auth` imports the adapter. A search of `internal/auth/authapi`, `authruntime` and `authorization` finds no call to it, so no path from a decision reaches it today.
 
 ## Status
 
@@ -70,7 +70,7 @@ Three tests hold the boundary in code (`internal/auth/entitlement/deps_test.go`)
 | --- | --- |
 | Adapter and Postgres source | On `main` as a library. Nothing in the authorize path calls it. |
 | Entitlement-derived obligation | Not built. ACP-ADR-07 allows one. The decision schema defines none, so adding one is a schema change ([obligations](obligations.md#status)). |
-| Entitlement revision in the decision cache key | The key has the field. It is 0, because no entitlement aggregate or feed event exists yet. When one exists it becomes a dependency like the others. |
+| Entitlement revision in the decision cache key | The key type has the field. The authorize route does not set it (`internal/auth/authapi/authorize_cache.go:123-133`), so it is 0, and no entitlement aggregate or feed event exists yet. When one exists it becomes a dependency like the others. |
 | `entitlement_requirement` of an endpoint profile | The field exists in the profile schema. No row of the go-api, query-api or auth-service profiles has a value on `main`. See [endpoint profiles](endpoint-profiles.md#absent-versus-null). |
 | Entitlement in tokens | The query-api principal envelope still has `tier` and `licensed_features` (`internal/queryapi/principal/claims.go`). ADR-07 removes them at the next version of the envelope. Until then the 60 s token lifetime is the compensating control. |
 | Billing and licensing enforcement point | Planned, CHAOS-10862. |

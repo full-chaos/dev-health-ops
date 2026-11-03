@@ -179,10 +179,9 @@ authService:
   #      4  users owned: the credential routes too (AUTH_PROXY_CREDENTIALS) and
   #         AUTH_USERS_OWNED. Meaning (D6358): auth-service writes the existing
   #         public users table; no auth-schema copy, no projection.
-  #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
-  #         the existing public organizations and memberships tables.
-  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #      5  cancelled (D6651): public.organizations and public.memberships stay the
+  #         authority. Phase 5 and AUTH_ORGS_OWNED (any extraEnv list) are refused at render.
+  #    Phase 4 is the highest phase. Rollback from phase 4 is NOT one upgrade: stage goApi,
   #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
   #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
@@ -209,8 +208,8 @@ authService:
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
-  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true is refused at every phase until
+  #    CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -540,7 +539,7 @@ authService:
     runId: ""
     activeDeadlineSeconds: 1800
     ttlSecondsAfterFinished: 86400
-    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED are refused here.
+    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED (removed, D6651) are refused here.
     extraEnv: []
     resources:
       requests:

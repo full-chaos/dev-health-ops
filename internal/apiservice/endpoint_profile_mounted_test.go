@@ -32,7 +32,17 @@ func (r mountedRoute) key() string { return r.Method + " " + r.Pattern + "@" + r
 // guarded areas mount.
 func mountedRoutes(t *testing.T) []mountedRoute {
 	t.Helper()
-	key := strings.Repeat("fixture-key-", 3)
+	return mountedRoutesWith(t, nil)
+}
+
+// mountedKey is the HS256 key the mounted routes verify with.
+var mountedKey = strings.Repeat("fixture-key-", 3)
+
+// mountedRoutesWith is mountedRoutes with configure applied to the
+// Authenticator before the routes are built.
+func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mountedRoute {
+	t.Helper()
+	key := mountedKey
 	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +65,9 @@ func mountedRoutes(t *testing.T) []mountedRoute {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
+	if configure != nil {
+		configure(auth)
+	}
 	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {

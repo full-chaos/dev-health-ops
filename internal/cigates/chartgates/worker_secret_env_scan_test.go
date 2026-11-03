@@ -22,10 +22,9 @@ import (
 //   - a function of an imported package in envLookupFuncs, matched by import path, so any alias counts and a same-named
 //     function of another package does not;
 //   - inside the secrets package, the same functions called unqualified;
-//   - a lookup passed in: a one-argument call of a parameter, variable or struct field whose declared type is a
-//     named type or alias of a string lookup (secrets.LookupEnv, a type whose name says env or lookup), or is
-//     func(string) string or func(string) (string, bool) under a name that says env or lookup. A same-named method,
-//     a call with other arguments, or a redactor of the same shape is not a lookup.
+//   - a lookup passed in: a one-argument call of a parameter, variable or struct field whose declared type is
+//     func(string) string or func(string) (string, bool), or a named type or alias of one (secrets.LookupEnv), unless
+//     its name is in nonEnvLookupHolders. A same-named method or a call with other arguments is not a lookup.
 //
 // A name that appears only in a comment, or in a file that never looks anything up, is not read.
 const (
@@ -33,8 +32,28 @@ const (
 	secretsDir        = "internal/platform/secrets"
 )
 
-// envLookupName is the name of a lookup holder or a named lookup type: getenv, lookupEnv, LookupFunc, ...
-var envLookupName = regexp.MustCompile(`(?i)env|lookup`)
+// nonEnvLookupHolders are the name words of string-lookup-shaped holders and types that read no environment, each with
+// the reason. Every other func(string) string or func(string) (string, bool) holder counts as an environment lookup.
+var nonEnvLookupHolders = map[string]string{
+	"scrub":     "redacts a value",
+	"redact":    "redacts a value",
+	"mask":      "masks a value",
+	"sanitize":  "cleans a value",
+	"cookie":    "reads a request cookie (oidc Cookie, saml cookie)",
+	"documents": "reads a registered GraphQL document (websmoke Documents)",
+	"revision":  "reads a git revision (docsbuild Revision)",
+	"rewrite":   "rewrites a value (authrows Rewrite, exactsum rewrite)",
+	"team":      "resolves a team name (TeamResolver, TeamNames, resolveTeam)",
+	"names":     "lists team names (icfinalize namesOf)",
+	"find":      "matches a body (aidetection find)",
+	"build":     "builds an SQL predicate (claim_id_chunks build)",
+	"cut":       "cuts a value (logging RedactUserinfoLast cut)",
+	"digest":    "digests a document (goapiproof digestFn)",
+	"import":    "maps an import path (affected importPath)",
+	"label":     "labels a key (investmentexplain label)",
+	"read":      "reads a stored row field (deadletter replayFromRow read)",
+	"value":     "reads a stored setting value (llmorgsettings value)",
+}
 
 var envLookupFuncs = map[string]map[string]bool{
 	"os":      {"Getenv": true, "LookupEnv": true},
@@ -99,7 +118,7 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 		changed = false
 		for _, file := range files {
 			ast.Inspect(file, func(node ast.Node) bool {
-				if spec, ok := node.(*ast.TypeSpec); ok && !scan.lookupTypes[spec.Name.Name] && envLookupName.MatchString(spec.Name.Name) && scan.isLookupType(spec.Type) {
+				if spec, ok := node.(*ast.TypeSpec); ok && !scan.lookupTypes[spec.Name.Name] && !nonEnvLookupHolder(spec.Name.Name) && scan.isLookupType(spec.Type) {
 					scan.lookupTypes[spec.Name.Name], changed = true, true
 				}
 				return true
@@ -142,21 +161,31 @@ func newEnvScan(files map[string]*ast.File) *envScan {
 	return scan
 }
 
-// isLookupHolder reports whether a parameter, variable or field holds an environment lookup: its type is a string lookup,
-// and the type is a named lookup type or the holder's own name says it looks up the environment. The shape alone is not
-// enough: func(string) string is also the type of a redactor or a rewriter.
+// isLookupHolder reports whether a parameter, variable or field holds an environment lookup: its type is a string lookup
+// (or a named type or alias of one) and its name is not in nonEnvLookupHolders. The scan errs toward counting a read.
 func (s *envScan) isLookupHolder(name string, typ ast.Expr) bool {
-	if !s.isLookupType(typ) {
-		return false
-	}
-	switch typed := typ.(type) {
-	case *ast.Ident, *ast.SelectorExpr:
-		return true
-	case *ast.ParenExpr:
-		return s.isLookupHolder(name, typed.X)
-	}
-	return envLookupName.MatchString(name)
+	return s.isLookupType(typ) && !nonEnvLookupHolder(name)
 }
+
+// nonEnvLookupHolder reports whether a holder or type name has a word of nonEnvLookupHolders and no word that names the
+// environment (env, getenv, environment, lookup): readEnv still counts, KeyScrub and resolveTeam do not.
+func nonEnvLookupHolder(name string) bool {
+	exempt := false
+	for _, word := range nameWords.FindAllString(name, -1) {
+		word = strings.ToLower(word)
+		switch word {
+		case "env", "getenv", "environment", "lookup":
+			return false
+		}
+		if _, ok := nonEnvLookupHolders[word]; ok {
+			exempt = true
+		}
+	}
+	return exempt
+}
+
+// nameWords splits a Go name into its words: KeyScrub -> Key Scrub, lookupEnv -> lookup Env, team_names -> team names.
+var nameWords = regexp.MustCompile(`[A-Z]+[a-z0-9]*|[a-z0-9]+`)
 
 // isLookupType reports whether a type expression is a string lookup: func(string) string, func(string) (string, bool),
 // or a named type or alias of one.
@@ -345,6 +374,8 @@ func TestWorkerSecretKeyReaderScan(t *testing.T) {
 		{"E18-redactor-of-the-lookup-shape", "package x\ntype R struct{ Scrub func(string) string }\nfunc f(r R) string { return r.Scrub(\"SOME_KEY\") }\n", false},
 		{"E19-two-arg-method-named-like-a-lookup-field", "package x\ntype H struct{ Getenv func(string) string }\ntype M struct{}\nfunc (M) Getenv(ctx, key string) string { return key }\nfunc f(m M) string { return m.Getenv(\"ctx\", \"SOME_KEY\") }\n", false},
 		{"E20-parameter-shadows-an-import", "package x\nimport \"context\"\nvar _ context.Context\ntype H struct{ Getenv func(string) string }\nfunc g(context H) string { return context.Getenv(\"SOME_KEY\") }\n", true},
+		{"E21-neutral-names-hold-a-lookup", "package x\nfunc f(fn func(string) string, get func(string) (string, bool), g func(string) string) {\n_ = fn(\"SOME_KEY\")\n}\n", true},
+		{"E22-env-word-beats-an-exempt-word", "package x\ntype R struct{ readEnv func(string) string }\nfunc f(r R) string { return r.readEnv(\"SOME_KEY\") }\n", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

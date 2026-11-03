@@ -33,6 +33,7 @@ var delegatedCatalogActions = []struct{ action, kind string }{
 	{"admin.users", "platform"}, {"admin.orgs", "platform"}, {"admin.impersonate", "platform"},
 	{"authz.decide", "platform"}, {"admin.billing", "platform"}, {"admin.flags", "platform"},
 	{"admin.audit", "platform"}, {"admin.telemetry", "platform"}, {"admin.stats", "platform"},
+	{"credentials.project", "platform"},
 }
 
 func TestDelegatedActionTableIsTheWholeCatalog(t *testing.T) {

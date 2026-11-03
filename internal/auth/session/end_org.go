@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
 )
 
 // ErrBusy reports that a session or go-api refresh token row EndOrgInTx or
@@ -52,7 +53,9 @@ const lockNotAvailable = "55P03"
 // Sessions of other organizations and sessions with no organization are not
 // read. Rows are locked NOWAIT: a row another writer holds is ErrBusy.
 func (s *Store) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, organizationID uuid.UUID) (Ended, error) {
-	sessions, err := s.endLockedSessions(ctx, tx, `
+	sessions, err := s.endLockedSessions(ctx, tx, func(at time.Time) audit.OutboxEvent {
+		return sessionevent.Principal(principalID.String(), sessionevent.ReasonOrgEnded, at)
+	}, `
 		SELECT s.id::text, `+s.effectiveExpiry()+` > clock_timestamp()
 		FROM `+s.q+`.sessions s
 		WHERE s.principal_id = $1 AND s.organization_id = $2 AND s.revoked_at IS NULL
@@ -88,7 +91,9 @@ func (s *Store) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, org
 // a key-share lock on that row (the new session's foreign key), and waiting
 // for its token would close a deadlock. A row another writer holds is ErrBusy.
 func (s *Store) EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organizationID uuid.UUID) (Ended, error) {
-	sessions, err := s.endLockedSessions(ctx, tx, `
+	sessions, err := s.endLockedSessions(ctx, tx, func(at time.Time) audit.OutboxEvent {
+		return sessionevent.Organization(organizationID.String(), sessionevent.ReasonOrgEnded, at)
+	}, `
 		SELECT s.id::text, `+s.effectiveExpiry()+` > clock_timestamp()
 		FROM `+s.q+`.sessions s
 		WHERE s.organization_id = $1 AND s.revoked_at IS NULL
@@ -110,7 +115,7 @@ func (s *Store) EndOrganizationInTx(ctx context.Context, tx audit.TxOps, organiz
 
 // endLockedSessions runs lock, which reads (id, live) of the sessions to end
 // FOR UPDATE NOWAIT, and revokes the live ones.
-func (s *Store) endLockedSessions(ctx context.Context, tx audit.TxOps, lock string, args ...any) (int, error) {
+func (s *Store) endLockedSessions(ctx context.Context, tx audit.TxOps, scope func(at time.Time) audit.OutboxEvent, lock string, args ...any) (int, error) {
 	rows, err := tx.Query(ctx, lock, args...)
 	if err != nil {
 		return 0, endOrgErr("locking the sessions", err)
@@ -132,8 +137,12 @@ func (s *Store) endLockedSessions(ctx context.Context, tx audit.TxOps, lock stri
 		return 0, endOrgErr("locking the sessions", err)
 	}
 	if len(ids) > 0 {
-		if err := s.endSessions(ctx, tx, ids, revokedByCaller, true); err != nil {
+		at, err := s.revokeSessionsBulk(ctx, tx, ids, revokedByCaller, true)
+		if err != nil {
 			return 0, endOrgErr("revoking the sessions", err)
+		}
+		if err := tx.AddEvent(scope(at)); err != nil {
+			return 0, endOrgErr("queueing the scope event", err)
 		}
 	}
 	return len(ids), nil

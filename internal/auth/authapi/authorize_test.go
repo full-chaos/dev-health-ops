@@ -271,8 +271,12 @@ func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 0 {
-		t.Fatalf("the embedded document has no authorize row, yet %d route(s) mounted", len(routes))
+	if len(routes) != 2 {
+		t.Fatalf("the embedded document holds both authorize rows, yet %d route(s) mounted, want 2", len(routes))
+	}
+	deps.ProfileRows = authorizeProfileDoc(t)
+	if routes, _ = AuthorizeRoutes(deps); len(routes) != 0 {
+		t.Fatalf("a document with no authorize row mounted %d route(s)", len(routes))
 	}
 	deps.ProfileRows = authorizeProfileDoc(t, PatternAuthorizeBatch)
 	if routes, _ = AuthorizeRoutes(deps); len(routes) != 1 || routes[0].Pattern != PatternAuthorizeBatch {
@@ -422,9 +426,7 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, status int, reaso
 	if rec.Code != status {
 		t.Fatalf("status %d, want %d; body %s", rec.Code, status, rec.Body)
 	}
-	if status != http.StatusBadRequest {
-		validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
-	}
+	validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
 	var doc struct {
 		ReasonCode string `json:"reason_code"`
 	}

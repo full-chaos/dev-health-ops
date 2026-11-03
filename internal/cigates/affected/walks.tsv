@@ -37,6 +37,8 @@ internal/atlassianteams	vendored_patch_chain_test.go	third_party/vendor/atlassia
 internal/atlassianteams	vendored_patch_chain_test.go	unexpressed	-	-
 internal/audit	writer_guard_test.go	.	tree	*.go
 internal/auth/acrmint	census_test.go	.	tree	*.go
+internal/auth/authapi	acr_events_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
+internal/auth/authapi	acr_events_test.go	internal/auth/outboxprojection	dir	*
 internal/auth/authapi	register_test.go	unexpressed	-	-
 internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
@@ -45,8 +47,10 @@ internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/access-token	dir	*
+internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	credential_class_service_account_token_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	decision_golden_shape_test.go	contracts/auth/v1/golden/decision	tree	*
 internal/auth/contracts	discovery_goldens_test.go	contracts/auth/v1/examples/discovery	dir	*
@@ -69,6 +73,7 @@ internal/auth/contracts	reject_location_test.go	contracts/auth/v1/examples	tree	
 internal/auth/contracts	retired_credential_class_test.go	contracts/auth/v1/endpoint-profiles.*.json	dir	*
 internal/auth/contracts	retired_credential_class_test.go	contracts/auth/v1/examples/endpoint-auth-profile/*.json	dir	*
 internal/auth/contracts	schema_dialect_test.go	contracts/auth/v1/jsonschema	dir	*
+internal/auth/contracts	service_account_token_goldens_test.go	contracts/auth/v1/examples/service-account-token	dir	*
 internal/auth/contracts	session_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	transport_error_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	workload_token_goldens_test.go	contracts/auth/v1/examples/workload-token	dir	*
@@ -76,6 +81,9 @@ internal/auth/contracts/tokencorpus	corpus.go	unexpressed	-	-
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token	dir	*
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token	tree	*
 internal/auth/contracts/tokencorpus	corpus_test.go	contracts/auth/v1/golden/access-token/vectors	dir	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token	dir	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token	tree	*
+internal/auth/contracts/tokencorpus	service_account_test.go	contracts/auth/v1/golden/service-account-token/vectors	dir	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	dir	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token	tree	*
 internal/auth/contracts/tokencorpus	workload_test.go	contracts/auth/v1/golden/workload-token/vectors	dir	*
@@ -100,10 +108,14 @@ internal/auth/platformrole	superuser_sites_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	cmd	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
+internal/auth/pushlifecycle	acr_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
+internal/auth/pushprojection	import_guard_test.go	unexpressed	-	-
+internal/auth/restorefence	consumers_reader_test.go	internal	tree	*.go
 internal/auth/restorefence	consumers_test.go	internal	tree	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
+internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
@@ -129,6 +141,7 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
+internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed	-	*.go
 internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
 internal/cigates/checkgo	support_test.go	unexpressed	-	-
 internal/cigates/checkgoshards	race_excluded_receipts_test.go	unexpressed	-	-
@@ -161,13 +174,9 @@ internal/cigates/integrationshards	support_test.go	unexpressed	-	-
 internal/cigates/membershipreads	membershipreads.go	unexpressed	-	*.go
 internal/cigates/nopython	tests_python_test.go	unexpressed	-	-
 internal/cigates/outboundtransport	outboundtransport_test.go	.	tree	*.go
+internal/cigates/queuecreds	queuerows_flow_test.go	unexpressed	-	*.go
 internal/cigates/queuecreds	queuerows_test.go	cmd	tree	*.go
 internal/cigates/queuecreds	queuerows_test.go	internal	tree	*.go
-internal/cigates/queuecreds	queuerows_test.go	internal/joboperator	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/joboutbox	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/jobruntime	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/syncreconciler	dir	*
-internal/cigates/queuecreds	queuerows_test.go	internal/workersctl	dir	*
 internal/cigates/queuecreds	scan.go	unexpressed	-	*.go
 internal/cigates/queuecreds	scan.go	unexpressed	-	*.json
 internal/cigates/queuecreds	scan.go	unexpressed	-	-

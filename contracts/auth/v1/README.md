@@ -17,12 +17,15 @@ follow them, then the Wave 3 user access token `access-token.v1` (CHAOS-10442),
 `refresh-response.v2` (the refresh answer for the EdDSA access token; v1 stays the answer for the HS256 token and both are read until the HS256 issuer is removed), the Wave 8
 workload token `workload-token.v1` (CHAOS-10648: typ `workload+jwt`, one audience, no
 `org_id`/`sid`/`scope`, at most 300 s; its signed corpus is `golden/workload-token`),
+the service account token `service-account-token.v1` (CHAOS-12362: typ `sa+jwt`, audience
+`dev-health-api`, `org_id` and `cid`, no `sid`/`scope`, at most 300 s; its signed corpus is
+`golden/service-account-token`),
 and `transport-error.v1` (CHAOS-10392), the body auth-service's shared
 transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -128,6 +131,13 @@ class bit `error.v1` once because no shared guard existed):
 `error.v1`'s `status` and `retry_after_seconds` and `principal.v1`'s revisions
 use the same rule; revisions add the int64 range. Fixtures for these rules
 belong in `reject_by_client`.
+
+`error.v1`'s `status` admits 400 for reason `malformed` only (D6643, an
+amendment of TRD section 18): the schema's `allOf` conditional ties the two, so
+a route cannot use 400 for any other refusal. A route that answers it declares
+`oneOf [TransportError, Error]` for its 400: the transport's own 400 (a body
+that could not be read) and the route's `error.v1` refusal are disjoint
+(`TestErrorV1IsDisjointFromTheTransportEnvelope`).
 
 ### Constraints live in the cross-language dialect intersection
 
@@ -348,9 +358,7 @@ boundary (TRD §9, §13).
   `organization_id`: the optional member is absent for a platform-level aggregate.
   The allowlist is per EVENT, not per aggregate: a scope event carries `revoked_before` and `reason` and nothing else, and no ordinary principal or organization event carries either. The wire pins a session event at revision 1, and clients (`ParseProvisioningEvent`, the feed mapper, the sink and the consumer) refuse any other revision for it and an id that is not the derived one for a signing key. `reason` is `caller`, `refresh_reuse`, `password_changed`, `org_ended`,
   `delegation_ended` or `compromised`. A principal's sessions ended in ONE organization (a membership removed) are told as `principal.sessions_revoked` with reason `org_ended`: there is no (principal, organization) shape, so a consumer may also drop that principal's sessions in other organizations, which only evicts a cache (the server still decides). Order across aggregates stays unpromised.
-  This change is the contract only: no producer writes these events yet
-  (the producer is a later change; session and signing-key lifecycle stay
-  `OffStream` until then).
+  Producers: every session end that writes a revoke (explicit revoke, refresh reuse, sign-in supersede, a legacy family revoke, a delegated session ended with its actor or base) queues `session.revoked`, and the live linked client sessions of a revoked web session get one each in the same transaction (a client session that commits after that read has no event; the server's read of the parent still refuses it). Bulk ends queue one scope event with the one clock reading written as `revoked_at`: revoke-all and end-all (reason `caller`), a membership or organization end (`org_ended`), a password change (`password_changed`, `revoked_before` is the stamp the same UPDATE wrote; a session created between that stamp and the UPDATE is decided by the server's row, not the event). A key compromise queues `signing_key.compromised` only. `RevokeUnpinned` (a one-off backfill) stays off-stream by ruling.
 
 ### Credential metadata: secrets are returned once (CHAOS-4934)
 

@@ -217,8 +217,8 @@ func (e *env) auditRows(t *testing.T, ctx context.Context, eventType, target str
 }
 
 // outboxRows counts every outbox row naming the aggregate, raw or as a wire
-// id, of any event type. Session lifecycle is off the provisioning stream
-// (audit.OffStreamSessionLifecycle), so every session commit must leave 0.
+// id, of any event type. A session's own events name it as ses_ + base64url,
+// which this does not match (see sessionEvents); a bulk end names its principal.
 func (e *env) outboxRows(t *testing.T, ctx context.Context, aggregate string) int {
 	return e.count(t, ctx, `SELECT count(*) FROM auth.auth_outbox_events
 		WHERE aggregate_id IN ($1, 'prn_' || $1)`, aggregate)
@@ -456,8 +456,8 @@ func TestRaceRevokeAllAgainstRotations(t *testing.T) {
 		t.Fatalf("%d live sessions after RevokeAll", n)
 	}
 	if a, o := e.auditRows(t, ctx, "auth.session.revoked_all", principal.String()),
-		e.outboxRows(t, ctx, principal.String()); a != 1 || o != 0 {
-		t.Fatalf("audit rows %d, outbox events %d; want 1 and 0", a, o)
+		e.outboxRows(t, ctx, principal.String()); a != 1 || o != 1 {
+		t.Fatalf("audit rows %d, outbox events %d; want 1 and 1 (the one principal.sessions_revoked scope event)", a, o)
 	}
 	if e.sessionRevoked(t, ctx, other.Session.ID) {
 		t.Fatal("RevokeAll revoked another principal's session")

@@ -108,7 +108,6 @@
               "thresholds": [
                 {
                   "color": "#e5484d",
-                  "label": "any",
                   "unit": "",
                   "value": 0.5
                 }

@@ -232,8 +232,8 @@ func (h handlers) createSocialUser(ctx context.Context, tx pgx.Tx, info *oauthpr
 		AuthProviderID: &providerUserID, IsActive: true, IsVerified: true}
 	_, err = tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6, true, true, false, 0, NULL, $7, $7)`,
+	 is_active, is_verified, token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6, true, true, 0, NULL, $7, $7)`,
 		user.ID, user.Email, user.Username, user.FullName, provider, providerUserID, now)
 	if err != nil {
 		return nil, err

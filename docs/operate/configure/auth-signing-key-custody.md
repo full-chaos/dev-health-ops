@@ -68,7 +68,7 @@ authService:
 
 `keySet` replaces `signingKey`. The chart renders only `kid`, `state` and `file` into a ConfigMap, and it never
 carries key material. Exactly one key is `active`. A `file` is a bare name. The pod holds a static copy, so a
-change to the set is a new rollout. The states and the moves between them are in the key rotation runbooks.
+change to the set is a new rollout. The states and the moves between them are in the key rotation runbooks: [planned rotation](../runbooks/auth-signing-key-planned-rotation.md) and [emergency rotation and rollback](../runbooks/auth-signing-key-emergency-rotation-and-rollback.md).
 
 ## Settings by service
 

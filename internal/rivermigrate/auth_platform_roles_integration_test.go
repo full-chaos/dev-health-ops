@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -159,6 +160,76 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 		}
 		t.Errorf("%s: no gap names users %q %s (excess=%v): %v", label, column, privilege, excess, gaps)
 	}
+	// live is the set of public.users columns the api role holds privilege on
+	// right now (table-wide or column-level); declared is what the posture
+	// grants. They must be equal: a column in live and not in declared is an
+	// EXCESS, a column in declared and not in live is MISSING.
+	usersColumns := func() []string {
+		t.Helper()
+		rows, err := admin.Query(ctx, `SELECT attname FROM pg_attribute WHERE attrelid = 'public.users'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attname`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var names []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			names = append(names, name)
+		}
+		return names
+	}
+	live := func(privilege string) string {
+		t.Helper()
+		var cols []string
+		for _, column := range usersColumns() {
+			if held(api, privilege, column) {
+				cols = append(cols, column)
+			}
+		}
+		return strings.Join(cols, ",")
+	}
+	declared := func(posture postgresstore.RolePosture, privilege string) string {
+		t.Helper()
+		for _, table := range posture.RequiredTables {
+			if table.TableName != "users" {
+				continue
+			}
+			if (privilege == "INSERT" && table.AllowInsert) || (privilege == "UPDATE" && table.AllowUpdate) {
+				return strings.Join(usersColumns(), ",")
+			}
+		}
+		var names []string
+		for _, column := range posture.ColumnScoped {
+			if column.TableName == "users" && column.Privilege == privilege {
+				names = append(names, column.ColumnName)
+			}
+		}
+		sort.Strings(names)
+		return strings.Join(names, ",")
+	}
+	noGaps := func(label string, owned bool) {
+		t.Helper()
+		gaps, err := postgresstore.DiagnoseRolePosture(ctx, apiPool, api, postgresstore.APIPostureFor(true, owned))
+		if err != nil {
+			t.Fatalf("%s: diagnose: %v", label, err)
+		}
+		if len(gaps) != 0 {
+			t.Errorf("%s: live grants disagree with the declared posture (owned=%v): %v", label, owned, gaps)
+		}
+	}
+	equalPosture := func(label string, owned bool) {
+		t.Helper()
+		posture := postgresstore.APIPostureFor(true, owned)
+		for _, privilege := range []string{"INSERT", "UPDATE"} {
+			if got, want := live(privilege), declared(posture, privilege); got != want {
+				t.Errorf("%s: live users %s columns = [%s], declared = [%s] (excess or missing)", label, privilege, got, want)
+			}
+		}
+		noGaps(label, owned)
+	}
 	user := "00000000-0000-4000-8000-0000000a1093"
 
 	if code, stderr := migrate(""); code != cli.ExitOK {
@@ -166,6 +237,7 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 	}
 	check("flag unset", goAPIWritesAll)
 	exact("flag unset", false, true)
+	equalPosture("flag unset", false)
 	runs("flag unset: insert", usersInsertWhileOwned, user, "pr-10993@example.test")
 	runs("flag unset: superuser update (rollback control)", `UPDATE users SET is_superuser = is_superuser WHERE id = $1`, user)
 
@@ -174,6 +246,7 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 	}
 	check("flag on", ownedByAuth)
 	exact("flag on", true, true)
+	equalPosture("flag on", true)
 	exact("flag on, read as off", false, false)
 	refused("flag on: insert naming is_superuser",
 		`INSERT INTO users (id, email, is_superuser) VALUES (gen_random_uuid(), 'pr-10993-b@example.test', false)`)
@@ -213,6 +286,7 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 		t.Fatalf("flag on, repair: exit %d\n%s", code, stderr)
 	}
 	exact("flag on, repaired", true, true)
+	equalPosture("flag on, repaired", true)
 
 	if code, stderr := migrate("yes"); code != 1 || !strings.Contains(stderr, "AUTH_PLATFORM_ROLES_OWNED") {
 		t.Fatalf("an unparsable flag: exit %d, stderr:\n%s", code, stderr)
@@ -224,5 +298,6 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 	}
 	check("flag off again (rollback)", goAPIWritesAll)
 	exact("flag off again (rollback)", false, true)
+	equalPosture("flag off again (rollback)", false)
 	runs("rollback: superuser update", `UPDATE users SET is_superuser = is_superuser WHERE id = $1`, user)
 }

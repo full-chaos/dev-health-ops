@@ -59,7 +59,7 @@ refused() { # refused NAME WANT_TEXT VAR=VALUE...
   go "$@"
   if [ "${rc}" = 1 ] && grep -qF -- "${want}" <<<"${out}"; then ok "${name}"; else bad "${name} (rc ${rc})"; fi
 }
-no_write_calls() { ! grep -v 'auth can-i' "${FAKE_LOG}" | grep -qE ' (create|apply|run|delete|port-forward|exec|rollout) |^helm '; }
+no_write_calls() { ! grep -v 'auth can-i' "${FAKE_LOG}" | grep -v '^helm .* list ' | grep -qE ' (create|apply|run|delete|port-forward|exec|rollout) |^helm '; }
 
 # plan: real helm template, no cluster call
 : >"${FAKE_LOG}"
@@ -139,6 +139,9 @@ if no_write_calls && ! grep -qE '^helm (uninstall|rollback|upgrade)' "${FAKE_LOG
 : >"${FAKE_LOG}"
 go FAKE_OWNER_TOKEN= REHEARSAL_DIR="${T}/labelled"
 if grep -qF 'step 1: postgres' <<<"${out}" && grep -qE ' create secret ' "${FAKE_LOG}"; then ok labelled-namespace-proceeds-to-the-first-write; else bad "labelled-namespace-proceeds-to-the-first-write (rc ${rc})"; fi
+# the run stopped at its first create: cleanup deletes exactly what was recorded before that create, and nothing else
+deleted="$(grep -E ' delete ' "${FAKE_LOG}" | sed 's/.* delete //; s/ --ignore-not-found.*//' | tr '\n' ' ')"
+if [ "${deleted}" = 'secret/auth-pg-superuser ' ]; then ok cleanup-deletes-only-what-the-run-recorded; else bad "cleanup-deletes-only-what-the-run-recorded (${deleted})"; fi
 
 # namespace names: the full Kubernetes label syntax (RFC 1123, 1 to 63 characters) passes the name guard; the fake stops each at the first write
 for ns in authrot-a authrot-qa "authrot-$(printf 'a%.0s' $(seq 1 55))" authrot-a-b authrot-password; do
@@ -154,7 +157,7 @@ mkdir -p "${T}/full"
 echo x >"${T}/full/f"
 refused non-empty-dir-refused 'not empty' REHEARSAL_DIR="${T}/full"
 if no_write_calls; then ok non-empty-dir-refused-before-any-write; else bad non-empty-dir-refused-before-any-write; fi
-if [ ! -e "${T}/helm.called" ] && ! grep -q '^helm ' "${FAKE_LOG}"; then ok no-helm-call-before-the-guards; else bad no-helm-call-before-the-guards; fi
+if [ ! -e "${T}/helm.called" ] && ! grep -v '^helm .* list ' "${FAKE_LOG}" | grep -q '^helm '; then ok no-helm-call-before-the-guards; else bad no-helm-call-before-the-guards; fi
 
 # wiring: read from the script text
 body="$(grep -vE '^[[:space:]]*#' "${SCRIPT}")"

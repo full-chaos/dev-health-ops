@@ -9,13 +9,16 @@
 #
 # Environment (no value is printed):
 #   REHEARSAL_KUBECONFIG  a ServiceAccount kubeconfig, mode 0600, scoped to one namespace (never the k3s admin file)
-#   REHEARSAL_NAMESPACE   that namespace; it carries the label rehearsal-run equal to REHEARSAL_RUN_TOKEN
+#   REHEARSAL_NAMESPACE   that namespace: authrot-<suffix> only (an allowlist); it carries the label rehearsal-run equal to REHEARSAL_RUN_TOKEN
+#   REHEARSAL_SERVER      the API server URL of the bigboy rehearsal cluster; the kubeconfig must name exactly that server
 #   REHEARSAL_RUN_TOKEN   the run token the lead put in that label
 #   REHEARSAL_DIR         a new, empty directory (0700): keys, records, evidence
 #   REHEARSAL_IMAGES_ENV  a file with DEV_HEALTH_GO_{AUTH_MIGRATE,AUTH_SERVICE}_IMAGE=repo@sha256:<64 hex>
 #   REHEARSAL_RUN_ID      optional: the CI run id the digests come from (digits only)
 #
-# This script never creates or deletes a namespace and never uses the admin kubeconfig. Every kubectl and helm call
+# This script never creates or deletes a namespace and never uses the admin kubeconfig. It refuses, before any write, a name
+# that is not authrot-<suffix>, a server that is not REHEARSAL_SERVER, and any fixed-name object or the helm release already in
+# the namespace; on exit it deletes only the objects it recorded creating. Every kubectl and helm call
 # names --kubeconfig. Keys, DSNs and tokens go to the cluster on stdin and are never printed, never put on argv and never
 # written to a record: kids, states, status codes, revision numbers and seconds only. Each cell prints a literal
 # "PASS: <name>" or "FAIL: <name>"; the first FAIL stops the run.
@@ -33,6 +36,7 @@ source "${SCRIPT_DIR}/lib/auth_rotation_probe.sh"
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 readonly VALKEY_IMAGE="valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328"
 readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
+readonly NS_PREFIX="authrot-"
 readonly NS_RE='^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'
 readonly ADMIN_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 readonly ISSUER_URL="https://auth-issuer.rehearsal.test:8443"
@@ -98,7 +102,7 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     '                helm upgrade class hs256_compat: Deployment env flips, a still absent and compromised, keys rollback a refused;' \
     '                helm rollback to the eddsa revision: Deployment env eddsa, a still absent and compromised, b published.' \
     'not covered:    token cells (login, HS256 alg, revoked sid): they need go-api and a seeded user, see the compose driver.' \
-    'needs:          kubectl, helm, jq, openssl, curl; REHEARSAL_KUBECONFIG, REHEARSAL_NAMESPACE, REHEARSAL_RUN_TOKEN, REHEARSAL_DIR, REHEARSAL_IMAGES_ENV'
+    'needs:          kubectl, helm, jq, openssl, curl; REHEARSAL_KUBECONFIG, REHEARSAL_NAMESPACE, REHEARSAL_RUN_TOKEN, REHEARSAL_SERVER, REHEARSAL_DIR, REHEARSAL_IMAGES_ENV'
   for class in eddsa hs256_compat; do
     chart_args "${class}" "registry.invalid/auth-service@sha256:${zeros}" "registry.invalid/auth-migrate@sha256:${zeros}"
     rendered="$(KUBECONFIG=/dev/null helm template "${CHART_ARGS[@]}" --show-only templates/auth-service.yaml)" || die "the chart does not render for class ${class}"
@@ -112,12 +116,14 @@ fi
 : "${REHEARSAL_KUBECONFIG:?set REHEARSAL_KUBECONFIG to the ServiceAccount kubeconfig}"
 : "${REHEARSAL_NAMESPACE:?set REHEARSAL_NAMESPACE}"
 : "${REHEARSAL_RUN_TOKEN:?set REHEARSAL_RUN_TOKEN}"
+: "${REHEARSAL_SERVER:?set REHEARSAL_SERVER to the API server URL of the bigboy rehearsal cluster}"
 : "${REHEARSAL_DIR:?set REHEARSAL_DIR to a new directory}"
 : "${REHEARSAL_IMAGES_ENV:?set REHEARSAL_IMAGES_ENV to the image digest file}"
 valid_run_id "${REHEARSAL_RUN_ID:-}" || die "REHEARSAL_RUN_ID must be digits only (the CI run id)"
 NS="${REHEARSAL_NAMESPACE}"
 [[ "${NS}" =~ ${NS_RE} ]] || die "REHEARSAL_NAMESPACE is not a plain namespace name"
-case "${NS}" in dev-health | default | kube-*) die "refusing the namespace ${NS}" ;; esac
+# An allowlist: the one documented rehearsal prefix. Everything else (dev-health, default, kube-*, prod, production, ...) is refused.
+case "${NS}" in "${NS_PREFIX}"?*) ;; *) die "refusing the namespace ${NS}: not a rehearsal namespace (${NS_PREFIX}<suffix>)" ;; esac
 [[ "${REHEARSAL_RUN_TOKEN}" =~ ^[0-9a-f]{16,64}$ ]] || die "REHEARSAL_RUN_TOKEN is not a hex token"
 KCFG="${REHEARSAL_KUBECONFIG}"
 case "${KCFG}" in "${ADMIN_KUBECONFIG}" | */k3s.yaml) die "REHEARSAL_KUBECONFIG is the k3s admin kubeconfig: use the ServiceAccount file" ;; esac
@@ -139,6 +145,9 @@ kc() { kubectl --kubeconfig "${KCFG}" "$@"; }
 K() { kc -n "${NS}" "$@"; }
 hm() { helm --kubeconfig "${KCFG}" --namespace "${NS}" "$@"; }
 
+# The cluster target: the kubeconfig names exactly one server and it is the one the lead named for the bigboy rehearsal cluster.
+server="$(kc config view --minify -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null)" || server=""
+[ -n "${server}" ] && [ "${server}" = "${REHEARSAL_SERVER}" ] || die "the server in REHEARSAL_KUBECONFIG is not the rehearsal target (REHEARSAL_SERVER)"
 # The file name proves nothing: ask the API server. The ServiceAccount must be k3s, namespaced and not an admin.
 version="$(kc version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // ""')" || version=""
 case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG is not k3s (server version: ${version:-none}); no kind, no prod" ;; esac
@@ -146,6 +155,15 @@ case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG 
 [ "$(kc auth can-i create clusterroles 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can create clusterroles: it is not a namespace-scoped ServiceAccount"
 owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null)" || die "the namespace read of ${NS} was denied or failed"
 [ -n "${owner_token}" ] && [ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
+
+# Fixed names: nothing this run creates may already exist (it deletes only what it created, below).
+preexisting="$(K get deployment/auth-postgres deployment/auth-valkey service/auth-postgres service/auth-valkey \
+  secret/auth-pg-superuser secret/rehearsal-db secret/rehearsal-migrate secret/rehearsal-valkey secret/rehearsal-session \
+  secret/rehearsal-hs256 secret/rehearsal-unused secret/rehearsal-key-a secret/rehearsal-key-b --ignore-not-found -o name 2>/dev/null)" \
+  || die "the preflight read of the fixed names in ${NS} failed"
+[ -z "${preexisting}" ] || die "${preexisting//$'\n'/ } already exists in ${NS}: the run refuses to reuse or delete it"
+release_found="$(hm list --filter "^${RELEASE}\$" -q 2>/dev/null)" || die "the preflight read of the helm release failed"
+[ -z "${release_found}" ] || die "the helm release ${RELEASE} already exists in ${NS}: the run refuses to reuse or delete it"
 
 if [ -e "${REHEARSAL_DIR}" ] && [ -n "$(ls -A "${REHEARSAL_DIR}" 2>/dev/null)" ]; then
   die "${REHEARSAL_DIR} exists and is not empty"
@@ -156,6 +174,9 @@ DIR="$(cd -- "${REHEARSAL_DIR}" && pwd -P)"
 mkdir -p "${DIR}/keys" "${DIR}/records" "${DIR}/evidence"
 
 PF_PID=""
+# Every object this run creates is recorded just before its create; the EXIT trap deletes exactly the record (the preflight proved the names free).
+OWNED=()
+own() { OWNED+=("$1"); }
 cleanup() {
   local status=$?
   [ -z "${PF_PID}" ] || kill "${PF_PID}" >/dev/null 2>&1 || true
@@ -164,13 +185,15 @@ cleanup() {
     K get pods,jobs -o wide >&2 || true
     K logs --tail 60 -l app.kubernetes.io/component=auth-service >&2 || true
   fi
-  hm uninstall "${RELEASE}" >/dev/null 2>&1 || true
-  K delete deployment auth-postgres auth-valkey --ignore-not-found >/dev/null 2>&1 || true
-  K delete service auth-postgres auth-valkey --ignore-not-found >/dev/null 2>&1 || true
-  K delete secret rehearsal-db rehearsal-migrate rehearsal-valkey rehearsal-session rehearsal-hs256 rehearsal-unused \
-    rehearsal-key-a rehearsal-key-b auth-pg-superuser --ignore-not-found >/dev/null 2>&1 || true
+  local item
+  for item in "${OWNED[@]}"; do
+    case "${item}" in
+      helm/*) hm uninstall "${item#helm/}" >/dev/null 2>&1 || true ;;
+      *) K delete "${item}" --ignore-not-found >/dev/null 2>&1 || true ;;
+    esac
+  done
   shred -u "${DIR}"/keys/*.pem 2>/dev/null || true
-  printf 'CLEANUP namespace %s: release and rehearsal objects removed by name; the namespace stays for its owner\n' "${NS}"
+  printf 'CLEANUP namespace %s: the objects this run created were removed; the namespace stays for its owner\n' "${NS}"
   exit "${status}"
 }
 trap cleanup EXIT
@@ -189,15 +212,18 @@ rec_line "namespace=${NS} ci_run=${REHEARSAL_RUN_ID:-unset} kubernetes=${version
 rec_line "auth_service_digest=${IMG_SVC##*@} auth_migrate_digest=${IMG_MIG##*@}"
 
 # put_secret NAME KEY: the value on stdin only
-put_secret() { K create secret generic "$1" --from-file="$2=/dev/stdin" --dry-run=client -o yaml | K apply -f - >/dev/null; }
+put_secret() { own "secret/$1"; K create secret generic "$1" --from-file="$2=/dev/stdin" --dry-run=client -o yaml | K apply -f - >/dev/null; }
 
 say "step 1: postgres, valkey, Secrets"
 PG_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 RUNTIME_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
+own secret/auth-pg-superuser
 printf '%s' "${PG_PASSWORD}" | K create secret generic auth-pg-superuser --from-file=password=/dev/stdin >/dev/null
 export LOCAL_PG="${PG_IMAGE}" LOCAL_VALKEY="${VALKEY_IMAGE}"
+own deployment/auth-postgres; own service/auth-postgres
 # shellcheck disable=SC2016
 envsubst '${LOCAL_PG}' <"${SCRIPT_DIR}/auth_k8s/postgres.yaml" | K apply -f - >/dev/null
+own deployment/auth-valkey; own service/auth-valkey
 # shellcheck disable=SC2016
 envsubst '${LOCAL_VALKEY}' <"${SCRIPT_DIR}/auth_k8s/valkey.yaml" | K apply -f - >/dev/null
 K rollout status deploy/auth-postgres --timeout=240s >/dev/null
@@ -211,6 +237,7 @@ dsn postgres "${PG_PASSWORD}" | put_secret rehearsal-migrate AUTH_MIGRATION_DATA
 printf 'valkey://auth-valkey:6379/1' | put_secret rehearsal-valkey AUTH_VALKEY_URI
 head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' | put_secret rehearsal-session AUTH_SESSION_SUCCESSOR_KEY
 od -An -N32 -tx1 /dev/urandom | tr -d ' \n' | put_secret rehearsal-hs256 JWT_SECRET_KEY
+own secret/rehearsal-unused
 K create secret generic rehearsal-unused >/dev/null
 for kid in a b; do
   openssl genpkey -algorithm ed25519 -out "${DIR}/keys/${kid}.pem" 2>/dev/null
@@ -220,6 +247,7 @@ shred -u "${DIR}"/keys/*.pem
 
 say "step 2: chart install, class eddsa, key set a active + b pending"
 chart_args eddsa "${IMG_SVC}" "${IMG_MIG}"
+own "helm/${RELEASE}"
 hm upgrade --install "${CHART_ARGS[@]}" --wait --timeout 8m >/dev/null
 check install-class-is-eddsa eq "$(K get "deploy/${DEPLOYMENT}" -o json | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "AUTH_ACCESS_TOKEN_CLASS") | .value')" eddsa
 

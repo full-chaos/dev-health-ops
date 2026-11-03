@@ -2,9 +2,12 @@ package authapi
 
 import (
 	"crypto/rand"
+	"encoding/json"
+	"errors"
 	"slices"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/contracts/auth/v1/vocabulary"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 )
 
@@ -57,6 +60,99 @@ type decisionDocument struct {
 	OrganizationID *string `json:"organization_id"`
 	PolicyRevision int     `json:"policy_revision"`
 	ExpiresAt      string  `json:"expires_at"`
+	// Obligations is present only on an allow that carries at least one.
+	Obligations *wireObligations `json:"obligations,omitempty"`
+}
+
+// maxRepositoryAllowlist is the bound of repository_allowlist in
+// authorization_decision.v1 (maxItems); a test holds the two equal.
+const maxRepositoryAllowlist = 256
+
+// wireObligations is the obligations member of a decision. Every member is a
+// pointer: RepositoryAllowlist points at a non-nil slice, so an empty list (NONE)
+// is written as [] and never omitted, which a consumer would read as unrestricted.
+type wireObligations struct {
+	TenantScope         *string   `json:"tenant_scope,omitempty"`
+	RepositoryAllowlist *[]string `json:"repository_allowlist,omitempty"`
+	Redaction           *[]string `json:"redaction,omitempty"`
+	MinimumAssurance    *string   `json:"minimum_assurance,omitempty"`
+}
+
+var errObligationsInvalid = errors.New("authapi: a decision carries obligations that are not per contract")
+
+// redactionClasses are the registered redaction class ids
+// (vocabulary/redaction-classes.v1.json); a defect in the embedded file panics.
+var redactionClasses = func() map[string]bool {
+	var reg struct {
+		Classes []struct {
+			ID string `json:"id"`
+		} `json:"classes"`
+	}
+	if err := json.Unmarshal(vocabulary.RedactionClassesV1, &reg); err != nil || len(reg.Classes) == 0 {
+		panic("authapi: the redaction class registry is not readable")
+	}
+	out := map[string]bool{}
+	for _, c := range reg.Classes {
+		out[c.ID] = true
+	}
+	return out
+}()
+
+// wireObligationsOf maps a decision's obligations to the wire. A deny carries
+// none, and an obligation outside the contract (a repeated or malformed key, more
+// than maxRepositoryAllowlist keys, an unregistered class, an unknown assurance
+// level, a tenant scope that is not the question's organization) is an error:
+// the caller does not serve the decision.
+func wireObligationsOf(d authorization.Decision, organizationID string) (*wireObligations, error) {
+	o := d.Obligations
+	if o == nil {
+		return nil, nil
+	}
+	if !d.Allowed {
+		return nil, errObligationsInvalid
+	}
+	var w wireObligations
+	if o.TenantScope != "" {
+		if organizationID == "" || o.TenantScope != organizationID {
+			return nil, errObligationsInvalid
+		}
+		scope := o.TenantScope
+		w.TenantScope = &scope
+	}
+	if o.RepositoryRestricted || len(o.RepositoryAllowlist) > 0 {
+		if len(o.RepositoryAllowlist) > maxRepositoryAllowlist {
+			return nil, errObligationsInvalid
+		}
+		keys := make([]string, 0, len(o.RepositoryAllowlist))
+		for _, key := range o.RepositoryAllowlist {
+			if !authorizeRepositoryKeyPattern.MatchString(key) || slices.Contains(keys, key) {
+				return nil, errObligationsInvalid
+			}
+			keys = append(keys, key)
+		}
+		w.RepositoryAllowlist = &keys
+	}
+	if len(o.Redaction) > 0 {
+		classes := make([]string, 0, len(o.Redaction))
+		for _, class := range o.Redaction {
+			if !redactionClasses[class] || slices.Contains(classes, class) {
+				return nil, errObligationsInvalid
+			}
+			classes = append(classes, class)
+		}
+		w.Redaction = &classes
+	}
+	if o.MinimumAssurance != "" {
+		if !slices.Contains([]string{"aal1", "aal2", "aal3"}, o.MinimumAssurance) {
+			return nil, errObligationsInvalid
+		}
+		level := o.MinimumAssurance
+		w.MinimumAssurance = &level
+	}
+	if w == (wireObligations{}) {
+		return nil, nil
+	}
+	return &w, nil
 }
 
 type batchDecision struct {

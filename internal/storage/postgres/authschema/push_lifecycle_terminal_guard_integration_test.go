@@ -227,42 +227,56 @@ func TestTerminalGuardNonTerminalEventsStillAdvance(t *testing.T) {
 }
 
 // Two transactions race to end the same credential before either commits: the
-// second must see the first's terminal mark under the revision row lock.
+// second must see the first's terminal mark under the revision row lock. Both
+// orders of the sweeper's race matter: two sweeps (expired, expired) and a
+// revoke against a sweep (expired, revoked).
 func TestTerminalGuardConcurrentTerminalEventsWriteOne(t *testing.T) {
-	ctx, u, _ := guardUpgrade(t)
-	const aggregate = "66666666-6666-4666-8666-666666666666"
-	u.guardEmit(t, ctx, aggregate, guardCreated)
+	cases := []struct {
+		name         string
+		aggregate    string
+		first, later guardEvent
+	}{
+		{"two sweeps at once", "66666666-6666-4666-8666-666666666666", guardExpired, guardExpired},
+		{"sweep then revoke", "77777777-7777-4777-8777-777777777777", guardExpired, guardRevoked},
+		{"revoke then sweep", "88888888-8888-4888-8888-888888888888", guardRevoked, guardExpired},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, u, _ := guardUpgrade(t)
+			u.guardEmit(t, ctx, c.aggregate, guardCreated)
 
-	first := u.guardBegin(t, ctx)
-	if _, err := guardAppend(ctx, first, aggregate, guardExpired); err != nil {
-		_ = first.Rollback(ctx)
-		t.Fatal(err)
+			first := u.guardBegin(t, ctx)
+			if _, err := guardAppend(ctx, first, c.aggregate, c.first); err != nil {
+				_ = first.Rollback(ctx)
+				t.Fatal(err)
+			}
+			second := u.guardBegin(t, ctx)
+			var wg sync.WaitGroup
+			var secondRevision int64
+			var secondErr error
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				secondRevision, secondErr = guardAppend(ctx, second, c.aggregate, c.later)
+			}()
+			time.Sleep(time.Second)
+			if err := first.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			wg.Wait()
+			if secondErr != nil {
+				_ = second.Rollback(ctx)
+				t.Fatalf("second terminal event: %v", secondErr)
+			}
+			if err := second.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if secondRevision != 2 {
+				t.Errorf("second terminal event returned revision %d, want the current 2", secondRevision)
+			}
+			u.requireStream(t, ctx, c.aggregate, 2, 2)
+		})
 	}
-	second := u.guardBegin(t, ctx)
-	var wg sync.WaitGroup
-	var secondRevision int64
-	var secondErr error
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		secondRevision, secondErr = guardAppend(ctx, second, aggregate, guardRevoked)
-	}()
-	time.Sleep(time.Second)
-	if err := first.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	wg.Wait()
-	if secondErr != nil {
-		_ = second.Rollback(ctx)
-		t.Fatalf("second terminal event: %v", secondErr)
-	}
-	if err := second.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if secondRevision != 2 {
-		t.Errorf("second terminal event returned revision %d, want the current 2", secondRevision)
-	}
-	u.requireStream(t, ctx, aggregate, 2, 2)
 }
 
 func TestTerminalGuardFunctionStaysPinned(t *testing.T) {

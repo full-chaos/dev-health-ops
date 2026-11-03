@@ -56,7 +56,7 @@ func gaugeValue(t *testing.T, reader *sdkmetric.ManualReader) (int64, bool) {
 }
 
 func TestASetKeyIsIgnoredWithOneErrorLineAndTheGauge(t *testing.T) {
-	for _, value := range []string{"true", "false", "TRUE", "1", "zz-not-a-switch-4471", " true "} {
+	for _, value := range []string{"", " \t", "true", "false", "TRUE", "1", "zz-not-a-switch-4471", " true "} {
 		reader := useReader(t)
 		var logs bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&logs, nil))
@@ -85,7 +85,7 @@ func TestASetKeyIsIgnoredWithOneErrorLineAndTheGauge(t *testing.T) {
 
 func TestAnUnsetKeyLogsNothingAndTheGaugeIsZero(t *testing.T) {
 	for name, values := range map[string]map[string]string{
-		"absent": nil, "empty": {OrgsOwnedKey: ""}, "blank": {OrgsOwnedKey: "  "},
+		"absent": nil, "other key": {"AUTH_USERS_OWNED": "true"},
 	} {
 		reader := useReader(t)
 		var logs bytes.Buffer

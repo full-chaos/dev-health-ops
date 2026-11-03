@@ -260,7 +260,8 @@ func TestDisorderEveryArrivalOrderEndsRevokedAndNarrow(t *testing.T) {
 }
 
 // Cell 6b: the same with a widening event in the mix; it never lands in any order.
-func TestDisorderAWideningEventNeverLandsInAnyArrivalOrder(t *testing.T) {
+// Pins the CHAOS-12699 defect; the fix changes the expected end state to r4.
+func TestDisorderARefusedWideningParksLaterRevisionsToday(t *testing.T) {
 	events := []contracts.ExternalPushLifecycleEvent{
 		created(credA, "ingest:write", "schema:read"), scoped(credA, 2, "ingest:write"),
 		scoped(credA, 3, "ingest:write", "schema:read"), scoped(credA, 4, "ingest:write"),

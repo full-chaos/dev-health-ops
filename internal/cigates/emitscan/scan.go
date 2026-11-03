@@ -256,6 +256,13 @@ type pkgInfo struct {
 	labelParams map[string]map[int]bool // function name -> parameter slots that reach a metric attribute sink
 	variadic    map[string]map[int]bool // function name -> its variadic parameter slot
 	labelMarked map[*ast.CallExpr]bool  // attribute constructors that reach a metric label through a package-local call
+	topFuncs    map[string][]topFunc    // every top-level function (not a method) by name
+	rebound     map[string]bool         // names bound by a variable, assignment or parameter anywhere in the package
+}
+
+type topFunc struct {
+	decl    *ast.FuncDecl
+	imports map[string]string
 }
 
 func packageInfo(group []parsedFile) *pkgInfo {
@@ -269,13 +276,40 @@ func packageInfo(group []parsedFile) *pkgInfo {
 		})
 	}
 	info := &pkgInfo{consts: map[string][]string{}, rawFuncs: map[string]bool{}, constNames: map[string]bool{},
-		stringTypes: map[string]bool{}, typeNames: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, labelParams: map[string]map[int]bool{}, variadic: map[string]map[int]bool{}, labelMarked: map[*ast.CallExpr]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
+		stringTypes: map[string]bool{}, typeNames: map[string]bool{}, aliases: map[string][][2]string{}, saturated: map[string]bool{}, labelParams: map[string]map[int]bool{}, variadic: map[string]map[int]bool{}, labelMarked: map[*ast.CallExpr]bool{}, topFuncs: map[string][]topFunc{}, rebound: map[string]bool{}, budget: &budget{limit: workBase + workPerNode*nodes}}
 	for _, parsed := range group {
 		ast.Inspect(parsed.file, func(node ast.Node) bool {
 			if spec, ok := node.(*ast.TypeSpec); ok {
 				info.typeNames[spec.Name.Name] = true
 				if ident, isIdent := spec.Type.(*ast.Ident); isIdent && ident.Name == "string" {
 					info.stringTypes[spec.Name.Name] = true
+				}
+			}
+			return true
+		})
+	}
+	for _, parsed := range group {
+		imports := importNames(parsed.file)
+		for _, decl := range parsed.file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+				info.topFuncs[fn.Name.Name] = append(info.topFuncs[fn.Name.Name], topFunc{decl: fn, imports: imports})
+			}
+		}
+		ast.Inspect(parsed.file, func(node ast.Node) bool {
+			switch n := node.(type) {
+			case *ast.ValueSpec:
+				info.bindIdents(n.Names...)
+			case *ast.AssignStmt:
+				info.bindExprs(n.Lhs...)
+			case *ast.RangeStmt:
+				info.bindExprs(n.Key, n.Value)
+			case *ast.FuncType:
+				for _, list := range []*ast.FieldList{n.Params, n.Results} {
+					if list != nil {
+						for _, field := range list.List {
+							info.bindIdents(field.Names...)
+						}
+					}
 				}
 			}
 			return true
@@ -1509,6 +1543,77 @@ func splitWords(key string) []string {
 	return words
 }
 
+func (info *pkgInfo) bindIdents(names ...*ast.Ident) {
+	for _, name := range names {
+		info.rebound[name.Name] = true
+	}
+}
+
+func (info *pkgInfo) bindExprs(exprs ...ast.Expr) {
+	for _, expr := range exprs {
+		if ident, ok := expr.(*ast.Ident); ok {
+			info.rebound[ident.Name] = true
+		}
+	}
+}
+
+// riverConfigHasLogger reports a river.Config composite literal that sets Logger.
+func riverConfigHasLogger(lit *ast.CompositeLit) bool {
+	for _, element := range lit.Elts {
+		if kv, ok := element.(*ast.KeyValueExpr); ok {
+			if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "Logger" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// builderSetsLogger reports a call to a same-package top-level function that
+// is declared once, is not rebound by any variable or parameter of the package,
+// and whose every return is one direct river.Config literal that sets Logger.
+// Any other form is not accepted (fail closed).
+func (s *fileScan) builderSetsLogger(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok || s.pkg.rebound[ident.Name] || len(s.pkg.topFuncs[ident.Name]) != 1 {
+		return false
+	}
+	builder := s.pkg.topFuncs[ident.Name][0]
+	if builder.decl.Body == nil {
+		return false
+	}
+	returns, accepted := 0, true
+	ast.Inspect(builder.decl.Body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			returns++
+			if len(n.Results) != 1 || !isRiverConfigLiteralWithLogger(n.Results[0], builder.imports) {
+				accepted = false
+			}
+		}
+		return true
+	})
+	return accepted && returns > 0
+}
+
+func isRiverConfigLiteralWithLogger(expr ast.Expr, imports map[string]string) bool {
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		expr = unary.X
+	}
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Config" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && imports[pkg.Name] == "river" && riverConfigHasLogger(lit)
+}
+
 func (s *fileScan) riverClient(call *ast.CallExpr) {
 	if len(call.Args) < 2 {
 		s.add(RuleRiverLogger, call.Pos(), "config")
@@ -1520,15 +1625,14 @@ func (s *fileScan) riverClient(call *ast.CallExpr) {
 	}
 	lit, ok := config.(*ast.CompositeLit)
 	if !ok {
+		if builder, isCall := config.(*ast.CallExpr); isCall && s.builderSetsLogger(builder) {
+			return
+		}
 		s.add(RuleRiverLogger, call.Pos(), "config not a literal")
 		return
 	}
-	for _, element := range lit.Elts {
-		if kv, ok := element.(*ast.KeyValueExpr); ok {
-			if ident, ok := kv.Key.(*ast.Ident); ok && ident.Name == "Logger" {
-				return
-			}
-		}
+	if riverConfigHasLogger(lit) {
+		return
 	}
 	s.add(RuleRiverLogger, call.Pos(), "no Logger")
 }

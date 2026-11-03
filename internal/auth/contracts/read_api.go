@@ -208,6 +208,7 @@ type readResourceWire struct {
 
 type readItemWire struct {
 	readResourceWire
+	Principal    *readResourceWire `json:"principal"`
 	Organization *readResourceWire `json:"organization"`
 	Membership   *readResourceWire `json:"membership"`
 }
@@ -276,6 +277,9 @@ func ParseReadResponse(root string, req *ReadRequest, raw []byte) (*ReadResponse
 func readItemID(op ReadOperation, item readItemWire) string {
 	switch op.IDPrefix {
 	case "prn_":
+		if item.Principal != nil {
+			return item.Principal.PrincipalID
+		}
 		return item.PrincipalID
 	case "mbr_":
 		return item.MembershipID
@@ -319,7 +323,16 @@ func checkReadGet(op ReadOperation, req *ReadRequest, res readResourceWire) stri
 func checkReadListItem(op ReadOperation, req *ReadRequest, item readItemWire) string {
 	switch op.Name {
 	case "principals_list":
-		if req.Kind != "" && item.Kind != req.Kind {
+		if item.Principal == nil || item.Membership == nil {
+			return "item_pair_mismatch"
+		}
+		if item.Membership.OrganizationID != req.OrganizationID {
+			return "item_wrong_organization"
+		}
+		if item.Membership.PrincipalID != item.Principal.PrincipalID {
+			return "item_pair_mismatch"
+		}
+		if req.Kind != "" && item.Principal.Kind != req.Kind {
 			return "kind_filter_mismatch"
 		}
 	case "memberships_list":

@@ -19,7 +19,7 @@ lifecycle: active
 
 Both deployments are **dormant by default**: nothing starts unless you ask for
 it, and removing it changes no other service. Without the session keys the
-service answers only its operator surface, the refresh, logout and validate 503 stubs, the
+service answers only its operator surface, the refresh, logout, validate and switch-org 503 stubs, the
 well-known routes when a token issuer URL is set, and the workload exchange when
 it is on; see the [architecture](auth-control-plane-architecture.md).
 {: .fc-page-lede }

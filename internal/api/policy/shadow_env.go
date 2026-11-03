@@ -47,6 +47,9 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 		recordShadowStateSafe(ctx, false, true)
 		return nil
 	}
+	if lookup == nil {
+		return disabled("lookup")
+	}
 	read := func(key string) string {
 		value, _ := lookup(key)
 		return strings.TrimSpace(value)

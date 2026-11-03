@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func TestEventAndAuditRowAreWellFormed(t *testing.T) {
@@ -20,6 +21,7 @@ func TestEventAndAuditRowAreWellFormed(t *testing.T) {
 	if row.EventType != EventType {
 		t.Fatalf("event type %q", row.EventType)
 	}
+	auditwire.MustValidate(t, row)
 	if err := audit.ValidateAttributes(row.Attributes); err != nil {
 		t.Fatalf("audit attributes: %v", err)
 	}
@@ -60,6 +62,7 @@ func TestExpiredTuplePlanEndsWithExpiredEventsAndAuditRows(t *testing.T) {
 	if len(rows) != 1 || rows[0].EventType != "auth.resource_grant.expired" || rows[0].Attributes["reason_code"] != "expired" || rows[0].Attributes["new_status"] != "expired" {
 		t.Fatalf("expired plan audit rows = %+v", rows)
 	}
+	auditwire.MustValidate(t, rows[0])
 	if err := audit.ValidateAttributes(rows[0].Attributes); err != nil {
 		t.Fatalf("expired audit attributes: %v", err)
 	}

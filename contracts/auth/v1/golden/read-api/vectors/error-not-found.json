@@ -1,0 +1,15 @@
+{
+  "id": "error-not-found",
+  "kind": "error",
+  "http_status": 404,
+  "body": {
+    "schema_version": "error.v1",
+    "status": 404,
+    "reason_code": "not_found",
+    "request_id": "req_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "occurred_at": "2026-11-02T11:30:00.123456Z"
+  },
+  "parse": "accept",
+  "rule": null,
+  "why": "A missing grant and a foreign one answer the same."
+}

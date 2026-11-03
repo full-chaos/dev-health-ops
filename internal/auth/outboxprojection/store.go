@@ -40,6 +40,9 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 	if err != nil {
 		return Result{}, err
 	}
+	if current.state.Decided, err = e.decided(ctx, tx, in.Domain, event.AggregateID, current.state.Revision); err != nil {
+		return Result{}, err
+	}
 	revision := int64(event.Payload.Revision)
 	digest := Digest(in)
 
@@ -80,6 +83,11 @@ func (e *Engine) apply(ctx context.Context, tx audit.TxOps, in Input, organizati
 	case outcome.Retry():
 		return Result{Outcome: outcome, State: current.state}, nil
 	case outcome == pushlifecycle.Duplicate || outcome == pushlifecycle.Stale:
+		// The core met a revision no digest row names (a lost digest, a restored timeline): decide it now, so the
+		// reader never reads the same delivery again. It is not a refusal: an allowed audit row.
+		if err := e.insertDigest(ctx, tx, in, revision, digest, outcome); err != nil {
+			return Result{}, err
+		}
 		return Result{Outcome: outcome, State: current.state}, nil
 	case outcome != pushlifecycle.Applied:
 		if !denied {
@@ -176,6 +184,34 @@ func (e *Engine) load(ctx context.Context, tx audit.TxOps, domain Domain, refere
 		s.state.TerminalAt = terminal.UTC()
 	}
 	return s, true, nil
+}
+
+// refusedOutcomes are the digest outcomes of a final refusal: each decides its revision without applying it.
+var refusedOutcomes = []string{string(pushlifecycle.RefusedTerminal), string(pushlifecycle.RefusedWiden), string(pushlifecycle.RefusedTransition), string(pushlifecycle.RefusedParent)}
+
+// decided is the last revision above applied that a refused digest row decides, with every revision between them
+// decided too; 0 when the next revision has no refused row. A missing revision stops it, so a refusal above a gap
+// never lets the gap be skipped.
+func (e *Engine) decided(ctx context.Context, tx audit.TxOps, domain Domain, reference string, applied int64) (int64, error) {
+	rows, err := tx.Query(ctx, `SELECT revision FROM `+e.q+`.credential_projection_digest
+		WHERE domain_owner = $1 AND external_reference = $2 AND revision > $3 AND outcome = ANY($4::text[]) ORDER BY revision`,
+		string(domain), reference, applied, refusedOutcomes)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var last int64
+	for want := applied + 1; rows.Next(); want++ {
+		var revision int64
+		if err := rows.Scan(&revision); err != nil {
+			return 0, err
+		}
+		if revision != want {
+			break
+		}
+		last = revision
+	}
+	return last, rows.Err()
 }
 
 // ensureSource returns the external_source principal of (organization, source), creating it and its sources row on

@@ -1,0 +1,371 @@
+{
+  "surface": "read-api-golden.v1",
+  "description": "The golden corpus of the versioned read API contract: each row is one request, one exchange (a request and the response a parser decides on) or one error body, with the schema's verdict and the Go parser's verdict. A row whose schema verdict is accept and whose parse verdict is refuse names the rule only the parser can say.",
+  "vectors": [
+    {
+      "id": "request-limit-absent-is-50",
+      "file": "request-limit-absent-is-50.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-limit-100-allowed",
+      "file": "request-limit-100-allowed.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-limit-101-refused",
+      "file": "request-limit-101-refused.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-limit-0-refused",
+      "file": "request-limit-0-refused.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-limit-decimal-refused",
+      "file": "request-limit-decimal-refused.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-cursor-good",
+      "file": "request-cursor-good.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-cursor-bad-alphabet",
+      "file": "request-cursor-bad-alphabet.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-cursor-undecodable",
+      "file": "request-cursor-undecodable.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-cursor-padded-undecodable",
+      "file": "request-cursor-padded-undecodable.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-cursor-wrong-kind",
+      "file": "request-cursor-wrong-kind.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-grants-all-filters",
+      "file": "request-grants-all-filters.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-principals-list-needs-organization",
+      "file": "request-principals-list-needs-organization.json",
+      "kind": "request"
+    },
+    {
+      "id": "request-extra-resource-key",
+      "file": "request-extra-resource-key.json",
+      "kind": "request"
+    },
+    {
+      "id": "get-principal",
+      "file": "get-principal.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-principal-other-id",
+      "file": "get-principal-other-id.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-principal-with-email",
+      "file": "get-principal-with-email.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-principal-with-display-name",
+      "file": "get-principal-with-display-name.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-principal-revision-decimal",
+      "file": "get-principal-revision-decimal.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-organization",
+      "file": "get-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-organization-other-id",
+      "file": "get-organization-other-id.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-membership",
+      "file": "get-membership.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-membership-other-organization",
+      "file": "get-membership-other-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-membership-other-principal",
+      "file": "get-membership-other-principal.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-membership-invited-with-role",
+      "file": "get-membership-invited-with-role.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-grant",
+      "file": "get-grant.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-grant-other-organization",
+      "file": "get-grant-other-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-grant-other-id",
+      "file": "get-grant-other-id.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "get-grant-key-uppercase",
+      "file": "get-grant-key-uppercase.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-first-page",
+      "file": "list-memberships-first-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-last-page",
+      "file": "list-memberships-last-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-empty",
+      "file": "list-memberships-empty.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-exactly-limit-no-cursor",
+      "file": "list-memberships-exactly-limit-no-cursor.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-descending",
+      "file": "list-memberships-descending.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-repeated-id",
+      "file": "list-memberships-repeated-id.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-over-limit",
+      "file": "list-memberships-over-limit.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-over-default-limit",
+      "file": "list-memberships-over-default-limit.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-other-organization",
+      "file": "list-memberships-other-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-status-filter",
+      "file": "list-memberships-status-filter.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-cursor-is-not-last-item",
+      "file": "list-memberships-cursor-is-not-last-item.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-cursor-wrong-kind",
+      "file": "list-memberships-cursor-wrong-kind.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-cursor-on-empty-page",
+      "file": "list-memberships-cursor-on-empty-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-starts-before-cursor",
+      "file": "list-memberships-starts-before-cursor.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-starts-at-cursor",
+      "file": "list-memberships-starts-at-cursor.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-null-cursor",
+      "file": "list-memberships-null-cursor.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-memberships-101-items",
+      "file": "list-memberships-101-items.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-first-page",
+      "file": "list-grants-first-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-empty",
+      "file": "list-grants-empty.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-revoked-by-default",
+      "file": "list-grants-revoked-by-default.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-revoked-when-asked",
+      "file": "list-grants-revoked-when-asked.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-other-grantee",
+      "file": "list-grants-other-grantee.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-other-organization",
+      "file": "list-grants-other-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-key-missing",
+      "file": "list-grants-key-missing.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-grants-unordered",
+      "file": "list-grants-unordered.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-first-page",
+      "file": "list-principals-first-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-kind-filter",
+      "file": "list-principals-kind-filter.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-with-email",
+      "file": "list-principals-with-email.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-unordered",
+      "file": "list-principals-unordered.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-outside-organization",
+      "file": "list-principals-outside-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-pair-mismatch",
+      "file": "list-principals-pair-mismatch.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-membership-absent",
+      "file": "list-principals-membership-absent.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-bare-principal",
+      "file": "list-principals-bare-principal.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-organizations-first-page",
+      "file": "list-organizations-first-page.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-organizations-other-principal",
+      "file": "list-organizations-other-principal.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-organizations-pair-mismatch",
+      "file": "list-organizations-pair-mismatch.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-organizations-status-filter",
+      "file": "list-organizations-status-filter.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-organizations-unordered",
+      "file": "list-organizations-unordered.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "error-not-found",
+      "file": "error-not-found.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-malformed",
+      "file": "error-malformed.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-resource-key-member",
+      "file": "error-resource-key-member.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-resource-member",
+      "file": "error-resource-member.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-repositories-member",
+      "file": "error-repositories-member.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-conflict-not-for-reads",
+      "file": "error-conflict-not-for-reads.json",
+      "kind": "error"
+    },
+    {
+      "id": "error-status-mismatch",
+      "file": "error-status-mismatch.json",
+      "kind": "error"
+    }
+  ]
+}

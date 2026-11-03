@@ -417,6 +417,137 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the users row (and, for a token with an org_id, the membership row) is read live through PGUsers; a token with a sid reads its session row live (policy.PGStore.SessionState, then the session store's effective revoke and expiry).",
+      "disclosure_behavior": "go-api's wire: the token travels in the JSON body field token, never in a header. A refused token is 200 with valid false and every other member null, so the answer says only that the token is not good; a malformed body is go-api's 422 detail list; a store or key set fault is a 503, never a pass. The body never echoes the token.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/validate [dev-health-auth-service @api]",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 123,
+          "note": "func newValidateAuth",
+          "path": "internal/auth/authapi/compat_validate.go"
+        },
+        "description": "newValidateAuth: go-api's own decision, policy.Authenticator.Authenticate, over the body token. An HS256 token is verified by the go-api verifier the Issuer holds, then CheckClaims and userFromClaims (legacy_hs256 true). With AUTH_TOKEN_ISSUER_URL and a key set, an EdDSA user_access_token (JWT header alg EdDSA) of audience dev-health-api is checked by the profile-routed validator over this route's one row, then go-api's accessTokenUser; the acr-api and acr-mcp audiences, the workload token and a query-api audience token are refused. A token naming a session also needs that session live in auth-service's own state (stricter than go-api: an expired session or one revoked by a password stamp is valid false)."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/validate",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/compat_validate.go",
+        "line": 30
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (legacy_hs256) or EdDSA (user_access_token)",
+        "audience": "HS256: AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); EdDSA: dev-health-api",
+        "issuer": "HS256: AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); EdDSA: AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access; or the access-token.v1 JWS"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "No cache: the session row, the users row, the organization row and the membership row are read live, and the guard reads the user, the organization and the membership again inside the transaction that supersedes the caller's session.",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "go-api's wire: the body is read before the bearer, so a refused body or bearer is go-api's own bytes (401 Not authenticated, Invalid authorization header or Invalid or expired token; 400 Invalid organization ID; 422 for a body with a schema error). A target organization the caller is not a member of, or one that is inactive, is the same 403 text. A delegated or impersonation bearer is a 403. The body never echoes the organization id or a token.",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/auth/switch-org [dev-health-auth-service @api]",
+      "issued_credential": [
+        {
+          "algorithm": "HS256",
+          "anchor": {
+            "line": 67,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (default dev-health-api)",
+          "class_id": "ops_access_token_hs256",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_JWT_ISSUER (default dev-health-ops)",
+          "lifetime_seconds": 3600,
+          "note": "go-api's access claims for the caller's new session in the requested organization, plus sid (hs256_compat class)."
+        },
+        {
+          "algorithm": "EdDSA",
+          "anchor": {
+            "line": 67,
+            "note": "func (i *Issuer) Access",
+            "path": "internal/auth/authapi/issuer.go"
+          },
+          "audience": "AUTH_JWT_AUDIENCE (dev-health-api or auth-service, eddsa class)",
+          "class_id": "user_access_token",
+          "direction": "returned_to_caller",
+          "issuer": "AUTH_TOKEN_ISSUER_URL",
+          "lifetime_seconds": 3600,
+          "note": "Under the eddsa access token class the access token of the caller's new session is the access-token.v1 JWS, signed by the active key of the key set; its signing kid is recorded on the new session."
+        },
+        {
+          "algorithm": null,
+          "anchor": {
+            "line": 69,
+            "note": "func (s *Store) insertSession",
+            "path": "internal/auth/session/signin.go"
+          },
+          "audience": null,
+          "class_id": "refresh_credential",
+          "direction": "returned_to_caller",
+          "issuer": null,
+          "lifetime_seconds": 604800,
+          "note": "The first opaque credential of the caller's new session, which starts a new family; the session the switch supersedes is revoked, and the account's other sessions stay."
+        }
+      ],
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 109,
+          "note": "func (h handlers) authenticateWith",
+          "path": "internal/auth/authapi/routes.go"
+        },
+        "description": "authenticateWith: bearer HS256 access token with a sid claim; the session must be live and belong to sub, the users row active, and tv equal to users.token_version. A delegated session is refused 403. The route then judges the requested organization by fresh reads inside the supersede transaction: the user active, the organization active and the caller's membership of it. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version; the HS256 access token stays accepted (legacy_hs256 true)."
+      },
+      "public_rationale": null,
+      "route": "/api/v1/auth/switch-org",
+      "service": "dev-health-auth-service",
+      "source": {
+        "file": "internal/auth/authapi/switch_org.go",
+        "line": 34
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "none",
+      "token_shape": {
+        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
+        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
+        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
+        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
+      }
+    },
+    {
+      "accepted_credential_classes": [
         "social_oauth_exchange"
       ],
       "classification": "protected",
@@ -2267,5 +2398,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "f1b88a086ed92247268032bedfb647c638325992"
+  "source_commit": "7691593453acfb5163690e289c52b41054fd260f"
 }

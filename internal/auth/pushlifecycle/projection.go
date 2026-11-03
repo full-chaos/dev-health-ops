@@ -67,11 +67,16 @@ func (o Outcome) Retry() bool { return o == Gap || o == ParentPending }
 // State is one credential's projection. The zero value is a credential never
 // seen. Revision is the last applied revision.
 type State struct {
-	AggregateID      string
-	OrganizationID   string
-	Binding          string
-	SourceID         string
-	Revision         int64
+	AggregateID    string
+	OrganizationID string
+	Binding        string
+	SourceID       string
+	Revision       int64
+	// Decided is the last revision above Revision that a final refusal decided,
+	// with every revision between them decided too; a value at or below Revision
+	// means none. The next revision is then Decided+1, judged against the last
+	// applied state.
+	Decided          int64
 	Status           Status
 	Fingerprint      string
 	Scopes           []string
@@ -97,26 +102,64 @@ type State struct {
 // The producer writes a rotated event and its parent's retirement in one
 // transaction, each on its own aggregate; between the two events a consumer may
 // see both credentials live, and that window is accepted.
-// A parent that has not been seen yet is the caller's nil: ParentPending, retry later. The
-// returned state is state itself unless the outcome is Applied. Apply never panics and never returns Applied for a
-// terminal credential.
+// A parent that has not been seen yet is the caller's nil: ParentPending, retry later.
+//
+// Order: the next revision is max(Revision, Decided)+1. A revoked or expired
+// event that skips revisions applies to an active credential and is final (the
+// revision jumps to its own; a skipped revision is then Stale); every other
+// event that skips revisions, and a terminal one that would be refused, is a
+// Gap. A final refusal of the next revision decides it (Decided moves, nothing
+// else), so a refused revision never parks the later ones. The returned state is
+// state itself unless the outcome is Applied or that refusal. Apply never panics
+// and never returns Applied for a terminal credential.
 func Apply(state State, event contracts.ExternalPushLifecycleEvent, parent *State) (State, Outcome) {
 	revision := int64(event.Payload.Revision)
+	frontier := max(state.Revision, state.Decided)
 	switch {
 	case revision < 1 || event.AggregateType != contracts.ExternalPushCredentialAggregate || event.AggregateID == "":
 		return state, RefusedTransition
-	case state.Revision > 0 && event.AggregateID != state.AggregateID:
+	case state.AggregateID != "" && event.AggregateID != state.AggregateID:
 		return state, RefusedTransition
 	case revision == state.Revision:
 		return state, Duplicate
 	case revision < state.Revision:
 		return state, Stale
-	case revision > state.Revision+1:
+	case revision <= state.Decided:
+		return state, Duplicate
+	}
+	next := revision == frontier+1
+	switch {
+	case state.Status.Terminal():
+		return decide(state, event, next, RefusedTerminal)
+	case state.Revision == 0 && state.Decided > 0:
+		// The first revision was refused: the credential never existed, so no later event can apply.
+		return decide(state, event, next, RefusedTransition)
+	case !next && event.EventType != contracts.ExternalPushRevoked && event.EventType != contracts.ExternalPushExpired:
 		return state, Gap
 	}
-	if state.Status.Terminal() {
-		return state, RefusedTerminal
+	applied, outcome := transition(state, event, parent)
+	switch {
+	case outcome == Applied:
+		return applied, Applied
+	case !next:
+		return state, Gap
+	case outcome.Retry():
+		return state, outcome
 	}
+	return decide(state, event, true, outcome)
+}
+
+// decide returns a final refusal; a refusal of the next revision moves Decided and nothing else.
+func decide(state State, event contracts.ExternalPushLifecycleEvent, next bool, outcome Outcome) (State, Outcome) {
+	if next {
+		state.Decided = int64(event.Payload.Revision)
+	}
+	return state, outcome
+}
+
+// transition folds one event of the next revision, or a terminal event over a gap, into an active or unseen state.
+func transition(state State, event contracts.ExternalPushLifecycleEvent, parent *State) (State, Outcome) {
+	revision := int64(event.Payload.Revision)
 	change := event.Payload.Change
 	next := state
 	next.AggregateID = event.AggregateID

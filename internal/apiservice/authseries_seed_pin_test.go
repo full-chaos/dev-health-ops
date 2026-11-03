@@ -16,8 +16,8 @@ import (
 )
 
 // The seeded label sets are PINNED and follow the REGISTERED proxied routes: a new aggregate, outcome, class or proxied pattern must
-// change these literals on purpose. Public listener, every route registered and every flag on: proxy 6 x 3 = 18, routes 15 x 4 = 60, 78
-// in all; SSO routes only 26; session routes only 52; no pool 0.
+// change these literals on purpose. Public listener, every route registered and every flag on: proxy 6 x 3 = 18, routes 16 x 4 = 64, 82
+// in all; SSO routes only 26; session routes only 56; no pool 0.
 
 var (
 	ssoAggregates     = map[AuthAggregate]bool{AuthOIDC: true, AuthSAML: true}
@@ -137,7 +137,7 @@ func TestOneRequestOnASeededAuthProxySeriesIsAVisiblePlusOne(t *testing.T) {
 	}
 }
 
-func TestTheSeededRouteSeedsAreExactlyThePinnedFifteenInOrder(t *testing.T) {
+func TestTheSeededRouteSeedsAreExactlyThePinnedSeventeenInOrder(t *testing.T) {
 	wantSeeds := []httpapi.RequestSeed{
 		{Method: "POST", Route: "/api/v1/auth/change-password"},
 		{Method: "POST", Route: "/api/v1/auth/forgot-password"},
@@ -153,6 +153,8 @@ func TestTheSeededRouteSeedsAreExactlyThePinnedFifteenInOrder(t *testing.T) {
 		{Method: "POST", Route: "/api/v1/auth/saml/{provider_id}/initiate"},
 		{Method: "GET", Route: "/api/v1/auth/saml/{provider_id}/metadata"},
 		{Method: "POST", Route: "/api/v1/auth/social-login"},
+		{Method: "POST", Route: "/api/v1/auth/switch-org"},
+		{Method: "POST", Route: "/api/v1/auth/validate"},
 		{Method: "GET", Route: "/api/v1/auth/verify"},
 	}
 	got := authProxyRequestSeeds(proxiedRoutes(func(AuthAggregate) bool { return true }))
@@ -175,9 +177,9 @@ func TestTheSeededRouteSeriesFollowTheRegisteredProxiedRoutes(t *testing.T) {
 		keep   func(AuthAggregate) bool
 		series int
 	}{
-		{"every proxied route registered: 15 x 4", func(AuthAggregate) bool { return true }, 60},
+		{"every proxied route registered: 17 x 4", func(AuthAggregate) bool { return true }, 68},
 		{"SSO routes only: 5 x 4", func(a AuthAggregate) bool { return ssoAggregates[a] }, 20},
-		{"session routes only: 10 x 4", func(a AuthAggregate) bool { return sessionAggregates[a] }, 40},
+		{"session routes only: 12 x 4", func(a AuthAggregate) bool { return sessionAggregates[a] }, 48},
 		{"no proxied route registered", func(AuthAggregate) bool { return false }, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {

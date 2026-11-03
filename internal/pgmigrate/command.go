@@ -15,7 +15,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/ownermove"
 )
+
+// firstConnect bounds the wait for the first database connect: a hook Job's
+// new pod can be refused while its NetworkPolicy rules are programmed.
+var firstConnect = pgstorage.DefaultFirstConnect()
 
 // ResolveDSN finds the elevated migration DSN. The migrate group passes the
 // River migrator's resolver, so both verbs read MIGRATION_DATABASE_URI (or its
@@ -135,7 +140,7 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return cli.ExitFailure
 	}
 	boundary := pgstorage.Boundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	conn, err := pgstorage.ConnectWaiting(ctx, dsn.Reveal(), firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate postgres "+verb, "PostgreSQL")))
 	if err != nil {
 		return writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error())
 	}
@@ -149,6 +154,9 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return writeResult(env.Stdout, env.Stderr, status)
 	}
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
+	if code, ok := verifyOwnerPin(ctx, conn, env, logger); !ok {
+		return code
+	}
 	before, _ := Recorded(ctx, conn)
 	result, err := UpgradeLogged(ctx, conn, baseline, chain, logger)
 	// One final line per run, from state read back afterwards: the step logs fire
@@ -180,6 +188,18 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		return writeError(env.Stderr, "migration_failed", boundary.Redact(err).Error())
 	}
 	return writeResult(env.Stdout, env.Stderr, result)
+}
+
+// verifyOwnerPin checks MIGRATION_OWNER_ROLE before any DDL; ok=false means the run stops with code.
+func verifyOwnerPin(ctx context.Context, conn *pgx.Conn, env cli.Env, logger *slog.Logger) (int, bool) {
+	role, err := ownermove.VerifyPinFromEnv(ctx, conn, env.Lookup)
+	if err != nil {
+		return writeError(env.Stderr, "owner_pin_failed", err.Error()), false
+	}
+	if role != "" {
+		logger.Info(ownermove.PinVerifiedMessage, "owner_role", role)
+	}
+	return cli.ExitOK, true
 }
 
 func writeResult(stdout, stderr io.Writer, value any) int {
@@ -260,7 +280,7 @@ func recordedRevisions(ctx context.Context, resolve ResolveDSN, env cli.Env) (re
 		return nil, cli.ExitFailure, false
 	}
 	boundary := pgstorage.Boundary(dsn.Reveal())
-	conn, err := pgx.Connect(ctx, dsn.Reveal())
+	conn, err := pgstorage.ConnectWaiting(ctx, dsn.Reveal(), firstConnect.WithReport(pgstorage.TextReport(env.Stderr, "migrate postgres current", "PostgreSQL")))
 	if err != nil {
 		return nil, writeError(env.Stderr, "postgres_unavailable", boundary.Redact(err).Error()), false
 	}

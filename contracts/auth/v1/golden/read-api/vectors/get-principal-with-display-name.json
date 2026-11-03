@@ -1,0 +1,21 @@
+{
+  "id": "get-principal-with-display-name",
+  "kind": "exchange",
+  "operation": "principals_get",
+  "request": {
+    "schema_version": "principal-get-request.v1",
+    "principal_id": "prn_EXAMPLE0000000000000001"
+  },
+  "response": {
+    "schema_version": "principal-read.v1",
+    "principal_id": "prn_EXAMPLE0000000000000001",
+    "kind": "user",
+    "status": "active",
+    "revision": 3,
+    "display_name": "A B"
+  },
+  "response_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "No display name either."
+}

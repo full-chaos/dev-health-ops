@@ -223,6 +223,8 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 var sessionProxyRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/refresh":             AuthSessions,
 	"POST /api/v1/auth/logout":              AuthSessions,
+	"POST /api/v1/auth/validate":            AuthSessions,
+	"POST /api/v1/auth/switch-org":          AuthSessions,
 	"POST /api/v1/auth/login":               AuthLocalLogin,
 	"POST /api/v1/auth/register":            AuthCredentials,
 	"GET /api/v1/auth/verify":               AuthCredentials,
@@ -249,6 +251,7 @@ var routeProxyRoutes = map[string]AuthAggregate{
 // or stores (D6440). With the aggregate off the route keeps go-api's whole local chain.
 var ownerAuthenticatedRoutes = map[string]AuthAggregate{
 	"POST /api/v1/auth/change-password": AuthCredentials,
+	"POST /api/v1/auth/switch-org":      AuthSessions,
 }
 
 // ScopeExemptRoutes is the set of "METHOD path" routes the scope layers skip because auth-service authenticates

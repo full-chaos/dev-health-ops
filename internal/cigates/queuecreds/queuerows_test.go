@@ -22,9 +22,55 @@ var queueRowExpressions = []struct {
 	{regexp.MustCompile(`\bargs\s*->\s*'([a-z_]+)'\s*->>\s*'([a-z_]+)'`), func(m []string) string { return "args->" + m[1] + "->>" + m[2] }},
 	{regexp.MustCompile(`\bargs\s*#>>\s*'\{([a-z_,]+)\}'`), func(m []string) string { return "args#>>" + m[1] }},
 	{regexp.MustCompile(`\bargs\s*->\s*'([a-z_]+)'`), func(m []string) string { return "args->" + m[1] }},
-	{regexp.MustCompile(`\b(?:[a-z_]+\.)?args\s*(?:::|,|\s+AS\b)`), func([]string) string { return "args" }},
 	{regexp.MustCompile(`\bencoded_args\b`), func([]string) string { return "encoded_args" }},
 	{regexp.MustCompile(`\bdedupe_key\b`), func([]string) string { return "dedupe_key" }},
+}
+
+var (
+	sqlQuoted  = regexp.MustCompile(`'(?:[^']|'')*'|--[^\n]*`)
+	bareArgs   = regexp.MustCompile(`(?i)\b(?:[a-z_][a-z0-9_]*\.)?args\b`)
+	argsFollow = regexp.MustCompile(`^\s*(?:->|#>)`)
+)
+
+// bareArgsRead reports whether the text names the args column as a whole word whatever operator follows it. The
+// operators ->, ->>, #> and #>> name the field they read through their own expressions, so they do not count here.
+func bareArgsRead(text string) bool {
+	stripped := sqlQuoted.ReplaceAllString(text, " ")
+	for _, loc := range bareArgs.FindAllStringIndex(stripped, -1) {
+		if !argsFollow.MatchString(stripped[loc[1]:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// sqlKeys names the queue-row fields one SQL text reads.
+func sqlKeys(text string) []string {
+	seen := map[string]bool{}
+	for _, expression := range queueRowExpressions {
+		for _, match := range expression.pattern.FindAllStringSubmatch(text, -1) {
+			seen[expression.key(match)] = true
+		}
+	}
+	if bareArgsRead(text) {
+		seen["args"] = true
+	}
+	out := make([]string, 0, len(seen))
+	for key := range seen {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// queueRowSQLKeys names the queue-row fields a string literal reads when the literal is a SQL statement.
+func queueRowSQLKeys(text string) []string {
+	upper := strings.ToUpper(text)
+	if !(strings.Contains(upper, "SELECT") || strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE") ||
+		strings.Contains(upper, "DELETE") || strings.Contains(upper, "RETURNING") || strings.Contains(upper, "MERGE")) {
+		return nil
+	}
+	return sqlKeys(text)
 }
 
 // queueRowReads finds every SQL string literal outside tests that names a
@@ -69,18 +115,15 @@ func queueRowReads(t *testing.T, root string) map[string][]string {
 						return true
 					}
 					text, err := strconv.Unquote(lit.Value)
-					upper := strings.ToUpper(text)
-					if err != nil || !(strings.Contains(upper, "SELECT") || strings.Contains(upper, "INSERT") || strings.Contains(upper, "UPDATE")) {
+					if err != nil {
 						return true
 					}
-					for _, expression := range queueRowExpressions {
-						for _, match := range expression.pattern.FindAllStringSubmatch(text, -1) {
-							where := rel + "#" + name
-							if found[where] == nil {
-								found[where] = map[string]bool{}
-							}
-							found[where][expression.key(match)] = true
+					for _, key := range queueRowSQLKeys(text) {
+						where := rel + "#" + name
+						if found[where] == nil {
+							found[where] = map[string]bool{}
 						}
+						found[where][key] = true
 					}
 					return true
 				})
@@ -139,13 +182,13 @@ var queueRowReadTable = map[string]queueRowRead{
 		"args#>>domain,id, args#>>domain,type, args->>organization_id, dedupe_key",
 		roleOutput, "internal/joboutbox/loop.go", guardCall + "rearm.DedupeKey", "the provider-unit rearm log line prints the dedupe key"},
 	"internal/joboutbox/strand_repair.go#repairStrandedPartitionSQL": {
-		"args#>>domain,id, args#>>domain,type, args->>organization_id, dedupe_key",
+		"args, args#>>domain,id, args#>>domain,type, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "join and filter on the domain link; the dedupe key stays in strandCandidate and is reported for the provider-unit shape only"},
 	"internal/joboutbox/strand_repair.go#repairStrandedFinalizeSQL": {
-		"args#>>domain,id, args#>>domain,type, args->>organization_id, dedupe_key",
+		"args, args#>>domain,id, args#>>domain,type, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "same as the partition shape"},
 	"internal/joboutbox/strand_repair.go#repairStrandedWorkGraphSQL": {
-		"args#>>domain,id, args->>organization_id, dedupe_key",
+		"args, args#>>domain,id, args->>organization_id, dedupe_key",
 		roleInternal, "", "", "same as the partition shape"},
 	"internal/joboutbox/repository.go#rowColumns": {
 		"args, dedupe_key",
@@ -200,6 +243,8 @@ var queueRowReadTable = map[string]queueRowRead{
 		"dedupe_key", roleElsewhere, "", "", "ClickHouse event table, not a queue row"},
 	"internal/queryapi/reports/writeproofcases/cases.go#deleteObservedSQL": {
 		"args, dedupe_key", roleElsewhere, "", "", "write-proof test support, run by tests only"},
+	"internal/queryapi/reports/writeproofcases/cases.go#Teardown": {
+		"dedupe_key", roleElsewhere, "", "", "write-proof test support: a DELETE that filters on the key, with no RETURNING and no output, run by tests only"},
 	"internal/testsupport/pgseed/pgseed.go#WorkerJobOutbox": {
 		"args, dedupe_key", roleElsewhere, "", "", "test seeding helper"},
 }
@@ -248,15 +293,25 @@ func TestEveryQueueRowReadIsClassifiedAndItsGuardIsPresent(t *testing.T) {
 }
 
 var (
-	outputCall = regexp.MustCompile(`^(fmt\.(Errorf|Sprintf|Sprint|Sprintln|Fprintf|Printf|Println)|errors\.New|slog\.[A-Z][A-Za-z]*|.*(?:ogger|slog)(?:\(\))?\.(Debug|Info|Warn|Error)[A-Za-z]*)$`)
 	rowKeyName = regexp.MustCompile(`(?i)^(dedupekey|sourcededupekey|idempotencykey|correlationid|encodedargs|args)$`)
 )
 
 // Queue-row fields that a job's own code reads after the decoder has accepted
 // them; the value is guarded because Decode refused anything credential-shaped.
-var decodedRowFieldOutputs = map[string]string{
-	"internal/jobruntime/adapter.go#logStart":   "envelope fields after jobcontract.Decode",
-	"internal/jobruntime/adapter.go#NewAdapter": "the typed argument type's registered kind name, not a queue row value",
+type outputException struct {
+	values []string
+	reason string
+}
+
+var decodedRowFieldOutputs = map[string]outputException{
+	"internal/jobruntime/adapter.go#logStart":                                {[]string{"envelope.CorrelationID"}, "envelope field after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#NewAdapter":                              {[]string{"args.Kind()"}, "the typed argument type's registered kind name, not a queue row value"},
+	"internal/jobruntime/adapter.go#execute":                                 {[]string{"envelope.CorrelationID"}, "envelope correlation id on the handler logger, after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#logFinish":                               {[]string{"attributes"}, "the finish-line attributes hold the envelope correlation id, after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#startJobSpan":                            {[]string{"envelope.CorrelationID"}, "envelope correlation id as a span attribute, after jobcontract.Decode"},
+	"internal/workersctl/trigger_investment.go#writeManualInvestmentTrigger": {[]string{"generation"}, "the generation string is built by the same command from the canonical organization id, parsed dates and a hashed rerun tag; it is not read from a queue row"},
+	"internal/workersctl/trigger_workgraph.go#writeManualWorkgraphTrigger":   {[]string{"generation"}, "the generation string is built by the same command from the canonical organization id and parsed dates; it is not read from a queue row"},
+	"internal/workersctl/trigger_workgraph.go#rollbackTriggerTx":             {[]string{"args"}, "a local slice named args that holds slog attributes the caller built from request id, organization id and generation; not queue row arguments"},
 }
 
 // A queue row's dedupe key, idempotency key, correlation id or arguments must
@@ -264,69 +319,15 @@ var decodedRowFieldOutputs = map[string]string{
 // calls the shared value detector on it, or the value comes from a decoded envelope.
 func TestNoQueueRowFieldIsFormattedIntoAnErrorOrLogUnguarded(t *testing.T) {
 	root := repoRoot(t)
-	fset := token.NewFileSet()
-	seen := map[string]bool{}
-	for _, dir := range []string{"internal/joboutbox", "internal/syncreconciler", "internal/joboperator", "internal/jobruntime", "internal/workersctl"} {
-		entries, err := os.ReadDir(filepath.Join(root, dir))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			path := filepath.Join(root, dir, entry.Name())
-			source, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			file, err := parser.ParseFile(fset, path, source, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				body := string(source[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
-				where := dir + "/" + entry.Name() + "#" + fn.Name.Name
-				ast.Inspect(fn.Body, func(node ast.Node) bool {
-					call, ok := node.(*ast.CallExpr)
-					if !ok || !outputCall.MatchString(exprText(fset, source, call.Fun)) {
-						return true
-					}
-					for _, arg := range call.Args {
-						ast.Inspect(arg, func(inner ast.Node) bool {
-							name := ""
-							switch typed := inner.(type) {
-							case *ast.Ident:
-								name = typed.Name
-							case *ast.SelectorExpr:
-								name = typed.Sel.Name
-							}
-							if name == "" || !rowKeyName.MatchString(name) {
-								return true
-							}
-							if strings.Contains(body, guardCall) {
-								return true
-							}
-							if _, ok := decodedRowFieldOutputs[where]; ok {
-								seen[where] = true
-								return true
-							}
-							t.Errorf("%s formats %s into an error or log line without %s", where, name, guardCall)
-							return true
-						})
-					}
-					return true
-				})
-			}
-		}
+	findings, seen := formatCensus(t, root, censusDirs)
+	for _, finding := range findings {
+		t.Error(finding)
 	}
-	for where := range decodedRowFieldOutputs {
-		if !seen[where] {
-			t.Errorf("classified output %s no longer exists", where)
+	for where, exception := range decodedRowFieldOutputs {
+		for _, value := range exception.values {
+			if !seen[where+"|"+value] {
+				t.Errorf("classified output %s no longer formats %s", where, value)
+			}
 		}
 	}
 }

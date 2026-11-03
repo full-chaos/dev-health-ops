@@ -336,7 +336,7 @@ func proxyFlagRecreates(calls string) []string {
 // aggregate gates the others: a flag on for a route auth-service does not serve would compare auth-service's 404
 // with go-api's answer.
 func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
-	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout"
+	sessions := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org"
 	required := sessions + ",/api/v1/auth/login,/api/v1/auth/social-login"
 	forwarded := func(aggregate string) string {
 		return `devhealth_api_auth_proxy_requests_total{aggregate="` + aggregate + `",outcome="forwarded"} 3`
@@ -349,10 +349,10 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		wantError       string
 	}{
 		"nothing served": {wantError: "required aggregate sessions is not served by auth-service", wantProbes: []string{
-			"probe sessions: not served (2 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
+			"probe sessions: not served (4 routes)", "probe local_login: not served (1 routes)", "probe credentials: not served (6 routes)",
 			"probe social: not served (1 routes)", "probe oidc: not served (2 routes)", "probe saml: not served (3 routes)"}},
 		"login without sessions": {served: "/api/v1/auth/login", wantError: "required aggregate sessions is not served by auth-service",
-			wantProbes: []string{"probe sessions: not served (2 routes)", "probe local_login: served (1 routes)"}},
+			wantProbes: []string{"probe sessions: not served (4 routes)", "probe local_login: served (1 routes)"}},
 		"sessions only": {served: sessions, wantError: "required aggregate local_login is not served by auth-service"},
 		"sessions and login": {served: sessions + ",/api/v1/auth/login", metrics: forwarded("sessions") + "\n" + forwarded("local_login"),
 			wantRecreates: 2, wantForwards: "leg acp forwards: sessions local_login\n"},
@@ -361,11 +361,11 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 		"social forwarded although kept on go-api": {served: required, wantRecreates: 2,
 			metrics:   forwarded("sessions") + "\n" + forwarded("local_login") + "\n" + forwarded("social"),
 			wantError: "go-api forwarded aggregate social, whose flag is off"},
-		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 2 routes of aggregate sessions",
-			wantProbes: []string{"probe sessions: partial (1 of 2 routes served)"}},
+		"half an aggregate": {served: "/api/v1/auth/refresh", wantError: "auth-service serves 1 of the 4 routes of aggregate sessions",
+			wantProbes: []string{"probe sessions: partial (1 of 4 routes served)"}},
 		"half a non-session aggregate": {served: sessions + ",/api/v1/auth/oidc/p-probe/authorize",
 			wantError:  "auth-service serves 1 of the 2 routes of aggregate oidc",
-			wantProbes: []string{"probe sessions: served (2 routes)", "probe oidc: partial (1 of 2 routes served)"}},
+			wantProbes: []string{"probe sessions: served (4 routes)", "probe oidc: partial (1 of 2 routes served)"}},
 		"half a non-session aggregate without sessions": {served: "/api/v1/auth/saml/p-probe/metadata",
 			wantError: "auth-service serves 1 of the 3 routes of aggregate saml"},
 		"served but not forwarded": {served: required, wantRecreates: 2, wantError: "no forwarded request for aggregate sessions"},
@@ -398,7 +398,7 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 // Leg acp stores go-api's session issue credential and applies the sessions-owned grants before go-api first
 // restarts with the sessions flag, and no call line carries the token.
 func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(t *testing.T) {
-	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login",
+	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login",
 		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
 	if err != nil {
 		t.Fatalf("leg acp failed: %v\n%s", err, out)
@@ -443,7 +443,7 @@ func upKeys(t *testing.T, fake fakeDocker) [][3]string {
 	return out
 }
 
-const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login"
+const requiredServed = "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login"
 
 // Leg acp gives auth-service freshly made session keys through the compose environment only: never an argument, never
 // the output (CI masks them first), and none at all when AUTH_CORPUS_OMIT_AUTH_KEYS is set.
@@ -541,7 +541,7 @@ func TestAuthCorpusFailureDumpIncludesAuthServiceAndTheStub(t *testing.T) {
 // Leg acp reads auth-service's own log: the corpus test runs in another process than auth-service, so a body written
 // with the wrong writer for its route is visible only as the policy's ERROR line.
 func TestAuthCorpusAcpLegFailsOnAuthServiceWriterViolations(t *testing.T) {
-	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login"
+	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login"
 	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
 		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
 	known := `level=INFO msg="listener bound" component=auth-api-http address=127.0.0.1:8095`
@@ -916,7 +916,7 @@ func TestAuthCorpusCleanupRemovesExactlyTheProjectsOwnBuiltImagesAfterDown(t *te
 func TestAuthCorpusAcpLegDoesNotForwardMountedCredentialsBeforeUsersAreOwned(t *testing.T) {
 	credentials := "/api/v1/auth/register,/api/v1/auth/verify,/api/v1/auth/resend-verification,/api/v1/auth/forgot-password," +
 		"/api/v1/auth/reset-password,/api/v1/auth/change-password"
-	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/social-login," + credentials
+	served := "/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login," + credentials
 	metrics := `devhealth_api_auth_proxy_requests_total{aggregate="sessions",outcome="forwarded"} 3` + "\n" +
 		`devhealth_api_auth_proxy_requests_total{aggregate="local_login",outcome="forwarded"} 3`
 	for name, extra := range map[string][]string{"no caller env": nil, "caller env USERS_OWNED=1": {"USERS_OWNED=1"}} {
@@ -965,7 +965,7 @@ func TestAuthCorpusCredentialsGateNeedsMountAndOwnedUsers(t *testing.T) {
 
 // A partly mounted credentials aggregate fails in probe, owned or not, before the gate runs.
 func TestAuthCorpusPartlyMountedCredentialsFailTheLeg(t *testing.T) {
-	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/login,/api/v1/auth/register")
+	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/register")
 	if err == nil || !strings.Contains(out, "auth-service serves 1 of the 6 routes of aggregate credentials") {
 		t.Fatalf("want a partial-mount failure, got err=%v:\n%s", err, out)
 	}
@@ -1018,7 +1018,7 @@ func TestAuthCorpusOnlyStep1eSetsUsersOwned(t *testing.T) {
 // local_login keeps today's rule: mounted means served, and it is required. Its mount is only real when auth-service
 // has the lockout key, so the corpus env must keep setting it.
 func TestAuthCorpusLocalLoginStaysRequiredAndKeyed(t *testing.T) {
-	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout")
+	_, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org")
 	if err == nil || !strings.Contains(out, "required aggregate local_login is not served by auth-service") {
 		t.Fatalf("want local_login required, got err=%v:\n%s", err, out)
 	}
@@ -1066,7 +1066,7 @@ func TestAuthCorpusSessionsGateNeedsMountAndKeys(t *testing.T) {
 
 // The no-keys leg meets the refresh and logout stubs: it must still fail by name on sessions, not on local_login.
 func TestAuthCorpusNoKeysLegFailsOnSessionsWhenTheStubsAreMounted(t *testing.T) {
-	_, out, err := runAcpLeg(t, "AUTH_CORPUS_OMIT_AUTH_KEYS=1", "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout")
+	_, out, err := runAcpLeg(t, "AUTH_CORPUS_OMIT_AUTH_KEYS=1", "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org")
 	if err == nil || !strings.Contains(out, "required aggregate sessions is not served by auth-service") {
 		t.Fatalf("want the leg to fail on sessions, got err=%v:\n%s", err, out)
 	}

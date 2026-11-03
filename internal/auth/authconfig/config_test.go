@@ -320,6 +320,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  "true",
 		EnvOrgsOwned:                   "true",
 		EnvRevisionFeed:                "on",
+		EnvPushProjection:              "on",
 		rule.OwnedEnv:                  "true",
 		EnvLogLevel:                    "debug",
 		EnvShutdownTimeout:             "42s",
@@ -348,6 +349,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMembershipRoutes:            "true",
 		EnvSessionIssueWorkloadSubject: "prn_AAAAAAAAAAAAAAAAAAAAAA",
 		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
+		EnvAcrEventsWorkloadSubject:    "prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
 		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
@@ -357,6 +359,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
 		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
+		EnvPushProjection:              func(c Config) string { return strconv.FormatBool(c.PushProjection) },
 		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
 		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
@@ -385,6 +388,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvMembershipRoutes:            func(c Config) string { return strconv.FormatBool(c.Provisioning.Routes) },
 		EnvSessionIssueWorkloadSubject: func(c Config) string { return c.SessionIssueWorkloadSubject },
 		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
+		EnvAcrEventsWorkloadSubject:    func(c Config) string { return c.AcrEventsWorkloadSubject },
 		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
 		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
@@ -428,7 +432,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
 			}
-			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects {
+			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects || option.Env == EnvAcrEventsWorkloadSubject {
 				env[EnvTokenIssuerURL] = "https://auth.example.com"
 			}
 			env[option.Env] = value

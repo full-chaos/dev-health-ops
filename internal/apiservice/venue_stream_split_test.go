@@ -16,6 +16,56 @@ import (
 
 const productTelemetryEventsPath = "/api/v1/product-telemetry/events"
 
+// acceptedTelemetryEvent is one event the intake's value rules accept.
+const acceptedTelemetryEvent = `{"events":[{"name":"page_viewed","schemaVersion":"1","eventId":"e-accepted","ts":"2026-09-23T02:00:00.123Z","sessionId":"s","anonymousUserId":"a","payload":{"feature":"work_graph","surface":"quadrant_panel"}}]}`
+
+// acceptedTelemetryProblem is empty when the answer is the intake accepting one event into the anonymous stream.
+func acceptedTelemetryProblem(status int, body string) string {
+	if status != 202 {
+		return fmt.Sprintf("status %d, want 202", status)
+	}
+	var answer struct {
+		Status        string `json:"status"`
+		ItemsReceived int    `json:"items_received"`
+		ItemsDropped  int    `json:"items_dropped"`
+		Stream        string `json:"stream"`
+	}
+	if err := json.Unmarshal([]byte(body), &answer); err != nil {
+		return fmt.Sprintf("body is not JSON: %v", err)
+	}
+	if answer.Status != "accepted" || answer.ItemsReceived != 1 || answer.ItemsDropped != 0 || answer.Stream != "product-telemetry:anonymous:events" {
+		return fmt.Sprintf("answer is %q items_received=%d items_dropped=%d stream=%q", answer.Status, answer.ItemsReceived, answer.ItemsDropped, answer.Stream)
+	}
+	return ""
+}
+
+// acceptedEntryProblem is empty when the new stream entries are exactly one entry, in the
+// anonymous stream, holding the submitted event id.
+func acceptedEntryProblem(entries []string) string {
+	if len(entries) != 1 {
+		return fmt.Sprintf("%d new stream entries, want 1", len(entries))
+	}
+	entry := entries[0]
+	if key := streamKeyOfEntry(entry); key != "anonymous" {
+		return fmt.Sprintf("entry is in stream %q, want anonymous", key)
+	}
+	_, rest, found := strings.Cut(entry, ": events=")
+	if !found {
+		return "entry has no events field"
+	}
+	text, _, _ := strings.Cut(rest, " ingestion_id=")
+	var events []struct {
+		EventID string `json:"eventId"`
+	}
+	if err := json.Unmarshal([]byte(text), &events); err != nil {
+		return fmt.Sprintf("entry events are not JSON: %v", err)
+	}
+	if len(events) != 1 || events[0].EventID != "e-accepted" {
+		return fmt.Sprintf("entry events are %s, want one event with eventId e-accepted", text)
+	}
+	return ""
+}
+
 // requestEntries are the stream entries one request added to the Go plane.
 type requestEntries struct {
 	request string
@@ -212,5 +262,47 @@ func TestNewStreamEntriesIsAMultisetDifference(t *testing.T) {
 	}
 	if got := parseStreamEntries(streamPlantedEntryA + " | " + streamPlantedEntryB); len(got) != 2 || streamKeyOfEntry(got[1]) != "h2" {
 		t.Fatalf("parsed %v", got)
+	}
+}
+
+func TestAcceptedTelemetryProblem(t *testing.T) {
+	const good = `{"ingestion_id":"x","status":"accepted","items_received":1,"stream":"product-telemetry:anonymous:events"}`
+	for _, c := range []struct {
+		name   string
+		status int
+		body   string
+		bad    bool
+	}{
+		{"accepted", 202, good, false},
+		{"dropped event", 202, `{"status":"accepted","items_received":0,"items_dropped":1,"stream":"product-telemetry:anonymous:events"}`, true},
+		{"partly dropped", 202, `{"status":"accepted","items_received":1,"items_dropped":1,"stream":"product-telemetry:anonymous:events"}`, true},
+		{"refused", 422, good, true},
+		{"other stream", 202, `{"status":"accepted","items_received":1,"stream":"product-telemetry:h:events"}`, true},
+		{"not JSON", 202, `x`, true},
+	} {
+		if got := acceptedTelemetryProblem(c.status, c.body); (got != "") != c.bad {
+			t.Errorf("%s: problem %q, bad=%v", c.name, got, c.bad)
+		}
+	}
+}
+
+func TestAcceptedEntryProblem(t *testing.T) {
+	const good = `product-telemetry:anonymous:events: events=[{"eventId":"e-accepted"}] ingestion_id=<blank> org_id_hash= source=dev-health-web`
+	const otherStream = `product-telemetry:h2:events: events=[{"eventId":"e-accepted"}] ingestion_id=<blank> org_id_hash=h2 source=dev-health-web`
+	const otherEvent = `product-telemetry:anonymous:events: events=[{"eventId":"other"}] ingestion_id=<blank> org_id_hash= source=dev-health-web`
+	for _, c := range []struct {
+		name    string
+		entries []string
+		bad     bool
+	}{
+		{"anonymous with the event", []string{good}, false},
+		{"other stream with the event", []string{otherStream}, true},
+		{"anonymous with other event id", []string{otherEvent}, true},
+		{"no entries", nil, true},
+		{"two entries", []string{good, otherEvent}, true},
+	} {
+		if got := acceptedEntryProblem(c.entries); (got != "") != c.bad {
+			t.Errorf("%s: problem %q, bad=%v", c.name, got, c.bad)
+		}
 	}
 }

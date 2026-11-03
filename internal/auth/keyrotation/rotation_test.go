@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -279,6 +280,7 @@ func TestAuditVocabularyMatchesTheStateMachine(t *testing.T) {
 			t.Fatalf("%s: %v", verb, err)
 		}
 		event := appliedEvent(c.request, moves)
+		auditwire.MustValidate(t, event)
 		if err := audit.ValidateAttributes(event.Attributes); err != nil {
 			t.Errorf("%s audit row refused: %v", verb, err)
 		}
@@ -292,6 +294,7 @@ func TestAuditVocabularyMatchesTheStateMachine(t *testing.T) {
 	for _, reason := range append(append([]Reason(nil), Reasons...), ReasonStateChanged) {
 		for _, kid := range []string{"P", "", "not a kid"} {
 			event := refusedEvent(Request{Verb: VerbActivate, KeyID: kid}, reason)
+			auditwire.MustValidate(t, event)
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				t.Errorf("refused row (%s, %q) refused: %v", reason, kid, err)
 			}

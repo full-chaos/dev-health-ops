@@ -218,7 +218,7 @@ func TestAuthPhase5Refused(t *testing.T) {
 				if err == nil {
 					t.Fatal("rendered; phase 5 must be refused")
 				}
-				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358)", phase)) {
+				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) is cancelled (D6651)", phase)) {
 					t.Fatalf("the refusal does not name the decision: %.400s", out)
 				}
 			})
@@ -237,7 +237,7 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase 6":                 {phaseArgs(1, "--set", "authService.phase=6"), "/authService/phase"},
 		"phase string":            {phaseArgs(1, "--set-string", "authService.phase=1"), "/authService/phase"},
 		"phase fraction":          {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=1.5"), "/authService/phase"},
-		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 5"},
+		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 4"},
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
 		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"}, // gitleaks:allow
@@ -534,7 +534,7 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5 (refused at render), so the renders above show neither.
+	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED is removed (D6651), so the renders above show neither.
 	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
 		names[name] = configs["phase 3 with link routes"]
 	}

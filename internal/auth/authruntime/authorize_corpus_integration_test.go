@@ -4,6 +4,7 @@ package authruntime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"testing"
@@ -97,6 +98,9 @@ func azCheck(t *testing.T, v azVector, d contracts.AuthorizationDecision, user u
 		t.Errorf("%s: allowed %v reason %q revision %d, want %v %q %d", v.ID, d.Allowed, d.ReasonCode, d.PolicyRevision,
 			v.Expect.Allowed, v.Expect.wireReason(), v.Expect.PolicyRevision)
 	}
+	if got, want := azObligationsWire(t, d.Obligations), azExpectedObligations(t, v, org); got != want {
+		t.Errorf("%s: obligations %s, want %s", v.ID, got, want)
+	}
 	if d.PrincipalID != session.WirePrincipalID(user) {
 		t.Errorf("%s: principal_id %q, want %q", v.ID, d.PrincipalID, session.WirePrincipalID(user))
 	}
@@ -189,4 +193,45 @@ func TestAuthorizeCorpusReplaysThroughTheProductionRouter(t *testing.T) {
 	})
 	t.Logf("%s replayed=%d decided=%d malformed=%d batch=%d excluded=%d", authorizeCorpusMarker, len(rows), len(batch), malformed,
 		len(batch), len(azCorpusExclusions))
+}
+
+// azObligationsWire is the obligations of a parsed decision as the canonical JSON the wire carried.
+func azObligationsWire(t *testing.T, o *contracts.AuthorizationObligations) string {
+	t.Helper()
+	raw, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return azCanonical(t, raw)
+}
+
+// azExpectedObligations is the row's expect.obligations with its organization label replaced by the
+// organization id the replay seeded.
+func azExpectedObligations(t *testing.T, v azVector, org string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(v.Expect.Obligations, &m); err != nil {
+		t.Fatalf("%s: expect.obligations: %v", v.ID, err)
+	}
+	if _, ok := m["tenant_scope"]; ok {
+		m["tenant_scope"] = org
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return azCanonical(t, raw)
+}
+
+func azCanonical(t *testing.T, raw []byte) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

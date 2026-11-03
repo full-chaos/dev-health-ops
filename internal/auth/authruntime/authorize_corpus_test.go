@@ -89,7 +89,8 @@ var azCorpusExclusions = map[string]azExclusion{
 	"membership-active-uppercase":       azStatusNotRepresentable,
 	"principal-status-uppercase-active": azStatusNotRepresentable,
 
-	"repo-plain-snapshot-has-no-grants": azPlainSnapshotUnreachable,
+	"repo-plain-snapshot-has-no-grants":  azPlainSnapshotUnreachable,
+	"org-filtered-plain-snapshot-denies": azPlainSnapshotUnreachable,
 
 	"cross-org-membership-row-for-other-org": azMembershipOrgIsTheKey,
 	"repo-membership-org-mismatch":           azMembershipOrgIsTheKey,

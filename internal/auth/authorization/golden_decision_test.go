@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -301,6 +303,9 @@ func TestGoldenDecisionPDPRowsReachTheirVerdict(t *testing.T) {
 			t.Errorf("%s: expect.obligations is absent", v.ID)
 		} else if got, want := goldenObligationsJSON(t, d.Obligations), goldenCanonical(t, v.Expect.Obligations); got != want {
 			t.Errorf("%s: obligations %s, want %s", v.ID, got, want)
+		}
+		if d.Obligations != nil && slices.Contains(d.Obligations.RepositoryAllowlist, "*") || strings.Contains(string(v.Expect.Obligations), `"*"`) {
+			t.Errorf("%s: a wildcard in an allowlist (decision %+v, expected %s)", v.ID, d.Obligations, v.Expect.Obligations)
 		}
 		switch {
 		case v.Expect.ExpiresIn == nil && d.ExpiresAtUnixNano != 0:

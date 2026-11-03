@@ -23,6 +23,12 @@ const (
 	EnvShadowPDPInFlight = "AUTH_SHADOW_PDP_MAX_IN_FLIGHT"
 )
 
+// ShadowInputError is the error a NewDecider returns when a named environment input is missing or bad.
+// Variable names the input or inputs (comma separated), never a value or a path.
+type ShadowInputError struct{ Variable string }
+
+func (e *ShadowInputError) Error() string { return "shadow input: " + e.Variable }
+
 // ShadowEnvDeps are what a service brings to ShadowFromEnv.
 type ShadowEnvDeps struct {
 	// Rows is the service's action map.

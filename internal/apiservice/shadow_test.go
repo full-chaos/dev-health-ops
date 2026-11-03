@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -300,5 +301,100 @@ func TestConfigureShadowOnInstallsTheShadow(t *testing.T) {
 		EnvAuthWorkloadIssuer: testWorkloadIssuer, EnvAuthWorkloadBootstrapFile: bootstrapFile(t)}
 	if on, err := configureShadow(t, env); err != nil || !on {
 		t.Fatalf("on with good inputs: shadow %v, err %v; want on and no error", on, err)
+	}
+}
+
+func TestShadowSetupErrorNamesTheBadInputAndNoValue(t *testing.T) {
+	dir := t.TempDir()
+	proxy := "http://auth-service:8095"
+	both := EnvAuthWorkloadSubjectFile + "," + EnvAuthWorkloadBootstrapFile
+	subject := filepath.Join(dir, "planted-subject-file")
+	if err := os.WriteFile(subject, []byte("planted-subject-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		drop string
+		want string
+	}{
+		"missing issuer":       {nil, EnvAuthWorkloadIssuer, "variable=" + EnvAuthWorkloadIssuer},
+		"issuer not https":     {map[string]string{EnvAuthWorkloadIssuer: "http://auth.example.test"}, "", "variable=" + EnvAuthWorkloadIssuer},
+		"missing proxy url":    {map[string]string{EnvAuthProxyURL: ""}, "", "variable=" + EnvAuthProxyURL},
+		"no workload file":     {nil, EnvAuthWorkloadBootstrapFile, "variable=" + both},
+		"both workload files":  {map[string]string{EnvAuthWorkloadSubjectFile: subject}, "", "variable=" + both},
+		"unreadable bootstrap": {map[string]string{EnvAuthWorkloadBootstrapFile: filepath.Join(dir, "absent-file")}, "", "variable=" + EnvAuthWorkloadBootstrapFile},
+		"unreadable subject":   {map[string]string{EnvAuthWorkloadBootstrapFile: "", EnvAuthWorkloadSubjectFile: filepath.Join(dir, "absent-file")}, "", "variable=" + EnvAuthWorkloadSubjectFile},
+	} {
+		env := shadowEnvOn(t, proxy, tc.env)
+		if tc.drop != "" {
+			delete(env, tc.drop)
+		}
+		s, logs, _ := runNewShadow(t, env, nil)
+		if s != nil {
+			t.Errorf("%s: a shadow was built", name)
+		}
+		if !strings.Contains(logs, tc.want) || strings.Contains(logs, "variable=decider") {
+			t.Errorf("%s: log %q, want %s", name, logs, tc.want)
+		}
+		for _, secret := range []string{dir, "planted-subject", "absent-file", "auth.example.test"} {
+			if strings.Contains(logs, secret) {
+				t.Errorf("%s: log holds %q", name, secret)
+			}
+		}
+	}
+}
+
+var malformedProxyURLs = map[string]string{
+	"parse error": "http://[::1", "wrong scheme": "ftp://auth-service:8095", "empty host": "http://", "credentials": "http://user:pw-planted@auth-service:8095",
+	"path": "http://auth-service:8095/x", "query": "http://auth-service:8095?x=1", "fragment": "http://auth-service:8095#f", "opaque": "http:auth-service",
+}
+
+func configureShadowLogged(t *testing.T, env map[string]string) (enabled bool, logs string, err error) {
+	t.Helper()
+	t.Setenv("ENVIRONMENT", "development")
+	for _, key := range []string{policy.EnvShadowPDP, policy.EnvShadowPDPHighRisk, policy.EnvShadowPDPSample, policy.EnvShadowPDPInFlight, EnvAuthProxyURL,
+		EnvAuthWorkloadIssuer, EnvAuthWorkloadBootstrapFile, EnvAuthWorkloadSubjectFile, AuthProxyFlagEnv(AuthSessions), EnvAuthProxyOrgProvisioning} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	for k, v := range env {
+		t.Setenv(k, v)
+	}
+	var buf bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	components, err := configureWith(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second),
+		slog.New(slog.NewTextHandler(&buf, nil)), func(deps *Deps) { enabled = deps.Guard != nil && deps.Guard.ShadowEnabled() })
+	closeComponents(components)
+	return enabled, buf.String(), err
+}
+
+func TestConfigureMalformedProxyURLWithTheShadowOnTurnsOnlyTheShadowOff(t *testing.T) {
+	for name, raw := range malformedProxyURLs {
+		on, logs, err := configureShadowLogged(t, map[string]string{policy.EnvShadowPDP: "true", EnvAuthProxyURL: raw})
+		if err != nil || on {
+			t.Errorf("%s: shadow %v, err %v; want off and no start error", name, on, err)
+		}
+		if !strings.Contains(logs, "variable="+EnvAuthProxyURL) || strings.Contains(logs, "pw-planted") {
+			t.Errorf("%s: log %q, want an ERROR naming %s and no credential", name, logs, EnvAuthProxyURL)
+		}
+	}
+}
+
+// Without the shadow, or with a flag that needs the URL, a malformed AUTH_PROXY_URL still stops the start (authproxy.go ParseAuthProxyConfig).
+func TestConfigureMalformedProxyURLStillStopsTheStartForItsOtherConsumers(t *testing.T) {
+	for name, raw := range malformedProxyURLs {
+		for label, env := range map[string]map[string]string{
+			"shadow off":       {EnvAuthProxyURL: raw},
+			"shadow false":     {policy.EnvShadowPDP: "false", EnvAuthProxyURL: raw},
+			"sessions flag on": {policy.EnvShadowPDP: "true", EnvAuthProxyURL: raw, AuthProxyFlagEnv(AuthSessions): "true"},
+			"provisioning on":  {policy.EnvShadowPDP: "true", EnvAuthProxyURL: raw, EnvAuthProxyOrgProvisioning: "true"},
+		} {
+			_, _, err := configureShadowLogged(t, env)
+			var coded interface{ DependencyReason() string }
+			if !errors.As(err, &coded) || coded.DependencyReason() != "api_auth_proxy_config_invalid" {
+				t.Errorf("%s / %s: err %v, want reason api_auth_proxy_config_invalid", name, label, err)
+			}
+		}
 	}
 }

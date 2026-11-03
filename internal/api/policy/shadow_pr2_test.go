@@ -3,6 +3,8 @@ package policy
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -70,5 +72,31 @@ func TestShadowFromEnvNilLookupIsOffWithoutPanic(t *testing.T) {
 	}
 	if len(*state) != 1 || (*state)[0] != (shadowState{false, true}) {
 		t.Errorf("state %v, want one write: off and config-invalid", *state)
+	}
+}
+
+func TestShadowFromEnvLogsTheInputANewDeciderErrorNames(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"named input":     {&ShadowInputError{Variable: "AUTH_PROXY_URL"}, "variable=AUTH_PROXY_URL"},
+		"two inputs":      {&ShadowInputError{Variable: "A_FILE,B_FILE"}, "variable=A_FILE,B_FILE"},
+		"wrapped named":   {fmt.Errorf("wrapped: %w", &ShadowInputError{Variable: "AUTH_WORKLOAD_ISSUER"}), "variable=AUTH_WORKLOAD_ISSUER"},
+		"unnamed failure": {errors.New("secret-path /etc/x"), "variable=decider"},
+	} {
+		state := recordState(t)
+		var logs bytes.Buffer
+		deps := envDeps(&logs)
+		deps.NewDecider = func() (pep.Decider, error) { return nil, tc.err }
+		if s := ShadowFromEnv(envLookup(map[string]string{EnvShadowPDP: "true"}), deps); s != nil {
+			t.Errorf("%s: a shadow was built", name)
+		}
+		if !strings.Contains(logs.String(), tc.want) || strings.Contains(logs.String(), "secret-path") || strings.Contains(logs.String(), "wrapped") {
+			t.Errorf("%s: log %q, want %s and no error text", name, logs.String(), tc.want)
+		}
+		if len(*state) != 1 || (*state)[0] != (shadowState{false, true}) {
+			t.Errorf("%s: state %v, want off and config-invalid", name, *state)
+		}
 	}
 }

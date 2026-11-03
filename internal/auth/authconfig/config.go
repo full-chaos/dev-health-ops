@@ -281,6 +281,9 @@ type Config struct {
 	// SessionIssueWorkloadSubject is the one workload principal (prn_) whose
 	// workload token the session issue route accepts; empty = off.
 	SessionIssueWorkloadSubject string
+	// AcrEventsWorkloadSubject is the one acr-api workload principal (prn_) whose
+	// token the acr events route accepts. Empty leaves the route unmounted.
+	AcrEventsWorkloadSubject string
 
 	// AuthorizeCallerSubjects are the workload principals (prn_) whose
 	// workload token the authorize routes accept; empty = none.
@@ -381,6 +384,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
 		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
+		slog.Bool("acr_events_workload_enabled", c.AcrEventsWorkloadSubject != ""),
 	}
 }
 
@@ -573,6 +577,9 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.AuthorizeCallerSubjects, err = authorizeCallerSubjects(lookup, cfg.TokenIssuerURL); err != nil {
+		return Config{}, err
+	}
+	if cfg.AcrEventsWorkloadSubject, err = workloadSubject(lookup, EnvAcrEventsWorkloadSubject, cfg.TokenIssuerURL); err != nil {
 		return Config{}, err
 	}
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {

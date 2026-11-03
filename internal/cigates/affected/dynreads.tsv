@@ -48,6 +48,7 @@ internal/audit	drill_pitr_integration_test.go
 internal/auth/acrlisting	client.go
 internal/auth/acrmint	acrmint_test.go
 internal/auth/acrmint	census_test.go
+internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
 internal/auth/authapi	authorize_request_test.go
@@ -88,6 +89,8 @@ internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
+internal/auth/contracts	read_api_grant_test.go
+internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
@@ -174,6 +177,7 @@ internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
+internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go

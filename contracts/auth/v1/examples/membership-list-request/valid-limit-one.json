@@ -1,0 +1,7 @@
+{
+  "schema_version": "membership-list-request.v1",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "status": "active",
+  "limit": 1,
+  "cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+}

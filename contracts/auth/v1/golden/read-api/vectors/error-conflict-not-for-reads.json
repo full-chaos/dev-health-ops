@@ -1,0 +1,15 @@
+{
+  "id": "error-conflict-not-for-reads",
+  "kind": "error",
+  "http_status": 409,
+  "body": {
+    "schema_version": "error.v1",
+    "status": 409,
+    "reason_code": "revision_conflict",
+    "request_id": "req_AAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "occurred_at": "2026-11-02T11:30:00.123456Z"
+  },
+  "parse": "reject",
+  "rule": "status_not_for_reads",
+  "why": "A read has no state conflict."
+}

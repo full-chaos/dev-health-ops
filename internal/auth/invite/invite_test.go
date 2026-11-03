@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 // Unknown, accepted, revoked and expired invites give one refusal; a pending
@@ -138,6 +139,7 @@ func TestAuditRowsPassTheAllowlist(t *testing.T) {
 		if ev.OrganizationID == nil || *ev.OrganizationID != org.String() || ev.ActorPrincipalID == nil || *ev.ActorPrincipalID != actor.String() {
 			t.Fatalf("%s audit ids = %+v", v, ev)
 		}
+		auditwire.MustValidate(t, ev)
 		if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 			t.Fatalf("%s ValidateAttributes: %v", v, err)
 		}

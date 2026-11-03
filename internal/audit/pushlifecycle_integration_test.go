@@ -288,7 +288,7 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 		t.Fatalf("created_at differs inside one transaction: %v vs %v", rows[0].createdAt, rows[1].createdAt)
 	}
 
-	t.Run("two writers of one new credential emit created once", func(t *testing.T) {
+	t.Run("two writers of one new credential emit created once and one terminal revoke", func(t *testing.T) {
 		var wg sync.WaitGroup
 		errs := make([]error, 2)
 		for i := range errs {
@@ -307,8 +307,9 @@ func TestAppendPushLifecycleLegacyCredentialGetsCreatedThenTheEvent(t *testing.T
 			}
 		}
 		got := pushRows(t, ctx, env, "00000000-0000-4000-8000-000000000007")
-		if len(got) != 3 || got[0].eventType != externalpush.Created {
-			t.Fatalf("rows = %+v, want created then two revoked", got)
+		// revoked is terminal: the second writer's revoke is a no-op (no row, no revision).
+		if len(got) != 2 || got[0].eventType != externalpush.Created || got[1].eventType != externalpush.Revoked {
+			t.Fatalf("rows = %+v, want created then one revoked", got)
 		}
 		for i, r := range got {
 			if r.revision != int64(i+1) || r.key != fmt.Sprintf("external_push_credential:00000000-0000-4000-8000-000000000007:%d", i+1) {

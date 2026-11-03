@@ -10,8 +10,8 @@ import (
 
 func TestValidateAttributesAcceptsOnlyTheAllowlist(t *testing.T) {
 	allowed := map[string]any{
-		"reason_code": "role_granted", "target_kind": "membership", "membership_revision": int64(4),
-		"changed_fields": []string{"role_key", "status"}, "display_prefix": "fcacr_ab12",
+		"reason_code": "role_granted", "target_kind": "membership",
+		"changed_fields": []string{"role_key", "status"}, "revision": int64(4),
 	}
 	if err := ValidateAttributes(allowed); err != nil {
 		t.Fatalf("allowed attributes refused: %v", err)
@@ -127,7 +127,7 @@ func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
 		}
 		for _, v := range values {
 			attr := any(v)
-			if key == "changed_fields" {
+			if IsListVocabularyKey(key) {
 				attr = []string{v}
 			}
 			if err := ValidateAttributes(map[string]any{key: attr}); err != nil {
@@ -136,7 +136,7 @@ func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
 		}
 		for _, bad := range []string{"password123", "hunter2", "correct-horse", "role_granted_extra", strings.ToUpper(values[0])} {
 			attr := any(bad)
-			if key == "changed_fields" {
+			if IsListVocabularyKey(key) {
 				attr = []string{bad}
 			}
 			if err := ValidateAttributes(map[string]any{key: attr}); err == nil {
@@ -147,7 +147,7 @@ func TestEveryAttributeKeyHasAClosedValueRule(t *testing.T) {
 	if err := ValidateAttributes(map[string]any{"target_id": "password123"}); err == nil {
 		t.Error("target_id accepted a non-id")
 	}
-	if err := ValidateAttributes(map[string]any{"target_id": "11111111-1111-4111-8111-111111111111", "membership_revision": int64(3)}); err != nil {
+	if err := ValidateAttributes(map[string]any{"target_id": "11111111-1111-4111-8111-111111111111", "revision": int64(3)}); err != nil {
 		t.Errorf("a UUID id and a number were refused: %v", err)
 	}
 	rid := "password123"
@@ -252,14 +252,35 @@ func TestPrincipalEnabledTakesOnlyTheStringTrue(t *testing.T) {
 	}
 }
 
-// TestPrincipalEnabledAcceptsTheOneMemberList pins what the closed
-// vocabulary rule admits for an enumerated key: the list ["true"] too.
-func TestPrincipalEnabledAcceptsTheOneMemberList(t *testing.T) {
-	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{"true"}}); err != nil {
-		t.Fatalf("principal_enabled [\"true\"] refused: %v", err)
+// TestOnlyTheListVocabularyKeysTakeAList: audit-event.v1 types principal_enabled
+// and every other single-member vocabulary key as a string, so a list of one
+// member is refused (a list-form row would fail the published contract).
+func TestOnlyTheListVocabularyKeysTakeAList(t *testing.T) {
+	for _, key := range []string{"principal_enabled", "target_kind", "new_role"} {
+		if err := ValidateAttributes(map[string]any{key: []string{AttributeVocabulary()[key][0]}}); err == nil {
+			t.Errorf("%s as a list was accepted", key)
+		}
 	}
-	if err := ValidateAttributes(map[string]any{"principal_enabled": []string{}}); err == nil {
-		t.Fatal("principal_enabled [] accepted")
+	if err := ValidateAttributes(map[string]any{"changed_fields": "status"}); err == nil {
+		t.Error("changed_fields as a string was accepted")
+	}
+	for _, key := range []string{"changed_fields", "amr"} {
+		if err := ValidateAttributes(map[string]any{key: []string{}}); err == nil {
+			t.Errorf("%s [] accepted", key)
+		}
+	}
+}
+
+func TestWholeNumberAttributesAreNonNegativeAndExact(t *testing.T) {
+	for _, bad := range []any{int64(-1), -1, int32(-1), int64(9007199254740992), "3", 3.0} {
+		if err := ValidateAttributes(map[string]any{"revision": bad}); err == nil {
+			t.Errorf("revision %#v accepted", bad)
+		}
+	}
+	for _, ok := range []any{int64(0), 7, int32(7), int64(9007199254740991)} {
+		if err := ValidateAttributes(map[string]any{"revision": ok}); err != nil {
+			t.Errorf("revision %#v refused: %v", ok, err)
+		}
 	}
 }
 

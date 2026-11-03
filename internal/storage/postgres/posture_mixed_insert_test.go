@@ -11,7 +11,10 @@ import (
 // INSERT half must have it too, in the readiness query and in its diagnostic.
 var (
 	mixedInsertReadiness = regexp.MustCompile(`NOT required\.allow_insert\s+AND 'INSERT' = ANY \(held\.any_column\)(?:[^O]|O[^R])*?declared\.privilege = 'INSERT'`)
-	mixedInsertDiagnosis = regexp.MustCompile(`NOT allow_insert AND \(\s*has_table_privilege\(\$1, relation, 'INSERT'\)\s+OR \(has_any_column_privilege\(\$1, relation, 'INSERT'\) AND NOT table_name = ANY\(COALESCE\(\$7::text\[\], '\{\}'::text\[\]\)\)\)`)
+	// The diagnostic carve-out is exact: a column INSERT is excess unless the (table, column) pair is declared ($7, $8).
+	mixedInsertDiagnosis = regexp.MustCompile(`(?s)NOT allow_insert AND \(\s*has_table_privilege\(\$1, relation, 'INSERT'\)\s+OR EXISTS \(.*?pg_attribute.*?has_column_privilege\(\$1, relation, \w+\.attname, 'INSERT'\).*?unnest\(\$7::text\[\], \$8::text\[\]\).*?\) AS excess_insert`)
+	// The column sweep refuses an INSERT on any undeclared column; only a table-wide INSERT flag exempts it.
+	undeclaredInsertSweep = regexp.MustCompile(`privilege_type\.privilege = 'INSERT' AND mixed\.allow_insert`)
 )
 
 func TestRolePostureQueryAllowsDeclaredColumnInsertOnMixedTable(t *testing.T) {
@@ -25,5 +28,15 @@ func TestDiagnoseTablePostureQueryAllowsDeclaredColumnInsertOnMixedTable(t *test
 	t.Parallel()
 	if !mixedInsertDiagnosis.MatchString(diagnoseTablePostureQuery) {
 		t.Fatal("diagnoseTablePostureQuery reports excess_insert for a declared column INSERT on a mixed table: mirror the UPDATE carve-out ($7 = tables with an INSERT column)")
+	}
+}
+
+func TestRolePostureQueryColumnSweepRefusesUndeclaredColumnInsertOnMixedTable(t *testing.T) {
+	t.Parallel()
+	if !undeclaredInsertSweep.MatchString(rolePostureQuery) {
+		t.Fatal("rolePostureQuery's column sweep no longer ties its INSERT exemption to the table-wide allow_insert flag: an undeclared column INSERT on a mixed table must stay excess")
+	}
+	if got := len(regexp.MustCompile(`privilege_type\.privilege = 'INSERT'`).FindAllString(rolePostureQuery, -1)); got != 1 {
+		t.Fatalf("rolePostureQuery's column sweep names INSERT %d times, want 1 (the allow_insert exemption alone)", got)
 	}
 }

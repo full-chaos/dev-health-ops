@@ -277,6 +277,7 @@ func TestMigrateRiverUsersGrantsFollowPlatformRolesOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 	exact("excess INSERT (is_superuser)", true, false)
+	gapsName("excess INSERT (is_superuser)", "", "INSERT", true)
 	if _, err := admin.Exec(ctx, "REVOKE INSERT (is_superuser), UPDATE (updated_at) ON TABLE public.users FROM "+api); err != nil {
 		t.Fatal(err)
 	}

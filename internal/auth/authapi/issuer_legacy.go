@@ -2,9 +2,11 @@ package authapi
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -47,3 +49,10 @@ func (i *Issuer) VerifyLegacyRefresh(token string) (session.LegacyRefresh, error
 	}
 	return out, nil
 }
+
+// legacyRefreshAccepted counts each HS256 refresh token the compat refresh route accepts; nil counts nothing.
+// A package variable, not an Issuer field: endpoint-profile anchors pin line numbers in issuer.go.
+var legacyRefreshAccepted atomic.Pointer[accessverify.RefreshCounter]
+
+// SetRefreshAccepted sets the counter the compat refresh route counts accepted HS256 refresh tokens with.
+func SetRefreshAccepted(counter *accessverify.RefreshCounter) { legacyRefreshAccepted.Store(counter) }

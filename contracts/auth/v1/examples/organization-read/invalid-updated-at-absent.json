@@ -1,0 +1,9 @@
+{
+  "schema_version": "organization-read.v1",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "slug": "acme",
+  "name": "Acme",
+  "status": "active",
+  "revision": 4,
+  "created_at": "2026-11-02T10:00:00Z"
+}

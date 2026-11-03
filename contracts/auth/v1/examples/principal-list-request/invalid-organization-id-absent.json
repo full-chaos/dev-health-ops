@@ -1,0 +1,6 @@
+{
+  "schema_version": "principal-list-request.v1",
+  "kind": "service_account",
+  "limit": 100,
+  "cursor": "k1_cHJuX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAx"
+}

@@ -208,3 +208,49 @@ func withLink(env map[string]string, value string) map[string]string {
 	env[EnvSocialLinkRoutes] = value
 	return env
 }
+
+func TestRateLimitKeyIsOptionalFileCapableAndNeverPrinted(t *testing.T) {
+	rateKey := strings.Repeat("r", 40)
+	none, err := Load(Spec{LookupEnv: lookupFrom(sessionEnv(testAccessSecret, testSuccessorKey))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Session.RateLimitKey.Configured() {
+		t.Fatal("rate-limit key configured with the variable unset")
+	}
+	env := sessionEnv(testAccessSecret, testSuccessorKey)
+	env[EnvRateLimitKey] = rateKey
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Session.RateLimitKey.Reveal() != rateKey {
+		t.Fatal("rate-limit key did not resolve")
+	}
+	if strings.Contains(fmt.Sprint(cfg)+fmt.Sprint(slog.GroupValue(cfg.SafeAttrs()...)), rateKey) {
+		t.Fatal("the rate-limit key reached a printed form of the configuration")
+	}
+}
+
+func TestRateLimitKeyIsRefusedShortOrWithoutTheSessionSecrets(t *testing.T) {
+	short := sessionEnv(testAccessSecret, testSuccessorKey)
+	short[EnvRateLimitKey] = strings.Repeat("r", 31)
+	alone := baseEnv()
+	alone[EnvValkeyURI] = testValkeyURI
+	alone[EnvRateLimitKey] = strings.Repeat("r", 40)
+	for name, env := range map[string]map[string]string{"31 characters": short, "no session secrets": alone} {
+		_, err := Load(Spec{LookupEnv: lookupFrom(env)})
+		if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) || strings.Contains(err.Error(), strings.Repeat("r", 31)) {
+			t.Fatalf("%s: got %v, want an error naming %s and not its value", name, err, EnvRateLimitKey)
+		}
+	}
+}
+
+func TestRateLimitKeyEqualToAnotherPurposesKeyIsRefused(t *testing.T) {
+	env := sessionEnv(testAccessSecret, testSuccessorKey)
+	env[EnvRateLimitKey] = testAccessSecret
+	_, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err == nil || !strings.Contains(err.Error(), EnvRateLimitKey) || strings.Contains(err.Error(), testAccessSecret) {
+		t.Fatalf("got %v, want an error naming %s, not its value", err, EnvRateLimitKey)
+	}
+}

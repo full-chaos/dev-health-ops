@@ -1,0 +1,40 @@
+{
+  "id": "list-principals-outside-organization",
+  "kind": "exchange",
+  "operation": "principals_list",
+  "request": {
+    "schema_version": "principal-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 50
+  },
+  "response": {
+    "schema_version": "principal-list.v1",
+    "items": [
+      {
+        "principal": {
+          "schema_version": "principal-read.v1",
+          "principal_id": "prn_EXAMPLE0000000000000099",
+          "kind": "user",
+          "status": "active",
+          "revision": 3
+        },
+        "membership": {
+          "schema_version": "membership-read.v1",
+          "membership_id": "mbr_EXAMPLE0000000000000099",
+          "organization_id": "org_EXAMPLE0000000000000002",
+          "principal_id": "prn_EXAMPLE0000000000000099",
+          "role": "member",
+          "status": "active",
+          "revision": 2,
+          "created_at": "2026-11-02T10:00:00Z",
+          "updated_at": "2026-11-02T11:30:00.123456Z",
+          "joined_at": "2026-11-02T11:30:00.123456Z"
+        }
+      }
+    ]
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "item_wrong_organization",
+  "why": "A principal whose membership is of another organization than the requested one."
+}

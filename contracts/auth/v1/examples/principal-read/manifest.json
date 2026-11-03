@@ -1,0 +1,89 @@
+{
+  "description": "Golden corpus for principal-read.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-user.json",
+      "why": "An active user: id, kind, status and revision only."
+    },
+    {
+      "file": "valid-service-account-disabled.json",
+      "why": "A disabled service account keeps its row."
+    },
+    {
+      "file": "valid-workload.json",
+      "why": "A workload principal."
+    },
+    {
+      "file": "valid-revision-zero.json",
+      "why": "Revision 0: the aggregate has no revision row yet."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-email-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "An email is personal data: not representable."
+    },
+    {
+      "file": "invalid-display-name-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A display name is personal data."
+    },
+    {
+      "file": "invalid-password-hash-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A password hash is a secret."
+    },
+    {
+      "file": "invalid-identities-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Linked identities are not served by this read."
+    },
+    {
+      "file": "invalid-is-superuser-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "A platform flag is not part of the principal read."
+    },
+    {
+      "file": "invalid-kind-unknown.json",
+      "expect_instance_location": "/kind",
+      "expect_keyword": "enum",
+      "why": "Closed kind set."
+    },
+    {
+      "file": "invalid-status-pending.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "Closed status set."
+    },
+    {
+      "file": "invalid-principal-id-prefix.json",
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "why": "An organization id as the principal."
+    },
+    {
+      "file": "invalid-revision-negative.json",
+      "expect_instance_location": "/revision",
+      "expect_keyword": "minimum",
+      "why": "A revision is not negative."
+    },
+    {
+      "file": "invalid-revision-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "Revision is required."
+    },
+    {
+      "file": "invalid-schema-version.json",
+      "expect_instance_location": "/schema_version",
+      "expect_keyword": "const",
+      "why": "Unknown contract identifier."
+    }
+  ]
+}

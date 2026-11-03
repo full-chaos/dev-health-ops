@@ -11,6 +11,7 @@ int-observe	int-push	/integrate/customer-push/observability/	Observe source deli
 int-api	integrate	/integrate/api/	Use supported APIs	landing	true	public	planned	false	
 int-graphql	int-api	/integrate/api/graphql/	Query the GraphQL API	task-guide	true	public	planned	false	
 int-auth	int-api	/integrate/api/authentication/	Authenticate API clients	task-guide	true	public	planned	false	
+int-verify-go	int-api	/integrate/api/verify-access-tokens-go/	Verify access tokens in a Go service	task-guide	true	public	active	false	
 int-automation	int-api	/integrate/api/automation/	Automate supported workflows	task-guide	true	public	planned	false	
 int-webhooks	integrate	/integrate/webhooks/	Use webhooks	landing	true	public	planned	false	
 int-wh-config	int-webhooks	/integrate/webhooks/configure/	Configure a webhook	task-guide	true	public	planned	false	
@@ -22,5 +23,6 @@ int-contracts	int-build	/integrate/build-an-integration/data-contracts/	Use cano
 int-test	int-build	/integrate/build-an-integration/testing/	Test an integration	task-guide	true	public	planned	false	
 int-troubleshoot	integrate	/integrate/troubleshooting/	Troubleshoot integrations	troubleshooting-index	true	public	planned	false	
 int-auth-fail	int-troubleshoot	/integrate/troubleshooting/authentication/	Authentication and authorization errors	troubleshooting	true	public	planned	false	
+int-token-verification	int-troubleshoot	/integrate/troubleshooting/token-verification/	Token verification problems	troubleshooting	true	public	active	false	
 int-validation-fail	int-troubleshoot	/integrate/troubleshooting/schema-and-validation/	Schema and validation errors	troubleshooting	true	public	planned	false	
 int-delivery-fail	int-troubleshoot	/integrate/troubleshooting/delivery-and-rate-limits/	Delivery, retry, and rate-limit problems	troubleshooting	true	public	planned	false	

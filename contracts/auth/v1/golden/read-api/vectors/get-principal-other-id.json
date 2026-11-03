@@ -1,0 +1,20 @@
+{
+  "id": "get-principal-other-id",
+  "kind": "exchange",
+  "operation": "principals_get",
+  "request": {
+    "schema_version": "principal-get-request.v1",
+    "principal_id": "prn_EXAMPLE0000000000000001"
+  },
+  "response": {
+    "schema_version": "principal-read.v1",
+    "principal_id": "prn_EXAMPLE0000000000000002",
+    "kind": "user",
+    "status": "active",
+    "revision": 3
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "id_mismatch",
+  "why": "The answer is another principal."
+}

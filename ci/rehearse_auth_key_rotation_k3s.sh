@@ -126,7 +126,8 @@ NS="${REHEARSAL_NAMESPACE}"
 case "${NS}" in "${NS_PREFIX}"?*) ;; *) die "refusing the namespace ${NS}: not a rehearsal namespace (${NS_PREFIX}<suffix>)" ;; esac
 [[ "${REHEARSAL_RUN_TOKEN}" =~ ^[0-9a-f]{16,64}$ ]] || die "REHEARSAL_RUN_TOKEN is not a hex token"
 KCFG="${REHEARSAL_KUBECONFIG}"
-case "${KCFG}" in "${ADMIN_KUBECONFIG}" | */k3s.yaml) die "REHEARSAL_KUBECONFIG is the k3s admin kubeconfig: use the ServiceAccount file" ;; esac
+# The exact admin path, resolved (symlinks and .. included), not a file name: a ServiceAccount file may be called anything.
+[ "$(realpath -m -- "${KCFG}")" != "${ADMIN_KUBECONFIG}" ] || die "REHEARSAL_KUBECONFIG is the k3s admin kubeconfig: use the ServiceAccount file"
 [ -f "${KCFG}" ] || die "REHEARSAL_KUBECONFIG names no file"
 [ "$(stat -c %a "${KCFG}")" = 600 ] || die "REHEARSAL_KUBECONFIG must be mode 0600"
 [ -f "${REHEARSAL_IMAGES_ENV}" ] || die "REHEARSAL_IMAGES_ENV names no file"
@@ -153,6 +154,19 @@ version="$(kc version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // 
 case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG is not k3s (server version: ${version:-none}); no kind, no prod" ;; esac
 [ "$(kc auth can-i list nodes 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can list nodes: it is not a namespace-scoped ServiceAccount"
 [ "$(kc auth can-i create clusterroles 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can create clusterroles: it is not a namespace-scoped ServiceAccount"
+# Cluster scope (a namespace other than the run's, so no namespaced Role shows): the only rules allowed are the self-review creates,
+# get on non-resource URLs, and get on the one Namespace object named NS.
+cluster_rules="$(kc auth can-i --list --namespace default 2>/dev/null)" || die "the cluster-scope permission list of REHEARSAL_KUBECONFIG could not be read"
+while IFS= read -r row; do
+  [[ "${row}" =~ ^(.*[^[:space:]])?[[:space:]]*\[([^]]*)\][[:space:]]+\[([^]]*)\][[:space:]]+\[([^]]*)\]$ ]] || continue
+  res="${BASH_REMATCH[1]}"; urls="${BASH_REMATCH[2]}"; names="${BASH_REMATCH[3]}"; verbs="${BASH_REMATCH[4]}"
+  case "${res}|${names}|${verbs}" in
+    selfsubjectreviews.authentication.k8s.io\|\|create | selfsubjectaccessreviews.authorization.k8s.io\|\|create | selfsubjectrulesreviews.authorization.k8s.io\|\|create) ;;
+    "|"*"|get") [ -z "${res}" ] && [ -n "${urls}" ] || die "REHEARSAL_KUBECONFIG holds a cluster-scope permission beyond get on the namespace ${NS}: ${res} [${verbs}]" ;;
+    "namespaces|${NS}|get") ;;
+    *) die "REHEARSAL_KUBECONFIG holds a cluster-scope permission beyond get on the namespace ${NS}: ${res:-non-resource} [${verbs}]" ;;
+  esac
+done <<<"${cluster_rules}"
 owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null)" || die "the namespace read of ${NS} was denied or failed"
 [ -n "${owner_token}" ] && [ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
 

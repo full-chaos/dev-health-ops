@@ -20,7 +20,7 @@ case "$*" in
     'selfsubjectrulesreviews.authorization.k8s.io    []                  []               [create]' \
     '                                                [/api/*]            []               [get]' \
     '                                                [/healthz]          []               [get]' \
-    'namespaces                                      []                  [authrot-test]   [get]'
+    "namespaces                                      []                  [${REHEARSAL_NAMESPACE:-authrot-test}]   [get]"
     [ -z "${FAKE_CAN_I_EXTRA:-}" ] || printf '%s\n' "${FAKE_CAN_I_EXTRA}" ;;
   *"auth can-i list nodes"*) echo "${FAKE_CAN_I_NODES:-no}" ;;
 EOS

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,9 +68,9 @@ func TestSelectorGateRejectsASelectorTwoAcceptedClassesShare(t *testing.T) {
 }
 
 func TestSelectorGateRejectsAClassWithNoMarker(t *testing.T) {
-	profile := multiClassProfile(t, []any{"acr_client_credential", "ops_refresh_token"}, "credential_prefix", "fcacr_")
+	profile := multiClassProfile(t, []any{"acr_client_credential", "link_credential"}, "credential_prefix", "fcacr_")
 	if err := CheckClassSelector(profile, realRegistry(t)); err == nil {
-		t.Fatal("gate accepted a route whose second class (ops_refresh_token) has no marker")
+		t.Fatal("gate accepted a route whose second class (link_credential) has no marker")
 	}
 	registry := syntheticRegistry(
 		RegistryClass{ClassID: "acr_client_credential", Markers: []ClassMarker{{Kind: "credential_prefix", Name: "fcacr_"}}},
@@ -270,6 +271,10 @@ func TestEveryMarkerIsDiscriminatedInItsClassTransport(t *testing.T) {
 			marker := raw.(map[string]any)
 			kind, name := marker["kind"].(string), strings.ToLower(marker["name"].(string))
 			ok := markerMatchesTransport(kind, name, head, shape)
+			if kind == bodyFieldKind {
+				bodyShape, _ := marker["shape"].(string)
+				ok = bodyMarkerMatchesTransport(name, strings.ToLower(bodyShape), head, shape)
+			}
 			if !ok {
 				t.Errorf("class %v marker %s/%q is not how its transport text presents the credential (header_or_cookie %q, shape %q)",
 					class["class_id"], kind, name, transport["header_or_cookie"], transport["shape"])
@@ -303,6 +308,17 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 		return strings.Contains(head, "grant_type "+name)
 	}
 	return false
+}
+
+func bodyMarkerMatchesTransport(name, markerShape, head, shape string) bool {
+	_, rest, found := strings.Cut(head, "json body field ")
+	if !found || markerTransportToken(rest) != name {
+		return false
+	}
+	if value, isPrefix := strings.CutPrefix(markerShape, "prefix:"); isPrefix {
+		return strings.Contains(shape, "opaque "+value+" ")
+	}
+	return markerShape == "jwt" && strings.Contains(shape, " jwt,")
 }
 
 func markerTransportToken(text string) string {
@@ -583,5 +599,136 @@ func TestSelectorGateDoesNotMatchAContentTypeSelectorAgainstAHeaderMarker(t *tes
 	profile := multiClassProfile(t, []any{"acr_device_flow_code", "acr_workload_identity_exchange"}, "content_type", "application/json")
 	if err := CheckClassSelector(profile, registry); err == nil {
 		t.Fatal("gate matched a content_type selector against a dedicated_header marker")
+	}
+}
+
+func bodyMarker(name, shape string) ClassMarker {
+	return ClassMarker{Kind: "body_field", Name: name, Shape: shape}
+}
+
+func logoutShapedRegistry(refresh RegistryClass) map[string]RegistryClass {
+	return syntheticRegistry(
+		RegistryClass{ClassID: "ops_access_token_hs256", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "HS256"}}},
+		refresh,
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "EdDSA"}}},
+	)
+}
+
+func logoutShapedProfile(t *testing.T) map[string]any {
+	t.Helper()
+	return multiClassProfile(t, []any{"ops_access_token_hs256", "ops_refresh_token", "user_access_token"}, "jwt_header_alg", "EdDSA")
+}
+
+func TestSelectorGateKindsHoldTheBodyField(t *testing.T) {
+	if !slices.Contains(selectorKinds, "body_field") {
+		t.Fatal("body_field is not a selector kind")
+	}
+}
+
+func TestSelectorGateJudgesABodyClassByItsBodyMarker(t *testing.T) {
+	withMarker := logoutShapedRegistry(RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "jwt")}})
+	if err := CheckClassSelector(logoutShapedProfile(t), withMarker); err != nil {
+		t.Fatalf("gate refused the logout shape with a body marker on the refresh class: %v", err)
+	}
+	withoutMarker := logoutShapedRegistry(RegistryClass{ClassID: "ops_refresh_token", MarkersNoneReason: "carried in a JSON body field, never chosen from the request head"})
+	if err := CheckClassSelector(logoutShapedProfile(t), withoutMarker); err == nil {
+		t.Fatal("gate accepted a class with neither a head marker nor a body marker")
+	}
+}
+
+func TestSelectorGatePassesTheRealLogoutRow(t *testing.T) {
+	doc := readJSONFile(t, "contracts/auth/v1/endpoint-profiles.go-api.json")
+	rows, _ := doc["rows"].([]any)
+	registry := realRegistry(t)
+	found := false
+	for _, entry := range rows {
+		row, _ := entry.(map[string]any)
+		if id, _ := row["id"].(string); !strings.HasPrefix(id, "POST /api/v1/auth/logout ") {
+			continue
+		}
+		found = true
+		if err := CheckClassSelector(row, registry); err != nil {
+			t.Fatalf("real logout row: %v", err)
+		}
+	}
+	if !found {
+		t.Fatal("logout row not found in endpoint-profiles.go-api.json")
+	}
+}
+
+func TestSelectorGateRefusesTwoBodyClassesOfOneShape(t *testing.T) {
+	registry := syntheticRegistry(
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "EdDSA"}}},
+		RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "jwt")}},
+		RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", "jwt")}},
+	)
+	profile := multiClassProfile(t, []any{"user_access_token", "ops_refresh_token", "refresh_credential"}, "jwt_header_alg", "EdDSA")
+	if err := CheckClassSelector(profile, registry); err == nil {
+		t.Fatal("gate accepted two body classes of the same field and shape")
+	}
+	registry["refresh_credential"] = RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_credential", "prefix:dhr1_")}}
+	if err := CheckClassSelector(profile, registry); err != nil {
+		t.Fatalf("gate refused two body classes in different fields: %v", err)
+	}
+	registry["refresh_credential"] = RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", "prefix:dhr1_")}}
+	registry["ops_refresh_token"] = RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "prefix:dhr1_x")}}
+	if err := CheckClassSelector(profile, registry); err == nil {
+		t.Fatal("gate accepted two body classes whose prefixes overlap")
+	}
+}
+
+func TestSelectorGateRefusesABodyMarkerOnAHeadCarriedClass(t *testing.T) {
+	registry := logoutShapedRegistry(RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "jwt")}})
+	registry["ops_access_token_hs256"] = RegistryClass{ClassID: "ops_access_token_hs256", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "HS256"}, bodyMarker("access_token", "jwt")}}
+	if err := CheckClassSelector(logoutShapedProfile(t), registry); err == nil {
+		t.Fatal("gate accepted a class that carries both a head marker and a body marker")
+	}
+}
+
+func TestSelectorGateRefusesABodyMarkerWithoutAShape(t *testing.T) {
+	registry := logoutShapedRegistry(RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "")}})
+	if err := CheckClassSelector(logoutShapedProfile(t), registry); err == nil {
+		t.Fatal("gate accepted a body marker with no shape")
+	}
+}
+
+func bodyPairRegistry(first, second ClassMarker) map[string]RegistryClass {
+	return syntheticRegistry(
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "EdDSA"}}},
+		RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{first}},
+		RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{second}},
+	)
+}
+
+func bodyPairProfile(t *testing.T) map[string]any {
+	t.Helper()
+	return multiClassProfile(t, []any{"user_access_token", "ops_refresh_token", "refresh_credential"}, "jwt_header_alg", "EdDSA")
+}
+
+func TestSelectorGateRefusesJWTAndOverlappingPrefixOnOneField(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "prefix:eyJ"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted jwt and prefix:eyJ on one body field")
+	}
+}
+
+func TestSelectorGateRefusesJWTAndOtherPrefixOnOneField(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "prefix:dhr1_"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted jwt and prefix:dhr1_ on one body field: dhr1_.a.b matches both")
+	}
+}
+
+func TestSelectorGateAcceptsJWTAndPrefixOnDifferentFields(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_credential", "prefix:dhr1_"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err != nil {
+		t.Fatalf("gate refused jwt and prefix on different body fields: %v", err)
+	}
+}
+
+func TestSelectorGateRefusesPrefixWithForbiddenCharacter(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_credential", "prefix:bad!"))
+	if err := CheckClassSelector(bodyPairProfile(t), registry); err == nil {
+		t.Fatal("gate accepted prefix:bad!, which the registry schema forbids")
 	}
 }

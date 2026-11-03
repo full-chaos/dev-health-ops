@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -18,8 +19,10 @@ func slowRoute(entered chan<- struct{}, release <-chan struct{}, wrote chan<- er
 		Pattern: "/slow",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			if answerFirst {
+				// A body past the connection's write buffer sends the header
+				// to the client now, with no flush.
 				w.WriteHeader(http.StatusOK)
-				w.(http.Flusher).Flush()
+				_, _ = w.Write(make([]byte, 64<<10))
 			}
 			close(entered)
 			<-release
@@ -99,8 +102,8 @@ func TestShutdownAnswersAnInFlightRequest503AtTheDrainDeadline(t *testing.T) {
 	if got.response.Header.Get(RequestIDHeader) == "" {
 		t.Error("the 503 at the drain deadline carries no request id")
 	}
-	if err := <-wrote; err == nil {
-		t.Error("the handler's late write succeeded after the 503, want it refused")
+	if err := <-wrote; !errors.Is(err, errAnsweredAtShutdown) {
+		t.Errorf("the handler's late write after the 503 returned %v, want errAnsweredAtShutdown", err)
 	}
 	<-shutdown
 }
@@ -126,6 +129,8 @@ func TestShutdownKeepsAnAnswerThatHasStarted(t *testing.T) {
 	if got.response.StatusCode != http.StatusOK {
 		t.Errorf("the started answer is %d, want its own 200", got.response.StatusCode)
 	}
-	<-wrote
+	if err := <-wrote; errors.Is(err, errAnsweredAtShutdown) {
+		t.Error("the drain deadline took over an answer that had started")
+	}
 	<-shutdown
 }

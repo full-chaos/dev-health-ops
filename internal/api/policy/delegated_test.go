@@ -192,8 +192,10 @@ var bearerReaders = map[string]bool{"Authenticate": true, "AuthenticateLegacy": 
 // the Guard, the Authenticator itself, and the named sites outside the Guard
 // (none takes a delegated bearer to a domain write).
 var namedBearerReaders = map[string]bool{
-	"internal/api/policy/guard.go:Guard.currentUser":                    true,
-	"internal/api/policy/guard.go:Guard.optionalUser":                   true,
+	"internal/api/policy/guard.go:Guard.currentUser":  true,
+	"internal/api/policy/guard.go:Guard.optionalUser": true,
+	// The shadow PDP's observation, after currentUser (and its deny) admitted the caller; it never changes the answer.
+	"internal/api/policy/guard.go:Guard.wrap":                           true,
 	"internal/api/policy/principal.go:Authenticator.Authenticate":       true,
 	"internal/api/policy/principal.go:Authenticator.AuthenticateLegacy": true,
 	"internal/api/policy/principal.go:Authenticator.authenticate":       true,

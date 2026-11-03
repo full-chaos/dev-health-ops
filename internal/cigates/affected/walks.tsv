@@ -412,6 +412,7 @@ internal/queryapi/rowview	census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-	*.go
 internal/queryapi/server	edge_users_test.go	unexpressed	-	-
+internal/queryapi/server	endpoint_profile_action_fields_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_rows_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_same_line_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go

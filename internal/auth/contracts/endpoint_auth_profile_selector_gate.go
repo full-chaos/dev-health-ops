@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -116,6 +117,8 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	}
 }
 
+var bodyPrefixShape = regexp.MustCompile(`^prefix:[A-Za-z0-9_-]+$`)
+
 type bodyCarried struct {
 	id      string
 	markers []ClassMarker
@@ -137,7 +140,7 @@ func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
 		return nil, fmt.Errorf("accepted class %q has a body_field marker and a request-head marker: a class is carried in one place", id)
 	}
 	for _, marker := range body {
-		if marker.Shape != "jwt" && !(strings.HasPrefix(marker.Shape, "prefix:") && len(marker.Shape) > len("prefix:")) {
+		if marker.Shape != "jwt" && !bodyPrefixShape.MatchString(marker.Shape) {
 			return nil, fmt.Errorf("accepted class %q body_field %s has shape %q, want jwt or prefix:<value>", id, marker.Name, marker.Shape)
 		}
 	}
@@ -146,8 +149,10 @@ func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
 
 // checkBodyClassesApart proves no two body-carried classes of a route can be
 // confused: the same body field with the same shape, or with prefixes where
-// one begins with the other, is refused. A jwt (three dot-separated parts) and
-// a prefixed opaque value never overlap.
+// one begins with the other, is refused. A jwt is any three dot-separated
+// parts (credential-classes.schema.json, shape), and an opaque value after a
+// prefix may hold dots, so a jwt overlaps every prefix: jwt and prefix:<v> on
+// one field are refused.
 func checkBodyClassesApart(classes []bodyCarried) error {
 	for i, a := range classes {
 		for _, b := range classes[i+1:] {
@@ -169,7 +174,7 @@ func shapesOverlap(a, b string) bool {
 	if aPrefix && bPrefix {
 		return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
 	}
-	return a == b
+	return a == b || aPrefix != bPrefix
 }
 
 // mediaType is a Content-Type value's media type: parameters (; charset=...) dropped, trimmed, lower-cased.

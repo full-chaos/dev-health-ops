@@ -666,9 +666,9 @@ func TestSelectorGateRefusesTwoBodyClassesOfOneShape(t *testing.T) {
 	if err := CheckClassSelector(profile, registry); err == nil {
 		t.Fatal("gate accepted two body classes of the same field and shape")
 	}
-	registry["refresh_credential"] = RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", "prefix:dhr1_")}}
+	registry["refresh_credential"] = RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_credential", "prefix:dhr1_")}}
 	if err := CheckClassSelector(profile, registry); err != nil {
-		t.Fatalf("gate refused two body classes whose shapes differ (jwt vs prefix): %v", err)
+		t.Fatalf("gate refused two body classes in different fields: %v", err)
 	}
 	registry["refresh_credential"] = RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", "prefix:dhr1_")}}
 	registry["ops_refresh_token"] = RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "prefix:dhr1_x")}}

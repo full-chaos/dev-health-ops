@@ -20,6 +20,7 @@ const (
 	fieldActionMapPath = "../../../contracts/auth/v1/graphql-field-actions.json"
 	declaredGapTicket  = "CHAOS-11042"
 	unknownValue       = "unknown"
+	actionMapTicket    = "CHAOS-12657"
 )
 
 type fieldActionRow struct {
@@ -154,9 +155,9 @@ func proofDefects(who string, proof claimProof, read func(file string) string, d
 	return defects
 }
 
-func hasGap(row fieldActionRow, field string) bool {
+func hasActionGap(row fieldActionRow) bool {
 	for _, gap := range row.Gaps {
-		if strings.HasPrefix(gap, field+":") && strings.Contains(gap, declaredGapTicket) {
+		if strings.HasPrefix(gap, "action:") {
 			return true
 		}
 	}
@@ -184,12 +185,14 @@ func mapClasses(row fieldActionRow, orgArg map[string]bool) (resource, disclosur
 
 // checkFieldActionMap returns every defect of doc: a served field with no row
 // or with more than one, a row for a field nothing serves, a catalog version
-// that is not the catalog's, an action that is not "unknown" (no action has a
-// registered proof: query-api enforces none), an "unknown" without its named
-// gap, a resource_resolver or disclosure_behavior that is not the statement
+// that is not the catalog's, a field the field action table (field_actions.go)
+// has no entry for or an entry for a field nothing serves, an action that is
+// empty, "unknown", not in the catalog or not the table's, a platform-scope action
+// on a field whose resource_resolver is not "none" (or the reverse), an action
+// row that still carries an "action:" gap, a resource_resolver or disclosure_behavior that is not the statement
 // registered for the field's class or whose proof is missing from the
 // declaration it names, and a resolver pointer the field name does not derive.
-func checkFieldActionMap(served []string, orgArg map[string]bool, doc fieldActionDoc, cat *policycatalog.Catalog, claims map[string]mapClaim, read func(file string) string) []string {
+func checkFieldActionMap(served []string, orgArg map[string]bool, doc fieldActionDoc, cat *policycatalog.Catalog, actions map[string]string, claims map[string]mapClaim, read func(file string) string) []string {
 	var defects []string
 	count := map[string]int{}
 	for _, row := range doc.Rows {
@@ -203,6 +206,14 @@ func checkFieldActionMap(served []string, orgArg map[string]bool, doc fieldActio
 			defects = append(defects, "served field with no action row: "+key)
 		case n > 1:
 			defects = append(defects, fmt.Sprintf("served field with %d action rows: %s", n, key))
+		}
+		if _, listed := actions[key]; !listed {
+			defects = append(defects, "served field with no entry in the field action table: "+key)
+		}
+	}
+	for key := range actions {
+		if !servedSet[key] {
+			defects = append(defects, "field action table entry for a field nothing serves: "+key)
 		}
 	}
 	for key := range count {
@@ -218,10 +229,21 @@ func checkFieldActionMap(served []string, orgArg map[string]bool, doc fieldActio
 		switch {
 		case row.Action == "":
 			defects = append(defects, key+": action is empty or null")
-		case row.Action != unknownValue:
-			defects = append(defects, fmt.Sprintf("%s: action %q has no registered proof, state it as %q with a gap", key, row.Action, unknownValue))
-		case !hasGap(row, "action"):
-			defects = append(defects, fmt.Sprintf("%s: action unknown without an \"action:\" gap naming %s", key, declaredGapTicket))
+		case row.Action == unknownValue:
+			defects = append(defects, fmt.Sprintf("%s: action is unknown; every query-api field names a catalog action (%s)", key, actionMapTicket))
+		default:
+			action, err := cat.Action(row.Action)
+			switch {
+			case err != nil:
+				defects = append(defects, fmt.Sprintf("%s: action %q is not in the catalog", key, row.Action))
+			case row.Action != actions[key]:
+				defects = append(defects, fmt.Sprintf("%s: action %q is not the field action table's %q", key, row.Action, actions[key]))
+			case (action.Scope == policycatalog.ScopePlatform) != strings.HasPrefix(row.ResourceResolver, "none"):
+				defects = append(defects, fmt.Sprintf("%s: action %q has scope %s but resource_resolver is %.40q (a platform action needs resolver none, an organization action an organization resolver)", key, row.Action, action.Scope, row.ResourceResolver))
+			}
+			if hasActionGap(row) {
+				defects = append(defects, fmt.Sprintf("%s: the row names action %q and still carries an \"action:\" gap", key, row.Action))
+			}
 		}
 		resClass, discClass := mapClasses(row, orgArg)
 		statement := func(field, value, class string) {
@@ -266,7 +288,7 @@ func TestEveryServedGraphQLFieldHasExactlyOneRowAndEveryStatementIsProvenOrAGap(
 	if doc.SchemaVersion != "graphql-field-actions.v1" {
 		t.Fatalf("schema_version %q", doc.SchemaVersion)
 	}
-	for _, defect := range checkFieldActionMap(served, orgArg, doc, policycatalog.Default(), mapClaims, readSource(t)) {
+	for _, defect := range checkFieldActionMap(served, orgArg, doc, policycatalog.Default(), FieldActionTable(), mapClaims, readSource(t)) {
 		t.Error(defect)
 	}
 }
@@ -299,15 +321,17 @@ func TestFieldActionMapGuardCatchesPlantedDefects(t *testing.T) {
 		r.Resolver = resolverPointer(r)
 		return r
 	}
-	gap := "action: none; " + declaredGapTicket
+	table := func() map[string]string {
+		return map[string]string{"Mutation.write": "reports.write", "Query.byArg": "analytics.read", "Query.noArg": "metrics.read"}
+	}
 	good := func() fieldActionDoc {
 		return fieldActionDoc{SchemaVersion: "graphql-field-actions.v1", CatalogVersion: cat.Version(), Rows: []fieldActionRow{
-			mk("Mutation", "write", unknownValue, "by argument", "disclosure mutation", gap),
-			mk("Query", "byArg", unknownValue, "by argument", "disclosure by argument", gap),
-			mk("Query", "noArg", unknownValue, "from credential", "disclosure credential", gap),
+			mk("Mutation", "write", "reports.write", "by argument", "disclosure mutation"),
+			mk("Query", "byArg", "analytics.read", "by argument", "disclosure by argument"),
+			mk("Query", "noArg", "metrics.read", "from credential", "disclosure credential"),
 		}}
 	}
-	if defects := checkFieldActionMap(served, orgArg, good(), cat, claims, read); len(defects) != 0 {
+	if defects := checkFieldActionMap(served, orgArg, good(), cat, table(), claims, read); len(defects) != 0 {
 		t.Fatalf("the clean fixture is refused: %v", defects)
 	}
 	swap := func(to string) func(string) string { return func(string) string { return to } }
@@ -316,25 +340,30 @@ func TestFieldActionMapGuardCatchesPlantedDefects(t *testing.T) {
 		mutate func(*fieldActionDoc)
 		read   func(string) string
 		want   string
+		table  func(map[string]string)
 	}{
 		{"orphan row", func(d *fieldActionDoc) {
-			d.Rows = append(d.Rows, mk("Query", "gone", unknownValue, "from credential", "disclosure credential", gap))
-		}, nil, "nothing serves: Query.gone"},
-		{"missing row", func(d *fieldActionDoc) { d.Rows = d.Rows[1:] }, nil, "no action row: Mutation.write"},
-		{"duplicate row", func(d *fieldActionDoc) { d.Rows = append(d.Rows, d.Rows[1]) }, nil, "2 action rows: Query.byArg"},
-		{"null action", func(d *fieldActionDoc) { d.Rows[2].Action = "" }, nil, "action is empty or null"},
-		{"catalog action with no registered proof", func(d *fieldActionDoc) { d.Rows[2].Action = "analytics.read" }, nil, "has no registered proof"},
-		{"unknown action without a gap", func(d *fieldActionDoc) { d.Rows[0].Gaps = nil }, nil, "unknown without an"},
-		{"unknown action whose gap omits the ticket", func(d *fieldActionDoc) { d.Rows[0].Gaps = []string{"action: none"} }, nil, "unknown without an"},
-		{"false disclosure", func(d *fieldActionDoc) { d.Rows[1].Disclosure = "any caller may read" }, nil, "not the statement proven for class darg"},
-		{"disclosure of another registered class", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "disclosure by argument" }, nil, "not the statement proven for class dcred"},
-		{"resource of another registered class", func(d *fieldActionDoc) { d.Rows[2].ResourceResolver = "by argument" }, nil, "not the statement proven for class cred"},
-		{"empty disclosure", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "" }, nil, "disclosure_behavior is empty or null"},
-		{"needle gone from the declaration", func(d *fieldActionDoc) {}, swap("package p\nfunc f() {}\nfunc g() { _ = \"other\" }\n"), "does not contain"},
-		{"needle only in a comment", func(d *fieldActionDoc) {}, swap("package p\nfunc f() { /* needle-a */ }\nfunc g() { _ = \"other\" }\n"), "does not contain"},
-		{"declaration absent", func(d *fieldActionDoc) {}, swap("package p\nfunc f() { _ = \"needle-a\" }\n"), "holds no declaration"},
-		{"wrong resolver pointer", func(d *fieldActionDoc) { d.Rows[2].Resolver = "queryResolver.Missing in x" }, nil, "is not"},
-		{"stale catalog version", func(d *fieldActionDoc) { d.CatalogVersion++ }, nil, "catalog_version"},
+			d.Rows = append(d.Rows, mk("Query", "gone", "metrics.read", "from credential", "disclosure credential"))
+		}, nil, "nothing serves: Query.gone", nil},
+		{"missing row", func(d *fieldActionDoc) { d.Rows = d.Rows[1:] }, nil, "no action row: Mutation.write", nil},
+		{"duplicate row", func(d *fieldActionDoc) { d.Rows = append(d.Rows, d.Rows[1]) }, nil, "2 action rows: Query.byArg", nil},
+		{"null action", func(d *fieldActionDoc) { d.Rows[2].Action = "" }, nil, "action is empty or null", nil},
+		{"action set back to unknown", func(d *fieldActionDoc) { d.Rows[2].Action = unknownValue }, nil, "action is unknown", nil},
+		{"action not in the catalog", func(d *fieldActionDoc) { d.Rows[2].Action = "x.nothing" }, nil, "is not in the catalog", nil},
+		{"action that is not the table's", func(d *fieldActionDoc) { d.Rows[2].Action = "analytics.read" }, nil, "is not the field action table's \"metrics.read\"", nil},
+		{"row with an action and a stale action gap", func(d *fieldActionDoc) { d.Rows[2].Gaps = []string{"action: stale; " + declaredGapTicket} }, nil, "still carries an \"action:\" gap", nil},
+		{"platform action on an organization resolver", func(d *fieldActionDoc) { d.Rows[2].Action = "admin.telemetry" }, nil, "has scope platform but resource_resolver", func(m map[string]string) { m["Query.noArg"] = "admin.telemetry" }},
+		{"served field with no table entry", func(d *fieldActionDoc) {}, nil, "no entry in the field action table: Query.noArg", func(m map[string]string) { delete(m, "Query.noArg") }},
+		{"table entry for a field nothing serves", func(d *fieldActionDoc) {}, nil, "nothing serves: Query.ghost", func(m map[string]string) { m["Query.ghost"] = "metrics.read" }},
+		{"false disclosure", func(d *fieldActionDoc) { d.Rows[1].Disclosure = "any caller may read" }, nil, "not the statement proven for class darg", nil},
+		{"disclosure of another registered class", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "disclosure by argument" }, nil, "not the statement proven for class dcred", nil},
+		{"resource of another registered class", func(d *fieldActionDoc) { d.Rows[2].ResourceResolver = "by argument" }, nil, "not the statement proven for class cred", nil},
+		{"empty disclosure", func(d *fieldActionDoc) { d.Rows[2].Disclosure = "" }, nil, "disclosure_behavior is empty or null", nil},
+		{"needle gone from the declaration", func(d *fieldActionDoc) {}, swap("package p\nfunc f() {}\nfunc g() { _ = \"other\" }\n"), "does not contain", nil},
+		{"needle only in a comment", func(d *fieldActionDoc) {}, swap("package p\nfunc f() { /* needle-a */ }\nfunc g() { _ = \"other\" }\n"), "does not contain", nil},
+		{"declaration absent", func(d *fieldActionDoc) {}, swap("package p\nfunc f() { _ = \"needle-a\" }\n"), "holds no declaration", nil},
+		{"wrong resolver pointer", func(d *fieldActionDoc) { d.Rows[2].Resolver = "queryResolver.Missing in x" }, nil, "is not", nil},
+		{"stale catalog version", func(d *fieldActionDoc) { d.CatalogVersion++ }, nil, "catalog_version", nil},
 	}
 	for _, c := range cases {
 		doc := good()
@@ -343,7 +372,11 @@ func TestFieldActionMapGuardCatchesPlantedDefects(t *testing.T) {
 		if c.read != nil {
 			reader = c.read
 		}
-		joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, claims, reader), "\n")
+		actions := table()
+		if c.table != nil {
+			c.table(actions)
+		}
+		joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, actions, claims, reader), "\n")
 		if !strings.Contains(joined, c.want) {
 			t.Errorf("%s: the guard did not report %q, it reported %q", c.name, c.want, joined)
 		}
@@ -358,7 +391,7 @@ func TestMapGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 	served, orgArg := servedRootFieldsWithOrgArg(t)
 	doc := loadFieldActionDoc(t)
 	real := readSource(t)
-	if defects := checkFieldActionMap(served, orgArg, doc, cat, mapClaims, real); len(defects) != 0 {
+	if defects := checkFieldActionMap(served, orgArg, doc, cat, FieldActionTable(), mapClaims, real); len(defects) != 0 {
 		t.Fatalf("the real map is refused before any plant: %v", defects[0])
 	}
 	swapped := func(file, old, repl string) func(string) string {
@@ -375,11 +408,11 @@ func TestMapGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 	}
 	branch := "claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive"
 	deleted := swapped("operation_org_guard.go", "if "+branch+" {", "if false {")
-	if joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, mapClaims, deleted), "\n"); !strings.Contains(joined, "does not contain") {
+	if joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, FieldActionTable(), mapClaims, deleted), "\n"); !strings.Contains(joined, "does not contain") {
 		t.Errorf("the superuser branch deleted from operationOrgDecision stayed green")
 	}
 	commented := swapped("operation_org_guard.go", "if "+branch+" {", "if false { /* "+branch+" */")
-	if joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, mapClaims, commented), "\n"); !strings.Contains(joined, "does not contain") {
+	if joined := strings.Join(checkFieldActionMap(served, orgArg, doc, cat, FieldActionTable(), mapClaims, commented), "\n"); !strings.Contains(joined, "does not contain") {
 		t.Errorf("the superuser branch kept only in a comment stayed green")
 	}
 	var planted fieldActionDoc
@@ -390,7 +423,7 @@ func TestMapGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 		}
 		planted.Rows = append(planted.Rows, row)
 	}
-	if joined := strings.Join(checkFieldActionMap(served, orgArg, planted, cat, mapClaims, real), "\n"); !strings.Contains(joined, "Query.securityAlerts: disclosure_behavior is not the statement proven") {
+	if joined := strings.Join(checkFieldActionMap(served, orgArg, planted, cat, FieldActionTable(), mapClaims, real), "\n"); !strings.Contains(joined, "Query.securityAlerts: disclosure_behavior is not the statement proven") {
 		t.Errorf("a false disclosure on Query.securityAlerts stayed green: %q", joined)
 	}
 	otherClass := planted
@@ -401,7 +434,35 @@ func TestMapGuardGoesRedOnTheVerifierPlants(t *testing.T) {
 			otherClass.Rows[i] = row
 		}
 	}
-	if joined := strings.Join(checkFieldActionMap(served, orgArg, otherClass, cat, mapClaims, real), "\n"); !strings.Contains(joined, "not the statement proven for class darg") {
+	if joined := strings.Join(checkFieldActionMap(served, orgArg, otherClass, cat, FieldActionTable(), mapClaims, real), "\n"); !strings.Contains(joined, "not the statement proven for class darg") {
 		t.Errorf("another class's registered disclosure on Query.securityAlerts stayed green")
+	}
+}
+
+// TestMapGuardGoesRedWhenARealRowIsSetBackOrChanged plants, in the real rows,
+// the two defects this map exists to refuse: a row set back to "unknown", and
+// a row whose action is not the field action table's.
+func TestMapGuardGoesRedWhenARealRowIsSetBackOrChanged(t *testing.T) {
+	cat := policycatalog.Default()
+	served, orgArg := servedRootFieldsWithOrgArg(t)
+	doc := loadFieldActionDoc(t)
+	plant := func(key, action string) fieldActionDoc {
+		planted := doc
+		planted.Rows = append([]fieldActionRow(nil), doc.Rows...)
+		for i, row := range planted.Rows {
+			if row.Type+"."+row.Field == key {
+				row.Action = action
+				planted.Rows[i] = row
+			}
+		}
+		return planted
+	}
+	back := strings.Join(checkFieldActionMap(served, orgArg, plant("Query.home", unknownValue), cat, FieldActionTable(), mapClaims, readSource(t)), "\n")
+	if !strings.Contains(back, "Query.home: action is unknown") {
+		t.Errorf("a row set back to unknown stayed green: %q", back)
+	}
+	changed := strings.Join(checkFieldActionMap(served, orgArg, plant("Query.home", "git.read"), cat, FieldActionTable(), mapClaims, readSource(t)), "\n")
+	if !strings.Contains(changed, "Query.home: action \"git.read\" is not the field action table's") {
+		t.Errorf("a row whose action is not the table's stayed green: %q", changed)
 	}
 }

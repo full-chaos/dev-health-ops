@@ -32,6 +32,7 @@ const (
 	KindTeamAutoimport               = "sync.team_autoimport"
 	KindTeamRepoOwnershipDerivation  = "sync.team_repo_ownership_derivation"
 	KindProviderOAuthRevocations     = "sync.provider_oauth_revocations"
+	KindExternalPushExpirySweep      = "sync.external_push_expiry_sweep"
 	KindRemainingCapacity            = "metrics.remaining.capacity"
 	KindRemainingComplexity          = "metrics.remaining.complexity"
 	KindRemainingDORA                = "metrics.remaining.dora"
@@ -142,6 +143,12 @@ type LLMBudgetStaleReservationsPayload struct {
 // ProviderOAuthRevocationsPayload is the periodic send of pending provider
 // OAuth revocation rows. River carries only the due time: never a row id or a token.
 type ProviderOAuthRevocationsPayload struct {
+	ScheduledFor string `json:"scheduled_for"`
+}
+
+// ExternalPushExpirySweepPayload is the periodic sweep that emits the expired
+// event of External Push credentials. River carries only the due time.
+type ExternalPushExpirySweepPayload struct {
 	ScheduledFor string `json:"scheduled_for"`
 }
 
@@ -310,6 +317,13 @@ var definitions = map[string]contractDefinition{
 	},
 	KindProviderOAuthRevocations: {
 		Kind:              KindProviderOAuthRevocations,
+		CurrentVersion:    ContractVersionV1,
+		SupportedVersions: []int{ContractVersionV1},
+		DomainLink:        "schedule_occurrence",
+		OrganizationScope: "global",
+	},
+	KindExternalPushExpirySweep: {
+		Kind:              KindExternalPushExpirySweep,
 		CurrentVersion:    ContractVersionV1,
 		SupportedVersions: []int{ContractVersionV1},
 		DomainLink:        "schedule_occurrence",
@@ -491,6 +505,15 @@ func Decode(kind string, data []byte) (Envelope, error) {
 			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
 		}
 		payload = value
+	case KindExternalPushExpirySweep:
+		var value ExternalPushExpirySweepPayload
+		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
+			return Envelope{}, fmt.Errorf("decode %s payload: %w", kind, err)
+		}
+		if err := value.validate(); err != nil {
+			return Envelope{}, fmt.Errorf("validate %s payload: %w", kind, err)
+		}
+		payload = value
 	case KindHeartbeat:
 		var value HeartbeatPayload
 		if err := decodeStrict(wire.Payload, MaxEnvelopeBytes, &value); err != nil {
@@ -652,6 +675,8 @@ func MarshalCanonical(envelope Envelope) ([]byte, error) {
 		kind = KindLLMBudgetStaleReservations
 	case ProviderOAuthRevocationsPayload:
 		kind = KindProviderOAuthRevocations
+	case ExternalPushExpirySweepPayload:
+		kind = KindExternalPushExpirySweep
 	case SyncCoverageRefreshPayload:
 		kind = KindSyncCoverageRefresh
 	case RetentionCleanupPayload:
@@ -765,6 +790,10 @@ func (payload LLMBudgetStaleReservationsPayload) validate() error {
 }
 
 func (payload ProviderOAuthRevocationsPayload) validate() error {
+	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
+}
+
+func (payload ExternalPushExpirySweepPayload) validate() error {
 	return validateUTCTimestamp("scheduled_for", payload.ScheduledFor)
 }
 

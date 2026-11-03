@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -150,11 +151,11 @@ func storedLifecycleEvents(t tokenRow) ([]audit.PushLifecycleEvent, error) {
 		}
 		return []audit.PushLifecycleEvent{event}, nil
 	}
-	organization, binding, source, err := wireIDs(t.OrgID, t.SourceID)
+	organization, binding, source, err := pushevent.WireIDs(t.OrgID, t.SourceID)
 	if err != nil {
 		return nil, err
 	}
-	names, err := scopeNames(t.Scopes)
+	names, err := pushevent.ScopeNames(t.Scopes)
 	if err != nil {
 		return nil, err
 	}
@@ -164,5 +165,5 @@ func storedLifecycleEvents(t tokenRow) ([]audit.PushLifecycleEvent, error) {
 		expires = &at
 	}
 	return []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
-		OrganizationID: organization, Binding: binding, SourceID: source, Change: createdChange(t.ID, names, expires)}}, nil
+		OrganizationID: organization, Binding: binding, SourceID: source, Change: pushevent.CreatedChange(t.ID, names, expires)}}, nil
 }

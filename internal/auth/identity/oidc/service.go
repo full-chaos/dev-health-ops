@@ -70,6 +70,8 @@ type FederatedAccount struct {
 	// LegacyFullName is the public.users full_name: nil is NULL.
 	LegacyFullName *string
 	RequestID      *string
+	// LegacyProvider is the users.auth_provider value the new row carries.
+	LegacyProvider string
 }
 
 // IdentityStore is the identity store as this flow uses it.
@@ -698,7 +700,8 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	org := row.OrgID
 	req := SessionRequest{OrgID: &org, Role: role, AMR: AMR}
 	principal, tokens, err := s.cfg.MembershipJIT.ProvisionJoinAndIssue(ctx,
-		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID}, org, req)
+		FederatedAccount{Key: v.key, Email: p.Email, FullName: p.FullName, LegacyFullName: p.LegacyFullName, RequestID: requestID,
+			LegacyProvider: v.legacyAuthProvider}, org, req)
 	switch {
 	case err == nil:
 		return Login{PrincipalID: principal.ID, Email: principal.Email, OrgID: &org, Role: req.Role, Tokens: tokens}, nil

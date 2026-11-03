@@ -11,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 )
 
-func (e *env) decide(t *testing.T, ctx context.Context, user, org uuid.UUID) authorization.Decision {
+func (e *env) decideAdmin(t *testing.T, ctx context.Context, user, org uuid.UUID) authorization.Decision {
 	t.Helper()
 	return authorization.NewEvaluator().Evaluate(
 		authorization.Request{Action: "settings.write", ResourceKind: "organization", OrganizationID: org.String()},
@@ -29,7 +29,7 @@ func TestPublicRowsWithNoAuthCopyAllow(t *testing.T) {
 	ctx := context.Background()
 	user, org := e.publicUser(t, ctx, true, false), e.publicOrg(t, ctx)
 	e.publicMember(t, ctx, user, org, "admin")
-	if d := e.decide(t, ctx, user, org); !d.Allowed {
+	if d := e.decideAdmin(t, ctx, user, org); !d.Allowed {
 		t.Fatalf("public rows, no auth copy: %+v, want allow", d)
 	}
 }
@@ -54,7 +54,7 @@ func TestPublicRowsDenyWhenInactiveOrRemoved(t *testing.T) {
 		user, org := e.publicUser(t, ctx, true, false), e.publicOrg(t, ctx)
 		e.publicMember(t, ctx, user, org, "admin")
 		c.mutate(user, org)
-		if d := e.decide(t, ctx, user, org); d.Allowed || d.Reason != c.reason {
+		if d := e.decideAdmin(t, ctx, user, org); d.Allowed || d.Reason != c.reason {
 			t.Errorf("%s: %+v, want deny %s", name, d, c.reason)
 		}
 	}
@@ -68,7 +68,7 @@ func TestPublicWinsWhenTheAuthCopyDisagrees(t *testing.T) {
 		user, org := e.user(t, ctx, true, false), e.org(t, ctx)
 		e.publicMember(t, ctx, user, org, "admin")
 		e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user)
-		if d := e.decide(t, ctx, user, org); !d.Allowed {
+		if d := e.decideAdmin(t, ctx, user, org); !d.Allowed {
 			t.Fatalf("%+v", d)
 		}
 	})
@@ -76,7 +76,7 @@ func TestPublicWinsWhenTheAuthCopyDisagrees(t *testing.T) {
 		user, org := e.user(t, ctx, true, false), e.org(t, ctx)
 		e.publicMember(t, ctx, user, org, "admin")
 		e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org)
-		if d := e.decide(t, ctx, user, org); !d.Allowed {
+		if d := e.decideAdmin(t, ctx, user, org); !d.Allowed {
 			t.Fatalf("%+v", d)
 		}
 	})
@@ -85,7 +85,7 @@ func TestPublicWinsWhenTheAuthCopyDisagrees(t *testing.T) {
 			user, org := e.user(t, ctx, true, false), e.org(t, ctx)
 			e.publicMember(t, ctx, user, org, "admin")
 			e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, org, user, status)
-			if d := e.decide(t, ctx, user, org); !d.Allowed {
+			if d := e.decideAdmin(t, ctx, user, org); !d.Allowed {
 				t.Fatalf("auth membership %s: %+v", status, d)
 			}
 		}
@@ -93,7 +93,7 @@ func TestPublicWinsWhenTheAuthCopyDisagrees(t *testing.T) {
 	t.Run("auth membership active, no public row: deny", func(t *testing.T) {
 		user, org := e.user(t, ctx, true, false), e.org(t, ctx)
 		e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
-		if d := e.decide(t, ctx, user, org); d.Allowed || d.Reason != authorization.ReasonNoMembership {
+		if d := e.decideAdmin(t, ctx, user, org); d.Allowed || d.Reason != authorization.ReasonNoMembership {
 			t.Fatalf("%+v", d)
 		}
 	})

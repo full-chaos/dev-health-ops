@@ -1,0 +1,14 @@
+{
+  "id": "request-limit-0-refused",
+  "kind": "request",
+  "operation": "grants_list",
+  "request": {
+    "schema_version": "grant-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 0
+  },
+  "request_schema": "reject",
+  "parse": "reject",
+  "rule": "schema",
+  "why": "A page holds at least one item."
+}

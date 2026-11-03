@@ -63,6 +63,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/acr"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -76,6 +77,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -209,7 +211,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
 			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
@@ -237,11 +239,10 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// route still ignores these three fields (sso.go's own doc
 			// comment). Cipher is the same FernetDecryptor
 			// (SETTINGS_ENCRYPTION_KEY) every other stored-secret decrypt
-			// in this process already uses. StateSecret reuses
-			// GitHubStateSigner's own APIJWTSecret.Reveal() (HKDF-derives
-			// a distinct key from it, state.go) -- no new secret material
-			// either way.
-			Cipher: deps.Decryptor, StateSecret: deps.GitHubStateSigner.Secret, Signer: deps.Signer, Inner: proxy.inner,
+			// in this process already uses. StateSecret is
+			// SSO_STATE_SECRET, else JWT_SECRET_KEY (statePurposeSecrets);
+			// HKDF derives one key per protocol from it (state.go).
+			Cipher: deps.Decryptor, StateSecret: deps.SSOStateSecret, StateSecretFallback: deps.SSOStateSecretFallback, Signer: deps.Signer, Inner: proxy.inner,
 			Issuer: deps.SessionIssuer, PlatformRoles: deps.platformRoles(),
 		})...)
 		billing.LogUnconfigured(logger, deps.StripeWebhookSecret, deps.StripeSecretKey)
@@ -276,7 +277,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
-			OrgState:           deps.OrgState,
+			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -329,9 +330,9 @@ func configure(
 }
 
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
-// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
+// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil {
+	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
@@ -438,7 +439,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
@@ -504,7 +505,13 @@ func configureWith(
 	}
 	deps.Invites = inviteConfig(cfg, logger, envsecrets.ProcessLookup)
 	deps.GitHubApp = GitHubAppConfig(envsecrets.ProcessLookup)
-	deps.GitHubStateSigner = githubapp.Signer{Secret: cfg.APIJWTSecret.Reveal(), Issuer: cfg.APIJWTIssuer, Audience: cfg.APIJWTAudience}
+	deps.SSOStateSecret, deps.SSOStateSecretFallback, deps.GitHubStateSigner = statePurposeSecrets(cfg)
+	refreshAccepted, err := accessverify.NewRefreshCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"), goAPIAccessService)
+	if err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
+	}
+	session.SetRefreshAccepted(refreshAccepted)
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)

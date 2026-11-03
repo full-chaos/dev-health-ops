@@ -373,9 +373,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 			}
 			return nil
 		},
-		Audit: audit.AuditEvent{
-			EventType: "auth.restore_fence.applied", Outcome: audit.OutcomeAllowed,
-		},
+		Audit:     appliedRow(),
 		OffStream: audit.OffStreamRestoreFence,
 		Refusals:  applyRefusals(),
 	})
@@ -391,6 +389,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedI
 		return Report{}, fmt.Errorf("%w: %v", ErrApply, commitErr)
 	}
 	return report, nil
+}
+
+func appliedRow() audit.AuditEvent {
+	return audit.AuditEvent{EventType: "auth.restore_fence.applied", Outcome: audit.OutcomeAllowed}
 }
 
 // sqlState is the SQLSTATE of a database error, or "none": the error text itself

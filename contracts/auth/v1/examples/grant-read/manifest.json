@@ -1,0 +1,75 @@
+{
+  "description": "Golden corpus for grant-read.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-active-repository.json",
+      "why": "An active grant on one repository; the resource key is served."
+    },
+    {
+      "file": "valid-all-repositories.json",
+      "why": "The organization-wide key *."
+    },
+    {
+      "file": "valid-expiring.json",
+      "why": "A grant with an expiry."
+    },
+    {
+      "file": "valid-revoked.json",
+      "why": "A revoked grant keeps its row and key."
+    },
+    {
+      "file": "valid-expired.json",
+      "why": "An expired grant."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-resource-key-uppercase.json",
+      "expect_instance_location": "/resource_key",
+      "expect_keyword": "pattern",
+      "why": "Keys are lowercase."
+    },
+    {
+      "file": "invalid-resource-key-no-owner.json",
+      "expect_instance_location": "/resource_key",
+      "expect_keyword": "pattern",
+      "why": "owner/repo or *."
+    },
+    {
+      "file": "invalid-resource-key-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "The key is required."
+    },
+    {
+      "file": "invalid-role-owner.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "owner is never repository-scoped."
+    },
+    {
+      "file": "invalid-status-unknown.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "Closed status set."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    },
+    {
+      "file": "invalid-grant-id-prefix.json",
+      "expect_instance_location": "/grant_id",
+      "expect_keyword": "pattern",
+      "why": "A membership id as the grant."
+    },
+    {
+      "file": "invalid-expires-at-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "expires_at is required (null for none)."
+    }
+  ]
+}

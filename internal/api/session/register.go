@@ -133,8 +133,8 @@ func (h handlers) register(w http.ResponseWriter, r *http.Request) {
 	user := &userRow{ID: h.NewUUID(), Email: email, FullName: input.fullName, IsActive: true}
 	if _, err := tx.Exec(ctx, `INSERT INTO users
 	(id, email, username, password_hash, full_name, avatar_url, auth_provider, auth_provider_id,
-	 is_active, is_verified, is_superuser, token_version, last_login_at, created_at, updated_at)
-VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, false, 0, NULL, $5, $5)`,
+	 is_active, is_verified, token_version, last_login_at, created_at, updated_at)
+VALUES ($1, $2, NULL, $3, $4, NULL, 'local', NULL, true, false, 0, NULL, $5, $5)`,
 		user.ID, user.Email, hash, user.FullName, now.UTC()); err != nil {
 		if isUniqueViolation(err) {
 			// A concurrent sign-up for the same address won the unique index:

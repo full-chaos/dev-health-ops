@@ -2,15 +2,14 @@
 // and its user agent.
 //
 // The address is the socket peer, unless the peer is a configured trusted
-// proxy (AUTH_SERVICE_TRUSTED_PROXIES) that sent exactly one X-Forwarded-For
-// value holding exactly one address: then it is that address. An excluded
+// proxy (AUTH_SERVICE_TRUSTED_PROXIES; go-api's TRUSTED_PROXIES is read with
+// the same parser and the same rule, internal/api/clientip): then it is the
+// right-most untrusted X-Forwarded-For hop (Trust.ClientOf). An excluded
 // address ("!<address>" entry) is never a proxy, even inside a listed network:
 // the node pod range holds the node's own addresses, from which a host process
-// or a hostNetwork pod reaches the service. The go-api
-// proxy sends one value it resolved itself (internal/apiservice/authproxy.go),
-// so a chain, a second header or an unparsable value is not a proxy's answer
-// and falls back to the peer. X-Forwarded-Proto and the other forwarded
-// headers are never read.
+// or a hostNetwork pod reaches the service. The internal service port binds
+// the address with an empty Trust, so it never reads a forwarded value.
+// X-Forwarded-Proto and the other forwarded headers are never read.
 //
 // The user agent is the first User-Agent value, each byte decoded as one
 // latin-1 code point, as go-api's userAgent() reads it
@@ -154,7 +153,7 @@ func (t Trust) trusts(peer netip.Addr) bool {
 }
 
 // Resolve is the client address of r: the zero Addr when the peer address
-// does not parse.
+// does not parse. It is ClientOf over the request's socket peer and headers.
 func (t Trust) Resolve(r *http.Request) netip.Addr {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -164,19 +163,62 @@ func (t Trust) Resolve(r *http.Request) netip.Addr {
 	if err != nil {
 		return netip.Addr{}
 	}
+	return t.ClientOf(peer.WithZone("").Unmap(), r.Header.Values("X-Forwarded-For"), r.Header.Get("X-Real-IP"))
+}
+
+// ClientOf is the one rule that names the client, for go-api and auth-service alike:
+//
+//  1. An untrusted peer is the client; its forwarding headers are never read.
+//  2. For a trusted peer the X-Forwarded-For lines are one chain, walked from the RIGHT. A trusted hop
+//     is skipped as a proxy; the first untrusted hop is the client. Entries left of it were written by
+//     that hop's sender and are never read.
+//  3. A hop that is not an address (empty, a name, garbage) ends the walk: the peer is the client.
+//  4. With no chain, or a chain of trusted hops only, a valid untrusted X-Real-IP is the client; else the peer.
+//
+// The caller lists a proxy only if it appends its peer to X-Forwarded-For or replaces the header with it.
+// An empty Trust trusts nobody, so the answer is always the peer.
+func (t Trust) ClientOf(peer netip.Addr, forwardedFor []string, realIP string) netip.Addr {
 	peer = peer.WithZone("").Unmap()
 	if !t.trusts(peer) {
 		return peer
 	}
-	values := r.Header.Values("X-Forwarded-For")
-	if len(values) != 1 || strings.Contains(values[0], ",") {
-		return peer
+	if joined := strings.Join(forwardedFor, ","); strings.TrimSpace(joined) != "" {
+		hops := strings.Split(joined, ",")
+		for i := len(hops) - 1; i >= 0; i-- {
+			hop, ok := ParseHop(hops[i])
+			if !ok {
+				return peer
+			}
+			if !t.trusts(hop) {
+				return hop
+			}
+		}
 	}
-	forwarded, err := netip.ParseAddr(strings.TrimSpace(values[0]))
-	if err != nil || forwarded.Zone() != "" {
-		return peer
+	if real, ok := ParseHop(realIP); ok && !t.trusts(real) {
+		return real
 	}
-	return forwarded.Unmap()
+	return peer
+}
+
+// ParseHop reads one address as a proxy header carries it: a bare IP, IP:port, [IPv6] or [IPv6]:port, spaces
+// ignored. A zone is dropped and an IPv4-mapped IPv6 address is unmapped, so one client has one key.
+func ParseHop(text string) (netip.Addr, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return netip.Addr{}, false
+	}
+	if addr, err := netip.ParseAddr(text); err == nil {
+		return addr.Unmap().WithZone(""), true
+	}
+	if ap, err := netip.ParseAddrPort(text); err == nil {
+		return ap.Addr().Unmap().WithZone(""), true
+	}
+	if strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") {
+		if addr, err := netip.ParseAddr(text[1 : len(text)-1]); err == nil {
+			return addr.Unmap().WithZone(""), true
+		}
+	}
+	return netip.Addr{}, false
 }
 
 // TrustsPeer reports whether the socket peer of r is a trusted proxy.

@@ -26,7 +26,9 @@ var copyTable = regexp.MustCompile(`\.(principals|organizations|memberships)\b|t
 
 func TestNoPDPDecisionInputReadsAnAuthCopy(t *testing.T) {
 	scopes := []censusScope{
-		{file: "decisionstate.go"},
+		{file: "decisionstate.go", allow: map[string]string{
+			"`SELECT kind, disabled_at IS NULL FROM `+t.table(\"principals\")+` WHERE id = $1`": "non-user principal (service account): auth-native, no public twin; read only when there is no public.users row",
+		}},
 		{file: "../membership/effective_on.go"},
 		{file: "../platformrole/rule/rule.go", funcs: []string{"PublicActiveRule", "PublicHoldsSQL"}},
 		{file: "../platformrole/store.go", funcs: []string{"ResolveOn", "resolvePublicOn"}},
@@ -55,7 +57,7 @@ func TestNoPDPDecisionInputReadsAnAuthCopy(t *testing.T) {
 			}
 			text = b.String()
 		}
-		if sc.allow == nil && authRule.MatchString(text) {
+		if sc.file != "../session/delegation.go" && authRule.MatchString(text) {
 			t.Errorf("%s calls the auth.principals platform role rule: %s", sc.file, authRule.FindString(text))
 		}
 		used := map[string]bool{}

@@ -36,6 +36,7 @@ type fakeSnapshot struct {
 	membership   *authorization.Membership
 	grants       []authorization.Grant
 	grantsErr    error
+	account      *authorization.ServiceAccount
 	now          int64
 }
 
@@ -57,8 +58,11 @@ func (s *fakeSnapshot) Grants(string) ([]authorization.Grant, error) { return s.
 func (s *fakeSnapshot) Workload() (authorization.WorkloadLimits, bool) {
 	return authorization.WorkloadLimits{}, false
 }
-func (s *fakeSnapshot) ServiceAccount(string) (authorization.ServiceAccount, bool) {
-	return authorization.ServiceAccount{}, false
+func (s *fakeSnapshot) ServiceAccount(org string) (authorization.ServiceAccount, bool) {
+	if org == "" || s.account == nil {
+		return authorization.ServiceAccount{}, false
+	}
+	return *s.account, true
 }
 func (s *fakeSnapshot) NowUnixNano() int64 { return s.now }
 
@@ -69,16 +73,20 @@ type snapKey struct {
 
 // fakeDecisionState counts transactions and reads, and can fail each step.
 type fakeDecisionState struct {
-	sessions   map[uuid.UUID]DecisionSession
-	snapshots  map[snapKey]*fakeSnapshot
-	actors     map[uuid.UUID]ActorState
-	actorErr   error
-	actorReads int
-	beginErr   error
-	sessionErr error
-	snapErr    error
-	reads      int
-	snapReads  int
+	sessions     map[uuid.UUID]DecisionSession
+	keys         map[uuid.UUID]DecisionKey
+	snapshots    map[snapKey]*fakeSnapshot
+	actors       map[uuid.UUID]ActorState
+	actorErr     error
+	actorReads   int
+	beginErr     error
+	sessionErr   error
+	keyErr       error
+	snapErr      error
+	reads        int
+	sessionReads int
+	keyReads     int
+	snapReads    int
 }
 
 func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error) error {
@@ -92,6 +100,7 @@ func (f *fakeDecisionState) Read(ctx context.Context, fn func(DecisionTx) error)
 type fakeDecisionTx struct{ f *fakeDecisionState }
 
 func (t fakeDecisionTx) Session(_ context.Context, id uuid.UUID) (DecisionSession, error) {
+	t.f.sessionReads++
 	if t.f.sessionErr != nil {
 		return DecisionSession{}, t.f.sessionErr
 	}
@@ -104,6 +113,16 @@ func (t fakeDecisionTx) Actor(_ context.Context, actor uuid.UUID) (ActorState, e
 		return ActorState{}, t.f.actorErr
 	}
 	return t.f.actors[actor], nil
+}
+
+func (t fakeDecisionTx) ServiceAccountKey(_ context.Context, id uuid.UUID) (DecisionKey, error) {
+	t.f.keyReads++
+	if t.f.keyErr != nil {
+		return DecisionKey{}, t.f.keyErr
+	}
+	k := t.f.keys[id]
+	k.NowUnixNano = authorizeNow
+	return k, nil
 }
 
 func (t fakeDecisionTx) Snapshot(_ context.Context, principal uuid.UUID, org string) (authorization.GrantSnapshot, error) {
@@ -271,8 +290,12 @@ func TestAuthorizeRoutesStayDarkWithoutTheirRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(routes) != 0 {
-		t.Fatalf("the embedded document has no authorize row, yet %d route(s) mounted", len(routes))
+	if len(routes) != 2 {
+		t.Fatalf("the embedded document holds both authorize rows, yet %d route(s) mounted, want 2", len(routes))
+	}
+	deps.ProfileRows = authorizeProfileDoc(t)
+	if routes, _ = AuthorizeRoutes(deps); len(routes) != 0 {
+		t.Fatalf("a document with no authorize row mounted %d route(s)", len(routes))
 	}
 	deps.ProfileRows = authorizeProfileDoc(t, PatternAuthorizeBatch)
 	if routes, _ = AuthorizeRoutes(deps); len(routes) != 1 || routes[0].Pattern != PatternAuthorizeBatch {
@@ -422,9 +445,7 @@ func assertError(t *testing.T, rec *httptest.ResponseRecorder, status int, reaso
 	if rec.Code != status {
 		t.Fatalf("status %d, want %d; body %s", rec.Code, status, rec.Body)
 	}
-	if status != http.StatusBadRequest {
-		validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
-	}
+	validateSurface(t, contracts.ErrorSurface, rec.Body.Bytes())
 	var doc struct {
 		ReasonCode string `json:"reason_code"`
 	}

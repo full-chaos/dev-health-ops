@@ -53,6 +53,23 @@ const REQUIRED_GROUPS = {
   "invite": ["accept", "reject"],
   "invite-create-request": ["accept", "reject"],
   "invite-accept-request": ["accept", "reject"],
+  // The versioned read API (CHAOS-10995): pure schema documents; the rules a schema cannot say are parser rules in golden/read-api.
+  "principal-read": ["accept", "reject"],
+  "principal-get-request": ["accept", "reject"],
+  "principal-list-request": ["accept", "reject"],
+  "principal-list": ["accept", "reject"],
+  "organization-read": ["accept", "reject"],
+  "organization-get-request": ["accept", "reject"],
+  "organization-list-request": ["accept", "reject"],
+  "organization-list": ["accept", "reject"],
+  "membership-read": ["accept", "reject"],
+  "membership-get-request": ["accept", "reject"],
+  "membership-list-request": ["accept", "reject"],
+  "membership-list": ["accept", "reject"],
+  "grant-read": ["accept", "reject"],
+  "grant-get-request": ["accept", "reject"],
+  "grant-list-request": ["accept", "reject"],
+  "grant-list": ["accept", "reject"],
   "oauth-clients": ["accept", "reject"],
   "oauth-authorization-server": ["accept", "reject"],
 };
@@ -228,6 +245,55 @@ const NOT_IN_THE_VOCABULARY = [
   "",
   "revoked because bob@example.test leaked it",
 ];
+// The audit-event.v1 attribute members, written by hand on purpose: they are the
+// producer allowlist (internal/audit/allowlist.go) plus the members no producer
+// writes. Widening the schema, the allowlist and the Go parity test together
+// must also need a deliberate edit here.
+const APPROVED_AUDIT_ATTRIBUTE_KEYS = [
+  "action",
+  "action_key",
+  "actions",
+  "aggregate_revision",
+  "aggregate_type",
+  "amr",
+  "assertion_key_id",
+  "audience",
+  "binding_disabled",
+  "binding_id",
+  "caller_principal_id",
+  "changed_fields",
+  "client_class",
+  "credential_class",
+  "credential_id",
+  "decision_id",
+  "decision_reason_code",
+  "jti",
+  "key_id",
+  "new_role",
+  "new_status",
+  "policy_revision",
+  "previous_role",
+  "previous_status",
+  "principal_enabled",
+  "principal_id",
+  "provider",
+  "purged_email_verification_tokens",
+  "purged_password_reset_tokens",
+  "reason_code",
+  "related_key_id",
+  "resource_id",
+  "resource_kind",
+  "resource_type",
+  "revision",
+  "rotation_refusal",
+  "rotation_verb",
+  "run_id",
+  "source",
+  "target_id",
+  "target_kind",
+  "workload_jti",
+];
+
 const VOCABULARY_SURFACES = {
   "credential-entry": {
     list: "revoked_reason",
@@ -672,6 +738,12 @@ for (const surface of surfaces) {
       if (JSON.stringify([...(node?.enum ?? [])].sort()) !== JSON.stringify([...values].sort())) {
         fail(`${surface}: the schema enum differs from the ${vocabulary.list} vocabulary`);
       }
+    }
+  }
+  if (surface === "audit-event") {
+    const members = Object.keys(readJSON(schemaPath).properties?.attributes?.properties ?? {});
+    if (JSON.stringify([...members].sort()) !== JSON.stringify([...APPROVED_AUDIT_ATTRIBUTE_KEYS].sort())) {
+      fail(`${surface}: the schema attribute members differ from the approved attribute key list in run.mjs`);
     }
   }
   const sweepPath = path.join(v1, "sweeps", `${surface}.property-sweep.json`);

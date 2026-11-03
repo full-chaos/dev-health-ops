@@ -11,6 +11,7 @@ lifecycle: active
 
 - [Query the GraphQL API](graphql.md)
 - [Authenticate API clients](authentication.md)
+- [Verify access tokens in a Go service](verify-access-tokens-go.md)
 - [Automate supported workflows](automation.md)
 
 Task guides explain the supported interaction. Exact schema, fields, errors, pagination, limits, and compatibility live under [Reference](../../reference/api/index.md).

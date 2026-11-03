@@ -4,7 +4,7 @@
     "title": "Dev Health Auth Control Plane v1",
     "version": "1.0.0",
     "summary": "Wire contract for the Go Auth Control Plane service.",
-    "description": "OpenAPI 3.1 description of the Auth Control Plane v1 wire surface.\n\nWHY 3.1 AND NOT 3.0: OpenAPI 3.1 uses JSON Schema draft 2020-12 as its schema dialect directly, so the `$ref`s below point at the SAME schema files the Go, Python and TypeScript validators read. OpenAPI 3.0 uses a modified subset of draft-04 and would have required a second, translated copy of every schema -- and two copies of one contract is the drift class the cross-language golden fixtures exist to catch.\n\nWHY JSON AND NOT YAML: this document is validated by three runtimes. JSON needs no parser beyond the one each already has; YAML would add a parser dependency to the Go and TypeScript sides purely for the sake of convention, and a document that is harder to check is not a better contract.\n\nPATHS: the four session routes auth-service mounts when its session secrets are set (CHAOS-10228): POST /v1/token/refresh, GET /v1/sessions/current, POST /v1/sessions/revoke and POST /v1/sessions/revoke-all. With neither secret set the service mounts only the retryable 503 stubs of the refresh and logout routes of go-api, the well-known routes when a token issuer URL is set and the workload exchange when it is on, and answers 404 on every other path. Each path has a row in contracts/auth/v1/endpoint-profiles.auth-service.json; the paths of later routes land with those routes."
+    "description": "OpenAPI 3.1 description of the Auth Control Plane v1 wire surface.\n\nWHY 3.1 AND NOT 3.0: OpenAPI 3.1 uses JSON Schema draft 2020-12 as its schema dialect directly, so the `$ref`s below point at the SAME schema files the Go, Python and TypeScript validators read. OpenAPI 3.0 uses a modified subset of draft-04 and would have required a second, translated copy of every schema -- and two copies of one contract is the drift class the cross-language golden fixtures exist to catch.\n\nWHY JSON AND NOT YAML: this document is validated by three runtimes. JSON needs no parser beyond the one each already has; YAML would add a parser dependency to the Go and TypeScript sides purely for the sake of convention, and a document that is harder to check is not a better contract.\n\nPATHS: the four session routes auth-service mounts when its session secrets are set (CHAOS-10228): POST /v1/token/refresh, GET /v1/sessions/current, POST /v1/sessions/revoke and POST /v1/sessions/revoke-all. With neither secret set the service mounts only the retryable 503 stubs of the refresh and logout routes of go-api, the well-known routes when a token issuer URL is set and the workload exchange when it is on, and answers 404 on every other path. Each path has a row in contracts/auth/v1/endpoint-profiles.auth-service.json; POST /v1/authorize and POST /v1/authorize:batch, the policy decision point, are served when AUTH_AUTHORIZE_CALLER_SUBJECTS and a token issuer URL are set; the paths of later routes land with those routes."
   },
   "paths": {
     "/v1/token/refresh": {
@@ -614,6 +614,188 @@
         "description": "Removes an identity of the bearer's own principal only (404 for any other id); the last sign-in method is never removed (409). A sign-in older than the freshness window is refused (403)."
       }
     },
+    "/v1/authorize": {
+      "post": {
+        "operationId": "authorize",
+        "summary": "Decide one authorization request for a user principal",
+        "description": "A policy-enforcement point asks whether the principal named by principal_reference may take an action on a resource. The answer is an authorization_decision.v1, allow or deny. The reason_code is for the policy-enforcement point and is not to be echoed to an end user. Every state read of the call runs in one read-only transaction.",
+        "security": [
+          {
+            "workloadToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One authorization_decision.v1.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or a body that is not exactly one request (or one batch), the route's own error.v1 refusal with status 400 and reason malformed (D6643). The body is one of the two, never both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1: invalid_credentials when the caller's workload token is refused (answered before any body byte is read), principal_reference_invalid when the principal_reference token names no live session of its principal; the two codes differ so a policy-enforcement point can tell its own token failing from the user's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the route's limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store, clock or key set failure (retry_after_seconds); the whole call fails, never a per-item deny and never an allow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/authorize:batch": {
+      "post": {
+        "operationId": "authorizeBatch",
+        "summary": "Decide up to 100 authorization requests in one call",
+        "description": "As authorize, for up to 100 requests. Each request is decided apart: one deny never changes another decision. The answer holds one decision per request index. A refused principal_reference or a state failure on any request fails the whole call.",
+        "security": [
+          {
+            "workloadToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One authorization_batch_response.v1, with one decision per request index.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationBatchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or a body that is not exactly one request (or one batch), the route's own error.v1 refusal with status 400 and reason malformed (D6643). The body is one of the two, never both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1: invalid_credentials when the caller's workload token is refused (answered before any body byte is read), principal_reference_invalid when the principal_reference token names no live session of its principal; the two codes differ so a policy-enforcement point can tell its own token failing from the user's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the route's limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store, clock or key set failure (retry_after_seconds); the whole call fails, never a per-item deny and never an allow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/.well-known/jwks.json": {
       "get": {
         "operationId": "getJwks",
@@ -839,6 +1021,12 @@
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "The HS256 ops access token auth-service mints, with a sid claim naming the session."
+      },
+      "workloadToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "The workload token (JOSE typ workload+jwt, audience auth-service) of a policy-enforcement point whose subject is listed in AUTH_AUTHORIZE_CALLER_SUBJECTS."
       }
     },
     "schemas": {
@@ -847,6 +1035,9 @@
       },
       "WorkloadToken": {
         "$ref": "../jsonschema/workload-token.v1.schema.json"
+      },
+      "ServiceAccountToken": {
+        "$ref": "../jsonschema/service-account-token.v1.schema.json"
       },
       "AuditEvent": {
         "$ref": "../jsonschema/audit-event.v1.schema.json"
@@ -946,6 +1137,54 @@
       },
       "InviteAcceptRequest": {
         "$ref": "../jsonschema/invite-accept-request.v1.schema.json"
+      },
+      "PrincipalRead": {
+        "$ref": "../jsonschema/principal-read.v1.schema.json"
+      },
+      "PrincipalGetRequest": {
+        "$ref": "../jsonschema/principal-get-request.v1.schema.json"
+      },
+      "PrincipalListRequest": {
+        "$ref": "../jsonschema/principal-list-request.v1.schema.json"
+      },
+      "PrincipalList": {
+        "$ref": "../jsonschema/principal-list.v1.schema.json"
+      },
+      "OrganizationRead": {
+        "$ref": "../jsonschema/organization-read.v1.schema.json"
+      },
+      "OrganizationGetRequest": {
+        "$ref": "../jsonschema/organization-get-request.v1.schema.json"
+      },
+      "OrganizationListRequest": {
+        "$ref": "../jsonschema/organization-list-request.v1.schema.json"
+      },
+      "OrganizationList": {
+        "$ref": "../jsonschema/organization-list.v1.schema.json"
+      },
+      "MembershipRead": {
+        "$ref": "../jsonschema/membership-read.v1.schema.json"
+      },
+      "MembershipGetRequest": {
+        "$ref": "../jsonschema/membership-get-request.v1.schema.json"
+      },
+      "MembershipListRequest": {
+        "$ref": "../jsonschema/membership-list-request.v1.schema.json"
+      },
+      "MembershipList": {
+        "$ref": "../jsonschema/membership-list.v1.schema.json"
+      },
+      "GrantRead": {
+        "$ref": "../jsonschema/grant-read.v1.schema.json"
+      },
+      "GrantGetRequest": {
+        "$ref": "../jsonschema/grant-get-request.v1.schema.json"
+      },
+      "GrantListRequest": {
+        "$ref": "../jsonschema/grant-list-request.v1.schema.json"
+      },
+      "GrantList": {
+        "$ref": "../jsonschema/grant-list.v1.schema.json"
       }
     }
   }

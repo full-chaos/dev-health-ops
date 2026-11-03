@@ -30,7 +30,7 @@ func TestReapSelectionIsServedByAnIndexWithoutASort(t *testing.T) {
 	}
 
 	table := authschema.Quote(env.schema) + ".auth_outbox_events"
-	rows, err := env.pool.Query(ctx, `EXPLAIN `+reapSelection(table), time.Now().Add(-7*24*time.Hour).UTC(), 1000)
+	rows, err := env.pool.Query(ctx, `EXPLAIN `+reapSelection(table, authschema.Quote(env.schema)+".projection_cursor"), time.Now().Add(-7*24*time.Hour).UTC(), 1000)
 	if err != nil {
 		t.Fatalf("explain: %v", err)
 	}

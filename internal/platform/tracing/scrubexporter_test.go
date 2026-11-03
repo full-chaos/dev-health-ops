@@ -374,3 +374,99 @@ func TestSpanPlaceholderKeyIsTheSharedPlaceholderName(t *testing.T) {
 		t.Errorf("span placeholder key %q differs from the shared placeholder name %q", placeholderKey, logging.RedactedKeyName)
 	}
 }
+
+func TestAnInputAttributeNamedLikeThePlaceholderIsHidden(t *testing.T) {
+	const marker = "input-placeholder-marker"
+	credentialKey := sentinelToken() + "k"
+	input := func() []attribute.KeyValue {
+		return []attribute.KeyValue{
+			attribute.String(placeholderKey, marker),
+			attribute.String(credentialKey, "first"),
+			attribute.String("outcome", "ok"),
+			attribute.String(credentialKey+"2", "last"),
+		}
+	}
+	count := func(kvs []attribute.KeyValue) (placeholders int) {
+		for _, kv := range kvs {
+			if string(kv.Key) != placeholderKey {
+				continue
+			}
+			placeholders++
+			if kv.Value.AsString() != hidden {
+				t.Errorf("placeholder entry holds %q, want %q", kv.Value.AsString(), hidden)
+			}
+		}
+		return placeholders
+	}
+	check := func(t *testing.T, exporter *tracetest.InMemoryExporter, attrsOf func(tracetest.SpanStub) []attribute.KeyValue, wantOne bool) {
+		t.Helper()
+		spans := exporter.GetSpans()
+		if len(spans) == 0 {
+			t.Fatal("no span was exported")
+		}
+		if text := exportedText(spans); strings.Contains(text, marker) {
+			t.Errorf("the value of an input attribute named %q was exported:\n%s", placeholderKey, strings.ReplaceAll(text, "\x00", " | "))
+		}
+		var got []attribute.KeyValue
+		for _, span := range spans {
+			got = append(got, attrsOf(span)...)
+		}
+		if n := count(got); wantOne && n != 1 {
+			t.Errorf("exported %d placeholder entries, want exactly 1: %v", n, got)
+		}
+	}
+
+	t.Run("span, event and link through the production provider", func(t *testing.T) {
+		provider, exporter := newScrubbedProvider(t, "svc")
+		tracer := provider.Tracer("t")
+		_, linked := tracer.Start(context.Background(), "linked")
+		linked.End()
+		_, span := tracer.Start(context.Background(), "op",
+			trace.WithAttributes(input()...),
+			trace.WithLinks(trace.Link{SpanContext: linked.SpanContext(), Attributes: input()}))
+		span.AddEvent("ev", trace.WithAttributes(input()...))
+		span.End()
+		if err := provider.ForceFlush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		spans := exporter.GetSpans()
+		for _, span := range spans {
+			if span.Name != "op" {
+				continue
+			}
+			if n := count(span.Attributes); n != 1 {
+				t.Errorf("span: %d placeholder entries, want 1: %v", n, span.Attributes)
+			}
+			if len(span.Events) != 1 || count(span.Events[0].Attributes) != 1 {
+				t.Errorf("event: want one event with one placeholder entry: %v", span.Events)
+			}
+			if len(span.Links) != 1 || count(span.Links[0].Attributes) != 1 {
+				t.Errorf("link: want one link with one placeholder entry: %v", span.Links)
+			}
+		}
+		check(t, exporter, func(s tracetest.SpanStub) []attribute.KeyValue { return s.Attributes }, false)
+	})
+
+	// The production provider fixes its own resource and scope, so these two cells build the provider around the
+	// production exporter wrapper with the attribute placed in the resource and the scope.
+	t.Run("resource", func(t *testing.T) {
+		exporter := tracetest.NewInMemoryExporter()
+		provider := sdktrace.NewTracerProvider(
+			sdktrace.WithResource(resource.NewWithAttributes("", append(input(), attribute.String("service.name", "svc"))...)),
+			sdktrace.WithSyncer(scrubWrap(exporter)),
+		)
+		t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+		_, span := provider.Tracer("t").Start(context.Background(), "op")
+		span.End()
+		check(t, exporter, func(s tracetest.SpanStub) []attribute.KeyValue { return s.Resource.Attributes() }, true)
+	})
+
+	t.Run("scope", func(t *testing.T) {
+		exporter := tracetest.NewInMemoryExporter()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(scrubWrap(exporter)))
+		t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+		_, span := provider.Tracer("t", trace.WithInstrumentationAttributes(input()...)).Start(context.Background(), "op")
+		span.End()
+		check(t, exporter, func(s tracetest.SpanStub) []attribute.KeyValue { return s.InstrumentationScope.Attributes.ToSlice() }, true)
+	})
+}

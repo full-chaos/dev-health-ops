@@ -337,9 +337,15 @@ func (h credentialHandlers) goAPIBearerRefusal(w http.ResponseWriter, r *http.Re
 		result = "error"
 	}
 	h.compat.rec.record(r.Context(), operation, result, answer.reason, err)
+	writeGoAPIBearerRefusal(w, r, answer, textChangeNotAllowed)
+}
+
+// writeGoAPIBearerRefusal writes go-api's guard answer to a refused bearer:
+// 401 with the guard's text, forbidden as the 403 text, 503 or 500.
+func writeGoAPIBearerRefusal(w http.ResponseWriter, r *http.Request, answer refusal, forbidden string) {
 	switch answer.status {
 	case http.StatusForbidden:
-		policy.WriteDetail(w, http.StatusForbidden, policy.ErrorDetail(textChangeNotAllowed), nil)
+		policy.WriteDetail(w, http.StatusForbidden, policy.ErrorDetail(forbidden), nil)
 	case http.StatusUnauthorized:
 		text := "Invalid or expired token"
 		header := r.Header.Get("Authorization")

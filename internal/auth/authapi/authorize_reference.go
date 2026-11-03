@@ -40,13 +40,29 @@ type PrincipalReferencesConfig struct {
 	Now  func() time.Time
 }
 
+// ReferenceKind is the kind of principal a verified reference names.
+type ReferenceKind uint8
+
+const (
+	// ReferenceUser is an end user's access token: its session must be live.
+	ReferenceUser ReferenceKind = iota
+	// ReferenceServiceAccount is a service-account token: it has no session;
+	// the key row it was exchanged for must be live.
+	ReferenceServiceAccount
+)
+
 // ReferencedPrincipal is the principal a verified reference names. It is
-// identity only: its session, user and memberships are current state the
-// caller still has to read.
+// identity only: its session or key, user and memberships are current state
+// the caller still has to read.
 type ReferencedPrincipal struct {
 	ID        uuid.UUID
+	Kind      ReferenceKind
 	SessionID string
-	TokenID   string
+	// CredentialID and OrgID are set for a service account only: the key row
+	// the token was exchanged for and the organization the token names.
+	CredentialID uuid.UUID
+	OrgID        string
+	TokenID      string
 }
 
 // NewPrincipalReferences validates cfg.

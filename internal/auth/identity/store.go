@@ -302,7 +302,7 @@ func storedLoginKey(email string) string {
 // errPrincipalExists ends a first projection whose principal row already
 // exists (an earlier or a concurrent projection); Project then compares and
 // updates instead.
-var errPrincipalExists = errors.New("identity: principal already projected")
+var errPrincipalExists error = concurrentProjection("identity: principal already projected")
 
 // insertProjection inserts the principal and user rows when the principal is
 // new, in one audit.Commit with one audit row (reason principal_projected)
@@ -347,7 +347,8 @@ VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END)`
 			EventType: "auth.principal.projected", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
 			Attributes: map[string]any{"reason_code": "principal_projected", "target_kind": "principal", "target_id": principal},
 		},
-		Events: events,
+		Events:   events,
+		Refusals: []error{errPrincipalExists},
 	})
 	switch {
 	case err == nil:

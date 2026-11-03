@@ -597,8 +597,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
 	case errors.Is(err, ErrIdentityAmbiguous):
-		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
-			"More than one account carries this sign-in. Contact your organization administrator.")
+		return Login{}, ambiguousIdentity()
 	case errors.Is(err, ErrNotOrgMember):
 		return Login{}, notMember(row)
 	case errors.Is(err, ErrIdentityNotFound):
@@ -798,6 +797,11 @@ func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message 
 		return internal(ReasonStoreUnavailable, err)
 	}
 	return nil
+}
+
+func ambiguousIdentity() *Error {
+	return deny(http.StatusConflict, ReasonIdentityConflict,
+		"More than one account carries this sign-in. Contact your organization administrator.")
 }
 
 func conflict() *Error {

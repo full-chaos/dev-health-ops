@@ -37,6 +37,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole/rule
 internal/auth/publicaudit
 internal/auth/requestid
+internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
 internal/chmigrate
@@ -92,6 +93,7 @@ internal/testsupport/moduleroot
 internal/testsupport/pgseed
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
+~contracts/auth/v1/jsonschema
 ~internal/auth/passwordpolicy/data
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql

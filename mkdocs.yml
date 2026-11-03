@@ -176,6 +176,7 @@ nav:
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
+          - Auth signing-key rotation and rollback: operate/runbooks/auth-signing-key-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
           - Auth platform roles flip and rollback: operate/runbooks/auth-platform-roles-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md
@@ -234,6 +235,7 @@ nav:
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
       - Auth workload registry: reference/auth/workload-registry.md
+      - Auth workload audit: reference/auth/workload-audit.md
       - Auth identity linking: reference/auth/identity-linking.md
       - Auth delegated sessions: reference/auth/delegated-sessions.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md

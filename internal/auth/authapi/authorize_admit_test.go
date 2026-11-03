@@ -57,7 +57,7 @@ func newAdmitFixture(t *testing.T) *admitFixture {
 	counting := &countingVerifier{inner: callers.verifier}
 	callers.verifier = counting
 	routes, err := AuthorizeRoutes(AuthorizeDeps{
-		Callers: callers, References: h.references(), State: h.state, Evaluator: authorization.NewEvaluator(),
+		Callers: callers, References: h.references(), State: h.state, Evaluator: authorization.NewEvaluator(), Audit: h.audit.write,
 		ProfileRows: authorizeProfileDoc(t, PatternAuthorize, PatternAuthorizeBatch),
 	})
 	if err != nil {

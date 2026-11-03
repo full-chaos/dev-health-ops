@@ -445,6 +445,7 @@ func configureWithRoutes(
 	// The error is logged here, unredacted-by-category, so an operator can
 	// diagnose without shell access while the response stays detail-free:
 	// the same split cmd/query-api landed for CHAOS-4724.
+	var schemaChecked atomic.Bool
 	if err := registry.RegisterRequired(CheckPostgres, func(ctx context.Context) error {
 		if probeErr := store.Probe(ctx); probeErr != nil {
 			logger.ErrorContext(
@@ -452,6 +453,9 @@ func configureWithRoutes(
 				"check", CheckPostgres, "reason", authstore.ReasonOf(probeErr),
 			)
 			return probeErr
+		}
+		if schemaChecked.CompareAndSwap(false, true) {
+			logSchemaChecked(ctx, logger, cfg.DatabaseSchema)
 		}
 		return nil
 	}); err != nil {
@@ -574,12 +578,27 @@ func configureWithRoutes(
 		return nil, err
 	}
 	routes = append(routes, workloadRoutes...)
-	decisionRoutes, err := authorizeRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	// The revision feed is built before the authorize routes: with it on, they ask its decision cache. The loop is built
+	// with no sink unless AUTH_REVISION_FEED=on (default off): publishing then stays off (a sink-less publisher would mark
+	// events delivered that nobody received) and the reaper runs. On, the sink feeds the revision feed (revisionfeed), and
+	// the subscriber component runs beside the loop.
+	feed, err := revisionFeed(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	decisionRoutes, err := authorizeRoutes(cfg, logger, store.Pool(), schemaID, signer, feed.decisions)
 	if err != nil {
 		closeStore()
 		return nil, err
 	}
 	routes = append(routes, decisionRoutes...)
+	acrRoutes, err := acrEventRoutes(cfg, logger, store.Pool(), schemaID, signer)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	routes = append(routes, acrRoutes...)
 	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{
 		Keys: signer, IssuerURL: cfg.TokenIssuerURL, Logger: logger,
 	})...)
@@ -592,17 +611,20 @@ func configureWithRoutes(
 		return nil, err
 	}
 
-	// The loop is built with no sink unless AUTH_REVISION_FEED=on (default off): publishing then stays off (a
-	// sink-less publisher would mark events delivered that nobody received) and the reaper runs. On, the sink feeds the
-	// revision feed (revisionfeed), and the subscriber component runs beside the loop.
-	feedPublisher, feedComponents, err := revisionFeed(cfg, logger, store.Pool(), schemaID)
+	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
+	loopConfig.Logger = logger
+	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), feed.publisher, loopConfig)
 	if err != nil {
 		closeStore()
 		return nil, err
 	}
-	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
-	loopConfig.Logger = logger
-	outboxLoop, err := audit.NewOutboxLoop(store.Pool(), feedPublisher, loopConfig)
+
+	projectOrg, err := organizationProjectorFor(cfg, logger, store.Pool(), schemaID)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
+	projectionComponents, err := pushProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
 	if err != nil {
 		closeStore()
 		return nil, err
@@ -611,7 +633,8 @@ func configureWithRoutes(
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
-	components = append(components, feedComponents...)
+	components = append(components, feed.components...)
+	components = append(components, projectionComponents...)
 	return append(components,
 		outboxLoop,
 		announcedListener{listener: operatorHTTP, logger: logger},

@@ -472,13 +472,30 @@ spec:
   {{- if or (eq (include "dev-health.authProxyOn" $) "true") (and $.Values.goApi.enabled (eq (include "dev-health.authWorkloadExchange" $) "true")) }}
   {{- $apiFrom = append $apiFrom (dict "matchLabels" (include "dev-health.componentSelectorLabels" (dict "component" "go-api" "context" $) | fromYaml)) }}
   {{- end }}
-  {{- if or $apiFrom $a.networkPolicy.metricsFrom }}
+  {{- /* CHAOS-12359: the ingress controller reaches the API port only while a host routes the issuer's two documents to auth-service (ingress.hosts, service: auth-service). ingress-nginx passes the client address alone in X-Forwarded-For (prod/ingress-nginx.values.yaml, replace mode), so the pod address in authService.trustedProxies is honest for it. */}}
+  {{- $wellKnown := eq (include "dev-health.authWellKnownRouted" $) "true" }}
+  {{- if and $wellKnown (or (not (toString $.Values.networkPolicy.ingressControllerNamespace)) (eq (toString $.Values.networkPolicy.ingressControllerNamespace) (include "dev-health.namespace" $))) }}
+  {{- fail "networkPolicy.ingressControllerNamespace must name the ingress controller's namespace, not this release's, while a host routes to auth-service" }}
+  {{- end }}
+  {{- if and $wellKnown (not (and (kindIs "map" $a.networkPolicy.ingressControllerPodLabels) $a.networkPolicy.ingressControllerPodLabels)) }}
+  {{- fail "authService.networkPolicy.ingressControllerPodLabels must not be empty while a host routes to auth-service: with no pod labels every pod of the controller namespace would reach the API port" }}
+  {{- end }}
+  {{- if or $apiFrom $a.networkPolicy.metricsFrom $wellKnown }}
   ingress:
-    {{- with $apiFrom }}
+    {{- /* One rule on the API port carries every peer (the deploy egress proof plan reads at most one). */}}
+    {{- if or $apiFrom $wellKnown }}
     - from:
-        {{- range . }}
+        {{- range $apiFrom }}
         - podSelector:
             {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- if $wellKnown }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.ingressControllerNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $a.networkPolicy.ingressControllerPodLabels | nindent 14 }}
         {{- end }}
       ports:
         - protocol: TCP

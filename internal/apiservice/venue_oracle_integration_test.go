@@ -209,6 +209,21 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		t.Errorf("sent telemetry reports are empty")
 	}
 	fmt.Fprintf(&receipt, "telemetry reports sent: %s\n", venueoracle.Mark(pySent == goSent && pySent != ""))
+	// The live intake path: every recorded pt: request that Go accepts is retired, so one Go-only
+	// request proves an accepted event (202, items_received 1) and its Valkey stream entry.
+	acceptedBody := venueoracle.B64(acceptedTelemetryEvent)
+	accepted := venueoracle.Do(t, base, venueoracle.Request{Name: "pt: accepted bounded event", Method: http.MethodPost, Path: productTelemetryEventsPath,
+		Headers: map[string]string{"Content-Type": "application/json"}, Body: acceptedBody})
+	problem := acceptedTelemetryProblem(accepted.Status, accepted.Body)
+	if problem != "" {
+		t.Errorf("pt: accepted bounded event: %s", problem)
+	}
+	acceptedEntries := newStreamEntries(parseStreamEntries(goStream), parseStreamEntries(venueoracle.StreamEntries(t, ctx, venue.ValkeyURI, "product-telemetry:*", "ingestion_id")))
+	entryProblem := acceptedEntryProblem(acceptedEntries)
+	if entryProblem != "" {
+		t.Errorf("pt: accepted bounded event stream entry: %s", entryProblem)
+	}
+	fmt.Fprintf(&receipt, "%-58s go-only     go=%d %s\n", "pt: accepted bounded event", accepted.Status, venueoracle.Mark(problem == "" && entryProblem == ""))
 	// The fixture's qa and design teams have two holders, so their drift and
 	// member happy paths answer 409; one team with one holder and a project
 	// key pins those paths, Go-only, after every Python-compared request and

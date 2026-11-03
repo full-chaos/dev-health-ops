@@ -51,8 +51,7 @@ rolled-back commit leaves no gap. A mutation that is not a provisioning event
 row only. The wire contract already admits the revocation events that will
 replace the session and signing-key `OffStream` reasons (`session.revoked`,
 `principal.sessions_revoked`, `organization.sessions_revoked`,
-`signing_key.compromised`, CHAOS-11816); no producer writes them yet, so the
-code above is unchanged until the producer change lands. The session aggregate is one-shot (revision 1, terminal): `Commit` bumps no revision row for it and writes its outbox row with `ON CONFLICT (idempotency_key) DO NOTHING`; the revision feed sink publishes it with a script that writes no high-water field, and the consumer evicts without a mark or a cursor entry, so a session event adds no state to Valkey, to a replica or to the restore floors.
+`signing_key.compromised`, CHAOS-11816); the session and signing-key mutations queue them from inside `Apply` with `TxOps.AddEvent` (they keep the `OffStream` reason for the events they declare statically: none), and `Commit` writes the queued events with the declared ones in the same transaction. The session aggregate is one-shot (revision 1, terminal): `Commit` bumps no revision row for it and writes its outbox row with `ON CONFLICT (idempotency_key) DO NOTHING`; the revision feed sink publishes it with a script that writes no high-water field, and the consumer evicts without a mark or a cursor entry, so a session event adds no state to Valkey, to a replica or to the restore floors.
 
 The guarantee is held by PostgreSQL for code that does not set out to defeat
 it. Migration `0006` puts a trigger on the audit and outbox tables and on the
@@ -144,8 +143,16 @@ channel.
   event asks for a catch-up (the floor applies it again), a catch-up or a failed
   `InvalidateAll` of a (re)subscribe retries with the backoff, and
   `subscription_up` stays 0 until the `InvalidateAll` and the read succeeded.
-  No decision cache exists yet (5.8), so the invalidator is a no-op and the
-  consumer keeps its watermarks and metrics. Metrics:
+  Readiness is per confirmation: every confirmed subscribe (also a client
+  reconnect inside one subscription) sets `subscription_up` to 0, and only the
+  catch-up of the latest confirmation sets it to 1 again.
+  The invalidator is the decision cache (`internal/auth/decisioncache`) that
+  `POST /v1/authorize` and `:batch` ask while the subscription is ready: an
+  allow is stored with the aggregates and revisions its decision read, and an
+  event of one of them evicts it. With the feed off there is no cache. Metrics
+  of the cache: `devhealth_auth_decision_cache_lookups_total{result=hit|miss|bypass}`,
+  `devhealth_auth_decision_cache_puts_total{result}` (the closed `decisioncache.PutResults` set)
+  and `devhealth_auth_decision_cache_entries`. Metrics of the feed:
   `devhealth_auth_revision_feed_events_total{disposition=apply|ignore|gap|dropped|invalidate_failed}` (`dropped`: a live message or a catch-up floor refused before the cursor, because it is malformed or its revision is outside 1..2^53-1; the cursor never moves on it; `invalidate_failed`: the invalidation returned an error, the event is not applied and is retried),
   `devhealth_auth_revision_feed_resync_total{cause=gap|resubscribe}` and
   `devhealth_auth_revision_feed_subscription_up` (1 while subscribed and caught up). No

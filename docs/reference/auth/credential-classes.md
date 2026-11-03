@@ -94,6 +94,7 @@ Design docs (read the guardrails at minimum):
 | `workload_token` | optional_feature | workload | |
 | `workload_bootstrap_credential` | optional_feature | workload | |
 | `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
+| `service_account_token` | **unconsumed** | service_account | contract only; nothing mints or verifies it yet |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -135,6 +136,12 @@ have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor, the request id and the calling
 credential (`credential_id` here, or `caller_principal_id` and `workload_jti`
 for the go-api workload token).
+
+Four read scopes name the versioned read API (CHAOS-10995; contracts only, no
+route serves them yet): `principals:read`, `organizations:read`,
+`memberships:read` and `grants:read`. A read holds its read scope and a write
+scope never satisfies one (`contracts.ReadScopeAllows`). A mint verb that issues
+them and the routes that check them come with the routes.
 
 **`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
@@ -239,6 +246,21 @@ session issue route refuse its prefix before any validator. The registry
 (`auth.credential_registry`) keeps the SHA-256 digest of the whole value, never
 the value. Each key change is one `service_account.key_changed` provisioning
 event that names the credential row id.
+
+**`service_account_token` (CHAOS-12362).** The EdDSA token the exchange of a
+service account key will issue. Its wire contract is `service-account-token.v1`:
+header {alg EdDSA, typ `sa+jwt`, kid}; claims iss, aud (exactly `dev-health-api`),
+sub (the account), principal_type `service_account`, org_id (the account's
+organization), cid (the key row id), jti, iat, nbf, exp; no `sid`, no `scope`,
+no audience list; lifetime at most 300 seconds and never past the key's expiry
+(`ServiceAccountTokenLifetime`). Its typ separates it from the user access
+token (`at+jwt`) and the workload token (`workload+jwt`). Only the contract and
+its signed golden corpus (`golden/service-account-token`) exist: nothing mints
+it, no verifier reads it and no endpoint row accepts it, so the class is
+`unconsumed`. The key itself stays the exchange's subject and is never a bearer.
+Its issue will write the append-only audit event
+`auth.service_account.token_issued`, naming the credential row id, never the
+key value.
 
 **`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
 first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as

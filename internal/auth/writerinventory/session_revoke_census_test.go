@@ -13,10 +13,10 @@ import (
 // (rulings on CHAOS-10987). A base session's end must reach its delegated
 // children, so a new site needs a ruling and a place here.
 var sessionRevokeSites = map[string]string{
-	"internal/auth/session/store.go":               "Store.endSessions: ends the delegated children of ids; delegationend.Record ends the public rows",
-	"internal/auth/keyrotation/store.go":           "Operator.revokeSessions: sessionsToRevoke selects the children; the public row stays open to its expires_at (KeepPublicRows)",
-	"internal/auth/session/unpinned.go":            "RevokeUnpinned: no child possible, a live base has a pin (sessions_pin_present); no public row",
-	"internal/auth/delegationend/delegationend.go": "End: child rows only; each caller's delegationend.Record ends the public rows",
+	"internal/auth/session/store.go":               "Store.endSessions: ends the delegated children of ids; delegationend.Record ends the public rows; queues session.revoked per session (scope events from the bulk callers)",
+	"internal/auth/keyrotation/store.go":           "Operator.revokeSessions: sessionsToRevoke selects the children; the public row stays open to its expires_at (KeepPublicRows); the compromise queues signing_key.compromised",
+	"internal/auth/session/unpinned.go":            "RevokeUnpinned: no child possible, a live base has a pin (sessions_pin_present); no public row; OFF-STREAM by ruling (acp answers-11816-2 Q-C): a one-off backfill, a second run returns 0, its audit row stands",
+	"internal/auth/delegationend/delegationend.go": "End: child rows only; each caller's delegationend.Record ends the public rows and queues session.revoked per delegated row",
 }
 
 // delegationEnders call delegationend.End or lock delegated rows to end them.
@@ -32,6 +32,26 @@ var delegationEnders = []string{
 // principalDisableSites write auth.principals.disabled_at. A disabled user's
 // delegated sessions end there; a workload or a service account is never the
 // actor or the target of a delegation.
+// offStreamSessionRevokeSites are the sessionRevokeSites that tell the stream nothing, by ruling.
+var offStreamSessionRevokeSites = map[string]bool{"internal/auth/session/unpinned.go": true}
+
+// TestEverySessionRevokeSiteTellsTheStream: a site that writes sessions.revoked_at queues a revocation event (CHAOS-11816),
+// except the one site ruled off-stream. The scan is of source text, so it proves a site names the producer, not that every
+// branch reaches it; the integration cells prove the branches.
+func TestEverySessionRevokeSiteTellsTheStream(t *testing.T) {
+	root := repoRoot(t)
+	for file := range sessionRevokeSites {
+		raw, err := os.ReadFile(filepath.Join(root, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tells := strings.Contains(string(raw), "sessionevent.") || strings.Contains(string(raw), "AddEvent(")
+		if tells == offStreamSessionRevokeSites[file] {
+			t.Errorf("%s: names the revocation producer = %v, off-stream by ruling = %v", file, tells, offStreamSessionRevokeSites[file])
+		}
+	}
+}
+
 var principalDisableSites = map[string]string{
 	"internal/auth/identity/store.go":       "the projection ends the actor's delegated sessions",
 	"internal/auth/serviceaccount/store.go": "exempt: kind service_account only (store.go:330); Start refuses a non-user actor and target",

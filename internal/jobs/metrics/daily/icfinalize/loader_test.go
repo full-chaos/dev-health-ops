@@ -131,3 +131,22 @@ func TestTheWorkItemArmReadsTheTeamSplit(t *testing.T) {
 		t.Error("wip_max_30d is not the largest daily sum")
 	}
 }
+
+// A day holds a cycle only when it holds a merged pull request (CHAOS-12562):
+// the git arm gives the other days no cycle, and the 30-day median of no cycle
+// is NULL, never 0.
+func TestTheGitArmGivesADayWithNoMergedPullRequestNoCycle(t *testing.T) {
+	const cycle = `if(toInt64(u.delivery_units) - toInt64(u.work_items_completed) > 0,
+           CAST(u.cycle_p50_hours, 'Nullable(Float64)'), NULL) AS cycle_p50_hours`
+	if !strings.Contains(rollingStatsGitArmSQL, cycle) {
+		t.Errorf("the git arm does not leave a day with no merged pull request without a cycle")
+	}
+	if !strings.Contains(rollingStatsSQL, "median(cycle_p50_hours)     AS cycle_p50_30d_hours") {
+		t.Errorf("the 30-day cycle is not the median of the days that hold one")
+	}
+	for _, forbidden := range []string{"ifNull(median(", "cycle_p50_hours > 0", "u.prs_merged"} {
+		if strings.Contains(rollingStatsSQL, forbidden) {
+			t.Errorf("rollingStatsSQL contains %q", forbidden)
+		}
+	}
+}

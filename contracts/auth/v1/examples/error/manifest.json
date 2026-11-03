@@ -17,6 +17,10 @@
       "why": "State/lifecycle/idempotency conflict."
     },
     {
+      "file": "valid-400-malformed.json",
+      "why": "D6643: 400 is admitted for reason malformed ONLY (a body that is not exactly one request). The accepting side of the status-400 conditional; without it the enum value could be dropped and every reject fixture here would stay green."
+    },
+    {
       "file": "valid-429-with-retry.json",
       "why": "Transient by TRD s18, so retry_after_seconds is REQUIRED by the if/then rule. Positive control for the conditional."
     },
@@ -241,6 +245,18 @@
       "expect_keyword": "not",
       "file": "invalid-403-with-retry-after.json",
       "why": "Retry guidance on a non-transient status, caught by the `else` branch. Telling a caller to retry a 403 sends it into a loop that will fail identically forever."
+    },
+    {
+      "expect_instance_location": "/reason_code",
+      "expect_keyword": "const",
+      "file": "invalid-400-other-reason.json",
+      "why": "D6643: a 400 whose reason is not malformed. 400 is admitted for malformed only, so a route cannot widen it into a general-purpose client-error status; delete the 400 `then` clause and only this fixture goes green."
+    },
+    {
+      "expect_instance_location": "/",
+      "expect_keyword": "not",
+      "file": "invalid-400-with-retry-after.json",
+      "why": "Retry guidance on a 400. A malformed body fails identically forever, so 400 is non-transient and falls to the `else` branch like 401, 403, 404 and 409."
     },
     {
       "expect_instance_location": "/",

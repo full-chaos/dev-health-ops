@@ -1,0 +1,14 @@
+{
+  "id": "request-limit-100-allowed",
+  "kind": "request",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 100
+  },
+  "request_schema": "accept",
+  "parse": "accept",
+  "rule": null,
+  "why": "The cap is allowed."
+}

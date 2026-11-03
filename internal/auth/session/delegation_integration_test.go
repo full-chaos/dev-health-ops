@@ -154,6 +154,9 @@ func (d *delegationEnv) wantEnded(t *testing.T, ctx context.Context, row Record,
 	if got != 1 {
 		t.Fatalf("delegation_ended rows of %s = %d, want 1", row.ID, got)
 	}
+	if events := d.env.sessionEvents(t, ctx, row.ID); len(events) != 1 {
+		t.Fatalf("session.revoked events of the delegated row %s = %d, want 1", row.ID, len(events))
+	}
 }
 
 // refuseAudit makes the database refuse one audit event type, so a mutation
@@ -558,6 +561,22 @@ func TestDelegationEndsWithItsBase(t *testing.T) {
 				t.Fatalf("child reason = %q", got)
 			}
 			d.wantEnded(t, ctx, row, c)
+			// The scope the stream is told (CHAOS-11816): an organization end names the organization; a principal's end in ONE
+			// organization names the principal (there is no (principal, organization) shape, so a consumer evicts the
+			// principal's sessions in other organizations too: cache eviction only, the server still decides).
+			wantType, wantID := "principal", "prn_"+c.actor.String()
+			if name == "end_organization_in_tx" {
+				wantType, wantID = "organization", "org_"+baseOrg.String()
+			}
+			var scoped int
+			for _, r := range d.env.revocationRows(t, ctx) {
+				if r.aggregateType == wantType && r.aggregateID == wantID && r.eventType == wantType+".sessions_revoked" && r.reason == "org_ended" {
+					scoped++
+				}
+			}
+			if scoped != 1 {
+				t.Fatalf("%s.sessions_revoked (org_ended) events for %s = %d, want 1", wantType, wantID, scoped)
+			}
 		})
 	}
 }

@@ -63,7 +63,7 @@ func TestTheRollingReadLeavesOutRetractedKeys(t *testing.T) {
 	if _, listed := got["gone@example.com"]; listed || len(got) != 1 {
 		t.Errorf("stats = %v, want only mid@: gone@ holds only a retracted key", got)
 	}
-	if mid := got["mid@example.com"]; mid.ChurnLOC30d != 10 || mid.CycleP5030dHrs != 20 {
+	if mid := got["mid@example.com"]; mid.ChurnLOC30d != 10 || mid.CycleP5030dHrs == nil || *mid.CycleP5030dHrs != 20 {
 		t.Errorf("mid@ = %+v, want churn 10 and median cycle 20 over its two live keys", mid)
 	}
 }

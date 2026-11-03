@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -222,6 +223,7 @@ func TestAuditRowsPassTheAllowlistAndNameTheMembership(t *testing.T) {
 					t.Fatalf("new_role set on a verb that changes no role: %v", ev.Attributes)
 				}
 			}
+			auditwire.MustValidate(t, ev)
 			if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 				t.Fatalf("ValidateAttributes: %v", err)
 			}

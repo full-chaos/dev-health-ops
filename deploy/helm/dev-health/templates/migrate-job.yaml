@@ -238,6 +238,12 @@ spec:
             - name: AUTH_PROXY_SESSIONS
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            {{- /* go-api's AUTH_PLATFORM_ROLES_OWNED: the River step's api role grants on users follow it, no
+            is_superuser write (postgres.APIPostureFor). */}}
+            - name: AUTH_PLATFORM_ROLES_OWNED
+              value: "true"
+            {{- end }}
             {{- if $chCloud.enabled }}
             {{- /*
             CHAOS-10754 / CHAOS-11995: the Cloud login for the DDL this Job

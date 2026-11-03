@@ -473,6 +473,12 @@ spec:
             - name: AUTH_PROXY_SESSIONS
               value: "true"
             {{- end }}
+            {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
+            {{- /* go-api's AUTH_PLATFORM_ROLES_OWNED: the api role's users grants follow it, no is_superuser write
+            (postgres.APIPostureFor); the query-api session read carries the platform role read. */}}
+            - name: AUTH_PLATFORM_ROLES_OWNED
+              value: "true"
+            {{- end }}
           envFrom:
             - secretRef:
                 {{- if .Values.secrets.create }}

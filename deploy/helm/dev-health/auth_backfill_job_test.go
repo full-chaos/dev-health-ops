@@ -72,11 +72,10 @@ func setContainerEnv(doc map[string]any, name, value string) {
 }
 
 // ownedSwitchesAgree is the equality the render tests rely on: the service and
-// the Job carry byte-equal AUTH_USERS_OWNED and AUTH_ORGS_OWNED (both unset
-// counts as equal).
+// the Job carry byte-equal AUTH_USERS_OWNED (unset counts as equal).
 func ownedSwitchesAgree(t *testing.T, service, job map[string]any) error {
 	t.Helper()
-	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
+	for _, name := range []string{"AUTH_USERS_OWNED"} {
 		sv, sset := containerEnvValue(t, service, name)
 		jv, jset := containerEnvValue(t, job, name)
 		if sv != jv || sset != jset {
@@ -99,7 +98,7 @@ func TestAuthOrgsOwnedDefaultUnset(t *testing.T) {
 }
 
 // The owned switches come from authService.phase alone: auth-service and the Job agree in every rendered phase
-// (4 users owned included), and phase 5 (orgs owned) is refused until its own public-table writer leaf.
+// (4 users owned included), and phase 5 (orgs owned) is cancelled (D6651).
 func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 	for _, verb := range []string{"users-backfill", "orgs-backfill"} {
 		for _, phase := range []string{"1", "2", "3", "4"} {
@@ -120,7 +119,7 @@ func TestAuthOrgsOwnedOneKeyAllConsumers(t *testing.T) {
 		for _, phase := range []string{"5"} {
 			t.Run(verb+"/phase "+phase+" refused", func(t *testing.T) {
 				_, out, err := renderAuth(t, withSets(backfillOn, "authService.backfill.verb="+verb, "authService.phase="+phase)...)
-				if err == nil || !strings.Contains(out, "phase 5 (orgs owned) needs its own public-table writer leaf") {
+				if err == nil || !strings.Contains(out, orgsOwnedPhase5Msg) {
 					t.Fatalf("phase %s rendered: err=%v out=%.300s", phase, err, out)
 				}
 			})
@@ -138,9 +137,9 @@ func TestAuthOrgsOwnedEqualityFailsForEachConsumer(t *testing.T) {
 		name   string
 		mutate func(service, job map[string]any)
 	}{
-		{"N1 auth-service reads a literal", func(s, _ map[string]any) { setContainerEnv(s, "AUTH_ORGS_OWNED", "false") }},
-		{"N2 Job reads a literal", func(_, j map[string]any) { setContainerEnv(j, "AUTH_ORGS_OWNED", "false") }},
-		{"N3 Job reads a different key for users", func(_, j map[string]any) { setContainerEnv(j, "AUTH_USERS_OWNED", "true") }},
+		{"N1 auth-service reads a literal", func(s, _ map[string]any) { setContainerEnv(s, "AUTH_USERS_OWNED", "false") }},
+		{"N2 Job reads a literal", func(_, j map[string]any) { setContainerEnv(j, "AUTH_USERS_OWNED", "false") }},
+		{"N3 Job reads a different value", func(_, j map[string]any) { setContainerEnv(j, "AUTH_USERS_OWNED", "true") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

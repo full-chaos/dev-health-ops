@@ -147,3 +147,18 @@ func TestVerifyRoutedNeedsRouteAccess(t *testing.T) {
 		t.Fatalf("RouteAccess: err %v routed %v", err, v.Routed())
 	}
 }
+
+// TestRoutedAccessCarriesTheActor: query-api's adapter hands the act claim of
+// a delegated session's access token to policy, as go-api's does.
+func TestRoutedAccessCarriesTheActor(t *testing.T) {
+	user := headerToken(`{"alg":"EdDSA","typ":"at+jwt","kid":"k"}`)
+	actor := "prn_actor"
+	result, err := RoutedAccess(stubValidator(t, stubEdDSA{claims: &authverify.AccessClaims{Subject: "prn_x", SessionID: "ses_y", ActorSubject: &actor}}, nil)).Validate(context.Background(), "svc", "GET /r", user)
+	if err != nil || result.Claims == nil || result.Claims.Actor == nil || *result.Claims.Actor != actor {
+		t.Fatalf("result %+v err %v, want Actor %s", result, err, actor)
+	}
+	result, err = RoutedAccess(stubValidator(t, stubEdDSA{claims: &authverify.AccessClaims{Subject: "prn_x", SessionID: "ses_y"}}, nil)).Validate(context.Background(), "svc", "GET /r", user)
+	if err != nil || result.Claims == nil || result.Claims.Actor != nil {
+		t.Fatalf("result %+v err %v, want no Actor", result, err)
+	}
+}

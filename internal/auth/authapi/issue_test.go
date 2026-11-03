@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -20,11 +22,21 @@ type fakeServiceCredentials struct {
 	id      string
 	refusal servicecred.Refusal
 	err     error
+	mu      sync.Mutex
 	seen    []string
 }
 
+// checked is the tokens Check saw, copied under the lock.
+func (f *fakeServiceCredentials) checked() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.seen)
+}
+
 func (f *fakeServiceCredentials) Check(_ context.Context, token contracts.SecretString) (servicecred.Credential, servicecred.Refusal, error) {
+	f.mu.Lock()
 	f.seen = append(f.seen, token.Reveal())
+	f.mu.Unlock()
 	if f.err != nil {
 		return servicecred.Credential{}, "", f.err
 	}

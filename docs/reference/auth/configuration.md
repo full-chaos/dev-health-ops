@@ -51,6 +51,10 @@ and `/readyz` fails closed, naming the check. See the
 | `--public-max-in-flight` | `AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT` | `256` | 1 to 100000. In-flight cap of the key and discovery routes, apart from the shared cap of 64. |
 | `--public-rate-limit` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND` | `500` | 0.01 to 100000, per key or discovery route bucket. |
 | `--public-rate-limit-burst` | `AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST` | `1000` | 1 to 100000, per key or discovery route bucket. |
+| `--pdp-caller-rate-limit` | `AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND` | `150` | 0.01 to 100000. Token bucket of one caller workload on one PDP route (`/v1/authorize`, `/v1/authorize:batch`), per pod: the effective per-caller limit is this times the pod count. A batch costs its decision count. |
+| `--pdp-caller-rate-limit-burst` | `AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST` | `300` | 1 to 100000, per caller and route, per pod. Must be at least 100, the largest batch: the chart refuses a smaller value at render. |
+| `--pdp-route-rate-limit` | `AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND` | `2000` | 0.01 to 100000. Ceiling of all callers together on one PDP route, per pod. From the 5.19 load test; revisit with CHAOS-12705. |
+| `--pdp-route-rate-limit-burst` | `AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST` | `4000` | 1 to 100000, per route, per pod. |
 | (none, secret) | `AUTH_DATABASE_URI` or `AUTH_DATABASE_URI_FILE` | required | The **runtime** login's DSN. Exactly one of the two. |
 | `--database-schema` | `AUTH_DATABASE_SCHEMA` | `auth` | Lowercase unquoted identifier `[a-z][a-z0-9_]*`, at most 63 characters. |
 | `--database-max-conns` | `AUTH_DATABASE_MAX_CONNS` | `8` | 1 to 256, per replica. The chart sets it from `authService.database.maxConns` (1 to 32) and can check the total against `authService.database.connectionBudget`. |

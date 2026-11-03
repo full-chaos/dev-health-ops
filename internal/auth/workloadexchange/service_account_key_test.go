@@ -535,3 +535,39 @@ func TestRoutesAcceptsTheKeySubjectAlone(t *testing.T) {
 		}
 	}
 }
+
+// Any scope field on a key subject, well formed or not, is the one scope
+// refusal before the store read: a key holds no scope.
+func TestEveryScopeFieldFormOnAKeyIsTheScopeRefusal(t *testing.T) {
+	reference := newHarness(t)
+	reference.registry.err = refusedBecause("unknown")
+	want := reference.post(form(reference.validSubject(), "auth-service", "").Encode())
+	tooMany := strings.TrimSpace(strings.Repeat(testAction+" ", maxScopeActions+1))
+	cases := map[string][]string{
+		"one action":       {testAction},
+		"empty":            {""},
+		"blank":            {" "},
+		"double space":     {testAction + "  " + testOtherAction},
+		"two scope fields": {testAction, testOtherAction},
+		"too many actions": {tooMany},
+		"action too long":  {strings.Repeat("a", maxActionSize+1)},
+	}
+	for name, scope := range cases {
+		t.Run(name, func(t *testing.T) {
+			keys := &fakeKeys{}
+			h := newHarness(t, withServiceAccountKeys(keys))
+			v := saForm(saKeyValue("A"), "dev-health-api", "")
+			v["scope"] = scope
+			rec := h.post(v.Encode())
+			if rec.Code != want.Code || rec.Body.String() != want.Body.String() {
+				t.Fatalf("%d %q, want the refusal %d %q", rec.Code, rec.Body.String(), want.Code, want.Body.String())
+			}
+			if got := h.saPoints()["refused/scope_refused/dev-health-api"]; got != 1 {
+				t.Fatalf("counter refused/scope_refused = %d; points %v", got, nonZero(h.saPoints()))
+			}
+			if keys.calls() != 0 {
+				t.Fatalf("a scope refusal reached the registry %d time(s)", keys.calls())
+			}
+		})
+	}
+}

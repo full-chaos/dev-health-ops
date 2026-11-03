@@ -341,6 +341,23 @@ func checkedInSchedules() []Schedule {
 				"period emits every 5 to 10 minutes.",
 		},
 		{
+			ID:               "external_push_expiry_sweep",
+			Native:           true,
+			Cadence:          EveryInterval(15 * time.Minute),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: 2 * time.Hour,
+			TargetKind:       jobcontract.KindExternalPushExpirySweep,
+			ProducerID:       ProducerPushExpirySweep,
+			MaxAttempts:      2,
+			AlertThreshold:   90 * time.Minute,
+			Rationale: "Sends an expired lifecycle event for each External Push token that " +
+				"expired and was not revoked. The job does nothing while the push lifecycle " +
+				"events flag is off. Each run re-reads the expired tokens in its window, so a " +
+				"missed run is repaired by the next one; a 15 minute period emits every 15 to " +
+				"30 minutes.",
+		},
+		{
 			ID: "phone_home_heartbeat",
 			// The legacy Beat entry "phone-home-heartbeat" was deleted --
 			// Celery is retired; see RetiredBeatInventory. The compute body

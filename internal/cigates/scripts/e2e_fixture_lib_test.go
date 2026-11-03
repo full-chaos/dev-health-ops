@@ -30,6 +30,10 @@ func stubbedSeedEnv(t *testing.T) (bin, state string) {
 	writeStub(t, bin, "psql", `
 case "$*" in
   *"SELECT id FROM users WHERE email"*) [ -f "$STUB_STATE/user" ] && cat "$STUB_STATE/user"; exit 0 ;;
+  *"INSERT INTO auth.sessions"*)
+    echo "psql $*" >> "$STUB_STATE/psql.log"
+    echo "cccccccc-1111-4222-8333-444444444444"
+    exit 0 ;;
 esac
 echo "psql $*" >> "$STUB_STATE/psql.log"
 exit 0
@@ -47,7 +51,7 @@ case "$*" in
 esac
 echo "Updated user: e2e@test.local (id: bbbbbbbb-1111-4222-8333-444444444444)"
 `)
-	writeStub(t, bin, "cigate", `echo "token-for-$E2E_USER_ID"`)
+	writeStub(t, bin, "cigate", `echo "token-for-$E2E_USER_ID-$E2E_SESSION_ID"`)
 	return bin, state
 }
 
@@ -63,18 +67,18 @@ generate_auth_token
 		"STUB_STATE="+state, "BIN_DIR="+bin,
 		"POSTGRES_HOST=h", "POSTGRES_PORT=1", "POSTGRES_SUPERUSER=u", "POSTGRES_SUPERUSER_PASSWORD=p", "POSTGRES_DB=d",
 		"POSTGRES_URI=postgresql+asyncpg://u:p@h:1/d", "E2E_ORG_ID=11111111-2222-4333-8444-555555555555",
-		"SETTINGS_ENCRYPTION_KEY=k")
+		"E2E_ISSUER_URL=https://localhost:1", "E2E_ISSUER_KEY_FILE=/nonexistent")
 	return cmdSpec{dir: root, env: env}.run("bash", "-c", script)
 }
 
 func TestSeedIdentityIsIdempotentAndUsesTheVerbs(t *testing.T) {
 	bin, state := stubbedSeedEnv(t)
 	first := runSeed(t, bin, state)
-	if first.code != 0 || strings.TrimSpace(first.stdout) != "token-for-bbbbbbbb-1111-4222-8333-444444444444" {
+	if first.code != 0 || strings.TrimSpace(first.stdout) != "token-for-bbbbbbbb-1111-4222-8333-444444444444-cccccccc-1111-4222-8333-444444444444" {
 		t.Fatalf("first seed: rc=%d stdout=%q stderr=%q", first.code, first.stdout, tail(first.stderr, 400))
 	}
 	second := runSeed(t, bin, state)
-	if second.code != 0 || strings.TrimSpace(second.stdout) != "token-for-bbbbbbbb-1111-4222-8333-444444444444" {
+	if second.code != 0 || strings.TrimSpace(second.stdout) != "token-for-bbbbbbbb-1111-4222-8333-444444444444-cccccccc-1111-4222-8333-444444444444" {
 		t.Fatalf("a rerun against the same database must converge: rc=%d stdout=%q stderr=%q", second.code, second.stdout, tail(second.stderr, 400))
 	}
 	log, _ := os.ReadFile(filepath.Join(state, "dho.log"))
@@ -86,7 +90,10 @@ func TestSeedIdentityIsIdempotentAndUsesTheVerbs(t *testing.T) {
 	}
 	psqlLog, _ := os.ReadFile(filepath.Join(state, "psql.log"))
 	if !strings.Contains(string(psqlLog), "INSERT INTO organizations") || strings.Contains(string(psqlLog), "INSERT INTO users") || strings.Contains(string(psqlLog), "INSERT INTO memberships") {
-		t.Errorf("only the organization row may be a raw write:\n%s", psqlLog)
+		t.Errorf("only the organization row and the session rows may be raw writes:\n%s", psqlLog)
+	}
+	if n := strings.Count(string(psqlLog), "INSERT INTO auth.sessions"); n != 2 || !strings.Contains(string(psqlLog), "legacy_token_version") {
+		t.Errorf("each seed must write one session pinned to the user's token_version, wrote %d:\n%s", n, psqlLog)
 	}
 }
 

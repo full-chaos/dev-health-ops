@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -43,6 +44,10 @@ type fakeDB struct {
 }
 
 func (d *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, ".sessions") {
+		pin := int64(6)
+		return fakeRow{values: []any{uuid.MustParse(edgetokenmint.ProvePrincipalID), false, false, &pin}}
+	}
 	d.args, d.sql = args, sql
 	// The row answers for the principal the lookup bound: the admin
 	// principal holds admin, the proof principal viewer.

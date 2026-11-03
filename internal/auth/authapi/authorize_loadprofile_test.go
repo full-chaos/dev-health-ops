@@ -159,9 +159,11 @@ func runPDPProfile(t *testing.T, file, name string, exp pdpWant, delay time.Dura
 	// The runner drops a request when its queue is full, and counts a drop as an error: one worker per scheduled request
 	// means nothing is dropped however slow the host is, so the error-rate check below never reads the clock.
 	duration := 2 * time.Second
+	workers := int(rate * duration.Seconds())
 	rep, err := loadharness.Run(context.Background(), cfg, loadharness.Options{
-		Profile: loadharness.Profile{Name: name, Rate: rate, Duration: duration, Concurrency: 4},
+		Profile: loadharness.Profile{Name: name, Rate: rate, Duration: duration, Concurrency: workers},
 		Getenv:  getenv,
+		Client:  &http.Client{},
 	})
 	if err != nil {
 		t.Fatal(err)

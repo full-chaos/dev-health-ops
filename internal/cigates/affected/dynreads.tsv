@@ -237,6 +237,7 @@ internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/frozengoldens	reads.go
 internal/cigates/frozengoldens	reads_guard_test.go
+internal/cigates/gitleaksignore	gitleaksignore_test.go
 internal/cigates/integrationshards	ci_script_helpers_test.go
 internal/cigates/integrationshards	integration_sharding_test.go
 internal/cigates/integrationshards	shard_run_tee_bound_test.go
@@ -618,6 +619,8 @@ internal/testsupport/gitmaintcensus	census_test.go
 internal/testsupport/goldenscan	tree.go
 internal/testsupport/goldenscan	vectors_test.go
 internal/testsupport/idpstub/cmd/idpstub	main.go
+internal/testsupport/issuerstub	issuerstub.go
+internal/testsupport/issuerstub	issuerstub_test.go
 internal/testsupport/moduleroot	moduleroot_test.go
 internal/testsupport/oraclecompare	oraclecompare.go
 internal/testsupport/providerstub	corpus_social_test.go

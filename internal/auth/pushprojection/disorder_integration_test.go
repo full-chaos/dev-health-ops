@@ -253,3 +253,31 @@ func TestDisorderRotationReadBeforeItsParentWaitsAndAParentReplayRevivesNothing(
 		t.Fatalf("%d registry rows for the child, want 1", n)
 	}
 }
+
+// Cell 16b: a widening read in order, right after the narrowing, is refused for good and never parked.
+func TestDisorderWideningReadInOrderIsRefusedAtOnceAndNeverParked(t *testing.T) {
+	e := getEnv(t, true)
+	org := e.org(t)
+	r := e.reader(t, time.Hour)
+	e.drain(t, r)
+	id := uuid.NewString()
+	c := created(org, id, "ingest:write", "schema:read")
+	e.appendCommitted(t, c)
+	e.appendCommitted(t, scoped(c, "ingest:write"))
+	e.quiet(t, r, id, func(view) {})
+	e.appendCommitted(t, scoped(c, "ingest:write", "schema:read"))
+	e.quiet(t, r, id, func(v view) {
+		if v.revision >= 3 {
+			t.Fatalf("the widening applied: %+v", v)
+		}
+	})
+	if v := e.view(t, id); v != (view{2, "active", "{ingest:write}"}) {
+		t.Fatalf("end state %+v, want active r2 {ingest:write}", v)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_projection_digest WHERE external_reference = $1 AND revision = 3 AND outcome = 'refused_widen'`, id); n != 1 {
+		t.Fatal("the widening is not decided as refused_widen")
+	}
+	if n := e.parkedFor(t, id); n != 0 {
+		t.Fatalf("a refused widening is parked (%d rows)", n)
+	}
+}

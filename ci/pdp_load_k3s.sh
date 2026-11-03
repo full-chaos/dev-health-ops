@@ -260,7 +260,7 @@ pass "leg 1: one human with an admin membership"
 # The runner pod (ci/pdp_load_k3s/runner-pod.tpl): its init containers seed the workload registry and write the bootstrap value into the
 # pod's own volume; the value never leaves the pod.
 # shellcheck disable=SC2016
-IMG_MIG="${IMG_MIG}" RUNNER_IMAGE="${RUNNER_IMAGE}" envsubst '${IMG_MIG} ${RUNNER_IMAGE}' <"${SCRIPT_DIR}/pdp_load_k3s/runner-pod.tpl" | K apply -f - >/dev/null
+env IMG_MIG="${IMG_MIG}" RUNNER_IMAGE="${RUNNER_IMAGE}" envsubst '${IMG_MIG} ${RUNNER_IMAGE}' <"${SCRIPT_DIR}/pdp_load_k3s/runner-pod.tpl" | K apply -f - >/dev/null
 K wait --for=condition=Ready pod/pdp-runner --timeout=300s >/dev/null || { K describe pod pdp-runner >&2 || true; die "the runner pod did not become Ready"; }
 SUBJECT="$(PSU -f - <"${SCRIPT_DIR}/pdp_load_k3s/subject.sql")"
 [[ "${SUBJECT}" =~ ^prn_[A-Za-z0-9_-]{22}$ ]] || die "the api workload principal id is not a wire principal id"

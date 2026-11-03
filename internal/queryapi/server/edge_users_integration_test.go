@@ -87,7 +87,7 @@ VALUES ($1, $2, 'local', $3, false, false, $4, now(), now())`,
 
 	// serve answers the status and body of GET /api/v1/people with an edge token for user.
 	serve := func(user uuid.UUID, tokenVersion int) (int, string) {
-		claims := validTestEdgeClaims("org-edge-1")
+		claims := validTestEdgeClaims("22222222-2222-2222-2222-222222222222")
 		claims["sub"] = user.String()
 		claims["tv"] = tokenVersion
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=a", nil)

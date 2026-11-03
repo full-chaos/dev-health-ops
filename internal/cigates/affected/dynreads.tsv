@@ -123,6 +123,7 @@ internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
+internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	organization_census_test.go

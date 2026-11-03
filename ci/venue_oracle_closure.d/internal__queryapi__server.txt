@@ -53,6 +53,7 @@ internal/auth/servicecred
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/backfillrun
 internal/cacheinvalidation

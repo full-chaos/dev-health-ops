@@ -28,28 +28,35 @@ import (
 
 var (
 	sessionsWord  = regexp.MustCompile(`\bsessions\b`)
-	livenessWords = regexp.MustCompile(`revoked_at\s+IS\s+(NOT\s+)?NULL|expires_at\s*(>=|<=|>|<)`)
+	livenessWords = regexp.MustCompile(`(\w+\.)?(revoked_at\s+IS\s+(NOT\s+)?NULL|expires_at\s*(>=|<=|>|<))`)
+	spaces        = regexp.MustCompile(`\s+`)
 )
 
 // key is "<path from the repo root>#<enclosing func or declared name>".
-var livenessAllowlist = map[string]string{
-	"internal/api/policy/session.go#sessionStateQuery":          "CHAOS-12701: go-api and query-api reader on column grants; moves to sessionrule with its grant ruling",
-	"internal/auth/session/delegation.go#lockBaseAndPriors":     "the prior-delegation lock set (own revoked_at); the base decision itself uses the rule",
-	"internal/auth/session/delegation.go#insertDelegation":      "creation expiry of a delegated row (min of the base's rule Expiry and grants), not a liveness decision",
-	"internal/auth/session/end_all.go#revokeAllLive":            "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry",
-	"internal/auth/session/end_all.go#EndAllInTx":               "revokes by own revoked_at; the go-api refresh_tokens predicate shares the function",
-	"internal/auth/session/end_org.go#EndOrgInTx":               "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry",
-	"internal/auth/session/end_org.go#EndOrganizationInTx":      "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry",
-	"internal/auth/session/store.go#endSessions":                "UPDATE writer: revokes the rows it was given",
-	"internal/auth/session/unpinned.go#CountUnpinned":           "operator count of unpinned rows by own revoked_at, not a liveness decision",
-	"internal/auth/session/unpinned.go#RevokeUnpinned":          "operator revoke of unpinned rows by own revoked_at, not a liveness decision",
-	"internal/auth/delegationend/delegationend.go#End":          "UPDATE writer for delegated children",
-	"internal/auth/delegationend/delegationend.go#lock":         "lock set of delegated children by own revoked_at",
-	"internal/auth/keyrotation/store.go#revokeSessions":         "UPDATE writer after a signing-key rotation",
-	"internal/auth/keyrotation/store.go#sessionsToRevoke":       "selects rows to revoke after a key rotation; over-revoking an already ended row is harmless",
-	"internal/auth/restorefence/specs.go#sections":              "restore fence revokes rows the target holds live in the source",
-	"internal/testsupport/authrows/queries.go#refreshTokensACP": "test-support golden query, not a runtime decision",
-	"internal/testsupport/pinrig/pinrig.go#ClearPin":            "test-support fixture write",
+// allowed is one allowlisted statement: predicates is every revoked_at / expires_at test the
+// statement holds (sorted, joined by " | "), so a second predicate added inside an allowlisted
+// function changes the string and fails; reason says why it is not a liveness decision.
+type allowed struct{ predicates, reason string }
+
+var livenessAllowlist = map[string]allowed{
+	"internal/api/policy/session.go#sessionStateQuery":          {`revoked_at IS NOT NULL`, "CHAOS-12701: go-api and query-api reader on column grants; moves to sessionrule with its grant ruling"},
+	"internal/auth/session/delegation.go#lockBaseAndPriors":     {`s.revoked_at IS NULL`, "the prior-delegation lock set (own revoked_at); the base decision itself uses the rule"},
+	"internal/auth/session/delegation.go#insertDelegation":      {`e.expires_at >`, "creation expiry of a delegated row (min of the base's rule Expiry and grants), not a liveness decision"},
+	"internal/auth/session/end_all.go#revokeAllLive":            {`s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
+	"internal/auth/session/end_all.go#EndAllInTx":               {`revoked_at IS NULL`, "revokes by own revoked_at; the go-api refresh_tokens predicate shares the function"},
+	"internal/auth/session/end_org.go#EndOrgInTx":               {`revoked_at IS NULL | revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
+	"internal/auth/session/end_org.go#EndOrganizationInTx":      {`revoked_at IS NULL | revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
+	"internal/auth/session/store.go#liveClientSessions":         {`revoked_at IS NULL`, "selects the live client sessions under a revoked web session to name them in session.revoked events (own revoked_at); the server read of each is the rule"},
+	"internal/auth/session/store.go#endSessions":                {`revoked_at IS NULL | revoked_at IS NULL`, "UPDATE writer: revokes the rows it was given"},
+	"internal/auth/session/unpinned.go#CountUnpinned":           {`revoked_at IS NULL`, "operator count of unpinned rows by own revoked_at, not a liveness decision"},
+	"internal/auth/session/unpinned.go#RevokeUnpinned":          {`revoked_at IS NULL | revoked_at IS NULL | revoked_at IS NULL`, "operator revoke of unpinned rows by own revoked_at, not a liveness decision"},
+	"internal/auth/delegationend/delegationend.go#End":          {`revoked_at IS NULL`, "UPDATE writer for delegated children"},
+	"internal/auth/delegationend/delegationend.go#lock":         {`revoked_at IS NULL`, "lock set of delegated children by own revoked_at"},
+	"internal/auth/keyrotation/store.go#revokeSessions":         {`revoked_at IS NULL | revoked_at IS NULL`, "UPDATE writer after a signing-key rotation"},
+	"internal/auth/keyrotation/store.go#sessionsToRevoke":       {`s.revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke after a key rotation; over-revoking an already ended row is harmless"},
+	"internal/auth/restorefence/specs.go#sections":              {`s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL | s.revoked_at IS NULL | t.expires_at > | t.expires_at > | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | t.revoked_at IS NULL | x.revoked_at IS NOT NULL`, "restore fence revokes rows the target holds live in the source"},
+	"internal/testsupport/authrows/queries.go#refreshTokensACP": {`rc.revoked_at IS NOT NULL | rt.revoked_at IS NOT NULL | s.revoked_at IS NOT NULL`, "test-support golden query, not a runtime decision"},
+	"internal/testsupport/pinrig/pinrig.go#ClearPin":            {`revoked_at IS NOT NULL`, "test-support fixture write"},
 }
 
 // statementLiterals returns, per top-level string expression of a file (a maximal
@@ -107,9 +114,18 @@ func statementLiterals(fset *token.FileSet, file *ast.File) map[string]string {
 	return out
 }
 
+func predicatesOf(text string) string {
+	var out []string
+	for _, m := range livenessWords.FindAllString(text, -1) {
+		out = append(out, spaces.ReplaceAllString(m, " "))
+	}
+	sort.Strings(out)
+	return strings.Join(out, " | ")
+}
+
 func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 	root := repoRoot(t)
-	found := map[string]bool{}
+	found := map[string]string{}
 	for _, top := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -137,7 +153,7 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 			}
 			for scope, text := range statementLiterals(fset, file) {
 				if sessionsWord.MatchString(text) && livenessWords.MatchString(text) {
-					found[rel+"#"+scope] = true
+					found[rel+"#"+scope] = predicatesOf(text)
 				}
 			}
 			return nil
@@ -152,12 +168,16 @@ func TestNoHandWrittenSessionLivenessPredicate(t *testing.T) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if _, ok := livenessAllowlist[k]; !ok {
+		entry, ok := livenessAllowlist[k]
+		switch {
+		case !ok:
 			t.Errorf("%s names auth.sessions and tests revoked_at or expires_at by hand: use sessionrule, or list it in livenessAllowlist with its reason", k)
+		case entry.predicates != found[k]:
+			t.Errorf("%s: its predicates are now [%s], the allowlist holds [%s]: a new hand-written liveness test inside an allowlisted statement needs its own entry", k, found[k], entry.predicates)
 		}
 	}
 	for k := range livenessAllowlist {
-		if !found[k] {
+		if _, ok := found[k]; !ok {
 			t.Errorf("livenessAllowlist entry %s matches no statement; remove it", k)
 		}
 	}
@@ -188,5 +208,20 @@ func TestTheStoreReadsTheSharedRule(t *testing.T) {
 	}
 	if store.RefreshTTL() != 90*time.Minute {
 		t.Errorf("RefreshTTL = %v", store.RefreshTTL())
+	}
+}
+
+// The allowlist is per statement and per predicate: a second liveness test added inside an
+// allowlisted statement is a different predicate set, and fails the census above.
+func TestCensusSeesASecondPredicateInsideAnAllowlistedStatement(t *testing.T) {
+	entry := livenessAllowlist["internal/auth/session/end_all.go#revokeAllLive"]
+	listed := predicatesOf("SELECT 1 FROM sessions s WHERE s.principal_id = $1 AND s.revoked_at IS NULL")
+	if listed != entry.predicates {
+		t.Fatalf("fixture drifted: %q vs %q", listed, entry.predicates)
+	}
+	for _, extra := range []string{" AND s.expires_at > now()", " AND s.revoked_at IS NULL", " AND x.revoked_at IS NOT NULL"} {
+		if got := predicatesOf("SELECT 1 FROM sessions s WHERE s.principal_id = $1 AND s.revoked_at IS NULL" + extra); got == entry.predicates {
+			t.Errorf("a second predicate %q is not seen", extra)
+		}
 	}
 }

@@ -35,6 +35,7 @@ internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
 internal/auth/identity/social	test	ci
 internal/auth/pushlifecycle	test	contracts
+internal/auth/pushreconcile/reconcilejob	test	alerts
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
 internal/auth/revisionfeed	test	contracts

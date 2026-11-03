@@ -41,9 +41,13 @@ internal/api/credentials	probes.go	internal/apiservice/ssovenue
 internal/api/credentials	probes.go	internal/auth/authapi
 internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/auth/lockorder
+internal/api/credentials	probes.go	internal/auth/pushprojection
+internal/api/credentials	probes.go	internal/auth/pushreconcile/reconcilejob
 internal/api/credentials	probes.go	internal/billingcli
 internal/api/credentials	probes.go	internal/clicredentials
+internal/api/credentials	probes.go	internal/fixturescli
 internal/api/credentials	probes.go	internal/pushlifecyclecli
+internal/api/credentials	probes.go	internal/workerservice
 internal/apiservice	githubapp_config.go	cmd/dho
 internal/apiservice	githubapp_config.go	deploy/helm/dev-health
 internal/apiservice	githubapp_config.go	internal/api/githubapp
@@ -163,6 +167,7 @@ internal/auth/contracts	contracts.go	internal/auth/pushlifecycle
 internal/auth/contracts	contracts.go	internal/auth/pushprojection
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/projectionreader
+internal/auth/contracts	contracts.go	internal/auth/pushreconcile/reconcilejob
 internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
@@ -173,12 +178,14 @@ internal/auth/contracts	contracts.go	internal/auth/workload
 internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/workflows
+internal/auth/contracts	contracts.go	internal/fixturescli
 internal/auth/contracts	contracts.go	internal/jobs/pushexpiry
 internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/pushlifecyclecli
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/storage/postgres/authschema
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
+internal/auth/contracts	contracts.go	internal/workerservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/contracts
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/auth/workloadexchange
@@ -667,6 +674,8 @@ internal/providerfoundation	clients.go	internal/apiservice/ssovenue
 internal/providerfoundation	clients.go	internal/auth/authapi
 internal/providerfoundation	clients.go	internal/auth/authruntime
 internal/providerfoundation	clients.go	internal/auth/lockorder
+internal/providerfoundation	clients.go	internal/auth/pushprojection
+internal/providerfoundation	clients.go	internal/auth/pushreconcile/reconcilejob
 internal/providerfoundation	clients.go	internal/backfillrun
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/cigates/queuecreds

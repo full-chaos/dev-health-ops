@@ -54,6 +54,7 @@ var goMessageForProvisioningKeyword = map[string]string{
 	"maximum":       "maximum:",
 	"type":          "type:",
 	"minItems":      "minItems:",
+	"maxItems":      "maxItems:",
 	"not":           "not:",
 }
 

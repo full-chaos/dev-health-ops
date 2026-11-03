@@ -169,6 +169,10 @@ type MigrationOptions struct {
 	// skipped (resolveQueryAPISessionRead) and the query-api readiness check stays
 	// not-ready until a later run grants it.
 	QueryAPISessionRead *SessionReadGrant
+	// AuthSchema is the auth migrator's schema (AUTH_DATABASE_SCHEMA, default "auth"). When the migration login is
+	// neither a superuser nor the owner of that schema it cannot grant or revoke there: the query-api leg then leaves
+	// the session read to auth-grants (sessionReaders) and revokes nothing in that schema (resolveAuthLeg).
+	AuthSchema string
 	// PostureManifestDigest is the sha256 hex digest CHAOS-5437's lockstep
 	// guard stamps into worker_posture_manifest_applied on every run
 	// (postgres.PostureManifestDigest() -- injected the same way
@@ -207,6 +211,9 @@ type MigrationOptions struct {
 	// moves nothing.
 	RiverSyncDispatchRoutes []string
 	Logger                  *slog.Logger
+
+	// revokeSkipSchema is set by resolveAuthLeg: the query-api role's grants in it are not revoked.
+	revokeSkipSchema string
 }
 
 // postureManifestAppliedTable mirrors postgres.PostureManifestAppliedTable's
@@ -369,6 +376,18 @@ func ApplyPinnedMigrations(
 		)
 		if err != nil {
 			return MigrationResult{}, err
+		}
+	}
+
+	if options.QueryAPIRole != "" {
+		var canGrantAuth bool
+		if err := lockConnection.QueryRow(ctx, authGrantableSQL, options.authSchema()).Scan(&canGrantAuth); err != nil {
+			return MigrationResult{}, migrationStageError("read the auth schema owner")
+		}
+		var skipped bool
+		if options, skipped = resolveAuthLeg(options, canGrantAuth); skipped && options.Logger != nil {
+			options.Logger.WarnContext(ctx, "the migration login cannot grant in the auth schema; query-api's session read is left to auth-grants",
+				"class", "auth_schema_not_grantable", "query_api_role", options.QueryAPIRole, "auth_schema", options.authSchema())
 		}
 	}
 
@@ -668,7 +687,7 @@ func ValidateMigrationOptions(options MigrationOptions) error {
 		}
 		seenSyncRoutes[kind] = struct{}{}
 	}
-	if options.DomainRole == options.QueueRole {
+	if options.DomainRole == options.QueueRole || (options.AuthSchema != "" && !validIdentifier(options.AuthSchema)) {
 		return ErrMigrationConfiguration
 	}
 	if err := validateCoordinatorOptions(options); err != nil {
@@ -926,6 +945,35 @@ func resolveQueryAPISessionRead(options MigrationOptions, tablePresent bool) (Mi
 	return options, true
 }
 
+// authGrantableSQL is true when the login is a superuser or owns the auth schema ($1).
+const authGrantableSQL = `SELECT rolsuper OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1 AND nspowner = r.oid)
+FROM pg_catalog.pg_roles r WHERE r.rolname = current_user`
+
+func (options MigrationOptions) authSchema() string {
+	if options.AuthSchema != "" {
+		return options.AuthSchema
+	}
+	if options.QueryAPISessionRead != nil && options.QueryAPISessionRead.Schema != "" {
+		return options.QueryAPISessionRead.Schema
+	}
+	return "auth"
+}
+
+// resolveAuthLeg drops the query-api session read and marks the auth schema out of the role's revokes when the
+// migration login cannot grant there (a NOSUPERUSER login that does not own the auth schema). It reports whether a
+// session read was dropped.
+func resolveAuthLeg(options MigrationOptions, canGrantAuth bool) (MigrationOptions, bool) {
+	if canGrantAuth || options.QueryAPIRole == "" {
+		return options, false
+	}
+	options.revokeSkipSchema = options.authSchema()
+	if options.QueryAPISessionRead == nil {
+		return options, false
+	}
+	options.QueryAPISessionRead = nil
+	return options, true
+}
+
 func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions) error {
 	if err := aclguard.Lock(ctx, tx); err != nil {
 		return fmt.Errorf("take the privilege writer lock")
@@ -952,7 +1000,7 @@ func applyRuntimeGrants(ctx context.Context, tx pgx.Tx, options MigrationOptions
 		// then grant exactly the manifest below: its posture is a function of this
 		// migration alone. PUBLIC's grants are not the role's to lose and stay for
 		// the check to name.
-		revokes, err := roleacl.RevokeStatements(ctx, tx, options.QueryAPIRole)
+		revokes, err := roleacl.RevokeStatementsOutside(ctx, tx, options.QueryAPIRole, options.revokeSkipSchema)
 		if err != nil {
 			return fmt.Errorf("enumerate the query-api role's grants")
 		}

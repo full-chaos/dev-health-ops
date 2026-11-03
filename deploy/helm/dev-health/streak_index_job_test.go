@@ -141,7 +141,9 @@ func TestStreakIndexHookAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 // Every pre-upgrade index hook runs before the migrate Job, one after the other, so with all of them on their deadlines
 // plus the migrate Job and the rollout margin must fit helm --timeout 90m, and each hook's build window must fit its own deadline.
 func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
-	const helmTimeoutSeconds, rolloutMarginSeconds, startupAndCleanupSeconds = 5400, 600, 360
+	const helmTimeoutSeconds, rolloutMarginSeconds = 5400, 500
+	// open-units-index adds the 70 s first-connect wait (CHAOS-12666) to the 360 s startup and cleanup.
+	startupAndCleanup := map[string]int{"t-dev-health-streak-index": 360, "t-dev-health-open-units-index": 430}
 	jobs, _, refusal := renderJobs(t, "web.enabled=false", "migrations.hook.streakIndex.enabled=true", "migrations.hook.openUnitsIndex.enabled=true")
 	if refusal != "" {
 		t.Fatalf("render refused: %s", refusal)
@@ -164,8 +166,8 @@ func TestAllIndexHooksAndMigrateJobFitTheHelmTimeout(t *testing.T) {
 				window = n
 			}
 		}
-		if window == 0 || window+startupAndCleanupSeconds > deadline {
-			t.Fatalf("%s: build window %d + startup and cleanup %d exceeds activeDeadlineSeconds %d", name, window, startupAndCleanupSeconds, deadline)
+		if window == 0 || window+startupAndCleanup[name] > deadline {
+			t.Fatalf("%s: build window %d + startup and cleanup %d exceeds activeDeadlineSeconds %d", name, window, startupAndCleanup[name], deadline)
 		}
 	}
 	if total > helmTimeoutSeconds {

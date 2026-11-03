@@ -661,7 +661,7 @@ func oauthDomainDeniedDetail() *pyjson.Object {
 func (h handlers) oauthExchangeAndFetch(ctx context.Context, w http.ResponseWriter, r *http.Request, row *providerRow, providerID uuid.UUID,
 	providerType, stateToken, code string) (oauthClaims, error) {
 	now := h.Now()
-	state, err := verifyOAuthState(h.StateSecret, stateToken, providerID.String(), now)
+	state, err := verifyOAuthStateKeys(h.stateKeys(), stateToken, providerID.String(), now)
 	if err != nil {
 		if errors.Is(err, errOAuthStateExpired) {
 			return oauthClaims{}, ssoAuthErr("OAuth state expired")

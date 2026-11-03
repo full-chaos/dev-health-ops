@@ -51,7 +51,7 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 
 ## go-api
 
-242 rows: 53 map to one of 13 catalog actions, 156 have no action with a stated gap, and 33 (the public rows) have no action field.
+242 rows: 64 map to one of 18 catalog actions, 145 have no action with a stated gap, and 33 (the public rows) have no action field.
 
 ### Routes with an action
 
@@ -110,21 +110,31 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | `admin.orgs` | `DELETE /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `GET /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
 | `admin.orgs` | `PATCH /api/v1/admin/orgs/{org_id}` | Superuser | `cross_org_superuser_only` |
+| `admin.impersonate` | `POST /api/v1/admin/impersonate` | Superuser | `cross_org_superuser_only` |
+| `admin.impersonate` | `POST /api/v1/admin/impersonate/stop` | Superuser | `cross_org_superuser_only` |
+| `admin.billing` | `POST /api/v1/billing/plans/pull-stripe` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `GET /api/v1/admin/feature-flags` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `PATCH /api/v1/admin/feature-flags/{flag_id}` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `GET /api/v1/admin/orgs/{org_id}/feature-overrides` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `POST /api/v1/admin/orgs/{org_id}/feature-overrides` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `DELETE /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}` | Superuser | `cross_org_superuser_only` |
+| `admin.flags` | `PATCH /api/v1/admin/orgs/{org_id}/feature-overrides/{override_id}` | Superuser | `cross_org_superuser_only` |
+| `admin.audit` | `GET /api/v1/admin/platform/audit-logs` | Superuser | `cross_org_superuser_only` |
+| `admin.stats` | `GET /api/v1/admin/platform/stats` | Superuser | `cross_org_superuser_only` |
 
 Source: `contracts/auth/v1/endpoint-profiles.go-api.json`. "Route level today" is the `policy.*` validator named in the row.
 
-These 12 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `org.read`, `org.write`, `org.delete`, `admin.users`. Of these, query-api rows and GraphQL fields map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read` and `org.read` (see below).
+These 17 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `members.update`, `org.read`, `org.write`, `org.delete`, `acr.context.read`, `admin.users`, `authz.decide`, `admin.telemetry`, `reports.write`. Of these, query-api rows and GraphQL fields map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read`, `org.read`, `admin.telemetry` and `reports.write` (see below).
 
 ### Routes with no action
 
-156 protected rows carry `action: null` and a gap. The gap text falls into these groups:
+145 protected rows carry `action: null` and a gap (140 on the api listener, 4 on the internal listener, 1 on the billing-edge listener). The gap text falls into these groups:
 
 | Reason | Rows |
 | --- | --- |
-| no catalog action covers the route's resource | 129 |
-| superuser-only handler; the catalog has no platform action for it | 11 |
-| a check exists but is not proven equal to one catalog action | 11 |
-| other (see the row) | 5 |
+| no catalog action covers the route's resource | 118 |
+| a check exists but is not proven equal to one catalog action | 10 |
+| other (see the row) | 17 |
 
 The first group names a resource that the catalog has no action for. The resources, taken from the gap text, with the number of rows for each:
 
@@ -139,17 +149,15 @@ The first group names a resource that the catalog has no action for. The resourc
 | retention policy | 6 |
 | user | 6 |
 | IP allowlist entry | 5 |
-| audit log | 5 |
 | ingest source | 5 |
-| feature override | 4 |
+| audit log | 4 |
 | the internal service entitlement and configuration reads | 4 |
-| impersonation session | 3 |
 | backfill job | 2 |
-| feature flag | 2 |
 | identity | 2 |
 | ingest batch | 2 |
 | ingest schema | 2 |
 | team drift change | 2 |
+| team members | 2 |
 | the payment provider webhook; the signature is its only credential | 2 |
 | GitHub App install state | 1 |
 | IP allowlist check | 1 |
@@ -158,24 +166,19 @@ The first group names a resource that the catalog has no action for. The resourc
 | integration backfill trigger | 1 |
 | integration source | 1 |
 | integration sync trigger | 1 |
-| platform stats | 1 |
 | setup status | 1 |
 | sync run | 1 |
 | sync run units | 1 |
 | sync targets | 1 |
 | team import | 1 |
-| team member discovery (provider call) | 1 |
-| team member inference (provider call) | 1 |
-| team members | 1 |
-| team members (inferred) | 1 |
+| team member discovery | 1 |
+| team member inference | 1 |
 | the build identity read | 1 |
 | the incident provider webhook; the binding signature is its only credential | 1 |
 | the source provider webhook; the signature is its only credential | 1 |
 | the sync configuration domain | 1 |
 
 Each gap entry says "this leaf does not extend the vocabulary": the profile leaf that wrote the rows recorded the missing action and did not add one.
-
-Superuser-only handlers have no platform action to map to, because the catalog has `admin.users` and `admin.orgs` only. CHAOS-11847 plans explicit platform actions for them.
 
 ## query-api
 
@@ -282,7 +285,7 @@ The guard reads only fields' own arguments named `orgId` or `org_id`. An organiz
 
 - `productTelemetryPlatformDashboard` is refused with `AUTHORIZATION_ERROR` unless `producttelemetry.RequirePlatformAdmin` passes the caller, which requires `admin.telemetry` outside an impersonation: its action is `admin.telemetry`, an exact match.
 - `dataHealth` is refused with `AUTHORIZATION_ERROR` unless `datahealth.RequireOperator` passes the caller: a holder of `admin.stats`, or the role admin, owner or operator. Its action is `integrations.read`, which the organization roles admin and owner hold. The `operator` role and `admin.stats` holders have no organization role in the catalog; that difference is a deliberate change candidate.
-- The five saved-report mutations apply `requireMutationOrg` after the guard: `Authorization required` when the caller has no organization, `Access denied` when the `orgId` is not the caller's organization. No role is read, so every organization role can write them today: their action is the new `reports.write` (catalog version 11), held by viewer, member, admin and owner.
+- The five saved-report mutations apply `requireMutationOrg` after the guard: `Authorization required` when the caller has no organization, `Access denied` when the `orgId` is not the caller's organization. No role is read, so every organization role can write them today: their action is the new `reports.write` (catalog version 12), held by viewer, member, admin and owner.
 - `sourceHealth` has no role gate, only the organization guard, so its action is `analytics.read`. Narrowing it to `integrations.read` (admin and owner) is a deliberate change candidate, not made here.
 - `complexityTimeseries` answers `AUTHORIZATION_ERROR` for a request with no organization.
 

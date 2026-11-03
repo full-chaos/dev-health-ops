@@ -1,0 +1,18 @@
+{
+  "id": "list-grants-empty",
+  "kind": "exchange",
+  "operation": "grants_list",
+  "request": {
+    "schema_version": "grant-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001",
+    "limit": 2
+  },
+  "response": {
+    "schema_version": "grant-list.v1",
+    "items": []
+  },
+  "response_schema": "accept",
+  "parse": "accept",
+  "rule": null,
+  "why": "No grants."
+}

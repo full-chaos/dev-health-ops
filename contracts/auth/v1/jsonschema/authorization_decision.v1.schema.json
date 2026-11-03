@@ -86,11 +86,12 @@
         "repository_allowlist": {
           "type": "array",
           "uniqueItems": true,
+          "maxItems": 256,
           "items": {
             "type": "string",
             "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$"
           },
-          "description": "Canonical repository keys the service may touch; `*` means organization-wide. An empty array means NONE, not unrestricted: unrestricted is the absence of the member plus a tenant scope."
+          "description": "Canonical repository keys the service may touch; `*` means organization-wide. An empty array means NONE, not unrestricted: unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit [\"*\"] with a tenant scope, never as an absent member, and sends the member (an empty one included) on every allow of an action that filters by repository, so a consumer reads an absent allowlist on such an action as a deny. At most 256 keys: the decision point never truncates a list, a member over the bound is a deny with its own reason code."
         },
         "redaction": {
           "type": "array",

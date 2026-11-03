@@ -396,3 +396,25 @@ func TestDisorderKnownDefectRevokeOverARevisionGapLeavesTheCredentialPermitted(t
 		}
 	}
 }
+
+// Cell U9: a rotation that arrives after its parent was retired earlier than the rotation (revoked, or expired by
+// time) is refused for good; one retired at the rotation or later applies.
+func TestAcrDisorderRotationOfAParentRetiredBeforeItIsRefused(t *testing.T) {
+	issued := mustApply(t, State{}, acrdIssued(acrdParent, t0, "context:read"), nil)
+	rotationAt := t0.Add(time.Hour)
+	rotation := acrdRotated(acrdChild, acrdParent, rotationAt, "context:read")
+	for name, tc := range map[string]struct {
+		parent State
+		want   Outcome
+	}{
+		"revoked before the rotation": {mustApply(t, issued, acrdRevoked(acrdParent, 2, rotationAt.Add(-time.Minute)), nil), RefusedParent},
+		"expired before the rotation": {mustApply(t, issued, acrdExpired(acrdParent, 2, rotationAt.Add(-time.Minute), rotationAt.Add(-time.Minute)), nil), RefusedParent},
+		"revoked at the rotation":     {mustApply(t, issued, acrdRevoked(acrdParent, 2, rotationAt), nil), Applied},
+		"revoked after the rotation":  {mustApply(t, issued, acrdRevoked(acrdParent, 2, rotationAt.Add(time.Minute)), nil), Applied},
+	} {
+		next, outcome := Apply(State{}, rotation, &tc.parent)
+		if outcome != tc.want || (tc.want == RefusedParent && next.Status != StatusUnknown) {
+			t.Errorf("%s: outcome %s status %q, want %s", name, outcome, next.Status, tc.want)
+		}
+	}
+}

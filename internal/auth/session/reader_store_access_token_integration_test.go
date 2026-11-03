@@ -79,7 +79,7 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, `GRANT SELECT ON public.users, public.memberships TO `+authschema.Quote(apiRole)); err != nil {
+	if _, err := admin.Exec(ctx, `GRANT SELECT ON public.users, public.memberships, public.organizations TO `+authschema.Quote(apiRole)); err != nil {
 		t.Fatal(err)
 	}
 	schema, err := authschema.NewValidatedIdentifier(schemaName)

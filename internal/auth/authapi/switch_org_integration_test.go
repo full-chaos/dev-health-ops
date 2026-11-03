@@ -5,7 +5,6 @@ package authapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
@@ -280,42 +280,42 @@ func (p pausedReads) MemberRoleLockedOn(ctx context.Context, q session.Queryer, 
 	return role, found, err
 }
 
-// remove is auth-service's member removal in its lock order: the principal
-// FOR UPDATE (step 1), the public membership FOR UPDATE (5), its delete, then
-// the pair's sessions ended NOWAIT (6a, session.Store.EndOrgInTx), retried on
-// ErrBusy as the verbs do. held, when set, is closed once the membership is
-// locked and deleted, and the removal waits on proceed before ending sessions.
-func (l *switchOrgLive) remove(ctx context.Context, user, org uuid.UUID, held, proceed chan struct{}) error {
-	for attempt := 1; ; attempt++ {
-		err := audit.Commit(ctx, l.runtime, l.schema, audit.Mutation{
-			Apply: func(ctx context.Context, tx audit.TxOps) error {
-				if _, err := tx.Exec(ctx, `SELECT 1 FROM auth.principals WHERE id = $1 FOR UPDATE`, user.String()); err != nil {
-					return err
-				}
-				if _, err := tx.Exec(ctx, `SELECT 1 FROM public.memberships WHERE user_id = $1 AND org_id = $2 FOR UPDATE`, user, org); err != nil {
-					return err
-				}
-				if _, err := tx.Exec(ctx, `DELETE FROM public.memberships WHERE user_id = $1 AND org_id = $2`, user, org); err != nil {
-					return err
-				}
-				if held != nil {
-					close(held)
-					held = nil
-					<-proceed
-				}
-				_, err := l.store.EndOrgInTx(ctx, tx, user, org)
-				return err
-			},
-			Audit:     audit.AuditEvent{EventType: "auth.session.revoked_all", Outcome: audit.OutcomeAllowed},
-			OffStream: audit.OffStreamSessionLifecycle,
+// heldEnder is the session store a removal ends the pair's sessions through.
+// With held set it pauses once: it closes held when the removal has locked
+// and written the membership rows, and waits on proceed before it ends them.
+type heldEnder struct {
+	*session.Store
+	once          sync.Once
+	held, proceed chan struct{}
+}
+
+func (h *heldEnder) EndOrgInTx(ctx context.Context, tx audit.TxOps, principalID, organizationID uuid.UUID) (session.Ended, error) {
+	if h.held != nil {
+		h.once.Do(func() {
+			close(h.held)
+			select {
+			case <-h.proceed:
+			case <-ctx.Done():
+			}
 		})
-		if !errors.Is(err, session.ErrBusy) || attempt == session.BusyAttempts {
-			return err
-		}
-		if err := session.WaitBusy(ctx, attempt); err != nil {
-			return err
-		}
 	}
+	return h.Store.EndOrgInTx(ctx, tx, principalID, organizationID)
+}
+
+// remove is auth-service's member removal itself (membership.Store.Remove),
+// which writes the auth.memberships copy and so always changes guarded state,
+// in its lock order: the principal FOR UPDATE (step 1), the public membership
+// FOR UPDATE (5) and its delete, the auth copy (6), then the pair's sessions
+// ended NOWAIT (6a). held and proceed pause it before 6a (heldEnder).
+func (l *switchOrgLive) remove(ctx context.Context, user, org uuid.UUID, held, proceed chan struct{}) error {
+	members, err := membership.New(membership.Config{Pool: l.runtime, Schema: l.schema, OwnsUsers: l.owned,
+		Sessions: &heldEnder{Store: l.store, held: held, proceed: proceed}, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		return err
+	}
+	_, err = members.Remove(ctx, membership.Change{OrgID: org, PrincipalID: user,
+		Authorize: func(context.Context, audit.TxOps, membership.Locked) error { return nil }})
+	return err
 }
 
 // O-B3 (G2): a switch and a member removal race in both orders. Removal
@@ -332,7 +332,11 @@ func TestSwitchOrgIntegrationRaceWithRemoval(t *testing.T) {
 		held, proceed := make(chan struct{}), make(chan struct{})
 		removed := make(chan error, 1)
 		go func() { removed <- l.remove(ctx, c.user, c.orgB, held, proceed) }()
-		<-held
+		select {
+		case <-held:
+		case err := <-removed:
+			t.Fatalf("the removal ended (%v) before it held its locks", err)
+		}
 		answered := make(chan int, 1)
 		go func() { answered <- post(l.server, PatternCompatSwitchOrg, orgBody(c.orgB), c.bearer).Code }()
 		select {
@@ -359,7 +363,11 @@ func TestSwitchOrgIntegrationRaceWithRemoval(t *testing.T) {
 		c := l.switchCase(t, ctx)
 		answered := make(chan int, 1)
 		go func() { answered <- post(l.server, PatternCompatSwitchOrg, orgBody(c.orgB), c.bearer).Code }()
-		<-read
+		select {
+		case <-read:
+		case code := <-answered:
+			t.Fatalf("the switch answered %d without reading the membership in its transaction", code)
+		}
 		removed := make(chan error, 1)
 		go func() { removed <- l.remove(ctx, c.user, c.orgB, nil, nil) }()
 		select {

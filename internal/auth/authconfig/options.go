@@ -249,6 +249,12 @@ var optionRegistry = []Option{
 			"_FILE reads it from a mounted file instead. Required while the login, credential or social link routes mount",
 	},
 	{
+		Env: EnvRateLimitKey, Kind: KindString, Secret: true, Group: GroupSession,
+		Usage: "key the rate-limit counters digest identifiers with, at least 32 characters; " + EnvRateLimitKey +
+			"_FILE reads it from a mounted file instead. Unset, the limiter is keyed from " + EnvAccessTokenSecret +
+			"; needs the session secrets",
+	},
+	{
 		Env: EnvLoginLockoutKey, Kind: KindString, Secret: true, Group: GroupSession,
 		Usage: "32-byte login lockout key, base64url without padding; " + EnvLoginLockoutKey +
 			"_FILE reads it from a mounted file instead. With the session secrets it mounts POST /api/v1/auth/login",

@@ -60,6 +60,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/engineclause
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/storedversion

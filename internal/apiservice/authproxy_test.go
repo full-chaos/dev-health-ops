@@ -45,6 +45,7 @@ var (
 		"POST /api/v1/auth/refresh":             AuthSessions,
 		"POST /api/v1/auth/logout":              AuthSessions,
 		"POST /api/v1/auth/validate":            AuthSessions,
+		"POST /api/v1/auth/switch-org":          AuthSessions,
 		"POST /api/v1/auth/login":               AuthLocalLogin,
 		"POST /api/v1/auth/register":            AuthCredentials,
 		"GET /api/v1/auth/verify":               AuthCredentials,
@@ -354,6 +355,7 @@ var proxyCalls = []proxyCall{
 	{http.MethodPost, "/api/v1/auth/saml/p-1/initiate", `{"relay_state": "/x"}`, false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/saml/p-1/acs", `{"SAMLResponse": "PHNhbWw+", "RelayState": "r"}`, false, AuthSAML},
 	{http.MethodPost, "/api/v1/auth/validate", `{"token":  "opaque-access-1"}`, false, AuthSessions},
+	{http.MethodPost, "/api/v1/auth/switch-org", `{"org_id":  "3a6f0c52-9b0e-4d7a-8f3b-2c1d5e6f7a8b"}`, true, AuthSessions},
 }
 
 func (c proxyCall) request(t *testing.T) *http.Request {
@@ -475,7 +477,6 @@ func TestAuthProxyLeavesUnmappedAuthRoutesInGoAPI(t *testing.T) {
 	for _, call := range []proxyCall{
 		{method: http.MethodGet, target: "/api/v1/auth/me", bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/me/organizations", bearer: true},
-		{method: http.MethodPost, target: "/api/v1/auth/switch-org", body: `{"org_id": "x"}`, bearer: true},
 		{method: http.MethodPost, target: "/api/v1/auth/accept-invite", body: `{"token": "x"}`, bearer: true},
 		{method: http.MethodPost, target: "/api/v1/auth/onboard", body: `{}`, bearer: true},
 		{method: http.MethodGet, target: "/api/v1/auth/onboarding/state", bearer: true},
@@ -687,8 +688,8 @@ func TestAuthProxyFailsClosed(t *testing.T) {
 			}
 			after := proxyMetrics(t)
 			series := proxySeries(AuthSessions, "upstream_error")
-			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 3 {
-				t.Errorf("%s moved by %v, want 3", series, delta)
+			if delta := seriesValue(after, series) - seriesValue(before, series); delta != 4 {
+				t.Errorf("%s moved by %v, want 4", series, delta)
 			}
 		})
 	}

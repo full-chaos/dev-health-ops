@@ -2,19 +2,14 @@ package customerpush
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
-	"slices"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -86,49 +81,9 @@ func (l lifecycle) append(ctx context.Context, tx pgx.Tx, events []audit.PushLif
 	return audit.AppendPushLifecycle(ctx, tx, l.schema, events)
 }
 
-// credentialFingerprint is the public fingerprint of a token: the first 16 hex
-// characters of the SHA-256 of its id. It identifies the credential, is
-// derived from neither the token nor its hash, and cannot authenticate.
-func credentialFingerprint(id uuid.UUID) string {
-	sum := sha256.Sum256([]byte(externalpush.Aggregate + ":" + id.String()))
-	return hex.EncodeToString(sum[:8])
-}
-
-// credentialScopes is the contract's scope set: a sorted set, never nil.
-func credentialScopes(scopes []string) []string {
-	out := slices.Clone(scopes)
-	slices.Sort(out)
-	return append([]string{}, slices.Compact(out)...)
-}
-
-func credentialExpiry(at *time.Time) *time.Time {
-	if at == nil {
-		return nil
-	}
-	utc := at.UTC()
-	return &utc
-}
-
-// createdChange is the credential's state in the created form.
-func createdChange(id uuid.UUID, scopes []string, expiresAt *time.Time) externalpush.Change {
-	return externalpush.Change{Status: "active", Fingerprint: credentialFingerprint(id),
-		Scopes: credentialScopes(scopes), ExpiresAt: credentialExpiry(expiresAt)}
-}
-
-func wireIDs(orgID string, sourceID *uuid.UUID) (organization, binding, source string, err error) {
-	organization = provisioning.WireID("organization", orgID)
-	if organization == "" {
-		return "", "", "", errors.New("customerpush: the organization id cannot be carried on the lifecycle wire")
-	}
-	if sourceID == nil {
-		return organization, externalpush.BindingOrganization, "", nil
-	}
-	return organization, externalpush.BindingSource, sourceID.String(), nil
-}
-
 // createdEvents is the event of a new token.
 func createdEvents(t newToken) ([]audit.PushLifecycleEvent, error) {
-	organization, binding, source, err := wireIDs(t.OrgID, t.SourceID)
+	organization, binding, source, err := pushevent.WireIDs(t.OrgID, t.SourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,21 +93,21 @@ func createdEvents(t newToken) ([]audit.PushLifecycleEvent, error) {
 		expires = &at
 	}
 	return []audit.PushLifecycleEvent{{EventType: externalpush.Created, AggregateID: t.ID.String(),
-		OrganizationID: organization, Binding: binding, SourceID: source, Change: createdChange(t.ID, t.Scopes, expires)}}, nil
+		OrganizationID: organization, Binding: binding, SourceID: source, Change: pushevent.CreatedChange(t.ID, t.Scopes, expires)}}, nil
 }
 
 // revokedEvent is the retirement of a stored token. The snapshot is the token
 // as stored, for a token that predates the stream.
 func revokedEvent(old tokenRow) (audit.PushLifecycleEvent, error) {
-	organization, binding, source, err := wireIDs(old.OrgID, old.SourceID)
+	organization, binding, source, err := pushevent.WireIDs(old.OrgID, old.SourceID)
 	if err != nil {
 		return audit.PushLifecycleEvent{}, err
 	}
-	names, err := scopeNames(old.Scopes)
+	names, err := pushevent.ScopeNames(old.Scopes)
 	if err != nil {
 		return audit.PushLifecycleEvent{}, err
 	}
-	snapshot := createdChange(old.ID, names, old.ExpiresAt)
+	snapshot := pushevent.CreatedChange(old.ID, names, old.ExpiresAt)
 	return audit.PushLifecycleEvent{EventType: externalpush.Revoked, AggregateID: old.ID.String(),
 		OrganizationID: organization, Binding: binding, SourceID: source,
 		Change: externalpush.Change{Status: "revoked"}, Snapshot: &snapshot}, nil
@@ -175,15 +130,5 @@ func rotatedEvents(old tokenRow, next newToken) ([]audit.PushLifecycleEvent, err
 	return []audit.PushLifecycleEvent{rotated, revoked}, nil
 }
 
-func scopeNames(raw []byte) ([]string, error) {
-	value, err := scopesValue(raw)
-	if err != nil {
-		return nil, err
-	}
-	list := value.([]pyjson.Value)
-	names := make([]string, len(list))
-	for index, scope := range list {
-		names[index] = scope.(string)
-	}
-	return names, nil
-}
+// credentialFingerprint is the shared fingerprint (internal/auth/pushevent).
+func credentialFingerprint(id uuid.UUID) string { return pushevent.Fingerprint(id) }

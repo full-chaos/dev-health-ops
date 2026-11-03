@@ -6837,6 +6837,13 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		}
 
 		if orgAllowed != nil {
+			if claims.Delegated {
+				// The write door refuses a delegated session's caller before
+				// any resolver, as the operation guard does on every route.
+				log.Printf("query-api: proof-write route refused a delegated session: operation=%s", operation)
+				http.Error(w, "proof-write refuses an impersonation session", http.StatusForbidden)
+				return
+			}
 			// Fail closed on the empty case too -- see the doc comment above.
 			// claims.OrgID is trusted here for the same reason the rest of this
 			// pipeline trusts claims: authenticateInternalRequest already

@@ -365,6 +365,15 @@ type corpusManifest struct {
 // the same clock: the dev-health-api token in its window is good; expired, not
 // yet valid, another issuer, an auth-service token and an ACR token are
 // refused.
+// corpusDelegatedAtGoAPI are the go-api decisions of the corpus's delegated
+// tokens (CHAOS-10991): go-api maps act.sub to the caller's ImpersonatedBy and
+// refuses an actor that is not a canonical principal id (the vector's
+// "prn_BBBBBBBBBBBBBBBBBBBBBB" has non-zero trailing bits), as it refuses such
+// a sub. The verifier still accepts the token; the per-request check refuses.
+var corpusDelegatedAtGoAPI = map[string]string{
+	"valid-act-api.json": "reject",
+}
+
 var corpusAtAnotherAudience = map[string]string{
 	"invalid-aud-api-token-at-auth-service.json":     "accept",
 	"invalid-order-audience-over-expiry.json":        "reject",
@@ -406,7 +415,9 @@ func TestA2CorpusThroughGoAPI(t *testing.T) {
 	for _, row := range manifest.Vectors {
 		t.Run(strings.TrimSuffix(row.File, ".json"), func(t *testing.T) {
 			expect := row.Expect
-			if row.Audience != accessTokenAudienceAPI {
+			if decided, known := corpusDelegatedAtGoAPI[row.File]; known {
+				expect = decided
+			} else if row.Audience != accessTokenAudienceAPI {
 				var known bool
 				if expect, known = corpusAtAnotherAudience[row.File]; !known {
 					t.Fatalf("a corpus row decided at %s that this test does not place at go-api", row.Audience)

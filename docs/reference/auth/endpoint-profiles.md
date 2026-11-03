@@ -347,6 +347,21 @@ does a delegated session's bearer pass this route's gate. The value is
 `TestDelegatedBearerRowsEqualTheGoAllowlist` holds the values equal to the Go
 allowlist. A row that `authenticateWith` does not reach omits the field.
 
+A go-api row that the Guard gates for a user bearer also has
+`delegated_bearer`. The Guard reads the values at start, keyed by the route
+template, and refuses a delegated session's bearer on a `denied` row with
+`403 {"detail":"Not allowed in an impersonation session"}`. A route with no
+value refuses it too. The rule: `allowed` only outside `/api/v1/admin`, never
+with an action the catalog marks `impersonation: denied`, and only for a `GET`
+or `HEAD` or an action the catalog marks `allowed`. Every other row is
+`denied`, the writes with no action included: a support need comes as a row
+with a catalog action. The deny applies to every delegated bearer,
+`platform_owner` too, until 6.12. `POST /api/v1/auth/validate` and
+`POST /api/v1/auth/logout` read the bearer outside the Guard and omit the
+field. The test `TestDelegatedBearerRowsFollowTheRule` holds the values equal
+to the rule; `TestEveryBearerReadOutsideTheGuardIsNamed` fails on a bearer
+read outside the Guard that is not named.
+
 This field is not `impersonation_policy`. That field says whether go-api's
 org-context override reaches a route.
 

@@ -199,8 +199,8 @@ From `contracts/auth/v1/README.md`:
 - Version 8: `acr.context.read` is `allowed` under a delegated session (CHAOS-12401). No role changed, so no decision changes.
 - Version 9: `viewer`, `member`, `admin` and `owner` hold `acr.context.read`, as they hold `git.read` (CHAOS-12347). `platform_admin` and `platform_owner` do not. No action row changed.
 - Version 10: `credentials.project` (platform, high, `none`, `denied`), the action the acr-api workload row lists for the acr credential events route. No role holds it, so no decision changes (CHAOS-11196).
+- Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.
 
 ## Planned, not built
 
 The catalog on `main` has no platform action other than `admin.users`, `admin.orgs` and `authz.decide`. The superuser-inherited sites in go-api have no explicit platform action yet. CHAOS-11847 plans `admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry` and `admin.stats`. CHAOS-10987 (delegated session) also changes the catalog. Neither change is on `main`, and the version number each will take is not fixed here.
-- Version 10: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.

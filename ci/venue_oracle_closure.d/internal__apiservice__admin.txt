@@ -162,6 +162,7 @@ internal/testsupport/platformroleseam
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/smtpcapture
+internal/testsupport/superuserwriter
 internal/testsupport/venueoracle
 internal/workitemcontract
 ~internal/api/externalingest/testdata

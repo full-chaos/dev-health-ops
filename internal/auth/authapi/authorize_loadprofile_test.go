@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -300,4 +301,20 @@ func TestPDPAssertionGate(t *testing.T) {
 			t.Fatal("non-race build passed a dropped report")
 		}
 	})
+}
+
+func TestPDPRaceConstMatchesBinary(t *testing.T) {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("no build info in the test binary")
+	}
+	got := false
+	for _, s := range bi.Settings {
+		if s.Key == "-race" {
+			got = s.Value == "true"
+		}
+	}
+	if got != raceEnabled {
+		t.Fatalf("raceEnabled %v, binary built with -race %v", raceEnabled, got)
+	}
 }

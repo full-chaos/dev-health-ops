@@ -153,7 +153,9 @@ func TestC41DsnEnvAndUnknownNameRefused(t *testing.T) {
 func TestC41bPoolOpenErrorHasAFixedMessage(t *testing.T) {
 	oldConnect, oldReconcile := connectFn, reconcileFn
 	t.Cleanup(func() { connectFn, reconcileFn = oldConnect, oldReconcile })
-	connectFn = func(_ context.Context, dsn string) (*pgxpool.Pool, error) { return nil, errors.New("cannot parse `" + dsn + "`") }
+	connectFn = func(_ context.Context, dsn string) (*pgxpool.Pool, error) {
+		return nil, errors.New("cannot parse `" + dsn + "`")
+	}
 	reconcileFn = func(context.Context, *pgxpool.Pool, string, int, time.Duration) (reconcilejob.Report, error) {
 		t.Fatal("the reconcile must not run")
 		return reconcilejob.Report{}, nil

@@ -445,6 +445,7 @@ func configureWithRoutes(
 	// The error is logged here, unredacted-by-category, so an operator can
 	// diagnose without shell access while the response stays detail-free:
 	// the same split cmd/query-api landed for CHAOS-4724.
+	var schemaChecked atomic.Bool
 	if err := registry.RegisterRequired(CheckPostgres, func(ctx context.Context) error {
 		if probeErr := store.Probe(ctx); probeErr != nil {
 			logger.ErrorContext(
@@ -452,6 +453,9 @@ func configureWithRoutes(
 				"check", CheckPostgres, "reason", authstore.ReasonOf(probeErr),
 			)
 			return probeErr
+		}
+		if schemaChecked.CompareAndSwap(false, true) {
+			logSchemaChecked(ctx, logger, cfg.DatabaseSchema)
 		}
 		return nil
 	}); err != nil {

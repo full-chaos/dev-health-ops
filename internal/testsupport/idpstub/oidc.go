@@ -450,10 +450,7 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if override != nil {
-		answer := make(map[string]any, len(override))
-		for k, v := range override {
-			answer[k] = v
-		}
+		answer := deepCopyClaims(override)
 		if edit := o.currentOverride(); edit != nil {
 			edit(answer)
 		}
@@ -469,4 +466,40 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		edit(answer)
 	}
 	writeJSON(w, http.StatusOK, answer)
+}
+
+func deepCopyClaims(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyValue(v)
+	}
+	return out
+}
+
+func deepCopyValue(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		return deepCopyClaims(x)
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = deepCopyValue(e)
+		}
+		return out
+	case []string:
+		return append([]string(nil), x...)
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, e := range x {
+			out[k] = e
+		}
+		return out
+	case []map[string]any:
+		out := make([]map[string]any, len(x))
+		for i, e := range x {
+			out[i] = deepCopyClaims(e)
+		}
+		return out
+	}
+	return v
 }

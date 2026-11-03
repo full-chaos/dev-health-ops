@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/platform/netaddr"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -459,7 +460,7 @@ func Load(spec Spec) (Config, error) {
 			return Config{}, err
 		}
 		// Port 0 is exempt, since each such bind gets its own port.
-		if sameListener(cfg.InternalAddress, cfg.APIAddress) || sameListener(cfg.InternalAddress, cfg.OperatorAddress) {
+		if netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.APIAddress) || netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.OperatorAddress) {
 			return Config{}, fmt.Errorf(
 				"%s must not be the same address as %s or %s", EnvInternalAddress, EnvAPIAddress, EnvOperatorAddress,
 			)
@@ -1094,31 +1095,6 @@ func address(lookup secrets.LookupEnv, key, fallback string) (string, error) {
 		return "", fmt.Errorf("%s must be a host:port address", key)
 	}
 	return value, nil
-}
-
-// sameListener reports whether two host:port addresses would bind one socket:
-// equal port numbers (so "08095" is "8095") and equal hosts, or either host a
-// wildcard (empty, 0.0.0.0, ::). Port 0 never collides.
-func sameListener(a, b string) bool {
-	hostA, portA, errA := net.SplitHostPort(a)
-	hostB, portB, errB := net.SplitHostPort(b)
-	if errA != nil || errB != nil {
-		return a == b
-	}
-	numA, errA := strconv.Atoi(portA)
-	numB, errB := strconv.Atoi(portB)
-	if errA != nil || errB != nil || numA == 0 || numB == 0 || numA != numB {
-		return false
-	}
-	return isWildcardHost(hostA) || isWildcardHost(hostB) || strings.EqualFold(hostA, hostB)
-}
-
-func isWildcardHost(host string) bool {
-	switch host {
-	case "", "0.0.0.0", "::":
-		return true
-	}
-	return false
 }
 
 func logLevel(lookup secrets.LookupEnv) (slog.Level, error) {

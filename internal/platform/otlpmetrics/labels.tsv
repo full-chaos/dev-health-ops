@@ -172,6 +172,8 @@ workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/j
 dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
 dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go
+dev_health_authz_enforcement_enabled	namespace,service	code: internal/authzenforce/authzenforce.go
+dev_health_authz_enforcement_ignored_items	service	code: internal/authzenforce/authzenforce.go
 dev_health_benchmarking_nonfinite_percentile_inputs_total		code: internal/jobs/metrics/daily/benchmarking/nonfinite.go
 dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/benchmarking/metrics.go
 dev_health_cicd_duplicate_natural_key_total	dataset,provider,table	code: internal/providerfoundation/budget.go

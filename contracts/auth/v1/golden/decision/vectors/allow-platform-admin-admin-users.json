@@ -3,7 +3,7 @@
     "allowed": true,
     "cache_class": "",
     "expires_in_seconds": null,
-    "policy_revision": 9,
+    "policy_revision": 11,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },

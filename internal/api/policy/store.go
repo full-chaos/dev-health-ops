@@ -137,7 +137,11 @@ func (s PGStore) UserState(ctx context.Context, id uuid.UUID) (UserState, bool, 
 	return state, true, nil
 }
 
-const membershipSQL = `SELECT role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1`
+// membershipSQL reads the row of an active organization only (is_active is
+// true, as orgMembershipSQL and the login read take it): a suspend keeps the
+// members' rows.
+const membershipSQL = `SELECT m.role FROM memberships m JOIN organizations o ON o.id = m.org_id
+WHERE m.user_id = $1 AND m.org_id = $2 AND o.is_active IS true LIMIT 1`
 
 // Membership is user_is_member_of_org's query, reading the row's role too:
 // the existence answers the membership check, the role is the user's role in
@@ -150,7 +154,7 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role)")
+		return "", false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id, is_active)")
 	}
 	if role == nil {
 		return "", true, nil
@@ -159,9 +163,12 @@ func (s PGStore) Membership(ctx context.Context, userID, orgID uuid.UUID) (strin
 }
 
 // orgMembershipSQL is membershipSQL with the org's existence: one row
-// whatever is stored, the membership columns NULL when there is no row.
-const orgMembershipSQL = `SELECT EXISTS (SELECT 1 FROM organizations WHERE id = $2), m.user_id IS NOT NULL, m.role
+// whatever is stored, the membership columns NULL when there is no row. A row
+// of an organization that is not active (is_active is not true, as the login
+// read takes it) is no membership: a suspend keeps the members' rows.
+const orgMembershipSQL = `SELECT o.id IS NOT NULL, m.user_id IS NOT NULL AND o.is_active IS true, CASE WHEN o.is_active IS true THEN m.role END
 FROM (SELECT 1) AS one
+LEFT JOIN organizations o ON o.id = $2
 LEFT JOIN (SELECT user_id, role FROM memberships WHERE user_id = $1 AND org_id = $2 LIMIT 1) AS m ON true`
 
 // OrgMembership is Membership with whether the org exists. A NULL role
@@ -171,7 +178,7 @@ func (s PGStore) OrgMembership(ctx context.Context, userID, orgID uuid.UUID) (st
 	var orgFound, member bool
 	var role *string
 	if err := s.Pool.QueryRow(ctx, orgMembershipSQL, userID, orgID).Scan(&orgFound, &member, &role); err != nil {
-		return "", false, false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id)")
+		return "", false, false, storeError(err, "SELECT on memberships (user_id, org_id, role) and organizations (id, is_active)")
 	}
 	if role == nil {
 		return "", member, orgFound, nil

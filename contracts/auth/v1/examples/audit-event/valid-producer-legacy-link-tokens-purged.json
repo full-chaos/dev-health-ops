@@ -1,0 +1,11 @@
+{
+  "schema_version": "audit-event.v1",
+  "event_type": "auth.legacy_link_tokens.purged",
+  "occurred_at": "2026-11-02T10:00:00Z",
+  "outcome": "allowed",
+  "attributes": {
+    "purged_email_verification_tokens": 0,
+    "purged_password_reset_tokens": 12,
+    "run_id": "roll-24d"
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "description": "Golden corpus for membership-read.v1. No client-only rule in this corpus: every rule here is a schema rule; the rules a schema cannot say are in golden/read-api.",
+  "accept": [
+    {
+      "file": "valid-active.json",
+      "why": "An active member with a role."
+    },
+    {
+      "file": "valid-invited.json",
+      "why": "An invited member holds no role and has not joined."
+    },
+    {
+      "file": "valid-removed.json",
+      "why": "A removed member keeps the row."
+    },
+    {
+      "file": "valid-owner.json",
+      "why": "An owner."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-role-platform-owner.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "enum",
+      "why": "A platform role is not a membership role."
+    },
+    {
+      "file": "invalid-status-pending.json",
+      "expect_instance_location": "/status",
+      "expect_keyword": "enum",
+      "why": "pending is the event spelling."
+    },
+    {
+      "file": "invalid-extra-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed object."
+    },
+    {
+      "file": "invalid-principal-id-prefix.json",
+      "expect_instance_location": "/principal_id",
+      "expect_keyword": "pattern",
+      "why": "An organization id as the principal."
+    },
+    {
+      "file": "invalid-active-without-role.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "type",
+      "why": "An active member holds a role."
+    },
+    {
+      "file": "invalid-invited-with-role.json",
+      "expect_instance_location": "/role",
+      "expect_keyword": "type",
+      "why": "An invited member holds no role."
+    },
+    {
+      "file": "invalid-joined-at-absent.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "required",
+      "why": "joined_at is required (null until joined)."
+    }
+  ]
+}

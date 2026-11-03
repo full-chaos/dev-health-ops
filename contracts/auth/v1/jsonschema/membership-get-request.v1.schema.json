@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/membership-get-request.v1.schema.json",
+  "title": "Auth Control Plane membership get request (v1 wire format)",
+  "description": "Request body of a versioned read. Names one membership by its organization and principal. The route names the operation; the body carries no operation member and no credential. Closed: any other member fails.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "organization_id",
+    "principal_id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "membership-get-request.v1",
+      "description": "Contract identifier. A reader MUST reject an unrecognised value (G-26: unknown denies)."
+    },
+    "organization_id": {
+      "type": "string",
+      "pattern": "^org_[A-Za-z0-9_-]{1,64}$",
+      "description": "The organization."
+    },
+    "principal_id": {
+      "type": "string",
+      "pattern": "^prn_[A-Za-z0-9_-]{1,64}$",
+      "description": "The principal."
+    }
+  }
+}

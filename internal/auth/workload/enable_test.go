@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 func enableFixture() (enableState, EnableInput) {
@@ -120,6 +121,7 @@ func TestTheEnableAuditRowNamesTheOperatorAndThePrincipalOnlyWithTheFlag(t *test
 		if ev.SubjectPrincipalID == nil || *ev.SubjectPrincipalID != id.String() || ev.RequestID == nil || *ev.RequestID != request {
 			t.Errorf("%s: subject or request id is not the workload's / the caller's", name)
 		}
+		auditwire.MustValidate(t, ev)
 		if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 			t.Errorf("%s: the audit allowlist refuses the row: %v", name, err)
 		}

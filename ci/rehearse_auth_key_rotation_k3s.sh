@@ -9,8 +9,8 @@
 #
 # Environment (no value is printed):
 #   REHEARSAL_KUBECONFIG  a ServiceAccount kubeconfig, mode 0600, scoped to one namespace (never the k3s admin file)
-#   REHEARSAL_NAMESPACE   that namespace; it holds a ConfigMap rehearsal-owner whose key token equals REHEARSAL_RUN_TOKEN
-#   REHEARSAL_RUN_TOKEN   the run token the lead put in that ConfigMap
+#   REHEARSAL_NAMESPACE   that namespace; it carries the label rehearsal-run equal to REHEARSAL_RUN_TOKEN
+#   REHEARSAL_RUN_TOKEN   the run token the lead put in that label
 #   REHEARSAL_DIR         a new, empty directory (0700): keys, records, evidence
 #   REHEARSAL_IMAGES_ENV  a file with DEV_HEALTH_GO_{AUTH_MIGRATE,AUTH_SERVICE}_IMAGE=repo@sha256:<64 hex>
 #   REHEARSAL_RUN_ID      optional: the CI run id the digests come from (digits only)
@@ -33,7 +33,7 @@ source "${SCRIPT_DIR}/lib/auth_rotation_probe.sh"
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 readonly VALKEY_IMAGE="valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328"
 readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
-readonly NS_RE='^[a-z0-9][a-z0-9-]{2,40}$'
+readonly NS_RE='^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$'
 readonly ADMIN_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 readonly ISSUER_URL="https://auth-issuer.rehearsal.test:8443"
 readonly RELEASE="rot"
@@ -144,8 +144,8 @@ version="$(kc version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // 
 case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG is not k3s (server version: ${version:-none}); no kind, no prod" ;; esac
 [ "$(kc auth can-i list nodes 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can list nodes: it is not a namespace-scoped ServiceAccount"
 [ "$(kc auth can-i create clusterroles 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can create clusterroles: it is not a namespace-scoped ServiceAccount"
-owner_token="$(K get configmap rehearsal-owner -o 'jsonpath={.data.token}' 2>/dev/null || true)"
-[ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
+owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null || true)"
+[ -n "${owner_token}" ] && [ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
 
 if [ -e "${REHEARSAL_DIR}" ] && [ -n "$(ls -A "${REHEARSAL_DIR}" 2>/dev/null)" ]; then
   die "${REHEARSAL_DIR} exists and is not empty"

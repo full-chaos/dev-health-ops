@@ -6,11 +6,11 @@ import (
 )
 
 // The projection reader's grant is the reviewed one, written out here independently of ProjectionReaderReads: the two
-// filters of the read, the keyset column and the three columns it returns (CHAOS-11199). No fingerprint, scope, source,
-// owner or principal column.
-func TestProjectionReaderReadsAreTheReviewedColumns(t *testing.T) {
+// filters of the read, the keyset column and the three columns it returns (CHAOS-11199), then scopes and source_id for the
+// External Push reconcile (CHAOS-10897, C24). No fingerprint, terminal_at, owner or principal column.
+func TestC24GrantColumnsScopesAndSourceIDOnly(t *testing.T) {
 	want := []ColumnGrant{{Table: "credential_projection", Columns: []string{
-		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at"}}}
+		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at", "scopes", "source_id"}}}
 	if got := ProjectionReaderReads(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ProjectionReaderReads() = %+v, want %+v", got, want)
 	}

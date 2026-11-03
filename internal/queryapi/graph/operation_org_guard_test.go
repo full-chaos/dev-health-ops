@@ -201,3 +201,31 @@ func TestOperationOrgGuardServesAnImpersonationSessionNamingItsOrg(t *testing.T)
 		t.Fatalf("got %+v, want no errors", response)
 	}
 }
+
+// TestOperationOrgGuardRefusesADelegatedCallersWrites: a delegated session's
+// caller runs queries only; a mutation or a subscription is refused by its
+// operation type, before any field runs, whatever org it names (no catalog
+// action covers a saved report, so this is by type, as MCP does).
+func TestOperationOrgGuardRefusesADelegatedCallersWrites(t *testing.T) {
+	t.Parallel()
+	const own = "org-own"
+	delegated := authctx.Claims{OrgID: own, Role: "admin", Delegated: true}
+	plain := authctx.Claims{OrgID: own, Role: "admin"}
+	for _, tc := range []struct {
+		name     string
+		document string
+		claims   authctx.Claims
+		want     string
+	}{
+		{"delegated mutation", `mutation M { createSavedReport(orgId: "org-own") }`, delegated, msgDelegatedOperation},
+		{"delegated mutation with no org", `mutation M { doIt }`, delegated, msgDelegatedOperation},
+		{"delegated subscription", `subscription S { doIt }`, delegated, msgDelegatedOperation},
+		{"delegated query", `query Q { doIt(orgId: "org-own") }`, delegated, ""},
+		{"plain mutation", `mutation M { createSavedReport(orgId: "org-own") }`, plain, ""},
+	} {
+		ctx := authctx.WithClaims(context.Background(), tc.claims)
+		if got := operationOrgViolation(ctx, guardOperation(t, tc.document, nil)); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

@@ -51,6 +51,16 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		a.logger.WarnContext(ctx, "api user access token has an unusable subject")
 		return nil, errRejected
 	}
+	var impersonatedBy *string
+	if claims.Actor != nil {
+		actor, ok := parsePrincipalID(*claims.Actor)
+		if !ok {
+			a.logger.WarnContext(ctx, "api user access token has an unusable actor", slog.String("user_id", id.String()))
+			return nil, errRejected
+		}
+		by := actor.String()
+		impersonatedBy = &by
+	}
 	store, ok := a.store.(AccessUserStore)
 	if !ok {
 		a.logger.WarnContext(ctx, "api user access token with no user store", slog.String("user_id", id.String()))
@@ -75,7 +85,8 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		return nil, err
 	}
 	user := &User{UserID: id.String(), ID: id, Email: row.Email, Username: row.Username, FullName: row.FullName,
-		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID}
+		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID,
+		ImpersonatedBy: impersonatedBy}
 	if claims.OrgID != nil && *claims.OrgID != "" {
 		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
 		if err != nil {

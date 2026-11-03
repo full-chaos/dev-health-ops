@@ -81,6 +81,9 @@ func operationOrgViolation(ctx context.Context, operation *graphql.OperationCont
 // the operation may run) and, when a verified, non-impersonating superuser named
 // an org other than their own, that org (the operation then runs against it).
 func operationOrgDecision(ctx context.Context, operation *graphql.OperationContext) (message, rebindTo string) {
+	if claims, ok := authctx.FromContext(ctx); ok && claims.Delegated && operation.Operation.Operation != ast.Query {
+		return msgDelegatedOperation, ""
+	}
 	if claims, ok := authctx.FromContext(ctx); ok && orglessPlatformCaller(claims) {
 		if !orglessOperationAllowed(claims, operation) {
 			return "Authorization required", ""
@@ -209,3 +212,7 @@ func orgArgumentValue(value *ast.Value, variables map[string]any) (string, bool)
 	}
 	return "", false
 }
+
+// msgDelegatedOperation refuses every operation but a query to a delegated
+// session's caller.
+const msgDelegatedOperation = "Not allowed in an impersonation session"

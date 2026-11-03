@@ -157,8 +157,16 @@ case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG 
 # Cluster scope (a namespace other than the run's, so no namespaced Role shows): the only rules allowed are the self-review creates,
 # get on non-resource URLs, and get on the one Namespace object named NS.
 cluster_rules="$(kc auth can-i --list --namespace default 2>/dev/null)" || die "the cluster-scope permission list of REHEARSAL_KUBECONFIG could not be read"
+# Fail closed: the header must be the expected four columns, every later row must parse, an empty list is refused.
+header_seen=0
 while IFS= read -r row; do
-  [[ "${row}" =~ ^(.*[^[:space:]])?[[:space:]]*\[([^]]*)\][[:space:]]+\[([^]]*)\][[:space:]]+\[([^]]*)\]$ ]] || continue
+  [ -n "${row//[[:space:]]/}" ] || continue
+  if [ "${header_seen}" = 0 ]; then
+    [[ "${row}" =~ ^Resources[[:space:]]+Non-Resource[[:space:]]+URLs[[:space:]]+Resource[[:space:]]+Names[[:space:]]+Verbs$ ]] || die "the cluster-scope permission list of REHEARSAL_KUBECONFIG has an unrecognised header"
+    header_seen=1
+    continue
+  fi
+  [[ "${row}" =~ ^(.*[^[:space:]])?[[:space:]]*\[([^]]*)\][[:space:]]+\[([^]]*)\][[:space:]]+\[([^]]*)\]$ ]] || die "the cluster-scope permission list of REHEARSAL_KUBECONFIG has an unrecognised row"
   res="${BASH_REMATCH[1]}"; urls="${BASH_REMATCH[2]}"; names="${BASH_REMATCH[3]}"; verbs="${BASH_REMATCH[4]}"
   case "${res}|${names}|${verbs}" in
     selfsubjectreviews.authentication.k8s.io\|\|create | selfsubjectaccessreviews.authorization.k8s.io\|\|create | selfsubjectrulesreviews.authorization.k8s.io\|\|create) ;;
@@ -167,6 +175,7 @@ while IFS= read -r row; do
     *) die "REHEARSAL_KUBECONFIG holds a cluster-scope permission beyond get on the namespace ${NS}: ${res:-non-resource} [${verbs}]" ;;
   esac
 done <<<"${cluster_rules}"
+[ "${header_seen}" = 1 ] || die "the cluster-scope permission list of REHEARSAL_KUBECONFIG is empty"
 owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null)" || die "the namespace read of ${NS} was denied or failed"
 [ -n "${owner_token}" ] && [ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
 

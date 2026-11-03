@@ -26,6 +26,7 @@ lifecycle: active
 - [Service accounts](auth-service-accounts.md)
 - [Kubernetes workload federation](auth-workload-kubernetes-federation.md)
 - [Auth legacy compatibility and rollback](auth-legacy-compat-and-rollback.md)
+- [External Push lifecycle events](external-push-lifecycle.md)
 - [Legacy ingest retirement](legacy-ingest-retirement.md)
 
 Retain the affected organization or workspace identifier, source, scope, time, job or request identifiers, sanitized logs, last known good checkpoint, and changes made during recovery.

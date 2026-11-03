@@ -2,34 +2,43 @@ package chartgates_test
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
-	"io/fs"
-	"os"
-	pathpkg "path"
+	"go/types"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"golang.org/x/tools/go/packages"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 )
 
 // A name is read by a Go source when a non-test file holds it as a string constant or literal in code (a comment is not
-// code) and the same file calls an environment lookup. A call is a lookup by its identity, not by its name alone:
-//   - a function of an imported package in envLookupFuncs, matched by import path, so any alias counts and a same-named
-//     function of another package does not;
-//   - inside the secrets package, the same functions called unqualified;
-//   - a lookup passed in: a one-argument call of a parameter, variable or struct field whose declared type is
-//     func(string) string or func(string) (string, bool), or a named type or alias of one (secrets.LookupEnv), unless
-//     it is a non-env holder (nonEnvLookupHolders by package and identifier, or a redactor word of nonEnvLookupWords).
-//     A same-named method or a call with other arguments is not a lookup.
+// code) and the same file calls an environment lookup. A key read only by a test is not a product read. The scan
+// type-checks the packages (go/types, with their test files and the CI build tags) and decides by the callee object:
 //
+//   - a function in envLookupFuncs, matched by package path: os.Getenv, os.LookupEnv, syscall.Getenv and the env readers
+//     of internal/platform/secrets, under any import alias, a dot import, or unqualified inside the secrets package;
+//
+//   - a variable, parameter or struct field (embedded too) whose type is, or is a named type or alias of,
+//     func(string) string or func(string) (string, bool), unless it is a non-env holder (nonEnvLookupHolders by package
+//     and identifier, or a redactor word of nonEnvLookupWords). Copies count by their own type, however they are made.
+//
+//   - a function or method that passes one of its string parameters straight to such a lookup (envWrappers).
+//
+// Any other method never counts, whatever its name or signature.
 // A name that appears only in a comment, or in a file that never looks anything up, is not read.
 const (
-	secretsImportPath = "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	modulePath        = "github.com/full-chaos/dev-health-ops"
+	secretsImportPath = modulePath + "/internal/platform/secrets"
 	secretsDir        = "internal/platform/secrets"
 )
 
@@ -63,6 +72,34 @@ var nonEnvLookupHolders = map[lookupHolder]string{
 	{"internal/llmorgsettings", "value"}:                       "reads a stored setting value",
 	{"internal/jobs/metrics/daily/icfinalize", "TeamNames"}:    "lists team names",
 	{"internal/jobs/metrics/daily/icfinalize", "TeamResolver"}: "resolves a team name",
+	{"internal/api/syncadmin", "component"}:                    "reads a PagerDuty config object key",
+	{"internal/apiservice/admin", "text"}:                      "reads a response detail key",
+	{"internal/auth/contracts/tokencorpus", "q"}:               "quotes a string",
+	{"internal/cigates/affected", "table"}:                     "maps a file to its table path",
+	{"internal/cigates/docstools", "cell"}:                     "reads a table row cell",
+	{"internal/cigates/docstools", "get"}:                      "reads a CSV row field",
+	{"internal/cigates/docstools", "invTxThemeOf"}:             "maps a subcategory to its theme",
+	{"internal/fixturescli", "flag"}:                           "formats a target flag",
+	{"internal/gqlgenguard", "rel"}:                            "maps a path to the module root",
+	{"internal/platform/credshape", "segment"}:                 "encodes a probe segment",
+	{"internal/providersync", "canonical"}:                     "canonicalises a work item id",
+	{"internal/providersync", "label"}:                         "labels a value",
+	{"internal/providersync", "writerOf"}:                      "names a relation writer",
+	{"internal/queryapi/digest", "Document"}:                   "digests a document",
+	{"internal/queryapi/hotspots", "repoLabel"}:                "labels a repository id",
+	{"internal/scheduler/sync", "derive"}:                      "derives a materialization id",
+	{"internal/scheduler/sync", "field"}:                       "reads a project JSON field",
+	{"internal/storage/postgres/authschema", "qualified"}:      "qualifies a table name",
+	{"internal/storage/roleacl", "on"}:                         "renders an SQL class condition",
+	{"internal/storage/roleacl", "own"}:                        "renders an SQL ownership case",
+	{"internal/syncdispatchruntime", "get"}:                    "reads a budget bucket key",
+	{"internal/syncdispatchruntime", "text"}:                   "reads an observation key",
+	{"internal/testsupport/chlogin", "with"}:                   "builds a DSN with a password",
+	{"internal/testsupport/idpstub", "esc"}:                    "escapes a string",
+	{"internal/testsupport/sessionscenario", "aliceAccess"}:    "reads a scenario token",
+	{"internal/testsupport/sessionscenario", "aliceRefresh"}:   "reads a scenario token",
+	{"internal/testsupport/sessionscenario", "latest"}:         "reads a scenario token",
+	{"internal/testsupport/sessionscenario", "successor"}:      "reads a scenario token",
 }
 
 var envLookupFuncs = map[string]map[string]bool{
@@ -75,117 +112,174 @@ var envLookupFuncs = map[string]map[string]bool{
 	},
 }
 
-type envScan struct {
-	lookupTypes map[string]bool            // named types (and aliases) of a string lookup, by type name
-	fields      map[string]bool            // struct fields of a string-lookup type, by field name, tree-wide
-	pkgValues   map[string]map[string]bool // package-level variables of a string-lookup type, by directory then name
+// envUnit is one type-checked package: its files by path relative to the module root, test files included.
+type envUnit struct {
+	files map[string]*ast.File
+	info  *types.Info
 }
 
 func scanEnvReaders(sources map[string]string) map[string][]string {
-	readers := map[string][]string{}
-	fset := token.NewFileSet()
-	files := map[string]*ast.File{}
-	for path, src := range sources {
-		if file, err := parser.ParseFile(fset, path, src, 0); err == nil {
-			files[path] = file
-		}
-	}
-	scan := newEnvScan(files)
-	for path, file := range files {
-		imports := importNames(file)
-		dir := filepath.ToSlash(filepath.Dir(path))
-		lookups := false
-		names := map[string]bool{}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch typed := node.(type) {
-			case *ast.CallExpr:
-				lookups = lookups || scan.isEnvLookup(typed, imports, dir)
-			case *ast.BasicLit:
-				if typed.Kind == token.STRING {
-					if value, err := strconv.Unquote(typed.Value); err == nil {
-						names[value] = true
+	return scanEnvUnits(checkSources(sources))
+}
+
+func scanEnvUnits(units []envUnit) map[string][]string {
+	wrappers := envWrappers(units)
+	found := map[string]map[string]bool{}
+	for _, unit := range units {
+		for path, file := range unit.files {
+			if strings.HasSuffix(path, "_test.go") {
+				continue
+			}
+			lookups := false
+			names := map[string]bool{}
+			ast.Inspect(file, func(node ast.Node) bool {
+				switch typed := node.(type) {
+				case *ast.CallExpr:
+					lookups = lookups || isEnvLookupCall(unit.info, typed, wrappers)
+				case *ast.BasicLit:
+					if typed.Kind == token.STRING {
+						if value, err := strconv.Unquote(typed.Value); err == nil {
+							names[value] = true
+						}
 					}
 				}
+				return true
+			})
+			if !lookups {
+				continue
 			}
-			return true
-		})
-		if !lookups {
-			continue
-		}
-		for name := range names {
-			readers[name] = append(readers[name], path)
+			for name := range names {
+				if found[name] == nil {
+					found[name] = map[string]bool{}
+				}
+				found[name][path] = true
+			}
 		}
 	}
-	for name := range readers {
+	readers := map[string][]string{}
+	for name, paths := range found {
+		for path := range paths {
+			readers[name] = append(readers[name], path)
+		}
 		sort.Strings(readers[name])
 	}
 	return readers
 }
 
-func newEnvScan(files map[string]*ast.File) *envScan {
-	scan := &envScan{lookupTypes: map[string]bool{}, fields: map[string]bool{}, pkgValues: map[string]map[string]bool{}}
+// isEnvLookupCall reports whether a call's callee is an environment lookup by its object. wrappers holds the functions
+// and methods (by types.Func.FullName) that pass one of their string parameters straight to a lookup.
+func isEnvLookupCall(info *types.Info, call *ast.CallExpr, wrappers map[string]bool) bool {
+	var obj types.Object
+	switch fun := ast.Unparen(call.Fun).(type) {
+	case *ast.Ident:
+		obj = info.Uses[fun]
+	case *ast.SelectorExpr:
+		if selection, ok := info.Selections[fun]; ok {
+			if selection.Kind() != types.FieldVal {
+				method, isFunc := selection.Obj().(*types.Func)
+				return isFunc && wrappers[method.FullName()]
+			}
+			obj = selection.Obj()
+		} else {
+			obj = info.Uses[fun.Sel]
+		}
+	}
+	switch typed := obj.(type) {
+	case *types.Func:
+		if typed.Pkg() == nil {
+			return false
+		}
+		if wrappers[typed.FullName()] {
+			return true
+		}
+		if typed.Signature().Recv() != nil {
+			return false
+		}
+		return envLookupFuncs[typed.Pkg().Path()][typed.Name()]
+	case *types.Var:
+		return isStringLookup(typed.Type()) && !nonEnvLookupHolder(typed)
+	}
+	return false
+}
+
+// envWrappers finds the functions and methods whose body passes one of their string parameters, as the argument itself,
+// to an environment lookup (or to another wrapper): loader.getenv(name) { return loader.Getenv(name) }. A call of a
+// wrapper is a lookup wherever it is, so a file that reads its names through a wrapper method or a helper of another
+// package is a reader. Keys are types.Func.FullName, the same for a package loaded from source and from export data.
+func envWrappers(units []envUnit) map[string]bool {
+	wrappers := map[string]bool{}
 	for changed := true; changed; {
 		changed = false
-		for path, file := range files {
-			dir := filepath.ToSlash(filepath.Dir(path))
-			ast.Inspect(file, func(node ast.Node) bool {
-				if spec, ok := node.(*ast.TypeSpec); ok && !scan.lookupTypes[spec.Name.Name] && !nonEnvLookupHolder(dir, spec.Name.Name) && scan.isLookupType(spec.Type) {
-					scan.lookupTypes[spec.Name.Name], changed = true, true
-				}
-				return true
-			})
-		}
-	}
-	for path, file := range files {
-		dir := filepath.ToSlash(filepath.Dir(path))
-		imports := importNames(file)
-		ast.Inspect(file, func(node ast.Node) bool {
-			if st, ok := node.(*ast.StructType); ok {
-				for _, field := range st.Fields.List {
-					for _, name := range field.Names {
-						if scan.isLookupHolder(dir, name.Name, field.Type) {
-							scan.fields[name.Name] = true
+		for _, unit := range units {
+			for _, file := range unit.files {
+				for _, decl := range file.Decls {
+					fn, ok := decl.(*ast.FuncDecl)
+					if !ok || fn.Body == nil {
+						continue
+					}
+					obj, ok := unit.info.Defs[fn.Name].(*types.Func)
+					if !ok || wrappers[obj.FullName()] {
+						continue
+					}
+					params := map[types.Object]bool{}
+					for i := 0; i < obj.Signature().Params().Len(); i++ {
+						if param := obj.Signature().Params().At(i); types.Identical(param.Type().Underlying(), types.Typ[types.String]) {
+							params[param] = true
 						}
 					}
-				}
-			}
-			return true
-		})
-		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok || gen.Tok != token.VAR {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value := spec.(*ast.ValueSpec)
-				for i, name := range value.Names {
-					if scan.isLookupValueSpec(value, i, imports, dir) {
-						if scan.pkgValues[dir] == nil {
-							scan.pkgValues[dir] = map[string]bool{}
-						}
-						scan.pkgValues[dir][name.Name] = true
+					if len(params) == 0 {
+						continue
 					}
+					ast.Inspect(fn.Body, func(node ast.Node) bool {
+						call, ok := node.(*ast.CallExpr)
+						if !ok || wrappers[obj.FullName()] || !isEnvLookupCall(unit.info, call, wrappers) {
+							return true
+						}
+						for _, arg := range call.Args {
+							if id, ok := ast.Unparen(arg).(*ast.Ident); ok && params[unit.info.Uses[id]] {
+								wrappers[obj.FullName()], changed = true, true
+							}
+						}
+						return true
+					})
 				}
 			}
 		}
 	}
-	return scan
+	return wrappers
 }
 
-// isLookupHolder reports whether a parameter, variable or field holds an environment lookup: its type is a string lookup
-// (or a named type or alias of one) and it is not a non-env holder. The scan errs toward counting a read.
-func (s *envScan) isLookupHolder(dir, name string, typ ast.Expr) bool {
-	return s.isLookupType(typ) && !nonEnvLookupHolder(dir, name)
+// isStringLookup reports whether a type is, or is a named type or alias of, func(string) string or
+// func(string) (string, bool).
+func isStringLookup(t types.Type) bool {
+	sig, ok := t.Underlying().(*types.Signature)
+	if !ok || sig.Variadic() || sig.Params().Len() != 1 || !types.Identical(sig.Params().At(0).Type(), types.Typ[types.String]) {
+		return false
+	}
+	results := sig.Results()
+	switch results.Len() {
+	case 1:
+		return types.Identical(results.At(0).Type(), types.Typ[types.String])
+	case 2:
+		return types.Identical(results.At(0).Type(), types.Typ[types.String]) && types.Identical(results.At(1).Type(), types.Typ[types.Bool])
+	}
+	return false
 }
 
-// nonEnvLookupHolder reports whether a holder or type is in nonEnvLookupHolders, or its name has a word of
-// nonEnvLookupWords and no word that names the environment (env, getenv, environment, lookup): redactEnv still counts.
-func nonEnvLookupHolder(dir, name string) bool {
-	if _, ok := nonEnvLookupHolders[lookupHolder{dir, name}]; ok {
+// nonEnvLookupHolder reports whether a lookup-shaped holder reads no environment: the holder, or the named type it has,
+// is in nonEnvLookupHolders by package directory and identifier, or its name has a word of nonEnvLookupWords and no
+// word that names the environment (env, getenv, environment, lookup): redactEnv still counts.
+func nonEnvLookupHolder(holder *types.Var) bool {
+	if _, ok := nonEnvLookupHolders[lookupHolder{packageDir(holder.Pkg()), holder.Name()}]; ok {
 		return true
 	}
+	if named, ok := types.Unalias(holder.Type()).(*types.Named); ok {
+		if _, ok := nonEnvLookupHolders[lookupHolder{packageDir(named.Obj().Pkg()), named.Obj().Name()}]; ok {
+			return true
+		}
+	}
 	exempt := false
-	for _, word := range nameWords.FindAllString(name, -1) {
+	for _, word := range nameWords.FindAllString(holder.Name(), -1) {
 		word = strings.ToLower(word)
 		switch word {
 		case "env", "getenv", "environment", "lookup":
@@ -201,165 +295,141 @@ func nonEnvLookupHolder(dir, name string) bool {
 // nameWords splits a Go name into its words: KeyScrub -> Key Scrub, lookupEnv -> lookup Env, team_names -> team names.
 var nameWords = regexp.MustCompile(`[A-Z]+[a-z0-9]*|[a-z0-9]+`)
 
-// isLookupType reports whether a type expression is a string lookup: func(string) string, func(string) (string, bool),
-// or a named type or alias of one.
-func (s *envScan) isLookupType(expr ast.Expr) bool {
-	switch typed := expr.(type) {
-	case *ast.ParenExpr:
-		return s.isLookupType(typed.X)
-	case *ast.Ident:
-		return s.lookupTypes[typed.Name]
-	case *ast.SelectorExpr:
-		return s.lookupTypes[typed.Sel.Name]
-	case *ast.FuncType:
-		params, results := fieldTypes(typed.Params), fieldTypes(typed.Results)
-		if len(params) != 1 || !isIdent(params[0], "string") {
-			return false
-		}
-		switch len(results) {
-		case 1:
-			return isIdent(results[0], "string")
-		case 2:
-			return isIdent(results[0], "string") && isIdent(results[1], "bool")
-		}
+// packageDir is a package's directory relative to the module root ("internal/x"), or its path outside the module.
+func packageDir(pkg *types.Package) string {
+	if pkg == nil {
+		return ""
 	}
-	return false
+	return strings.TrimSuffix(strings.TrimPrefix(pkg.Path(), modulePath+"/"), "_test")
 }
 
-func (s *envScan) isLookupValueSpec(value *ast.ValueSpec, i int, imports map[string]string, dir string) bool {
-	if value.Type != nil {
-		return s.isLookupHolder(dir, value.Names[i].Name, value.Type)
-	}
-	return i < len(value.Values) && isEnvFuncRef(value.Values[i], imports)
-}
-
-// isEnvFuncRef reports whether an expression names a package environment lookup without calling it (lookup := os.LookupEnv).
-func isEnvFuncRef(expr ast.Expr, imports map[string]string) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	x, ok := sel.X.(*ast.Ident)
-	return ok && x.Obj == nil && envLookupFuncs[imports[x.Name]][sel.Sel.Name]
-}
-
-// isLookupFieldRef reports whether an expression takes a lookup field of a value without calling it (lookup := env.Lookup).
-func (s *envScan) isLookupFieldRef(expr ast.Expr, imports map[string]string) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	if x, ok := sel.X.(*ast.Ident); ok && x.Obj == nil {
-		if _, imported := imports[x.Name]; imported {
-			return false
-		}
-	}
-	return s.fields[sel.Sel.Name]
-}
-
-func (s *envScan) isEnvLookup(call *ast.CallExpr, imports map[string]string, dir string) bool {
-	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		if x, ok := fun.X.(*ast.Ident); ok && x.Obj == nil {
-			if path, imported := imports[x.Name]; imported {
-				return envLookupFuncs[path][fun.Sel.Name]
-			}
-		}
-		return len(call.Args) == 1 && s.fields[fun.Sel.Name]
-	case *ast.Ident:
-		if fun.Obj == nil {
-			if dir == secretsDir && envLookupFuncs[secretsImportPath][fun.Name] {
-				return true
-			}
-			return len(call.Args) == 1 && s.pkgValues[dir][fun.Name]
-		}
-		return len(call.Args) == 1 && s.isLookupObject(fun.Obj, imports, dir)
-	}
-	return false
-}
-
-// isLookupObject reports whether a local declaration (a parameter, a variable, an assignment) holds a string lookup.
-func (s *envScan) isLookupObject(obj *ast.Object, imports map[string]string, dir string) bool {
-	if obj.Kind != ast.Var {
-		return false
-	}
-	switch decl := obj.Decl.(type) {
-	case *ast.Field:
-		return s.isLookupHolder(dir, obj.Name, decl.Type)
-	case *ast.ValueSpec:
-		for i, name := range decl.Names {
-			if name.Name == obj.Name {
-				return s.isLookupValueSpec(decl, i, imports, dir)
-			}
-		}
-	case *ast.AssignStmt:
-		for i, lhs := range decl.Lhs {
-			if id, ok := lhs.(*ast.Ident); ok && id.Name == obj.Name && len(decl.Rhs) == len(decl.Lhs) {
-				return isEnvFuncRef(decl.Rhs[i], imports) || s.isLookupFieldRef(decl.Rhs[i], imports)
-			}
-		}
-	}
-	return false
-}
-
-func importNames(file *ast.File) map[string]string {
-	out := map[string]string{}
-	for _, spec := range file.Imports {
-		path, err := strconv.Unquote(spec.Path.Value)
+// checkSources type-checks in-memory sources by package directory and package clause. An import of a module package the
+// sources hold is checked from them; any other import comes from the installed export data, and one that resolves
+// nowhere stays unresolved (its uses are no lookup).
+func checkSources(sources map[string]string) []envUnit {
+	fset := token.NewFileSet()
+	type pkgKey struct{ dir, name string }
+	byPkg := map[pkgKey]map[string]*ast.File{}
+	for path, src := range sources {
+		file, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
 			continue
 		}
-		name := pathpkg.Base(path)
-		if spec.Name != nil {
-			name = spec.Name.Name
+		key := pkgKey{filepath.ToSlash(filepath.Dir(path)), file.Name.Name}
+		if byPkg[key] == nil {
+			byPkg[key] = map[string]*ast.File{}
 		}
-		out[name] = path
+		byPkg[key][path] = file
 	}
-	return out
-}
-
-func fieldTypes(list *ast.FieldList) []ast.Expr {
-	var out []ast.Expr
-	if list == nil {
-		return out
-	}
-	for _, field := range list.List {
-		for n := max(len(field.Names), 1); n > 0; n-- {
-			out = append(out, field.Type)
+	im := &sourceImporter{fset: fset, std: importer.Default(), done: map[string]*types.Package{}, pkgs: map[string]map[string]*ast.File{}}
+	for key, files := range byPkg {
+		if !strings.HasSuffix(key.name, "_test") {
+			im.pkgs[key.dir] = files
 		}
 	}
-	return out
+	var units []envUnit
+	for key, files := range byPkg {
+		path := modulePath + "/" + key.dir
+		if strings.HasSuffix(key.name, "_test") {
+			path += "_test"
+		}
+		units = append(units, envUnit{files: files, info: im.check(path, files)})
+	}
+	return units
 }
 
-func isIdent(expr ast.Expr, name string) bool {
-	id, ok := expr.(*ast.Ident)
-	return ok && id.Name == name
+type sourceImporter struct {
+	fset *token.FileSet
+	std  types.Importer
+	done map[string]*types.Package
+	pkgs map[string]map[string]*ast.File
+}
+
+func (im *sourceImporter) Import(path string) (*types.Package, error) {
+	if pkg, ok := im.done[path]; ok {
+		return pkg, nil
+	}
+	if dir, ok := strings.CutPrefix(path, modulePath+"/"); ok {
+		if files, held := im.pkgs[dir]; held {
+			im.check(path, files)
+			return im.done[path], nil
+		}
+	}
+	return im.std.Import(path)
+}
+
+func (im *sourceImporter) check(path string, files map[string]*ast.File) *types.Info {
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	list := make([]*ast.File, 0, len(files))
+	for _, file := range files {
+		list = append(list, file)
+	}
+	config := types.Config{Importer: im, Error: func(error) {}}
+	pkg, _ := config.Check(path, im.fset, list, info)
+	im.done[path] = pkg
+	return info
+}
+
+// realEnvTree is the type-checked tree, loaded once per test binary: the packages under internal and cmd, with their
+// test files, once without build tags and once with -tags=integration (the two CI legs).
+var realEnvTree struct {
+	once    sync.Once
+	units   []envUnit
+	errs    []string
+	elapsed time.Duration
+}
+
+func loadRealEnvTree(root string) {
+	start := time.Now()
+	for _, flags := range [][]string{nil, {"-tags=integration"}} {
+		config := &packages.Config{
+			Mode:       packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+			Dir:        root,
+			Tests:      true,
+			BuildFlags: flags,
+		}
+		pkgs, err := packages.Load(config, "./internal/...", "./cmd/...")
+		if err != nil {
+			realEnvTree.errs = append(realEnvTree.errs, err.Error())
+			continue
+		}
+		for _, pkg := range pkgs {
+			for _, perr := range pkg.Errors {
+				realEnvTree.errs = append(realEnvTree.errs, pkg.ID+": "+perr.Error())
+			}
+			files := map[string]*ast.File{}
+			for _, file := range pkg.Syntax {
+				rel, rerr := filepath.Rel(root, pkg.Fset.Position(file.Pos()).Filename)
+				if rerr != nil || strings.HasPrefix(rel, "..") {
+					continue
+				}
+				files[filepath.ToSlash(rel)] = file
+			}
+			realEnvTree.units = append(realEnvTree.units, envUnit{files: files, info: pkg.TypesInfo})
+		}
+	}
+	realEnvTree.elapsed = time.Since(start)
 }
 
 // realEnvReaders scans the non-test Go sources of the tree under g.root.
 func realEnvReaders(g *guard) map[string][]string {
-	sources := map[string]string{}
-	for _, dir := range []string{"internal", "cmd"} {
-		_ = filepath.WalkDir(g.path(dir), func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if entry.IsDir() && entry.Name() == "testdata" {
-				return filepath.SkipDir
-			}
-			if entry.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			if data, rerr := os.ReadFile(path); rerr == nil {
-				rel, _ := filepath.Rel(g.root, path)
-				sources[filepath.ToSlash(rel)] = string(data)
-			}
-			return nil
-		})
-	}
-	g.expect(len(sources) > 0, "no Go source was found under %s, so the reader scan measured nothing", g.root)
-	return scanEnvReaders(sources)
+	realEnvTree.once.Do(func() { loadRealEnvTree(g.root) })
+	g.expect(len(realEnvTree.errs) == 0, "the reader scan could not type-check the tree: %s", strings.Join(firstN(realEnvTree.errs, 5), "; "))
+	g.expect(len(realEnvTree.units) > 0, "no Go package was found under %s, so the reader scan measured nothing", g.root)
+	return scanEnvUnits(realEnvTree.units)
 }
+
+func firstN(in []string, n int) []string {
+	if len(in) > n {
+		return in[:n]
+	}
+	return in
+}
+
+// secretsStub stands in for the secrets package in the single-file cells, so they type-check without the real tree.
+const secretsStub = "package secrets\nimport \"os\"\ntype LookupEnv func(string) (string, bool)\ntype Value struct{}\n" +
+	"func GetenvSecret(name string) string { return os.Getenv(name) }\n" +
+	"func ResolveSecret(key string, lookup LookupEnv) (Value, bool, error) {\n_, ok := lookup(key)\nreturn Value{}, ok, nil\n}\n"
 
 func TestWorkerSecretKeyReaderScan(t *testing.T) {
 	cases := []struct {
@@ -394,7 +464,7 @@ func TestWorkerSecretKeyReaderScan(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := len(scanEnvReaders(map[string]string{"internal/x/x.go": c.src})["SOME_KEY"]) > 0
+			got := len(scanEnvReaders(map[string]string{"internal/x/x.go": c.src, secretsDir + "/stub.go": secretsStub})["SOME_KEY"]) > 0
 			if got != c.want {
 				t.Errorf("%s: SOME_KEY read = %v, want %v", c.name, got, c.want)
 			}
@@ -414,6 +484,83 @@ func TestWorkerSecretKeyReaderScanInjectedFieldOfAnotherPackage(t *testing.T) {
 	}
 	if got := scanEnvReaders(sources)["SOME_KEY"]; len(got) != 1 || got[0] != "internal/pushcli/batch.go" {
 		t.Errorf("SOME_KEY readers = %v, want [internal/pushcli/batch.go]", got)
+	}
+}
+
+// Multi-file cells, each a small module tree: the forms the r1 review of CHAOS-12688 executed against the name-keyed
+// scan, and the ones the typed scan adds. want is whether wantFile is a reader of SOME_KEY.
+func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
+	mod := strings.TrimSuffix(secretsImportPath, "/"+secretsDir)
+	envStruct := "type Env struct{ Lookup func(string) (string, bool) }\n"
+	cases := []struct {
+		name     string
+		files    map[string]string
+		wantFile string
+		want     bool
+	}{
+		{"V01-var-copy-of-a-lookup-field", map[string]string{
+			"internal/x/x.go": "package x\n" + envStruct + "func f(env Env) {\nvar lookup = env.Lookup\n_, _ = lookup(\"SOME_KEY\")\n}\n",
+		}, "internal/x/x.go", true},
+		{"V02-package-var-chain-from-os-lookupenv", map[string]string{
+			"internal/x/x.go": "package x\nimport \"os\"\nvar lookupEnv = os.LookupEnv\nvar second = lookupEnv\nfunc f() { _, _ = second(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", true},
+		{"V03-embedded-named-lookup-field", map[string]string{
+			"internal/x/x.go": "package x\ntype Lookup func(string) (string, bool)\ntype Env struct{ Lookup }\nfunc f(e Env) { _, _ = e.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", true},
+		{"V04-dot-imported-os-getenv", map[string]string{
+			"internal/x/x.go": "package x\nimport . \"os\"\nfunc f() string { return Getenv(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", true},
+		{"V05-chained-copy-of-a-lookup-field", map[string]string{
+			"internal/x/x.go": "package x\n" + envStruct + "func f(env Env) {\na := env.Lookup\nb := a\n_, _ = b(\"SOME_KEY\")\n}\n",
+		}, "internal/x/x.go", true},
+		{"V06-unqualified-secrets-reader", map[string]string{
+			secretsDir + "/use.go": "package secrets\nimport \"os\"\nvar _ = os.Args\nfunc GetenvSecret(name string) string { return getenv(name) }\n" +
+				"func getenv(name string) string { return name }\nfunc f() string { return GetenvSecret(\"SOME_KEY\") }\n",
+		}, secretsDir + "/use.go", true},
+		{"V07-same-named-imported-types-with-different-signatures", map[string]string{
+			"internal/a/a.go": "package a\ntype Getter func(string) string\n",
+			"internal/b/b.go": "package b\ntype Getter func(string) int\n",
+			"internal/x/x.go": "package x\nimport (\n\"" + mod + "/internal/a\"\n\"" + mod + "/internal/b\"\n)\nvar _ a.Getter\nfunc f(g b.Getter) int { return g(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", false},
+		{"V08-method-named-like-a-lookup-field-of-another-package", map[string]string{
+			"internal/localgit/sync.go":               "package localgit\ntype Options struct{ Lookup func(string) (string, bool) }\n",
+			"internal/syncdispatchcontract/routes.go": "package syncdispatchcontract\ntype Registry struct{}\nfunc (Registry) Lookup(kind string) (string, bool) { return kind, true }\n",
+			"internal/syncreconciler/observer.go": "package syncreconciler\nimport \"" + mod + "/internal/syncdispatchcontract\"\n" +
+				"func f(r syncdispatchcontract.Registry) {\n_, _ = r.Lookup(\"SOME_KEY\")\n_, _ = syncdispatchcontract.Registry.Lookup(r, \"SOME_KEY\")\n}\n",
+		}, "internal/syncreconciler/observer.go", false},
+		{"V09-a-key-read-only-in-a-test-file", map[string]string{
+			"internal/x/x.go":      "package x\nconst key = \"SOME_KEY\"\n",
+			"internal/x/x_test.go": "package x\nimport \"os\"\nfunc use() string { return os.Getenv(key) + os.Getenv(\"SOME_KEY\") }\n",
+		}, "", false},
+		{"V10-holder-of-an-exempt-named-type-in-another-package", map[string]string{
+			"internal/jobs/metrics/daily/icfinalize/executor.go": "package icfinalize\ntype TeamResolver func(string) string\n",
+			"internal/y/y.go": "package y\nimport \"" + mod + "/internal/jobs/metrics/daily/icfinalize\"\nfunc f(r icfinalize.TeamResolver) string { return r(\"SOME_KEY\") }\n",
+		}, "internal/y/y.go", false},
+		{"V12-env-wrapper-method-in-another-file", map[string]string{
+			"internal/syncbudget/loader.go":    "package syncbudget\ntype Loader struct{ Getenv func(string) string }\nfunc (l Loader) getenv(name string) string { return l.Getenv(name) }\n",
+			"internal/syncbudget/hydration.go": "package syncbudget\nfunc f(l Loader) string { return l.getenv(\"SOME_KEY\") }\n",
+		}, "internal/syncbudget/hydration.go", true},
+		{"V13-env-wrapper-function-of-another-package", map[string]string{
+			"internal/envutil/envutil.go": "package envutil\nimport \"os\"\nfunc Read(name string) string { return os.Getenv(name) }\nfunc Hash(name string) string { return name }\n",
+			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/envutil\"\nfunc f() string { return envutil.Read(\"SOME_KEY\") }\n",
+			"internal/y/y.go":             "package y\nimport \"" + mod + "/internal/envutil\"\nfunc g() string { return envutil.Hash(\"OTHER_KEY\") }\n",
+		}, "internal/x/x.go", true},
+		{"V11-getenv-of-a-resolved-non-env-package", map[string]string{
+			"internal/fakeenv/fakeenv.go": "package fakeenv\nfunc Getenv(name string) string { return name }\n",
+			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/fakeenv\"\nfunc f() string { return fakeenv.Getenv(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			readers := scanEnvReaders(c.files)["SOME_KEY"]
+			got := len(readers) > 0
+			if c.wantFile != "" {
+				got = slices.Contains(readers, c.wantFile)
+			}
+			if got != c.want {
+				t.Errorf("%s: SOME_KEY read by %q = %v (readers %v), want %v", c.name, c.wantFile, got, readers, c.want)
+			}
+		})
 	}
 }
 

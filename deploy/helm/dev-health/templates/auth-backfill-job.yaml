@@ -1,7 +1,7 @@
 {{- /*
 One `dho auth <verb>` run (users-backfill, orgs-backfill or legacy-link-purge) as a plain Job. Off by default.
-It reads the SAME switches as auth-service: authService.phase (4 users owned, 5 orgs owned) feeds
-AUTH_USERS_OWNED / AUTH_ORGS_OWNED, so a verb never sees a different switch than the service.
+It reads the SAME switches as auth-service: authService.phase (4 users owned) feeds
+AUTH_USERS_OWNED, so a verb never sees a different switch than the service.
 The runtime login is the auth-service secret reference (no value in the chart). The Job is not
 a hook: its name carries a hash of its whole rendered pod template, so the next upgrade with the
 same inputs renders the same Job, and any changed input is a new Job. The roll that enables it
@@ -50,10 +50,6 @@ spec:
         - name: AUTH_PLATFORM_ROLES_OWNED
           value: "true"
         {{- end }}
-        {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
-        - name: AUTH_ORGS_OWNED
-          value: "true"
-        {{- end }}
         {{- with $b.extraEnv }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -75,7 +71,8 @@ spec:
 {{- if or (not (kindIs "string" $b.runId)) (empty $b.runId) }}{{- fail "authService.backfill.runId is required when authService.backfill.enabled: it names this run, and a new value makes a new Job" }}{{- end }}
 {{- if not (and (has (kindOf $b.batch) (list "int" "int64" "float64")) (eq (float64 $b.batch) (floor (float64 $b.batch))) (ge (int $b.batch) 1) (le (int $b.batch) 10000)) }}{{- fail "authService.backfill.batch must be a whole number from 1 to 10000" }}{{- end }}
 {{- range $b.extraEnv }}
-{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (phase, database)" .name) }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.backfill.extraEnv must not set AUTH_ORGS_OWNED: AUTH_ORGS_OWNED is removed (D6651), orgs owned (phase 5) is cancelled and no workload reads it" }}{{- end }}
+{{- if has (upper (trim .name)) (list "AUTH_USERS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_DATABASE_URI" "AUTH_DATABASE_SCHEMA") }}{{- fail (printf "authService.backfill.extraEnv must not set %s: the chart renders it from authService (phase, database)" .name) }}{{- end }}
 {{- end }}
 {{- if not $a.networkPolicy.egress.database.to }}{{- fail "authService.networkPolicy.egress.database.to is required with authService.backfill.enabled: the Job has its own NetworkPolicy and an empty list would cut it off from the database" }}{{- end }}
 {{- $podTemplate := include "dev-health.authBackfillPodTemplate" . }}

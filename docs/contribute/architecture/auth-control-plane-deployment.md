@@ -183,13 +183,12 @@ rollback is the phase minus 1.
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api (two stages, `authService.loginStage`: `authService` first, then `goApi`), and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
-| 5 | Orgs owned | Phase 4 plus `AUTH_ORGS_OWNED` (auth-service, the backfill Job, and the auth-migrate and auth-grants Jobs). **Refused at render.** |
+| 5 | Orgs owned | **Cancelled (D6651).** Refused at render. `AUTH_ORGS_OWNED` is removed; `public.organizations` and `public.memberships` stay the authority. |
 
-Phases 4 and 5 mean (D6358) that auth-service becomes the writer of the existing
-public `users` table (4) and of the public `organizations` and `memberships`
-tables (5): no auth-schema copy, no projection. Phase 4 renders. The service does
-not write the organizations and memberships tables yet, so the chart refuses
-phase 5 until its own public-table writer leaf.
+Phase 4 means (D6358) that auth-service becomes the writer of the existing
+public `users` table: no auth-schema copy, no projection. Phase 5 (the public
+`organizations` and `memberships` tables) is cancelled (D6651): those tables stay
+the authority, and phase 4 is the highest phase the chart renders.
 The credential routes move with users owned, not with login: go-api refuses
 `AUTH_USERS_OWNED` unless the credential routes go to auth-service. auth-service
 mounts them from phase 2 and answers 503 until users are owned.

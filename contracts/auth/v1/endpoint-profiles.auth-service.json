@@ -1703,7 +1703,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 25
+        "line": 27
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -1736,7 +1736,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 26
+        "line": 28
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"

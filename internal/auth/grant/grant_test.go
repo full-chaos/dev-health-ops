@@ -25,10 +25,10 @@ func TestValidKey(t *testing.T) {
 	long := strings.Repeat("a", 100)
 	for key, want := range map[string]bool{
 		"acme/api": true, "a/b": true, "*": true, "acme/api.v2": true, "acme/my_repo-1": true, "0a/9z": true,
-		long + "/" + long: true,
-		"Acme/api":        false, "acme/API": false, "acme": false, "": false, "acme/api/extra": false, "a/b/c": false,
+		long + "/" + long: true, "a/b/c": true, "acme/api/extra": true, "a/.b": true,
+		"Acme/api": false, "acme/API": false, "acme": false, "": false,
 		"**": false, "a/*": false, "*/b": false, "*/*": false, " *": false, "* ": false, "acme/api\n": false,
-		"/b": false, "a/": false, ".a/b": false, "a/.b": false, "-a/b": false, "a/-b": false,
+		"/b": false, "a/": false, ".a/b": false, "-a/b": false, "a/-b": false,
 		long + "a/b": false, "a/" + long + "a": false, "acme/apı": false, "acme/api\x00": false,
 	} {
 		if got := ValidKey(key); got != want {

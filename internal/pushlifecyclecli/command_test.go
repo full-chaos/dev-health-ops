@@ -3,6 +3,7 @@ package pushlifecyclecli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,5 +123,58 @@ func TestBackfillCreatedDSNEnvFlagRefusesImplausibleNames(t *testing.T) {
 		if code != cli.ExitUsage || len(calls) != 0 || gotDSN != "" || !strings.Contains(errOut, "argument error: -dsn-env") {
 			t.Errorf("name %q: code %d calls %d stderr %q", name, code, len(calls), errOut)
 		}
+	}
+}
+
+func TestBackfillCreatedPoolOpenFailureNeverPrintsTheDSN(t *testing.T) {
+	const bad = "postgres://sensitive_login_c92:dsn_secret_a91@[::1"
+	dir := t.TempDir()
+	file := filepath.Join(dir, "dsn")
+	if err := os.WriteFile(file, []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cells := []struct {
+		name   string
+		args   []string
+		lookup map[string]string
+		real   bool
+		want   string
+	}{
+		{"named_var", []string{"-dsn-env", "API_DATABASE_URI"}, map[string]string{"API_DATABASE_URI": bad}, true, "API_DATABASE_URI"},
+		{"named_file", []string{"-dsn-env", "API_DATABASE_URI"}, map[string]string{"API_DATABASE_URI_FILE": file}, true, "API_DATABASE_URI"},
+		{"default_var", nil, map[string]string{"POSTGRES_URI": bad}, true, "POSTGRES_URI"},
+		{"default_file", nil, map[string]string{"POSTGRES_URI_FILE": file}, true, "POSTGRES_URI"},
+		{"fake_seam_error", []string{"-dsn-env", "API_DATABASE_URI"}, map[string]string{"API_DATABASE_URI": bad}, false, "API_DATABASE_URI"},
+	}
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			oldConnect, oldBackfill := connectFn, backfillFn
+			t.Cleanup(func() { connectFn, backfillFn = oldConnect, oldBackfill })
+			if !c.real {
+				connectFn = func(_ context.Context, dsn string) (*pgxpool.Pool, error) {
+					return nil, errors.New("cannot parse `" + dsn + "`")
+				}
+			} else {
+				connectFn = connect
+			}
+			backfillFn = func(context.Context, *pgxpool.Pool, string, bool, int) (customerpush.BackfillReport, error) {
+				t.Fatal("backfill must not run")
+				return customerpush.BackfillReport{}, nil
+			}
+			var so, se bytes.Buffer
+			env := cli.Env{Args: c.args, Stdout: &so, Stderr: &se, Lookup: func(k string) (string, bool) { v, ok := c.lookup[k]; return v, ok }}
+			if code := run(context.Background(), env); code != cli.ExitFailure {
+				t.Fatalf("code %d, want %d", code, cli.ExitFailure)
+			}
+			got := se.String()
+			for _, leak := range []string{"sensitive_login_c92", "dsn_secret_a91", "postgres://", "xxxxxx"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("stderr leaks %q: %q", leak, got)
+				}
+			}
+			if !strings.Contains(got, c.want) {
+				t.Errorf("stderr does not name %s: %q", c.want, got)
+			}
+		})
 	}
 }

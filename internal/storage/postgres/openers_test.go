@@ -309,9 +309,11 @@ func TestMain(m *testing.M) {
 
 func runCensusBinary(t *testing.T, binary string, run openerRun, dsn string) (int, string) {
 	t.Helper()
+	// The build runs before the clock starts: a cold, loaded runner takes minutes to compile, and that time is not the run's.
+	binaryPath := filepath.Join(censusBinaries(t), binary)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(censusBinaries(t), binary), run.args...)
+	cmd := exec.CommandContext(ctx, binaryPath, run.args...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
 	for _, entry := range run.env {
 		cmd.Env = append(cmd.Env, strings.ReplaceAll(entry, "{DSN}", dsn))
@@ -330,6 +332,7 @@ func runCensusBinary(t *testing.T, binary string, run openerRun, dsn string) (in
 }
 
 func TestEveryBoundaryOpenerFailsClosedOnAnUnparsableDSN(t *testing.T) {
+	censusBinaries(t) // build once, before any subtest is timed
 	for path, class := range openers {
 		if class.kind != kindBoundary {
 			continue

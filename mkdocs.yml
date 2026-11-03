@@ -230,6 +230,7 @@ nav:
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
       - Auth workload registry: reference/auth/workload-registry.md
+      - Auth workload audit: reference/auth/workload-audit.md
       - Auth identity linking: reference/auth/identity-linking.md
       - Auth delegated sessions: reference/auth/delegated-sessions.md
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md

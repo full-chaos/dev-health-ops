@@ -25,6 +25,10 @@ Rules of the contract the rows pin:
   empty, and never on a page with no items. Items are in ascending id order.
 - A principal read is `principal_id`, `kind`, `status` and `revision`. It has no
   email, display name, password hash or identity, and the object is closed.
+- A principal list item pairs a `principal-read.v1` body with the `membership-read.v1`
+  body that shows the principal belongs to the requested organization. The parser
+  refuses a membership of another organization (`item_wrong_organization`) and a
+  membership of another principal than the one beside it (`item_pair_mismatch`).
 - A grant read carries the repository `resource_key`; an error body never does,
   and a parser refusal never repeats it (a refusal is a surface, a stage and a
   rule).

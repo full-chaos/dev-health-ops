@@ -288,6 +288,26 @@
       "kind": "exchange"
     },
     {
+      "id": "list-principals-outside-organization",
+      "file": "list-principals-outside-organization.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-pair-mismatch",
+      "file": "list-principals-pair-mismatch.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-membership-absent",
+      "file": "list-principals-membership-absent.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-bare-principal",
+      "file": "list-principals-bare-principal.json",
+      "kind": "exchange"
+    },
+    {
       "id": "list-organizations-first-page",
       "file": "list-organizations-first-page.json",
       "kind": "exchange"

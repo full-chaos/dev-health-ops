@@ -63,3 +63,58 @@ func TestTheInternalListenerIsOffByDefaultAndTheStartLineNamesIt(t *testing.T) {
 		}
 	}
 }
+
+// The same listener in another spelling is still the same listener: a
+// leading-zero port, and the wildcard host in any of its forms.
+func TestTheInternalAddressRefusesAnotherSpellingOfAnotherListenersAddress(t *testing.T) {
+	type pair struct{ other, internal string }
+	spellings := []pair{
+		{":8095", ":08095"},
+		{":8095", "0.0.0.0:8095"},
+		{"0.0.0.0:8095", ":8095"},
+		{":8095", "[::]:8095"},
+		{"[::]:8095", ":8095"},
+		{"0.0.0.0:8095", "[::]:8095"},
+		{"0.0.0.0:8095", "127.0.0.1:8095"},
+		{"127.0.0.1:8095", ":8095"},
+		{"127.0.0.1:8095", "127.0.0.1:08095"},
+	}
+	for _, listener := range []string{EnvAPIAddress, EnvOperatorAddress} {
+		for _, p := range spellings {
+			t.Run(listener+"/"+p.other+"/"+p.internal, func(t *testing.T) {
+				env := baseEnv()
+				env[EnvAPIAddress] = "10.0.0.1:9000"
+				env[EnvOperatorAddress] = "10.0.0.1:9001"
+				env[listener] = p.other
+				env[internalAddressEnv] = p.internal
+				_, err := Load(Spec{LookupEnv: lookupFrom(env)})
+				want := internalAddressEnv + " must not be the same address"
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load = %v, want an error naming %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestTheInternalAddressAcceptsWhatDoesNotShareAListener(t *testing.T) {
+	cases := map[string]struct{ api, operator, internal string }{
+		"different port":                {":8095", ":8096", ":8097"},
+		"specific host, other port":     {":8095", ":8096", "127.0.0.1:8097"},
+		"different specific hosts":      {"127.0.0.1:8095", "127.0.0.1:8096", "127.0.0.2:8095"},
+		"port zero beside port zero":    {":0", ":8096", ":0"},
+		"port zero wildcard vs another": {"0.0.0.0:0", ":8096", ":0"},
+		"port zero in zero spelling":    {":8095", ":0", ":00"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := baseEnv()
+			env[EnvAPIAddress] = c.api
+			env[EnvOperatorAddress] = c.operator
+			env[internalAddressEnv] = c.internal
+			if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err != nil {
+				t.Fatalf("Load = %v, want accepted", err)
+			}
+		})
+	}
+}

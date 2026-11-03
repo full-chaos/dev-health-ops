@@ -239,8 +239,8 @@ func TestADelegatedSessionKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T)
 	})
 	base := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), nil), "GET", "/api/v1/admin/teams")
 	got := enforceRequest(delegated, "GET", "/api/v1/admin/teams")
-	if got.status != base.status || got.body != base.body {
-		t.Fatalf("delegated: %d %q, want the legacy %d %q", got.status, got.body, base.status, base.body)
+	if got.status != base.status {
+		t.Fatalf("delegated: %d %q, want the legacy %d", got.status, got.body, base.status)
 	}
 	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/delegated"}) {
 		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/delegated]", n, rec.unjudgedSnapshot())

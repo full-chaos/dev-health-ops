@@ -17,10 +17,9 @@ import (
 
 // Closed outcomes of the enforcement counter.
 const (
-	enforceOutcomeAllow          = "allow"
-	enforceOutcomeDeny           = "deny"
-	enforceOutcomeErrorDeny      = "error_deny"
-	enforceOutcomeUnjudgedLegacy = "unjudged_legacy"
+	enforceOutcomeAllow     = "allow"
+	enforceOutcomeDeny      = "deny"
+	enforceOutcomeErrorDeny = "error_deny"
 
 	enforceDefaultTimeout = 2 * time.Second
 	enforceRetryAfter     = "5"
@@ -110,8 +109,10 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		return enforceNotCovered
 	}
 	org := strings.ToLower(o.orgID)
-	if o.bearer == "" || !o.userAccessToken || o.impersonating || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
-		countEnforce(ctx, row.Namespace, enforceOutcomeUnjudgedLegacy)
+	if reason := unjudgedReason(o, row, org); reason != "" {
+		countEnforceUnjudged(ctx, o.pattern, reason)
+		e.logger.DebugContext(ctx, "api enforcement: caller not judged, the legacy answer stands",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
 		return enforceLegacy
 	}
 	request := pep.Request{PrincipalReference: o.bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
@@ -143,6 +144,22 @@ func (e *Enforcer) ask(ctx context.Context, request pep.Request) (decision pep.D
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
 	return e.decider.Decide(ctx, request), false
+}
+
+// unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
+// access token comes first: nothing else can be said of it.
+func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
+	switch {
+	case o.bearer == "" || !o.userAccessToken:
+		return enforceUnjudgedHS256
+	case o.impersonating:
+		// Temporary: the decision point decides a delegated session, but go-api does not yet pass the delegation
+		// context it needs. Remove this case when it does.
+		return enforceUnjudgedDelegated
+	case row.ResourceType == policycatalog.ScopeOrganization && org == "":
+		return enforceUnjudgedNoOrg
+	}
+	return ""
 }
 
 // carriesObligation reports whether an allow carries an obligation. This guard enforces none, so an allow that

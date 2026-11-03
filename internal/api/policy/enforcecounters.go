@@ -11,6 +11,7 @@ import (
 const (
 	enforceDecisionMetric = "dev_health_authz_enforcement_decisions_total"
 	enforceServiceLabel   = "go-api"
+	enforceUnjudgedMetric = "dev_health_authz_enforcement_unjudged_total"
 )
 
 type enforceDecisionAdder func(ctx context.Context, namespace, outcome string)
@@ -21,7 +22,7 @@ var enforceDecisionAdd = newEnforceDecisionAdder(otel.Meter(shadowMeterName))
 
 func newEnforceDecisionAdder(meter metric.Meter) enforceDecisionAdder {
 	counter, err := meter.Int64Counter(enforceDecisionMetric,
-		metric.WithDescription("Enforced decisions by action namespace, service and outcome: allow, deny, error_deny, unjudged_legacy"))
+		metric.WithDescription("Enforced decisions by action namespace, service and outcome: allow, deny, error_deny"))
 	if err != nil {
 		return func(context.Context, string, string) {}
 	}
@@ -50,5 +51,20 @@ type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 var enforceUnjudgedAdd = newEnforceUnjudgedAdder(otel.Meter(shadowMeterName))
 
 func newEnforceUnjudgedAdder(meter metric.Meter) enforceUnjudgedAdder {
-	return func(context.Context, string, string) {}
+	counter, err := meter.Int64Counter(enforceUnjudgedMetric,
+		metric.WithDescription("Requests on an enforced cell whose caller the decision point cannot judge, so the legacy answer stood, by route row and reason: hs256, delegated, no_org"))
+	if err != nil {
+		return func(context.Context, string, string) {}
+	}
+	return func(ctx context.Context, route, reason string) {
+		counter.Add(ctx, 1, metric.WithAttributes(attribute.String("route", route), attribute.String("reason", reason)))
+	}
+}
+
+// countEnforceUnjudged never changes a decision: a counter failure is swallowed.
+func countEnforceUnjudged(ctx context.Context, route, reason string) {
+	defer func() { _ = recover() }()
+	if enforceUnjudgedAdd != nil {
+		enforceUnjudgedAdd(ctx, route, reason)
+	}
 }

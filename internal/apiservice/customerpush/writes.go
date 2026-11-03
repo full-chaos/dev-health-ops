@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -610,7 +611,7 @@ func (h *handlers) rotateToken(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.Exec(ctx, `UPDATE external_ingest_tokens SET revoked_at = $2 WHERE id = $1`, old.ID, now); err != nil {
 			return nil, err
 		}
-		names, err := scopeNames(old.Scopes)
+		names, err := pushevent.ScopeNames(old.Scopes)
 		if err != nil {
 			return nil, err
 		}

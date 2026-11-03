@@ -70,6 +70,7 @@ internal/cli
 internal/edgetokenmint
 internal/egressguard
 internal/entitlements
+internal/envelopemint
 internal/httpguard
 internal/identityalias
 internal/jobcontract
@@ -130,6 +131,7 @@ internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/storage/valkey

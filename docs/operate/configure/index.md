@@ -10,6 +10,7 @@ lifecycle: active
 # Configure the platform
 
 - [Environment and secrets](environment-and-secrets.md)
+- [Auth signing-key custody and environment](auth-signing-key-custody.md)
 - [Databases and storage](databases-and-storage.md)
 - [Network and TLS](network-and-tls.md)
 - [Workers and schedules](workers-and-schedules.md)

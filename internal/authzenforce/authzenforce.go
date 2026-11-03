@@ -129,35 +129,31 @@ const (
 	ignoredMetric = "dev_health_authz_enforcement_ignored_items"
 )
 
-// Register exposes sw as gauges on meter: one series per namespace of the
-// service (1 enforced, 0 not) and the count of ignored items. The labels are
-// closed sets: the catalog's namespaces and the service. A switch with no
-// service registers nothing.
+// Register exposes sw as gauges on meter, set once now (a switch is read once and never changes): one series per
+// namespace of the service (1 enforced, 0 not) and the count of ignored items. The labels are closed sets: the
+// catalog's namespaces and the service. A switch with no service registers nothing.
 func Register(meter metric.Meter, sw Switch) error {
 	if sw.service.Env() == "" {
 		return nil
 	}
-	service := attribute.String("service", string(sw.service))
-	_, err := meter.Int64ObservableGauge(enabledMetric,
-		metric.WithDescription("1 while decision-point enforcement is on for the action namespace in this service"),
-		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			for _, namespace := range vocabularyNamespaces() {
-				value := int64(0)
-				if sw.on[namespace] {
-					value = 1
-				}
-				o.Observe(value, metric.WithAttributes(attribute.String("namespace", namespace), service))
-			}
-			return nil
-		}))
+	enabledGauge, err := meter.Int64Gauge(enabledMetric,
+		metric.WithDescription("1 while decision-point enforcement is on for the action namespace in this service"))
 	if err != nil {
 		return err
 	}
-	_, err = meter.Int64ObservableGauge(ignoredMetric,
-		metric.WithDescription("Items of the enforcement list this service could not accept; their namespaces stay off"),
-		metric.WithInt64Callback(func(_ context.Context, o metric.Int64Observer) error {
-			o.Observe(int64(sw.ignored), metric.WithAttributes(service))
-			return nil
-		}))
-	return err
+	ignoredGauge, err := meter.Int64Gauge(ignoredMetric,
+		metric.WithDescription("Items of the enforcement list this service could not accept; their namespaces stay off"))
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	for _, namespace := range vocabularyNamespaces() {
+		value := int64(0)
+		if sw.on[namespace] {
+			value = 1
+		}
+		enabledGauge.Record(ctx, value, metric.WithAttributes(attribute.String("namespace", namespace), attribute.String("service", string(sw.service))))
+	}
+	ignoredGauge.Record(ctx, int64(sw.ignored), metric.WithAttributes(attribute.String("service", string(sw.service))))
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
@@ -97,6 +98,7 @@ func TestOwnerAuditEventsNameWhoAndHow(t *testing.T) {
 		ev.Attributes["target_id"] != subject.String() || ev.Attributes["reason_code"] != "role_granted" {
 		t.Errorf("operator audit event = %+v", ev)
 	}
+	auditwire.MustValidate(t, ev)
 	if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 		t.Errorf("operator audit attributes refused: %v", err)
 	}
@@ -106,6 +108,7 @@ func TestOwnerAuditEventsNameWhoAndHow(t *testing.T) {
 		ref.SubjectPrincipalID == nil || *ref.SubjectPrincipalID != subject.String() || ref.EventType != audit.EventPlatformOwnerGrantRefused {
 		t.Errorf("refusal audit event = %+v", ref)
 	}
+	auditwire.MustValidate(t, ref)
 	if err := audit.ValidateAttributes(ref.Attributes); err != nil {
 		t.Errorf("refusal audit attributes refused: %v", err)
 	}

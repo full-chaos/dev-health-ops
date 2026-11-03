@@ -798,15 +798,13 @@ var operationSpecs = map[string]OperationSpec{
 	// evidenceQualityStats is in investmentBreakdown's registered document
 	// and absent from investmentFull's, so declaring it on both would leave
 	// a permanently-stale entry on one of them.
-	"investmentBreakdown": {
-		ResponseRoot: "analytics",
-		Variables:    investmentVariables,
-		Parity: Options{FloatTierB: map[string]string{
-			"data.analytics.evidenceQualityStats.mean":   "avgIf(evidence_quality) -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:250, CHAOS-5451)",
-			"data.analytics.evidenceQualityStats.stddev": "stddevPopIf(evidence_quality) -- ClickHouse float aggregate; 20 identical runs over 5M rows gave 9 distinct values (investmentquality.go:251, CHAOS-5451)",
-			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
-		}},
-	},
+	"investmentBreakdown": investmentBreakdownSpec(),
+	// CHAOS-12698: acr's team-scoped and repository-scoped names for the
+	// investmentBreakdown body (query_route.go registers the same text under
+	// each name). Same document body, same root, same request and the same
+	// declarations, so each takes investmentBreakdown's spec unchanged.
+	"investmentBreakdownTeam":       investmentBreakdownSpec(),
+	"investmentBreakdownRepository": investmentBreakdownSpec(),
 	// CHAOS-8104's dedicated browser document selects only the persisted
 	// quality means grouped by the supplied investment dimension. Keep its
 	// input distinct from investmentBreakdown: the operation would otherwise
@@ -1430,7 +1428,25 @@ func flowMatrixInvestmentVariant(dimension string) Variant {
 	}
 }
 
-// investmentVariables builds investmentBreakdown's request only.
+// investmentBreakdownSpec is the spec of every operation whose registered
+// document is the investmentBreakdown body: investmentBreakdown itself and
+// acr's scoped names for it (investmentBreakdownTeam,
+// investmentBreakdownRepository, CHAOS-12698). A function, not a shared
+// value, so no two entries share one FloatTierB map.
+func investmentBreakdownSpec() OperationSpec {
+	return OperationSpec{
+		ResponseRoot: "analytics",
+		Variables:    investmentVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.evidenceQualityStats.mean":   "avgIf(evidence_quality) -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:250, CHAOS-5451)",
+			"data.analytics.evidenceQualityStats.stddev": "stddevPopIf(evidence_quality) -- ClickHouse float aggregate; 20 identical runs over 5M rows gave 9 distinct values (investmentquality.go:251, CHAOS-5451)",
+			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
+		}},
+	}
+}
+
+// investmentVariables builds investmentBreakdown's request only (through
+// investmentBreakdownSpec, which its scoped names share).
 //
 // It used to be shared with investmentFull, which was the bug: this
 // function's batch carries a `breakdowns` sub-request and nothing else, so

@@ -47,6 +47,7 @@ internal/cli
 internal/edgetokenmint
 internal/egressguard
 internal/entitlements
+internal/envelopemint
 internal/httpguard
 internal/jobcontract
 internal/joboutbox
@@ -85,6 +86,7 @@ internal/storage/clickhouse
 internal/storage/postgres
 internal/storage/postgres/aclguard
 internal/storage/postgres/authschema
+internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog

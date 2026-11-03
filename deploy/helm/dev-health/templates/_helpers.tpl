@@ -1071,7 +1071,7 @@ auth-service's issuerURLPattern (internal/auth/authconfig), so a value the servi
 {{- $class := $t.class | default "" -}}
 {{- $issuer := $t.issuerURL | default "" -}}
 {{- if $class -}}
-{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}
+{{- if not (has $class (list "hs256_compat" "eddsa")) }}{{- fail "authService.accessToken.class must be empty, hs256_compat or eddsa" }}{{- end -}}{{- /* gitleaks:allow */ -}}
 {{- if not (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) }}{{- fail "authService.accessToken.class needs authService.phase >= 2: auth-service mints access tokens only on its session routes" }}{{- end -}}
 {{- end -}}
 {{- if or (eq $class "eddsa") $issuer -}}
@@ -1762,3 +1762,26 @@ The 8 groups of a lower-case IPv6 address as a JSON list of numbers, "::" expand
 {{- end -}}
 {{- if $same }}true{{- end -}}
 {{- end -}}
+
+{{/*
+The ops schema owner pin (migrations.hook.ownerRole -> MIGRATION_OWNER_ROLE) for the migrate, open-units-index,
+streak-index and river-migrate Jobs, or "". Empty renders nothing. Set, it must be a plain role name that differs from
+every runtime login; and while auth-service owns sessions, query-api's session read must come from auth-grants
+(authService.migrate.sessionReaders.queryApi = the query-api login), because the pinned login cannot grant in the auth
+schema and the River step then leaves that read out.
+*/}}
+{{- define "dev-health.opsOwnerRole" -}}
+{{- $owner := trim (toString (default "" .Values.migrations.hook.ownerRole)) -}}
+{{- if $owner -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $owner) }}{{- fail "migrations.hook.ownerRole must be a plain role name ([a-z][a-z0-9_]*, at most 63 bytes)" }}{{- end -}}
+{{- $queryAPI := "" -}}
+{{- range .Values.queryApi.extraEnv }}{{- if eq .name "QUERY_API_DATABASE_ROLE" }}{{- $queryAPI = trim (toString .value) -}}{{- end }}{{- end -}}
+{{- $api := trim (toString (get (.Values.migrations.hook.provisionRoles.apiRole | default dict) "name")) -}}
+{{- $runtime := list (toString .Values.config.RIVER_DOMAIN_DATABASE_ROLE) (toString .Values.config.RIVER_QUEUE_DATABASE_ROLE) (toString .Values.config.RIVER_COORDINATOR_DATABASE_ROLE) (toString .Values.config.RIVER_KEDA_READONLY_DATABASE_ROLE) $queryAPI $api -}}
+{{- if has $owner $runtime }}{{- fail "migrations.hook.ownerRole must differ from every runtime login (the RIVER_*_DATABASE_ROLE logins, the query-api login and provisionRoles.apiRole)" }}{{- end -}}
+{{- if and $queryAPI (eq (include "dev-health.authOn" (dict "flag" "sessions" "context" .)) "true") -}}
+{{- if ne (trim (toString .Values.authService.migrate.sessionReaders.queryApi)) $queryAPI }}{{- fail "migrations.hook.ownerRole is set while auth-service owns sessions: set authService.migrate.sessionReaders.queryApi to the query-api login (QUERY_API_DATABASE_ROLE); the pinned login cannot grant query-api's auth session read, so auth-grants must" }}{{- end -}}
+{{- end -}}
+{{- $owner -}}
+{{- end -}}
+{{- end }}

@@ -10,6 +10,7 @@ lifecycle: active
 # Troubleshoot integrations
 
 - [Authentication and authorization errors](authentication.md)
+- [Token verification problems](token-verification.md)
 - [Schema and validation errors](schema-and-validation.md)
 - [Delivery, retry, and rate-limit problems](delivery-and-rate-limits.md)
 

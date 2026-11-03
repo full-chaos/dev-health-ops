@@ -26,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -47,6 +48,9 @@ type Config struct {
 	// CollectDependencies makes every snapshot say what it read (the aggregate
 	// ids and their revisions, in the same transaction) for the decision cache.
 	CollectDependencies bool
+	// RefreshTTL is the refresh lifetime the session store reads liveness with. It is required: the
+	// caller passes the one value the store gets (session.DefaultRefreshTTL), never a second default.
+	RefreshTTL time.Duration
 }
 
 // Reader is an authapi.DecisionState over Postgres.
@@ -56,6 +60,7 @@ type Reader struct {
 	users   authapi.PGUsers
 	roles   *platformrole.Store
 	collect bool
+	rule    sessionrule.Rule
 }
 
 // New validates cfg.
@@ -70,7 +75,11 @@ func New(cfg Config) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users, roles: roles, collect: cfg.CollectDependencies}, nil
+	rule, err := sessionrule.New(authschema.Quote(cfg.Schema), cfg.RefreshTTL)
+	if err != nil {
+		return nil, fmt.Errorf("decisionstate: %w", err)
+	}
+	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users, roles: roles, collect: cfg.CollectDependencies, rule: rule}, nil
 }
 
 func storeErr(what string, err error) error { return fmt.Errorf("%w: %s: %w", ErrStore, what, err) }
@@ -97,19 +106,16 @@ type txReader struct {
 
 func (t *txReader) table(name string) string { return authschema.Quote(t.r.schema) + "." + name }
 
-// Session reads the session row: live when not revoked and not expired at the
-// transaction's clock, the delegation columns, and whether the delegating
-// session is live by the same rule.
+// Session reads the session row: live by the session rule (sessionrule: not revoked, not stamp-voided,
+// its web session not ended, not expired) at the transaction's clock, the delegation columns, and whether
+// the delegating session is live by the same rule.
 func (t *txReader) Session(ctx context.Context, sessionID uuid.UUID) (authapi.DecisionSession, error) {
 	var (
 		s            authapi.DecisionSession
 		actor, orgID *string
 	)
-	err := t.tx.QueryRow(ctx, `SELECT s.principal_id, s.revoked_at IS NULL AND s.expires_at > now(),
-s.actor_principal_id::text, s.delegated_from_session_id IS NOT NULL, s.organization_id::text, s.amr, s.delegation_permitted_actions,
-COALESCE((SELECT b.revoked_at IS NULL AND b.expires_at > now() FROM `+t.table("sessions")+` b WHERE b.id = s.delegated_from_session_id), false)
-FROM `+t.table("sessions")+` s WHERE s.id = $1`,
-		sessionID).Scan(&s.PrincipalID, &s.Live, &actor, &s.HasDelegatedFrom, &orgID, &s.AMR, &s.PermittedActions, &s.BaseLive)
+	err := t.tx.QueryRow(ctx, sessionQuery(t.r.rule, t.table("sessions")), sessionID).Scan(
+		&s.PrincipalID, &s.Live, &actor, &s.HasDelegatedFrom, &orgID, &s.AMR, &s.PermittedActions, &s.BaseLive)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return authapi.DecisionSession{}, nil
@@ -132,6 +138,15 @@ FROM `+t.table("sessions")+` s WHERE s.id = $1`,
 	}
 	s.Found = true
 	return s, nil
+}
+
+// sessionQuery reads one session row ($1) with Live and BaseLive from one rule. now() is the
+// transaction's clock, so every read of a call sees one instant.
+func sessionQuery(rule sessionrule.Rule, sessions string) string {
+	return `SELECT s.principal_id, ` + rule.Live("s", "now()") + `,
+s.actor_principal_id::text, s.delegated_from_session_id IS NOT NULL, s.organization_id::text, s.amr, s.delegation_permitted_actions,
+COALESCE((SELECT ` + rule.Live("b", "now()") + ` FROM ` + sessions + ` b WHERE b.id = s.delegated_from_session_id), false)
+FROM ` + sessions + ` s WHERE s.id = $1`
 }
 
 // Actor reads the real actor of a delegated session now, in the decision

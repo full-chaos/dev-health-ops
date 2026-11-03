@@ -47,7 +47,9 @@ import (
 // rotationGraceWindow).
 const GraceWindow = 30 * time.Second
 
-// DefaultRefreshTTL is go-api's rolling refresh lifetime, which ACP-ADR-03
+// DefaultRefreshTTL is the one refresh lifetime value of the auth plane. The session
+// store defaults to it, and the auth runtime hands the same value to the decision
+// reader, which has no default of its own. It is go-api's rolling refresh lifetime, which ACP-ADR-03
 // keeps (7 days rolling, single-use, family-linked).
 const DefaultRefreshTTL = 7 * 24 * time.Hour
 
@@ -75,7 +77,11 @@ type Config struct {
 	Schema authschema.ValidatedIdentifier
 	// SuccessorKey is a 32-byte base64url server secret deriving rotated credentials.
 	SuccessorKey contracts.SecretString
-	// RefreshTTL is a credential's idle lifetime; 0 means 7 days (go-api's).
+	// RefreshTTL is a credential's idle lifetime; 0 means DefaultRefreshTTL (7 days, go-api's).
+	// It is also the lifetime of a session with no credential in the liveness rule, so the
+	// decision reader (decisionstate.Config.RefreshTTL) must be given the same value: the
+	// auth runtime passes sessionRefreshTTL() to both, and a test fails if a literal
+	// appears in either place.
 	RefreshTTL time.Duration
 	// SessionLifetime is an optional absolute session lifetime; 0 means no cap
 	// (go-api parity). With a cap, a credential never outlives its session.
@@ -92,11 +98,13 @@ type Config struct {
 
 // Store is the session domain over one auth schema.
 type Store struct {
-	pool            *pgxpool.Pool
-	schema          authschema.ValidatedIdentifier
-	q               string
-	key             *[successorKeyBytes]byte
-	refreshTTL      time.Duration
+	pool       *pgxpool.Pool
+	schema     authschema.ValidatedIdentifier
+	q          string
+	key        *[successorKeyBytes]byte
+	refreshTTL time.Duration
+	// rule is the one liveness rule (revoked, expiry, cap) over this schema and
+	// refreshTTL; the effective* methods below are its aliases for the row s.
 	rule            sessionrule.Rule
 	sessionLifetime time.Duration
 	usersOwned      bool
@@ -107,7 +115,9 @@ type Store struct {
 	delegations     metric.Int64Counter
 }
 
-// RefreshTTL is the refresh lifetime the store reads liveness with.
+// RefreshTTL is the refresh lifetime the store reads liveness with: Config.RefreshTTL, or
+// DefaultRefreshTTL when that was 0. A reader of the same rule elsewhere (decisionstate)
+// takes this value, not a copy of the default.
 func (s *Store) RefreshTTL() time.Duration { return s.refreshTTL }
 
 // Format and LogValue keep the successor key out of every printed form: fmt
@@ -138,6 +148,8 @@ func New(cfg Config) (*Store, error) {
 	if s.sessionLifetime < 0 {
 		return nil, errors.New("session: a negative session lifetime")
 	}
+	// The rule is built after the defaults above, so it reads the lifetime the credentials
+	// are issued with, not the raw configuration value.
 	if s.rule, err = sessionrule.New(s.q, s.refreshTTL); err != nil {
 		return nil, err
 	}
@@ -250,18 +262,41 @@ func (s *Store) sessionColumns() string {
 	s.actor_principal_id::text, s.delegation_reason, s.delegation_permitted_actions`
 }
 
-// effectiveRevokedAt is alias s's revoked_at as the record reports it, from the
-// one session rule (sessionrule.Rule.Revoked). Liveness is read, not written
-// (CHAOS-12398): a web logout, an organization switch, revoke-all and a password
-// change end a browser client's session with no code on those paths.
+// effectiveRevokedAt is the expression for alias s's revoked_at as the record
+// reports it, from the one session rule (sessionrule.Rule.Revoked): the session's
+// own revoke, else the principal's password stamp (users.password_updated_at)
+// when that is strictly after the session was created, else, for a browser
+// client's session, the same two tests over its web session's row.
+//
+// A client session is created after its web session, so a password change between
+// the two creations voids the parent and not the child's own stamp: the parent's
+// stamp is read against the parent's created_at. A password change thus ends every
+// older session in the same transaction that wrote the new hash, whether or not
+// RevokeAll ran. Both times are database-clock values; a principal with no stamp
+// voids nothing. Liveness is read, not written (CHAOS-12398): a web logout, an
+// organization switch, revoke-all and a password change end the child with no
+// code on those paths.
 func (s *Store) effectiveRevokedAt() string { return s.rule.Revoked("s") }
 
-// effectiveExpiry is alias s's effective expiry (sessionrule.Rule.Expiry).
+// effectiveExpiry is the expression for alias s's effective expiry
+// (sessionrule.Rule.Expiry): its own, or for a browser client's session its web
+// session's when that is first. A session's own expiry is the absolute cap or its
+// newest credential's expiry, whichever is first; a session with no credential
+// uses its last rotation plus the refresh lifetime. LEAST ignores the NULL of an
+// unlinked session. Depth one: a linked session's parent has no link (0042's
+// trigger), so one subquery is the whole chain.
 func (s *Store) effectiveExpiry() string { return s.rule.Expiry("s") }
 
-// effectiveCap is alias s's absolute cap (sessionrule.Rule.Cap). A refresh
-// exchange and a new credential's expiry both read it, so a client session cannot
-// be exchanged, or hold a credential, past its web session.
+// The three methods are kept as methods, not inlined at each caller, so a statement
+// of this package reads "s.effectiveExpiry()" and the alias it assumes (s) is stated
+// once. They build text only: the SQL itself lives in internal/auth/sessionrule, and
+// a test (TestTheStoreReadsTheSharedRule) fails if one of them stops being the rule's.
+// Callers pass the clock themselves (clock_timestamp()), so the rule has no clock of its own.
+//
+// effectiveCap is alias s's absolute cap (sessionrule.Rule.Cap): sessions.expires_at,
+// or for a browser client's session its web session's effective expiry when that is
+// first. A refresh exchange and a new credential's expiry both read it, so a client
+// session cannot be exchanged, or hold a credential, past its web session.
 func (s *Store) effectiveCap() string { return s.rule.Cap("s") }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {

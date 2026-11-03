@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -101,7 +102,7 @@ func newEnv(t *testing.T) (*env, error) {
 	if err != nil {
 		return nil, err
 	}
-	reader, err := New(Config{Pool: runtime, Schema: schema, Users: authapi.PGUsers{Pool: runtime, AuthSchema: schema}})
+	reader, err := New(Config{Pool: runtime, Schema: schema, Users: authapi.PGUsers{Pool: runtime, AuthSchema: schema}, RefreshTTL: session.DefaultRefreshTTL})
 	if err != nil {
 		return nil, err
 	}

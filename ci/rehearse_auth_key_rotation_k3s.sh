@@ -144,7 +144,7 @@ version="$(kc version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // 
 case "${version}" in *+k3s*) ;; *) die "the cluster behind REHEARSAL_KUBECONFIG is not k3s (server version: ${version:-none}); no kind, no prod" ;; esac
 [ "$(kc auth can-i list nodes 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can list nodes: it is not a namespace-scoped ServiceAccount"
 [ "$(kc auth can-i create clusterroles 2>/dev/null || true)" = no ] || die "REHEARSAL_KUBECONFIG can create clusterroles: it is not a namespace-scoped ServiceAccount"
-owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null || true)"
+owner_token="$(kc get namespace "${NS}" -o 'jsonpath={.metadata.labels.rehearsal-run}' 2>/dev/null)" || die "the namespace read of ${NS} was denied or failed"
 [ -n "${owner_token}" ] && [ "${owner_token}" = "${REHEARSAL_RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token"
 
 if [ -e "${REHEARSAL_DIR}" ] && [ -n "$(ls -A "${REHEARSAL_DIR}" 2>/dev/null)" ]; then

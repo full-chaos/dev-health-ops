@@ -160,6 +160,7 @@ if grep -qE '^hm rollback "\$\{RELEASE\}" "\$\{EVIDENCE_EDDSA_REVISION\}"' <<<"$
 ROLE="${ROOT}/ci/auth_k8s/rotation_rehearsal_role.yaml"
 doc_of() { awk -v k="$1" '/^---$/ { n++; next } { d[n] = d[n] $0 "\n" } END { for (i in d) if (d[i] ~ ("(^|\n)kind: " k "\n")) printf "%s", d[i] }'; }
 if [ -f "${ROLE}" ]; then
+  # shellcheck disable=SC2016
   fixture="$(NS=authrot-test envsubst '${NS}' <"${ROLE}")"
   role_kinds="$(sed -n 's/^kind: //p' <<<"${fixture}" | sort -u | tr '\n' ' ')"
   if [ "${role_kinds}" = "ClusterRole ClusterRoleBinding Role RoleBinding " ]; then ok role-fixture-kinds-are-the-four-expected; else bad "role-fixture-kinds-are-the-four-expected (${role_kinds})"; fi

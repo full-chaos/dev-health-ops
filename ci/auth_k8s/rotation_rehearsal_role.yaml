@@ -1,5 +1,7 @@
-# The one namespaced Role of the ServiceAccount that runs ci/rehearse_auth_key_rotation_k3s.sh. The lead applies it with the admin
-# kubeconfig after envsubst '${NS}'. No cluster-scoped kind, no cluster-scoped verb, no RBAC resource, no wildcard resource or group.
+# The RBAC of the ServiceAccount that runs ci/rehearse_auth_key_rotation_k3s.sh. The lead applies it with the admin kubeconfig after
+# envsubst '${NS}'. One namespaced Role + RoleBinding (no RBAC resource, no wildcard resource or group), and one ClusterRole +
+# ClusterRoleBinding named with the run namespace: verbs [get] on resource [namespaces] for that one namespace name, bound to this
+# ServiceAccount only. The driver reads the cluster-scoped Namespace label rehearsal-run with it; it grants nothing else cluster-wide.
 # Why each group: core = the Secrets, ConfigMaps, Services and ServiceAccount the chart and the driver create (helm keeps its release in Secrets),
 # and the pods with exec, log and portforward for postgres, valkey, the one-off keys pods and the JWKS probe; apps = the auth-service,
 # postgres and valkey Deployments (and their ReplicaSets); batch = the auth-migrate hook Job; networking = the chart's NetworkPolicies;
@@ -28,4 +30,19 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata: {name: rehearsal, namespace: ${NS}}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rehearsal}
+subjects: [{kind: ServiceAccount, name: rehearsal, namespace: ${NS}}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: rehearsal-ns-${NS}}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [${NS}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: rehearsal-ns-${NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: rehearsal-ns-${NS}}
 subjects: [{kind: ServiceAccount, name: rehearsal, namespace: ${NS}}]

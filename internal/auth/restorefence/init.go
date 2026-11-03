@@ -96,6 +96,10 @@ func initInTx(ctx context.Context, db initDB, schema authschema.ValidatedIdentif
 	return timeline, nil
 }
 
+func initializedRow() audit.AuditEvent {
+	return audit.AuditEvent{EventType: "auth.restore_fence.initialized", Outcome: audit.OutcomeAllowed}
+}
+
 // Init writes the 'initial' fence row for the timeline the server is on, as the
 // migration role, in one audit.Commit. It refuses on a server in recovery and when the
 // timeline already has a row of any kind. With ifAbsent an existing row is not an error
@@ -112,7 +116,7 @@ func Init(ctx context.Context, pool *pgxpool.Pool, schema authschema.ValidatedId
 			report.Timeline = timeline
 			return err
 		},
-		Audit:     audit.AuditEvent{EventType: "auth.restore_fence.initialized", Outcome: audit.OutcomeAllowed},
+		Audit:     initializedRow(),
 		OffStream: audit.OffStreamRestoreFence,
 		Refusals:  initRefusals(),
 	})

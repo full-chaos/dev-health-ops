@@ -1,0 +1,29 @@
+# Release values for ci/pdp_load_k3s.sh: the auth-service PDP on a fresh bigboy k3s namespace, nothing else. Credentials
+# never appear here: the script writes the Secrets it names in the cluster. Images and the per-run settings (the caller
+# subject, the route limiter) come from the script by --set.
+web: {enabled: false}
+goWorkers: {enabled: false}
+goApi: {enabled: false}
+valkey: {enabled: true}
+postgresql: {enabled: true}
+# The migrate Job runs `dho migrate upgrade`, whose last step (the ClickHouse head) fails with "CLICKHOUSE_URI is required" when the
+# chart has no ClickHouse. The ClickHouse is for that step only; the PDP does not read it.
+clickhouse: {enabled: true}
+secrets: {create: true}
+authService:
+  phase: 2
+  replicas: 2
+  database: {secretName: auth-db}
+  networkPolicy: {enabled: false}
+  signingKey: {secretName: auth-key, keyId: pdp-load}
+  accessToken: {class: eddsa, issuerURL: "https://auth.pdp-load.example"}
+  sessionKeys: {successor: {secretName: auth-session}}
+  valkey: {secretName: auth-ratelimit}
+  migrate:
+    secretName: auth-migrate-db
+    sessionReaders: {goApi: devhealth_api, queryApi: devhealth_query_api}
+migrations:
+  hook:
+    provisionRoles: {enabled: true}
+    riverMigrate: {enabled: true}
+    routeActivate: {enabled: false}

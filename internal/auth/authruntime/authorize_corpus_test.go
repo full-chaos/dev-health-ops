@@ -33,7 +33,8 @@ const (
 	// A workload principal reference does not resolve: decisionstate reads no
 	// workload limits (Workload is always absent).
 	azWorkloadPrincipalUnreachable azExclusion = "workload_principal_unreachable"
-	// decisionstate reads no service-account row (ServiceAccount is always absent).
+	// The replay seeds no service-account principal, key or grant row. decisionstate's
+	// service-account read is replayed against a real schema in its own integration cells.
 	azServiceAccountUnreachable azExclusion = "service_account_unreachable"
 	// A nil snapshot, a grant read failure or a missing clock is a 503 on the
 	// router, never a decision.
@@ -61,7 +62,8 @@ var azExclusionReasons = []azExclusion{
 type azPinCell struct{ file, fn string }
 
 var azExclusionPinCells = map[azExclusion]azPinCell{
-	azMembershipOrgIsTheKey: {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
+	azMembershipOrgIsTheKey:     {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
+	azServiceAccountUnreachable: {"../decisionstate/decisionstate_serviceaccount_integration_test.go", "TestServiceAccountSnapshotGrantStates"},
 }
 
 var azCorpusExclusions = map[string]azExclusion{
@@ -72,10 +74,13 @@ var azCorpusExclusions = map[string]azExclusion{
 	"workload-inactive-principal":      azWorkloadPrincipalUnreachable,
 	"workload-no-allowed-actions":      azWorkloadPrincipalUnreachable,
 
-	"repo-service-account-inactive":       azServiceAccountUnreachable,
-	"repo-service-account-live-grant":     azServiceAccountUnreachable,
-	"repo-service-account-org-mismatch":   azServiceAccountUnreachable,
-	"repo-service-account-without-grants": azServiceAccountUnreachable,
+	"org-action-service-account-is-no-membership": azServiceAccountUnreachable,
+	"repo-service-account-expired-grant":          azServiceAccountUnreachable,
+	"repo-service-account-inactive":               azServiceAccountUnreachable,
+	"repo-service-account-live-grant":             azServiceAccountUnreachable,
+	"repo-service-account-org-mismatch":           azServiceAccountUnreachable,
+	"repo-service-account-revoked-grant":          azServiceAccountUnreachable,
+	"repo-service-account-without-grants":         azServiceAccountUnreachable,
 
 	"nil-snapshot":           azStateFailureIs503,
 	"repo-grant-read-failed": azStateFailureIs503,

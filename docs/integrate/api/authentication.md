@@ -17,3 +17,5 @@ lifecycle: active
 6. Rotate or revoke through the owning surface.
 
 An `fcpush_` token is for Customer Push and must not be reused as a generic GraphQL or admin credential. See [Authentication reference](../../reference/api/authentication.md).
+
+A service that receives the EdDSA user access token verifies it as described in [Verify access tokens in a Go service](verify-access-tokens-go.md) and [Access-token claims and validation](../../reference/auth/access-token-claims.md).

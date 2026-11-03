@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 // A membership audit row names the calling credential beside the human actor.
@@ -27,6 +28,7 @@ func TestAuditRowNamesTheCallingCredential(t *testing.T) {
 		if ev.ActorPrincipalID == nil || *ev.ActorPrincipalID != actor.String() {
 			t.Fatalf("%s: actor = %v, want the human actor", name, ev.ActorPrincipalID)
 		}
+		auditwire.MustValidate(t, ev)
 		if err := audit.ValidateAttributes(ev.Attributes); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}

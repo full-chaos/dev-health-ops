@@ -148,6 +148,24 @@ from this hook. The pin rule and the lockstep rule are the River hook's, for the
 same reason: `dho migrate roles` bootstraps the logins the running application
 build must find. There is no chart-default fallback.
 */}}
+{{- /*
+CHAOS-12614: the optional ops migration login (the NOSUPERUSER owner of the database and the ops schemas after
+`dho migrate owner-move`). OFF unless migratorRole.name is set; the password comes from an operator-created Secret
+(migratorRole.secretName / secretKey), like apiRole. `dho migrate roles` creates it LOGIN NOSUPERUSER NOCREATEDB
+NOCREATEROLE NOREPLICATION NOBYPASSRLS with CONNECT on the database and nothing else; an existing login keeps its password.
+*/}}
+{{- $migratorRole := .Values.migrations.hook.provisionRoles.migratorRole | default dict }}
+{{- $migratorName := toString ($migratorRole.name | default "") }}
+{{- $migratorSecretName := toString ($migratorRole.secretName | default "") }}
+{{- $migratorSecretKey := toString ($migratorRole.secretKey | default "") }}
+{{- if $migratorName }}
+{{- if not $migratorSecretName }}
+{{- fail "migrations.hook.provisionRoles.migratorRole.name is set but migratorRole.secretName is empty: the migration login's password is read from an operator-created Secret (this chart never creates it); set migratorRole.secretName, or clear migratorRole.name to leave the migration login off." }}
+{{- end }}
+{{- if not $migratorSecretKey }}
+{{- fail "migrations.hook.provisionRoles.migratorRole.name is set but migratorRole.secretKey is empty: name the key in migratorRole.secretName that holds the migration login's password." }}
+{{- end }}
+{{- end }}
 {{- $rolesImage := .Values.migrations.hook.provisionRoles.image | default .Values.migrations.hook.riverMigrate.image | default .Values.migrations.hook.routeActivate.image }}
 {{- /*
 CHAOS-6958: IfNotPresent is this hook's OWN default -- never
@@ -327,6 +345,15 @@ spec:
                   name: {{ $apiSecretName | quote }}
                   key: {{ $apiSecretKey | quote }}
 {{- end }}
+{{- if $migratorName }}
+            - name: OPS_MIGRATOR_DATABASE_ROLE
+              value: {{ $migratorName | quote }}
+            - name: OPS_MIGRATOR_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $migratorSecretName | quote }}
+                  key: {{ $migratorSecretKey | quote }}
+{{- end }}
 {{- if $monitorName }}
             - name: OTEL_PG_MONITOR_DATABASE_ROLE
               value: {{ $monitorName | quote }}
@@ -341,7 +368,9 @@ spec:
                 {{- if .Values.secrets.create }}
                 name: {{ include "dev-health.fullname" . }}-provision-roles-conn
               {{- else }}
-                name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
+                {{- /* CHAOS-12614: provisionRoles.externalSecretName keeps this Job on the superuser DSN (role creation
+                needs CREATEROLE) while the other ops hooks move to the migration login. */}}
+                name: {{ .Values.migrations.hook.provisionRoles.externalSecretName | default .Values.migrations.hook.externalSecretName | default (include "dev-health.secretName" .) }}
               {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
@@ -455,6 +484,11 @@ spec:
               value: {{ .Values.config.RIVER_QUEUE_DATABASE_ROLE | quote }}
             - name: RIVER_COORDINATOR_DATABASE_ROLE
               value: {{ .Values.config.RIVER_COORDINATOR_DATABASE_ROLE | quote }}
+            {{- with include "dev-health.opsOwnerRole" . }}
+            {{- /* CHAOS-12614: the pinned owner of the database and the ops schemas; dho checks it before any DDL. */}}
+            - name: MIGRATION_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
             {{- /* The query-api login (queryApi.extraEnv), so this step provisions its grants. */}}
             {{- range .Values.queryApi.extraEnv }}
             {{- if eq .name "QUERY_API_DATABASE_ROLE" }}

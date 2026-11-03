@@ -214,3 +214,92 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are
 ```
 
 Checks after import: query `dev_health_org_activity_refresh_age_seconds` and `daily_finalize_org_activity_refresh_failed_total` over the last hour. The age is below 172800 and the counter reads 0 on a healthy worker. "No data" for the age means the table is empty or the reads fail (see the read-failed counter); it does not mean fresh.
+
+## Auth shadow mismatch
+
+The go-api shadow harness runs the new policy decision next to the legacy guard and counts every difference (CHAOS-10849). The dashboard source is `deploy/signoz/dashboards/auth-shadow-mismatch.json` ("Dev Health - Auth Shadow Mismatch (production)"); the alert is `AuthShadowMismatchUnresolved` in `alerts/rules.yml`, group `auth_shadow`.
+
+**The signal is not live yet.** The mismatch and result panels show no data and the rule is inert until the shadow is wired into go-api (the pull request that adds the `AUTH_SHADOW_PDP` switch) and `AUTH_SHADOW_PDP` is on. The two status panels differ: once the shadow is wired, `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid` report data even with the switch off (0 and 0 when off; 0 and 1 when the shadow settings are invalid). The counters are lazy: an OpenTelemetry counter has no series until its first `Add`, so an absent series means nothing happened. The rule has no absent-data alert. Do not read an applied rule as proof that the shadow is armed; the check is `dev_health_api_shadow_enabled` = 1 in SigNoz.
+
+Labels are a closed set: `namespace`, `caller`, `class` on `dev_health_api_shadow_mismatch_total`, and `result` on `dev_health_api_shadow_results_total`. `namespace` is the action namespace (admin, billing, integrations, license, members, settings, teams), not the Kubernetes namespace. `caller` is member, admin or superuser. `class` is legacy_bug, new_bug, unresolved or intentional. Filters use only `service.name` and `deployment.environment` besides these. No organization, user, route, action or decision id is ever a label.
+
+What to read:
+
+- `AuthShadowMismatchUnresolved`: any increase of `dev_health_api_shadow_mismatch_total` with `class = 'unresolved'` in one hour, evaluated every 5 minutes, severity warning, channel `accounts-email`, no renotify (one email per transition; the dashboard holds the detail). `unresolved` is the default class, so any difference that no reviewed row of the class table covers lands here.
+- Dashboard: unresolved total; mismatches by action namespace, by caller and by class; a namespace by caller table; results by `result` (match, mismatch, error, dropped, skipped); `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid`.
+- Zero mismatches is not "good" by itself: read the results panel, because error, dropped or skipped calls produce no mismatch.
+- The metric says where; the go-api WARN log "api shadow pdp: mismatch with the legacy guard" says what (action, route, reason_code, decision_id). The log is limited to one line per second per class: use it for samples, never for counts.
+
+PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a builder threshold rule that names the `accounts-email` channel and does not use the notification policy (`usePolicy` is false):
+
+```json
+{
+  "alert": "AuthShadowMismatchUnresolved",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_shadow_mismatch_total",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": "class = 'unresolved' AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "at_least_once",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "1h",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "go-api"
+  },
+  "annotations": {
+    "summary": "auth shadow PDP: an unresolved mismatch with the legacy guard",
+    "description": "The shadow policy decision differed from the legacy guard and no reviewed class covers the difference. Next: the dashboard 'Dev Health - Auth Shadow Mismatch (production)' for the action namespace and caller, then the go-api WARN log 'api shadow pdp: mismatch with the legacy guard' (action, route, reason_code, decision_id; one line per second per class, so read samples, not counts)."
+  }
+}
+```

@@ -110,6 +110,10 @@
       "why": "A member limited to several repositories: sorted, unique canonical keys."
     },
     {
+      "file": "decision-valid-allowlist-nested-keys.json",
+      "why": "Allowlist keys nest groups: 2 to 20 segments."
+    },
+    {
       "file": "decision-valid-allow-redaction-every-class.json",
       "why": "Every registered redaction class in one decision (contracts/auth/v1/vocabulary/redaction-classes.v1.json)."
     },
@@ -224,6 +228,24 @@
       "expect_instance_location": "/obligations/repository_allowlist/0",
       "expect_keyword": "pattern",
       "why": "Canonical lowercase keys only."
+    },
+    {
+      "file": "decision-invalid-allowlist-21-segments.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "pattern",
+      "why": "21 segments is one past the deepest key."
+    },
+    {
+      "file": "decision-invalid-allowlist-256-bytes.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "maxLength",
+      "why": "256 bytes is one past the key bound."
+    },
+    {
+      "file": "decision-invalid-allowlist-trailing-slash.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash leaves the last segment empty."
     },
     {
       "file": "decision-invalid-deny-with-obligations.json",

@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-obligations
-summary: The authorization decision wire contract - the fields of a decision, the five closed obligations, the redaction class registry, the fail-closed parsing rules the Go client enforces, and the status of the decision point that issues them.
+summary: The authorization decision wire contract - the fields of a decision, the six closed obligations, the redaction class registry, the fail-closed parsing rules the Go client enforces, and the status of the decision point that issues them.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -22,7 +22,7 @@ An authorization decision answers one question: may this principal perform this 
 {: .fc-page-lede }
 
 !!! warning "No ordinary allow carries an obligation yet"
-    The wire contract and the Go parser exist on `main`. The auth-service serves `POST /v1/authorize` and `POST /v1/authorize:batch` (`contracts/auth/v1/openapi/auth-v1.openapi.json`), and the decision document has an `obligations` member. The decision point writes the obligations a decision carries, but the policy that sets them for an ordinary allow (tenant scope, repository allowlist, redaction) is not in yet, and a delegated allow, the only one that carries any, is denied before it is decided. No service enforces an obligation. See [Status](#status).
+    The wire contract, the Go parser and the decision document member exist on `main`. The decision point writes the obligations a decision holds, but no policy sets them for an ordinary allow yet (CHAOS-12851), a delegated allow is denied before it is decided, and no service enforces an obligation. `repository_scope` and the reason `repository_allowlist_too_large` are in the contract before the decision point emits them. See [Status](#status).
 
 ## Request
 
@@ -51,12 +51,13 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 
 ## Obligations
 
-The set is closed. `additionalProperties` is false. A decision that carries an obligation the contract does not define is invalid, and the consumer denies.
+The set is closed (six members). `additionalProperties` is false. A decision that carries an obligation the contract does not define is invalid, and the consumer denies.
 
 | Obligation | Type | The resource service must |
 | --- | --- | --- |
 | `tenant_scope` | organization id | Keep every read and write inside that organization. |
-| `repository_allowlist` | array of at most 256 `owner/repo` keys, or `*` | Touch only those repositories. `*` means organization-wide. An empty array means none, not unrestricted. Unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit `["*"]` and sends the member (an empty one included) on every allow of an action that filters by repository; a consumer reads an absent allowlist on such an action as a deny. A list is never truncated. |
+| `repository_allowlist` | array of at most 256 `owner/repo` keys (the contract also admits `*`) | Touch only those repositories. An empty array means none, not unrestricted. The decision point never emits `*` and never truncates a list: a principal with more than 256 readable repositories is denied with `repository_allowlist_too_large`. A consumer still accepts `*` as organization-wide. |
+| `repository_scope` | `organization` | Read every repository of the tenant: nothing limits the read. A decision carries this member or `repository_allowlist`, never both. On an allow of an action that filters by repository, a consumer that finds neither member denies: an absent member never means unrestricted. |
 | `redaction` | array of `personal_identifiers`, `contact_details`, `free_text` | Remove those field classes from the response. An unknown class makes the whole decision invalid. |
 | `minimum_assurance` | `aal1`, `aal2` or `aal3` | Deny when the principal's authenticator assurance level is lower. |
 | `step_up` | boolean | Make the caller complete step-up authentication before the action proceeds. |
@@ -95,7 +96,7 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
 | `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny with obligations, a repeated or malformed key, more than 256 keys, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
-| Actor chain, delegation limits and obligations in the decision point | Planned, CHAOS-10839. The wire member exists; the policy that sets `tenant_scope`, `repository_allowlist` and `redaction` on an ordinary allow is the next change of CHAOS-12656. |
+| Actor chain, delegation limits and obligations in the decision point | Delegation: CHAOS-10839. The policy that sets `tenant_scope`, `repository_allowlist` and `repository_scope` on an ordinary allow: CHAOS-12851. The PEP client learns `repository_scope` and the new reason first: CHAOS-12853. |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10846 (TypeScript server-only decision client) and CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
 | Entitlement-derived obligation | Planned, CHAOS-10837 (entitlement adapter) and CHAOS-10862 (billing and licensing enforcement point). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |

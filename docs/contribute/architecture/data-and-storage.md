@@ -442,7 +442,7 @@ Two rules hold for every read of the tree:
    It repairs nothing: it adds the rows it finds to the unlabeled counter
    `workgraph_issue_pr_fallback_beside_native_rows_total` on every
    build (plus one counter per side, `..._beside_native_pull_request_rows_total`, `..._beside_native_issue_rows_total`,
-   `..._pull_request_issue_side_rows_total`, and `workgraph_issue_pr_fallback_invariant_checks_total`, one per check that ran; the rule `IssuePRFallbackInvariantBreached` in [`alerts/rules.yml`](../../../alerts/rules.yml) alerts on any increase of the first counter in 24 hours), and when the count is above 0 it logs a WARN `issue-pr fallback
+   `..._pull_request_issue_side_rows_total`, and `workgraph_issue_pr_fallback_invariant_checks_total`, one per check that ran; the rule `IssuePRFallbackInvariantBreached` in `alerts/rules.yml` (see [dashboards and alerts](../../operate/observe/dashboards-and-alerts.md)) alerts on any increase of the first counter in 24 hours), and when the count is above 0 it logs a WARN `issue-pr fallback
    invariant breached` with the counts and reports FAILED (step evidence
    `status: failed`, build evidence `failed_steps`); the later steps still run. A pull or merge request
    work item (`ghpr:<owner>/<repo>#<n>`, `gitlab:<path>!<n>`) is never the

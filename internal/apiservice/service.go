@@ -704,6 +704,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, err
 	}
+	delegated, err := goAPIDelegatedRows()
+	if err != nil {
+		return protection{}, err
+	}
+	auth.DelegatedRows(delegated)
 	rows, err := goAPIScopeRows()
 	if err != nil {
 		return protection{}, err

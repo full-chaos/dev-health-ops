@@ -146,10 +146,10 @@ func TestSAMLRoutesRefuseANewAccountWithoutWrites(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	var body struct {
-		Detail string `json:"detail"`
+		Detail json.RawMessage `json:"detail"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || rec.Code != http.StatusForbidden ||
-		body.Detail != "This account is not a member of the provider's organization." || len(issuer.got) != 0 {
+		string(body.Detail) != `{"message":"A membership in this organization is required","reason":"membership_required"}` || len(issuer.got) != 0 {
 		t.Fatalf("ACS = %d %s sessions %d, want 403 with the membership detail and no session", rec.Code, rec.Body, len(issuer.got))
 	}
 	if after := h.writeCounts(); after != before {

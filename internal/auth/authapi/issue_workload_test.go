@@ -183,10 +183,10 @@ func (w *workloadIssueFixture) requireSuccessReasonsAreClosed() {
 // users read, no projection, no session.
 func (w *workloadIssueFixture) nothingRead(name string) {
 	w.t.Helper()
-	if len(w.creds.seen) != 0 || w.users.calls != 0 || len(w.sessions.created) != 0 ||
+	if len(w.creds.checked()) != 0 || w.users.calls != 0 || len(w.sessions.created) != 0 ||
 		len(w.projector.userCalls) != 0 || len(w.projector.orgCalls) != 0 {
 		w.t.Fatalf("%s: a refusal read stores: checks %d users %d sessions %d projections %d/%d", name,
-			len(w.creds.seen), w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
+			len(w.creds.checked()), w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
 	}
 }
 
@@ -229,8 +229,8 @@ func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
-	if len(w.creds.seen) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", w.creds.seen)
+	if len(w.creds.checked()) != 0 {
+		t.Fatalf("the workload path checked a service credential: %v", w.creds.checked())
 	}
 	if len(w.sessions.created) != 1 {
 		t.Fatalf("%d sessions created", len(w.sessions.created))
@@ -437,8 +437,8 @@ func TestIssueSessionCountsAcceptedServiceCredentialUse(t *testing.T) {
 			t.Fatalf("status %d: %s", response.Code, response.Body)
 		}
 	}
-	if len(w.creds.seen) != 2 || w.creds.seen[0] != issuerToken {
-		t.Fatalf("checks %v", w.creds.seen)
+	if len(w.creds.checked()) != 2 || w.creds.checked()[0] != issuerToken {
+		t.Fatalf("checks %v", w.creds.checked())
 	}
 	if got, _ := w.counter(compatCounterName, map[string]string{"class": authsessClass}); got != 2 {
 		t.Fatalf("compat uses = %d, want 2", got)
@@ -734,7 +734,7 @@ func TestTheRouteRechecksTheVerifiedClaimsAfterVerify(t *testing.T) {
 		if len(w.sessions.created) != before {
 			t.Fatalf("%s: a session was created on claims the route must refuse", name)
 		}
-		if len(w.creds.seen) != 0 || w.users.calls != usersBefore {
+		if len(w.creds.checked()) != 0 || w.users.calls != usersBefore {
 			t.Fatalf("%s: a refusal read stores", name)
 		}
 	}

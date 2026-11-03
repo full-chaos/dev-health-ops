@@ -107,9 +107,10 @@ func TestAcrOutOfOrderRevisionsAreGapDuplicateAndStale(t *testing.T) {
 		t.Fatalf("revision 2 on a credential never seen: outcome %s, want gap", outcome)
 	}
 	state := mustApplyAcr(t, State{}, issued, nil)
+	// A terminal event that skips revisions ends the credential (no acr event could fill the gap).
 	for _, name := range []string{"valid-revoked-revision-3.json", "valid-expired-revision-4.json"} {
-		if next, outcome := applyAcr(t, state, acrEvent(t, name), nil); outcome != Gap || next.Status != StatusActive || next.Revision != 1 {
-			t.Fatalf("%s: outcome %s state %+v, want a gap and no change", name, outcome, next)
+		if next, outcome := applyAcr(t, state, acrEvent(t, name), nil); outcome != Applied || !next.Status.Terminal() || Permits(next, "context:read", t0) {
+			t.Fatalf("%s: outcome %s state %+v, want applied and ended", name, outcome, next)
 		}
 	}
 	if _, outcome := applyAcr(t, state, issued, nil); outcome != Duplicate {

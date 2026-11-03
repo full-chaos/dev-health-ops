@@ -175,7 +175,8 @@ nav:
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
-          - Auth signing-key rotation and rollback: operate/runbooks/auth-signing-key-rotation-and-rollback.md
+          - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
+          - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
           - Auth platform roles flip and rollback: operate/runbooks/auth-platform-roles-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md

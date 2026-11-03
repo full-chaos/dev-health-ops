@@ -19,7 +19,8 @@ import (
 // live venue-oracle round caught as a real status-code divergence. Every
 // route in this package with a body parameter registers through this, never
 // bare Guard.Wrap. policy.Guard.BodyFirst is the one implementation, shared
-// with internal/api/orgs.
+// with internal/api/orgs. CHAOS-12843: this order is the decided behaviour for the org write routes,
+// pinned by TestOrgWriteRoutesKeepTheBodyFirstOrder.
 func (h *handlers) bodyFirst(level policy.Authz, next http.Handler) http.Handler {
 	return h.guard.BodyFirst(level, next)
 }

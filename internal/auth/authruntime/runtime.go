@@ -307,6 +307,9 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 		)
 	}
 
+	if _, err := apimetrics.Install(); err != nil {
+		logger.Warn("install the OTel meter provider", "error", err)
+	}
 	removedenv.ObserveOrgsOwned(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)

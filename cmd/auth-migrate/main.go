@@ -95,6 +95,9 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
+	logger := logging.NewJSON(stderr, slog.LevelInfo)
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
+
 	if len(args) > 0 && args[0] == "keys" {
 		return executeKeys(parent, args[1:], lookup, stdout, stderr)
 	}
@@ -159,9 +162,6 @@ func execute(
 		}
 		return 0
 	}
-
-	logger := logging.NewJSON(stderr, slog.LevelInfo)
-	removedenv.ObserveOrgsOwned(parent, lookup, logger)
 
 	migrationURI, configured, err := secrets.ResolveDSNSetting(envMigrationURI, lookup)
 	if err != nil {

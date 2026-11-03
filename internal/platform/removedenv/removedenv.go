@@ -4,7 +4,6 @@ package removedenv
 import (
 	"context"
 	"log/slog"
-	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -18,12 +17,13 @@ const (
 	orgsOwnedIgnoredName = "dev_health_auth_orgs_owned_ignored"
 )
 
-// ObserveOrgsOwned reports whether OrgsOwnedKey is set. The key changes no behaviour: a set key, of any value, is
-// ignored as if unset. It writes one ERROR line that names the key and never its value, and sets the gauge to 1 (0 when
-// the key is unset or blank). Each binary calls it once at start.
+// ObserveOrgsOwned reports whether OrgsOwnedKey is set. The key changes no behaviour: a set key, of any value (an empty
+// or blank value too), is ignored as if unset. It writes one ERROR line that names the key and never its value, and
+// sets the gauge to 1 (0 when the key is unset). Each binary calls it once at start. The long-running services call it
+// after the process meter provider is installed, so the gauge is exported on their /metrics. The one-shot commands
+// (auth-migrate, orgs-backfill) install no provider and push nothing: they report by the ERROR line only.
 func ObserveOrgsOwned(ctx context.Context, lookup func(string) (string, bool), logger *slog.Logger) bool {
-	raw, _ := lookup(OrgsOwnedKey)
-	set := strings.TrimSpace(raw) != ""
+	_, set := lookup(OrgsOwnedKey)
 	if set {
 		if logger == nil {
 			logger = slog.Default()

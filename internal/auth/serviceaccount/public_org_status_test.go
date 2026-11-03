@@ -36,7 +36,7 @@ func TestResolveKeyReadsOrganizationStatusFromPublic(t *testing.T) {
 	if sql == "" {
 		t.Fatal("ResolveKey holds no SQL literal")
 	}
-	if strings.Contains(sql, ".organizations") {
+	if strings.Contains(strings.ReplaceAll(sql, "public.organizations", ""), ".organizations") {
 		t.Error("ResolveKey reads the auth.organizations copy: read public.organizations.is_active")
 	}
 	if !strings.Contains(sql, "public.organizations o") || !strings.Contains(sql, "o.is_active") {

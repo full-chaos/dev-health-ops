@@ -151,8 +151,20 @@ func TestCompatLoginRefusesBeforeTheCredentialCheckWhenSignerUnavailable(t *test
 	}
 }
 
-// The limiter is charged before the signer check, so a caller over its
-// budget gets the 429 during an outage too.
+// The limiter is charged before the signer check, and a login the signer check
+// refuses gives the charge back (CHAOS-12737): ten refused tries leave the
+// budget whole, so the eleventh is the 503 again, never a 429.
+func TestAPreflightFailedLoginDoesNotSpendTheBudget(t *testing.T) {
+	signer := unreadableKeySigner(t)
+	f := onEdDSA(t, newCompatFixture(t), signer)
+	for i := 0; i <= loginAccountLimit.Count; i++ {
+		expectGoAPIUnavailable(t, f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil))
+	}
+	if n := compatWrites(f); n != 0 || f.attempts.failures != 0 {
+		t.Fatalf("%d writes during the outage", n)
+	}
+}
+
 func TestALimitedLoginAnswers429BeforeTheSignerIsChecked(t *testing.T) {
 	signer := unreadableKeySigner(t)
 	f := onEdDSA(t, newCompatFixture(t), signer)

@@ -76,6 +76,9 @@ type fakeDecisionState struct {
 	sessions     map[uuid.UUID]DecisionSession
 	keys         map[uuid.UUID]DecisionKey
 	snapshots    map[snapKey]*fakeSnapshot
+	actors       map[uuid.UUID]ActorState
+	actorErr     error
+	actorReads   int
 	beginErr     error
 	sessionErr   error
 	keyErr       error
@@ -102,6 +105,14 @@ func (t fakeDecisionTx) Session(_ context.Context, id uuid.UUID) (DecisionSessio
 		return DecisionSession{}, t.f.sessionErr
 	}
 	return t.f.sessions[id], nil
+}
+
+func (t fakeDecisionTx) Actor(_ context.Context, actor uuid.UUID) (ActorState, error) {
+	t.f.actorReads++
+	if t.f.actorErr != nil {
+		return ActorState{}, t.f.actorErr
+	}
+	return t.f.actors[actor], nil
 }
 
 func (t fakeDecisionTx) ServiceAccountKey(_ context.Context, id uuid.UUID) (DecisionKey, error) {
@@ -248,13 +259,14 @@ func (h *authorizeHandlerFixture) batch(qs ...map[string]any) *httptest.Response
 }
 
 type wireDecision struct {
-	DecisionID     string  `json:"decision_id"`
-	Allowed        bool    `json:"allowed"`
-	ReasonCode     string  `json:"reason_code"`
-	PrincipalID    string  `json:"principal_id"`
-	OrganizationID *string `json:"organization_id"`
-	PolicyRevision int     `json:"policy_revision"`
-	ExpiresAt      string  `json:"expires_at"`
+	DecisionID     string         `json:"decision_id"`
+	Allowed        bool           `json:"allowed"`
+	ReasonCode     string         `json:"reason_code"`
+	PrincipalID    string         `json:"principal_id"`
+	OrganizationID *string        `json:"organization_id"`
+	PolicyRevision int            `json:"policy_revision"`
+	ExpiresAt      string         `json:"expires_at"`
+	Obligations    map[string]any `json:"obligations"`
 }
 
 func decodeWire[T any](t *testing.T, rec *httptest.ResponseRecorder) T {

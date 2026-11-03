@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -15,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
+	"github.com/full-chaos/dev-health-ops/internal/auth/delegationinput"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -52,6 +54,28 @@ type DecisionSession struct {
 	// or a delegating session: an impersonation session.
 	HasActor         bool
 	HasDelegatedFrom bool
+	// The delegation columns of the row, as the same read returned them.
+	// ActorPrincipalID is uuid.Nil without an actor. OrganizationID is the
+	// target organization of an impersonation session.
+	ActorPrincipalID uuid.UUID
+	OrganizationID   *uuid.UUID
+	AMR              []string
+	PermittedActions []string
+	// BaseLive is true when the delegating session is neither revoked nor
+	// expired at the transaction's clock; false when there is none.
+	BaseLive bool
+}
+
+// ActorState is the real actor of a delegated session, read in the decision
+// transaction.
+type ActorState struct {
+	// Active is true when the actor is an active user principal and its
+	// public.users row is active.
+	Active bool
+	// CanImpersonate is true when the actor holds admin.impersonate now.
+	CanImpersonate bool
+	// Owner is true when the actor holds platform_owner now.
+	Owner bool
 }
 
 // serviceAccountKeyClass is the credential class of a service-account key
@@ -86,23 +110,27 @@ func (k DecisionKey) liveFor(p ReferencedPrincipal) bool {
 		k.NowUnixNano > 0 && k.ExpiresAtUnixNano != 0 && k.NowUnixNano < k.ExpiresAtUnixNano
 }
 
-// delegated reports an impersonation session. The decision core's delegation
-// rules are not wired to this route yet, so such a reference is denied with
-// delegation_invalid instead of being decided as the plain target user.
+// delegated reports an impersonation session: it is decided by the core's
+// delegation rules over the row's own columns, never as the plain target user.
 func (s DecisionSession) delegated() bool { return s.HasActor || s.HasDelegatedFrom }
 
-// delegatedSnapshot makes the decision core deny every request with
-// delegation_invalid: a delegation with an empty actor chain.
-type delegatedSnapshot struct{ authorization.GrantSnapshot }
-
-func (delegatedSnapshot) Delegation() (authorization.Delegation, bool) {
-	return authorization.Delegation{}, true
+// delegatedSnapshot is the effective subject's snapshot with the actor chain of
+// the delegated session. An empty chain denies every request with
+// delegation_invalid.
+type delegatedSnapshot struct {
+	authorization.GrantSnapshot
+	del authorization.Delegation
 }
+
+func (d delegatedSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
 
 // DecisionTx reads decision state inside one read-only transaction. Every
 // error means the state could not be read.
 type DecisionTx interface {
 	Session(ctx context.Context, sessionID uuid.UUID) (DecisionSession, error)
+	// Actor is the live state of the real actor of a delegated session; the
+	// zero ActorState for an unknown principal.
+	Actor(ctx context.Context, actor uuid.UUID) (ActorState, error)
 	// ServiceAccountKey reads the key row a service-account reference names,
 	// with the transaction's clock.
 	ServiceAccountKey(ctx context.Context, credentialID uuid.UUID) (DecisionKey, error)
@@ -272,6 +300,7 @@ type authorizeItem struct {
 	principal ReferencedPrincipal
 	decision  authorization.Decision
 	now       int64
+	delegated bool
 	// orgKnown is true when the question's organization is a canonical uuid
 	// the decision transaction found.
 	orgKnown bool
@@ -367,6 +396,13 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 		}
 		h.Logger.InfoContext(ctx, "authorize decision", "decision_id", doc.DecisionID, "allowed", doc.Allowed, "reason_code", doc.ReasonCode,
 			"cache", item.cache)
+		// The owner-exemption audit event is written by a follow-up change,
+		// outside this read-only transaction; until then the exemption is only
+		// this log line.
+		if a := item.decision.Audit; a != nil {
+			h.Logger.WarnContext(ctx, "authorize owner exemption", "decision_id", doc.DecisionID, "actor_principal_id", a.ActorPrincipalID,
+				"organization_id", a.OrganizationID, "action", a.Action, "audit_reason", a.Reason)
+		}
 		out[i] = doc
 	}
 	if err := h.auditHighRisk(ctx, items, out); err != nil {
@@ -376,15 +412,25 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 	return out, true
 }
 
-// evaluate checks each referenced session, or a service account's key row,
-// once, then decides each item over its (principal, organization) snapshot,
-// read once per pair. With the cache in use, an item of a user session that is
-// not delegated reads its unfed values and asks the cache first; a hit reads
-// no snapshot. A service account's decision never uses the cache: its
-// account row is in no cache key and no feed dependency.
+// referencedSession is a live session a principal reference names, with its
+// actor when it is a delegated session.
+type referencedSession struct {
+	id    uuid.UUID
+	row   DecisionSession
+	actor ActorState
+}
+
+// evaluate checks each referenced session once (and reads the actor of a
+// delegated one once), or a service account's key row once, then decides each
+// item over its (principal, organization, session) snapshot, read once per
+// triple. A delegated session is live only while its delegating session is.
+// With the cache in use, an item of a user session that is not delegated reads
+// its unfed values and asks the cache first; a hit reads no snapshot. A
+// delegated session is never cached. A service account's decision never uses
+// the cache: its account row is in no cache key and no feed dependency.
 func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved map[string]ReferencedPrincipal, items []authorizeItem,
 	cached bool) error {
-	delegatedRefs := map[string]bool{}
+	sessions := map[string]referencedSession{}
 	accountRefs := map[string]bool{}
 	for ref, p := range resolved {
 		if p.Kind == ReferenceServiceAccount {
@@ -406,25 +452,37 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 		if err != nil {
 			return err
 		}
-		if !s.Found || !s.Live || s.PrincipalID != p.ID {
+		if !s.Found || !s.Live || s.PrincipalID != p.ID || (s.delegated() && !s.BaseLive) {
 			return errAuthorizeReferenceRefused
 		}
-		delegatedRefs[ref] = s.delegated()
+		rs := referencedSession{id: sid, row: s}
+		if s.delegated() && s.ActorPrincipalID != uuid.Nil {
+			if rs.actor, err = tx.Actor(ctx, s.ActorPrincipalID); err != nil {
+				return err
+			}
+		}
+		sessions[ref] = rs
 	}
-	type pair struct {
+	type triple struct {
 		principal uuid.UUID
 		org       string
-		delegated bool
+		session   uuid.UUID
 		account   bool
 	}
-	snapshots := map[pair]authorization.GrantSnapshot{}
-	unfed := map[pair]UnfedState{}
-	versions := map[pair]string{}
+	snapshots := map[triple]authorization.GrantSnapshot{}
+	unfed := map[triple]UnfedState{}
+	versions := map[triple]string{}
 	for i := range items {
 		q := items[i].question
-		key := pair{items[i].principal.ID, q.OrganizationID, delegatedRefs[q.PrincipalReference], accountRefs[q.PrincipalReference]}
+		rs := sessions[q.PrincipalReference]
+		delegated := rs.row.delegated()
+		account := accountRefs[q.PrincipalReference]
+		key := triple{principal: items[i].principal.ID, org: q.OrganizationID, account: account}
+		if delegated {
+			key.session = rs.id
+		}
 		items[i].cache = cacheBypass
-		if cached && !key.delegated && !key.account {
+		if cached && !delegated && !account {
 			u, ok := unfed[key]
 			if !ok {
 				var err error
@@ -457,8 +515,15 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			if snap, err = tx.Snapshot(ctx, key.principal, key.org); err != nil {
 				return err
 			}
-			if key.delegated {
-				snap = delegatedSnapshot{snap}
+			if delegated {
+				snap = delegatedSnapshot{snap, delegationinput.Delegation(delegationinput.Facts{
+					Actor:               rs.row.ActorPrincipalID,
+					Organization:        rs.row.OrganizationID,
+					AMR:                 rs.row.AMR,
+					PermittedActions:    rs.row.PermittedActions,
+					ActorMayImpersonate: rs.actor.Active && rs.actor.CanImpersonate,
+					ActorOwner:          rs.actor.Owner,
+				})}
 			}
 			snapshots[key] = snap
 		}
@@ -470,7 +535,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			req.ResourceKey = q.ResourceKey
 		}
 		d := h.Evaluator.Evaluate(req, snap)
-		if _, onWire := wireReasonCode(d.Reason); !onWire {
+		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated) {
 			return errAuthorizeStateFailure
 		}
 		if items[i].cache == cacheMiss {
@@ -483,10 +548,16 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 				items[i].read = &decisioncache.Read{Dependencies: ds.Dependencies(), SetTypes: ds.SetTypes()}
 			}
 		}
-		items[i].decision, items[i].now = d, snap.NowUnixNano()
+		items[i].decision, items[i].now, items[i].delegated = d, snap.NowUnixNano(), delegated
 		items[i].orgKnown = knownOrganization(q.OrganizationID, snap)
 	}
 	return nil
+}
+
+// obligationsFit is the wire rule of obligations: only the allow of a delegated
+// session carries them, and every such allow does.
+func obligationsFit(d authorization.Decision, delegated bool) bool {
+	return (d.Allowed && delegated) == (d.Obligations != nil)
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {
@@ -503,6 +574,10 @@ func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error
 		PrincipalID:    session.WirePrincipalID(item.principal.ID),
 		PolicyRevision: item.decision.PolicyRevision,
 		ExpiresAt:      decisionExpiry(item.decision, item.now).Format(expiresAtLayout),
+	}
+	if item.delegated {
+		// A delegated allow is used once: the impersonation can end at any time.
+		doc.ExpiresAt = time.Unix(0, item.now).UTC().Format(expiresAtLayout)
 	}
 	if org := item.question.OrganizationID; org != "" {
 		doc.OrganizationID = &org

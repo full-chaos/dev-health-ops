@@ -8,6 +8,8 @@ import (
 	"io"
 	"regexp"
 	"slices"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 const (
@@ -22,7 +24,7 @@ const (
 // the schema to the same verdicts.
 var (
 	authorizeActionPattern        = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
-	authorizeRepositoryKeyPattern = regexp.MustCompile(`^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`)
+	authorizeRepositoryKeyPattern = repokey.Matcher()
 	authorizeResourceKeyPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,255}$`)
 	authorizeRequestIDPattern     = regexp.MustCompile(`^req_[A-Za-z0-9_-]{26}$`)
 
@@ -138,6 +140,9 @@ func questionFromMembers(members map[string]json.RawMessage, path string) (Autho
 	}
 	if q.ResourceKey, err = patternString(resource["key"], path+"/resource/key", keyPattern); err != nil {
 		return AuthorizationQuestion{}, err
+	}
+	if q.ResourceType == "repository" && len(q.ResourceKey) > repokey.MaxBytes {
+		return AuthorizationQuestion{}, invalidAuthorization("%s/resource/key is longer than %d bytes", path, repokey.MaxBytes)
 	}
 	if raw, ok := resource["organization_id"]; ok {
 		if q.OrganizationID, err = plainString(raw, path+"/resource/organization_id"); err != nil {

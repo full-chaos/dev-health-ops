@@ -1,0 +1,63 @@
+# PostgreSQL (superuser devhealth, as in prod) and ClickHouse for ci/ops_owner_move_k3s.sh; images via envsubst.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ops-postgres}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ops-postgres}}
+  template:
+    metadata: {labels: {app: ops-postgres}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 70, runAsGroup: 70, fsGroup: 70}
+      volumes: [{name: data, emptyDir: {}}]
+      containers:
+        - name: postgres
+          image: ${OPS_PG_IMAGE}
+          imagePullPolicy: IfNotPresent
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql}]
+          env:
+            - {name: POSTGRES_USER, value: devhealth}
+            - {name: POSTGRES_DB, value: devhealth}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: ops-pg, key: POSTGRES_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/pgdata}
+          readinessProbe:
+            exec: {command: [pg_isready, -h, 127.0.0.1, -U, devhealth]}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ops-postgres}
+spec:
+  selector: {app: ops-postgres}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ops-clickhouse}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ops-clickhouse}}
+  template:
+    metadata: {labels: {app: ops-clickhouse}}
+    spec:
+      containers:
+        - name: clickhouse
+          image: ${OPS_CH_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: CLICKHOUSE_USER, value: dho}
+            - {name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "1"}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: {secretKeyRef: {name: ops-pg, key: CLICKHOUSE_PASSWORD}}
+          readinessProbe:
+            tcpSocket: {port: 9000}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ops-clickhouse}
+spec:
+  selector: {app: ops-clickhouse}
+  ports: [{name: native, port: 9000, targetPort: 9000}, {name: http, port: 8123, targetPort: 8123}]

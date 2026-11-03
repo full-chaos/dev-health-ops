@@ -174,3 +174,23 @@ func TestVerifyReadsTimeClaimsLikePyJWT(t *testing.T) {
 		}
 	}
 }
+
+func TestStateMintedUnderTheFallbackKeyStillVerifiesAfterTheSuccessorIsSet(t *testing.T) {
+	now := time.Now()
+	old, err := testSigner.Mint("org-1", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor := Signer{Secret: "successor-secret-successor-secret-1", FallbackSecret: testSigner.Secret, Issuer: testSigner.Issuer, Audience: testSigner.Audience}
+	if _, err := successor.Verify(old, now); err != nil {
+		t.Fatalf("old-key state: %v", err)
+	}
+	fresh, _ := successor.Mint("org-1", nil, now)
+	if _, err := testSigner.Verify(fresh, now); err == nil {
+		t.Fatal("a state minted with the successor verified under the old key alone: Mint must use the successor")
+	}
+	noFallback := Signer{Secret: successor.Secret, Issuer: testSigner.Issuer, Audience: testSigner.Audience}
+	if _, err := noFallback.Verify(old, now); err == nil {
+		t.Fatal("old-key state verified with no fallback")
+	}
+}

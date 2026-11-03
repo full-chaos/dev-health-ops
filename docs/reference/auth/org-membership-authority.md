@@ -11,6 +11,8 @@ source_of_truth:
   - internal/auth/restorefence/specs.go
   - internal/audit/outboxloop.go
   - internal/audit/reaper.go
+  - internal/auth/decisionstate/decisionstate.go
+  - internal/auth/membership/effective_on.go
 applicability: current
 lifecycle: active
 ---
@@ -26,8 +28,8 @@ checks, rolls back and restores it. It states what the code does now. It links t
 | Data | Authority | The `auth` schema holds |
 | --- | --- | --- |
 | Users | `public.users` | Credentials, password and lockout state, and a copy of each shared column ([deployment, phase 4](../../contribute/architecture/auth-control-plane-deployment.md)). |
-| Organizations | `public.organizations` | A copy. It is never a decision input. |
-| Memberships | `public.memberships` | A copy. It is never a decision input. |
+| Organizations | `public.organizations` | A copy. The authorization decision still reads its status from `auth.organizations` (`internal/auth/decisionstate/decisionstate.go:383`), so a stale copy changes a decision. |
+| Memberships | `public.memberships` | A copy. The decision reads both tables (`internal/auth/membership/effective_on.go:31-53`): a public row with a role decides, and the auth row decides only when there is no such public row (`internal/auth/membership/membership.go:73-85`). |
 | Platform roles | `auth.platform_role_assignments`, once `AUTH_PLATFORM_ROLES_OWNED` is on | The authority itself (the one exception, D6659). |
 
 - Orgs owned (phase 5, CHAOS-10998, ticket 4.13) is **cancelled** (D6651). The chart refuses phase 5 and refuses
@@ -39,7 +41,8 @@ checks, rolls back and restores it. It states what the code does now. It links t
   write both schemas in one commit ([provisioning routes](configuration.md#provisioning-routes)).
 - go-api sends its organization and member writes to auth-service only when `AUTH_PROXY_ORG_PROVISIONING=true`. With the switch off,
   go-api writes the public tables only and `auth.memberships` drifts (CHAOS-11779,
-  [users-owned runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)).
+  [users-owned runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Those writes make no auth-service call and no
+  outbox event (see [The provisioning event](#the-provisioning-event)).
 - Platform roles: with `authService.platformRolesOwned: true`, platform authority comes from `auth.platform_role_assignments`, not from
   `public.users.is_superuser` ([runbook](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md)).
   Platform-admin roles and organization roles stay separate ([platform administrator](platform-admin.md),
@@ -47,8 +50,19 @@ checks, rolls back and restores it. It states what the code does now. It links t
 
 ## The provisioning event
 
-Each security change writes one `provisioning-event.v1` row to `auth_outbox_events` in the same transaction as the state change and the
-audit row ([audit and outbox operations](../../contribute/architecture/auth-control-plane-audit-outbox.md), "The write path").
+Each security change that auth-service records writes one `provisioning-event.v1` row to `auth_outbox_events` in the same transaction as
+the state change and the audit row ([audit and outbox operations](../../contribute/architecture/auth-control-plane-audit-outbox.md),
+"The write path"). The guarantee stops there: a write that goes to the public tables without an auth-service call has no row in
+`auth_outbox_events`.
+
+- Proxy-off writes are absent from the stream. With `AUTH_PROXY_ORG_PROVISIONING` off, go-api writes organization and membership rows
+  to `public.organizations` and `public.memberships` directly. The admin routes for member add, role change, remove, transfer and
+  invite, and for organization suspension, make no auth-service call
+  (`internal/apiservice/admin/orgs_provision_test.go:373`, `internal/apiservice/admin/orgs_suspend_test.go:40`). The decision reader
+  states the same: go-api writes public users and memberships without an outbox event (`internal/auth/decisionstate/decisionstate.go:137`).
+- Rollback consequence: after the switch is turned off, a consumer of `auth_outbox_events` misses every ordinary membership and
+  organization change made in go-api. It must resynchronise from the public tables (see [Reconcile](#reconcile)) and must not treat a
+  quiet stream as no change.
 The schema is `contracts/auth/v1/jsonschema/provisioning-event.v1.schema.json`, with examples in `contracts/auth/v1/examples/provisioning-event/`.
 
 - Required members: `schema_version`, `aggregate_type`, `aggregate_id`, `event_type`, `idempotency_key`, `created_at`, `payload`.
@@ -108,6 +122,8 @@ Only one auth retention rule exists in code: the outbox reaper.
 
 - The reaper deletes **published** outbox events older than 7 days, at most 1000 per sweep, once per second
   (`internal/audit/outboxloop.go:58`, `internal/audit/reaper.go`). An unpublished event is never deleted, at any age (`reaper.go:24-28`).
+- Exception: an `external_push_credential` event is kept, whatever its age, until its id is at or below the push projection cursor's
+  low-water mark; with no cursor row it is kept (`internal/audit/reaper.go:69-83`).
 - Deactivation denies first. The ADR says physical deletion and PII cleanup come later under a retention policy
   ([ADR](../../contribute/architecture/auth-control-plane-adrs.md), line 792).
 

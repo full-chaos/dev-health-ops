@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -72,14 +74,20 @@ func TestRefreshCountsAnAcceptedHS256RefreshTokenAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.verifyRefresh(context.Background(), refresh); err != nil {
-		t.Fatalf("verifyRefresh: %v", err)
+	count := func(token string) (ok bool, status int) {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", nil)
+		w := httptest.NewRecorder()
+		_, _, _, ok = h.refreshClaims(w, r, token)
+		return ok, w.Code
+	}
+	if ok, _ := count(refresh); !ok {
+		t.Fatal("a valid refresh token was refused")
 	}
 	if got := refreshAcceptedTotal(t, reader, "dev-health-ops-api"); got != 1 {
 		t.Fatalf("after one accepted refresh token the counter is %d, want 1", got)
 	}
 	for name, token := range map[string]string{"an access token": access, "garbage": "a.b.c"} {
-		if _, err := h.verifyRefresh(context.Background(), token); err == nil {
+		if ok, _ := count(token); ok {
 			t.Fatalf("%s was accepted as a refresh token", name)
 		}
 	}

@@ -475,6 +475,9 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		h.failMint(w, r, opCompatRefresh, err)
 		return
 	}
+	if legacy != nil {
+		legacyRefreshAccepted.Load().Accepted(ctx)
+	}
 	h.rec.record(ctx, opCompatRefresh, "success", string(result.Reason), nil)
 	out := pyjson.NewObject()
 	out.Set("access_token", tokens.Access)

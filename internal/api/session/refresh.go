@@ -81,14 +81,14 @@ func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaim
 		h.Logger.DebugContext(ctx, "refresh token refused", "reason", edgetoken.ReasonOf(err))
 		return nil, err
 	}
-	refreshAccepted.Load().Accepted(ctx)
 	return claims, nil
 }
 
-// refresh is POST /api/v1/auth/refresh (refresh.py).
-func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+// refreshClaims verifies a refresh token and reads the sub, org_id and jti the
+// route needs. It answers the refusal itself and returns false; a token it
+// returns true for is one the route accepts, and only then is it counted.
+func (h handlers) refreshClaims(w http.ResponseWriter, r *http.Request, token string) (userIDText, orgIDText, jti string, ok bool) {
 	ctx := r.Context()
-	token, _ := ctx.Value(refreshInputKey{}).(string)
 	claims, verifyErr := h.verifyRefresh(ctx, token)
 	if verifyErr != nil {
 		h.refuseInvalidRefresh(w, r, token)
@@ -99,7 +99,6 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "refresh sub", err)
 		return
 	}
-	orgIDText := ""
 	if raw, present := claims["org_id"]; present {
 		if orgIDText, err = pyStrClaim(raw); err != nil {
 			h.fail(w, r, "refresh org", err)
@@ -111,9 +110,20 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusUnauthorized, "Invalid refresh token")
 		return
 	}
-	jti, err := pyStrClaim(jtiRaw)
-	if err != nil {
+	if jti, err = pyStrClaim(jtiRaw); err != nil {
 		h.fail(w, r, "refresh jti", err)
+		return
+	}
+	refreshAccepted.Load().Accepted(ctx)
+	return userIDText, orgIDText, jti, true
+}
+
+// refresh is POST /api/v1/auth/refresh (refresh.py).
+func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	token, _ := ctx.Value(refreshInputKey{}).(string)
+	userIDText, orgIDText, jti, ok := h.refreshClaims(w, r, token)
+	if !ok {
 		return
 	}
 

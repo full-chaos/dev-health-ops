@@ -1,15 +1,21 @@
 package postgres
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // Every place the repository opens a PostgreSQL connection or pool with pgx
@@ -203,6 +209,173 @@ func TestEveryPostgresOpenerIsClassified(t *testing.T) {
 	for path := range openers {
 		if !opened[path] {
 			t.Errorf("%s is classified but no longer opens PostgreSQL with pgx: remove it from the table", path)
+		}
+	}
+}
+
+// Every opener that builds its boundary with Boundary is RUN with a connection
+// string pgx cannot parse, and no login or password text of it may reach its
+// output: pgx's parse error echoes the string with only the password masked, and
+// a boundary cannot find the login in a string that does not parse, so Boundary
+// fails closed (CHAOS-12733). A new boundary opener fails this census until it has
+// a driver here, and a driver whose opener leaks fails by the leak check.
+
+const (
+	censusLogin    = "census_login_q7x9"
+	censusPassword = "census_password_q7x9"
+)
+
+var censusDSNs = map[string]string{
+	"uri":       "postgres://" + censusLogin + ":" + censusPassword + "@[::1",
+	"key=value": "user=" + censusLogin + " password=" + censusPassword + " host=[::1 sslmode=bogus",
+}
+
+type openerRun struct {
+	args []string
+	env  []string // {DSN} is the malformed connection string
+	// reaches is text the output must hold, so the run measures the open and not an earlier refusal.
+	reaches string
+}
+
+type openerDriver struct {
+	binary string // "dho" or "recorder"
+	runs   []openerRun
+	// drivenBy names a test (file::Test) that runs an opener no binary can reach without a live server.
+	drivenBy string
+}
+
+const censusClickHouse = "CLICKHOUSE_URI=clickhouse://census:census-password-1@127.0.0.1:1/db"
+
+var openerDrivers = map[string]openerDriver{
+	"internal/admincli/admincli.go":                    {binary: "dho", runs: []openerRun{{args: []string{"admin", "features", "seed"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/adminops/users.go":                       {binary: "dho", runs: []openerRun{{args: []string{"admin", "users", "list"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/auth/usersbackfill/command.go":           {binary: "dho", runs: []openerRun{{args: []string{"auth", "users-backfill"}, env: []string{"AUTH_DATABASE_URI={DSN}"}}}},
+	"internal/backfillrun/command.go":                  {binary: "dho", runs: []openerRun{{args: []string{"backfill", "run", "--config-id", "census"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/fixturescli/fixturescli.go":              {binary: "dho", runs: []openerRun{{args: []string{"fixtures", "finalize-synthetic-sync", "--target", "cicd", "--repo-name", "r", "--org", "o"}, env: []string{"MIGRATION_DATABASE_URI={DSN}", "DEV_HEALTH_ALLOW_SYNTHETIC_SYNC_RUN=1"}}}},
+	"internal/fixturescli/recommendations_backstop.go": {drivenBy: "internal/fixturescli/recommendations_backstop_census_test.go::TestBackstopOpenFailureHoldsNoLoginOfAnUnparsableDSN"},
+	"internal/fixturescli/product_telemetry.go":        {binary: "dho", runs: []openerRun{{args: []string{"fixtures", "product-telemetry", "--days", "1", "--sessions-per-day", "1"}, env: []string{"POSTGRES_URI={DSN}", censusClickHouse}}}},
+	"internal/goapicli/prove/main.go":                  {drivenBy: "internal/goapicli/prove/credentials_census_test.go::TestOpenPostgresPoolHoldsNoLoginOfAnUnparsableDSN"},
+	"internal/goapicli/routing/main.go":                {binary: "dho", runs: []openerRun{{args: []string{"goapi", "routing", "status"}, env: []string{"POSTGRES_URI={DSN}"}, reaches: "could not be parsed as a Postgres DSN"}}},
+	"internal/maintenancecli/maintenance.go":           {binary: "dho", runs: []openerRun{{args: []string{"maintenance", "cleanup-tokens"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/pgmigrate/command.go": {binary: "dho", runs: []openerRun{
+		{args: []string{"migrate", "postgres", "status"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}},
+		{args: []string{"migrate", "postgres", "current"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
+	"internal/pgmigrate/downgrade.go":            {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "downgrade", "-1"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
+	"internal/pgmigrate/indexbuild.go":           {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "build-index", "failure-streak"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
+	"internal/pgmigrate/preflight.go":            {binary: "dho", runs: []openerRun{{args: []string{"migrate", "postgres", "preflight"}, env: []string{"POSTGRES_URI={DSN}", "DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER=1"}}}},
+	"internal/pushlifecyclecli/command.go":       {binary: "dho", runs: []openerRun{{args: []string{"push-lifecycle", "backfill-created"}, env: []string{"POSTGRES_URI={DSN}"}}}},
+	"internal/synccli/jira_stored_credential.go": {binary: "dho", runs: []openerRun{{args: []string{"sync", "teams", "--provider", "jira", "--org", "00000000-0000-0000-0000-000000000001"}, env: []string{"POSTGRES_URI={DSN}", censusClickHouse}}}},
+	"tools/record-provider-answers/main.go":      {binary: "recorder", runs: []openerRun{{args: []string{"-provider", "linear", "-dry"}, env: []string{"POSTGRES_URI={DSN}", "SETTINGS_ENCRYPTION_KEY=census-key-census-key-census-key-1"}}}},
+}
+
+var (
+	censusBinariesOnce sync.Once
+	censusDir          string
+	censusBuildErr     error
+)
+
+// censusBinaries builds the two binaries once per test run, under TMPDIR.
+func censusBinaries(t *testing.T) string {
+	t.Helper()
+	censusBinariesOnce.Do(func() {
+		root := repoRoot(t)
+		censusDir, censusBuildErr = os.MkdirTemp("", "opener-census-")
+		if censusBuildErr != nil {
+			return
+		}
+		for name, pkg := range map[string]string{"dho": "./cmd/dho", "recorder": "./tools/record-provider-answers"} {
+			build := exec.Command("go", "build", "-o", filepath.Join(censusDir, name), pkg)
+			build.Dir = root
+			if out, err := build.CombinedOutput(); err != nil {
+				censusBuildErr = fmt.Errorf("build %s: %v\n%s", pkg, err, out)
+				return
+			}
+		}
+	})
+	if censusBuildErr != nil {
+		t.Fatal(censusBuildErr)
+	}
+	return censusDir
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if censusDir != "" {
+		_ = os.RemoveAll(censusDir)
+	}
+	os.Exit(code)
+}
+
+func runCensusBinary(t *testing.T, binary string, run openerRun, dsn string) (int, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(censusBinaries(t), binary), run.args...)
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}
+	for _, entry := range run.env {
+		cmd.Env = append(cmd.Env, strings.ReplaceAll(entry, "{DSN}", dsn))
+	}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	code := 0
+	if err := cmd.Run(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok || ctx.Err() != nil {
+			t.Fatalf("%v %v: %v", binary, run.args, err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return code, output.String()
+}
+
+func TestEveryBoundaryOpenerFailsClosedOnAnUnparsableDSN(t *testing.T) {
+	for path, class := range openers {
+		if class.kind != kindBoundary {
+			continue
+		}
+		driver, ok := openerDrivers[path]
+		if !ok {
+			t.Errorf("%s is a boundary opener with no driver in openerDrivers: add the verb that opens it, run with a malformed connection string", path)
+			continue
+		}
+		if driver.drivenBy != "" {
+			file, name, _ := strings.Cut(driver.drivenBy, "::")
+			parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot(t), file), nil, 0)
+			found := false
+			if err == nil {
+				for _, decl := range parsed.Decls {
+					if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == name {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Errorf("%s: drivenBy names %s, which does not exist", path, driver.drivenBy)
+			}
+			continue
+		}
+		for index, run := range driver.runs {
+			for form, dsn := range censusDSNs {
+				t.Run(fmt.Sprintf("%s/%d/%s", path, index, form), func(t *testing.T) {
+					code, output := runCensusBinary(t, driver.binary, run, dsn)
+					if (code == 0 && run.reaches == "") || output == "" {
+						t.Fatalf("exit %d, output %q: the run did not refuse the malformed connection string", code, output)
+					}
+					for _, leaked := range []string{censusLogin, censusPassword, "[::1"} {
+						if strings.Contains(output, leaked) {
+							t.Errorf("%s %v leaks %q of an unparsable DSN: %q", path, run.args, leaked, output)
+						}
+					}
+					if run.reaches != "" && !strings.Contains(output, run.reaches) {
+						t.Errorf("the output %q does not hold %q: the run stopped before the open", output, run.reaches)
+					}
+				})
+			}
+		}
+	}
+	for path := range openerDrivers {
+		if openers[path].kind != kindBoundary {
+			t.Errorf("%s has a driver but is not a boundary opener", path)
 		}
 	}
 }

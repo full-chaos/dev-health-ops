@@ -189,3 +189,7 @@ func appendKeywordValue(out []string, value string) []string {
 	}
 	return append(out, value)
 }
+
+const UnparsableMarker = "[redacted: connection string cannot be parsed]"
+
+func NewUnparsableBoundary(dsn string) Boundary { return NewBoundary(dsn) }

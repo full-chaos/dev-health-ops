@@ -34,12 +34,18 @@ type workloadProvisioningEnv struct {
 
 func newWorkloadProvisioningEnv(t *testing.T, ctx context.Context) *workloadProvisioningEnv {
 	t.Helper()
+	return newWorkloadProvisioningEnvWith(t, ctx, nil)
+}
+
+// newWorkloadProvisioningEnvWith is newWorkloadProvisioningEnv with edit applied to the environment first.
+func newWorkloadProvisioningEnvWith(t *testing.T, ctx context.Context, edit func(map[string]string)) *workloadProvisioningEnv {
+	t.Helper()
 	useKeyStates(t, staticKeyStates(nil))
 	dir := t.TempDir()
 	writeSigningKey(t, dir, "k1.pem")
 	workload := uuid.New()
 	subject := session.WirePrincipalID(workload)
-	e := newRoutesEnvWith(t, ctx, map[string]string{
+	env := map[string]string{
 		authconfig.EnvUsersOwned:                  "true",
 		authconfig.EnvMembershipRoutes:            "true",
 		authconfig.EnvInviteTokenSecret:           provisioningInviteSecret,
@@ -50,7 +56,11 @@ func newWorkloadProvisioningEnv(t *testing.T, ctx context.Context) *workloadProv
 		authconfig.EnvAccessTokenAudience:         "dev-health-api",
 		authconfig.EnvTokenIssuerURL:              workloadProvisioningIssuer,
 		authconfig.EnvSessionIssueWorkloadSubject: subject,
-	})
+	}
+	if edit != nil {
+		edit(env)
+	}
+	e := newRoutesEnvWith(t, ctx, env)
 	svc, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
 	return &workloadProvisioningEnv{routesEnv: e, svc: map[string]string{"Authorization": "Bearer " + svc},
 		signer: token.NewFileSigner(token.FileConfig{KeyPath: filepath.Join(dir, "k1.pem"), KeyID: "k1"}), workload: workload, subject: subject}

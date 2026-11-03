@@ -779,10 +779,10 @@ VALUES ($1, $2, 'workload_bootstrap_credential', decode(md5($1::uuid::text), 'he
 func TestProvisioningServiceAccountsWhileUsersAreNotOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnvWith(t, ctx, map[string]string{authconfig.EnvMembershipRoutes: "true", authconfig.EnvInviteTokenSecret: provisioningInviteSecret,
-		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious})
-	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	w := newWorkloadProvisioningEnvWith(t, ctx, func(env map[string]string) { delete(env, authconfig.EnvUsersOwned) })
+	e := w.routesEnv
+	header, _ := w.mint(t, ctx, nil)
+	header["Content-Type"] = "application/json"
 	boss, org := e.seed(t, ctx)
 	got := e.doWith(t, authapi.PatternServiceAccountCreate, jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(),
 		"owner_principal_id": boss.String(), "name": "not-owned"}), header)
@@ -905,15 +905,10 @@ AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'cre
 func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnvWith(t, ctx, map[string]string{
-		authconfig.EnvUsersOwned:                "true",
-		authconfig.EnvOrgsOwned:                 "true",
-		authconfig.EnvMembershipRoutes:          "true",
-		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
-		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
-	})
-	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	w := newWorkloadProvisioningEnvWith(t, ctx, func(env map[string]string) { env[authconfig.EnvOrgsOwned] = "true" })
+	e := w.routesEnv
+	header, _ := w.mint(t, ctx, nil)
+	header["Content-Type"] = "application/json"
 	_, org := e.seed(t, ctx)
 	super := e.account(t, ctx, acctMail(), true, true)
 	publicActive := func() bool {
@@ -945,15 +940,10 @@ func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
 func TestProvisioningRenameThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	e := newRoutesEnvWith(t, ctx, map[string]string{
-		authconfig.EnvUsersOwned:                "true",
-		authconfig.EnvOrgsOwned:                 "true",
-		authconfig.EnvMembershipRoutes:          "true",
-		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
-		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
-	})
-	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+	w := newWorkloadProvisioningEnvWith(t, ctx, func(env map[string]string) { env[authconfig.EnvOrgsOwned] = "true" })
+	e := w.routesEnv
+	header, _ := w.mint(t, ctx, nil)
+	header["Content-Type"] = "application/json"
 	owner, org := e.seed(t, ctx)
 	viewer := e.account(t, ctx, acctMail(), false, true)
 	e.addVia(t, header, org, viewer, owner, "viewer")

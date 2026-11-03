@@ -123,10 +123,13 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 // sso_provider_id (ops revision 0155) is inserted only: the provider row an OIDC or
 // SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
+// saml_nameid_format and saml_sp_name_qualifier (ops revision 0160) are inserted only, with a SAML
+// account's NameID attributes as go-api stores them; before 0160 their grant is DEFERRED.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id",
+			"saml_nameid_format", "saml_sp_name_qualifier",
 		},
 		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }

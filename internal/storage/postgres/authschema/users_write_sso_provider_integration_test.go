@@ -135,3 +135,26 @@ func TestSwitchOffNarrowingLosesTheSSOProviderInsert(t *testing.T) {
 		t.Fatalf("the switch-off narrowing does not lose INSERT users.sso_provider_id: %v", narrowed.Lost)
 	}
 }
+
+// TestUsersOwnedApplyGrantsTheSAMLNameIDPartsInsert (CHAOS-11622): at ops head the users-owned grants include INSERT
+// on users.saml_nameid_format and users.saml_sp_name_qualifier, and no UPDATE on either.
+func TestUsersOwnedApplyGrantsTheSAMLNameIDPartsInsert(t *testing.T) {
+	f := newOrderFixture(t)
+	if _, err := f.dhoMigrate(t); err != nil {
+		t.Fatalf("dho migrate: %v", err)
+	}
+	if _, err := f.applyUsersOwned(t, true, ""); err != nil {
+		t.Fatalf("Apply users-owned: %v", err)
+	}
+	for _, column := range []string{"saml_nameid_format", "saml_sp_name_qualifier"} {
+		for privilege, want := range map[string]bool{"INSERT": true, "UPDATE": false} {
+			var held bool
+			if err := orderConnect(t, f.ctx, f.uri).QueryRow(f.ctx, `SELECT has_column_privilege($1, 'public.users', $2, $3)`, f.role, column, privilege).Scan(&held); err != nil {
+				t.Fatal(err)
+			}
+			if held != want {
+				t.Errorf("%s %s held = %v, want %v", privilege, column, held, want)
+			}
+		}
+	}
+}

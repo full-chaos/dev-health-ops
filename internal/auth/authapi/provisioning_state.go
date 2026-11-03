@@ -23,7 +23,7 @@ type stateAnswer struct {
 // withStateRoute mounts the state route when the profile document holds a row listing every class the route admits,
 // else logs one line naming the route.
 func (h provisioningHandlers) withStateRoute(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if rowsAcceptFor(rows, []string{PatternOrgState}, admittedClasses(PatternOrgState, h.Workload != nil)) != nil {
+	if rowsAcceptFor(rows, []string{PatternOrgState}, admittedClasses(PatternOrgState)) != nil {
 		h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgState)
 		return routes
 	}

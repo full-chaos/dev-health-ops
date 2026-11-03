@@ -11,7 +11,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "253"
@@ -37,7 +37,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "187"
@@ -63,7 +63,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "172"
@@ -89,7 +89,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "234"
@@ -115,7 +115,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "254"
@@ -141,7 +141,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "147"
@@ -167,7 +167,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "118"
@@ -193,7 +193,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "134"
@@ -219,7 +219,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "134"
@@ -245,7 +245,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "58"
@@ -271,7 +271,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "152"
@@ -297,7 +297,7 @@
         "gzip"
       ],
       "Authorization": [
-        "Bearer svc_authsess_\u003cPLACEHOLDER\u003e"
+        "Bearer \u003cWORKLOAD-TOKEN\u003e"
       ],
       "Content-Length": [
         "260"

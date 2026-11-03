@@ -12,15 +12,14 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
 // The routes are built only from a binary whose embedded endpoint-profile
-// document has a row, accepting the session issuer credential, for each of
+// document has a row, accepting the go-api workload token, for each of
 // them.
 func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
-	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles, true); err != nil {
+	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
 	var document map[string]any
@@ -56,7 +55,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 			"row removed": func(row map[string]any) (map[string]any, bool) { return row, row["route"] != pattern },
 			"class removed": func(row map[string]any) (map[string]any, bool) {
 				if row["route"] == pattern {
-					row["accepted_credential_classes"] = []any{"workload_token"}
+					row["accepted_credential_classes"] = []any{serviceSessionIssuerClass}
 				}
 				return row, true
 			},
@@ -67,19 +66,19 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 				return row, true
 			},
 		} {
-			err := provisioningRowsPresent(plant(edit), false)
+			err := provisioningRowsPresent(plant(edit))
 			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
 				t.Fatalf("%s, %s: %v, want a refusal naming the route", pattern, name, err)
 			}
 		}
 	}
-	if err := provisioningRowsPresent([]byte("{"), false); !errors.Is(err, errProvisioningRows) {
+	if err := provisioningRowsPresent([]byte("{")); !errors.Is(err, errProvisioningRows) {
 		t.Fatalf("an unreadable document: %v, want a refusal", err)
 	}
 	// ProvisioningRoutes runs the check: a planted document without one route's
 	// row builds no route at all.
 	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
 		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
@@ -87,17 +86,15 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	}
 }
 
-// The provisioning routes accept only the session issuer credential holding
-// memberships:write. Every kind of user token, as the Authorization bearer, is
-// refused 401 invalid_credentials at the credential gate on every route: no
-// credential-row lookup (counted on the real servicecred checker's pool), no
-// actor or store read, no organization projection, no echo of the token in the
+// The provisioning routes accept only the go-api workload token. Every kind of
+// user token, as the Authorization bearer, is refused 401 invalid_credentials
+// at the credential gate on every route: no key-set read, no actor or store read, no organization projection, no echo of the token in the
 // body or the logs.
 func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 	tokens := userTokensWithIssuer(t)
-	pool, connects := usertokens.CountingPool(t)
-	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: servicecred.PG{Pool: pool}, Users: f.users, Reader: noRows{},
+	w := newWorkloadIssueFixture(t)
+	f := newProvFixtureFor(t, nil, w)
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Workload: w.workload,
 		Organizations: f.orgs, Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, ProfileRows: docWithRow(t, PatternOrgSuspend),
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
 	if err != nil {
@@ -130,8 +127,8 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 		}
 		usertokens.NoLeak(t, opOrgState+" "+tok.Kind+" body", response.Body.String(), tokens)
 	}
-	if got := connects.Count(); got != 0 {
-		t.Errorf("a user token reached the credential table: %d connection attempt(s), want 0", got)
+	if got := w.keys.reads; got != 0 {
+		t.Errorf("a user token reached the key set: %d read(s), want 0", got)
 	}
 	if f.storeCalls() != 0 || f.users.reads != 0 {
 		t.Errorf("a user token reached the stores: %d calls, %d reads", f.storeCalls(), f.users.reads)
@@ -145,7 +142,7 @@ func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
 	if !slices.Contains(provisioningPatterns, PatternOrgReactivate) {
 		t.Fatalf("provisioningPatterns %v does not hold %s", provisioningPatterns, PatternOrgReactivate)
 	}
-	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles, true); err != nil {
+	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
 	f := newProvFixture(t)
@@ -183,7 +180,7 @@ func TestAMissingReactivateRowRefusesTheWholeSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = provisioningRowsPresent(raw, false)
+	err = provisioningRowsPresent(raw)
 	if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+PatternOrgReactivate+" ") {
 		t.Fatalf("a document without the reactivate row: %v, want a refusal naming the route", err)
 	}
@@ -215,7 +212,7 @@ func TestTheRowsGateNeedsTheInviteRevokeRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := provisioningRowsPresent(raw, false); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+route+" ") {
+	if err := provisioningRowsPresent(raw); !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+route+" ") {
 		t.Fatalf("without the revoke row: %v, want a refusal naming the route", err)
 	}
 }
@@ -253,7 +250,7 @@ func plantClasses(t *testing.T, route string, classes ...string) []byte {
 func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWorkload) ([]string, error) {
 	t.Helper()
 	f := newProvFixture(t)
-	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
+	routes, err := ProvisioningRoutes(ProvisioningDeps{Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Workload: workload, ProfileRows: rows})
 	var patterns []string
 	for _, route := range routes {
@@ -262,54 +259,45 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 	return patterns, err
 }
 
-// A provisioning route mounts only on a row that lists every credential class
-// its operation admits: the session issuer class, and the go-api workload
-// token when the operation is a workload operation and the workload path is
-// configured. A row that lists the issuer class alone under-describes a
-// workload route, so the switch (and the org state route) refuse it; without
-// the workload path, or on a non-workload operation, the issuer class alone
-// is the whole admitted set.
-func TestProvisioningRoutesMountOnlyOnRowsAcceptingEveryAdmittedClass(t *testing.T) {
+// A provisioning route mounts only on a row that lists the go-api workload token, the one class every provisioning
+// operation admits (every operation is on workloadOperations). A row that lists the retired session issuer class
+// alone refuses the switch (and leaves the org state and rename routes unmounted); a row that lists the workload
+// token mounts the route with or without the workload path configured.
+func TestProvisioningRoutesMountOnlyOnRowsAcceptingTheWorkloadToken(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
 	// The org state read and the rename route are not on the startup gate: they mount only on a row.
 	dark := []string{PatternOrgState, PatternOrgRename}
 	for op, pattern := range provisioningRouteOps {
-		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
-		both := plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass)
-		if workloadOperations[op] && !slices.Contains(dark, pattern) {
-			if _, err := provisioningRoutesOver(t, issuerOnly, workload); !errors.Is(err, errProvisioningRows) ||
+		if !workloadOperations[op] {
+			t.Errorf("%s is not on the workload list: no class is left for it to admit", op)
+		}
+		retiredOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
+		workloadRow := plantClasses(t, pattern, workloadTokenClass)
+		if !slices.Contains(dark, pattern) {
+			if _, err := provisioningRoutesOver(t, retiredOnly, workload); !errors.Is(err, errProvisioningRows) ||
 				!strings.Contains(err.Error(), "POST "+pattern+" ") {
-				t.Errorf("%s: an issuer-only row with the workload path configured: %v, want a refusal naming the route", op, err)
-			}
-		} else if !slices.Contains(dark, pattern) {
-			if _, err := provisioningRoutesOver(t, issuerOnly, workload); err != nil {
-				t.Errorf("%s: a non-workload route on an issuer-only row: %v, want it mounted", op, err)
+				t.Errorf("%s: a row of the retired class alone: %v, want a refusal naming the route", op, err)
 			}
 		}
-		if _, err := provisioningRoutesOver(t, issuerOnly, nil); err != nil {
-			t.Errorf("%s: an issuer-only row without the workload path: %v, want it mounted", op, err)
-		}
-		if _, err := provisioningRoutesOver(t, both, workload); err != nil {
-			t.Errorf("%s: a row listing both classes: %v, want it mounted", op, err)
+		for _, w := range []*SessionIssueWorkload{workload, nil} {
+			if _, err := provisioningRoutesOver(t, workloadRow, w); err != nil {
+				t.Errorf("%s: a row listing the workload token: %v, want it mounted", op, err)
+			}
 		}
 	}
 	for _, pattern := range dark {
-		mounted := func(rows []byte, workload *SessionIssueWorkload) bool {
+		mounted := func(rows []byte) bool {
 			patterns, err := provisioningRoutesOver(t, rows, workload)
 			if err != nil {
 				t.Fatalf("%s row: %v", pattern, err)
 			}
 			return slices.Contains(patterns, pattern)
 		}
-		issuerOnly := plantClasses(t, pattern, serviceSessionIssuerClass)
-		if mounted(issuerOnly, workload) {
-			t.Errorf("%s mounted on an issuer-only row with the workload path configured", pattern)
+		if mounted(plantClasses(t, pattern, serviceSessionIssuerClass)) {
+			t.Errorf("%s mounted on a row of the retired class alone", pattern)
 		}
-		if !mounted(issuerOnly, nil) {
-			t.Errorf("%s did not mount on an issuer-only row without the workload path", pattern)
-		}
-		if !mounted(plantClasses(t, pattern, serviceSessionIssuerClass, workloadTokenClass), workload) {
-			t.Errorf("%s did not mount on a row listing both classes", pattern)
+		if !mounted(plantClasses(t, pattern, workloadTokenClass)) {
+			t.Errorf("%s did not mount on a row listing the workload token", pattern)
 		}
 	}
 }
@@ -339,35 +327,29 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 	}
 }
 
-// The rows gate's refusal names, for the start log, the route and every class
-// its row must list, as a typed error with a stable reason: the workload class
-// too when the binding is configured.
+// The rows gate's refusal names, for the start log, the route and the one class
+// its row must list, as a typed error with a stable reason.
 func TestTheRowsGateRefusalNamesTheRouteAndClasses(t *testing.T) {
 	workload := newWorkloadIssueFixture(t).workload
-	for name, tc := range map[string]struct {
-		workload *SessionIssueWorkload
-		classes  []string
-	}{
-		"without the workload path": {nil, []string{serviceSessionIssuerClass}},
-		"with the workload path":    {workload, []string{serviceSessionIssuerClass, workloadTokenClass}},
-	} {
+	for name, w := range map[string]*SessionIssueWorkload{"without the workload path": nil, "with the workload path": workload} {
 		t.Run(name, func(t *testing.T) {
+			classes := []string{workloadTokenClass}
 			rows := plantClasses(t, PatternMembershipAdd, "no_such_class")
-			_, err := provisioningRoutesOver(t, rows, tc.workload)
+			_, err := provisioningRoutesOver(t, rows, w)
 			var refusal *ProvisioningRowError
 			if !errors.As(err, &refusal) || !errors.Is(err, errProvisioningRows) {
 				t.Fatalf("err = %v, want a ProvisioningRowError that is errProvisioningRows", err)
 			}
-			if refusal.Route != "POST "+PatternMembershipAdd || !slices.Equal(refusal.Classes, tc.classes) {
-				t.Fatalf("refusal route=%q classes=%v, want POST %s and %v", refusal.Route, refusal.Classes, PatternMembershipAdd, tc.classes)
+			if refusal.Route != "POST "+PatternMembershipAdd || !slices.Equal(refusal.Classes, classes) {
+				t.Fatalf("refusal route=%q classes=%v, want POST %s and %v", refusal.Route, refusal.Classes, PatternMembershipAdd, classes)
 			}
 			if refusal.DependencyReason() != ProvisioningRowReason {
 				t.Fatalf("reason = %q", refusal.DependencyReason())
 			}
 			attrs := refusal.DependencyAttrs()
-			want := []any{"route", "POST " + PatternMembershipAdd, "required_classes", tc.classes}
+			want := []any{"route", "POST " + PatternMembershipAdd, "required_classes", classes}
 			if len(attrs) != len(want) || attrs[0] != want[0] || attrs[1] != want[1] || attrs[2] != want[2] ||
-				!slices.Equal(attrs[3].([]string), tc.classes) {
+				!slices.Equal(attrs[3].([]string), classes) {
 				t.Fatalf("attrs = %v, want %v", attrs, want)
 			}
 		})

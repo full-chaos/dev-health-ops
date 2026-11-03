@@ -384,7 +384,7 @@ func TestBothSelectorsWorkloadShareOneClientAndOneExchange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prov, err := orgProvisioner(cfg, issueEnv(env), provisioning)
+	prov, err := orgProvisioner(cfg, provisioning)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,10 +407,10 @@ func TestBothSelectorsWorkloadShareOneClientAndOneExchange(t *testing.T) {
 	}
 }
 
-// One workload and one session_compat: each client presents its own class.
+// The session issue client may stay on session_compat (until it is retired) while the provisioning clients present the
+// workload token: each client presents its own class.
 func TestMixedSelectorsEachClientPresentsItsOwnClass(t *testing.T) {
 	for name, selectors := range map[string]struct{ session, provisioning string }{
-		"session workload, provisioning compat": {"workload", "session_compat"},
 		"session compat, provisioning workload": {"session_compat", "workload"},
 	} {
 		s := newCredServer(t)
@@ -427,7 +427,7 @@ func TestMixedSelectorsEachClientPresentsItsOwnClass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		prov, err := orgProvisioner(cfg, issueEnv(env), provisioning)
+		prov, err := orgProvisioner(cfg, provisioning)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -515,8 +515,8 @@ func TestSessionSelectorRefusesPaddedAndWhitespaceOnlyValues(t *testing.T) {
 	}
 }
 
-// The provisioning selector keeps main's trimmed reading (the value was trimmed since the provisioning change): the
-// 13 values of the matrix are accepted or refused exactly as on main.
+// The provisioning selector keeps its trimmed reading: unset or blank and workload (padded or not) build the workload
+// client; session_compat (padded or not, retired), another case, a boolean and a combined value are start-up errors.
 func TestProvisioningSelectorKeepsMainsTrimmedReading(t *testing.T) {
 	cfg := provisioningOn(t, "http://auth-service:8095")
 	good := workloadEnv(t, nil)
@@ -525,18 +525,18 @@ func TestProvisioningSelectorKeepsMainsTrimmedReading(t *testing.T) {
 		workload bool
 		refused  bool
 	}{
-		"unset":                {"", false, false},
-		"space only":           {" ", false, false},
-		"tab only":             {"\t", false, false},
-		"newline only":         {"\n", false, false},
+		"unset":                {"", true, false},
+		"space only":           {" ", true, false},
+		"tab only":             {"\t", true, false},
+		"newline only":         {"\n", true, false},
 		"workload":             {"workload", true, false},
 		"workload leading":     {" workload", true, false},
 		"workload trailing":    {"workload ", true, false},
 		"workload surrounding": {" workload ", true, false},
-		"compat":               {"session_compat", false, false},
-		"compat leading":       {" session_compat", false, false},
-		"compat trailing":      {"session_compat ", false, false},
-		"compat surrounding":   {" session_compat ", false, false},
+		"compat":               {"session_compat", false, true},
+		"compat leading":       {" session_compat", false, true},
+		"compat trailing":      {"session_compat ", false, true},
+		"compat surrounding":   {" session_compat ", false, true},
 		"wrong case":           {"Workload", false, true},
 		"boolean":              {"true", false, true},
 		"combined":             {"workload session_compat", false, true},

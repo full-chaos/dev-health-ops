@@ -177,6 +177,7 @@ internal/testsupport/redirectprobe
 internal/testsupport/usertokens
 internal/testsupport/valkeyreply
 internal/testsupport/venueoracle
+internal/testsupport/workloadclient
 internal/token
 internal/workitemcontract
 ~contracts/auth/v1/jsonschema

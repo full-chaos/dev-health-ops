@@ -107,8 +107,8 @@ func TestIssueSessionWorkloadTokenOnTheLiveStore(t *testing.T) {
 		EventSessionIssued, l.user.String(), l.workload.String(), jti); n != 1 {
 		t.Fatalf("%d matching %s rows, want 1", n, EventSessionIssued)
 	}
-	if len(l.creds.seen) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", l.creds.seen)
+	if len(l.creds.checked()) != 0 {
+		t.Fatalf("the workload path checked a service credential: %v", l.creds.checked())
 	}
 }
 
@@ -119,8 +119,8 @@ func TestIssueSessionRefusesAWrongAudienceTokenOnTheLiveStore(t *testing.T) {
 	l := newWorkloadIssueLive(t, ctx)
 	header, _ := l.token(t, "dev-health-api")
 	expectError(t, post(l.server, PatternIssueSession, issueBody(l.user, "", "pwd"), header), http.StatusUnauthorized, reasonInvalidCredentials)
-	if l.keys.reads != 0 || len(l.creds.seen) != 0 {
-		t.Fatalf("a wrong audience read the key set %d times and checked %d credentials", l.keys.reads, len(l.creds.seen))
+	if l.keys.reads != 0 || len(l.creds.checked()) != 0 {
+		t.Fatalf("a wrong audience read the key set %d times and checked %d credentials", l.keys.reads, len(l.creds.checked()))
 	}
 	if n := l.sessions(t, ctx); n != 0 {
 		t.Fatalf("%d session rows after a refusal", n)

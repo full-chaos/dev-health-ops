@@ -30,7 +30,7 @@ An authorization decision answers one question: may this principal perform this 
 
 - The principal is an opaque reference that the decision point resolves on the server. The request has no `roles`, `permissions`, `scopes` or `is_superuser` member, and `additionalProperties` is false, so a caller cannot add a claim.
 - `action` is a catalog action from the [policy catalog](policy-catalog.md). A bare `admin` is invalid.
-- `resource` has a `type` and a canonical lowercase `key`. The closed `type` values are `organization`, `repository`, `membership`, `service_account`, `grant`, `credential`, `session`, `signing_key`, `subscription` and `platform`. A repository key is `owner/repo` or `*` for organization-wide.
+- `resource` has a `type` and a canonical lowercase `key`. The closed `type` values are `organization`, `repository`, `membership`, `service_account`, `grant`, `credential`, `session`, `signing_key`, `subscription` and `platform`. A repository key is a lowercase path of 2 to 20 segments in at most 255 bytes (`owner/repo`, or `owner/group/repo` for nested GitLab groups) or `*` for organization-wide. A segment but the last holds 1 to 100 characters, starts and ends with a letter or digit and never starts with a dot; the last may start with a dot (`.github`). An empty segment, `.`, `..` and a trailing slash are refused.
 - `context` has a `request_id` and a `client_service`. The `client_service` is a label for metrics and audit. It confers nothing.
 
 A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisions, each with the zero-based `index` of the request it answers.
@@ -56,7 +56,7 @@ The set is closed (six members). `additionalProperties` is false. A decision tha
 | Obligation | Type | The resource service must |
 | --- | --- | --- |
 | `tenant_scope` | organization id | Keep every read and write inside that organization. |
-| `repository_allowlist` | array of at most 256 `owner/repo` keys (the contract also admits `*`) | Touch only those repositories. An empty array means none, not unrestricted. The decision point never emits `*` and never truncates a list: a principal with more than 256 readable repositories is denied with `repository_allowlist_too_large`. A consumer still accepts `*` as organization-wide. |
+| `repository_allowlist` | array of at most 256 repository keys (a path of 2 to 20 segments; the contract also admits `*`) | Touch only those repositories. An empty array means none, not unrestricted. The decision point never emits `*` and never truncates a list: a principal with more than 256 readable repositories is denied with `repository_allowlist_too_large`. A consumer still accepts `*` as organization-wide. A consumer that reads an `owner/*` scope (a grant on every repository below one owner) matches every depth below `owner/`, never `owner2/...`; this contract defines no `owner/*` key, so the decision point states each repository. |
 | `repository_scope` | `organization` | Read every repository of the tenant: nothing limits the read. A decision carries this member or `repository_allowlist`, never both. On an allow of an action that filters by repository, a consumer that finds neither member denies: an absent member never means unrestricted. |
 | `redaction` | array of `personal_identifiers`, `contact_details`, `free_text` | Remove those field classes from the response. An unknown class makes the whole decision invalid. |
 | `minimum_assurance` | `aal1`, `aal2` or `aal3` | Deny when the principal's authenticator assurance level is lower. |

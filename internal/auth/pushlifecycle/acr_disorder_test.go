@@ -363,17 +363,19 @@ func TestAcrDisorderChangedIdentityNeverRevokesOrExpires(t *testing.T) {
 	}
 }
 
-// Cell U7 (KnownDefect, pins today's behaviour): a refused rotated child is final and never stored, so its later
-// events at revision 2 or more are a gap, parked for ever. The child is never live, so no scope widens. Same class
-// as the External Push pin of CHAOS-12699.
-func TestAcrDisorderKnownDefectRefusedRotationParksTheChildsLaterRevisions(t *testing.T) {
+// Cell U7: a refused rotated child is final and decides revision 1, so its later events are refused for good, never
+// parked. The child is never live, so no scope widens. A child never seen at all still waits.
+func TestAcrDisorderRefusedRotationRefusesTheChildsLaterRevisions(t *testing.T) {
 	parent := mustApply(t, State{}, acrdIssued(acrdParent, t0, "context:read"), nil)
 	at := t0.Add(time.Minute)
 	d := &acrdDelivery{t: t, parent: &parent}
 	d.deliver(acrdRotated(acrdChild, acrdParent, at, "context:read", "admin:all"))
 	d.deliver(acrdRevoked(acrdChild, 2, at))
-	if d.state.Status != StatusUnknown || len(d.parked) != 1 {
-		t.Fatalf("child state %q parked %d, want unprojected with the revoke parked", d.state.Status, len(d.parked))
+	if d.state.Status != StatusUnknown || len(d.parked) != 0 {
+		t.Fatalf("child state %q parked %d, want unprojected with nothing parked", d.state.Status, len(d.parked))
+	}
+	if _, outcome := Apply(d.state, acrdRevoked(acrdChild, 2, at), &parent); outcome != Duplicate {
+		t.Fatalf("child revoke r2 again: outcome %s, want duplicate (it was refused)", outcome)
 	}
 	if next, outcome := Apply(State{}, acrdRevoked(acrdChild, 2, at), &parent); outcome != Gap || !sameState(next, State{}) {
 		t.Fatalf("child revoke r2: outcome %s, want gap", outcome)
@@ -381,19 +383,20 @@ func TestAcrDisorderKnownDefectRefusedRotationParksTheChildsLaterRevisions(t *te
 	acrdDenies(t, "refused child", d.state)
 }
 
-// Cell U8 (KnownDefect, pins today's behaviour): the contract allows a revoked or expired event at revision 3 or more
-// (contracts/auth/v1/README.md:434), but the core applies only the next revision, so a revoke that skips over the last
-// applied revision is a gap: nothing is applied and the credential stays active and permitted. The fix is decided elsewhere.
-func TestDisorderKnownDefectRevokeOverARevisionGapLeavesTheCredentialPermitted(t *testing.T) {
+// Cell U8: the contract allows a revoked or expired event at revision 3 or more (contracts/auth/v1/README.md:434), and
+// acr has no event that could fill the skipped revision, so a terminal event over a gap applies at its own revision
+// and ends the credential: not active, not live, no scope.
+func TestDisorderRevokeOverARevisionGapEndsTheCredential(t *testing.T) {
 	active := mustApply(t, State{}, acrdIssued(acrdParent, t0, "context:read"), nil)
 	for name, e := range map[string]contracts.ExternalPushLifecycleEvent{
 		"revoked r3": acrdRevoked(acrdParent, 3, t0.Add(time.Minute)),
 		"expired r4": acrdExpired(acrdParent, 4, t0.Add(time.Minute), acrdExpiry),
 	} {
 		next, outcome := Apply(active, e, nil)
-		if outcome != Gap || !outcome.Retry() || !sameState(next, active) || next.Status != StatusActive || !Permits(next, "context:read", t0) {
-			t.Errorf("%s over r1: outcome %s status %s permits %v, want gap, active and permitted", name, outcome, next.Status, Permits(next, "context:read", t0))
+		if outcome != Applied || !next.Status.Terminal() || next.Revision != int64(e.Payload.Revision) {
+			t.Errorf("%s over r1: outcome %s status %s r%d, want applied and ended at its own revision", name, outcome, next.Status, next.Revision)
 		}
+		acrdDenies(t, name, next)
 	}
 }
 

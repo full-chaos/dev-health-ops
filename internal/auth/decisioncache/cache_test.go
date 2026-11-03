@@ -679,3 +679,37 @@ func TestTheUnfedValuesArePartOfTheKey(t *testing.T) {
 		miss(t, r, other, "unfed values "+changed)
 	}
 }
+
+func TestTheReturnedDecisionIsACopyOfEveryObligationSlice(t *testing.T) {
+	r := newRig(t, 0)
+	k := baseKey(t)
+	d := allow(k)
+	d.Obligations = &authorization.Obligations{TenantScope: "org_1", RepositoryRestricted: true,
+		RepositoryAllowlist: []string{"acme/api"}, Redaction: []string{"free_text", "contact_details"}}
+	mustStore(t, r, k, d, read(r))
+	d.Obligations.Redaction[0] = "personal_identifiers"
+	got := hit(t, r, k)
+	if got.Obligations.Redaction[0] != "free_text" {
+		t.Fatalf("the stored redaction shares the caller's slice: %q", got.Obligations.Redaction)
+	}
+	got.Obligations.Redaction[1] = "personal_identifiers"
+	again := hit(t, r, k)
+	if again.Obligations.Redaction[1] != "contact_details" {
+		t.Fatalf("the stored redaction changed through a returned copy: %q", again.Obligations.Redaction)
+	}
+	if !again.Obligations.RepositoryRestricted {
+		t.Fatalf("the restricted mark was lost: %+v", again.Obligations)
+	}
+}
+
+func TestAnEmptyRestrictedAllowlistSurvivesTheCache(t *testing.T) {
+	r := newRig(t, 0)
+	k := baseKey(t)
+	d := allow(k)
+	d.Obligations = &authorization.Obligations{TenantScope: "org_1", RepositoryRestricted: true, RepositoryAllowlist: []string{}}
+	mustStore(t, r, k, d, read(r))
+	got := hit(t, r, k)
+	if got.Obligations == nil || !got.Obligations.RepositoryRestricted || len(got.Obligations.RepositoryAllowlist) != 0 {
+		t.Fatalf("an empty restricted allowlist (none) did not survive: %+v", got.Obligations)
+	}
+}

@@ -13,7 +13,7 @@
       "alg": "EdDSA",
       "use": "sig",
       "kid": "auth-example-2026-04",
-      "x": "6HWc3HoMtq3zC_-eijQV8lVvMN7OmFQKGeuAQZxBCxQ"
+      "x": "qK2-9D_UWT3oTxW_9UDtrlodK_Tg554Gdy4yqHqjNQw"
     }
   ],
   "decision_order": [
@@ -491,18 +491,18 @@
       "why": "The token for acr-mcp, verified as that audience. It differs from valid-api in aud and scope only."
     },
     {
-      "file": "valid-act-api.json",
-      "now": 1760000300,
-      "verify_as_audience": "dev-health-api",
-      "expect": "accept",
-      "why": "A delegated token: sub is the effective subject, act.sub the real actor."
-    },
-    {
       "file": "valid-act-auth-service.json",
       "now": 1760000300,
       "verify_as_audience": "auth-service",
       "expect": "accept",
       "why": "A delegated token at auth-service's own session routes."
+    },
+    {
+      "file": "valid-act-canonical.json",
+      "now": 1760000300,
+      "verify_as_audience": "dev-health-api",
+      "expect": "accept",
+      "why": "A delegated token: sub is the effective subject, act.sub the real actor in the canonical principal id form every issuer writes."
     },
     {
       "file": "valid-api-no-organization.json",

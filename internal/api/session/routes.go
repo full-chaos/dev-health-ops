@@ -275,7 +275,9 @@ func (h handlers) validate(w http.ResponseWriter, r *http.Request) {
 
 // optionalUser is get_current_user_optional: no header, a malformed one or
 // a refused token is no user; an unavailable database is the 503 (written
-// here, ok=false); any other lookup failure is the bare 500.
+// here, ok=false); any other lookup failure is the bare 500. A delegated
+// session's bearer is the Guard's refusal (written here, ok=false): logout
+// takes the user to a write outside the Guard.
 func (h handlers) optionalUser(w http.ResponseWriter, r *http.Request) (*policy.User, bool) {
 	authorization := r.Header.Get("Authorization")
 	if authorization == "" {
@@ -288,6 +290,9 @@ func (h handlers) optionalUser(w http.ResponseWriter, r *http.Request) (*policy.
 	user, err := h.Auth.Authenticate(r.Context(), token)
 	switch {
 	case err == nil:
+		if h.Guard.RefuseDelegated(w, r, user) {
+			return nil, false
+		}
 		return user, true
 	case policy.IsRefusal(err):
 		return nil, true

@@ -48,7 +48,7 @@ func refreshAcceptedTotal(t *testing.T, reader *sdkmetric.ManualReader, service 
 	return total
 }
 
-func TestRefreshCountsAnAcceptedHS256RefreshTokenAndNothingElse(t *testing.T) {
+func TestRefreshClaimsRefuseWhatTheRouteRefusesAndCountNothing(t *testing.T) {
 	verifier, err := edgetoken.New(refreshCounterSecret, refreshCounterIssuer, refreshCounterAudience)
 	if err != nil {
 		t.Fatal(err)
@@ -83,15 +83,15 @@ func TestRefreshCountsAnAcceptedHS256RefreshTokenAndNothingElse(t *testing.T) {
 	if ok, _ := count(refresh); !ok {
 		t.Fatal("a valid refresh token was refused")
 	}
-	if got := refreshAcceptedTotal(t, reader, "dev-health-ops-api"); got != 1 {
-		t.Fatalf("after one accepted refresh token the counter is %d, want 1", got)
+	if got := refreshAcceptedTotal(t, reader, "dev-health-ops-api"); got != 0 {
+		t.Fatalf("reading a refresh token's claims moved the counter to %d, want 0 (the route counts at its 200)", got)
 	}
 	for name, token := range map[string]string{"an access token": access, "garbage": "a.b.c"} {
 		if ok, _ := count(token); ok {
 			t.Fatalf("%s was accepted as a refresh token", name)
 		}
 	}
-	if got := refreshAcceptedTotal(t, reader, "dev-health-ops-api"); got != 1 {
-		t.Fatalf("a refused token moved the counter to %d, want 1", got)
+	if got := refreshAcceptedTotal(t, reader, "dev-health-ops-api"); got != 0 {
+		t.Fatalf("a refused token moved the counter to %d, want 0", got)
 	}
 }

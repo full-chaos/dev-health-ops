@@ -75,6 +75,27 @@ var refreshAccepted atomic.Pointer[accessverify.RefreshCounter]
 // SetRefreshAccepted sets the counter the refresh route counts accepted HS256 refresh tokens with.
 func SetRefreshAccepted(counter *accessverify.RefreshCounter) { refreshAccepted.Store(counter) }
 
+// statusRecorder keeps the status the refresh route answers with, so the route
+// counts a refresh token only when it answered 200.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.status == 0 {
+		s.status = code
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(b)
+}
+
 func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaims, error) {
 	claims, err := h.Verifier.VerifyType(token, edgetoken.RefreshType)
 	if err != nil {
@@ -85,8 +106,7 @@ func (h handlers) verifyRefresh(ctx context.Context, token string) (jwt.MapClaim
 }
 
 // refreshClaims verifies a refresh token and reads the sub, org_id and jti the
-// route needs. It answers the refusal itself and returns false; a token it
-// returns true for is one the route accepts, and only then is it counted.
+// route needs. It answers the refusal itself and returns false.
 func (h handlers) refreshClaims(w http.ResponseWriter, r *http.Request, token string) (userIDText, orgIDText, jti string, ok bool) {
 	ctx := r.Context()
 	claims, verifyErr := h.verifyRefresh(ctx, token)
@@ -114,13 +134,19 @@ func (h handlers) refreshClaims(w http.ResponseWriter, r *http.Request, token st
 		h.fail(w, r, "refresh jti", err)
 		return
 	}
-	refreshAccepted.Load().Accepted(ctx)
 	return userIDText, orgIDText, jti, true
 }
 
 // refresh is POST /api/v1/auth/refresh (refresh.py).
 func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	recorder := &statusRecorder{ResponseWriter: w}
+	w = recorder
+	defer func() {
+		if recorder.status == http.StatusOK {
+			refreshAccepted.Load().Accepted(ctx)
+		}
+	}()
 	token, _ := ctx.Value(refreshInputKey{}).(string)
 	userIDText, orgIDText, jti, ok := h.refreshClaims(w, r, token)
 	if !ok {

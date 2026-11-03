@@ -95,6 +95,7 @@ internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
+internal/auth/contracts	repokey_cells_test.go
 internal/auth/contracts	retired_credential_class_test.go
 internal/auth/contracts	retired_legacy_ingest_test.go
 internal/auth/contracts	schema_dialect_test.go

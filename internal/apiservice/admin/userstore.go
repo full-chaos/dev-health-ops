@@ -246,11 +246,22 @@ func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser,
 		provider = *in.AuthProvider
 	}
 	u.AuthProvider = &provider
-	_, err := s.Pool.Exec(ctx, `
+	// A false value omits is_superuser (the column defaults to false), so the
+	// statement needs no write privilege on it; only a true value names it.
+	var err error
+	if u.IsSuperuser {
+		_, err = s.Pool.Exec(ctx, `
 INSERT INTO users (id, email, username, password_hash, full_name, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, $11, $12)`,
-		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID,
-		u.IsActive, u.IsVerified, u.IsSuperuser, u.CreatedAt, u.UpdatedAt)
+			u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID,
+			u.IsActive, u.IsVerified, u.IsSuperuser, u.CreatedAt, u.UpdatedAt)
+	} else {
+		_, err = s.Pool.Exec(ctx, `
+INSERT INTO users (id, email, username, password_hash, full_name, auth_provider, auth_provider_id, is_active, is_verified, token_version, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, $10, $11)`,
+			u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID,
+			u.IsActive, u.IsVerified, u.CreatedAt, u.UpdatedAt)
+	}
 	if err != nil {
 		return nil, err
 	}

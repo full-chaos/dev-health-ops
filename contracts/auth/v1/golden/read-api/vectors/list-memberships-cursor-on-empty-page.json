@@ -1,0 +1,18 @@
+{
+  "id": "list-memberships-cursor-on-empty-page",
+  "kind": "exchange",
+  "operation": "memberships_list",
+  "request": {
+    "schema_version": "membership-list-request.v1",
+    "organization_id": "org_EXAMPLE0000000000000001"
+  },
+  "response": {
+    "schema_version": "membership-list.v1",
+    "items": [],
+    "next_cursor": "k1_bWJyX0VYQU1QTEUwMDAwMDAwMDAwMDAwMDAy"
+  },
+  "response_schema": "accept",
+  "parse": "reject",
+  "rule": "cursor_on_empty_page",
+  "why": "An empty page has no cursor."
+}

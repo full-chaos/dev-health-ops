@@ -21,6 +21,7 @@ var bearerRowOperations = map[string]string{
 	opSessionRevoke:    "POST /v1/sessions/revoke",
 	opSessionRevokeAll: "POST /v1/sessions/revoke-all",
 	opChangePassword:   "POST /api/v1/auth/change-password",
+	opSwitchOrg:        "POST /api/v1/auth/switch-org",
 	opSocialLink:       "POST /v1/identities/social",
 	opSocialUnlink:     "DELETE /v1/identities/social/{id}",
 }
@@ -56,6 +57,12 @@ func TestDelegatedBearerRowsEqualTheGoAllowlist(t *testing.T) {
 	seen := map[string]bool{}
 	for _, row := range embeddedRows(t) {
 		key := row.Method + " " + row.Route
+		if key == validateBodyTokenProfile {
+			if row.DelegatedBearer != nil {
+				t.Errorf("%s: a body-token route has delegated_bearer %q", key, *row.DelegatedBearer)
+			}
+			continue
+		}
 		op, reached := operationOf[key]
 		userBearer := slices.Contains(row.Accepted, "user_access_token") || slices.Contains(row.Accepted, "ops_access_token_hs256")
 		switch {

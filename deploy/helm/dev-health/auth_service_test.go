@@ -211,6 +211,25 @@ func TestAuthServiceDeployment(t *testing.T) {
 	}
 }
 
+// The roll readback reads the migrate Job's pod log after the roll (CHAOS-10812): the Job is kept
+// after success, reaped by its TTL, and still replaced by the next hook run.
+func TestAuthMigrateJobIsKeptForTheReadbackAndReplacedOnTheNextHook(t *testing.T) {
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render failed: %v\n%.600s", err, out)
+	}
+	job := authDoc(docs, "Job", "a-dev-health-auth-migrate")
+	if job == nil {
+		t.Fatal("no auth-migrate Job")
+	}
+	if policy := at(job, "metadata", "annotations", "helm.sh/hook-delete-policy"); policy != "before-hook-creation" {
+		t.Errorf("hook-delete-policy = %v, want before-hook-creation only (kept after success, replaced on the next hook)", policy)
+	}
+	if ttl := at(job, "spec", "ttlSecondsAfterFinished"); ttl != 86400 {
+		t.Errorf("ttlSecondsAfterFinished = %v, want 86400", ttl)
+	}
+}
+
 func TestAuthMigrateIsASeparateHookJob(t *testing.T) {
 	docs, out, err := renderAuth(t, authBase...)
 	if err != nil {

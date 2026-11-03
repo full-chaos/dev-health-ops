@@ -23,6 +23,7 @@ internal/api/policy/scope.go	EffectiveOrgID	admin.impersonate	4
 internal/api/policy/scope.go	Scope.Impersonation	admin.impersonate	carry
 internal/api/policy/scope.go	Scope.mayUseOrg	admin.orgs	4
 internal/api/policy/scope.go	Scope.useTokenOrg	admin.orgs	4
+internal/api/policy/shadow_guard.go	shadowCallerKind	admin.orgs	handler
 internal/api/session/permissions.go	userPermissions	admin.orgs	2
 internal/api/session/permissions.go	userPermissions	admin.users	2
 internal/api/session/refresh.go	handlers.refreshRole	admin.orgs	4

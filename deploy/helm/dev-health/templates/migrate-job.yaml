@@ -217,6 +217,11 @@ spec:
             */}}
             - name: AUTH_DATABASE_SCHEMA
               value: {{ include "dev-health.authDatabaseSchema" . | quote }}
+            {{- with include "dev-health.opsOwnerRole" . }}
+            {{- /* CHAOS-12614: the pinned owner of the database and the ops schemas; dho checks it before any DDL. */}}
+            - name: MIGRATION_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
             - name: DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER
               value: {{ .Values.migrations.hook.celeryRiverCutover | quote }}
             - name: OPERATIONAL_ORDERING_CONTRACT
@@ -363,9 +368,16 @@ spec:
               {{- else }}
                 name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
               {{- end }}
-          {{- with .Values.migrations.hook.extraEnv }}
+          {{- $ownerRole := include "dev-health.opsOwnerRole" . }}
+          {{- if or .Values.migrations.hook.extraEnv $ownerRole }}
           env:
+            {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with $ownerRole }}
+            - name: MIGRATION_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}
@@ -381,11 +393,11 @@ activeDeadlineSeconds for the prod table and pass a helm --timeout above it.
 */}}
 {{- if .Values.migrations.hook.openUnitsIndex.enabled }}
 {{- /*
-The verb's whole run is startup (about 60 s) + the build window (deadlineSeconds) + the cleanup drop (300 s): it must end
-inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
+The verb's whole run is the first-connect wait (60 s budget + a 10 s last attempt) + startup (about 60 s) + the build window
+(deadlineSeconds) + the cleanup drop (300 s): 430 s beside the window. It must end inside the Job's activeDeadlineSeconds, or Kubernetes kills the pod mid-build and the INVALID leftover stays.
 */}}
-{{- if gt (add (int .Values.migrations.hook.openUnitsIndex.deadlineSeconds) 360) (int .Values.migrations.hook.openUnitsIndex.activeDeadlineSeconds) }}
-{{- fail "migrations.hook.openUnitsIndex.deadlineSeconds + 360 (startup and cleanup) must not exceed migrations.hook.openUnitsIndex.activeDeadlineSeconds" }}
+{{- if gt (add (int .Values.migrations.hook.openUnitsIndex.deadlineSeconds) 430) (int .Values.migrations.hook.openUnitsIndex.activeDeadlineSeconds) }}
+{{- fail "migrations.hook.openUnitsIndex.deadlineSeconds + 430 (first-connect wait, startup and cleanup) must not exceed migrations.hook.openUnitsIndex.activeDeadlineSeconds" }}
 {{- end }}
 {{- /*
 With localBundledPostgres the Job runs on pre-upgrade only: the bundled database exists on an upgrade, and a fresh
@@ -461,9 +473,16 @@ spec:
               {{- else }}
                 name: {{ default (include "dev-health.secretName" .) .Values.migrations.hook.externalSecretName }}
               {{- end }}
-          {{- with .Values.migrations.hook.extraEnv }}
+          {{- $ownerRole := include "dev-health.opsOwnerRole" . }}
+          {{- if or .Values.migrations.hook.extraEnv $ownerRole }}
           env:
+            {{- with .Values.migrations.hook.extraEnv }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- with $ownerRole }}
+            - name: MIGRATION_OWNER_ROLE
+              value: {{ . | quote }}
+            {{- end }}
           {{- end }}
           resources:
             {{- toYaml .Values.migrations.hook.resources | nindent 12 }}

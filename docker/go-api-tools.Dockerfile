@@ -77,6 +77,7 @@ COPY contracts/graphql/v1 ./contracts/graphql/v1
 COPY contracts/jobs/v1 ./contracts/jobs/v1
 COPY contracts/sync-dispatch/v1 ./contracts/sync-dispatch/v1
 COPY contracts/auth/v1/vocabulary ./contracts/auth/v1/vocabulary
+COPY contracts/auth/v1/jsonschema/acr-credential-lifecycle-event.v1.schema.json ./contracts/auth/v1/jsonschema/
 COPY internal ./internal
 
 RUN --mount=type=cache,target=/go/pkg/mod \

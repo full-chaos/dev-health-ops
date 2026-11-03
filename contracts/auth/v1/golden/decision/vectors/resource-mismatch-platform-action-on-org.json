@@ -3,8 +3,9 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 9,
-    "reason": "resource_mismatch"
+    "policy_revision": 11,
+    "reason": "resource_mismatch",
+    "wire_reason_code": "resource_mismatch"
   },
   "id": "resource-mismatch-platform-action-on-org",
   "layer": "pdp",

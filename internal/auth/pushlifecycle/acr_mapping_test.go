@@ -12,11 +12,11 @@ import (
 // The acr credential lifecycle contract (acr-credential-lifecycle-event.v1)
 // has no projection code of its own: these tests drive its golden events
 // through the real Apply, so the ordering, terminal and no-widen rules are the
-// push rules and cannot drift. The mapping is the one the later consumers use.
+// push rules and cannot drift.
 const (
-	acrSourceID    = "acr"
-	acrFingerprint = "0123456789abcdef"
-	acrParentID    = "cred_exampleparentaaa"
+	acrParentID = "cred_exampleparentaaa"
+	// The engine derives the acr fingerprint; Apply only needs one at creation.
+	acrTestFingerprint = "00112233445566ff"
 )
 
 func acrEvent(t *testing.T, name string) contracts.AcrCredentialLifecycleEvent {
@@ -40,33 +40,13 @@ func acrEvent(t *testing.T, name string) contracts.AcrCredentialLifecycleEvent {
 	return event
 }
 
-func mapAcr(e contracts.AcrCredentialLifecycleEvent) contracts.ExternalPushLifecycleEvent {
-	types := map[string]string{
-		contracts.AcrCredentialIssued:         contracts.ExternalPushCreated,
-		contracts.AcrCredentialDeviceRedeemed: contracts.ExternalPushCreated,
-		contracts.AcrCredentialRotated:        contracts.ExternalPushRotated,
-		contracts.AcrCredentialRevoked:        contracts.ExternalPushRevoked,
-		contracts.AcrCredentialExpired:        contracts.ExternalPushExpired,
-	}
-	change := contracts.ExternalPushLifecycleChange{
-		Status: e.Payload.Change.Status, Scopes: e.Payload.Change.Scopes,
-		RotationParentID: e.Payload.Change.RotationParentID, ExpiresAt: e.Payload.Change.ExpiresAt,
-	}
-	if e.Payload.Revision == 1 {
-		change.Fingerprint = acrFingerprint
-	}
-	return contracts.ExternalPushLifecycleEvent{
-		SchemaVersion: contracts.ExternalPushLifecycleEventSurface, AggregateType: contracts.ExternalPushCredentialAggregate,
-		AggregateID: e.AggregateID, EventType: types[e.EventType], IdempotencyKey: e.IdempotencyKey, CreatedAt: e.CreatedAt,
-		Payload: contracts.ExternalPushLifecyclePayload{
-			Revision: e.Payload.Revision, OrganizationID: e.Payload.OrganizationID, Binding: contracts.ExternalPushBindingSource, SourceID: acrSourceID, Change: change,
-		},
-	}
-}
-
 func applyAcr(t *testing.T, state State, e contracts.AcrCredentialLifecycleEvent, parent *State) (State, Outcome) {
 	t.Helper()
-	return Apply(state, mapAcr(e), parent)
+	mapped := FromAcr(e)
+	if e.Payload.Revision == 1 {
+		mapped.Payload.Change.Fingerprint = acrTestFingerprint
+	}
+	return Apply(state, mapped, parent)
 }
 
 func mustApplyAcr(t *testing.T, state State, e contracts.AcrCredentialLifecycleEvent, parent *State) State {
@@ -127,9 +107,10 @@ func TestAcrOutOfOrderRevisionsAreGapDuplicateAndStale(t *testing.T) {
 		t.Fatalf("revision 2 on a credential never seen: outcome %s, want gap", outcome)
 	}
 	state := mustApplyAcr(t, State{}, issued, nil)
+	// A terminal event that skips revisions ends the credential (no acr event could fill the gap).
 	for _, name := range []string{"valid-revoked-revision-3.json", "valid-expired-revision-4.json"} {
-		if next, outcome := applyAcr(t, state, acrEvent(t, name), nil); outcome != Gap || next.Status != StatusActive || next.Revision != 1 {
-			t.Fatalf("%s: outcome %s state %+v, want a gap and no change", name, outcome, next)
+		if next, outcome := applyAcr(t, state, acrEvent(t, name), nil); outcome != Applied || !next.Status.Terminal() || Permits(next, "context:read", t0) {
+			t.Fatalf("%s: outcome %s state %+v, want applied and ended", name, outcome, next)
 		}
 	}
 	if _, outcome := applyAcr(t, state, issued, nil); outcome != Duplicate {

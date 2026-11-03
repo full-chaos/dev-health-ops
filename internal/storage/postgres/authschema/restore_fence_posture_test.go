@@ -34,9 +34,9 @@ func restoreFenceMigration(t *testing.T) string {
 // the only safe door is a function that runs as a dedicated NOLOGIN owner with
 // exactly the outbox and revision privileges. The exception is pinned: the one
 // function, EXECUTE revoked from PUBLIC in the migration that creates it, and
-// the owner's closed-world posture row (pushWriterViolations). Two migrations
+// the owner's closed-world posture row (pushWriterViolations). Three migrations
 // may declare it: the one that creates it, and the one that replaces its body
-// (CHAOS-12358), which must restate SECURITY DEFINER and the pinned search_path
+// (CHAOS-12358) or add its terminal-event guard (CHAOS-12332), each of which must restate SECURITY DEFINER and the pinned search_path
 // because CREATE OR REPLACE swaps both. The runtime role reads the timeline
 // itself, so no function lends the owner's authority to another role.
 func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
@@ -44,10 +44,8 @@ func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const (
-		creatingMigration  = "aggregate_revisions_external_push_credential"
-		replacingMigration = "external_push_lifecycle_binding"
-	)
+	const creatingMigration = "aggregate_revisions_external_push_credential"
+	replacingMigrations := map[string]bool{"external_push_lifecycle_binding": true, "external_push_terminal_guard": true}
 	for _, m := range migrations {
 		sql := strings.ToUpper(code(m.SQL))
 		count := strings.Count(sql, "SECURITY DEFINER")
@@ -60,7 +58,7 @@ func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
 				t.Errorf("migration %04d_%s must declare exactly the one %s function and revoke EXECUTE from PUBLIC",
 					m.Version, m.Name, PushLifecycleFunction)
 			}
-		case m.Name == replacingMigration:
+		case replacingMigrations[m.Name]:
 			if count != 1 || strings.Count(sql, "CREATE OR REPLACE FUNCTION") != 1 || strings.Count(sql, "CREATE FUNCTION") != 0 ||
 				!strings.Contains(sql, strings.ToUpper(PushLifecycleFunction)) ||
 				!strings.Contains(sql, "SET SEARCH_PATH = %1$I, PG_TEMP") {

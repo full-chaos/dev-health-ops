@@ -443,6 +443,9 @@ authService:
   #    run by the service at startup.
   migrate:
     enabled: true
+    # -- The finished Job and its pod log stay this long (the next hook run replaces them sooner), so a roll readback
+    #    can read `kubectl logs job/<release>-auth-migrate` ("auth schema current at version N") without exec.
+    ttlSecondsAfterFinished: 86400
     image:
       # -- docker/go-worker.Dockerfile target `auth-migrate`.
       repository: ghcr.io/full-chaos/dev-health-go-auth-migrate
@@ -1390,6 +1393,19 @@ migrations:
         name: ""
         secretName: ""
         secretKey: "API_DATABASE_PASSWORD"
+      # -- CHAOS-12614: optional ops migration LOGIN (e.g. devhealth_migrator) that owns the database and the ops
+      #    schemas after `dho migrate owner-move`. EMPTY name = OFF. When set, `dho migrate roles` creates it if missing
+      #    (LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, CONNECT on the application database,
+      #    nothing else) with the password from an OPERATOR-CREATED Secret named by secretName / secretKey (the render
+      #    fails if name is set while either is empty). An existing login keeps its password.
+      migratorRole:
+        name: ""
+        secretName: ""
+        secretKey: "OPS_MIGRATOR_DATABASE_PASSWORD"
+      # -- CHAOS-12614: the Secret this Job envFroms when secrets.create=false. EMPTY MEANS
+      #    migrations.hook.externalSecretName. Set it to a Secret with the superuser DSN when the other ops hooks move
+      #    to the migration login: creating roles needs CREATEROLE.
+      externalSecretName: ""
     riverMigrate:
       # -- OFF is not "River never happens". With the hook off there are two
       #    paths, and which one you are on depends on secretData below:
@@ -1510,13 +1526,14 @@ migrations:
     openUnitsIndex:
       enabled: false
       # -- The index is small (about 2 MiB at 830k units), so the Job is short. The hook budget is
-      #    streakIndex 2400 + openUnitsIndex 600 + the migrate Job 1800 + a 600 s rollout margin = 5400 s, the
+      #    streakIndex 2400 + openUnitsIndex 700 + the migrate Job 1800 + a 500 s rollout margin = 5400 s, the
       #    helm --timeout of 90m; a larger value here needs a smaller streakIndex or a larger helm --timeout.
-      activeDeadlineSeconds: 600
+      activeDeadlineSeconds: 700
       # -- lock_timeout of the table-lock probe before each attempt, in seconds (1 to 60). The waits for older
       #    transactions are not under it: they run up to deadlineSeconds.
       lockTimeoutSeconds: 5
-      # -- window of the whole build in seconds; deadlineSeconds + 360 must not exceed activeDeadlineSeconds.
+      # -- window of the whole build in seconds; deadlineSeconds + 430 (the 70 s first-connect wait, startup and
+      #    cleanup) must not exceed activeDeadlineSeconds.
       deadlineSeconds: 240
       attempts: 3
       retryDelaySeconds: 15
@@ -1545,6 +1562,12 @@ migrations:
     # -- Existing dedicated Secret when secrets.create=false. Falls back to
     #    secrets.externalSecretName for backward compatibility when empty.
     externalSecretName: ""
+    # -- CHAOS-12614: the owner pin of the ops migrators (MIGRATION_OWNER_ROLE on the migrate, open-units-index,
+    #    streak-index and river-migrate Jobs). EMPTY = OFF (today's behaviour). Set, dho refuses to run any DDL unless
+    #    it is connected AS this role, the role is NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS, and it
+    #    owns the database, schema river and every object of public and river (`dho migrate owner-move` first). While
+    #    auth-service owns sessions, authService.migrate.sessionReaders.queryApi must name the query-api login.
+    ownerRole: ""
 
 # =============================================================================
 # Ingress

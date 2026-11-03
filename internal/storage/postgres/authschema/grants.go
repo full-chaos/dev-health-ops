@@ -245,11 +245,23 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 		))
 	}
 
-	readerStatements, err := sessionReaderStatements(ctx, conn, options, schemaID)
+	sessionStatements, err := readerStatements(ctx, conn, options, schemaID,
+		options.SessionReaderRoles, SessionReaderReads(options.PlatformRolesOwned), "session reader")
 	if err != nil {
 		return err
 	}
-	statements = append(statements, readerStatements...)
+	statements = append(statements, sessionStatements...)
+
+	projectionReads, err := presentReads(ctx, conn, options.Schema, ProjectionReaderReads())
+	if err != nil {
+		return err
+	}
+	projectionStatements, err := readerStatements(ctx, conn, options, schemaID,
+		options.ProjectionReaderRoles, projectionReads, "projection reader")
+	if err != nil {
+		return err
+	}
+	statements = append(statements, projectionStatements...)
 
 	logger := options.Logger
 	if logger == nil {
@@ -328,6 +340,12 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			return err
 		}
 	}
+	beforeProjection := make(map[string][]GrantRecord, len(options.ProjectionReaderRoles))
+	for _, reader := range options.ProjectionReaderRoles {
+		if beforeProjection[reader], err = snapshotDirectGrants(ctx, tx, options.Schema, reader); err != nil {
+			return err
+		}
+	}
 	statements = append(statements, publicStatements...)
 
 	for _, statement := range statements {
@@ -365,6 +383,13 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 			return err
 		}
 		lost = append(lost, readerNarrowing(reader, beforeReaders[reader], afterReader)...)
+	}
+	for _, reader := range options.ProjectionReaderRoles {
+		afterReader, err := snapshotDirectGrants(ctx, tx, options.Schema, reader)
+		if err != nil {
+			return err
+		}
+		lost = append(lost, projectionReaderNarrowing(reader, beforeProjection[reader], afterReader)...)
 	}
 	sort.Slice(lost, func(i, j int) bool { return lost[i].less(lost[j]) })
 	var deferred []GrantRecord
@@ -411,6 +436,11 @@ func applyRuntimeGrants(ctx context.Context, conn querier, manifest []TablePrivi
 	if err != nil {
 		return err
 	}
+	projectionViolations, err := projectionReaderViolations(ctx, tx.Conn(), options)
+	if err != nil {
+		return err
+	}
+	readerViolations = append(readerViolations, projectionViolations...)
 	if readerViolations = excuseRetained(readerViolations, deferred); len(readerViolations) > 0 {
 		logger.ErrorContext(
 			ctx, "session readers cannot hold exactly their declared reads; refusing and rolling back",

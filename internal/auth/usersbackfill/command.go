@@ -25,6 +25,9 @@ const (
 	dsnEnv    = authconfig.EnvDatabaseURI
 )
 
+// firstConnect bounds the wait for the first database connect.
+var firstConnect = pgstorage.DefaultFirstConnect()
+
 // connectFn is the database connect step; tests replace it to prove a gate refuses first.
 var connectFn = connect
 
@@ -186,6 +189,13 @@ func connect(ctx context.Context, env cli.Env, verb string) (*pgxpool.Pool, auth
 	pool, err := pgxpool.New(ctx, dsn.Reveal())
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "%s: could not open the database pool: %v\n", verb, boundary.Redact(err))
+		return nil, schema, cli.ExitFailure
+	}
+	// The first connect waits (bounded): a new Job pod can be refused while its
+	// NetworkPolicy rules are programmed.
+	if err := firstConnect.WithReport(pgstorage.TextReport(env.Stderr, verb, "PostgreSQL")).Do(ctx, pool.Ping); err != nil {
+		pool.Close()
+		fmt.Fprintf(env.Stderr, "%s: could not connect to the database: %v\n", verb, boundary.Redact(err))
 		return nil, schema, cli.ExitFailure
 	}
 	return pool, schema, cli.ExitOK

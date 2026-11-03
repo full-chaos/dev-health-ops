@@ -18,6 +18,7 @@ var credentialRegistryReaders = map[string]string{
 	"internal/auth/workload/bootstrap_lifecycle.go": "bootstrap lifecycle verbs, by class or liveBootstrap; no authentication",
 	"internal/auth/serviceaccount/keys.go":          "key verbs by class or liveKey, and resolve by a 32-byte digest with the class checked",
 	"internal/auth/outboxprojection/store.go":       "the projection's own rows, never a credential check",
+	"internal/auth/decisionstate/decisionstate.go":  "ServiceAccountKey: one row by id for a service-account reference; the PDP counts it live only with the service-account key class and domain_owner platform (authapi/authorize.go DecisionKey.liveFor), so a domain-owned row never decides an allow",
 }
 
 var credentialRegistryRead = regexp.MustCompile("(?i)\\b(FROM|JOIN)\\s+(`\\s*\\+\\s*\\w+\\.q\\s*\\+\\s*`)?\\S*credential_registry")

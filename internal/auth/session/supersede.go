@@ -54,15 +54,7 @@ func (s *Store) CreateSupersedingAudited(ctx context.Context, principalID uuid.U
 		event.RequestID = requestid.Audit(ctx)
 	}
 	principal, predecessorID := principalID.String(), predecessor.String()
-	revoked := audit.AuditEvent{
-		EventType: EventSessionRevoked, Outcome: audit.OutcomeAllowed,
-		ActorPrincipalID: event.ActorPrincipalID, SubjectPrincipalID: &principal, OrganizationID: nil,
-		RequestID: event.RequestID,
-		Attributes: map[string]any{
-			"reason_code": string(ReasonSessionRevoked), "target_kind": "session", "target_id": predecessorID,
-			"source": "go-api-delegated",
-		},
-	}
+	revoked := supersededEvent(event, principal, predecessorID)
 	var out Issued
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {

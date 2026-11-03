@@ -82,6 +82,13 @@ func enforceRequest(h http.Handler, method, path string) response {
 
 type enforceCell struct{ namespace, method, path string }
 
+// The refusal body is the one the route level gives, so a client sees no new shape.
+var enforceDenyBodies = map[string]string{
+	"teams":   `{"detail":"Admin access required"}`,
+	"billing": `{"detail":"Access denied"}`,
+	"admin":   `{"detail":"Superuser access required"}`,
+}
+
 var enforceCells = []enforceCell{
 	{"teams", "GET", "/api/v1/admin/teams"},
 	{"billing", "GET", "/api/v1/billing/invoices"},
@@ -94,8 +101,8 @@ func TestAnEnforcedCellTakesThePDPDecisionInsteadOfTheLegacyOne(t *testing.T) {
 			recordEnforce(t)
 			deny := newTestPDP(t, denyWith("role_lacks_action"))
 			got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newEnforcerFor(t, deny.client(t), onFor(cell.namespace))), cell.method, cell.path)
-			if got.status != http.StatusForbidden {
-				t.Fatalf("PDP deny, legacy allow: %d %q, want 403", got.status, got.body)
+			if got.status != http.StatusForbidden || got.body != enforceDenyBodies[cell.namespace] {
+				t.Fatalf("PDP deny, legacy allow: %d %q, want 403 %q", got.status, got.body, enforceDenyBodies[cell.namespace])
 			}
 			if n := len(deny.calls()); n != 1 {
 				t.Fatalf("%d PDP calls, want 1", n)

@@ -3,6 +3,7 @@ package apiservice
 import (
 	"bytes"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 
@@ -85,5 +86,41 @@ func TestOnlyTheEnforcementCellsOfGoAPINeedTheCredential(t *testing.T) {
 	env := map[string]string{authzenforce.QueryAPI.Env(): "billing"}
 	if enf, err := buildEnforcer(lookupFrom(env), quietLogger(), AuthProxyConfig{}, nil); enf != nil || err != nil {
 		t.Fatalf("query-api's variable reached go-api's builder: %v %v", enf, err)
+	}
+}
+
+func TestTheSharedWorkloadClientIsTheProvisioningOneThenTheSessionOne(t *testing.T) {
+	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
+	env := lookupFrom(map[string]string{EnvAuthWorkloadSubjectFile: subjectFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer})
+	ask := []workloadAsk{{EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential}}
+	one, err := newWorkloadClient(proxy, env, ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := newWorkloadClient(proxy, env, ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sharedWorkloadClient(provisioningCredential{workload: one}, sessionCredential{workload: two}); got != one {
+		t.Fatal("the provisioning client is not preferred")
+	}
+	if got := sharedWorkloadClient(provisioningCredential{}, sessionCredential{workload: two}); got != two {
+		t.Fatal("the session client is not the fallback")
+	}
+	if got := sharedWorkloadClient(provisioningCredential{}, sessionCredential{}); got != nil {
+		t.Fatal("a client appeared from nowhere")
+	}
+}
+
+// Startup builds the Enforcer and installs it beside the guard: a source pin where no database runs.
+func TestStartupInstallsTheEnforcerOnTheGuard(t *testing.T) {
+	raw, err := os.ReadFile("service.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"buildEnforcer(envsecrets.ProcessLookup", "protected.guard.SetEnforcer(enforcer)"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("service.go does not contain %q", want)
+		}
 	}
 }

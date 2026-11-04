@@ -367,9 +367,11 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	}
 }
 
-// The five obligations an allow can carry. go-api carries out none of them.
+// The five obligations an allow can carry, each in a form go-api cannot carry out on a route that has a repository
+// dimension: a tenant scope other than the request's organization, any repository allowlist, and every redaction,
+// minimum assurance and step-up.
 var enforceObligationKinds = map[string]map[string]any{
-	"tenant_scope":         {"tenant_scope": ownOrg},
+	"tenant_scope":         {"tenant_scope": strangerOrg},
 	"repository_allowlist": {"repository_allowlist": []any{"acme/widget"}},
 	"redaction":            {"redaction": []any{"personal_identifiers"}},
 	"minimum_assurance":    {"minimum_assurance": "aal2"},
@@ -380,7 +382,7 @@ const enforceUnavailableBody = `{"detail":"Authorization service temporarily una
 
 // An allow that carries an obligation go-api cannot carry out is no verdict: 503 with Retry-After, counted
 // error_deny. It is neither served nor refused with the route-level 403.
-func TestAnAllowThatCarriesAnyObligationIsNoVerdictThroughTheGuard(t *testing.T) {
+func TestAnAllowWithAnObligationGoAPICannotCarryOutIsNoVerdictThroughTheGuard(t *testing.T) {
 	for _, kind := range slices.Sorted(maps.Keys(enforceObligationKinds)) {
 		for _, cell := range enforceCells {
 			t.Run(kind+"/"+cell.namespace, func(t *testing.T) {
@@ -414,7 +416,7 @@ func answerOf(verdict enforceVerdict) (int, string, http.Header) {
 
 // Every mapped go-api row, every obligation kind: the allow is no verdict. The control is the same allow with no
 // obligation, which every row serves.
-func TestAnAllowThatCarriesAnyObligationIsNoVerdictOnEveryMappedRow(t *testing.T) {
+func TestAnAllowWithAnObligationGoAPICannotCarryOutIsNoVerdictOnEveryMappedRow(t *testing.T) {
 	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
 	if err != nil {
 		t.Fatal(err)
@@ -478,6 +480,130 @@ func TestAnAllowThatCarriesAnyObligationIsNoVerdictOnEveryMappedRow(t *testing.T
 			}
 			t.Logf("obligation=%s rows=%d status503=%d retry_after=%d error_deny=%d", kind, len(keys), status503, retryAfter, errorDeny)
 		})
+	}
+}
+
+// A tenant scope that is the request's organization is carried out: every organization row serves. A platform row
+// asks for no organization, so the scope names none of its request and is not carried out.
+func TestATenantScopeOfTheRequestOrganizationIsCarriedOutOnEveryOrganizationRow(t *testing.T) {
+	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	pdp.obligations = map[string]any{"tenant_scope": ownOrg}
+	enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: onFor(authzenforce.Namespaces()...), Timeout: time.Second, Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	organization, platform := 0, 0
+	for _, key := range slices.Sorted(maps.Keys(rows)) {
+		row := rows[key]
+		before := len(rec.snapshot())
+		status, _, header := answerOf(enf.decide(context.Background(), enforceObservation{pattern: key, bearer: shadowBearer, orgID: ownOrg, userAccessToken: true}))
+		counted := rec.snapshot()[before:]
+		switch row.ResourceType {
+		case "organization":
+			organization++
+			if status != http.StatusOK || !slices.Equal(counted, []string{row.Namespace + "/allow"}) {
+				t.Errorf("%s: tenant scope = the request organization answered %d counted %v, want 200 and [%s/allow]", key, status, counted, row.Namespace)
+			}
+		default:
+			platform++
+			if status != http.StatusServiceUnavailable || header.Get("Retry-After") != enforceRetryAfter || !slices.Equal(counted, []string{row.Namespace + "/error_deny"}) {
+				t.Errorf("%s: platform row with a tenant scope answered %d counted %v, want 503 with Retry-After and [%s/error_deny]", key, status, counted, row.Namespace)
+			}
+		}
+	}
+	if organization == 0 || platform == 0 {
+		t.Fatalf("organization rows %d, platform rows %d: the matrix needs both", organization, platform)
+	}
+}
+
+func newEnforcerWithoutRepositoryDimension(t *testing.T, decider pep.Decider, sw authzenforce.Switch, routes ...string) *Enforcer {
+	t.Helper()
+	flagged := map[string]bool{}
+	for _, route := range routes {
+		flagged[route] = true
+	}
+	enf, err := NewEnforcer(EnforceConfig{Decider: decider, Rows: shadowTestRows, Switch: sw, Timeout: time.Second, Logger: quiet(), NoRepositoryDimension: flagged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enf
+}
+
+// The carried-out rule: a tenant scope that is the request's organization, and a repository allowlist on a route the
+// table marks as having no repository dimension, are carried out and the allow serves. Any other obligation, or a
+// set with one obligation not carried out, is no verdict: 503 with Retry-After, counted error_deny.
+func TestTheCarriedOutRuleThroughTheGuard(t *testing.T) {
+	const teamsRead = "GET /api/v1/admin/teams"
+	cells := []struct {
+		name        string
+		obligations map[string]any
+		flagged     []string
+		method      string
+		path        string
+		serves      bool
+	}{
+		{"tenant scope is the request organization", map[string]any{"tenant_scope": ownOrg}, nil, "GET", "/api/v1/admin/teams", true},
+		{"tenant scope is another organization", map[string]any{"tenant_scope": strangerOrg}, nil, "GET", "/api/v1/admin/teams", false},
+		{"tenant scope on a platform route", map[string]any{"tenant_scope": ownOrg}, nil, "GET", "/api/v1/admin/orgs", false},
+		{"repository allowlist on a route with no repository dimension", map[string]any{"repository_allowlist": []any{"acme/widget"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", true},
+		{"empty repository allowlist on a route with no repository dimension", map[string]any{"repository_allowlist": []any{}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", true},
+		{"repository allowlist on a route not flagged", map[string]any{"repository_allowlist": []any{"acme/widget"}}, []string{"POST /api/v1/admin/teams"}, "GET", "/api/v1/admin/teams", false},
+		{"redaction on a flagged route", map[string]any{"redaction": []any{"personal_identifiers"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"minimum assurance on a flagged route", map[string]any{"minimum_assurance": "aal2"}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"step up on a flagged route", map[string]any{"step_up": true}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"tenant scope and repository allowlist, both carried out", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", true},
+		{"carried-out set plus redaction", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}, "redaction": []any{"personal_identifiers"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"carried-out set plus minimum assurance", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}, "minimum_assurance": "aal2"}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"carried-out set plus step up", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}, "step_up": true}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"tenant scope carried out, repository allowlist on a route not flagged", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}}, nil, "GET", "/api/v1/admin/teams", false},
+		{"repository allowlist carried out, tenant scope another organization", map[string]any{"tenant_scope": strangerOrg, "repository_allowlist": []any{"acme/widget"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			pdp.obligations = cell.obligations
+			namespace := shadowTestRows[cell.method+" "+cell.path].Namespace
+			// A served cell runs as a plain member, whom the legacy check refuses: only the carried-out allow serves it.
+			// A refused cell runs as a superuser, whom the legacy check serves: only the no-verdict refusal refuses it.
+			who := personaSuperuser
+			if cell.serves {
+				who = personaMember
+			}
+			got := enforceRequest(enforceHandler(t, personaStore(who), userClaims(nil), newEnforcerWithoutRepositoryDimension(t, pdp.client(t), onFor(namespace), cell.flagged...)), cell.method, cell.path)
+			if cell.serves {
+				if got.status != http.StatusOK || !slices.Equal(rec.snapshot(), []string{namespace + "/allow"}) {
+					t.Fatalf("%d %q counted %v, want 200 and [%s/allow]: every obligation is carried out", got.status, got.body, rec.snapshot(), namespace)
+				}
+				return
+			}
+			if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != enforceRetryAfter || got.body != enforceUnavailableBody {
+				t.Fatalf("%d %q retry-after %q, want 503 %q with Retry-After %s: an obligation is not carried out", got.status, got.body, got.header.Get("Retry-After"), enforceUnavailableBody, enforceRetryAfter)
+			}
+			if !slices.Equal(rec.snapshot(), []string{namespace + "/error_deny"}) {
+				t.Fatalf("counted %v, want [%s/error_deny]", rec.snapshot(), namespace)
+			}
+		})
+	}
+}
+
+func TestTheNoRepositoryDimensionTableNamesOnlyMappedRows(t *testing.T) {
+	if _, err := NewEnforcer(EnforceConfig{Decider: funcDecider{}, Rows: shadowTestRows, NoRepositoryDimension: map[string]bool{"GET /api/v1/not-a-row": true}}); err == nil {
+		t.Fatal("a no-repository-dimension flag on a route with no row was accepted")
+	}
+	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range slices.Sorted(maps.Keys(goAPIRoutesWithoutRepositoryDimension)) {
+		if _, ok := rows[key]; !ok {
+			t.Errorf("%s is flagged with no repository dimension but is not a mapped go-api row", key)
+		}
 	}
 }
 

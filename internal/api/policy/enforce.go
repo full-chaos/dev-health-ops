@@ -42,7 +42,14 @@ type EnforceConfig struct {
 	// refuses every request of a namespace switched on with a 503 and a reason code; Decider is nil.
 	Unconfigured bool
 	Logger       *slog.Logger
+	// NoRepositoryDimension names the routes ("METHOD /route") that have no repository dimension. Nil is
+	// goAPIRoutesWithoutRepositoryDimension.
+	NoRepositoryDimension map[string]bool
 }
+
+// goAPIRoutesWithoutRepositoryDimension is the explicit list of go-api routes that have no repository dimension. A
+// route not listed has one.
+var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,

@@ -899,54 +899,14 @@ AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'cre
 	}
 }
 
-// With AUTH_ORGS_OWNED the suspend and reactivate routes, through configure, also write go-api's is_active in the
-// verb's commit.
-func TestProvisioningSuspendWritesPublicWhileOrgsOwned(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	e := newRoutesEnvWith(t, ctx, map[string]string{
-		authconfig.EnvUsersOwned:                "true",
-		authconfig.EnvOrgsOwned:                 "true",
-		authconfig.EnvMembershipRoutes:          "true",
-		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
-		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
-	})
-	token, _ := e.issuerCredential(t, ctx, "auth-session-issuer", `["memberships:write", "sessions:issue"]`, false, false)
-	header := map[string]string{"Authorization": "Bearer " + token, "Content-Type": "application/json"}
-	_, org := e.seed(t, ctx)
-	super := e.account(t, ctx, acctMail(), true, true)
-	publicActive := func() bool {
-		t.Helper()
-		var active bool
-		if err := e.admin.QueryRow(ctx, `SELECT is_active FROM public.organizations WHERE id = $1`, org).Scan(&active); err != nil {
-			t.Fatal(err)
-		}
-		return active
-	}
-	body := jsonBody(t, map[string]any{"organization_id": org.String(), "actor_principal_id": super.String()})
-	if got := e.doWith(t, authapi.PatternOrgSuspend, body, header); got.status != http.StatusOK {
-		t.Fatalf("suspend: %d %s", got.status, got.body)
-	}
-	if publicActive() {
-		t.Fatal("go-api's row is still active after the suspend with orgs owned")
-	}
-	if got := e.doWith(t, authapi.PatternOrgReactivate, body, header); got.status != http.StatusOK {
-		t.Fatalf("reactivate: %d %s", got.status, got.body)
-	}
-	if !publicActive() {
-		t.Fatal("go-api's row is still inactive after the reactivate with orgs owned")
-	}
-}
-
-// The rename route through configure with the embedded endpoint-profile document, as the runtime role with users and
-// organizations owned: an owner renames, both rows change in one commit with the audit row naming the actor; a viewer
-// is refused and changes nothing.
+// The rename route through configure with the embedded endpoint-profile document, as the runtime role with users
+// owned: an owner renames, auth.organizations changes in one commit with the audit row naming the actor and go-api's
+// row is left alone; a viewer is refused and changes nothing.
 func TestProvisioningRenameThroughConfigure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newRoutesEnvWith(t, ctx, map[string]string{
 		authconfig.EnvUsersOwned:                "true",
-		authconfig.EnvOrgsOwned:                 "true",
 		authconfig.EnvMembershipRoutes:          "true",
 		authconfig.EnvInviteTokenSecret:         provisioningInviteSecret,
 		authconfig.EnvInviteTokenSecretPrevious: provisioningInvitePrevious,
@@ -978,8 +938,8 @@ func TestProvisioningRenameThroughConfigure(t *testing.T) {
 	if got.status != http.StatusOK || object(t, got)["name"] != "Renamed Org" || object(t, got)["renamed"] != true {
 		t.Fatalf("rename by the owner: %d %s", got.status, got.body)
 	}
-	if public, auth := names(); public != "Renamed Org" || auth != "Renamed Org" {
-		t.Fatalf("names after the rename: public %q, auth %q, want both Renamed Org", public, auth)
+	if public, auth := names(); public != "Routes Org" || auth != "Renamed Org" {
+		t.Fatalf("names after the rename: public %q, auth %q, want Routes Org and Renamed Org", public, auth)
 	}
 	var rows int
 	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.organization.renamed'

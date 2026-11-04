@@ -143,9 +143,9 @@ func EnsureUserIn(ctx context.Context, tx audit.TxOps, q string, id uuid.UUID) e
 
 // EnsureOrganizationIn inserts the auth.organizations copy of a public
 // organization inside tx, only when the row is missing; an existing copy is
-// never read for a value or changed. Like EnsureUserIn it is independent of
-// the organizations-owned switch: public.organizations is the source. A
-// public organization that is not there is ErrOrganizationNotFound.
+// never read for a value or changed. Like EnsureUserIn it reads the public
+// row: public.organizations is the source. A public organization that is not
+// there is ErrOrganizationNotFound.
 func EnsureOrganizationIn(ctx context.Context, tx audit.TxOps, q string, orgID uuid.UUID) error {
 	var exists bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+q+`.organizations WHERE id = $1)`, orgID).Scan(&exists); err != nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 )
 
 // AuthAggregate is one routing unit of the /api/v1/auth/* proxy to
@@ -119,12 +120,11 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 		}
 		return cfg, nil
 	}
-	upstream, err := url.Parse(raw)
-	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" || upstream.User != nil ||
-		(upstream.Path != "" && upstream.Path != "/") || upstream.RawQuery != "" || upstream.Fragment != "" || upstream.Opaque != "" {
+	upstream, ok := workloadinput.ParseOrigin(raw)
+	if !ok {
 		return AuthProxyConfig{}, fmt.Errorf("%s must be an http(s) origin such as http://auth-service:8095, with no path, query or credentials", EnvAuthProxyURL)
 	}
-	cfg.Upstream = &url.URL{Scheme: upstream.Scheme, Host: upstream.Host}
+	cfg.Upstream = upstream
 	if !cfg.On[AuthSessions] {
 		for _, aggregate := range AuthAggregates[1:] {
 			if cfg.On[aggregate] {

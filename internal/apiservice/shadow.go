@@ -14,6 +14,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
@@ -51,11 +52,11 @@ func newShadow(cfg AuthProxyConfig, lookup func(string) (string, bool), shared *
 		}
 		client := shared
 		if client == nil {
-			built, err := newWorkloadClient(cfg, lookup, []workloadAsk{{flag: policy.EnvShadowPDP, selector: "the shadow PDP credential"}})
+			built, err := newWorkloadClient(cfg, lookup, []workloadAsk{{Flag: policy.EnvShadowPDP, Selector: "the shadow PDP credential"}})
 			if err != nil {
-				var input *workloadInputError
-				if errors.As(err, &input) && input.variable != "" {
-					return nil, &policy.ShadowInputError{Variable: input.variable}
+				var input *workloadinput.InputError
+				if errors.As(err, &input) && input.Variable != "" {
+					return nil, &policy.ShadowInputError{Variable: input.Variable}
 				}
 				return nil, err
 			}

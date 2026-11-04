@@ -253,7 +253,7 @@ func integrationJobCapMinutes(t *testing.T, raw []byte, workflow, job string) in
 	case int:
 		return v
 	case string:
-		m := regexp.MustCompile(`(\d+) \|\| (\d+)\s*\}\}\s*$`).FindStringSubmatch(v)
+		m := regexp.MustCompile(`(\d+) \|\| (\d+)\)?\s*\}\}\s*$`).FindStringSubmatch(v)
 		if m == nil {
 			t.Fatalf("%s job %s: timeout-minutes expression %q is not `... && N || M`", workflow, job, v)
 		}

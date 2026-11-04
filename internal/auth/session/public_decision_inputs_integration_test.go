@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 )
 
 // publicOnlyUser seeds an active public.users row with NO auth copy.
@@ -229,9 +230,10 @@ func TestIssueRefusesAnEmailCollisionAndWritesNothing(t *testing.T) {
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.users (principal_id, email, email_lower) VALUES ($1, $2, lower($2))`, other.String(), email); err != nil {
 		t.Fatal(err)
 	}
+	// The collision itself, not a later statement of the aborted transaction, ends the issue.
 	_, err := e.store.Create(ctx, user, nil, []string{"pwd"})
-	if err == nil || errors.Is(err, ErrPrincipalUnavailable) {
-		t.Fatalf("Create with a colliding login key = %v, want a store error", err)
+	if !errors.Is(err, ErrStore) || !errors.Is(err, copyproject.ErrEmailCollision) {
+		t.Fatalf("Create with a colliding login key = %v, want a store error carrying copyproject.ErrEmailCollision", err)
 	}
 	if p, u, _ := e.copies(t, ctx, user, nil); p+u != 0 {
 		t.Fatalf("a refused issue left copies: %d %d", p, u)

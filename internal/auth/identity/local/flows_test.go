@@ -47,6 +47,7 @@ type flowAccounts struct {
 	byID            map[uuid.UUID]*User
 	taken           bool
 	provided        []ProvisionLocalRequest
+	decoyed         int
 	verified        []uuid.UUID
 	peeked          [][32]byte
 	hashes          []string
@@ -78,6 +79,13 @@ func (a *flowAccounts) ProvisionLocal(_ context.Context, req ProvisionLocalReque
 	}
 	a.provided = append(a.provided, req)
 	return a.newID, nil
+}
+
+// ProvisionLocalDecoy is recorded as the step it stands in for: a known and a new address take the same steps.
+func (a *flowAccounts) ProvisionLocalDecoy(_ context.Context, _ ProvisionLocalRequest) error {
+	a.rec.add("ProvisionLocal")
+	a.decoyed++
+	return nil
 }
 
 func (a *flowAccounts) PeekVerificationLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {

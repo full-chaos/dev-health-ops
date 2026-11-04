@@ -77,9 +77,15 @@ func verbs() []verb {
 		// so a Postgres DSN that names a closed port is never dialed.
 		{family: "admin orgs delete", noGrantsSignature: "the ClickHouse login cannot purge database",
 			root: adminops.Command(), path: []string{"orgs", "delete"},
-			args: func(string) []string { return []string{"--org-id", "c0ffee00-dead-4bee-8bad-f00dfeedface"} },
+			args: func(string) []string {
+				return []string{"--org-id", "c0ffee00-dead-4bee-8bad-f00dfeedface", "--actor", "0f000000-0000-4000-8000-00000000000f"}
+			},
 			env: func(dsn string) map[string]string {
 				env := dsnEnv(dsn)
+				// The delete goes through the authentication service, so its
+				// config is checked first; the preflight refuses before any call.
+				env["AUTH_PROXY_URL"] = "http://127.0.0.1:1"
+				env["AUTH_SESSION_ISSUE_TOKEN"] = "svc_authsess_" + "0123456789abcdef0123456789abcdef0123456789a"
 				env["MIGRATION_DATABASE_URI"] = "postgres://orgdel_census:orgdel-census-pg-pw@127.0.0.1:1/devhealth?sslmode=disable"
 				return env
 			}},

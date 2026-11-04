@@ -19,7 +19,7 @@ e2e_dho_admin() {
 }
 
 # Seeds the e2e organization, user and admin membership and prints the access token the api's /health check sends.
-# The user and the membership go through the dho verbs, so the writer's invariants apply. The organization row and
+# The user goes through the dho verb, so the writer's invariants apply. The organization row, the membership and
 # the user's session are the raw writes: no dho verb exists for creating an organization with a chosen id (E2E_ORG_ID
 # is the fixed uuid the ClickHouse fixtures and the envelope tokens already name), and an access token is accepted
 # only for a live session of its user, pinned to the user's token_version, which auth-service writes at login (no
@@ -45,16 +45,22 @@ generate_auth_token() {
       return 1
     fi
   fi
-  e2e_dho_admin users update --id "${user_id}" --org "${E2E_ORG_ID}" --role admin >/dev/null || {
-    echo "ERROR: dho admin users update could not add the e2e user to the e2e organization" >&2
-    return 1
-  }
   case "${user_id}" in
     *[!0-9a-fA-F-]* | "")
       echo "ERROR: the e2e user id is not a uuid" >&2
       return 1
       ;;
   esac
+  # The membership is a raw write like the organization row: the dho membership verbs send the change to auth-service
+  # (CHAOS-11799), and this job runs no auth-service.
+  e2e_psql -c "
+    UPDATE memberships SET role = 'admin', updated_at = now() WHERE org_id = '${E2E_ORG_ID}' AND user_id = '${user_id}';
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '${E2E_ORG_ID}', '${user_id}', 'admin', now(), now(), now()
+      WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = '${E2E_ORG_ID}' AND user_id = '${user_id}');" >/dev/null || {
+    echo "ERROR: could not add the e2e user to the e2e organization" >&2
+    return 1
+  }
   session_id="$(e2e_psql -c "
     INSERT INTO auth.principals (id, kind, display_name) VALUES ('${user_id}', 'user', 'e2e') ON CONFLICT (id) DO NOTHING;
     INSERT INTO auth.sessions (principal_id, token_hash, expires_at, legacy_token_version)

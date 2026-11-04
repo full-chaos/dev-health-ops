@@ -1,0 +1,40 @@
+# Values for scripts/drill-refresh-reuse.sh (CHAOS-11230): the chart's auth-service alone, in the prod posture of
+# deploy values.prod.yaml (phase 3, loginStage goApi, eddsa access class), in one throwaway namespace. go-api is not
+# rendered: at phase 3 it forwards /api/v1/auth/login and /api/v1/auth/refresh to auth-service unread, so the drill
+# calls the same auth-service handlers. The images come from the script (--set); every Secret named here is made by
+# the script in the drill namespace from values generated at run time.
+web: {enabled: false}
+goApi: {enabled: false}
+queryApi: {enabled: false}
+goWorkers: {enabled: false}
+clickhouse: {enabled: false}
+postgresql: {enabled: false}
+valkey: {enabled: false}
+migrations: {hook: {enabled: false}}
+secrets: {create: false, externalSecretName: drill-ops}
+hs256Secret: {externalSecretName: drill-hs256}
+authService:
+  phase: 3
+  loginStage: goApi
+  accessToken: {issuerURL: "https://auth.drill.invalid", class: eddsa}
+  image: {pullPolicy: IfNotPresent}
+  database: {secretName: auth-runtime-dsn}
+  signingKey: {secretName: auth-key, keyId: drill-refresh-reuse}
+  sessionKeys:
+    successor: {secretName: auth-session-successor}
+    loginLockout: {secretName: auth-login-lockout}
+  social: {secretName: auth-social}
+  valkey: {secretName: auth-valkey}
+  migrate:
+    image: {pullPolicy: IfNotPresent}
+    secretName: auth-migrate-dsn
+    runtimeRole: devhealth_auth
+    ownerRole: devhealth_auth_migrator
+    sessionReaders: {goApi: devhealth_api, queryApi: devhealth_query_api}
+  networkPolicy:
+    egress:
+      database: {to: [{podSelector: {matchLabels: {app: drill-postgres}}}]}
+      valkey: {to: [{podSelector: {matchLabels: {app: drill-valkey}}}]}
+global:
+  imagePullSecrets:
+    - name: ghcr-pull

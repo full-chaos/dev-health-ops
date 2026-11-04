@@ -48,6 +48,7 @@ type GroupWriter struct {
 }
 
 type groupCall struct {
+	ctx    context.Context
 	events []AuditEvent
 	done   chan error
 	lead   chan struct{}
@@ -83,7 +84,7 @@ func (w *GroupWriter) Append(ctx context.Context, events ...AuditEvent) (err err
 	if err := validateAppendOnly(events); err != nil {
 		return err
 	}
-	c := &groupCall{events: events, done: make(chan error, 1), lead: make(chan struct{}, 1)}
+	c := &groupCall{ctx: ctx, events: events, done: make(chan error, 1), lead: make(chan struct{}, 1)}
 	w.mu.Lock()
 	w.pending = append(w.pending, c)
 	if w.active < w.flushers {
@@ -122,24 +123,29 @@ func (w *GroupWriter) flush(ctx context.Context) {
 	w.mu.Unlock()
 }
 
-// take removes the oldest waiting calls, at least one and up to maxRows rows.
-// A taken call that was handed a slot it has not started gives it up. w.mu is
-// held.
+// take removes the oldest waiting calls, up to maxRows rows (a first call
+// above it alone). A waiting call whose context has ended is removed and never
+// taken: its caller returns the context error. A removed call that was handed
+// a slot it has not started gives it up. w.mu is held.
 func (w *GroupWriter) take() []*groupCall {
-	n, rows := 0, 0
-	for n < len(w.pending) && (n == 0 || rows+len(w.pending[n].events) <= w.maxRows) {
-		rows += len(w.pending[n].events)
-		n++
-	}
-	group := append([]*groupCall(nil), w.pending[:n]...)
-	w.pending = append(w.pending[:0], w.pending[n:]...)
-	for _, c := range group {
+	var group []*groupCall
+	rows, n := 0, 0
+	for ; n < len(w.pending); n++ {
+		c := w.pending[n]
+		if c.ctx.Err() == nil {
+			if len(group) > 0 && rows+len(c.events) > w.maxRows {
+				break
+			}
+			rows += len(c.events)
+			group = append(group, c)
+		}
 		select {
 		case <-c.lead:
 			w.active--
 		default:
 		}
 	}
+	w.pending = append(w.pending[:0], w.pending[n:]...)
 	return group
 }
 

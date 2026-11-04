@@ -274,6 +274,7 @@ internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
+internal/cigates/scripts	census_ops_script_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go

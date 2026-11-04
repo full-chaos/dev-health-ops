@@ -285,6 +285,9 @@ type Server struct {
 	// answers holds the requests in a route chain that have not answered, so
 	// Shutdown can answer them 503 when the drain budget runs out.
 	answers *shutdownAnswers
+	// drained closes once Shutdown has returned and no handler runs.
+	drained   chan struct{}
+	drainOnce sync.Once
 
 	mu       sync.RWMutex
 	listener net.Listener
@@ -325,7 +328,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if maxHeaderBytes <= 0 {
 		maxHeaderBytes = 1 << 16
 	}
-	server := &Server{name: name, logger: logger, errors: make(chan error, 1), answers: answers}
+	server := &Server{name: name, logger: logger, errors: make(chan error, 1), answers: answers, drained: make(chan struct{})}
 	server.server = &http.Server{
 		Addr: options.Address,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -667,6 +670,7 @@ func (s *Server) Start(ctx context.Context) error {
 // Shutdown stops accepting and drains in-flight requests within the budget the
 // lifecycle runtime allotted this component.
 func (s *Server) Shutdown(ctx context.Context) error {
+	defer s.drainOnce.Do(func() { go s.closeWhenDrained() })
 	s.mu.RLock()
 	started := s.listener != nil
 	s.mu.RUnlock()
@@ -693,14 +697,25 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	// contexts, and wait for the handlers.
 	s.answers.answerAll()
 	_ = s.server.Close()
-	for s.active.Load() > 0 {
+	for running := s.active.Load(); running > 0; running = s.active.Load() {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("shutdown %s: %w", s.name, ctx.Err())
+			return fmt.Errorf("shutdown %s: %d handlers still running: %w", s.name, running, ctx.Err())
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
 	return fmt.Errorf("shutdown %s: %w", s.name, err)
+}
+
+// Drained lets the lifecycle runtime stop the next component (the store) only
+// after the handlers a Shutdown left running have ended.
+func (s *Server) Drained() <-chan struct{} { return s.drained }
+
+func (s *Server) closeWhenDrained() {
+	for s.active.Load() > 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(s.drained)
 }
 
 // Errors lets the lifecycle runtime terminate when serving fails after bind.

@@ -8,7 +8,8 @@
 # Leg 1 INSTALL   chart install (auth-service phase 2, eddsa, 2 replicas, the chart's own PostgreSQL, Valkey and ClickHouse; the migrate hook needs the ClickHouse), one human
 #                 with an admin membership, the api workload row and its bootstrap value (made in the runner pod, never copied out).
 # Leg 2 KNEE      RECORDED, not gated: the DEFAULT route limiter (20 rps, burst 40 per route per pod). It shows the 429 knee.
-# Leg 3 GATED     the route limiter LIFTED (AUTH_SERVICE_RATE_LIMIT_* = 100000, this namespace only, never a prod value): every
+# Leg 3 GATED     the route limiter LIFTED (AUTH_SERVICE_RATE_LIMIT_* = 100000) and the PDP caller and route limiters LIFTED
+#                 (authService.pdpRateLimit.* = 100000), this namespace only, never a prod value: every
 #                 class alone and the mix, normal then peak, single route and batch-10, at p95 25 ms / p99 75 ms / errors 0.
 #                 batch-100 is recorded, not gated. The first breach is reported and the run stops (no threshold change).
 # Leg 4 CACHE-ON  only with AUTH_PDP_CACHE_ON=1: revision feed on, the mix recorded.
@@ -97,12 +98,28 @@ write_extra() {
     if [ "$3" = lift ]; then
       printf '    - {name: AUTH_SERVICE_RATE_LIMIT_PER_SECOND, value: "100000"}\n'
       printf '    - {name: AUTH_SERVICE_RATE_LIMIT_BURST, value: "100000"}\n'
+      printf '  pdpRateLimit: {callerPerSecond: 100000, callerBurst: 100000, routePerSecond: 100000, routeBurst: 100000}\n'
     fi
   } >"$1"
 }
 
 write_secrets_values() { # FILE: the chart's own Secret data (go-api is off: placeholders the render needs)
   printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n' "$1" "${FULL}" "$2" >"$3"
+}
+
+# pdp_limits RENDERED lifted|default: the four PDP limiter variables of the auth-service render are all 100000 (lifted) or
+# none is (default).
+pdp_limits() {
+  local name value
+  for name in AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST \
+    AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST; do
+    value="$(grep -A1 -E "name: ${name}\$" <<<"$1" | sed -n 's/^ *value: "\(.*\)"$/\1/p')"
+    [ -n "${value}" ] || return 1
+    case "$2" in
+      lifted) [ "${value}" = 100000 ] || return 1 ;;
+      *) [ "${value}" != 100000 ] || return 1 ;;
+    esac
+  done
 }
 
 print_plan() {
@@ -113,7 +130,7 @@ print_plan() {
   printf 'plan: namespace %s on %s, release %s, runner image %s\n' "${NS}" "${KUBECONFIG_FILE}" "${RELEASE}" "${RUNNER_IMAGE##*/}"
   printf 'plan: leg 1 INSTALL  chart phase 2, eddsa, 2 replicas, PostgreSQL, Valkey and ClickHouse (migrate step) of the chart, one admin human, the api workload\n'
   printf 'plan: leg 2 KNEE     recorded, not gated: the default route limiter (20 rps, burst 40 per route per pod) at %s rps for %s s\n' "${KNEE_RATE}" "${KNEE_SECONDS}"
-  printf 'plan: leg 3 GATED    route limiter lifted (AUTH_SERVICE_RATE_LIMIT_PER_SECOND and _BURST = 100000, this namespace only); cache OFF\n'
+  printf 'plan: leg 3 GATED    route limiter lifted (AUTH_SERVICE_RATE_LIMIT_PER_SECOND and _BURST = 100000) and PDP caller and route limiters lifted (authService.pdpRateLimit.* = 100000), this namespace only; cache OFF\n'
   printf 'plan: gated SLO      p95=%s,p99=%s,err=%s per class and for the mix, normal then peak; batch-10 gated, batch-100 recorded\n' "${SLO_P95}" "${SLO_P99}" "${SLO_ERR}"
   printf 'plan: leg 4 CACHE-ON only with AUTH_PDP_CACHE_ON=1 (revision feed on): the mix recorded, not gated\n'
   printf 'plan: every run mints a fresh workload token and is capped at %s s (a workload token lives 300 s)\n' "${RUN_CAP_SECONDS}"
@@ -128,10 +145,14 @@ print_plan() {
   grep -q 'name: AUTH_WORKLOAD_BOOTSTRAP' <<<"${rendered}" || die "the chart renders no AUTH_WORKLOAD_BOOTSTRAP"
   if grep -q 'AUTH_SERVICE_RATE_LIMIT' <<<"${rendered}"; then die "the knee form renders a route limiter override"; fi
   pass "plan: the knee form renders the caller subject and the eddsa class with the default route limiter"
+  pdp_limits "${rendered}" default || die "the knee form renders a lifted PDP limiter variable"
+  pass "plan: the knee form renders the default PDP caller and route limiters"
   helm_args "${work}/extra-lift.yaml"
   rendered="$(helm template "${HELM_ARGS[@]}" --show-only templates/auth-service.yaml)"
   [ "$(grep -c 'AUTH_SERVICE_RATE_LIMIT_' <<<"${rendered}")" = 2 ] || die "the gated form does not render both route limiter variables"
   pass "plan: the gated form renders the lifted route limiter (per second and burst)"
+  pdp_limits "${rendered}" lifted || die "the gated form does not render all four PDP limiter variables at 100000"
+  pass "plan: the gated form renders the lifted PDP caller and route limiters (per second and burst)"
   rendered="$(helm template "${HELM_ARGS[@]}" --show-only templates/migrate-job.yaml)"
   grep -q 'CLICKHOUSE_URI:' <<<"${rendered}" || die "the chart renders no CLICKHOUSE_URI for the migrate hook (dho migrate upgrade needs it)"
   pass "plan: the migrate hook Secret carries CLICKHOUSE_URI (the ClickHouse step of dho migrate upgrade)"

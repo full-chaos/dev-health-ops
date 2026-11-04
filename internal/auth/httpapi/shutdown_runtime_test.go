@@ -224,3 +224,55 @@ func TestRuntimeStopsTheStoreOnlyAfterASlowHandlerEnds(t *testing.T) {
 		t.Error("the runtime returned no error after a shutdown breach")
 	}
 }
+
+// Drained stays open while a handler that outlived Shutdown still runs, and closes
+// once it ends. The 50ms window can only miss a wrong close, never report one.
+func TestDrainedStaysOpenWhileAHandlerRuns(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	options := testOptions(Route{
+		Method:  http.MethodGet,
+		Pattern: "/hold",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(entered)
+			<-release
+		}),
+	})
+	options.RequestTimeout = 5 * time.Minute
+	server, err := NewServer(options)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	go func() {
+		client := &http.Client{Timeout: time.Minute}
+		if response, err := client.Get("http://" + server.Address() + "/hold"); err == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	<-entered
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := server.Shutdown(ctx); err == nil || !strings.Contains(err.Error(), "1 handlers still running") {
+		t.Fatalf("Shutdown returned %v with a handler running, want an error that names the running handlers", err)
+	}
+	select {
+	case <-server.Drained():
+		t.Fatal("Drained closed while a handler was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-server.Drained():
+	case <-time.After(10 * time.Second):
+		t.Fatal("Drained never closed after the handler ended")
+	}
+}

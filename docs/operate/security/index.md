@@ -10,6 +10,7 @@ lifecycle: active
 # Security operations
 
 - [Production hardening](hardening.md)
+- [Manage External Push credentials](external-push-credentials.md)
 - Use the approved credential-incident and security-incident processes for suspected compromise.
 
 Administrative privacy choices do not replace infrastructure encryption, secret management, access control, patching, logging, backup protection, and incident response.

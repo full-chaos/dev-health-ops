@@ -136,15 +136,12 @@ func TestKeyPatternIsTheContractAndTheMigrationPattern(t *testing.T) {
 	if node != KeyPattern() {
 		t.Fatalf("authorization_request.v1 key pattern = %v, Store pattern = %q", node, KeyPattern())
 	}
-	sql, err := os.ReadFile(filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations", "0020_grant_service_account_workload_shape.sql"))
+	sql, err := os.ReadFile(filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations", "0053_grant_repository_key_nested.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The table CHECK keeps the two-segment floor until the migration that
-	// widens it rolls; the Store accepts nested keys before then.
-	const tableFloor = `^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`
-	if !strings.Contains(string(sql), "resource_id ~ '"+tableFloor+"'") {
-		t.Fatalf("migration 0020 does not hold the table floor pattern %q", tableFloor)
+	if !strings.Contains(string(sql), "resource_id ~ '"+KeyPattern()+"'") {
+		t.Fatalf("migration 0053 does not hold the Store key pattern %q", KeyPattern())
 	}
 }
 

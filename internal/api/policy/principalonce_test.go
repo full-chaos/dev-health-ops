@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/constant"
 	"go/importer"
@@ -456,6 +457,10 @@ func headerKey(node ast.Node, info *types.Info) (ast.Expr, bool) {
 // every read of the Authorization header outside allowed, and every reason
 // the scan cannot be trusted.
 func authorizationGuardProblems(dir string, allowed []string) []string {
+	return guardProblemsWith(dir, allowed, importer.ForCompiler(token.NewFileSet(), "source", nil))
+}
+
+func guardProblemsWith(dir string, allowed []string, fallback types.Importer) []string {
 	var problems []string
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -481,7 +486,7 @@ func authorizationGuardProblems(dir string, allowed []string) []string {
 	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
 	conf := types.Config{
-		Importer: newLocalImporter(fset, dir),
+		Importer: newLocalImporter(fset, dir, fallback),
 		Error:    func(err error) { problems = append(problems, "type check: "+err.Error()) },
 	}
 	_, _ = conf.Check("policy", fset, parsed, info)
@@ -527,8 +532,8 @@ type localImporter struct {
 	cache    map[string]*types.Package
 }
 
-func newLocalImporter(fset *token.FileSet, dir string) *localImporter {
-	l := &localImporter{fset: fset, fallback: importer.ForCompiler(fset, "source", nil), root: dir, cache: map[string]*types.Package{}}
+func newLocalImporter(fset *token.FileSet, dir string, fallback types.Importer) *localImporter {
+	l := &localImporter{fset: fset, fallback: fallback, root: dir, cache: map[string]*types.Package{}}
 	if mod, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
 		if fields := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0]); len(fields) == 2 && fields[0] == "module" {
 			l.module = fields[1]
@@ -633,6 +638,26 @@ func TestAuthorizationGuardResolvesImportedConstants(t *testing.T) {
 				t.Fatalf("guard refused: %v", problems)
 			}
 		})
+	}
+}
+
+// failingThirdParty resolves the standard library and refuses every other
+// import, as a CI leg without the third-party sources does.
+type failingThirdParty struct{ std types.Importer }
+
+func (f failingThirdParty) Import(path string) (*types.Package, error) {
+	if strings.Contains(strings.SplitN(path, "/", 2)[0], ".") {
+		return nil, errors.New("no source for " + path)
+	}
+	return f.std.Import(path)
+}
+
+// TestGuardChecksTheRealPackageWithoutThirdPartyImports: the guard needs only
+// this module's constants, so it must pass when no third-party import loads.
+func TestGuardChecksTheRealPackageWithoutThirdPartyImports(t *testing.T) {
+	fallback := failingThirdParty{std: importer.ForCompiler(token.NewFileSet(), "source", nil)}
+	for _, problem := range guardProblemsWith(".", []string{"principalonce.go", "guard.go"}, fallback) {
+		t.Error(problem)
 	}
 }
 

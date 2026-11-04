@@ -1201,6 +1201,73 @@ groups:
             per class, so read samples, not counts).
 
   # ---------------------------------------------------------------------------
+  # Auth service SLO alerts (CHAOS-11220). The targets and their sources are the
+  # table in docs/reference/auth/readiness-and-slo.md. Availability is covered
+  # by AuthService5xx and AuthServiceHighServerErrorRate above; no burn-rate
+  # rule exists. The duration histogram has an edge at 25 ms, 75 ms and 200 ms
+  # (internal/auth/httpapi/accesslog.go), so each threshold is an edge. The only
+  # label read is `route`, a registered pattern; the only group-by is `le`.
+  # Created in SigNoz by hand as builder threshold rules (PromQL does not
+  # evaluate there): docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: auth_slo
+    interval: 1m
+    rules:
+      - alert: AuthzLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(dev_health_api_http_request_duration_seconds_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.025
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth PDP p95 latency above 25 ms"
+          description: |
+            The p95 of POST /v1/authorize and /v1/authorize:batch on the auth
+            service was above 25 ms for five minutes (target p95 < 25 ms).
+            Next: CHAOS-12705 and the load profile ci/pdp_load_k3s.sh.
+
+      - alert: AuthzLatencyP99High
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(dev_health_api_http_request_duration_seconds_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.075
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth PDP p99 latency above 75 ms"
+          description: |
+            The p99 of POST /v1/authorize and /v1/authorize:batch on the auth
+            service was above 75 ms for five minutes (target p99 < 75 ms).
+
+      - alert: AuthTokenLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(dev_health_api_http_request_duration_seconds_bucket{job="auth-service",route=~"/internal/v1/sessions|/v1/token/refresh"}[5m]))) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth token issue or refresh p95 latency above 200 ms"
+          description: |
+            The p95 of session issue (/internal/v1/sessions) and refresh
+            (/v1/token/refresh) on the auth service was above 200 ms for five
+            minutes (target p95 < 200 ms).
+
+      - alert: AuthOutboxOldestPendingHigh
+        expr: |
+          max(devhealth_auth_outbox_oldest_pending_age_seconds{job="auth-service"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Auth outbox oldest pending event older than 5 minutes"
+          description: |
+            The oldest unpublished auth outbox event was older than 300 seconds
+            for five minutes (target: under 5 minutes).
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

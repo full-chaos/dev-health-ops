@@ -73,7 +73,11 @@ func docsDriftGuard(d docTree) []string {
 		m    map[string]any
 	}{{"the workflow", wf}, {docsDriftJob, job}} {
 		for _, key := range []string{"env", "defaults"} {
-			if _, ok := scope.m[key]; ok {
+			if v, ok := scope.m[key]; ok {
+				// CHAOS-12858: the one allowed workflow env is GOPROXY with the pipe fallback; it changes where modules come from, not what the checks run.
+				if m, isMap := v.(map[string]any); isMap && key == "env" && scope.name == "the workflow" && len(m) == 1 && m["GOPROXY"] == "https://proxy.golang.org|direct" {
+					continue
+				}
 				out = append(out, scope.name+" must not set "+key+": it could change what the checks run")
 			}
 		}
@@ -158,6 +162,9 @@ func TestDocsDriftWorkflowRunsTheDocsPageGuards(t *testing.T) {
 		plantCase{"the job sets env", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsDriftPath, "  docs-drift:\n    name: docs-drift\n", "  docs-drift:\n    name: docs-drift\n    env:\n      GOFLAGS: -run=^$\n")
 		}, "must not set env"},
+		plantCase{"the workflow sets GOFLAGS beside GOPROXY", func(t *testing.T, d docTree) docTree {
+			return d.edit(t, docsDriftPath, "  GOPROXY: https://proxy.golang.org|direct\n", "  GOPROXY: https://proxy.golang.org|direct\n  GOFLAGS: -run=^$\n")
+		}, "the workflow must not set env"},
 		plantCase{"Python is installed", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, docsDriftPath, "      - name: Set up Go\n", "      - uses: actions/setup-python@v6\n      - name: Set up Go\n")
 		}, "must install no Python"},

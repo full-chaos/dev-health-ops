@@ -35,12 +35,14 @@ func PublicReadColumns() []ColumnGrant {
 			"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier",
 		}},
-		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"}},
+		// id and updated_at: the versioned read API serves a membership's id and last change. id is held whether or not
+		// auth-service owns users (MembershipWriteGrants holds it only under that switch).
+		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"}},
 		{Table: "sso_providers", Columns: []string{
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
 		}},
-		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
+		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
 		// The login organization choice ranks a user's organizations by their metrics
@@ -770,9 +772,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
 			continue
 		}
-		if options.OrgsOwned && schema == publicSchema && (kind == "r" || kind == "p") && isOrganizationWriteColumn(table, privilege, column) {
-			continue
-		}
 		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
 			continue
 		}
@@ -810,10 +809,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	organizationMissing, err := organizationWriteMissing(ctx, conn, options)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
-		impersonationMissing...), organizationMissing...), nil
+	return append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), nil
 }

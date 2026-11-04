@@ -140,15 +140,15 @@ func (h Handlers) Unlink(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// AccountExistsMessage is the 409 for an e-mail another account holds; it names
-// no sign-in method.
-const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+// ConflictMessage is the one 409 answer for a sign-in that finds an account already holding the e-mail or the
+// identity; it says nothing about which. The reason stays in the audit row, the log and the metric.
+const ConflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
 
 func writeError(w http.ResponseWriter, provider Provider, err error) {
 	var conflict *ConflictError
 	switch {
 	case errors.As(err, &conflict):
-		writeDetail(w, http.StatusConflict, AccountExistsMessage)
+		writeDetail(w, http.StatusConflict, ConflictMessage)
 	case errors.Is(err, ErrProviderUnavailable):
 		writeInternal(w)
 	case errors.Is(err, ErrProviderNotConfigured):
@@ -168,9 +168,9 @@ func writeError(w http.ResponseWriter, provider Provider, err error) {
 	case errors.Is(err, ErrReauthenticationRequired):
 		writeDetail(w, http.StatusForbidden, "Sign in again to change linked accounts")
 	case errors.Is(err, identity.ErrIdentityConflict):
-		writeDetail(w, http.StatusConflict, "This "+providerLabel(provider)+" account is linked to another user")
+		writeDetail(w, http.StatusConflict, ConflictMessage)
 	case errors.Is(err, ErrProviderLinked):
-		writeDetail(w, http.StatusConflict, "A "+providerLabel(provider)+" account is already linked")
+		writeDetail(w, http.StatusConflict, ConflictMessage)
 	case errors.Is(err, identity.ErrNotFound):
 		writeDetail(w, http.StatusNotFound, "Identity not found")
 	case errors.Is(err, identity.ErrLastSignInMethod):

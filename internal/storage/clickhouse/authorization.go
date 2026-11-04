@@ -29,6 +29,10 @@ type TableGrant struct {
 // of postgres.RolePosture.
 type Posture struct {
 	RequiredTables []TableGrant
+	// OptionalTables may be granted or not: CheckPosture accepts both, but a
+	// table that is granted must hold no privilege beyond the declared ones.
+	// GrantStatements renders none of them.
+	OptionalTables []TableGrant
 }
 
 // APIPosture is dho api's ClickHouse posture (CHAOS-6310): the dedicated
@@ -82,12 +86,6 @@ func APIPosture(database string) Posture {
 		// complexity and compounding-risk rows. Read-only.
 		{Database: database, Table: "repo_complexity_daily", AllowSelect: true},
 		{Database: database, Table: "compounding_risk_daily", AllowSelect: true},
-		// POST /api/v1/ingest/telemetry (CHAOS-6501) inserted its signal buckets
-		// with this login. The route is retired (CHAOS-11813), but the grant
-		// stays in the manifest: CheckPosture refuses a login whose grants
-		// differ from it either way, and prod's users.d still grants it. The
-		// manifest row and the users.d grant go together in one ordered step.
-		{Database: database, Table: "telemetry_signal_bucket", AllowInsert: true},
 		// GET /llm-settings/spend (CHAOS-6667) reads an org's LLM token usage
 		// and its categorization outcomes per run. Read-only.
 		{Database: database, Table: "llm_token_usage", AllowSelect: true},
@@ -104,7 +102,18 @@ func APIPosture(database string) Posture {
 		// (internal/repoinventory) on every call. Read-only. The prod users.d
 		// grant ships in the same deploy step as the image (CHAOS-12121).
 		{Database: database, Table: "repos", AllowSelect: true},
-	}}
+	}, OptionalTables: retiredAPIGrants(database)}
+}
+
+// retiredAPIGrants are the grants of routes that are gone. Prod's users.d still
+// holds the telemetry insert grant that POST /api/v1/ingest/telemetry used
+// (retired in CHAOS-11813); go-api accepts it present or absent while the
+// users.d grant is dropped. TODO(CHAOS-12878): remove this list once the grant
+// is gone from prod, so that any grant on the table is refused again.
+func retiredAPIGrants(database string) []TableGrant {
+	return []TableGrant{
+		{Database: database, Table: "telemetry_signal_bucket", AllowInsert: true},
+	}
 }
 
 // ErrPostureMismatch is CheckPosture's refusal: the connected login's
@@ -277,7 +286,33 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 		expected[key] = privileges
 	}
 
+	optional := map[string]map[string]bool{}
+	for _, table := range posture.OptionalTables {
+		key := table.Database + "." + table.Table
+		if _, required := expected[key]; required {
+			continue
+		}
+		privileges := map[string]bool{}
+		if table.AllowInsert {
+			privileges["INSERT"] = true
+		}
+		if table.AllowSelect {
+			privileges["SELECT"] = true
+		}
+		if table.AllowDelete {
+			privileges["ALTER DELETE"] = true
+		}
+		optional[key] = privileges
+	}
+
 	var problems []string
+	for key, allowedPrivileges := range optional {
+		for privilege := range held[key] {
+			if !allowedPrivileges[privilege] {
+				problems = append(problems, fmt.Sprintf("%s has unexpected %s", key, privilege))
+			}
+		}
+	}
 	for key, wantPrivileges := range expected {
 		gotPrivileges := held[key]
 		for privilege := range wantPrivileges {
@@ -292,7 +327,9 @@ func CheckPosture(ctx context.Context, conn driver.Conn, posture Posture) error 
 		}
 	}
 	for key := range held {
-		if _, declared := expected[key]; !declared {
+		_, declared := expected[key]
+		_, allowed := optional[key]
+		if !declared && !allowed {
 			problems = append(problems, fmt.Sprintf("%s has grants but is not in the declared manifest", key))
 		}
 	}

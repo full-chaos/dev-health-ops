@@ -323,7 +323,7 @@ Userlist exposure and pooler convergence move to CHAOS-5604 scope. For now, dire
 
 ## See also
 
-- [Operator commands § Workerctl on Kubernetes](operator-commands.md#workerctl-on-kubernetes-trap-169-amended) — running corrective verbs from a one-off Pod.
+- [Operator commands § Workerctl on Kubernetes](operator-commands.md#dho-workers-on-kubernetes-the-one-off-operator-pod-trap-169-amended-2026-11-03) — running corrective verbs from a one-off Pod.
 - [Go API Wave 0 § Tools pod (operator image)](../../contribute/architecture/go-api-wave-0-proof-infrastructure.md#tools-pod-operator-image) — what the tools image carries and the `kubectl run` form for it.
 - [Prod k3s operate](prod-k3s-deploy-and-operate.md) — restore procedures, secrets, rollouts.
 - CHAOS-5606 — Query-api bootstrap epic (JOB 7).

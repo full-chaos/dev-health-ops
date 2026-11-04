@@ -328,12 +328,14 @@ func TestAuthorizeAuditVocabularyIsTheWireVocabulary(t *testing.T) {
 	vocab := audit.AttributeVocabulary()
 	reasons := slices.Clone(vocab["decision_reason_code"])
 	slices.Sort(reasons)
-	if want := AuthorizeWireReasonCodes(); !slices.Equal(reasons, want) {
+	want := append(AuthorizeWireReasonCodes(), contractOnlyReasonCodes...)
+	slices.Sort(want)
+	if !slices.Equal(reasons, want) {
 		t.Errorf("decision_reason_code %v, want the wire codes %v", reasons, want)
 	}
 	types := slices.Clone(vocab["resource_type"])
 	slices.Sort(types)
-	want := slices.Clone(authorizeResourceTypes)
+	want = slices.Clone(authorizeResourceTypes)
 	slices.Sort(want)
 	if !slices.Equal(types, want) {
 		t.Errorf("resource_type %v, want %v", types, want)

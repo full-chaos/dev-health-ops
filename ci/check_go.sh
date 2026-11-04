@@ -4702,6 +4702,7 @@ AUTH_PACKAGES=(
   ./contracts/auth/v1/...
   ./internal/audit/...
   ./internal/storage/postgres/authschema/...
+  ./internal/authzenforce/...
   ./internal/jobs/pushexpiry/...
   ./internal/workerservice/...
   ./internal/token/...
@@ -4792,9 +4793,34 @@ check_auth_history() {
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 
+# auth_race_timeout_min (CHAOS-12938): the per-package go test -timeout of the auth race leg, in whole minutes: the heaviest race
+# weight (ci/go_race_weights.d) of a package under AUTH_PACKAGES, times 1.5, rounded up, never under 10. The go default of 10 min
+# timed out internal/auth/authapi (hosted race runs of 459 to 600 s). No row under AUTH_PACKAGES refuses: the budget has no source.
+auth_race_timeout_min() {
+  local pkg pat rows heaviest
+  local -a pats=()
+  for pkg in "${AUTH_PACKAGES[@]}"; do
+    pat="${pkg#./}"
+    case "${pat}" in */...) pat="${pat%/...}/" ;; *) pat="${pat}"$'\t' ;; esac
+    pats+=("${pat}")
+  done
+  rows="$(race_weights_rows)" || return 2
+  heaviest="$(printf '%s\n' "${rows}" | awk -F'\t' -v pats="$(printf '%s\n' "${pats[@]}")" '
+    BEGIN { n = split(pats, p, "\n") }
+    $2 ~ /^[0-9]+$/ { for (i = 1; i <= n; i++) { k = $1 (substr(p[i], length(p[i])) == "\t" ? "\t" : "/"); if (index(k, p[i]) == 1 && $2 + 0 > max) max = $2 + 0 } }
+    END { print max + 0 }')"
+  [ "${heaviest}" -gt 0 ] || die "auth race: no race weight row under AUTH_PACKAGES in ci/go_race_weights.d; the go test -timeout has no source"
+  local min=$(((heaviest * 3 + 119) / 120))
+  [ "${min}" -ge 10 ] || min=10
+  printf '%s\n' "${min}"
+}
+
 check_auth_race() {
-  printf 'auth go test -race\n'
-  auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
+  local min tmo
+  min="$(auth_race_timeout_min)" || return 2
+  tmo="$(job_go_test_timeout "${min}")" || return 2
+  printf 'auth go test -race (per-package -timeout %s)\n' "${tmo}"
+  auth_go test -mod=readonly -trimpath -count=1 -race -timeout="${tmo}" "${AUTH_PACKAGES[@]}"
 }
 
 # check_auth_race_integration (CHAOS-10207): auth concurrency proofs need BOTH

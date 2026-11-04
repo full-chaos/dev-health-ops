@@ -310,8 +310,7 @@ phase stops and says so.
 
 Investment categorization always runs on the platform provider. An
 organization's own provider configuration (BYO LLM) never applies to it, even
-when the provider is `auto`. `ORG_LLM_CONFIG_URL` and `ORG_LLM_CONFIG_TOKEN` are
-no longer read; remove them from the `heavy` worker group.
+when the provider is `auto`.
 
 ### Investment provider batch mode
 

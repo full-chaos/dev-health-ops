@@ -1,0 +1,48 @@
+# The RBAC of the ServiceAccount that runs ci/rehearse_auth_key_rotation_k3s.sh. The lead applies it with the admin kubeconfig after
+# envsubst '${NS}'. One namespaced Role + RoleBinding (no RBAC resource, no wildcard resource or group), and one ClusterRole +
+# ClusterRoleBinding named with the run namespace: verbs [get] on resource [namespaces] for that one namespace name, bound to this
+# ServiceAccount only. The driver reads the cluster-scoped Namespace label rehearsal-run with it; it grants nothing else cluster-wide.
+# Why each group: core = the Secrets, ConfigMaps, Services and ServiceAccount the chart and the driver create (helm keeps its release in Secrets),
+# and the pods with exec, log and portforward for postgres, valkey, the one-off keys pods and the JWKS probe; apps = the auth-service,
+# postgres and valkey Deployments (and their ReplicaSets); batch = the auth-migrate hook Job; networking = the chart's NetworkPolicies;
+# policy = the chart's PodDisruptionBudget.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: rehearsal, namespace: ${NS}}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, pods/exec, pods/portforward, services, endpoints, secrets, configmaps, serviceaccounts, events]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: rehearsal, namespace: ${NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rehearsal}
+subjects: [{kind: ServiceAccount, name: rehearsal, namespace: ${NS}}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: rehearsal-ns-${NS}}
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [${NS}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: rehearsal-ns-${NS}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: rehearsal-ns-${NS}}
+subjects: [{kind: ServiceAccount, name: rehearsal, namespace: ${NS}}]

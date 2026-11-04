@@ -49,6 +49,10 @@ stage-signing-key init container exists.
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while go-api forwards auth routes to it (authService.phase >= 2): without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") $a.networkPolicy.allowedFrom }}{{- fail "authService.networkPolicy.allowedFrom must be empty while go-api forwards auth routes to it (authService.phase >= 2): the API port admits go-api only while go-api forwards to it, because auth-service trusts the forwarded client address from that peer set" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.networkPolicy.enabled) }}{{- fail "authService.networkPolicy.enabled must stay true while go-api forwards auth routes to it (authService.phase >= 2): trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone; turn the policy on, or go back to phase 1" }}{{- end }}
+{{- /* CHAOS-12662: a batch costs its decision count, so a burst under the largest batch (maxAuthorizationBatchItems, 100) refuses that batch for ever; checked here, never at service start (D6465). auth_pdp_rate_limit_test.go ties 100 to that source. */}}
+{{- $pdp := default dict $a.pdpRateLimit }}
+{{- if lt (int ($pdp.callerBurst | default 0)) 100 }}{{- fail "authService.pdpRateLimit.callerBurst must be at least 100, the largest authorize batch: a batch costs its decision count against the caller's bucket" }}{{- end }}
+{{- if lt (int ($pdp.routeBurst | default 0)) 100 }}{{- fail "authService.pdpRateLimit.routeBurst must be at least 100, the largest authorize batch: a batch costs its decision count against the route's bucket" }}{{- end }}
 {{- include "dev-health.trustedProxyList" (dict "key" "authService.trustedProxies" "entries" $a.trustedProxies "ackKey" "authService.trustedProxiesWideAccepted" "ack" (eq (toString $a.trustedProxiesWideAccepted) "true") "peer" "the API port past the go-api pod selector") }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
@@ -321,6 +325,14 @@ spec:
             - name: AUTH_REVISION_FEED
               value: "on"
           {{- end }}
+            - name: AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND
+              value: {{ toString $pdp.callerPerSecond | quote }}
+            - name: AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST
+              value: {{ toString (int $pdp.callerBurst) | quote }}
+            - name: AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND
+              value: {{ toString $pdp.routePerSecond | quote }}
+            - name: AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST
+              value: {{ toString (int $pdp.routeBurst) | quote }}
           {{- if $a.trustedProxies }}
             - name: AUTH_SERVICE_TRUSTED_PROXIES
               value: {{ join "," $a.trustedProxies | quote }}

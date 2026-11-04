@@ -5,6 +5,7 @@ import "errors"
 var (
 	ErrNotFound        = errors.New("workload: workload not found")
 	ErrNameInvalid     = errors.New("workload: the name is outside the workload name pattern")
+	ErrOwnerInvalid    = errors.New("workload: the owner is outside the owner pattern")
 	ErrNameTaken       = errors.New("workload: a platform workload has that name")
 	ErrAudienceInvalid = errors.New("workload: an audience is outside the audience shape or repeated")
 	ErrActionInvalid   = errors.New("workload: an allowed action is not a catalog action or is repeated")

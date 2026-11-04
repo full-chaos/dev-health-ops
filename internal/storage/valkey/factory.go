@@ -70,9 +70,29 @@ func Open(ctx context.Context, config Config) (valkeygo.Client, error) {
 		return nil, err
 	}
 
+	options, err := clientOptions(config)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := valkeygo.NewClient(options)
+	if err != nil {
+		if client != nil {
+			client.Close()
+		}
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
+	}
+	if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
+		client.Close()
+		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
+	}
+	return client, nil
+}
+
+func clientOptions(config Config) (valkeygo.ClientOption, error) {
 	options, err := valkeygo.ParseURL(config.URI)
 	if err != nil {
-		return nil, ErrInvalidConfig
+		return valkeygo.ClientOption{}, ErrInvalidConfig
 	}
 	options.ClientName = config.ClientName
 	options.Dialer.Timeout = config.DialTimeout
@@ -82,14 +102,7 @@ func Open(ctx context.Context, config Config) (valkeygo.Client, error) {
 	options.BlockingPoolMinSize = config.BlockingPoolMinSize
 	options.BlockingPoolCleanup = config.ConnLifetime
 	options.ClientSetInfo = valkeygo.DisableClientSetInfo
-
-	client, err := valkeygo.NewClient(options)
-	if err != nil {
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
-	}
-	if err := client.Do(ctx, client.B().Ping().Build()).Error(); err != nil {
-		client.Close()
-		return nil, secrets.WithRedactedCause(ErrUnavailable, config.URI, err)
-	}
-	return client, nil
+	// Every target is one node; the cluster probe (CLUSTER SHARDS) is refused by least-privilege ACL users.
+	options.ForceSingleClient = true
+	return options, nil
 }

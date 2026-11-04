@@ -44,7 +44,7 @@ here; the operations arrive with the routes that serve them. Rules:
 The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
 has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
 `organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
-(an organization's principals, each with its membership), `organization-list.v1`
+(an organization's principals; a user item carries its membership, a service account or workload item carries none), `organization-list.v1`
 (a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
 `*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
 (`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no

@@ -106,6 +106,11 @@ func bcryptMatches(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
+// ErrBeforeCredentialCheck marks a Login error that came before the password
+// was compared: the user lookup, the lockout check and the address
+// normalization. An error without it came after a guess was checked.
+var ErrBeforeCredentialCheck = errors.New("local: before the credential check")
+
 // Login decides one credential check. Every refusal makes the same calls in
 // the same order: ByEmail, Check, one password compare (against the dummy
 // hash when no real hash applies), RecordFailure. Which refusal it was shows
@@ -113,16 +118,16 @@ func bcryptMatches(hash, password string) bool {
 func (s *Service) Login(ctx context.Context, c Credentials) (Outcome, error) {
 	email, err := identity.NormalizeEmail(c.Email)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("local: %w", err)
+		return Outcome{}, fmt.Errorf("local: %w: %w", ErrBeforeCredentialCheck, err)
 	}
 	id := s.LockoutIdentifier(email)
 	user, err := s.users.ByEmail(ctx, email)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("local: loading the user: %w", err)
+		return Outcome{}, fmt.Errorf("local: loading the user: %w: %w", ErrBeforeCredentialCheck, err)
 	}
 	locked, remaining, err := s.attempts.Check(ctx, id)
 	if err != nil {
-		return Outcome{}, fmt.Errorf("local: checking the lockout: %w", err)
+		return Outcome{}, fmt.Errorf("local: checking the lockout: %w: %w", ErrBeforeCredentialCheck, err)
 	}
 
 	hash, usable := DummyHash(), false

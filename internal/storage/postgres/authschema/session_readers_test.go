@@ -53,3 +53,35 @@ func TestPlatformRoleReaderColumnsAreTheReviewedOnes(t *testing.T) {
 		t.Errorf("SessionReaderReads(true) = %+v, want %+v", got, want)
 	}
 }
+
+func TestReaderAttributeViolationsNameEachRiskyAttribute(t *testing.T) {
+	if got := readerAttributeViolations("session_reader", "r", readerRoleAttributes{}); len(got) != 0 {
+		t.Fatalf("plain reader: %v", got)
+	}
+	for name, attrs := range map[string]readerRoleAttributes{
+		"SUPERUSER":   {Superuser: true},
+		"CREATEROLE":  {CreateRole: true},
+		"CREATEDB":    {CreateDB: true},
+		"BYPASSRLS":   {BypassRLS: true},
+		"REPLICATION": {Replication: true},
+	} {
+		got := readerAttributeViolations("session_reader", "r", attrs)
+		if len(got) != 1 || got[0].Privilege != name || got[0].Object != "r" || got[0].Kind != "session_reader" {
+			t.Errorf("%s: got %+v", name, got)
+		}
+	}
+}
+
+func TestReaderMembershipViolationsKeepOnlyReachableOnlyRoles(t *testing.T) {
+	memberships := []Violation{
+		{Kind: "role_membership", Object: "auth_runtime", SystemRole: true},
+		{Kind: "role_membership", Object: "inherited_ctx", SystemRole: false},
+	}
+	got := readerMembershipViolations("session_reader", "r", memberships)
+	if len(got) != 1 || got[0].Object != "auth_runtime" || got[0].Privilege != "MEMBER" || got[0].Kind != "session_reader" {
+		t.Fatalf("got %+v", got)
+	}
+	if got := readerMembershipViolations("session_reader", "r", nil); len(got) != 0 {
+		t.Fatalf("no memberships: %v", got)
+	}
+}

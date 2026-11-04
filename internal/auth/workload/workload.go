@@ -15,6 +15,7 @@ import (
 
 var (
 	namePattern     = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
+	ownerPattern    = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
 	audiencePattern = regexp.MustCompile(`^[a-z][a-z0-9._:-]{0,63}$`)
 	envPattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 	uidPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -27,7 +28,11 @@ const (
 
 // Spec is one platform workload registration.
 type Spec struct {
-	Name           string
+	Name string
+	// Owner is the team that runs the workload and its runbooks. It is registry
+	// contract data (workload-registry.json): the seed validates it and the
+	// database does not store it.
+	Owner          string
 	Audiences      []string
 	AllowedActions []string
 }
@@ -66,6 +71,15 @@ type Registration struct {
 func ValidateName(name string) error {
 	if !namePattern.MatchString(name) {
 		return ErrNameInvalid
+	}
+	return nil
+}
+
+// ValidateOwner refuses an owner outside the owner pattern. The owner is a team
+// name, not a person: lowercase letters, digits and hyphens.
+func ValidateOwner(owner string) error {
+	if !ownerPattern.MatchString(owner) {
+		return ErrOwnerInvalid
 	}
 	return nil
 }

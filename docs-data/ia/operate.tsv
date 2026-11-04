@@ -61,10 +61,12 @@ op-rb-auth-signing-key-emergency-rotation	op-runbooks	/operate/runbooks/auth-sig
 op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false
 op-rb-auth-platform-roles-flip	op-runbooks	/operate/runbooks/auth-platform-roles-flip-and-rollback/	Auth platform roles flip and rollback	runbook	true	public	active	false
 op-rb-auth-service-scrape-alerts	op-runbooks	/operate/runbooks/auth-service-scrape-and-alerts/	Auth-service scrape check and alert import	runbook	true	public	active	false
+op-rb-auth-push-projection-drift-alerts	op-runbooks	/operate/runbooks/auth-push-projection-drift-alerts/	Push projection drift alerts	runbook	true	public	active	false
 op-rb-auth-users-flip-back-grants	op-runbooks	/operate/runbooks/auth-users-flip-back-grants/	Auth users flip-back grants	runbook	true	public	active	false
 op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-workload-bootstrap-credential/	Workload bootstrap credential	runbook	true	public	active	false
 op-rb-auth-service-accounts	op-runbooks	/operate/runbooks/auth-service-accounts/	Service accounts	runbook	true	public	active	false
 op-rb-auth-workload-kubernetes-federation	op-runbooks	/operate/runbooks/auth-workload-kubernetes-federation/	Kubernetes workload federation	runbook	true	public	active	false
+op-rb-auth-workload-assertion-key-rotation	op-runbooks	/operate/runbooks/auth-workload-assertion-key-rotation/	Web assertion key rotation	runbook	true	public	active	false
 op-rb-auth-legacy-compat	op-runbooks	/operate/runbooks/auth-legacy-compat-and-rollback/	Auth legacy compatibility and rollback	runbook	true	public	active	false	
 op-rb-external-push-lifecycle	op-runbooks	/operate/runbooks/external-push-lifecycle/	External Push lifecycle events	runbook	true	public	active	false	
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	

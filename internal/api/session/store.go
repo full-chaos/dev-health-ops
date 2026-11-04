@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -103,13 +104,14 @@ func (h handlers) userByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*userR
 	return scanUsers(rows)
 }
 
-// userByProvider is the social-login lookup by provider identity.
+// userByProvider is the social-login lookup by provider identity. A social key is the provider's public instance
+// (gitlab.com): an account bound to a self-hosted GitLab instance holds that instance's numeric id and never matches.
 func (h handlers) userByProvider(ctx context.Context, tx pgx.Tx, providerUserID, provider string) (*userRow, error) {
 	columns, err := h.userColumnsFor("")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users WHERE auth_provider_id = $1::text AND auth_provider = $2::text`,
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users u WHERE u.auth_provider_id = $1::text AND u.auth_provider = $2::text AND `+identity.NotSelfHostedGitLabSQL("u"),
 		providerUserID, provider)
 	if err != nil {
 		return nil, err

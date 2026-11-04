@@ -113,3 +113,21 @@ func TestWebSSOOffRendersAsToday(t *testing.T) {
 }
 
 func ptr(m map[string]any) *map[string]any { return &m }
+
+func ssoEmptyRef(name string) map[string]any {
+	m := ssoRef(name)
+	m["value"] = ""
+	return m
+}
+
+func TestWebSSOEmptyValueWithValueFromFailsClosed(t *testing.T) {
+	sso := ssoEmptyRef("AUTH_SSO_ENABLED")
+	wantSSORefusal(t, "sso empty+ref, no class", ssoEnvArgs(t, sso))
+	wantSSORefusal(t, "sso empty+ref, hs256", ssoEnvArgs(t, sso, ssoVal("AUTH_ACCESS_TOKEN_CLASS", "hs256_compat"))) // gitleaks:allow
+	wantSSORefusal(t, "sso empty+ref, class ref", ssoEnvArgs(t, sso, ssoRef("AUTH_ACCESS_TOKEN_CLASS")))
+	wantSSORefusal(t, "sso on, class eddsa+ref", ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), func() map[string]any { m := ssoRef("AUTH_ACCESS_TOKEN_CLASS"); m["value"] = "eddsa"; return m }()))
+	got := webEnvDump(t, ssoEnvArgs(t, sso, ssoVal("AUTH_ACCESS_TOKEN_CLASS", "eddsa")))
+	if !strings.Contains(got, "AUTH_SSO_ENABLED") || !strings.Contains(got, "AUTH_ACCESS_TOKEN_CLASS") {
+		t.Errorf("sso empty+ref, literal eddsa: env lacks an entry: %s", got)
+	}
+}

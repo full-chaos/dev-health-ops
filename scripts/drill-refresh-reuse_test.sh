@@ -159,6 +159,7 @@ printf '{"refresh_token":"REFRESH_SECRET_MARKER","session_access_token":"ACCESS_
 out="$(safe_err "$body") $(detail "$body")"
 if [[ "$out" == *SECRET_MARKER* || "$out" != *"bad request"* ]]; then r=bad; else r=ok; fi
 check "safe_err and detail print the whitelisted text and no token" "$r"
+# shellcheck disable=SC2016 # the pattern is a regex for grep, not a shell expansion
 if grep -nE '(echo|printf).*(jq|cat)[^|]*"\$tok/' "$script" | grep -vE 'safe_err|detail'; then r=bad; else r=ok; fi
 check "no echo or printf of a response file bypasses safe_err and detail" "$r"
 

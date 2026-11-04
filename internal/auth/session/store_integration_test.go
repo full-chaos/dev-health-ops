@@ -135,6 +135,14 @@ func (e *env) deactivate(t *testing.T, ctx context.Context, id uuid.UUID) {
 	}
 }
 
+// wantCreatedRows checks the auth.session.created rows: Create writes one per session.
+func (e *env) wantCreatedRows(t *testing.T, ctx context.Context, want int) {
+	t.Helper()
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.created'`); n != want {
+		t.Fatalf("%d auth.session.created rows, want %d", n, want)
+	}
+}
+
 func (e *env) create(t *testing.T, ctx context.Context, principal uuid.UUID) Issued {
 	t.Helper()
 	issued, err := e.store.Create(ctx, principal, nil, []string{"pwd"})
@@ -293,8 +301,10 @@ func TestRaceParallelExchangeOfOneCredentialRotatesOnce(t *testing.T) {
 	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 1 {
 		t.Fatalf("%d live credentials, want 1", live)
 	}
-	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none.
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
+	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none. Create wrote the
+	// session's auth.session.created row.
+	e.wantCreatedRows(t, ctx, 1)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type NOT IN ('auth.session.refreshed', 'auth.session.created')`); n != 0 {
 		t.Fatalf("%d audit rows after a clean rotation, want 0", n)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
@@ -566,7 +576,9 @@ func TestGraceWithAChangedKeyIsRetryableAndRevokesNothing(t *testing.T) {
 		t.Fatal("a key mismatch revoked the session or its successor")
 	}
 	// The first exchange's accepted rotation wrote its auth.session.refreshed row (CHAOS-11400); the mismatch adds none.
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
+	// Create wrote the session's auth.session.created row.
+	e.wantCreatedRows(t, ctx, 1)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type NOT IN ('auth.session.refreshed', 'auth.session.created')`); n != 0 {
 		t.Fatalf("%d audit rows after a key mismatch, want 0", n)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {

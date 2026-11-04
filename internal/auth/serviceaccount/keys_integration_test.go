@@ -431,7 +431,10 @@ func TestSAKeyResolveRefusals(t *testing.T) {
 		}, "principal_disabled"},
 		{"org suspended", func(t *testing.T, orgID, _ uuid.UUID, _ IssuedKey) { e.suspend(t, orgID) }, "org_suspended"},
 		{"org deprovisioned", func(t *testing.T, orgID, _ uuid.UUID, _ IssuedKey) {
+			// With organizations not owned, the auth deprovision suspends the copy only; the key is refused once
+			// go-api's public.organizations row is inactive, the row that decides (D6651).
 			e.deprovision(t, orgID)
+			e.publicOrgActive(t, orgID, false)
 		}, "org_suspended"},
 	}
 	for _, c := range cases {

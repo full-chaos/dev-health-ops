@@ -207,7 +207,7 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 // dimension; redaction, minimum assurance and step-up never. An allow with one obligation not carried out is no
 // verdict: it is neither served nor a deny.
 func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension bool) bool {
-	if tenant, ok := o.TenantScope(); ok && (request.OrganizationID == "" || tenant != request.OrganizationID) {
+	if tenant, ok := o.TenantScope(); ok && tenant != request.OrganizationID {
 		return false
 	}
 	if o.RepositoryRestricted() && !noRepositoryDimension {

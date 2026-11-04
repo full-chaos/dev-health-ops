@@ -1,6 +1,7 @@
 package idpstub
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -478,8 +479,11 @@ func copyClaims(m map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// UseNumber: a float64 round trip would change large integers and refuse numbers past its range.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := dec.Decode(&out); err != nil {
 		return nil, err
 	}
 	return out, nil

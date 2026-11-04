@@ -100,7 +100,7 @@ func TestPreclaimReadinessRetriesRefusedDialUntilEndpointReturns(t *testing.T) {
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("check ran %d times, want 3", got)
 	}
-	want := []time.Duration{preclaimReadinessInitialBackoff, 2 * preclaimReadinessInitialBackoff}
+	want := []time.Duration{2 * time.Second, 4 * time.Second}
 	if got := clock.recordedWaits(); !slices.Equal(got, want) {
 		t.Fatalf("waits = %v, want %v", got, want)
 	}

@@ -21,7 +21,10 @@ func gatedPlaneHandler(lookup func(string) (string, bool), mux *http.ServeMux) (
 func planeHandler(mux *http.ServeMux, gate *pdp.Gate) http.Handler {
 	next := markResponseModelRoutes(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r.WithContext(pdp.WithGate(r.Context(), gate)))
+		gated := r.WithContext(pdp.WithGate(r.Context(), gate))
+		next.ServeHTTP(w, gated)
+		// The server span outside reads the pattern the inner mux recorded on the copy.
+		r.Pattern = gated.Pattern
 	})
 }
 

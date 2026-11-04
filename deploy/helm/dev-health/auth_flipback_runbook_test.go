@@ -9,13 +9,35 @@ import (
 	"testing"
 )
 
+const flipBackProdContext = "prodctx"
+
+// flipBackContextCases pairs the operator variable PROD_KUBE_CONTEXT with the
+// kube context that kubectl reports; only an exact match goes on.
+var flipBackContextCases = []struct{ prod, ctx string }{
+	{flipBackProdContext, flipBackProdContext},
+	{flipBackProdContext, "other"},
+	{flipBackProdContext, "prodctx-x"},
+	{flipBackProdContext, "prod"},
+	{"prodctx-x", flipBackProdContext},
+	{flipBackProdContext, ""},
+	{flipBackProdContext, "fail"},
+	{"", flipBackProdContext},
+	{"", ""},
+}
+
 const flipBackRunbook = "../../../docs/operate/runbooks/auth-users-flip-back-grants.md"
 
-// The fake answers `kubectl get rs` with FAKE_RS and `kubectl get pods` with
-// FAKE_PODS.
+// The fake answers `kubectl config current-context` with FAKE_CTX (the word
+// "fail" makes it exit 1), `kubectl get rs` with FAKE_RS and `kubectl get pods`
+// with FAKE_PODS.
 const flipBackKubectl = `#!/usr/bin/env bash
 printf '%s\n' "$*" >>"${FAKE_REC}"
 case "$2" in
+current-context)
+  [ "${FAKE_CTX}" = fail ] && exit 1
+  printf '%s\n' "${FAKE_CTX}"
+  exit 0
+  ;;
 rs) mode="${FAKE_RS}" ;;
 pods) mode="${FAKE_PODS}" ;;
 *) echo "unexpected kubectl $*" >&2; exit 2 ;;
@@ -72,7 +94,10 @@ func flipBackPodChecks(t *testing.T) []string {
 // owned ReplicaSet (check 0: exactly 1 by pod-template-hash; check 1: at least
 // 1 by the users-owned label), then passes only when the pod count is 0. A
 // kubectl failure (also one that prints a count), no count, a missing or
-// ambiguous ReplicaSet, or a non-zero pod count stops.
+// ambiguous ReplicaSet, or a non-zero pod count stops. Before any read, the
+// check proves that the current kube context is the prod context: any other
+// context (also one that holds an identical old ReplicaSet at 0 pods), an
+// empty one or a failing `config current-context` stops with no read.
 func TestTheFlipBackRunbookPodCheckFailsClosed(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not installed")
@@ -85,24 +110,43 @@ func TestTheFlipBackRunbookPodCheckFailsClosed(t *testing.T) {
 	rsFound := []map[string]bool{{"one": true}, {"one": true, "two": true}}
 	modes := []string{"fail", "zerofail", "empty", "zero", "one", "two"}
 	for i, block := range flipBackPodChecks(t) {
-		for _, rsMode := range modes {
-			for _, podMode := range []string{"fail", "zerofail", "empty", "two", "zero"} {
-				rec := filepath.Join(t.TempDir(), "argv")
-				cmd := exec.Command("bash", "-c", block)
-				cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-					"FAKE_REC="+rec, "FAKE_RS="+rsMode, "FAKE_PODS="+podMode)
-				out, err := cmd.CombinedOutput()
-				ok := rsFound[i][rsMode] && podMode == "zero"
-				stopped := err != nil && strings.Contains(string(out), "STOP")
-				if stopped == ok || (ok && (err != nil || !strings.Contains(string(out), "OK: 0 old owned pods"))) {
-					t.Errorf("check %d, rs %s, pods %s: err %v, want ok = %v\n%s", i, rsMode, podMode, err, ok, out)
-				}
-				argv, _ := os.ReadFile(rec)
-				if !strings.Contains(string(argv), "get rs -n ns1") || !strings.Contains(string(argv), selectors[i]) {
-					t.Errorf("check %d, rs %s, pods %s: kubectl argv = %q, want get rs -n ns1 with %s", i, rsMode, podMode, argv, selectors[i])
-				}
-				if rsFound[i][rsMode] && !strings.Contains(string(argv), "get pods -n ns1") {
-					t.Errorf("check %d, rs %s, pods %s: kubectl argv = %q, want get pods -n ns1", i, rsMode, podMode, argv)
+		for _, cc := range flipBackContextCases {
+			ctx := cc.ctx
+			for _, rsMode := range modes {
+				for _, podMode := range []string{"fail", "zerofail", "empty", "two", "zero"} {
+					rec := filepath.Join(t.TempDir(), "argv")
+					cmd := exec.Command("bash", "-c", block)
+					cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+						"FAKE_REC="+rec, "PROD_KUBE_CONTEXT="+cc.prod, "FAKE_CTX="+ctx, "FAKE_RS="+rsMode, "FAKE_PODS="+podMode)
+					out, err := cmd.CombinedOutput()
+					ctxOK := cc.prod != "" && ctx == cc.prod
+					ok := ctxOK && rsFound[i][rsMode] && podMode == "zero"
+					stopped := err != nil && strings.Contains(string(out), "STOP")
+					if stopped == ok || (ok && (err != nil || !strings.Contains(string(out), "OK: 0 old owned pods"))) {
+						t.Errorf("check %d, prod %q, ctx %q, rs %s, pods %s: err %v, want ok = %v\n%s", i, cc.prod, ctx, rsMode, podMode, err, ok, out)
+					}
+					argv, _ := os.ReadFile(rec)
+					if cc.prod == "" {
+						if len(argv) != 0 {
+							t.Errorf("check %d, empty PROD_KUBE_CONTEXT: kubectl argv = %q, want no kubectl call", i, argv)
+						}
+						continue
+					}
+					if !strings.HasPrefix(string(argv), "config current-context\n") {
+						t.Errorf("check %d, prod %q, ctx %q, rs %s, pods %s: first kubectl call = %q, want config current-context", i, cc.prod, ctx, rsMode, podMode, argv)
+					}
+					if !ctxOK {
+						if strings.Count(string(argv), "\n") != 1 {
+							t.Errorf("check %d, prod %q, ctx %q: kubectl argv = %q, want only config current-context before the stop", i, cc.prod, ctx, argv)
+						}
+						continue
+					}
+					if !strings.Contains(string(argv), "get rs -n ns1") || !strings.Contains(string(argv), selectors[i]) {
+						t.Errorf("check %d, rs %s, pods %s: kubectl argv = %q, want get rs -n ns1 with %s", i, rsMode, podMode, argv, selectors[i])
+					}
+					if rsFound[i][rsMode] && !strings.Contains(string(argv), "get pods -n ns1") {
+						t.Errorf("check %d, rs %s, pods %s: kubectl argv = %q, want get pods -n ns1", i, rsMode, podMode, argv)
+					}
 				}
 			}
 		}

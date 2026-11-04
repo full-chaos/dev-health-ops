@@ -40,12 +40,17 @@ type fakeScopeCredentials struct {
 	refusal servicecred.Refusal
 	err     error
 	scopes  []string
+	// held, when set, is the scope list of the credential: a scope outside it is refused.
+	held []string
 }
 
 func (f *fakeScopeCredentials) CheckScope(_ context.Context, token contracts.SecretString, scope string) (servicecred.Credential, servicecred.Refusal, error) {
 	f.scopes = append(f.scopes, scope)
 	if f.err != nil {
 		return servicecred.Credential{}, "", f.err
+	}
+	if f.held != nil && !slices.Contains(f.held, scope) {
+		return servicecred.Credential{}, servicecred.RefusedScope, nil
 	}
 	if f.refusal != "" || token.Reveal() != provisioningToken {
 		refusal := f.refusal
@@ -320,6 +325,8 @@ type provFixture struct {
 	reactivate                                  *fakeReactivate
 	sa                                          *fakeServiceAccounts
 	grants                                      *fakeGrants
+	reads                                       *fakeReads
+	grantReads                                  *fakeGrantReads
 	reader                                      *sdkmetric.ManualReader
 	logs                                        *bytes.Buffer
 	mux                                         *http.ServeMux
@@ -371,7 +378,7 @@ func newProvFixtureWith(t *testing.T, profileRows []byte) *provFixture {
 func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueWorkload) *provFixture {
 	t.Helper()
 	f := &provFixture{t: t, creds: &fakeScopeCredentials{}, orgs: &fakeEnsurer{}, members: &fakeMembers{}, invites: &fakeInvites{},
-		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
+		deprovision: &fakeDeprovision{}, reactivate: &fakeReactivate{}, sa: &fakeServiceAccounts{}, grants: &fakeGrants{}, reads: &fakeReads{}, grantReads: &fakeGrantReads{}, reader: sdkmetric.NewManualReader(), logs: &bytes.Buffer{},
 		org: uuid.New(), admin: uuid.New(), owner: uuid.New(), viewer: uuid.New(), super: uuid.New(), target: uuid.New(), x: uuid.New()}
 	f.account()
 	f.grants.principal = f.target
@@ -391,8 +398,14 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 	if err != nil {
 		t.Fatal(err)
 	}
+	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows,
+		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.mux = http.NewServeMux()
-	for _, route := range routes {
+	for _, route := range append(routes, readRoutes...) {
 		f.mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
 	}
 	return f

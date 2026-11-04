@@ -46,7 +46,7 @@ func TestRouteChainAppliesTheEmptyBodyPolicyOverTheDefault(t *testing.T) {
 		want  int
 	}{"the policy": {true, http.StatusRequestEntityTooLarge}, "the default": {false, http.StatusOK}} {
 		route := Route{Method: http.MethodGet, Pattern: "/x", EmptyBody: tc.empty, Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})}
-		handler := routeChain(route, options, slog.New(slog.DiscardHandler), WriteError, make(chan struct{}, 4), nil)
+		handler := routeChain(route, options, slog.New(slog.DiscardHandler), WriteError, make(chan struct{}, 4))
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/x", strings.NewReader("a")))
 		if response.Code != tc.want {

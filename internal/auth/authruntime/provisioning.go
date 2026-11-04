@@ -45,7 +45,7 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
-	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Sessions: sessions, Logger: logger, OwnsOrgs: cfg.OrgsOwned})
+	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Sessions: sessions, Logger: logger})
 	if err != nil {
 		return nil, err
 	}

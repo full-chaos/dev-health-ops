@@ -212,3 +212,18 @@ func TestValidateRefusalOfARevokedRowWithNoAuthServiceSessionRecordsNoLag(t *tes
 	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
 	wantLag(t, reader, 0, 0)
 }
+
+func TestValidateRefusalOnAStalePinRecordsNoLag(t *testing.T) {
+	f := newValidateFixture(t, false)
+	reader, provider := accessMeter()
+	f.meter = provider.Meter("test")
+	f.build()
+	stale := int64(3)
+	at := time.Now().Add(-7 * time.Second)
+	f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, LegacyTokenVersion: &stale}
+	record := f.record
+	record.RevokedAt = &at
+	f.sessions.records[f.record.ID] = record
+	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	wantLag(t, reader, 0, 0)
+}

@@ -245,12 +245,16 @@ func TestTheShadowAndTheEnforcerShareOneDecisionPointClient(t *testing.T) {
 
 // A failed build is not kept: the next asker's error names its own switch.
 func TestAFailedDecisionPointBuildNamesEachAsker(t *testing.T) {
-	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	dp := newDecisionPoint(proxy, lookupFrom(nil), nil)
-	for _, flag := range []string{"FIRST_ASKER", "SECOND_ASKER"} {
-		_, err := dp.decider(workloadAsk{flag: flag})
-		if err == nil || !strings.HasPrefix(err.Error(), flag+": ") {
-			t.Fatalf("err = %v, want one that starts with %s", err, flag)
+	for name, proxy := range map[string]AuthProxyConfig{
+		"no workload input": mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"}),
+		"no upstream":       {},
+	} {
+		dp := newDecisionPoint(proxy, lookupFrom(nil), nil)
+		for _, flag := range []string{"FIRST_ASKER", "SECOND_ASKER"} {
+			_, err := dp.decider(workloadAsk{flag: flag})
+			if err == nil || !strings.HasPrefix(err.Error(), flag+": ") {
+				t.Fatalf("%s: err = %v, want one that starts with %s", name, err, flag)
+			}
 		}
 	}
 }

@@ -984,10 +984,10 @@ type socialRefusal struct {
 }
 
 var socialLinkRefusals = map[string]socialRefusal{
-	"social: github email of a local user":                  {http.StatusConflict, socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user with another id": {http.StatusConflict, socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: github email of a github user without an id":   {http.StatusConflict, socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the provider-free 409"},
-	"social: gitlab email of a github user":                 {http.StatusConflict, socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go's names none"},
+	"social: github email of a local user":                  {http.StatusConflict, socialAccountExistsBody, "Python linked the identity by e-mail and signed in (CHAOS-10940); Go refuses with the generic 409"},
+	"social: github email of a github user with another id": {http.StatusConflict, socialAccountExistsBody, "Python replaced the stored provider id and signed in (CHAOS-10940); Go refuses with the generic 409"},
+	"social: github email of a github user without an id":   {http.StatusConflict, socialAccountExistsBody, "Python set the missing provider id and signed in (CHAOS-10940); Go refuses with the generic 409"},
+	"social: gitlab email of a github user":                 {http.StatusConflict, socialAccountExistsBody, "Python's 409 named the existing sign-in method; Go answers the one generic 409"},
 	"social: github no id": {http.StatusBadRequest, `{"detail":{"message":"The provider returned an invalid user id"}}`,
 		"Python raised on a profile without an id and answered 500; Go refuses with 400 (CHAOS-11619)"},
 }
@@ -1003,8 +1003,8 @@ var validateLimitAdmitted = map[string]socialRefusal{
 }
 
 // socialAccountExistsBody is the 409 Go answers for an e-mail another account holds: Python named the existing
-// sign-in method; Go names none (the replay expects the provider-free answer).
-const socialAccountExistsBody = `{"detail":{"message":"An account with this email already exists. Please sign in with your existing sign-in method."}}`
+// sign-in method; Go answers the one generic conflict body that says nothing about an account.
+const socialAccountExistsBody = `{"detail":{"message":"This sign-in could not be completed. Contact your administrator if this continues."}}`
 
 // socialLinkRows rewrites the golden row sets for the three refused steps: no provider id is replaced or
 // set, no login is recorded, and no refresh token is stored for them.

@@ -11,5 +11,5 @@ import (
 )
 
 func identityConfig(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) identity.Config {
-	return identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned, OrgsOwnedByAuth: cfg.OrgsOwned}
+	return identity.Config{Pool: pool, Schema: schema, Logger: logger, UsersOwnedByAuth: cfg.UsersOwned}
 }

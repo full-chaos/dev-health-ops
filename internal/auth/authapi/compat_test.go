@@ -927,7 +927,7 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
 			}
 			if c.name == "email of another provider" {
-				if want := `{"detail":{"message":"` + social.AccountExistsMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
+				if want := `{"detail":{"message":"` + social.ConflictMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
 					t.Fatalf("body %s, want %s", response.Body, want)
 				}
 			}

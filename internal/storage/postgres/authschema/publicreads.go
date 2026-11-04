@@ -767,9 +767,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 		if options.UsersOwned && schema == publicSchema && (kind == "r" || kind == "p") && isInviteWriteColumn(table, privilege, column) {
 			continue
 		}
-		if options.OrgsOwned && schema == publicSchema && (kind == "r" || kind == "p") && isOrganizationWriteColumn(table, privilege, column) {
-			continue
-		}
 		if schema == publicSchema && (kind == "r" || kind == "p") && isPublicAuditWriteColumn(table, privilege, column) {
 			continue
 		}
@@ -807,10 +804,6 @@ func publicReadViolations(ctx context.Context, conn *pgx.Conn, options Options) 
 	if err != nil {
 		return nil, err
 	}
-	organizationMissing, err := organizationWriteMissing(ctx, conn, options)
-	if err != nil {
-		return nil, err
-	}
-	return append(append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
-		impersonationMissing...), organizationMissing...), nil
+	return append(append(append(append(append(violations, missing...), inviteMissing...), auditMissing...), providerWriteMissing...),
+		impersonationMissing...), nil
 }

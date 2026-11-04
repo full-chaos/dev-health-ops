@@ -3,8 +3,10 @@ package postgres
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -464,5 +466,65 @@ func TestBackfillJobsInsertIsCoordinatorOnly(t *testing.T) {
 	domain, ok := find(domainPosture())
 	if !ok || domain != (TablePrivilege{TableName: "backfill_jobs", AllowUpdate: true}) {
 		t.Errorf("domain backfill_jobs = %+v (present=%t), want UPDATE only, never INSERT", domain, ok)
+	}
+}
+
+var pushExpiryTokenColumns = []string{"id", "org_id", "source_id", "scopes", "expires_at", "revoked_at"}
+
+func TestDomainPostureGrantsPushExpiryTokenColumnsOnly(t *testing.T) {
+	t.Parallel()
+
+	posture := domainPosture()
+	for _, table := range posture.RequiredTables {
+		if table.TableName == "external_ingest_tokens" {
+			t.Fatalf("domain posture declares external_ingest_tokens table-wide: %+v", table)
+		}
+	}
+	var got []string
+	for _, column := range posture.ColumnScoped {
+		if column.TableName != "external_ingest_tokens" {
+			continue
+		}
+		if column.Privilege != "SELECT" {
+			t.Fatalf("domain posture grants %s on external_ingest_tokens.%s, want SELECT only", column.Privilege, column.ColumnName)
+		}
+		got = append(got, column.ColumnName)
+	}
+	sort.Strings(got)
+	want := append([]string(nil), pushExpiryTokenColumns...)
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("domain posture external_ingest_tokens SELECT columns = %v, want %v", got, want)
+	}
+}
+
+func TestDomainPostureCoversPushExpiryStoreRead(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile("../../jobs/pushexpiry/store.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := regexp.MustCompile("(?s)pageSQL = `(.*?)`").FindSubmatch(source)
+	if found == nil {
+		t.Fatal("pushexpiry pageSQL not found")
+	}
+	statement := string(found[1])
+	if got := regexp.MustCompile(`(?i)\bFROM\s+(\w+)`).FindStringSubmatch(statement); got == nil || got[1] != "external_ingest_tokens" {
+		t.Fatalf("pushexpiry pageSQL reads %v, want external_ingest_tokens", got)
+	}
+	declared := map[string]bool{}
+	for _, column := range domainPosture().ColumnScoped {
+		if column.TableName == "external_ingest_tokens" && column.Privilege == "SELECT" {
+			declared[column.ColumnName] = true
+		}
+	}
+	for _, column := range pushExpiryTokenColumns {
+		if !regexp.MustCompile(`\b` + column + `\b`).MatchString(statement) {
+			t.Fatalf("pushexpiry pageSQL no longer names %q; update pushExpiryTokenColumns", column)
+		}
+		if !declared[column] {
+			t.Fatalf("pushexpiry pageSQL reads external_ingest_tokens.%s but domain posture has no SELECT row for it", column)
+		}
 	}
 }

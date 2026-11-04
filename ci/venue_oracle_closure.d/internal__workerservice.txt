@@ -29,6 +29,7 @@ internal/auth/pushreconcile/projectionreader
 internal/auth/pushreconcile/reconcilejob
 internal/auth/repokey
 internal/auth/sessionid
+internal/authzenforce
 internal/cacheinvalidation
 internal/chmigrate
 internal/chmigrate/chgate

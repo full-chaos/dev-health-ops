@@ -66,8 +66,8 @@ overrides.
 
 An organization administrator can set a calendar-month monetary ceiling for
 shared BYO LLM use. The ceiling is stored separately from the provider API key
-and applies to Ask Dev and other workflows that use the organization's BYO
-provider. Per-request token and concurrency limits remain active even when a
+and applies to the workflows that Dev Health runs with the organization's BYO
+provider. It is not enforced on Ask Dev questions, which Context Fabric sends to the model itself. Per-request token and concurrency limits remain active even when a
 provider does not return enough information for reliable monetary enforcement.
 
 For configured budgets, each provider network attempt first commits a
@@ -159,7 +159,7 @@ toggle is off, so an administrator can check a key before turning the own model 
 ## Prompt cache for an Anthropic model
 
 An organization that brings its own Anthropic model can ask Anthropic to cache
-the long, fixed instructions that Ask Dev sends at the start of each question.
+the fixed instructions that Ask Dev sends to interpret and synthesize each question.
 It is off until an organization owner or administrator turns it on, and it
 applies only while the model Ask Dev uses is on the `anthropic` provider; for
 any other provider the setting has no effect.

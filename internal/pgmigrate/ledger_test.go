@@ -84,3 +84,12 @@ func TestTheLiveChainCarriesOneLedgerRevision(t *testing.T) {
 		t.Fatalf("the live chain has %d ledger revisions, want exactly 1", count)
 	}
 }
+
+// appliedLedger is the ledger dho writes for a database it walked through every revision of chain.
+func appliedLedger(chain []ChainFile) map[string]LedgerRow {
+	ledger := map[string]LedgerRow{}
+	for _, file := range chain {
+		ledger[file.Revision] = LedgerRow{SHA256: FileSHA256(file)}
+	}
+	return ledger
+}

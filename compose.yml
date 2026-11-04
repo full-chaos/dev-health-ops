@@ -1185,8 +1185,8 @@ services:
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
       # The workload bootstrap credential, as a read-only file (written by
       # auth-workload-bootstrap, profile `auth`). go-api reads it only when
-      # AUTH_SESSION_ISSUE_CREDENTIAL or AUTH_PROVISIONING_CREDENTIAL selects
-      # `workload`; both are unset by default. The issuer must equal
+      # AUTH_PROXY_SESSIONS is on or AUTH_PROVISIONING_CREDENTIAL selects
+      # `workload`; both are off by default. The issuer must equal
       # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
       # signed under. A path, never the credential.
       AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap

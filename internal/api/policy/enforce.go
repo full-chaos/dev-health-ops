@@ -53,8 +53,8 @@ var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,
-// because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow that
-// carries an obligation is such a failure: go-api cannot carry the obligation out. The one
+// because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow with an
+// obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. The one
 // exception is a caller the decision point cannot judge (a legacy HS256 token, a delegated session, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
@@ -66,6 +66,8 @@ type Enforcer struct {
 	logger  *slog.Logger
 	// unconfigured: no decision point client; every request of a namespace switched on is refused.
 	unconfigured bool
+	// noRepositoryDimension: the routes with no repository dimension.
+	noRepositoryDimension map[string]bool
 }
 
 // NewEnforcer checks cfg.
@@ -84,7 +86,17 @@ func NewEnforcer(cfg EnforceConfig) (*Enforcer, error) {
 	if service := cfg.Switch.Service(); service != "" && service != authzenforce.GoAPI {
 		return nil, errors.New("enforce: the switch is not go-api's")
 	}
-	e := &Enforcer{decider: cfg.Decider, rows: cfg.Rows, sw: cfg.Switch, timeout: cfg.Timeout, logger: cfg.Logger, unconfigured: cfg.Unconfigured}
+	noRepositoryDimension := cfg.NoRepositoryDimension
+	if noRepositoryDimension == nil {
+		noRepositoryDimension = goAPIRoutesWithoutRepositoryDimension
+	}
+	for key := range noRepositoryDimension {
+		if _, ok := cfg.Rows[key]; !ok {
+			return nil, fmt.Errorf("enforce: %q is flagged with no repository dimension but has no row", key)
+		}
+	}
+	e := &Enforcer{decider: cfg.Decider, rows: cfg.Rows, sw: cfg.Switch, timeout: cfg.Timeout, logger: cfg.Logger, unconfigured: cfg.Unconfigured,
+		noRepositoryDimension: noRepositoryDimension}
 	if e.timeout <= 0 {
 		e.timeout = enforceDefaultTimeout
 	}
@@ -148,9 +160,9 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("namespace", row.Namespace), slog.String("reason", string(decision.Reason())))
 		return enforceUnavailable
 	}
-	if decision.Allowed() && carriesObligation(decision.Obligations()) {
+	if decision.Allowed() && !obligationsCarriedOut(decision.Obligations(), request, e.noRepositoryDimension[o.pattern]) {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
-		e.logger.WarnContext(ctx, "api enforcement: the allow carries an obligation go-api cannot carry out, no verdict, the route is refused",
+		e.logger.WarnContext(ctx, "api enforcement: the allow carries an obligation go-api does not carry out, no verdict, the route is refused",
 			slog.String("namespace", row.Namespace))
 		return enforceUnavailable
 	}
@@ -190,16 +202,21 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	return ""
 }
 
-// carriesObligation reports whether an allow carries an obligation. This guard carries out none, so an allow that
-// carries one is no verdict: it is neither served nor a deny.
-func carriesObligation(o pep.Obligations) bool {
-	if _, ok := o.TenantScope(); ok {
-		return true
+// obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope
+// is carried out when it is the request's organization; a repository allowlist only on a route with no repository
+// dimension; redaction, minimum assurance and step-up never. An allow with one obligation not carried out is no
+// verdict: it is neither served nor a deny.
+func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension bool) bool {
+	if tenant, ok := o.TenantScope(); ok && (request.OrganizationID == "" || tenant != request.OrganizationID) {
+		return false
+	}
+	if o.RepositoryRestricted() && !noRepositoryDimension {
+		return false
 	}
 	if _, ok := o.MinimumAssurance(); ok {
-		return true
+		return false
 	}
-	return o.RepositoryRestricted() || len(o.Redaction()) > 0 || o.StepUpRequired()
+	return len(o.Redaction()) == 0 && !o.StepUpRequired()
 }
 
 // pdpHooks are the two ways the guard asks the decision point: the shadow beside the legacy check, and the

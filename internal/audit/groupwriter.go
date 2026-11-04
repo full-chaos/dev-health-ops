@@ -83,7 +83,115 @@ func (w *GroupWriter) Append(ctx context.Context, events ...AuditEvent) (err err
 	if err := validateAppendOnly(events); err != nil {
 		return err
 	}
-	return appendTx(ctx, w.begin, w.schema, events)
+	c := &groupCall{events: events, done: make(chan error, 1), lead: make(chan struct{}, 1)}
+	w.mu.Lock()
+	w.pending = append(w.pending, c)
+	if w.active < w.flushers {
+		w.active++
+		c.lead <- struct{}{}
+	}
+	w.mu.Unlock()
+	for {
+		select {
+		case err := <-c.done:
+			return err
+		case <-c.lead:
+			w.flush(ctx)
+		case <-ctx.Done():
+			w.abandon(c)
+			return ctx.Err()
+		}
+	}
+}
+
+// flush is run by a call that holds a flusher slot: it writes the oldest
+// waiting calls in one transaction, then hands the slot to a waiting call or
+// gives it up. The transaction outlives the leading call's cancellation, as
+// it holds other calls' rows, but not w.timeout.
+func (w *GroupWriter) flush(ctx context.Context) {
+	w.mu.Lock()
+	group := w.take()
+	w.mu.Unlock()
+	if len(group) > 0 {
+		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.timeout)
+		w.write(wctx, group)
+		cancel()
+	}
+	w.mu.Lock()
+	w.passLead()
+	w.mu.Unlock()
+}
+
+// take removes the oldest waiting calls, at least one and up to maxRows rows.
+// A taken call that was handed a slot it has not started gives it up. w.mu is
+// held.
+func (w *GroupWriter) take() []*groupCall {
+	n, rows := 0, 0
+	for n < len(w.pending) && (n == 0 || rows+len(w.pending[n].events) <= w.maxRows) {
+		rows += len(w.pending[n].events)
+		n++
+	}
+	group := append([]*groupCall(nil), w.pending[:n]...)
+	w.pending = append(w.pending[:0], w.pending[n:]...)
+	for _, c := range group {
+		select {
+		case <-c.lead:
+			w.active--
+		default:
+		}
+	}
+	return group
+}
+
+// passLead hands the caller's slot to a waiting call that holds none, or gives
+// it up. w.mu is held.
+func (w *GroupWriter) passLead() {
+	for _, c := range w.pending {
+		if len(c.lead) == 0 {
+			c.lead <- struct{}{}
+			return
+		}
+	}
+	w.active--
+}
+
+// abandon removes a call whose context ended while it waited. A call already
+// taken is in a transaction and may still be committed; its caller is answered
+// with the context error either way.
+func (w *GroupWriter) abandon(c *groupCall) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, p := range w.pending {
+		if p != c {
+			continue
+		}
+		w.pending = append(w.pending[:i], w.pending[i+1:]...)
+		select {
+		case <-c.lead:
+			w.passLead()
+		default:
+		}
+		return
+	}
+}
+
+// write commits the group in one transaction. When that fails, each call is
+// written alone, so one call's refused row fails only that call.
+func (w *GroupWriter) write(ctx context.Context, group []*groupCall) {
+	var events []AuditEvent
+	for _, c := range group {
+		events = append(events, c.events...)
+	}
+	err := appendTx(ctx, w.begin, w.schema, events)
+	if err == nil || len(group) == 1 {
+		for _, c := range group {
+			c.done <- err
+		}
+		return
+	}
+	for _, c := range group {
+		c.done <- appendTx(ctx, w.begin, w.schema, c.events)
+	}
 }
 
 func (w *GroupWriter) queued() int {

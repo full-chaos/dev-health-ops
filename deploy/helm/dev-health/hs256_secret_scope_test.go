@@ -17,7 +17,7 @@ func helmOut(t *testing.T, off bool, args ...string) (string, error) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	cmd := exec.Command("helm", append([]string{"template", "hs256", ".", "--set", "goApi.enabled=true"}, args...)...)
+	cmd := helmCommand(append([]string{"template", "hs256", ".", "--set", "goApi.enabled=true"}, args...)...)
 	if off {
 		cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
 	}

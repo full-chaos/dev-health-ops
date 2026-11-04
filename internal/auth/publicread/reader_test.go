@@ -346,6 +346,9 @@ func TestUnknownPublicRoleFailsClosed(t *testing.T) {
 	if _, _, err := r.OrganizationsOf(ctx, user, nil, 5); !errors.Is(err, ErrUnknownRole) {
 		t.Fatalf("organizations of with an unknown role: %v, want ErrUnknownRole", err)
 	}
+	if _, _, err := r.Principals(ctx, org, "", nil, 5); !errors.Is(err, ErrUnknownRole) {
+		t.Fatalf("principal list with an unknown role: %v, want ErrUnknownRole", err)
+	}
 	out := logs.String()
 	for _, want := range []string{`"level":"ERROR"`, "org_" + org.String(), "superhero"} {
 		if !strings.Contains(out, want) {
@@ -368,8 +371,8 @@ func TestUnknownPublicRoleFailsClosed(t *testing.T) {
 			}
 		}
 	}
-	if total != 3 {
-		t.Fatalf("auth.publicread.unknown_role = %d, want 3", total)
+	if total != 4 {
+		t.Fatalf("auth.publicread.unknown_role = %d, want 4", total)
 	}
 }
 
@@ -405,6 +408,21 @@ func TestStatementsCarryTheirContract(t *testing.T) {
 	for name, parts := range want {
 		if missing := mustContain(stmts[name], parts...); len(missing) > 0 {
 			t.Errorf("%s lacks %v", name, missing)
+		}
+	}
+	selected := map[string][]string{
+		"org_get":             {"COALESCE(ro.revision, 0)"},
+		"orgs_of":             {"COALESCE(ro.revision, 0)", "COALESCE(rm.revision, 0)"},
+		"membership_get":      {"COALESCE(rm.revision, 0)"},
+		"memberships_list":    {"COALESCE(rm.revision, 0)"},
+		"principal_get_user":  {"COALESCE(rp.revision, 0)"},
+		"principal_get_other": {"COALESCE(rp.revision, 0)"},
+		"principals_list":     {"COALESCE(rp.revision, 0)", "COALESCE(rm.revision, 0)"},
+	}
+	for name, parts := range selected {
+		head, _, _ := strings.Cut(stmts[name], "\nFROM")
+		if missing := mustContain(head, parts...); len(missing) > 0 {
+			t.Errorf("%s selects no joined revision %v", name, missing)
 		}
 	}
 	for _, name := range []string{"orgs_of", "memberships_list", "principals_list"} {

@@ -438,6 +438,38 @@ func TestReadNextCursorIsTheLastItemAndAbsentOnTheLastPage(t *testing.T) {
 	if strings.Contains(got.Body.String(), "next_cursor") || !strings.Contains(got.Body.String(), `"items":[]`) {
 		t.Fatalf("an empty page: %s", got.Body)
 	}
+
+	// A list item that holds a membership beside its principal or organization keys the cursor on the principal or organization.
+	mem := func(p uuid.UUID) publicread.Membership {
+		return publicread.Membership{ID: uuid.New(), OrgID: f.org, PrincipalID: p, Role: "admin", CreatedAt: readTime, UpdatedAt: readTime}
+	}
+	f.reads.prins = nil
+	for _, id := range ids {
+		m := mem(id)
+		f.reads.prins = append(f.reads.prins, publicread.PrincipalOf{Principal: publicread.Principal{ID: id, Kind: "user", Active: true}, Membership: &m})
+	}
+	f.reads.prinsMore = true
+	page.Items, page.NextCursor = nil, nil
+	got = f.post(PatternPrincipalsList, `{"schema_version":"principal-list-request.v1","organization_id":"`+wire("org_", f.org)+`","limit":2}`, nil)
+	if err := json.Unmarshal(got.Body.Bytes(), &page); err != nil || len(page.Items) != 2 || page.NextCursor == nil {
+		t.Fatalf("principal first page: %s", got.Body)
+	}
+	if want := contracts.EncodeKeysetCursor(wire("prn_", ids[1])); *page.NextCursor != want {
+		t.Fatalf("principal next_cursor = %s, want the last principal's %s", *page.NextCursor, want)
+	}
+	f.reads.of = nil
+	for _, id := range ids {
+		f.reads.of = append(f.reads.of, publicread.OrganizationOf{Organization: publicread.Organization{ID: id, Slug: "s", Name: "n", Active: true, CreatedAt: readTime, UpdatedAt: readTime}, Membership: mem(f.target)})
+	}
+	f.reads.ofMore = true
+	page.Items, page.NextCursor = nil, nil
+	got = f.post(PatternOrganizationsList, `{"schema_version":"organization-list-request.v1","principal_id":"`+wire("prn_", f.target)+`","limit":2}`, nil)
+	if err := json.Unmarshal(got.Body.Bytes(), &page); err != nil || len(page.Items) != 2 || page.NextCursor == nil {
+		t.Fatalf("organization first page: %s", got.Body)
+	}
+	if want := contracts.EncodeKeysetCursor(wire("org_", ids[1])); *page.NextCursor != want {
+		t.Fatalf("organization next_cursor = %s, want the last organization's %s", *page.NextCursor, want)
+	}
 }
 
 func TestMembershipStatusFilterServesActiveOnly(t *testing.T) {

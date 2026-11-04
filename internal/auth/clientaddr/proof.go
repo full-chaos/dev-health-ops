@@ -119,8 +119,9 @@ func ParseProofKeys(name, value string, limit int) ([]ProofKey, error) {
 		if !ok || !kidPattern.MatchString(kid) {
 			return nil, fmt.Errorf("%s entry %d must be <kid>:<key> with a kid of 1-16 characters [a-z0-9-]", name, index+1)
 		}
+		// Go's decoder skips CR and LF inside the text, so refuse every byte outside the alphabet first.
 		secret, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
-		if err != nil || len(secret) < MinProofKeyBytes {
+		if err != nil || !isBase64URL(encoded) || len(secret) < MinProofKeyBytes {
 			return nil, fmt.Errorf("%s entry %d must hold a key of at least %d bytes, base64url without padding", name, index+1, MinProofKeyBytes)
 		}
 		if seen[kid] {
@@ -130,6 +131,17 @@ func ParseProofKeys(name, value string, limit int) ([]ProofKey, error) {
 		keys = append(keys, ProofKey{id: kid, secret: secret})
 	}
 	return keys, nil
+}
+
+// isBase64URL reports whether text holds only [A-Za-z0-9_-].
+func isBase64URL(text string) bool {
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseSigningKey reads go-api's one signing key; empty is none (go-api then sends no proof).

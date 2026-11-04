@@ -55,12 +55,12 @@ func TestMigration0020GrantServiceAccountWorkloadShape(t *testing.T) {
 	m20Seed(t, ctx, env)
 	exec := func(sql string) error { return guardedExec(ctx, env.runtime, sql) }
 
-	for _, key := range []string{"acme/widgets", "*"} {
+	for _, key := range []string{"acme/widgets", "*", "acme/a/b", "grp/sub/web"} {
 		if err := exec(m20GrantHead + `'repository', '` + key + `')`); err != nil {
 			t.Fatalf("repository grant %s: %v", key, err)
 		}
 	}
-	for _, key := range []string{"Acme/Widgets", "acme", "acme/a/b", "/widgets", "acme/", "acme/wid gets", "**", "acme/widgets*"} {
+	for _, key := range []string{"Acme/Widgets", "acme", "acme/a/", "/widgets", "acme/", "acme/wid gets", "**", "acme/widgets*"} {
 		m10Fail(t, exec(m20GrantHead+`'repository', '`+key+`')`), "repository grant key "+key)
 	}
 	m10Fail(t, exec(m20GrantHead+`'repo', 'acme/other')`), "a grant of kind repo")

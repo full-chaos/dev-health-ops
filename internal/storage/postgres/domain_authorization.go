@@ -939,6 +939,15 @@ func domainPosture() RolePosture {
 			{"integration_credentials", "last_test_error", "UPDATE"},
 			{"worker_job_completion_fences", "completion_key", "SELECT"},
 			{"worker_job_completion_fences", "completion_key", "INSERT"},
+			// CHAOS-12888: the External Push expiry sweeper (jobs/pushexpiry
+			// pageSQL) reads these six columns and no other. Column-scoped on
+			// purpose: name, token_hash and token_prefix stay unreadable.
+			{"external_ingest_tokens", "id", "SELECT"},
+			{"external_ingest_tokens", "org_id", "SELECT"},
+			{"external_ingest_tokens", "source_id", "SELECT"},
+			{"external_ingest_tokens", "scopes", "SELECT"},
+			{"external_ingest_tokens", "expires_at", "SELECT"},
+			{"external_ingest_tokens", "revoked_at", "SELECT"},
 			// The columns llmbudget.PgStore.Settle writes, and no other.
 			{"byo_llm_budget_reservations", "status", "UPDATE"},
 			{"byo_llm_budget_reservations", "input_tokens", "UPDATE"},

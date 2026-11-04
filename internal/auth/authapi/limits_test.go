@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -858,5 +859,23 @@ func TestAForwardedChainIsKeyedByItsRightMostUntrustedHop(t *testing.T) {
 	assertRateLimited(t, "a rotated left entry", post("203.0.113.201, 198.51.100.1"))
 	if r := post("203.0.113.77, 198.51.100.4"); r.Code != http.StatusUnauthorized {
 		t.Fatalf("another right-most hop = %d, want its own bucket (401)", r.Code)
+	}
+}
+
+// The refund returned by admitRefundable gives each charge back once, however
+// often it is called.
+func TestAdmitRefundableRefundsEachChargeOnce(t *testing.T) {
+	store := newRefundCounters()
+	limits := mustLimits(t, store)
+	request := httptest.NewRequest(http.MethodPost, PatternCompatLogin, nil)
+	refund, ok := admitRefundable(httptest.NewRecorder(), request, goAPIRefusal, PatternCompatLogin, slog.New(slog.DiscardHandler),
+		charge{limits.limiter(loginIPLimit), "ip"}, charge{limits.limiter(loginAccountLimit), "acct"})
+	if !ok {
+		t.Fatal("not admitted")
+	}
+	refund(request.Context())
+	refund(request.Context())
+	if n := store.refunded(loginIPLimit.ID) + store.refunded(loginAccountLimit.ID); n != 2 {
+		t.Fatalf("%d refunds for two charges called twice, want 2", n)
 	}
 }

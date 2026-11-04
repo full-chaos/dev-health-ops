@@ -172,6 +172,8 @@ jobs:
   # CHAOS-12213: the race legs have their own job and their own 30 minute cap. In auth-test they shared one cap with the other
   # legs, and `job_go_test_timeout` gives each race-integration package the time left under that cap, so a slow job left a late
   # package too little time. The cap is not raised: each job stays under it.
+  # CHAOS-12938: auth-race takes the same cap env. Its go test -timeout comes from the race weights of the auth packages
+  # (auth_race_timeout_min in ci/check_go.sh), bounded by this cap, not from the 10 min go default.
   # CHAOS-12420: the same again. The two legs grew to the whole 30 minutes on a slow runner, and the last package got a
   # 2 s timeout, so each leg has a job of its own. auth-gate fans in both.
   auth-race:
@@ -179,6 +181,8 @@ jobs:
     if: needs.auth-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CHECK_GO_JOB_CAP_MIN: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

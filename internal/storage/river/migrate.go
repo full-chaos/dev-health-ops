@@ -1128,6 +1128,8 @@ func runtimeGrantStatements(options MigrationOptions) []string {
 		// domain role forge completed_at and mint a fence retention never
 		// reaps.
 		"DO $$ BEGIN IF to_regclass('public.worker_job_completion_fences') IS NOT NULL THEN GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + domainRole + "; END IF; END $$",
+		// CHAOS-12888: column-scoped, the six columns the push expiry sweep reads.
+		"DO $$ BEGIN IF to_regclass('public.external_ingest_tokens') IS NOT NULL THEN GRANT SELECT (id, org_id, source_id, scopes, expires_at, revoked_at) ON TABLE public.external_ingest_tokens TO " + domainRole + "; END IF; END $$",
 		// CHAOS-3033 Option B manifest additions — domain-exclusive tables
 		// (role-partition manifest, removed in e23ede618; see git history at eda2d6b91).
 		"DO $$ BEGIN IF to_regclass('public.billing_notifications') IS NOT NULL THEN GRANT SELECT ON TABLE public.billing_notifications TO " + domainRole + "; END IF; END $$",

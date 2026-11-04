@@ -304,6 +304,25 @@ func TestOrgListForPrincipalOrder(t *testing.T) {
 	}
 }
 
+func TestExternalSourcePrincipalReadsAsNotFound(t *testing.T) {
+	id := ids(4)
+	org := id[0]
+	db := &fakeDB{revs: map[string]int64{}}
+	db.auth.principals = []fPrincipal{{id[1], "external_source", true, org}, {id[2], "service_account", true, org}}
+	r, _, _ := newReader(t, db)
+	if _, err := r.Principal(context.Background(), id[1]); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an external_source principal is outside the read contract kinds and reads as not found, got %v", err)
+	}
+	items, _, err := r.Principals(context.Background(), org, "", nil, 10)
+	if err != nil || len(items) != 1 || items[0].Principal.ID != id[2] {
+		t.Fatalf("a principal list holds no external_source principal, got %+v, %v", items, err)
+	}
+	items, _, err = r.Principals(context.Background(), org, "external_source", nil, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("an external_source kind filter lists nothing, got %+v, %v", items, err)
+	}
+}
+
 func TestPrincipalListOrgBound(t *testing.T) {
 	id := ids(6)
 	org, other := id[0], id[1]

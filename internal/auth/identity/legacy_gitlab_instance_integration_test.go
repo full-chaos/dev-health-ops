@@ -73,3 +73,26 @@ func TestLegacyGitLabInstanceKeyKeepsTheMembershipBinding(t *testing.T) {
 		t.Fatalf("non-member self-hosted account = %+v, %v, %v; want ErrLegacyNotMember", p, found, err)
 	}
 }
+
+// GitLabInstanceIssuerSQL is the twin of GitLabInstanceIssuer: the same issuer for every base_url, NULL where Go refuses.
+func TestGitLabInstanceIssuerSQLMatchesGo(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	for _, base := range []string{
+		"", "https://gitlab.com", "https://GitLab.com/", "https://gitlab.com//", "https://gitlab.com/group",
+		"https://git.corp.example", "https://Git.Corp.Example:8443/gl/", "HTTPS://git.corp.example", "http://127.0.0.1:8080",
+		"https://user:pw@git.corp.example/x", "git.corp.example", "//git.corp.example", "ftp://git.corp.example", "https://",
+	} {
+		want, err := GitLabInstanceIssuer(base)
+		var got *string
+		if qerr := e.admin.QueryRow(ctx, `SELECT `+GitLabInstanceIssuerSQL("$1::text"), base).Scan(&got); qerr != nil {
+			t.Fatalf("base_url %q: %v", base, qerr)
+		}
+		switch {
+		case err != nil && got != nil:
+			t.Fatalf("base_url %q: Go refuses, SQL = %q", base, *got)
+		case err == nil && (got == nil || *got != want):
+			t.Fatalf("base_url %q: Go = %q, SQL = %v", base, want, got)
+		}
+	}
+}

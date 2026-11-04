@@ -92,6 +92,14 @@ func newReconEnv(t *testing.T) (*reconEnv, error) {
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`GRANT SELECT (%s) ON public.users TO %q`, cols, role)); err != nil {
 		return nil, err
 	}
+	for _, g := range []string{
+		`GRANT SELECT (user_id, org_id) ON public.memberships TO %q`,
+		`GRANT SELECT (id, org_id, protocol, status, config) ON public.sso_providers TO %q`,
+	} {
+		if _, err := admin.Exec(ctx, fmt.Sprintf(g, role)); err != nil {
+			return nil, err
+		}
+	}
 	cfg := admin.Config().Copy()
 	cfg.ConnConfig.User, cfg.ConnConfig.Password = role, password
 	runtime, err := pgxpool.NewWithConfig(ctx, cfg)

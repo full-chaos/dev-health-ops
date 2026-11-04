@@ -28,6 +28,9 @@ func TestOAuthSelfHostedGitLabIDIsNotTheGitLabComAccount(t *testing.T) {
 	})
 	const socialEmail = "gitlab.com.user@allowed.example"
 	seedAccount(t, ctx, st.pool, socialEmail, "gitlab", "77")
+	if _, err := st.pool.Exec(ctx, `UPDATE users SET sso_provider_id = NULL WHERE email = $1`, socialEmail); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := st.pool.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
 SELECT $1, $2, id, 'member', now(), now(), now() FROM users WHERE email = $3`, uuid.New(), orgID, socialEmail); err != nil {
 		t.Fatal(err)

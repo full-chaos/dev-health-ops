@@ -25,6 +25,7 @@ con-auth-cp-database	con-arch	/contribute/architecture/auth-control-plane-databa
 con-auth-cp-contracts	con-arch	/contribute/architecture/auth-control-plane-contracts/	Auth Control Plane contracts and SDK	task-guide	true	public	planned	false	Contributor guide to contracts/auth/v1: surfaces, the manifest corpus, the Go, Python and ajv runners, and the registry tests.
 con-auth-cp-audit-outbox	con-arch	/contribute/architecture/auth-control-plane-audit-outbox/	Auth Control Plane audit and outbox	task-guide	true	public	planned	false	The same-transaction audit and outbox write, the loop and reaper that run in Wave 1, metrics, and troubleshooting.
 con-auth-cp-go-gates	con-arch	/contribute/architecture/auth-control-plane-go-gates/	Auth Control Plane Go gates	reference	true	public	planned	false	The check_go.sh auth stages, the go-auth-service workflow and its auth-gate fan-in, and the image release checks.
+con-auth-pdp-contributor	con-arch	/contribute/architecture/auth-pdp-contributor-guide/	Auth policy decision contributor guide	task-guide	true	public	active	false	The order of work and the tests that fail when an auth catalog action, its route mapping or a shadow class row is changed.
 con-dev	contribute	/contribute/development/	Develop and test	landing	true	public	planned	false	
 con-commands	con-dev	/contribute/development/commands/	Common development commands	task-guide	true	public	planned	false	
 con-tests	con-dev	/contribute/development/testing/	Testing layers and local validation	task-guide	true	public	planned	false	

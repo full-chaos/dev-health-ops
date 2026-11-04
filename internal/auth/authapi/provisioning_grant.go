@@ -44,8 +44,8 @@ func init() {
 	provisioningOperations = append(provisioningOperations, opGrantCreate, opGrantUpdate, opGrantRevoke)
 }
 
-// maxGrantKeyBytes bounds resource_key: two 100-byte segments and the slash.
-const maxGrantKeyBytes = 201
+// maxGrantKeyBytes bounds resource_key: the repository key bound.
+const maxGrantKeyBytes = 255
 
 // Grants is the resource grant aggregate (*grant.Store).
 type Grants interface {

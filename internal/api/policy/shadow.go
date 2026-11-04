@@ -55,6 +55,16 @@ func (row ShadowRow) valid() bool {
 		(row.ResourceType == policycatalog.ScopeOrganization || row.ResourceType == policycatalog.ScopePlatform)
 }
 
+func (row ShadowRow) matchesCatalog() bool {
+	action, err := policycatalog.Default().Action(row.Action)
+	return err == nil && row == shadowRowOf(action)
+}
+
+func shadowRowOf(action policycatalog.Action) ShadowRow {
+	return ShadowRow{Action: action.ID, Namespace: strings.SplitN(action.ID, ".", 2)[0], ResourceType: action.ResourceKind,
+		HighRisk: action.RiskClass == policycatalog.RiskHigh}
+}
+
 // ParseShadowRows reads the protected rows of service that name a catalog action, keyed by the
 // route template "METHOD /route" the mux reports as Request.Pattern.
 func ParseShadowRows(raw []byte, service string) (map[string]ShadowRow, error) {
@@ -86,8 +96,7 @@ func ParseShadowRows(raw []byte, service string) (map[string]ShadowRow, error) {
 		if err != nil {
 			return nil, fmt.Errorf("shadow rows: %s: %w", key, err)
 		}
-		row := ShadowRow{Action: action.ID, Namespace: strings.SplitN(action.ID, ".", 2)[0], ResourceType: action.ResourceKind,
-			HighRisk: action.RiskClass == policycatalog.RiskHigh}
+		row := shadowRowOf(action)
 		if !row.valid() {
 			return nil, fmt.Errorf("shadow rows: %s: action %s is outside the shadow's namespaces or resource kinds", key, action.ID)
 		}
@@ -202,6 +211,9 @@ func NewShadow(cfg ShadowConfig) (*Shadow, error) {
 	for key, row := range cfg.Rows {
 		if !row.valid() {
 			return nil, fmt.Errorf("shadow: row %q is outside the closed namespaces or resource kinds", key)
+		}
+		if !row.matchesCatalog() {
+			return nil, fmt.Errorf("shadow: row %q differs from its catalog entry", key)
 		}
 	}
 	if cfg.SamplePercent < 0 || cfg.SamplePercent > 100 {

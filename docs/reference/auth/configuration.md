@@ -172,6 +172,22 @@ With `AUTH_SHADOW_PDP=true` the call goes to the origin of `AUTH_PROXY_URL` (req
 
 The shadow covers only requests that carry an EdDSA user access token; a legacy HS256 token, an impersonation and a request with no organization are `skipped`, so a zero mismatch count is no proof of parity for those callers. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS` before the shadow is turned on, and its per-pod rate limit applies to the PDP route.
 
+### PDP gate (query-api)
+
+query-api can ask the policy decision point (`POST /v1/authorize` on auth-service) on its REST routes (`/api/v1/*`). It asks for a caller that presents an EdDSA user access token, after query-api's own token and organization checks have accepted it, with the row's catalog action and the caller's organization. `/query`, `/graphql` and the MCP listener are not gated.
+
+| Environment | Rule |
+| --- | --- |
+| `QUERY_API_PDP_MODE` | `off`, `shadow` or `enforce`; unset or empty is `off`. `off` reads no other input and asks nothing. `shadow` asks in the background, counts and compares, and never changes a response. `enforce` answers a PDP deny with 403 `{"detail":"Not authorized"}`, and no verdict (the PDP is down, a timeout, a 429, a bad answer) with 503 `{"detail":"Authorization unavailable"}`; the route's handler is not reached. |
+| `AUTH_PROXY_URL` | auth-service's base URL (go-api's setting): an http(s) origin with no path, query or credentials. Read only while the mode is `shadow` or `enforce`. |
+| `AUTH_WORKLOAD_SUBJECT_FILE`, `AUTH_WORKLOAD_BOOTSTRAP_FILE`, `AUTH_WORKLOAD_ISSUER` | query-api's workload credential, with go-api's rules (exactly one file, readable; an https issuer). Read only while the mode is `shadow` or `enforce`. |
+
+A bad mode value, or `shadow`/`enforce` with a missing or bad input, never fails the start. query-api logs one ERROR naming the variable (never its value or a path), sets `dev_health_query_api_pdp_config_invalid` to 1, and answers 503 `{"detail":"Authorization unavailable"}` to every request that would ask the PDP. Each call presents query-api's workload token (audience `auth-service`, client service `dev-health-query-api`) and is limited to 2 seconds; the workload registry row `query-api` holds that audience.
+
+The HS256 edge token (`ops_access_token_hs256`) and the effective-principal envelope (`effective_principal_envelope`) are on an explicit exempt list: they never ask the PDP and stay on today's path in every mode, until HS256 and the envelope retire. Each accepted exempt caller counts in `dev_health_query_api_pdp_exempt_total` (labels `class`, `action`). PDP asks count in `dev_health_query_api_pdp_results_total` (labels `mode`: `shadow`, `enforce`, `invalid`; `result`: `allow`, `deny`, `unavailable`, `match`, `mismatch`, `error`, `dropped`, `not_configured`; `action`). `dev_health_query_api_pdp_enabled` is 1 while a shadow or enforce gate is built.
+
+Before the mode is turned on: query-api needs a workload binding (`auth-migrate workloads bind -workload query-api ...`), auth-service must list query-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS`, and its per-pod limit on the PDP route applies. A delegated (impersonation) token and a caller with no organization are decided by the PDP like any other user token.
+
 ### Workload token exchange
 
 The route `POST /internal/v1/token/exchange` is internal: go-api never forwards it. It is mounted while

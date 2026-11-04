@@ -92,10 +92,15 @@ func Parse(path string) ([]Row, error) {
 	return rows, nil
 }
 
-// goEnv is the environment of the child go tool: ten named variables the go command needs, read one by one, plus the three this scan
-// pins. The rest of the process environment (tokens, keys, DSNs) is never read and never forwarded.
-func goEnv() []string {
-	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1"}
+// ciArches are the GOARCH values the scan runs for, GOOS linux. CI runs Go on arm64 (oci-arc-runners) and on amd64 (ubuntu-latest), and
+// go list ignores a file named for the other arch, so a scan of the host arch alone gave a different answer per host. The scan runs
+// once per arch and the problems are united: the result is the same on every host and never accepts what one CI arch refuses.
+var ciArches = []string{"amd64", "arm64"}
+
+// goEnv is the environment of the child go tool: ten named variables the go command needs, read one by one, plus the five this scan
+// pins (GOOS and GOARCH come from the caller, never from the process environment). The rest of the process environment (tokens, keys, DSNs) is never read and never forwarded.
+func goEnv(goarch string) []string {
+	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1", "GOOS=linux", "GOARCH=" + goarch}
 	add := func(name, value string) {
 		if value != "" {
 			env = append(env, name+"="+value)
@@ -115,19 +120,17 @@ func goEnv() []string {
 	add("GOSUMDB", os.Getenv("GOSUMDB"))
 	add("GONOSUMDB", os.Getenv("GONOSUMDB"))
 	add("GOPRIVATE", os.Getenv("GOPRIVATE"))
-	add("GOOS", os.Getenv("GOOS"))
-	add("GOARCH", os.Getenv("GOARCH"))
 	add("GOEXPERIMENT", os.Getenv("GOEXPERIMENT"))
 	add("CC", os.Getenv("CC"))
 	add("CXX", os.Getenv("CXX"))
 	return env
 }
 
-func goList(root string) (modpath string, pkgs map[string]*goPackage, err error) {
+func goList(root, goarch string) (modpath string, pkgs map[string]*goPackage, err error) {
 	run := func(args ...string) ([]byte, error) {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = root
-		cmd.Env = goEnv()
+		cmd.Env = goEnv(goarch)
 		return cmd.Output()
 	}
 	out, err := run("list", "-m")
@@ -329,13 +332,13 @@ func calleeKey(c *ast.CallExpr, info *types.Info) string {
 
 // loadTypes parses and type-checks the packages (with their tests) once; a package that does not type-check is a problem, because the
 // scan then cannot tell a function value from anything else.
-func loadTypes(root string, importPaths []string) (typeStore, map[string][]string, error) {
+func loadTypes(root, goarch string, importPaths []string) (typeStore, map[string][]string, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes |
 			packages.NeedTypesInfo | packages.NeedSyntax,
 		Dir:   root,
 		Tests: true,
-		Env:   goEnv(),
+		Env:   goEnv(goarch),
 		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
 			return parser.ParseFile(fset, filename, src, parser.ParseComments)
 		},
@@ -409,9 +412,28 @@ func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErr
 	return out
 }
 
-// Check returns every problem of rows against the module at root; the shipped call has root = the repository.
+// Check returns every problem of rows against the module at root, united over ciArches; the shipped call has root = the repository.
 func Check(root string, rows []Row) ([]string, error) {
-	modpath, pkgs, err := goList(root)
+	seen := map[string]bool{}
+	var problems []string
+	for _, goarch := range ciArches {
+		got, err := checkFor(root, goarch, rows)
+		if err != nil {
+			return nil, fmt.Errorf("GOARCH=%s: %w", goarch, err)
+		}
+		for _, p := range got {
+			if !seen[p] {
+				seen[p] = true
+				problems = append(problems, p)
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems, nil
+}
+
+func checkFor(root, goarch string, rows []Row) ([]string, error) {
+	modpath, pkgs, err := goList(root, goarch)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +452,7 @@ func Check(root string, rows []Row) ([]string, error) {
 	var ts typeStore
 	loadErrs := map[string][]string{}
 	if len(patterns) > 0 {
-		if ts, loadErrs, err = loadTypes(root, patterns); err != nil {
+		if ts, loadErrs, err = loadTypes(root, goarch, patterns); err != nil {
 			return nil, err
 		}
 	}

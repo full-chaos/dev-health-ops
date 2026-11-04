@@ -1,8 +1,9 @@
 // Package orgdeprovision ends an organization in the auth schema in one
 // audit.Commit: every pending invite revoked, every live membership removed
-// (both tables each), every session of the organization ended, and the
-// organization suspended. go-api runs it before it purges the organization's
-// data, so the purge never leaves an auth membership, invite or session live.
+// (both tables each), every session of the organization ended, every live
+// key of its service accounts revoked, and the organization suspended. go-api
+// runs it before it purges the organization's data, so the purge never leaves
+// an auth membership, invite, session or service-account key live.
 package orgdeprovision
 
 import (
@@ -133,6 +134,7 @@ type plan struct {
 	members *membership.OrgRemoval
 	invites *invite.OrgRevocation
 	grants  *grantend.Plan
+	keys    *keyPlan
 }
 
 // Deprovision runs the one commit, in the auth lock order (membership.Store readPairs): the principal rows
@@ -140,8 +142,10 @@ type plan struct {
 // inviters of go-api-only invites, the actor of its audit row), the organization row FOR UPDATE
 // (step 3, exclusive), Authorize, the pending invites (step 4), every
 // membership row (steps 5 and 6), the organization's sessions and go-api
-// refresh tokens NOWAIT (step 6a, session.Store.EndOrganizationInTx), the
-// suspension, then the revisions inside audit.Commit. It takes no public.users
+// refresh tokens NOWAIT (step 6a, session.Store.EndOrganizationInTx), its grants
+// (step 6d), its live service-account key rows FOR UPDATE (step 6e; their
+// accounts are among the step-1 principal rows), the suspension, then the
+// revisions inside audit.Commit. It takes no public.users
 // row. Every membership and invite writer reaches the organization row before
 // any membership or invite row, and takes principal rows only before it, so
 // none waits in a cycle with it. A row step 6a finds locked rolls the commit
@@ -199,12 +203,17 @@ func (s *Service) plan(ctx context.Context, orgID uuid.UUID) (plan, error) {
 	if p.grants, err = grantend.PlanOrg(ctx, read, s.q, orgID); err != nil {
 		return plan{}, fmt.Errorf("%w: plan: %w", ErrStore, err)
 	}
+	p.keys = &keyPlan{q: s.q, org: orgID}
+	if p.keys.rows, err = p.keys.read(ctx, read, false); err != nil {
+		return plan{}, fmt.Errorf("%w: plan: %w", ErrStore, err)
+	}
 	return p, nil
 }
 
 func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 	events := append(p.invites.Events(), p.members.Events()...)
 	events = append(events, p.grants.Events()...)
+	events = append(events, p.keys.events()...)
 	if p.active || len(events) == 0 {
 		events = append(events, org.SuspendedEvent(in.OrgID))
 	}
@@ -216,6 +225,7 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 				return err
 			}
 			named := append(p.members.Referenced(), p.invites.Referenced()...)
+			named = append(named, p.keys.accounts()...)
 			if in.Actor.PrincipalID != nil {
 				// The audit row names the actor (a foreign key, KEY SHARE at commit).
 				named = append(named, *in.Actor.PrincipalID)
@@ -260,13 +270,18 @@ func (s *Service) once(ctx context.Context, in Input, p plan) (*Result, error) {
 				}
 				return err
 			}
+			// Step 6e: the organization's service-account key rows, after its grants.
+			if err := p.keys.apply(ctx, tx); err != nil {
+				return err
+			}
 			if !active {
 				return nil
 			}
 			return s.orgs.ApplySuspend(ctx, tx, in.OrgID)
 		},
-		Audit:    auditFor(in, p.active),
-		Also:     p.grants.Audit(grantend.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID, Caller: in.Actor.Caller}),
+		Audit: auditFor(in, p.active),
+		Also: append(p.grants.Audit(grantend.Actor{PrincipalID: in.Actor.PrincipalID, RequestID: in.Actor.RequestID, Caller: in.Actor.Caller}),
+			p.keys.audit(in.Actor)...),
 		Events:   events,
 		Refusals: []error{errSessionsBusy},
 	})

@@ -103,6 +103,10 @@ func (p *preflightStore) principal(t *testing.T, ctx context.Context) uuid.UUID 
 	if _, err := p.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'preflight-test')`, id.String()); err != nil {
 		t.Fatalf("seed principal: %v", err)
 	}
+	if _, err := p.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, token_version) VALUES ($1, $2, $3, 0)`,
+		id.String(), "pf-"+id.String()+"@example.test", "pf-"+id.String()); err != nil {
+		t.Fatalf("seed public.users: %v", err)
+	}
 	return id
 }
 

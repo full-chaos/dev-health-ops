@@ -1,6 +1,14 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-29T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/auth/session/signin.go",
+      "line": 73,
+      "now": "func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,",
+      "was": "func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -30,7 +38,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +53,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -305,7 +313,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -360,7 +368,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -375,7 +383,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -403,7 +411,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 138,
+          "line": 144,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -512,7 +520,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 69,
+            "line": 73,
             "note": "func (s *Store) insertSession",
             "path": "internal/auth/session/signin.go"
           },
@@ -577,7 +585,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -640,7 +648,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2149,7 +2157,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2231,7 +2239,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2313,7 +2321,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },

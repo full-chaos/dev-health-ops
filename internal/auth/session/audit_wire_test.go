@@ -31,6 +31,7 @@ func TestEverySessionAuditRowIsAValidAuditEventV1(t *testing.T) {
 			supersededEvent(audit.AuditEvent{ActorPrincipalID: actorID(actor), RequestID: &request}, principal, id),
 			supersededEvent(audit.AuditEvent{}, principal, id),
 			refreshedEvent(ctx, principal, id),
+			createdEvent(ctx, principal),
 		}
 		for _, row := range rows {
 			auditwire.MustValidate(t, row)

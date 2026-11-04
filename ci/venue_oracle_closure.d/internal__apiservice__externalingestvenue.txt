@@ -65,7 +65,9 @@ internal/auth/publicaudit
 internal/auth/pushevent
 internal/auth/pushlifecycle
 internal/auth/pushreconcile
+internal/auth/pushreconcile/projectionreader
 internal/auth/ratelimitvalkey
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid

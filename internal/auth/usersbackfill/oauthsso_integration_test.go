@@ -153,7 +153,7 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Users != int(base.Total)+2 || rep.Linked != 1 || rep.SelfHostedUnbindable != 1+int(base.SelfHostedUnbindable) || len(rep.Skipped) != 0 {
+	if rep.Users != int(base.Total)+2 || rep.Linked != 2 || len(rep.Skipped) != 0 {
 		t.Fatalf("report %+v", rep)
 	}
 
@@ -170,19 +170,19 @@ func TestBackfillOAuthSSOThenOwnedLoginHitsKey(t *testing.T) {
 	if n := e.identityCount(t, ctx, gh, "https://github.com", "github"); n != 1 {
 		t.Fatalf("social key kept = %d", n)
 	}
-	if n := e.identityCount(t, ctx, sh, "https://gitlab.com", "gitlab"); n != 1 {
-		t.Fatalf("self-hosted user's social key kept = %d", n)
+	if n := e.identityCount(t, ctx, sh, "https://gitlab.com", "gitlab"); n != 0 {
+		t.Fatalf("self-hosted user's gitlab.com social key = %d, want none", n)
 	}
 	var selfHostedKeys int
-	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE provider = $1`, shRow.String()).Scan(&selfHostedKeys); err != nil || selfHostedKeys != 0 {
-		t.Fatalf("self-hosted row keys = %d (%v)", selfHostedKeys, err)
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE provider = $1`, shRow.String()).Scan(&selfHostedKeys); err != nil || selfHostedKeys != 1 {
+		t.Fatalf("self-hosted row keys = %d (%v), want 1", selfHostedKeys, err)
 	}
 
 	count, err := identity.ReadOAuthSSOCount(ctx, e.runtime, authschemaQuote(e))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != (identity.OAuthSSOCount{Total: base.Total + 2, Keyed: base.Keyed + 1, Missing: 0, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 1}) {
+	if count != (identity.OAuthSSOCount{Total: base.Total + 2, Keyed: base.Keyed + 2, Missing: 0, Ambiguous: base.Ambiguous}) {
 		t.Fatalf("count line %q", count.Line())
 	}
 	again, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})
@@ -265,7 +265,7 @@ func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T)
 		return out.String()
 	}
 	before := countOut()
-	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed, Missing: 2, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 3}).Line() + "\n"; before != want {
+	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed, Missing: 5, Ambiguous: base.Ambiguous}).Line() + "\n"; before != want {
 		t.Fatalf("before the verb: %q, want %q", before, want)
 	}
 
@@ -274,11 +274,11 @@ func TestVerbUsersBackfillCarriesOAuthSSOAndCountVerbPrintsOneLine(t *testing.T)
 	if code != cli.ExitOK {
 		t.Fatalf("users-backfill exit %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "oauth_sso_keys_linked=2\n") {
+	if !strings.Contains(stdout.String(), "oauth_sso_keys_linked=5\n") {
 		t.Fatalf("stdout %q", stdout.String())
 	}
 	after := countOut()
-	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed + 2, Missing: 0, Ambiguous: base.Ambiguous, SelfHostedUnbindable: base.SelfHostedUnbindable + 3}).Line() + "\n"; after != want {
+	if want := (identity.OAuthSSOCount{Total: base.Total + 5, Keyed: base.Keyed + 5, Missing: 0, Ambiguous: base.Ambiguous}).Line() + "\n"; after != want {
 		t.Fatalf("after the verb: %q, want %q", after, want)
 	}
 	if strings.ContainsAny(after, "@") || strings.Count(after, "\n") != 1 {
@@ -358,7 +358,7 @@ func TestBackfillOAuthSSOCarriesOnlyExactlyOneRowAndCountsTheRest(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != (identity.OAuthSSOCount{Total: base.Total + 3, Keyed: base.Keyed + 1, Missing: 0, Ambiguous: base.Ambiguous + 2, SelfHostedUnbindable: base.SelfHostedUnbindable}) {
+	if count != (identity.OAuthSSOCount{Total: base.Total + 3, Keyed: base.Keyed + 1, Missing: 0, Ambiguous: base.Ambiguous + 2}) {
 		t.Fatalf("count line %q", count.Line())
 	}
 	again, err := RunOAuthSSO(ctx, PGOAuthSSOSource{Pool: e.runtime}, e.store, Options{})

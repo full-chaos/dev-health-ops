@@ -190,6 +190,8 @@ nav:
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
           - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
+          - Web assertion key rotation: operate/runbooks/auth-workload-assertion-key-rotation.md
+          - Auth client-address proof: operate/runbooks/auth-client-address-proof.md
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md

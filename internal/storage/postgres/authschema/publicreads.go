@@ -35,12 +35,14 @@ func PublicReadColumns() []ColumnGrant {
 			"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier",
 		}},
-		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"}},
+		// id and updated_at: the versioned read API serves a membership's id and last change. id is held whether or not
+		// auth-service owns users (MembershipWriteGrants holds it only under that switch).
+		{Table: "memberships", Columns: []string{"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"}},
 		{Table: "sso_providers", Columns: []string{
 			"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at",
 		}},
-		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier"}},
+		{Table: "organizations", Columns: []string{"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"}},
 		{Table: "saml_assertion_replays", Columns: []string{"provider_id", "assertion_id", "expires_at"}},
 		{Table: "org_licenses", Columns: []string{"org_id", "tier", "features_override"}},
 		// The login organization choice ranks a user's organizations by their metrics
@@ -64,10 +66,11 @@ func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
-// ProjectionReaderReads is everything a projection reader role reads in the auth schema.
+// ProjectionReaderReads is everything a projection reader role reads in the auth schema. scopes and source_id are
+// read by the External Push reconcile (CHAOS-10897) and never by the acr reconcile; no fingerprint, no terminal_at.
 func ProjectionReaderReads() []ColumnGrant {
 	return []ColumnGrant{{Table: "credential_projection", Columns: []string{
-		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at"}}}
+		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at", "scopes", "source_id"}}}
 }
 
 // PlatformRoleReaderColumns is what a session reader role also reads while the
@@ -123,10 +126,12 @@ func LegacyRefreshTokenGrant() TableWriteGrant {
 // last_login_at is updated only by a sign-in, with updated_at, as go-api's does.
 // sso_provider_id (ops revision 0155) is inserted only: the provider row an OIDC or
 // SAML account belongs to, never rewritten. Before 0155 its grant is DEFERRED.
+// is_superuser is never written (CHAOS-10993): the column defaults to false and the
+// platform roles live in auth.platform_role_assignments.
 func UsersWriteGrant() (insert, update []string) {
 	return []string{
 			"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-			"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id",
+			"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id",
 		},
 		[]string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 }

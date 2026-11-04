@@ -215,6 +215,7 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"allowed_by_membership_default", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-membership-default.json"},
 	{"impersonation_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-impersonation-denied.json"},
 	{"delegation_invalid", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-delegation-invalid.json"},
+	{"repository_allowlist_too_large", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-repository-allowlist-too-large.json"},
 }
 
 var approvedDecisionReasonCodes = func() []string {

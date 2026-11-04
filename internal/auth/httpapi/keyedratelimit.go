@@ -133,6 +133,18 @@ func (l *windowCounters) hit(key, path string) (count int, admitted bool) {
 	return entry.count, true
 }
 
+// unhit takes one hit back from the pair's live window: nothing when the pair
+// has no entry or its window has elapsed, and never below 0.
+func (l *windowCounters) unhit(key, path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entry := l.entries[key+"\x00"+path]
+	if entry == nil || l.now().Sub(entry.start) >= l.window || entry.count <= 0 {
+		return
+	}
+	entry.count--
+}
+
 // peek returns the window's count for the (key, path) pair without counting
 // a hit or changing anything: 0 when the pair has no entry or its window has
 // elapsed.

@@ -119,7 +119,7 @@ func TestTheAclCommandsAreExactlyTheOnesTheCodeCalls(t *testing.T) {
 			t.Errorf("the rule grants %q and nothing in the code calls it", command)
 		}
 	}
-	if len(used) != 13 {
-		t.Errorf("%d commands found in the code (%v), want 13: a parser that reads less must not pass", len(used), used)
+	if len(used) != 14 {
+		t.Errorf("%d commands found in the code (%v), want 14: a parser that reads less must not pass", len(used), used)
 	}
 }

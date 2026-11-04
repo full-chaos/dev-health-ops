@@ -392,7 +392,7 @@ func TestEveryExchangeRefusalMapsToItsStatusAndReason(t *testing.T) {
 // The store refuses a session whose public user is inactive or gone under its
 // lock (D6651) and names the locked session: the route's own read of the user
 // decides the reason and revokes the session; a user the route reads active
-// (a concurrent change) gets no token.
+// (a concurrent change) gets no token, revision_stale, and the session revoked.
 func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 	for name, c := range map[string]struct {
 		mutate  func(*fixture)
@@ -406,7 +406,7 @@ func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 			f.users.users[f.principal] = user
 		}, 401, "principal_deactivated", true},
 		"gone":             {func(f *fixture) { delete(f.users.users, f.principal) }, 401, "principal_not_found", true},
-		"active on reread": {func(*fixture) {}, 401, "revision_stale", false},
+		"active on reread": {func(*fixture) {}, 401, "revision_stale", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)

@@ -434,6 +434,22 @@ func TestCompatRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 	}
 }
 
+// A store refusal (D6651) whose public user the route reads active (a
+// concurrent change) mints nothing, answers go-api's generic 401 and revokes the
+// locked session the store named.
+func TestCompatRefreshOfAStoreRefusedUserReadActiveRevokesTheSession(t *testing.T) {
+	f := newCompatFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
+	if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("revoked %v, want the locked session %s", f.sessions.revoked, f.record.ID)
+	}
+	if f.sessions.minted != 0 {
+		t.Fatalf("%d successors minted, want 0", f.sessions.minted)
+	}
+}
+
 func TestCompatRefreshAnswersGoAPIsBodyWithTheRotatedCredential(t *testing.T) {
 	f := newCompatFixture(t)
 	rotated := "dhr1_" + strings.Repeat("r", 43)

@@ -69,6 +69,7 @@ internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/chmigrate
 internal/cli
 internal/edgetokenmint

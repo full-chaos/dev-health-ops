@@ -119,13 +119,18 @@ func TestTheSharedWorkloadClientIsTheProvisioningOneThenTheSessionOne(t *testing
 	}
 }
 
-// Startup builds the Enforcer and installs it beside the guard: a source pin where no database runs.
+// Startup builds one decision point client, the Enforcer and the shadow over it, and installs both beside the guard:
+// a source pin where no database runs.
 func TestStartupInstallsTheEnforcerOnTheGuard(t *testing.T) {
 	raw, err := os.ReadFile("service.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"buildEnforcer(envsecrets.ProcessLookup", "protected.guard.SetEnforcer(enforcer)"} {
+	for _, want := range []string{
+		"newDecisionPoint(authProxy, envsecrets.ProcessLookup, sharedWorkloadClient(provisioningCred, sessionCred))",
+		"buildEnforcer(envsecrets.ProcessLookup, logger, decisionPoint)", "protected.guard.SetEnforcer(enforcer)",
+		"protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))",
+	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("service.go does not contain %q", want)
 		}

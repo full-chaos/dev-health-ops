@@ -88,6 +88,8 @@ type recorder struct {
 	outcomes metric.Int64Counter
 	// compatUses counts accepted svc_authsess_ uses of the session issue route.
 	compatUses metric.Int64Counter
+	// revocationLag is the lag of a refused revoked session (revocation_lag.go).
+	revocationLag metric.Float64Histogram
 }
 
 func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
@@ -102,7 +104,11 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 		return recorder{}, err
 	}
 	compatUses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("class", compatClass)))
-	return recorder{logger: logger, outcomes: outcomes, compatUses: compatUses}, nil
+	lag, err := registerRevocationLag(meter)
+	if err != nil {
+		return recorder{}, err
+	}
+	return recorder{logger: logger, outcomes: outcomes, compatUses: compatUses, revocationLag: lag}, nil
 }
 
 func (rec recorder) record(ctx context.Context, operation, result, reason string, err error) {

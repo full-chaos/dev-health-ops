@@ -484,8 +484,11 @@ var additiveExemptions = []additiveExemption{
 	},
 	{
 		name: "grant_repository_key_nested",
-		regression: `constraint resource_grants.resource_grants_repository_key_canonical redefined "CHECK (((resource_kind <> 'repository'::text) OR (resource_id ~ '^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$'::text)))" -> ` +
-			`"CHECK (((resource_kind <> 'repository'::text) OR ((resource_id ~ '` + repokey.SchemaPattern + `'::text) AND (octet_length(resource_id) <= 255))))"`,
+		// Built with diffIsAdditive's own %q format: the pattern's backslash is escaped there.
+		regression: fmt.Sprintf("constraint %s redefined %q -> %q",
+			"resource_grants.resource_grants_repository_key_canonical",
+			`CHECK (((resource_kind <> 'repository'::text) OR (resource_id ~ '^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$'::text)))`,
+			`CHECK (((resource_kind <> 'repository'::text) OR ((resource_id ~ '`+repokey.SchemaPattern+`'::text) AND (octet_length(resource_id) <= 255))))`),
 		reason: "the repository grant key admits a nested path of 2-20 segments in at most 255 bytes; " +
 			"every segment now ends in [a-z0-9], and the migration refuses while a row would break that (CHAOS-12785)",
 	},

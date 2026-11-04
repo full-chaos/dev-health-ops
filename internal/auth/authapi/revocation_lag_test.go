@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -140,4 +141,17 @@ func TestValidateRefusalOfARevokedSessionRecordsItsLag(t *testing.T) {
 	f.sessions.records[f.record.ID] = record
 	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
 	wantLag(t, reader, 1, 7)
+}
+
+func TestANilRevokedAtRecordsNoLag(t *testing.T) {
+	reader, provider := accessMeter()
+	rec, err := newRecorder(slog.New(slog.DiscardHandler), provider.Meter("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec.observeRevocationLag(context.Background(), nil, time.Now())
+	wantLag(t, reader, 0, 0)
+	at := time.Now().Add(-2 * time.Second)
+	rec.observeRevocationLag(context.Background(), &at, at.Add(2*time.Second))
+	wantLag(t, reader, 1, 2)
 }

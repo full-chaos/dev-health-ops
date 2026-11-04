@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go/ast"
+	"go/build"
 	"go/constant"
 	"go/importer"
 	"go/parser"
@@ -16,11 +17,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -454,11 +457,33 @@ func headerKey(node ast.Node, info *types.Info) (ast.Expr, bool) {
 	return nil, false
 }
 
+var goRootOnce sync.Once
+
+// sourceImporter returns a source importer. A test binary built with
+// -trimpath has no GOROOT, so go/build cannot find the standard library
+// until the go command supplies it.
+func sourceImporter() types.Importer {
+	goRootOnce.Do(func() {
+		if build.Default.GOROOT != "" {
+			return
+		}
+		out, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			return
+		}
+		build.Default.GOROOT = strings.TrimSpace(string(out))
+	})
+	if build.Default.GOROOT == "" {
+		panic("guard type check: GOROOT is empty and `go env GOROOT` failed")
+	}
+	return importer.ForCompiler(token.NewFileSet(), "source", nil)
+}
+
 // authorizationGuardProblems scans the production files of dir and returns
 // every read of the Authorization header outside allowed, and every reason
 // the scan cannot be trusted.
 func authorizationGuardProblems(dir string, allowed []string) []string {
-	return guardProblemsWith(dir, allowed, importer.ForCompiler(token.NewFileSet(), "source", nil))
+	return guardProblemsWith(dir, allowed, sourceImporter())
 }
 
 func guardProblemsWith(dir string, allowed []string, fallback types.Importer) []string {
@@ -693,7 +718,7 @@ func (f failingThirdParty) Import(path string) (*types.Package, error) {
 // TestGuardChecksTheRealPackageWithoutThirdPartyImports: the guard needs only
 // this module's constants, so it must pass when no third-party import loads.
 func TestGuardChecksTheRealPackageWithoutThirdPartyImports(t *testing.T) {
-	fallback := failingThirdParty{std: importer.ForCompiler(token.NewFileSet(), "source", nil)}
+	fallback := failingThirdParty{std: sourceImporter()}
 	for _, problem := range guardProblemsWith(".", []string{"principalonce.go", "guard.go"}, fallback) {
 		t.Error(problem)
 	}

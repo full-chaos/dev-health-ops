@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-readiness-slo
-summary: The auth-service operator surface - /healthz, /readyz and /metrics - the three required readiness checks and the reason codes behind them, the metric series, the ordered shutdown, and the initial service level objectives with the dashboard that does not exist yet.
+summary: The auth-service operator surface (/healthz, /readyz, /metrics), the readiness checks and reason codes, the metric series, the ordered shutdown, and the service level objectives with their alerts.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -90,26 +90,28 @@ database pool. The whole sequence is bounded by `AUTH_SERVICE_SHUTDOWN_TIMEOUT`
 and the process exits 0 on a clean stop. A component that cannot stop in time
 makes the process exit 1 and log `service stopped with error`.
 
-## Initial service level objectives
+## Service level objectives
 
-The service is dormant (no route, no consumer), so Wave 1 has no request-latency
-or error-rate SLO to defend. The objectives that exist are about the service
-being ready to be used, **proposed and not yet measured in production**:
+Each row names its target, window, source and status. A target comes from a ticket or an existing page; a row with no sourced target says "target not set" and gives the measured baseline where one exists. No number here is a guess. Latency is the `dev_health_api_http_request_duration_seconds` histogram on the auth-service API listener, filtered by `route`; its edges include 25 ms, 75 ms and 200 ms (`internal/auth/httpapi/accesslog.go`), so each latency target is a bucket edge.
 
-| SLI | Objective | Source |
-| --- | --- | --- |
-| Readiness: fraction of time `dev_health_runtime_ready == 1` for a deployed replica | 99.9% over 30 days | `/metrics` |
-| Time to ready after a start | under 60 s | `dev_health_runtime_uptime_seconds` at first ready |
-| Oldest pending outbox event (once a sink exists) | under 5 minutes | `devhealth_auth_outbox_oldest_pending_age_seconds` |
+| Service and path | SLI | Target | Window | Source of the target | Status |
+| --- | --- | --- | --- | --- | --- |
+| auth-service, all routes | Availability: share of requests not answered 5xx (`dev_health_api_http_requests_total`, `status_class`) | 99.95% | 30 days | CHAOS-11220 | Target only; no production measurement. Alerts: `AuthService5xx` (any 5xx in 5 minutes, live in SigNoz) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for 10 minutes, in `alerts/rules.yml`, not yet created in SigNoz). No burn-rate rule. |
+| PDP `POST /v1/authorize` and `/v1/authorize:batch` | p95, p99 latency; error rate | p95 < 25 ms, p99 < 75 ms, errors 0 | Load leg (`ci/pdp_load_k3s.sh`); alert window 5 minutes | CHAOS-10854, CHAOS-12705 ("do not loosen the SLO") | Not yet met at peak (CHAOS-12705). At normal load it holds: low p95 7.1 ms, high 10.2, deny 7.6, batch-10 16.4. At 200 requests/s (client concurrency 64): authorize-high p95 2075 ms with 6.9% dropped, authorize-deny p95 32.6 ms and p99 120 ms, authorize-batch-10 p50 2.6 s with 38% dropped; batch-100 is recorded, not gated (82% dropped). Recorded baseline: run `lead-10854-k3s-v5`. Alerts: `AuthzLatencyP95High`, `AuthzLatencyP99High`. |
+| Session issue `/internal/v1/sessions` | p95 latency | < 200 ms | 5 minutes | CHAOS-11220 | Measured, one pod of 1 CPU: p95 under 10 ms up to 400 requests/s; 161 ms at 800 requests/s ([capacity](../../operate/plan/auth-service-capacity.md)). Alert: `AuthTokenLatencyP95High`. |
+| Refresh `/v1/token/refresh` | p95 latency | < 200 ms | 5 minutes | CHAOS-11220 | Measured: p95 about 7 ms at 300 requests/s; 6.8 ms with 6 times the refresh rate (10-minute token lifetime). Alert: `AuthTokenLatencyP95High`. |
+| JWKS `GET /.well-known/jwks.json` | p95 latency | target not set | - | no ticket or page states one | Measured baseline: p95 under 2 ms up to 1600 requests/s per pod. No alert. |
+| Exchange `POST /internal/v1/token/exchange` | latency, outcome | target not set | - | no ticket or page states one | No measurement: the load harness covers issue, refresh and JWKS. No alert. |
+| Audit outbox | Age of the oldest pending event (`devhealth_auth_outbox_oldest_pending_age_seconds`) | under 5 minutes | 5 minutes | this page, before CHAOS-11220 | Metric exists; not measured under load. Alert: `AuthOutboxOldestPendingHigh` (above 300 seconds). |
+| Revocation propagation | Seconds from the revoke request received to the revocation row written: `auth.session.revocation_lag` (Prometheus `auth_session_revocation_lag_seconds`, histogram, label `reason` only; CHAOS-12917, not yet on main) | target not set | - | no ticket or page states one | The SLI is named; the metric is not on main yet. No alert. |
+| Readiness | Fraction of time `dev_health_runtime_ready == 1` for a deployed replica | 99.9% | 30 days | this page, kept | Proposed, not measured in production. |
+| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |
 
-Alert on `dev_health_runtime_check_failed{check}` for any check for more than
-five minutes, and on `devhealth_auth_outbox_publisher_enabled == 0` **after** the
-first consumer lands (before that it is expected).
+Measured values come from the CHAOS-11223 runs (ops `b4e8ff13`, one pod of 1 CPU, not production) and the CHAOS-10854 run. The load numbers are test results, not production measurements.
 
-**Gap, named:** there is no readiness or SLO dashboard for the auth service yet.
-The series above are the inputs for one; building it is deferred until the
-service is deployed beyond a dormant environment, because a dashboard over a
-service nobody calls would show only its own heartbeat.
+The alert text is in `alerts/rules.yml` (group `auth_slo`) and its SigNoz builder form in [dashboards and alerts](../../operate/observe/dashboards-and-alerts.md#auth-service-slo-alerts). Also alert on `dev_health_runtime_check_failed{check}` for any check for more than five minutes, and on `devhealth_auth_outbox_publisher_enabled == 0` **after** the first consumer lands (before that it is expected).
+
+**Gap, named:** there is no readiness or SLO dashboard for the auth service yet; a separate change builds it from the series above.
 
 ## Verified against
 

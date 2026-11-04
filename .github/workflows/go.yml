@@ -353,6 +353,10 @@ permissions:
   # packages are private or public, so CI does not depend on their visibility.
   packages: read
 
+# CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
+env:
+  GOPROXY: https://proxy.golang.org|direct
+
 jobs:
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/

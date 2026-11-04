@@ -182,6 +182,7 @@ func TestScheduleCoveragePinsTheMissedRunPolicy(t *testing.T) {
 		"dimension_fold":                     CatchUpSkip,
 		"llm_budget_stale_reservations":      CatchUpSkip,
 		"provider_oauth_revocations":         CatchUpSkip,
+		"external_push_expiry_sweep":         CatchUpSkip,
 		"work_item_attribution_daily_fanout": CatchUpBounded,
 	}
 	schedules, err := Schedules()

@@ -128,6 +128,7 @@ internal/auth/writerinventory	credential_registry_reader_census_test.go	internal
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
+internal/authzenforce	census_test.go	.	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*
 internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*

@@ -114,7 +114,8 @@ type Options struct {
 	// thing ALTER FUNCTION OWNER needs); see applyPushLifecycleWriter.
 	PushLifecycleWriterRole string
 	// PushLifecycleCallerRoles are the logins that may execute that function:
-	// go-api's, and no other. Required when PushLifecycleWriterRole is set.
+	// go-api's login and the worker domain login that runs the expiry sweeper
+	// (CHAOS-12828), and no other. Required when PushLifecycleWriterRole is set.
 	PushLifecycleCallerRoles []string
 	// LockTimeout bounds how long one migration's transaction waits for a
 	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.

@@ -79,7 +79,7 @@ func TestRehearsedProvisionRunsTheStatementsOfARealOneAndStoresNothing(t *testin
 				t.Fatalf("ProvisionLocal(%s): %v", email, err)
 			}
 		}
-		real, rehearsed := uniqueEmail("real"), uniqueEmail("rehearsed")
+		real, rehearsed := uniqueEmailCom("real"), uniqueEmailCom("rehearsed")
 		log.take()
 		run(ctx, real)
 		want := log.take()

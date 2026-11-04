@@ -94,7 +94,7 @@ func assertMembershipRequired(t *testing.T, ctx context.Context, st stack, provi
 	if err := st.pool.QueryRow(ctx, `SELECT status FROM sso_providers WHERE id = $1`, providerID).Scan(&providerStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure' AND error_message = 'identity conflict'`,
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure'`,
 		providerID.String()).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,7 @@ internal/auth/policycatalog
 internal/auth/pushevent
 internal/auth/repokey
 internal/auth/sessionid
+internal/authzenforce
 internal/cacheinvalidation
 internal/chmigrate
 internal/chmigrate/chgate

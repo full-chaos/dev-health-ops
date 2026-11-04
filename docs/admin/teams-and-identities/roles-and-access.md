@@ -22,13 +22,7 @@ Do not troubleshoot access by sharing session tokens or elevating every user to 
 
 ## Ask Dev entity access
 
-Ask Dev scope search derives the organization and effective permissions from the
-authenticated server session. Browser-provided organization, repository,
-project, WorkUnit, issue, pull-request, page-context, and conversation-context
-IDs are reauthorized before use. Team selections are filters over an authorized
-direct scope and do not grant access to additional repositories or entities.
-The scope and metric GraphQL fields also require the canonical `ask_dev`
-feature decision; request fields and UI state cannot grant that entitlement.
+Ask Dev requests are served by Context Fabric, which re-reads the user's live access from Dev Health on every call and refuses with 403 `feature_not_enabled` when `ask_dev` is off. Context Fabric reauthorizes every subject ID in a request against the caller's live organization and repository grant. A page hint or a browser-provided ID never widens that grant.
 
 Missing and unauthorized stable IDs intentionally return the same
 existence-neutral result. Administrators should not expect the response to

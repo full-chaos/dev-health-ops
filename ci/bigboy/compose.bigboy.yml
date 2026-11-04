@@ -1909,12 +1909,11 @@ services:
   # workload token (CHAOS-12976, the prod shape): ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload, and acr-api exchanges the Compose
   # bootstrap credential of the workload acr-api (the volume acr_workload_bootstrap, written by acr-workload-bootstrap, profile auth)
   # at auth-service (the auth venue below) for a token of audience dev-health-api. go-api verifies it against the issuer's JWKS and
-  # the pinned subject AUTH_ACR_WORKLOAD_SUBJECT. There is no service token. CHAOS-9989:
-  # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE is passed through, EMPTY unless the environment sets it (empty = acr's own behaviour);
-  # no tracked env file sets it, and none may on bigboy (chris: a persistent BYO setting bills his key). `ops` makes acr read an
-  # org's BYO LLM config from ops' internal route with the workload token; set it for one run in the
-  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is gone (CHAOS-12976): prod has none
-  # (deploy values.acr-prod.yaml "No stand-in on prod"), and it checked a static bearer where acr-api now sends a workload token.
+  # the pinned subject AUTH_ACR_WORKLOAD_SUBJECT. There is no service token. CHAOS-12997: acr reads an org's BYO LLM config from ops'
+  # internal route with that token (scope llm_config:read) whenever it has an entitlement client; the
+  # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE setting was removed from acr and is not passed.
+  # The entitlement stand-in is gone (CHAOS-12976): prod has none (deploy values.acr-prod.yaml "No stand-in on prod"), and it checked
+  # a static bearer where acr-api now sends a workload token.
   # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
   # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each is REQUIRED (`:?`): with a pin missing every compose command fails, naming it, instead of
   # a default tag that could start a wrong image. So the acr lines must be in a host's _records/images.env BEFORE its checkout holds this file.
@@ -2088,7 +2087,6 @@ services:
       ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'
       ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai
       ACR_CONTEXT_FABRIC_MODEL_TIMEOUT: 100s
-      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}
       ACR_DATA_GRAPHQL_URL: http://query-api:8096
       ACR_DATA_QUERY_TIMEOUT: 30s
       ACR_DATA_QUERY_URL: http://query-api:8095

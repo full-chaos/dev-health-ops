@@ -15,7 +15,8 @@
 # the issuer over https and nothing here serves TLS.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT="$(dirname "$(dirname "${SELF}")")"
 FLAGS="${ROOT}/ci/live_e2e_auth_flags.tsv"
 
 ISSUER="${LIVE_E2E_AUTH_ISSUER:-https://localhost:8443}"
@@ -204,7 +205,7 @@ up() {
   export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
   (
     cd "${STATE}"
-    nohup bash "${BASH_SOURCE[0]}" with-env auth-service "${STATE}" -- "${STATE}/bin/auth-service" \
+    nohup bash "${SELF}" with-env auth-service "${STATE}" -- "${STATE}/bin/auth-service" \
       >"${STATE}/logs/auth-service.log" 2>&1 &
     echo "$!" >"${STATE}/auth-service.pid"
   )

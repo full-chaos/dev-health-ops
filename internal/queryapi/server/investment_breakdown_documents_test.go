@@ -86,6 +86,12 @@ func TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName
 		t.Fatalf("the investmentBreakdown document does not start with %q: this test compares nothing", breakdownHead)
 	}
 	body := strings.TrimPrefix(registeredInvestmentBreakdownDocument, breakdownHead)
+	// CHAOS-12999: the scoped texts also select sizedUnitCount (the sizing coverage of an ISSUE_SIZE answer); the
+	// investmentBreakdown text is the web wire form and does not.
+	scopedBody := strings.Replace(body, "      uncategorizedCount\n", "      uncategorizedCount\n      sizedUnitCount\n", 1)
+	if scopedBody == body {
+		t.Fatal("the investmentBreakdown body has no uncategorizedCount line: the scoped bodies cannot be derived")
+	}
 	schema := graph.NewExecutableSchema(graph.Config{}).Schema()
 	byDigest := map[string]string{
 		digestHex(registeredInvestmentBreakdownDocument):   "investmentBreakdown",
@@ -97,8 +103,8 @@ func TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName
 			t.Errorf("%s: the text does not start with %q", c.operation, head)
 			continue
 		}
-		if got := strings.TrimPrefix(c.text, head); got != body {
-			t.Errorf("%s: the body after the operation name differs from the investmentBreakdown body:\n%s", c.operation, got)
+		if got := strings.TrimPrefix(c.text, head); got != scopedBody {
+			t.Errorf("%s: the body after the operation name differs from the investmentBreakdown body plus sizedUnitCount:\n%s", c.operation, got)
 		}
 		doc, errs := gqlparser.LoadQuery(schema, c.text)
 		if len(errs) > 0 || len(doc.Operations) != 1 {
@@ -160,9 +166,20 @@ func TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDige
 	if got, ok := operationForDocument(registeredInvestmentBreakdownV1Document, byDigest); !ok || got != "investmentBreakdown" {
 		t.Errorf("the legacy investmentBreakdown text resolves to %q, %v; want investmentBreakdown, true", got, ok)
 	}
-	for _, c := range scopedInvestmentBreakdownDocuments {
-		if legacy, ok := legacyDigestsByOperation[c.operation]; ok {
-			t.Errorf("legacyDigestsByOperation[%s] = %v: no client ever sent an older text under this name", c.operation, legacy)
+	// acr sends each scoped text by its exact digest and pins it in its vendored catalogue, so the text before
+	// CHAOS-12999 stays accepted under the same name until acr has refreshed its pin.
+	for operation, legacyText := range map[string]string{
+		"investmentBreakdownTeam":       registeredInvestmentBreakdownTeamV1Document,
+		"investmentBreakdownRepository": registeredInvestmentBreakdownRepositoryV1Document,
+	} {
+		if legacy := legacyDigestsByOperation[operation]; len(legacy) != 1 || legacy[0] != digestHex(legacyText) {
+			t.Errorf("legacyDigestsByOperation[%s] = %v, want exactly the digest of the text before sizedUnitCount", operation, legacy)
+		}
+		if strings.Contains(legacyText, "sizedUnitCount") {
+			t.Errorf("%s: the legacy text selects sizedUnitCount: it is not the old text", operation)
+		}
+		if got, ok := operationForDocument(legacyText, byDigest); !ok || got != operation {
+			t.Errorf("the legacy %s text resolves to %q, %v; want %s, true", operation, got, ok, operation)
 		}
 	}
 }

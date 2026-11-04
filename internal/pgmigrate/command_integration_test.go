@@ -127,8 +127,9 @@ func TestCommandEndToEnd(t *testing.T) {
 		setup, state, code, detail string
 	}{
 		"the heads recorded over no schema": {
+			// The live head is a chain revision at or above the ledger revision, so the missing ledger refuses first.
 			"CREATE TABLE alembic_version (version_num varchar(32) PRIMARY KEY); INSERT INTO alembic_version VALUES ('0066'), ('" + pgmigrate.LiveHead(t) + "')",
-			"schema_mismatch", "schema_mismatch", "table(s) the head creates are absent",
+			"chain_revision_unapplied", "chain_revision_unapplied", "but the table is absent",
 		},
 		"only a function": {
 			"CREATE FUNCTION public.foreign_marker() RETURNS int LANGUAGE sql AS 'SELECT 1'",

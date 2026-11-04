@@ -583,3 +583,54 @@ func TestAuthCorpusSocialUnownedLegRunsOnTheEventsOfTheNokeysLeg(t *testing.T) {
 		t.Errorf("the plain run step must exclude both negative legs, found %v", conditions)
 	}
 }
+
+// The acp-nokeys condition and its command are one step of the job, and that step's own `if` enables it for the leg:
+// parsed, not matched in the text, so `if: false # matrix.leg == 'acp-nokeys'` or the command under another leg's
+// condition does not pass.
+func TestAuthCorpusNokeysCommandIsAnEnabledStepOfItsLeg(t *testing.T) {
+	var workflow struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   any    `yaml:"if"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, ".github", "workflows", "venue-oracles.yml")), &workflow); err != nil {
+		t.Fatal(err)
+	}
+	job, ok := workflow.Jobs["auth-corpus-external"]
+	if !ok {
+		t.Fatal("venue-oracles.yml has no auth-corpus-external job")
+	}
+	const command = "AUTH_CORPUS_OMIT_AUTH_KEYS=1 bash ci/auth_corpus_external.sh acp"
+	const failure = "required aggregate sessions is not served by auth-service"
+	enabling := func(raw any) bool {
+		cond, ok := raw.(string)
+		if !ok {
+			return false
+		}
+		cond = strings.TrimSpace(cond)
+		if strings.HasPrefix(cond, "${{") && strings.HasSuffix(cond, "}}") {
+			cond = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(cond, "${{"), "}}"))
+		}
+		return cond == "matrix.leg == 'acp-nokeys'"
+	}
+	carrying := 0
+	for _, step := range job.Steps {
+		if !strings.Contains(step.Run, command) && !strings.Contains(step.Run, failure) {
+			continue
+		}
+		carrying++
+		if !strings.Contains(step.Run, command) || !strings.Contains(step.Run, failure) {
+			t.Errorf("step %q holds only one of the acp-nokeys command and its failure check: they must be one step", step.Name)
+		}
+		if !enabling(step.If) {
+			t.Errorf("step %q runs the acp-nokeys command but its if is %#v, want exactly matrix.leg == 'acp-nokeys'", step.Name, step.If)
+		}
+	}
+	if carrying != 1 {
+		t.Errorf("%d steps of auth-corpus-external carry the acp-nokeys command or its failure check, want exactly 1", carrying)
+	}
+}

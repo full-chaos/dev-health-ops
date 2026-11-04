@@ -203,49 +203,37 @@ func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 	}
 }
 
-// Dark: with no endpoint-profile row for the route it answers 404 and one startup line names it; the suspend route's
-// row does not mount it.
-func TestOrgStateIsDarkWithoutItsProfileRow(t *testing.T) {
+// With no endpoint-profile row for the route the service does not start, naming the route; the suspend route's row does
+// not stand in for it. With both rows the route answers.
+func TestOrgStateNeedsItsProfileRowToStart(t *testing.T) {
 	for name, doc := range map[string][]byte{"document without the row": docWithoutRow(t, nil, stateRoute),
 		"suspend row only": docWithoutRow(t, docWithRow(t, PatternOrgSuspend), stateRoute)} {
-		f := newProvFixtureWith(t, doc)
-		if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusNotFound {
-			t.Fatalf("%s: state without its row: %d %s, want 404", name, got.Code, got.Body)
-		}
-		if f.reactivate.gets != 0 {
-			t.Fatalf("%s: the store ran for a route that is not mounted", name)
-		}
-		lines := 0
-		for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
-			if strings.Contains(line, stateRoute) {
-				lines++
-				if !strings.Contains(line, "not mounted") {
-					t.Fatalf("%s: the startup line does not say the route is not mounted: %s", name, line)
-				}
-			}
-		}
-		if lines != 1 {
-			t.Fatalf("%s: %d startup lines name the state route, want 1: %s", name, lines, f.logs.String())
+		routes, err := ProvisioningRoutes(provisioningDepsOver(t, doc, nil))
+		var refusal *ProvisioningRowError
+		if !errors.As(err, &refusal) || refusal.Route != "POST "+stateRoute || routes != nil {
+			t.Fatalf("%s: %d routes, %v; want none and a refusal naming the state route", name, len(routes), err)
 		}
 	}
-	both := newProvFixtureWith(t, docWithExtraRow(t, docWithRow(t, PatternOrgSuspend), stateRoute))
+	both := newProvFixtureWith(t, docWithRow(t, PatternOrgSuspend))
 	if got := both.post(stateRoute, both.stateBody(), nil); got.Code != http.StatusOK {
 		t.Fatalf("state with its row: %d %s, want 200", got.Code, got.Body)
 	}
 	for _, line := range strings.Split(both.logs.String(), "\n") {
-		// The grant routes are dark too and log their own line (provisioning_grant_test.go).
-		if strings.Contains(line, "not mounted") && !strings.Contains(line, "/internal/v1/grants/") {
-			t.Fatalf("a not-mounted line with both rows present: %s", line)
+		if strings.Contains(line, "not mounted") {
+			t.Fatalf("a not-mounted line with every row present: %s", line)
 		}
 	}
 }
 
-func TestOrgStateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testing.T) {
+func TestOrgStateNeedsAnAuthServicePostRowListingExactlyTheAdmittedClasses(t *testing.T) {
 	bare := docWithoutRow(t, nil, stateRoute)
 	for name, edit := range map[string]func(row map[string]any){
 		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
 		"another method":  func(row map[string]any) { row["method"] = "GET" },
 		"another class":   func(row map[string]any) { row["accepted_credential_classes"] = []any{"workload_token"} },
+		"an extra class": func(row map[string]any) {
+			row["accepted_credential_classes"] = []any{serviceSessionIssuerClass, workloadTokenClass, "extra_class"}
+		},
 	} {
 		var document map[string]any
 		if err := json.Unmarshal(docWithExtraRow(t, bare, stateRoute), &document); err != nil {
@@ -257,9 +245,8 @@ func TestOrgStateNeedsAnAuthServicePostRowAcceptingTheIssuerCredential(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		f := newProvFixtureWith(t, raw)
-		if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusNotFound {
-			t.Fatalf("%s: state %d, want 404", name, got.Code)
+		if routes, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) || routes != nil {
+			t.Fatalf("%s: %d routes, %v; want none and a start-up refusal", name, len(routes), err)
 		}
 	}
 }

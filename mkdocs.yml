@@ -75,6 +75,8 @@ nav:
           - AI Impact: use/ai-workflows/impact.md
           - AI Review Load: use/ai-workflows/review-load.md
           - AI Governance Risk: use/ai-workflows/risk.md
+      - Ask Dev:
+          - use/ask-dev/index.md
       - Reports:
           - use/reports/index.md
           - Create or clone: use/reports/create-or-clone.md
@@ -119,6 +121,8 @@ nav:
           - Credentials: admin/security-and-audit/credentials.md
           - Service accounts: admin/security-and-audit/service-accounts.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
+      - Ask Dev:
+          - admin/ask-dev/index.md
       - Troubleshooting:
           - admin/troubleshooting/index.md
           - Authentication and roles: admin/troubleshooting/authentication-and-roles.md
@@ -155,7 +159,7 @@ nav:
           - Job recovery lifecycle: operate/run/job-recovery-lifecycle.md
           - Ingestion and backfills: operate/run/ingestion-and-backfills.md
           - Operational controls: operate/run/operational-controls.md
-          - Ask Dev rollout: operate/run/ask-dev-rollout.md
+          - Repair stranded Ask Dev conversations: operate/run/ask-dev-rollout.md
       - Observe:
           - operate/observe/index.md
           - Health checks: operate/observe/health-checks.md

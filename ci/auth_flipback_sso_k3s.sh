@@ -291,7 +291,10 @@ for verb_resource in "list nodes" "create ns" "create clusterroles"; do
   [ "$(kc auth can-i ${verb_resource} 2>/dev/null || true)" = no ] || die "the kubeconfig is not namespace scoped: it may ${verb_resource}"
 done
 [ "$(K get configmap fb-run -o 'jsonpath={.data.token}' 2>/dev/null || true)" = "${RUN_TOKEN}" ] || die "the namespace ${NS} does not carry this run's token (ConfigMap fb-run)"
-pass "the kubeconfig is namespace scoped and ${NS} carries this run's token"
+# /version is readable by a namespace scoped credential (the nodes are not): the server must name itself k3s before any write
+server_version="$(kc version -o json 2>/dev/null | jq -r '.serverVersion.gitVersion // empty' 2>/dev/null || true)"
+[[ "${server_version}" == *+k3s* ]] || die "the cluster is not k3s (server version: ${server_version:-none})"
+pass "the kubeconfig is namespace scoped, the server is k3s (${server_version}) and ${NS} carries this run's token"
 
 umask 077
 mkdir -p "${AUTH_FB_WORK}"
@@ -472,8 +475,8 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
     env: [{name: "API_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "API_DATABASE_URI"}}}]}]}}')"
   printf '%s\n' "${stdin}" | K run "${name}" --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic --overrides="${overrides}" -- "$@" >/dev/null
 }
-oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin
-oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}"
+oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin || die "S1: the admin user verb failed"
+oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}" || die "S1: the admin organization verb failed"
 # the verb reads MIGRATION_DATABASE_URI (the owner DSN); go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
 ISSUE_TOKEN="$(printf '\n' | K run fb-issue-cred --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic \
   --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret auth-migrate-db '{spec: {containers: [{name: "fb-issue-cred", image: $image,
@@ -518,13 +521,15 @@ signin_saml() { # SUB
   [ -n "${resp}" ] || { printf 'idp-no-response'; return 0; }
   jfile --arg r "${resp}" --arg s "${relay}" '{SAMLResponse: $r} + (if $s == "" then {} else {RelayState: $s} end)'
   status="$(api POST "/api/v1/auth/saml/${SAML_ID}/acs" "${WORK}/req.json")"
-  if [ "$(jq -r '.access_token // empty | length > 0' "${BODY}" 2>/dev/null)" = true ]; then printf '%s token' "${status}"; else printf '%s no-token' "${status}"; fi
+  if [ "$(jq -r '.access_token // empty | length > 0' "${BODY}" 2>/dev/null)" = true ]; then printf '%s token %s' "${status}" "$(jq -r '.user_id // empty' "${BODY}" 2>/dev/null)"; else printf '%s no-token' "${status}"; fi
 }
 signin_both() { # LABEL: the sign-in must answer "200 token"
   local s
   pf_all
   s="$(signin_saml saml-sub-1)"
-  [ "${s}" = "200 token" ] || die "$1: the SAML sign-in answered '${s}', want '200 token'"
+  [[ "${s}" == "200 token "* ]] || die "$1: the SAML sign-in answered '${s}', want '200 token <user_id>'"
+  LAST_UID="${s#200 token }"
+  [[ "${LAST_UID}" =~ ^[0-9a-f-]{36}$ ]] || die "$1: the SAML sign-in answered no user_id"
   pf_stop
 }
 SSO_EMAILS="'saml.one@${DOMAIN}'"
@@ -542,6 +547,8 @@ signin_both "S3"
 SNAP3="$(identity_snapshot)"
 [ "$(grep -c '^[0-9a-f-]\{36\}|' <<<"${SNAP3}")" = 1 ] || die "S3: public.users does not hold exactly the SSO user: ${SNAP3}"
 if ! grep -q "|saml|${SAML_ID}|" <<<"${SNAP3}"; then die "S3: the SSO user does not carry auth_provider and the provider row id: ${SNAP3}"; fi
+SSO_UID="$(sed -n 's/^\([0-9a-f-]\{36\}\)|.*/\1/p' <<<"${SNAP3}" | head -1)"
+[ "${LAST_UID}" = "${SSO_UID}" ] || die "S3: the sign-in answered user_id ${LAST_UID}, not the saved SSO user ${SSO_UID}"
 pass "S3 go-api wrote the SAML user at phase 3 (auth_provider, sso_provider_id set); ${SNAP3##*$'\n'}"
 
 # ---- S4 U1 and the barrier -------------------------------------------------------------------------------------------------------------------
@@ -580,6 +587,7 @@ pass "S6 barrier up-owned passed; U3 rolled (auth-service owns users)"
 # ---- S7 sign-in under owned ---------------------------------------------------------------------------------------------------------------------
 HASH_BEFORE="$(row_hash)"
 signin_both "S7"
+[ "${LAST_UID}" = "${SSO_UID}" ] || die "S7: the sign-in under owned answered user_id ${LAST_UID}, not the saved SSO user ${SSO_UID}"
 [ "$(identity_snapshot)" = "${SNAP3}" ] || die "S7: the identity columns or the table counts changed under owned"
 [ "$(row_hash)" = "${HASH_BEFORE}" ] || die "S7: a sign-in under owned wrote a public.users row"
 pass "S7 the SAML sign-in under owned answered 200 as the same accounts and wrote nothing to public.users"
@@ -603,6 +611,7 @@ pass "S8 D1 rolled, barrier down-auth passed, D2 rolled (phase 3, go-api serves 
 
 # ---- S9 sign-in through go-api -------------------------------------------------------------------------------------------------------------------
 signin_both "S9"
+[ "${LAST_UID}" = "${SSO_UID}" ] || die "S9: the sign-in after the flip back answered user_id ${LAST_UID}, not the saved SSO user ${SSO_UID}"
 [ "$(identity_snapshot)" = "${SNAP3}" ] || die "S9: after the flip back the identity columns or the table counts differ from phase 3 (a new account or a conflict)"
 AUTH_AFTER="$(auth_counts)"
 [ "${AUTH_AFTER}" = "${AUTH_BEFORE}" ] || die "S9: the auth schema counts changed over the flip back: ${AUTH_BEFORE} -> ${AUTH_AFTER}"

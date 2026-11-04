@@ -52,6 +52,7 @@ const fbStubKubectl = `#!/usr/bin/env bash
 echo "kubectl $*" >>"$STUB_LOG"
 case "$*" in
   *"auth can-i"*) printf '%s\n' "${STUB_CAN_I:-no}" ;;
+  *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${STUB_GIT_VERSION:-v1.36.4+k3s1}" ;;
   *"get configmap fb-run"*) [ -n "${STUB_TOKEN:-}" ] && printf '%s' "$STUB_TOKEN" || exit 1 ;;
   *) [ "${STUB_PERMISSIVE:-0}" = 1 ] && exit 0 || exit 1 ;;
 esac
@@ -151,7 +152,6 @@ func TestFlipbackSSOK3sRefusesAKubeconfigThatIsNotNamespaceScopedOrNotThisRuns(t
 	// this run's token. STUB_PERMISSIVE lets the stub kubectl answer the install steps, so the install must be reached and the
 	// script must not name the token in its refusal text. The token is a fixture, 16 hex digits, written into the stub kubeconfig
 	// only; the .gitleaksignore rows for this file name the fixture const and this call by line.
-	// Keep this call on the line its row names.
 	res, calls = fbRun(t, append(append([]string{}, fbGoodEnvs...), "STUB_TOKEN="+fbToken, "STUB_PERMISSIVE=1"))
 	if strings.Contains(res.stderr, "token") || !strings.Contains(calls, "helm upgrade --install") {
 		t.Errorf("a scoped kubeconfig with this run's token never reached the install: stderr %q, calls:\n%s", res.stderr, calls)
@@ -350,5 +350,22 @@ func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 	}
 	if strings.Contains(text, "AUTH_SESSION_ISSUE_TOKEN: \"%s\"") {
 		t.Errorf("the secrets values still carry a random AUTH_SESSION_ISSUE_TOKEN go-api cannot present")
+	}
+}
+
+func TestFlipbackSSOK3sRefusesAServerThatIsNotK3sBeforeAnyWrite(t *testing.T) {
+	res, calls := fbRun(t, append(append([]string{}, fbGoodEnvs...), "STUB_TOKEN="+fbToken, "STUB_PERMISSIVE=1", "STUB_GIT_VERSION=v1.30.2")) // gitleaks:allow
+	if res.code == 0 || !strings.Contains(res.stderr, "the cluster is not k3s") || strings.Contains(calls, "helm ") || strings.Contains(calls, "create secret") {
+		t.Errorf("a kind-like server: exit %d, stderr %q, calls:\n%s", res.code, res.stderr, calls)
+	}
+}
+
+func TestFlipbackSSOK3sSignInsMustAnswerTheSavedSSOUser(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), fbScript))
+	for _, want := range []string{`die "S3: the sign-in answered user_id`, `die "S7: the sign-in under owned answered user_id`, `die "S9: the sign-in after the flip back answered user_id`,
+		`die "S1: the admin user verb failed"`, `die "S1: the admin organization verb failed"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the script lacks %q", want)
+		}
 	}
 }

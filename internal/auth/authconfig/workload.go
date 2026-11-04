@@ -25,6 +25,9 @@ const (
 	// workload-token exchange route with the Compose bootstrap credential
 	// subject.
 	EnvWorkloadBootstrap = "AUTH_WORKLOAD_BOOTSTRAP"
+	// EnvServiceAccountExchange ("true" or "false", default false) mounts the
+	// workload-token exchange route with the service account key subject.
+	EnvServiceAccountExchange = "AUTH_SERVICE_ACCOUNT_EXCHANGE"
 	// EnvWorkloadTrustDomain names this cluster in the workload bindings.
 	EnvWorkloadTrustDomain = "AUTH_WORKLOAD_TRUST_DOMAIN"
 	// EnvWorkloadClusterIssuer is the ServiceAccount token issuer of the
@@ -45,6 +48,7 @@ const (
 type WorkloadExchange struct {
 	Enabled           bool
 	Bootstrap         bool
+	ServiceAccountKey bool
 	TrustDomain       string
 	ClusterIssuer     string
 	KubeAPIURL        string
@@ -62,14 +66,21 @@ func workloadExchange(lookup secrets.LookupEnv, tokenIssuerURL string) (Workload
 	if bootstrap && tokenIssuerURL == "" {
 		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvWorkloadBootstrap, EnvTokenIssuerURL)
 	}
+	serviceAccountKey, err := strictBool(lookup, EnvServiceAccountExchange)
+	if err != nil {
+		return WorkloadExchange{}, err
+	}
+	if serviceAccountKey && tokenIssuerURL == "" {
+		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvServiceAccountExchange, EnvTokenIssuerURL)
+	}
 	enabled, err := strictBool(lookup, EnvWorkloadExchange)
 	if err != nil || !enabled {
-		return WorkloadExchange{Bootstrap: bootstrap}, err
+		return WorkloadExchange{Bootstrap: bootstrap, ServiceAccountKey: serviceAccountKey}, err
 	}
 	if tokenIssuerURL == "" {
 		return WorkloadExchange{}, fmt.Errorf("%s=true needs %s", EnvWorkloadExchange, EnvTokenIssuerURL)
 	}
-	out := WorkloadExchange{Enabled: true, Bootstrap: bootstrap}
+	out := WorkloadExchange{Enabled: true, Bootstrap: bootstrap, ServiceAccountKey: serviceAccountKey}
 	for _, field := range []struct {
 		name string
 		max  int
@@ -135,8 +146,8 @@ func HTTPSOrigin(raw string) error {
 
 var errNotHTTPSOrigin = errors.New("not an https origin")
 
-// Mounted reports whether the exchange route is mounted: either subject is on.
-func (w WorkloadExchange) Mounted() bool { return w.Enabled || w.Bootstrap }
+// Mounted reports whether the exchange route is mounted: any subject is on.
+func (w WorkloadExchange) Mounted() bool { return w.Enabled || w.Bootstrap || w.ServiceAccountKey }
 
 // EnvSessionIssueWorkloadSubject is the go-api workload principal (prn_) whose
 // workload token the session issue route accepts. Unset, the route accepts no

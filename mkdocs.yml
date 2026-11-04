@@ -165,6 +165,7 @@ nav:
       - Security:
           - operate/security/index.md
           - Production hardening: operate/security/hardening.md
+          - External Push credentials: operate/security/external-push-credentials.md
       - Runbooks:
           - operate/runbooks/index.md
           - Ingestion failure: operate/runbooks/ingestion-failure.md
@@ -178,6 +179,7 @@ nav:
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
+          - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
           - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
           - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
@@ -188,6 +190,7 @@ nav:
           - Service accounts: operate/runbooks/auth-service-accounts.md
           - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
+          - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
@@ -237,8 +240,10 @@ nav:
       - Auth decisions and obligations: reference/auth/obligations.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
+      - Auth External Push authority: reference/auth/external-push-authority.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
+      - Auth organization and membership authority: reference/auth/org-membership-authority.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md
       - Auth identity linking: reference/auth/identity-linking.md
@@ -246,6 +251,9 @@ nav:
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - Auth access-token claims and validation: reference/auth/access-token-claims.md
       - Auth JWKS and discovery: reference/auth/jwks-and-discovery.md
+      - Auth decision clients: reference/auth/decision-clients.md
+      - Auth reason codes: reference/auth/reason-codes.md
+      - Auth entitlement boundary: reference/auth/entitlement-boundary.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md
@@ -309,6 +317,7 @@ nav:
           - Auth Control Plane contracts and SDK: contribute/architecture/auth-control-plane-contracts.md
           - Auth Control Plane audit and outbox: contribute/architecture/auth-control-plane-audit-outbox.md
           - Auth Control Plane Go gates: contribute/architecture/auth-control-plane-go-gates.md
+          - Auth policy decision contributor guide: contribute/architecture/auth-pdp-contributor-guide.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

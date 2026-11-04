@@ -21,3 +21,5 @@ Registration and token management require an authenticated organization administ
 6. Validate a sample payload before the first write.
 
 Rotation is an immediate cutover: the old token stops working when the replacement is issued. Update the secret consumer and verify it before broad submission.
+
+Administrators: rotate, revoke and read the credential kind label in [Manage External Push credentials](../../operate/security/external-push-credentials.md).

@@ -23,3 +23,5 @@ A `401` or `503` on a bearer access token has its own page: [Token verification 
 ## Verify or reset link does not work
 
 After the e-mail link routes move to the auth service, a verify or reset link e-mailed before that change no longer works. Ask for a new link.
+
+A Customer Push token that fails after a rotation or a revoke: see [Manage External Push credentials](../../operate/security/external-push-credentials.md). Operators: the matrix in [External Push lifecycle events](../../operate/runbooks/external-push-lifecycle.md).

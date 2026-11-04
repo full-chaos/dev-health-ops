@@ -6,6 +6,10 @@
       "why": "An active grant on one repository; the resource key is served."
     },
     {
+      "file": "valid-nested-repository.json",
+      "why": "A nested repository key of 3 segments."
+    },
+    {
       "file": "valid-all-repositories.json",
       "why": "The organization-wide key *."
     },
@@ -28,6 +32,24 @@
       "expect_instance_location": "/resource_key",
       "expect_keyword": "pattern",
       "why": "Keys are lowercase."
+    },
+    {
+      "file": "invalid-resource-key-21-segments.json",
+      "expect_instance_location": "/resource_key",
+      "expect_keyword": "pattern",
+      "why": "21 segments is one past the deepest key."
+    },
+    {
+      "file": "invalid-resource-key-256-bytes.json",
+      "expect_instance_location": "/resource_key",
+      "expect_keyword": "maxLength",
+      "why": "256 bytes is one past the key bound."
+    },
+    {
+      "file": "invalid-resource-key-trailing-slash.json",
+      "expect_instance_location": "/resource_key",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash leaves the last segment empty."
     },
     {
       "file": "invalid-resource-key-no-owner.json",

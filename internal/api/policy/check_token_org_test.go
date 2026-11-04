@@ -23,7 +23,7 @@ func TestCheckTokenOrg(t *testing.T) {
 			User{UserID: userID.String(), OrgID: ownOrg}, func(err error) bool { return errors.Is(err, ErrUnavailable) && !IsRefusal(err) }, 1},
 		"superuser skips the read": {func(s *fakeStore) { delete(s.members, [2]uuid.UUID{userID, own}) },
 			User{UserID: userID.String(), OrgID: ownOrg, IsSuperuser: true}, func(err error) bool { return err == nil }, 0},
-		"no org reads nothing": {nil, User{UserID: userID.String()}, func(err error) bool { return err == nil }, 0},
+		"no org reads nothing":      {nil, User{UserID: userID.String()}, func(err error) bool { return err == nil }, 0},
 		"org claim that is no uuid": {nil, User{UserID: userID.String(), OrgID: "org-1"}, IsRefusal, 0},
 	} {
 		t.Run(name, func(t *testing.T) {

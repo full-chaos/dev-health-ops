@@ -239,6 +239,7 @@ internal/storage/clickhouse	param_types_census_test.go	cmd/...
 internal/storage/clickhouse	param_types_census_test.go	internal/...
 internal/storage/clickhouse	param_types_census_test.go	unexpressed
 internal/storage/postgres	api_authorization_integration_test.go	unexpressed
+internal/storage/postgres	openers_test.go	unexpressed
 internal/storage/postgres	provision_script_integration_test.go	unexpressed
 internal/storage/postgres	query_api_authorization_integration_test.go	unexpressed
 internal/storage/river	migrate_integration_test.go	unexpressed

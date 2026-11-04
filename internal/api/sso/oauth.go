@@ -756,7 +756,15 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 	if err := refuseUnusableSubject(authProviderValue, claims.externalID); err != nil {
 		return nil, nil, err
 	}
-	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, claims.email)
+	config, err := decodeOAuthConfig(row.Config)
+	if err != nil {
+		return nil, nil, err
+	}
+	issuer, err := identity.OAuthIssuer(identity.Provider(authProviderValue), config.BaseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	userID, found, err := h.resolveSSOIdentity(ctx, authProviderValue, claims.externalID, issuer, claims.email)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -782,10 +790,18 @@ func (h handlers) oauthProvisionUser(ctx context.Context, row *providerRow, prov
 		if claims.username != "" {
 			usernamePtr = &claims.username
 		}
-		return h.createAccountAndMembership(ctx, row, ssoNewAccount{
+		account := ssoNewAccount{
 			email: claims.email, authProvider: authProviderValue, externalID: externalIDPtr,
 			fullName: fullNamePtr, username: usernamePtr, avatarURL: avatarURLPtr,
-		})
+		}
+		if identity.SelfHostedGitLab(identity.Provider(authProviderValue), issuer) {
+			providerRowID, err := pythonparity.ParseUUID(row.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			account.ssoProviderID = &providerRowID
+		}
+		return h.createAccountAndMembership(ctx, row, account)
 	}
 	if err != nil {
 		return nil, nil, err

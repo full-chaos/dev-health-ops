@@ -456,7 +456,8 @@ func TestOrgScopeDecisionTable(t *testing.T) {
 		{name: "header not a uuid", org: "nope", auth: "valid", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
 		{name: "header stranger org superuser", org: strangerOrg, auth: "valid", store: superStore, status: 200, body: "org=" + strangerOrg + " "},
 		{name: "membership lookup fails", org: strangerOrg, auth: "valid", store: func(s *fakeStore) { s.errMember = errors.New("x") }, status: 500, body: `{"detail":"Internal Server Error"}`},
-		{name: "user lookup fails", auth: "valid", store: func(s *fakeStore) { s.errUser = errors.Join(ErrUnavailable, errors.New("x")) }, status: 500, body: `{"detail":"Internal Server Error"}`},
+		{name: "user lookup unavailable", auth: "valid", store: func(s *fakeStore) { s.errUser = errors.Join(ErrUnavailable, errors.New("x")) }, status: 503, body: `{"detail":{"message":"Database temporarily unavailable"}}`},
+		{name: "user lookup fails", auth: "valid", store: func(s *fakeStore) { s.errUser = errors.New("x") }, status: 500, body: `{"detail":"Internal Server Error"}`},
 		{name: "acr internal path skips", path: "/api/v1/internal/acr/x", org: strangerOrg, auth: "valid", status: 200, body: "org= "},
 		{name: "acr internal path exact prefix", path: "/api/v1/internal/acr", org: strangerOrg, auth: "valid", status: 403},
 	}
@@ -520,6 +521,7 @@ func TestImpersonationDecisionTable(t *testing.T) {
 		{name: "superuser with session", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},
 		{name: "truthy string claim", auth: "valid", claims: func(c jwt.MapClaims) { c["is_superuser"] = "no" }, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},
 		{name: "session lookup fails closed", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.errSession = errors.New("x") }, status: 500, userLookups: 1, sessionLookups: 1},
+		{name: "user lookup unavailable", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.errUser = errors.Join(ErrUnavailable, errors.New("x")) }, status: 503, userLookups: 1},
 		{name: "user lookup fails", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.errUser = errors.New("x") }, status: 500, userLookups: 1},
 		{name: "refused token", auth: "Bearer x." + "eyJpc19zdXBlcnVzZXIiOnRydWV9" + ".z", status: 200},
 	}

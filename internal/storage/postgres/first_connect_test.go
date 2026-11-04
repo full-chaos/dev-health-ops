@@ -80,12 +80,13 @@ func TestFirstConnectFailsAtBoundWithErrorClass(t *testing.T) {
 	if !errors.As(err, &opErr) {
 		t.Fatalf("Do() = %T, want the attempt's own *net.OpError", err)
 	}
-	// Pauses 2, 4, 8, 16, 30 s: attempts at 0, 2, 6, 14, 30 and 60 s.
-	if calls != 6 || clock.Sub(start) != FirstConnectBudget {
-		t.Fatalf("%d attempts over %v, want 6 over %v", calls, clock.Sub(start), FirstConnectBudget)
+	// Pauses 2, 4, 8, 16, 30 s: attempts at 0, 2, 6, 14 and 30 s; the last pause
+	// ends at the 60 s bound and no attempt starts there.
+	if calls != 5 || clock.Sub(start) != FirstConnectBudget {
+		t.Fatalf("%d attempts over %v, want 5 over %v", calls, clock.Sub(start), FirstConnectBudget)
 	}
-	if lines := strings.Count(out.String(), "\n"); lines != calls-1 {
-		t.Fatalf("%d lines for %d attempts, want one per retry:\n%s", lines, calls, out.String())
+	if lines := strings.Count(out.String(), "\n"); lines != calls {
+		t.Fatalf("%d lines for %d attempts, want one per pause:\n%s", lines, calls, out.String())
 	}
 }
 
@@ -223,7 +224,7 @@ func TestConnectWaitingRefusedPortFailsAtTheBound(t *testing.T) {
 		t.Fatalf("ConnectWaiting() = %v, %v; want no connection and a refused error", conn, err)
 	}
 	text := out.String()
-	// A 10 s budget on a clock only the pauses (2, 4, 4 s) move: 4 attempts, 3 lines.
+	// A 10 s budget on a clock only the pauses (2, 4, 4 s) move: 3 attempts, 3 lines.
 	if strings.Count(text, ", refused, ") != 3 {
 		t.Fatalf("want 3 refused lines:\n%s", text)
 	}

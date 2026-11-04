@@ -10,6 +10,9 @@
 // or a hostNetwork pod reaches the service. The internal service port binds
 // the address with an empty Trust, so it never reads a forwarded value.
 // X-Forwarded-Proto and the other forwarded headers are never read.
+// AUTH_CLIENT_ADDR_MODE (proof.go, Policy) can name the client from go-api's
+// signed X-Forwarded-Client-Proof instead; mode cidr, the default, is the rule
+// above.
 //
 // The user agent is the first User-Agent value, each byte decoded as one
 // latin-1 code point, as go-api's userAgent() reads it
@@ -239,20 +242,9 @@ type key struct{}
 type userAgentKey struct{}
 
 // Middleware binds the resolved client address and the user agent to every
-// request.
+// request: PolicyMiddleware in mode cidr with no proof key.
 func Middleware(t Trust) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
-			if addr := t.Resolve(r); addr.IsValid() {
-				ctx = With(ctx, addr)
-			}
-			if values := r.Header.Values("User-Agent"); len(values) > 0 {
-				ctx = WithUserAgent(ctx, latin1(values[0]))
-			}
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
+	return PolicyMiddleware(Policy{Mode: ModeCIDR, Trust: t})
 }
 
 func latin1(raw string) string {

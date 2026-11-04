@@ -545,7 +545,16 @@ if ! grep -q "|saml|${SAML_ID}|" <<<"${SNAP3}"; then die "S3: the SSO user does 
 pass "S3 go-api wrote the SAML user at phase 3 (auth_provider, sso_provider_id set); ${SNAP3##*$'\n'}"
 
 # ---- S4 U1 and the barrier -------------------------------------------------------------------------------------------------------------------
-barrier() { env RELEASE="${RELEASE}" NAMESPACE="${NS}" bash "${ROOT}/deploy/scripts/auth-users-owned-barrier.sh" "$1"; }
+# a superseded pod can still be terminating when the rollout is Ready; the barrier fails closed on it, so wait for none (150 s)
+no_terminating_pods() {
+  local n
+  for n in $(seq 1 50); do
+    [ -z "$(K get pods -l "app.kubernetes.io/instance=${RELEASE}" -o 'jsonpath={range .items[*]}{.metadata.deletionTimestamp}{end}')" ] && return 0
+    sleep 3
+  done
+  die "pods of ${RELEASE} are still terminating after 150 s"
+}
+barrier() { no_terminating_pods; env RELEASE="${RELEASE}" NAMESPACE="${NS}" bash "${ROOT}/deploy/scripts/auth-users-owned-barrier.sh" "$1"; }
 helm_cluster U1 --wait >/dev/null
 K rollout status deploy/"${FULL}-go-api" --timeout=300s >/dev/null
 barrier up-go-api || die "S4: the up-go-api barrier did not pass"

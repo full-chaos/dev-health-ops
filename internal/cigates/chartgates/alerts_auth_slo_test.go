@@ -248,7 +248,10 @@ func sloTableRows(g *guard) (intro string, rows [][]string) {
 		if n < 2 {
 			continue
 		}
-		cells := strings.Split(strings.TrimSuffix(strings.TrimPrefix(line, "| "), " |"), " | ")
+		cells := strings.Split(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "|"), "|"), "|")
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
 		g.expect(len(cells) == 6, "%s SLO row %d has %d cells, want 6: %.60s", sloTableRel, n-1, len(cells), line)
 		rows = append(rows, cells)
 	}
@@ -294,10 +297,29 @@ func sloTableRowsBindToTheRules(g *guard) {
 		return
 	}
 	unionRoutes := map[string][]string{}
-	for i, w := range want {
-		c := rows[i]
-		at := fmt.Sprintf("%s SLO row %d (%s)", sloTableRel, i+1, w.label)
-		g.expect(strings.HasPrefix(c[0], w.label), "%s: first cell is %q", at, c[0])
+	used := make([]bool, len(rows))
+	sameLabel := map[string]int{}
+	for _, w := range want {
+		sameLabel[w.label]++
+	}
+	for _, w := range want {
+		at := fmt.Sprintf("%s SLO row (%s)", sloTableRel, w.label)
+		found := -1
+		for i, r := range rows {
+			if used[i] || !strings.HasPrefix(r[0], w.label) {
+				continue
+			}
+			if sameLabel[w.label] == 1 || strings.Contains(r[1], w.sli) {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			g.failf("%s: first cell: no unmatched row starts with %q", at, w.label)
+			continue
+		}
+		used[found] = true
+		c := rows[found]
 		var gotRoutes []string
 		for _, m := range sloRouteTok.FindAllStringSubmatch(c[0], -1) {
 			gotRoutes = append(gotRoutes, m[1])
@@ -424,5 +446,72 @@ func TestAuthSLOBuilderGuardPlantedDefects(t *testing.T) {
 func TestAuthSLOTableGuardRowCount(t *testing.T) {
 	runPlanted(t, []planted{
 		{"row-appended", []string{sloTableRel}, mut(sloTableRel, "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n", "| Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |\n| Extra | x | target 1 ms | 1 minute | none | none |\n"), sloTableRowsBindToTheRules, "SLO table has 11 rows, want 10"},
+	})
+}
+
+func sloRowLine(t *testing.T, doc, prefix string) string {
+	t.Helper()
+	for _, l := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(l, "| "+prefix) {
+			return l
+		}
+	}
+	t.Fatalf("no SLO row starting %q", prefix)
+	return ""
+}
+
+func sloRowsMut(f func(t *testing.T, doc string) string) func(*testing.T, string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+		p := rootPath(root, sloTableRel)
+		if err := os.WriteFile(p, []byte(f(t, mustRead(t, p))), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAuthSLOTableGuardAcceptsEquivalentLayouts(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*testing.T, string)
+	}{
+		{"padding-space-in-a-cell", mut(sloTableRel, "| Session issue `/internal/v1/sessions` |", "|  Session issue `/internal/v1/sessions`  |")},
+		{"padding-in-every-cell-of-a-row", sloRowsMut(func(t *testing.T, doc string) string {
+			l := sloRowLine(t, doc, "Refresh ")
+			return strings.Replace(doc, l, strings.ReplaceAll(l, " | ", "   |   "), 1)
+		})},
+		{"two-rows-swapped", sloRowsMut(func(t *testing.T, doc string) string {
+			a, b := sloRowLine(t, doc, "PDP "), sloRowLine(t, doc, "Session issue ")
+			return strings.Replace(strings.Replace(strings.Replace(doc, a, "@@A@@", 1), b, a, 1), "@@A@@", b, 1)
+		})},
+		{"readiness-rows-swapped", sloRowsMut(func(t *testing.T, doc string) string {
+			a, b := sloRowLine(t, doc, "Readiness | Fraction"), sloRowLine(t, doc, "Readiness | Time to ready")
+			return strings.Replace(strings.Replace(strings.Replace(doc, a, "@@A@@", 1), b, a, 1), "@@A@@", b, 1)
+		})},
+	}
+	real := realRoot(t)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			copyPath(t, real, root, sloTableRel)
+			copyPath(t, real, root, orgActivityDocRel)
+			c.mutate(t, root)
+			g := &guard{root: root, tmp: t.TempDir()}
+			sloTableRowsBindToTheRules(g)
+			if len(g.v) != 0 {
+				t.Fatalf("an equivalent Markdown layout was refused: %v", g.v)
+			}
+		})
+	}
+}
+
+func TestAuthSLOTableGuardRowSetDefects(t *testing.T) {
+	runPlanted(t, []planted{
+		{"row-dropped", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
+			return strings.Replace(doc, sloRowLine(t, doc, "Exchange ")+"\n", "", 1)
+		}), sloTableRowsBindToTheRules, "SLO table has 9 rows, want 10"},
+		{"row-replaced-by-a-duplicate", []string{sloTableRel}, sloRowsMut(func(t *testing.T, doc string) string {
+			return strings.Replace(doc, sloRowLine(t, doc, "Refresh "), sloRowLine(t, doc, "Session issue "), 1)
+		}), sloTableRowsBindToTheRules, "(Refresh): first cell: no unmatched row"},
 	})
 }

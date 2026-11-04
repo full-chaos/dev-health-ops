@@ -20,7 +20,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 
@@ -454,17 +453,10 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	// holds NO KEY UPDATE: an invite accept that holds its invite takes the
 	// foreign key's KEY SHARE on this row, and FOR UPDATE here would cycle
 	// with it. The final DELETE takes FOR UPDATE, as it always did.
-	//
-	// While auth-service owns organizations, go-api's role has no write on
-	// memberships: FOR UPDATE needs it, and the organization row's cascade takes
-	// the rows.
-	orgsOwned := usersowned.OrgsOn()
 	locks := []string{
 		`SELECT 1 FROM organizations WHERE id = $1 FOR NO KEY UPDATE`,
 		`SELECT 1 FROM org_invites WHERE org_id = $1 ORDER BY id FOR UPDATE`,
-	}
-	if !orgsOwned {
-		locks = append(locks, `SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`)
+		`SELECT 1 FROM memberships WHERE org_id = $1 ORDER BY id FOR UPDATE`,
 	}
 	for _, lock := range locks {
 		if _, err := tx.Exec(ctx, lock, orgUUID); err != nil {
@@ -479,7 +471,7 @@ func (h *handlers) orgDeletionPurgePostgres(ctx context.Context, orgUUID uuid.UU
 	}
 
 	for _, target := range orgDeletionTargets {
-		if result.postgresTableCount[target.Table] == 0 || (orgsOwned && target.Table == "memberships") {
+		if result.postgresTableCount[target.Table] == 0 {
 			continue
 		}
 		if _, err := tx.Exec(ctx, target.deleteSQL(), target.bindValue(orgUUID, orgIDStr)); err != nil {

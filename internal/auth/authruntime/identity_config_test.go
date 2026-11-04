@@ -7,11 +7,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
-func TestIdentityConfigCarriesBothOwnershipSwitches(t *testing.T) {
-	for _, tc := range []struct{ users, orgs bool }{{true, true}, {true, false}, {false, true}, {false, false}} {
-		got := identityConfig(authconfig.Config{UsersOwned: tc.users, OrgsOwned: tc.orgs}, nil, nil, authschema.ValidatedIdentifier{})
-		if got.UsersOwnedByAuth != tc.users || got.OrgsOwnedByAuth != tc.orgs {
-			t.Fatalf("users=%v orgs=%v: got users=%v orgs=%v", tc.users, tc.orgs, got.UsersOwnedByAuth, got.OrgsOwnedByAuth)
+func TestIdentityConfigCarriesTheUsersOwnedSwitch(t *testing.T) {
+	for _, users := range []bool{true, false} {
+		got := identityConfig(authconfig.Config{UsersOwned: users}, nil, nil, authschema.ValidatedIdentifier{})
+		if got.UsersOwnedByAuth != users {
+			t.Fatalf("users=%v: got users=%v", users, got.UsersOwnedByAuth)
 		}
 	}
 }

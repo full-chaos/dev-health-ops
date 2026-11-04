@@ -329,14 +329,17 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_refresh_token",
         "refresh_credential"
       ],
+      "class_disambiguator": {
+        "kind": "body_field",
+        "name": "refresh_token"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
-      "gaps": [
-        "ops_refresh_token (a go-api refresh JWT in the same JSON body field refresh_token) is also accepted and exchanged once for a new session by session.Store.ExchangeLegacy, but this row lists refresh_credential only: both classes are body-carried, so no head selector (scheme, prefix, header or JWT header) can tell them apart and the selector gate would refuse a two-class row. The gap ends with the legacy refresh window (CHAOS-10408); the body-carried selector kind that would let the row list both is CHAOS-10583."
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
       "issued_credential": [

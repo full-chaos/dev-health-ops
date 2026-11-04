@@ -311,11 +311,14 @@ func markerMatchesTransport(kind, name, head, shape string) bool {
 }
 
 func bodyMarkerMatchesTransport(name, markerShape, head, shape string) bool {
-	_, rest, found := strings.Cut(head, "json body field ")
-	if !found || markerTransportToken(rest) != name {
+	named := false
+	for _, part := range strings.Split(head, "json body field ")[1:] {
+		named = named || markerTransportToken(part) == name
+	}
+	if !named {
 		return false
 	}
-	if value, isPrefix := strings.CutPrefix(markerShape, "prefix:"); isPrefix {
+	if value, isValue := bodyShapeValue(markerShape); isValue {
 		return strings.Contains(shape, "opaque "+value+" ")
 	}
 	return markerShape == "jwt" && strings.Contains(shape, " jwt,")

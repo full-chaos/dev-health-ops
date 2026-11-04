@@ -91,15 +91,31 @@ keys_list_state() {
   printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { print $2; found = 1 } END { exit found ? 0 : 1 }'
 }
 
+# valid_run_id VALUE: the CI run id is digits only (1-20) or empty; the one operator-supplied value a record carries.
+valid_run_id() {
+  [[ -z "$1" || "$1" =~ ^[0-9]{1,20}$ ]]
+}
+
 # Records: noclobber, one file per scenario, PASS/FAIL lines.
 REC_FILE=""
 rec_open() {
   REC_FILE="$1"
   ( set -o noclobber; printf '# %s\n' "$2" >"${REC_FILE}" ) 2>/dev/null || { REC_FILE=""; return 1; }
 }
+# rec_line redacts by FIELD: a whitespace-separated token is refused when its key names a secret (key=value with a
+# password/secret/token/credential/private key name) or when it is shaped like one (a URL with credentials, a PEM header,
+# a JWT). Plain text that merely contains a word such as "password" (a namespace name) is not a secret.
 rec_line() {
   [ -n "${REC_FILE}" ] || return 1
-  if grep -Eqi '://[^ /]*:[^ @]*@|password|BEGIN [A-Z ]*PRIVATE|eyJ[A-Za-z0-9_-]{8,}' <<<"$1"; then
+  local tok key
+  for tok in $1; do
+    key="${tok%%=*}"
+    if [ "${key}" != "${tok}" ] && grep -Eqi '^(.*[-_.])?(password|passwd|secret|token|credential|apikey|api[-_]key|private[-_]?key)([-_.].*)?$' <<<"${key}"; then
+      printf 'refused: record line looks like a secret\n' >&2
+      return 1
+    fi
+  done
+  if grep -Eqi '://[^ /]*:[^ @]*@|BEGIN [A-Z ]*PRIVATE|eyJ[A-Za-z0-9_-]{8,}' <<<"$1"; then
     printf 'refused: record line looks like a secret\n' >&2
     return 1
   fi

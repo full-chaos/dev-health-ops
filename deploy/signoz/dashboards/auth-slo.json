@@ -1,0 +1,1825 @@
+{
+  "name": "auth-slo",
+  "schemaVersion": "v6",
+  "spec": {
+    "display": {
+      "description": "Auth service SLO view: requests, latency, exchange, PDP, outbox, revision feed and legacy ingest (CHAOS-11221). Labels from the allowlist only. No data until the auth service takes traffic (phase 2). Lines are the CHAOS-11220 SLO table numbers; the alerts are in alerts/rules.yml group auth_slo.",
+      "name": "Dev Health - Auth Service SLO (production)"
+    },
+    "duration": "24h",
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/request-rate"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/error-5xx"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/authorize-p95"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 7
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/authorize-p99"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 7
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/token-p95"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 14
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/jwks"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 14
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/exchange-latency"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 21
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/exchange-outcomes"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 21
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/refresh-exchanges"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 28
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/token-refused"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 28
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/decision-cache"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 35
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/outbox-age"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 35
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/outbox-delivery"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 42
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/outbox-publisher"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 42
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/revfeed-events"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 49
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/revfeed-resync"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 49
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/revfeed-up"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 56
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/push-lag"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 56
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/ingest-audit"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 63
+            }
+          ]
+        }
+      }
+    ],
+    "panels": {
+      "request-rate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Rate of auth-service requests by status_class.",
+            "name": "Requests by status class"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_requests_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "status_class",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{status_class}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "error-5xx": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Increase of 5xx responses. The alert is AuthService5xx (any 5xx, 5m); the availability SLO is in the SLO table (CHAOS-11220).",
+            "name": "5xx requests"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_requests_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND status_class = '5xx'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "authorize-p95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "POST /v1/authorize p95. SLO line 25 ms (CHAOS-11220 row 2; alert AuthzLatencyP95High).",
+            "name": "Authorize p95"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": "s"
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": [
+                {
+                  "color": "#e5484d",
+                  "label": "25 ms",
+                  "unit": "s",
+                  "value": 0.025
+                }
+              ],
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_request_duration_seconds",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "p95"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "authorize-p99": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "POST /v1/authorize p99. SLO line 75 ms (CHAOS-11220 row 2; alert AuthzLatencyP99High). Resolves to bucket edges: 0.075 needs the edge added by CHAOS-11220.",
+            "name": "Authorize p99"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": "s"
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": [
+                {
+                  "color": "#e5484d",
+                  "label": "75 ms",
+                  "unit": "s",
+                  "value": 0.075
+                }
+              ],
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_request_duration_seconds",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "p99"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "token-p95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "POST /v1/token/refresh p95. SLO line 200 ms (CHAOS-11220 rows 3,4; alert AuthTokenLatencyP95High).",
+            "name": "Token refresh p95"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": "s"
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": [
+                {
+                  "color": "#e5484d",
+                  "label": "200 ms",
+                  "unit": "s",
+                  "value": 0.2
+                }
+              ],
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_request_duration_seconds",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "p95"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/token/refresh'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "jwks": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "GET /.well-known/jwks.json. No alert: no target is set (CHAOS-11220 row 5).",
+            "name": "JWKS rate and p95"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_requests_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'GET /.well-known/jwks.json'"
+                    },
+                    "groupBy": [],
+                    "legend": "rate",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            },
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "B",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_request_duration_seconds",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "p95"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'GET /.well-known/jwks.json'"
+                    },
+                    "groupBy": [],
+                    "legend": "p95",
+                    "limit": 100,
+                    "name": "B",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "exchange-latency": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "POST /internal/v1/token/exchange. No alert: no target is set (CHAOS-11220 row 6).",
+            "name": "Exchange rate and p95"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_requests_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /internal/v1/token/exchange'"
+                    },
+                    "groupBy": [],
+                    "legend": "rate",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            },
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "B",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_http_request_duration_seconds",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "p95"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /internal/v1/token/exchange'"
+                    },
+                    "groupBy": [],
+                    "legend": "p95",
+                    "limit": 100,
+                    "name": "B",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "exchange-outcomes": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "auth.workload.exchanges. Groups outcome and reason only; subject and audience are never grouped.",
+            "name": "Exchanges by outcome and reason"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "auth.workload.exchanges",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "outcome",
+                        "signal": "metrics"
+                      },
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "reason",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{outcome}}{{reason}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "refresh-exchanges": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "auth.session.refresh_exchanges by reason_code.",
+            "name": "Refresh exchanges by reason"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "auth.session.refresh_exchanges",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "reason_code",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{reason_code}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "token-refused": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "devhealth_auth_access_token_refused_total by reason and profile (verifier side).",
+            "name": "Access tokens refused by reason"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_access_token_refused_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "reason",
+                        "signal": "metrics"
+                      },
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "profile",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{reason}}{{profile}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "decision-cache": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "devhealth_auth_decision_cache_lookups_total by result. No alert: no measured baseline.",
+            "name": "Decision cache lookups by result"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_decision_cache_lookups_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "result",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{result}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "outbox-age": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "devhealth_auth_outbox_oldest_pending_age_seconds. SLO line 300 s (CHAOS-11220 row 7; alert AuthOutboxOldestPendingHigh). publisher_enabled = 0 means no sink.",
+            "name": "Outbox oldest pending age"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": "s"
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": [
+                {
+                  "color": "#e5484d",
+                  "label": "300 s",
+                  "unit": "s",
+                  "value": 300
+                }
+              ],
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_outbox_oldest_pending_age_seconds",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "outbox-delivery": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "delivered rate and delivery_failures by reason. No alert: no number is set.",
+            "name": "Outbox delivered and failures"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_outbox_delivered_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [],
+                    "legend": "delivered",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            },
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "B",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_outbox_delivery_failures_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "reason",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{reason}}",
+                    "limit": 100,
+                    "name": "B",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "outbox-publisher": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "devhealth_auth_outbox_publisher_enabled (0 = no sink).",
+            "name": "Outbox publisher enabled"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_outbox_publisher_enabled",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "revfeed-events": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Revocation propagation PROXY, not seconds of effect (revocation lag metric: CHAOS-12917, not built).",
+            "name": "Revision feed events by disposition"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_revision_feed_events_total",
+                        "timeAggregation": "rate",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "disposition",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{disposition}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "revfeed-resync": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Revocation propagation proxy (CHAOS-12917).",
+            "name": "Revision feed resyncs by cause"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_revision_feed_resync_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "cause",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{cause}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "revfeed-up": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Revocation propagation proxy (CHAOS-12917).",
+            "name": "Revision feed subscription up"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_revision_feed_subscription_up",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "min"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "push-lag": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Revocation propagation proxy (CHAOS-12917). final_rows > 0 needs the drift alert.",
+            "name": "Push projection lag, parked and final rows"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_push_projection_lag",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [],
+                    "legend": "lag",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            },
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "B",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_push_projection_parked_rows",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [],
+                    "legend": "parked",
+                    "limit": 100,
+                    "name": "B",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            },
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "C",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "devhealth_auth_push_projection_final_rows",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [],
+                    "legend": "final",
+                    "limit": 100,
+                    "name": "C",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "ingest-audit": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "dev_health_api_ingest_auth_audit_failures_total by reason.",
+            "name": "Legacy ingest audit failures by reason"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": false
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_ingest_auth_audit_failures_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "reason",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{reason}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "refreshInterval": "",
+    "variables": []
+  },
+  "tags": [
+    {
+      "key": "environment",
+      "value": "production"
+    },
+    {
+      "key": "component",
+      "value": "auth-slo"
+    },
+    {
+      "key": "ticket",
+      "value": "CHAOS-11221"
+    }
+  ]
+}

@@ -601,3 +601,23 @@ These four blocks are derived from `alerts/rules.yml` and are not yet imported. 
   }
 }
 ```
+||||||| parent of c16d9c0c3e (feat(signoz): add the auth service SLO dashboard and its guard)
+
+
+## Auth service SLO dashboard
+
+The dashboard source is `deploy/signoz/dashboards/auth-slo.json` ("Dev Health - Auth Service SLO (production)", CHAOS-11221). It has panels only. The alert rules and the SLO numbers are in the SLO table change (`docs/reference/auth/readiness-and-slo.md`, group `auth_slo` in `alerts/rules.yml`); the dashboard draws their lines and holds no second copy of a rule. A signal with no set number has a panel and no alert.
+
+**No data yet.** The auth-service series is empty until the auth service takes traffic (phase 2); until then go-api serves the auth routes. The panels show no data and the rules stay inactive, as for the shadow dashboard.
+
+What it shows:
+
+- Requests by `status_class`, the 5xx count, and the p95 and p99 of `POST /v1/authorize` (lines at 25 ms and 75 ms), the p95 of `POST /v1/token/refresh` (line at 200 ms), JWKS and the exchange route (rate and p95; no target is set). All read `dev_health_api_http_requests_total` and `dev_health_api_http_request_duration_seconds` filtered to `listener = 'auth-api-http'` and one `route`. The histogram has bucket edges only at the values the service sets, so a percentile resolves to its bucket edge.
+- Workload exchanges by `outcome` and `reason` (`auth.workload.exchanges`; `subject` and `audience` are never a group-by), refresh exchanges by `reason_code`, access tokens refused by `reason` and `profile`, decision cache lookups by `result`.
+- Outbox: oldest pending age (line at 300 s), delivered rate, delivery failures by `reason`, and `publisher_enabled` (0 means no sink).
+- Revision feed events by `disposition`, resyncs by `cause`, subscription up, and push projection lag, parked and final rows. These are proxies for revocation propagation, not seconds of effect: the revocation lag metric does not exist yet (CHAOS-12917), so there is no panel and no alert for it.
+- Legacy ingest audit failures by `reason`.
+
+Not covered, because the service emits no metric for it: the JWKS cache age at the verifiers, a PDP outage seen at the caller, and revocation lag in seconds.
+
+The labels are the closed set in `internal/platform/otlpmetrics/labels.tsv`; the dashboard filters on `deployment.environment`, `service.name`, `listener` and `route` and groups only by labels listed there. `auth.*` metric names can land underscored in SigNoz: the owner checks the names at import (auth-service scrape runbook, Step 3). The import is a separate step from the merged JSON.

@@ -166,7 +166,7 @@ WHERE u.id = $1`,
 	"principal_get_other": `/* publicread.principal_get_other */
 SELECT p.id, p.kind, p.disabled_at IS NULL, COALESCE(rp.revision, 0)
 FROM {A}.principals p ` + revisionJoin("rp", "principal", "prn_", "p.id") + `
-WHERE p.id = $1 AND p.kind <> 'user'`,
+WHERE p.id = $1 AND p.kind IN ('service_account', 'workload')`,
 
 	"principals_list": `/* publicread.principals_list */
 SELECT x.id, x.kind, x.active, COALESCE(rp.revision, 0), x.mid, x.role, x.joined_at, x.created_at, x.updated_at, COALESCE(rm.revision, 0)

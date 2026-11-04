@@ -232,7 +232,7 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 	case "principal_get_other":
 		id := *uuidArg(args[0])
 		for _, p := range f.auth.principals {
-			if p.ID == id && p.Kind != "user" {
+			if p.ID == id && (p.Kind == "service_account" || p.Kind == "workload") {
 				out.rows = append(out.rows, []any{p.ID, p.Kind, p.Active, f.rev("principal", "prn_", p.ID)})
 			}
 		}
@@ -252,7 +252,7 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 			}
 		}
 		for _, p := range f.auth.principals {
-			if p.OrgID == org && p.Kind != "user" {
+			if p.OrgID == org && (p.Kind == "service_account" || p.Kind == "workload") {
 				all = append(all, listed{Principal: Principal{ID: p.ID, Kind: p.Kind, Active: p.Active}})
 			}
 		}

@@ -93,6 +93,8 @@ func TestReaderOverTheRealSchemasAsTheRuntimeRole(t *testing.T) {
 	exec(`INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'admin')`, members[2], users[2], orgA)
 	exec(`INSERT INTO public.memberships (id, user_id, org_id, role) VALUES ($1, $2, $3, 'viewer')`, members[3], users[0], orgB)
 	exec(`INSERT INTO auth.principals (id, kind) VALUES ($1, 'workload')`, workload)
+	externalSource := uuid.MustParse("00000000-0000-4000-8000-0000000000b2")
+	exec(`INSERT INTO auth.principals (id, kind) VALUES ($1, 'external_source')`, externalSource)
 
 	reader, err := New(Config{Querier: runtime, AuthSchema: authschema.Quote(mustIdent(t, "auth"))})
 	if err != nil {
@@ -135,6 +137,9 @@ func TestReaderOverTheRealSchemasAsTheRuntimeRole(t *testing.T) {
 	p, err = reader.Principal(ctx, workload)
 	if err != nil || p.Kind != "workload" || !p.Active {
 		t.Fatalf("workload principal = %+v, %v", p, err)
+	}
+	if _, err := reader.Principal(ctx, externalSource); err != ErrNotFound {
+		t.Fatalf("external_source principal: %v", err)
 	}
 	if _, err := reader.Principal(ctx, uuid.New()); err != ErrNotFound {
 		t.Fatalf("unknown principal: %v", err)

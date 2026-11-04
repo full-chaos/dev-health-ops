@@ -419,7 +419,7 @@ func TestStatementsCarryTheirContract(t *testing.T) {
 		"membership_get":      append([]string{"WHERE m.org_id = $1 AND m.user_id = $2"}, rev("membership", "mbr_", "m.id")...),
 		"memberships_list":    append([]string{"WHERE m.org_id = $1", "m.id > $2", "ORDER BY m.id", "LIMIT $3"}, rev("membership", "mbr_", "m.id")...),
 		"principal_get_user":  append([]string{"WHERE u.id = $1"}, rev("principal", "prn_", "u.id")...),
-		"principal_get_other": append([]string{"WHERE p.id = $1 AND p.kind <> 'user'", `"auth".principals p`}, rev("principal", "prn_", "p.id")...),
+		"principal_get_other": append([]string{"WHERE p.id = $1 AND p.kind IN ('service_account', 'workload')", `"auth".principals p`}, rev("principal", "prn_", "p.id")...),
 		"principals_list": append([]string{"WHERE m.org_id = $1", "sa.organization_id = $1", "w.organization_id = $1", "x.kind = $2", "x.id > $3", "ORDER BY x.id", "LIMIT $4",
 			`"auth".service_accounts sa`, `"auth".workloads w`}, append(rev("principal", "prn_", "x.id"), rev("membership", "mbr_", "x.mid")...)...),
 	}

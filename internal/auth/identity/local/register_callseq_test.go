@@ -2,10 +2,12 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/callseq"
 )
 
@@ -65,4 +67,58 @@ func TestRegisterKnownAddressStoresNothingAndSendsTheNoticeOnly(t *testing.T) {
 	if known.accounts.decoyed != 1 || fresh.accounts.decoyed != 0 {
 		t.Errorf("decoy provisions: known %d, new %d, want 1 and 0", known.accounts.decoyed, fresh.accounts.decoyed)
 	}
+}
+
+// With the organization slug taken, every address state still makes the calls of a new sign-up; only a known
+// address delivers the notice, and no state stores a credential.
+func TestRegisterSlugCollisionMakesOneCallSequenceForEveryAddressState(t *testing.T) {
+	seqs := map[string][]string{}
+	for _, name := range []string{"new", "known", "taken-on-write"} {
+		for _, collision := range []bool{false, true} {
+			rig := newFlowRig(t, true)
+			email := name + "@example.com"
+			switch name {
+			case "known":
+				rig.user(email, true)
+			case "taken-on-write":
+				rig.accounts.taken = true
+			}
+			if collision {
+				rig.f.accounts = recordedCollision{Accounts: rig.f.accounts, rec: rig.rec}
+			}
+			out, err := rig.f.Register(context.Background(), RegisterRequest{Email: email, Password: flowPassword})
+			if err != nil || out.Kind != FlowOK {
+				t.Fatalf("%s collision=%v: Register = %+v, %v", name, collision, out, err)
+			}
+			key := fmt.Sprintf("%s/collision=%v", name, collision)
+			seqs[key] = rig.rec.names()
+			for _, issued := range rig.links.issued {
+				if collision && issued.PrincipalID != uuid.Nil {
+					t.Errorf("%s: a credential was stored for %v", key, issued.PrincipalID)
+				}
+			}
+			delivered := 0
+			for _, msg := range rig.mail.sent {
+				if msg.Deliver {
+					delivered++
+				}
+			}
+			if want := map[bool]int{false: 1, true: 0}[collision && name != "known"]; delivered != want {
+				t.Errorf("%s: %d mails delivered, want %d", key, delivered, want)
+			}
+		}
+	}
+	callseq.Same(t, "register with a slug collision", seqs)
+}
+
+// recordedCollision refuses the provision with a slug collision, as the store does when the organization name's slug is
+// held, and records the call as the other fakes do.
+type recordedCollision struct {
+	Accounts
+	rec *flowRecorder
+}
+
+func (c recordedCollision) ProvisionLocal(context.Context, ProvisionLocalRequest) (uuid.UUID, error) {
+	c.rec.add("ProvisionLocal")
+	return uuid.Nil, identity.ErrOrganizationSlugCollision
 }

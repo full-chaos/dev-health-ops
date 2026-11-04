@@ -43,8 +43,9 @@ not hand-run a REVOKE.
    release prints. The hook logs show `runtime grants narrowing deferred with operator acknowledgement`, with the
    number of deferred grants.
 3. **Check that no old owned pod is left (read only).** Count the pods of the owned ReplicaSet, Terminating pods
-   included. The check first prints `kubectl config current-context` and stops unless it is the prod context
-   (`<prod context>`: the context name of your roll kit; replace it in the check): a cluster with the same release and
+   included. The check first prints `kubectl config current-context` and stops unless it equals the shell variable
+   `PROD_KUBE_CONTEXT` exactly (also stops when the variable is empty). Set it from your private notes before the
+   check, for example `export PROD_KUBE_CONTEXT=<name>`; this page gives no prod context. A cluster with the same release and
    an identical old ReplicaSet at 0 pods would pass every later test. Then it proves that its namespace, release and
    hash select the owned ReplicaSet: the Deployment keeps the old ReplicaSet at 0 replicas (default
    `revisionHistoryLimit`), so exactly one must match. A wrong namespace, release or hash matches none and stops,
@@ -53,9 +54,10 @@ not hand-run a REVOKE.
    ```bash
    (
      set -o pipefail
+     [ -n "${PROD_KUBE_CONTEXT:-}" ] || { echo "STOP: PROD_KUBE_CONTEXT is empty"; exit 1; }
      ctx="$(kubectl config current-context)"
      echo "kube context: ${ctx}"
-     [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
+     [ "${ctx}" = "${PROD_KUBE_CONTEXT}" ] || { echo "STOP: the kube context is '${ctx}', not PROD_KUBE_CONTEXT"; exit 1; }
      rs="$(kubectl get rs -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
@@ -88,9 +90,10 @@ not hand-run a REVOKE.
    ```bash
    (
      set -o pipefail
+     [ -n "${PROD_KUBE_CONTEXT:-}" ] || { echo "STOP: PROD_KUBE_CONTEXT is empty"; exit 1; }
      ctx="$(kubectl config current-context)"
      echo "kube context: ${ctx}"
-     [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
+     [ "${ctx}" = "${PROD_KUBE_CONTEXT}" ] || { echo "STOP: the kube context is '${ctx}', not PROD_KUBE_CONTEXT"; exit 1; }
      rs="$(kubectl get rs -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }

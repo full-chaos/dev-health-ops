@@ -4,6 +4,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -99,6 +100,40 @@ func TestRehearsedProvisionRunsTheStatementsOfARealOneAndStoresNothing(t *testin
 		}
 		if n := e.count(t, ctx, `SELECT count(*) FROM public.users WHERE email = $1`, rehearsed); n != 0 {
 			t.Errorf("org=%v: the rehearsed address is stored (%d rows)", org != nil, n)
+		}
+	}
+}
+
+// A rehearsed decoy on an internal .invalid address makes the statements of a real provision, with and without an
+// organization, and stores nothing; outside a rehearsal it is refused and stores nothing either.
+func TestRehearsedDecoyOnAnInvalidAddressRunsTheStatementsOfARealOneAndStoresNothing(t *testing.T) {
+	e := getEnv(t)
+	const stored = `SELECT (SELECT count(*) FROM auth.principals) + (SELECT count(*) FROM auth.users) + (SELECT count(*) FROM public.users)
+ + (SELECT count(*) FROM public.organizations) + (SELECT count(*) FROM auth.auth_outbox_events) + (SELECT count(*) FROM auth.security_audit_events)`
+	for _, org := range []*NewOrganization{nil, {Name: "Decoy Co " + uuid.NewString()[:8]}} {
+		store, log := tracedOwnedStore(t, e)
+		ctx := context.Background()
+		hash := testBcrypt
+		log.take()
+		if _, err := store.ProvisionLocal(ctx, LocalProvisionRequest{Email: uniqueEmailCom("real"), PasswordHash: &hash, Actor: SelfSignUp(nil), Organization: org}); err != nil {
+			t.Fatalf("org=%v: real ProvisionLocal: %v", org != nil, err)
+		}
+		want := log.take()
+
+		decoy := "rehearsal-" + uuid.NewString() + "@example.invalid"
+		before := e.count(t, ctx, stored)
+		if _, err := store.ProvisionLocal(WithDecoyAddress(audit.WithRehearsal(ctx)), LocalProvisionRequest{Email: decoy, PasswordHash: &hash, Actor: SelfSignUp(nil), Organization: org}); err != nil {
+			t.Fatalf("org=%v: rehearsed decoy ProvisionLocal: %v", org != nil, err)
+		}
+		got := log.take()
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("org=%v: decoy statements differ from the real ones:\nreal  %q\ndecoy %q", org != nil, want, got)
+		}
+		if _, err := store.ProvisionLocal(WithDecoyAddress(ctx), LocalProvisionRequest{Email: decoy, PasswordHash: &hash, Actor: SelfSignUp(nil), Organization: org}); !errors.Is(err, ErrDecoyOutsideRehearsal) {
+			t.Errorf("org=%v: decoy outside a rehearsal = %v, want ErrDecoyOutsideRehearsal", org != nil, err)
+		}
+		if after := e.count(t, ctx, stored); after != before {
+			t.Errorf("org=%v: decoys changed the stored row count from %d to %d", org != nil, before, after)
 		}
 	}
 }

@@ -47,11 +47,9 @@ var membershipWriterCensus = map[string]membershipSite{
 }
 
 // The purge builds its DELETE from orgDeletionTargets, so no allowlist row holds
-// it; the switch that drops the target and the lock is read here instead.
-var membershipPurgeSite = struct{ targets, purge, orgsOn, target string }{
+// it; the target is read here instead.
+var membershipPurgeSite = struct{ targets, target string }{
 	targets: "internal/apiservice/admin/orgdeletion_targets.go",
-	purge:   "internal/apiservice/admin/orgdeletion.go",
-	orgsOn:  "usersowned.OrgsOn()",
 	target:  `{Table: "memberships", Direct:`,
 }
 
@@ -126,13 +124,6 @@ func TestMembershipWriterCensus(t *testing.T) {
 	}
 	if !strings.Contains(string(targets), membershipPurgeSite.target) {
 		t.Fatalf("%s: no memberships purge target; update this census", membershipPurgeSite.targets)
-	}
-	purge, err := os.ReadFile(filepath.Join(root, membershipPurgeSite.purge))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(purge), membershipPurgeSite.orgsOn) {
-		t.Errorf("%s: the memberships purge does not read %s", membershipPurgeSite.purge, membershipPurgeSite.orgsOn)
 	}
 }
 

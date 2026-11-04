@@ -100,5 +100,15 @@ Ask Dev does not use the investment provider checks on this page. It runs on the
 | `own_model_turned_off` | An organization admin turned the organization's own model off. |
 | `ai_features_turned_off` | ACR AI features are turned off for this organization. |
 
-The web app shows these refusals as one generic "not entitled" message without the reason, so read the reason from the 403 body, or ask the platform owner. Organization admins control the **ACR AI features** and **Use your own model** switches in the workspace LLM settings. See [Turn on Ask Dev](../ask-dev/index.md).
+Dev Health's model gate also refuses a saved model that cannot serve a call, with a 403 and one of these detail codes (`internal/llmorgsettings/modelgate_unusable_test.go`). It never falls back to the platform model in these cases:
 
+| Detail code | What it means |
+| --- | --- |
+| `missing_credentials` | The saved provider has no key, or an empty key. |
+| `invalid_base_url` | The saved base URL is refused by the address guard. |
+| `unknown_provider` | The saved provider is not one the service supports. |
+| `unreadable_row` | The stored setting cannot be read. |
+
+Whether the Ask Dev service passes each of these codes through unchanged was not traced. Fix the saved model in the workspace LLM settings.
+
+The web app shows these refusals as one generic "not entitled" message without the reason, so read the reason from the 403 body, or ask the platform owner. Organization admins control the **ACR AI features** and **Use your own model** switches in the workspace LLM settings. See [Turn on Ask Dev](../ask-dev/index.md).

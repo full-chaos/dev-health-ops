@@ -33,4 +33,3 @@ Ask Dev conversations are stored by the Ask Dev service (ACR), not by the Dev He
 - **Organization removal.** Purging an organization deletes its Ask Dev rows; later calls with the old credentials are refused.
 
 This page does not state that conversation content is or is not used for model training: no such statement is enforced in the product code. Ask your platform owner for the provider's terms for the model your organization uses.
-

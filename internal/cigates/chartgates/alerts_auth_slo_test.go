@@ -17,6 +17,8 @@ import (
 // docs/operate/observe/dashboards-and-alerts.md and the SLO table in docs/reference/auth/readiness-and-slo.md.
 // The rule text decides the metric, the route, the window and the threshold; the builder JSON and the table must
 // say the same, and the p99/p95 targets must be bucket edges of the duration histogram.
+// The status cells are pinned to exact text by design (static-text class): a wording change in the table must
+// change the pin in the same commit, so the guard fails closed instead of accepting unreviewed status text.
 
 const (
 	sloGroup       = "auth_slo"

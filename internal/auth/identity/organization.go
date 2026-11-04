@@ -26,7 +26,7 @@ const organizationsSlugKey = "organizations_slug_key"
 
 // errOrganizationProjectedConcurrently ends a first projection that a
 // concurrent call already inserted; it is success.
-var errOrganizationProjectedConcurrently error = concurrentProjection("identity: organization projected concurrently")
+var errOrganizationProjectedConcurrently error = &concurrentProjection{"identity: organization projected concurrently"}
 
 type orgState struct {
 	slug   string

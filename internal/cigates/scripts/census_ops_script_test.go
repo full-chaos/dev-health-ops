@@ -11,15 +11,11 @@ import (
 // The ops census (`go test` over the cigates, testsupport and httpguard packages) runs internal/cigates/scripts, which
 // takes 744 s under load against the 10 m go test default. ci/check_go.sh census-ops is the repo-owned entry: it takes
 // the -timeout from cigates_go_test_timeout, the same function the hosted legs use, so a caller never relies on the default.
-// --print-cmd prints the go test argv and runs nothing; the cells read that line, never a clock.
+// The cells put a fake go on PATH that records its argv and answers `test` with success; no cell runs the census.
 
-const censusOpsWant = "go test -mod=readonly -trimpath -count=1 -timeout 20m ./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/..."
+const censusOpsArgv = "test -mod=readonly -trimpath -count=1 -timeout 20m ./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/..."
 
-// censusOpsLine: check_go.sh prints its module list before any verb runs; the verb line is the last one.
-func censusOpsLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	return lines[len(lines)-1]
-}
+const censusOpsWant = "test GOENV=off GOFLAGS=unset argv=" + censusOpsArgv + "\n"
 
 func censusOps(t *testing.T, checkGo string, args ...string) cmdResult {
 	t.Helper()
@@ -59,11 +55,12 @@ func censusGoCalls(t *testing.T, logFile string) string {
 	return string(b)
 }
 
-func TestCensusOpsPrintsTheCensusCommandWithTheCigatesTimeout(t *testing.T) {
+func TestCensusOpsRunsExactlyOneGoTestWithTheCigatesTimeout(t *testing.T) {
 	t.Parallel()
-	res := censusOps(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), "--print-cmd")
-	if res.code != 0 || censusOpsLine(res.stdout) != censusOpsWant {
-		t.Fatalf("census-ops --print-cmd: rc=%d stdout=%q stderr=%q, want rc 0 and %q", res.code, res.stdout, res.stderr, censusOpsWant)
+	pathEnv, logFile := censusFakeGo(t)
+	res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv})
+	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != censusOpsWant {
+		t.Fatalf("census-ops: rc=%d stderr=%q go calls=%q, want exactly %q", res.code, res.stderr, calls, censusOpsWant)
 	}
 }
 
@@ -72,32 +69,24 @@ func TestCensusOpsTakesTheTimeoutFromTheCigatesFunction(t *testing.T) {
 	planted := plantedCheckGoRoot(t,
 		"github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '20m\\n'; return 0 ;;",
 		"github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '7m\\n'; return 0 ;;")
-	res := censusOps(t, planted, "--print-cmd")
-	if want := strings.Replace(censusOpsWant, "-timeout 20m", "-timeout 7m", 1); res.code != 0 || censusOpsLine(res.stdout) != want {
-		t.Fatalf("census-ops follows cigates_go_test_timeout: rc=%d stdout=%q stderr=%q, want %q", res.code, res.stdout, res.stderr, want)
+	pathEnv, logFile := censusFakeGo(t)
+	res := censusOpsEnv(t, planted, []string{pathEnv})
+	if want := strings.Replace(censusOpsWant, "-timeout 20m", "-timeout 7m", 1); res.code != 0 || censusGoCalls(t, logFile) != want {
+		t.Fatalf("census-ops follows cigates_go_test_timeout: rc=%d stderr=%q go calls=%q, want %q", res.code, res.stderr, censusGoCalls(t, logFile), want)
 	}
 }
 
-func TestCensusOpsRefusesAnythingButPrintCmd(t *testing.T) {
+func TestCensusOpsRefusesAnyArgument(t *testing.T) {
 	t.Parallel()
 	pathEnv, logFile := censusFakeGo(t)
-	for _, args := range [][]string{{"--bogus"}, {"--print-cmd", "extra"}} {
+	for _, args := range [][]string{{"--bogus"}, {"--print-cmd"}} {
 		res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv}, args...)
-		if res.code == 0 || !strings.Contains(res.stderr, "census-ops accepts only an optional --print-cmd") {
-			t.Fatalf("census-ops %v: rc=%d stderr=%q, want a refusal naming --print-cmd", args, res.code, res.stderr)
+		if res.code == 0 || !strings.Contains(res.stderr, "census-ops accepts no arguments") {
+			t.Fatalf("census-ops %v: rc=%d stderr=%q, want a refusal", args, res.code, res.stderr)
 		}
 		if calls := censusGoCalls(t, logFile); calls != "" {
 			t.Fatalf("census-ops %v refused but ran go: %q", args, calls)
 		}
-	}
-}
-
-func TestCensusOpsPrintCmdRunsNoGoTestOrList(t *testing.T) {
-	t.Parallel()
-	pathEnv, logFile := censusFakeGo(t)
-	res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv}, "--print-cmd")
-	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != "" || censusOpsLine(res.stdout) != censusOpsWant {
-		t.Fatalf("census-ops --print-cmd: rc=%d stdout=%q stderr=%q go test/list calls=%q, want rc 0, %q and no call", res.code, res.stdout, res.stderr, calls, censusOpsWant)
 	}
 }
 
@@ -109,9 +98,8 @@ func TestCensusOpsRunsGoTestWithGoenvOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv, "GOENV=" + goenv})
-	want := "test GOENV=off GOFLAGS=unset argv=" + strings.TrimPrefix(censusOpsWant, "go ") + "\n"
-	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != want {
-		t.Fatalf("census-ops with a GOENV file: rc=%d stderr=%q go calls=%q, want exactly %q", res.code, res.stderr, calls, want)
+	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != censusOpsWant {
+		t.Fatalf("census-ops with a GOENV file: rc=%d stderr=%q go calls=%q, want exactly %q", res.code, res.stderr, calls, censusOpsWant)
 	}
 }
 

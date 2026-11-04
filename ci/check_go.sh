@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops [--print-cmd]|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -456,10 +456,10 @@ usage() {
          Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
          CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
          line without a cap. ci/check_golden_drift.sh takes it once for its rows.
-  census-ops [--print-cmd]
+  census-ops
          (CHAOS-12939) The ops census: go test -count=1 over ./internal/cigates/... ./internal/testsupport/...
          ./internal/httpguard/... with the -timeout of cigates_go_test_timeout (20m while the cigates packages
-         are listed). --print-cmd prints that command and runs nothing.
+         are listed).
   job-timeout MINUTES
          Print the go test -timeout, in seconds, of one integration call whose
          own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
@@ -848,17 +848,15 @@ cigates_go_test_timeout() {
   printf '10m\n'
 }
 
-# check_census_ops [--print-cmd]: the ops census (CHAOS-12939): go test over the cigates, testsupport and httpguard packages with the
+# check_census_ops: the ops census (CHAOS-12939): go test over the cigates, testsupport and httpguard packages with the
 # -timeout of cigates_go_test_timeout, so a caller with no -timeout of its own never meets the 10m default in internal/cigates/scripts.
-# --print-cmd prints the argv and runs nothing.
 check_census_ops() {
   local modpath cmd=(go test -mod=readonly -trimpath -count=1)
-  if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--print-cmd" ]; }; then die "census-ops accepts only an optional --print-cmd"; fi
+  [ "$#" -eq 0 ] || die "census-ops accepts no arguments"
   modpath="$(awk '$1 == "module" { print $2; exit }' "${ROOT}/go.mod")"
   [ -n "${modpath}" ] || die "no module line in ${ROOT}/go.mod"
   cmd+=(-timeout "$(cigates_go_test_timeout "${modpath}/internal/cigates/..." "${modpath}/internal/testsupport/..." "${modpath}/internal/httpguard/...")")
   cmd+=(./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/...)
-  if [ "${1:-}" = "--print-cmd" ]; then printf '%s\n' "${cmd[*]}"; return 0; fi
   (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOENV=off GOWORK=off "${cmd[@]}")
 }
 

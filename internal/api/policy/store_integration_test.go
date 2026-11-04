@@ -284,8 +284,10 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	// guard, over HTTP, as the api role.
 	auth := authenticator(t, store)
 	scope := NewScope(auth, quiet())
-	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Superuser, echo)))))
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Admin, echo)))))
 	t.Cleanup(server.Close)
+	platformServer := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Superuser, echo)))))
+	t.Cleanup(platformServer.Close)
 	token := sign(t, claims(func(c jwt.MapClaims) {
 		c["sub"] = admUser.String()
 		c["is_superuser"] = true
@@ -303,6 +305,18 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 	if response.StatusCode != 200 || !strings.HasPrefix(string(body), "org="+member.String()+" user="+admUser.String()) ||
 		response.Header.Get("X-Impersonated-User-Id") != targetUser.String() {
 		t.Fatalf("%d %s %v", response.StatusCode, body, response.Header)
+	}
+	request, _ = http.NewRequestWithContext(ctx, http.MethodGet, platformServer.URL+"/x", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Org-Id", stranger.String())
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "Not allowed in an impersonation session") {
+		t.Fatalf("platform level in a session: %d %s", response.StatusCode, body)
 	}
 	for _, user := range []uuid.UUID{inactive, nullUser} {
 		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/x", nil)

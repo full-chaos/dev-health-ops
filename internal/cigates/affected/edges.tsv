@@ -48,6 +48,7 @@ internal/api/externalurl	environment_proxy_test.go	unexpressed
 internal/api/githubapp	environment_proxy_test.go	unexpressed
 internal/api/gitlabcode	environment_proxy_test.go	unexpressed
 internal/api/oauthprovider	environment_proxy_test.go	unexpressed
+internal/api/policy	principalonce_test.go	unexpressed
 internal/api/policy	store_integration_test.go	unexpressed
 internal/api/restcore	environment_proxy_test.go	unexpressed
 internal/api/sso	environment_proxy_test.go	unexpressed

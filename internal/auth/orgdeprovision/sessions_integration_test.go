@@ -174,6 +174,8 @@ func TestDeprovisionEndsEverySessionOfTheOrganizationOnly(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	c := e.credentials(t, ctx)
+	const sessionAudits = `SELECT count(*) FROM auth.security_audit_events WHERE event_type LIKE 'auth.session.%' AND subject_principal_id = $1`
+	before := e.count(t, ctx, sessionAudits, c.member.String())
 	if _, err := e.service.Deprovision(ctx, Input{OrgID: c.org, Authorize: allowOrg}); err != nil {
 		t.Fatalf("Deprovision: %v", err)
 	}
@@ -181,9 +183,8 @@ func TestDeprovisionEndsEverySessionOfTheOrganizationOnly(t *testing.T) {
 	if n := e.auditRows(t, ctx, EventDeprovisioned, c.org); n != 1 {
 		t.Fatalf("deprovision audit rows = %d, want 1", n)
 	}
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type LIKE 'auth.session.%' AND subject_principal_id = $1`,
-		c.member.String()); n != 0 {
-		t.Fatalf("session audit rows = %d, want 0: the deprovision's row is the audit row", n)
+	if n := e.count(t, ctx, sessionAudits, c.member.String()); n != before {
+		t.Fatalf("session audit rows %d -> %d, want unchanged: the deprovision's row is the audit row", before, n)
 	}
 }
 

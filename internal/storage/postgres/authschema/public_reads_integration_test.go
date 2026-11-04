@@ -107,13 +107,23 @@ func (e *publicReadsEnv) rename(t *testing.T, ctx context.Context, from, to stri
 }
 
 // extraColumn returns a real column of public.<table> that the manifest does
-// not list.
+// not list. When the manifest lists every column of the table, the migration
+// role adds one in this test's database, so a new column must stay unreadable.
 func (e *publicReadsEnv) extraColumn(t *testing.T, ctx context.Context, table string) string {
 	t.Helper()
 	var column string
-	if err := e.admin.QueryRow(ctx, `SELECT column_name FROM information_schema.columns
+	err := e.admin.QueryRow(ctx, `SELECT column_name FROM information_schema.columns
 		WHERE table_schema = 'public' AND table_name = $1 AND column_name <> ALL($2::text[])
-		ORDER BY ordinal_position LIMIT 1`, table, publicReadOracle[table]).Scan(&column); err != nil {
+		ORDER BY ordinal_position LIMIT 1`, table, publicReadOracle[table]).Scan(&column)
+	if errors.Is(err, pgx.ErrNoRows) {
+		column = "ops_unlisted_probe"
+		if _, err := e.migration.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s ADD COLUMN %s text`,
+			Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(column)))); err != nil {
+			t.Fatalf("add a column outside the manifest to public.%s: %v", table, err)
+		}
+		return column
+	}
+	if err != nil {
 		t.Fatalf("a column of public.%s outside the manifest: %v", table, err)
 	}
 	return column

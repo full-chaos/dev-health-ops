@@ -284,6 +284,10 @@ func report(env cli.Env, boundary func(error) error, err error) int {
 		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.PlatformRolesMessage)
 		return cli.ExitRefused
 	}
+	if errors.Is(err, admin.ErrOneMembershipStep) {
+		fmt.Fprintf(env.Stderr, "argument error: %s\n", admin.ErrOneMembershipStep.Message)
+		return cli.ExitUsage
+	}
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
 		fmt.Fprintf(env.Stdout, "Error: %s\n", refusal.Message)
@@ -483,6 +487,10 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 			fmt.Fprintf(env.Stderr, "argument error: --role must be one of owner, admin, member, viewer\n")
 			return cli.ExitUsage
 		}
+	}
+	if org.set && removeFromOrg.set {
+		fmt.Fprintf(env.Stderr, "argument error: %s\n", admin.ErrOneMembershipStep.Message)
+		return cli.ExitUsage
 	}
 	update := admin.UpdateUserInput{
 		ID: id.ptr(), Email: email.ptr(), Username: username.ptr(),

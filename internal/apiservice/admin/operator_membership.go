@@ -18,6 +18,9 @@ var ErrNoProvisioner = &OperatorError{Message: "membership changes and organizat
 // ErrActorRequired refuses a membership change or a real organization delete with no --actor.
 var ErrActorRequired = &OperatorError{Message: "--actor is required: the id or email of an active owner or admin of the organization, or of a superuser (a superuser for an organization delete)."}
 
+// ErrOneMembershipStep refuses an update with both --org and --remove-from-org: a second step could fail after the first one was sent.
+var ErrOneMembershipStep = &OperatorError{Message: "run one membership change per update"}
+
 func (o Operator) requireProvisioning(actor string) error {
 	if o.Provisioner == nil {
 		return ErrNoProvisioner
@@ -117,8 +120,7 @@ func planMembershipChanges(ctx context.Context, store pgStore, userID uuid.UUID,
 			return err
 		}
 		kind := membershipRemove
-		addedHere := len(plan.steps) == 1 && plan.steps[0].kind == membershipAdd && plan.steps[0].org.ID == org.ID
-		if existing == nil && !addedHere {
+		if existing == nil {
 			kind = membershipAbsent
 		}
 		plan.steps = append(plan.steps, membershipStep{kind: kind, org: *org})

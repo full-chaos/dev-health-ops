@@ -434,7 +434,11 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	if err := refuseSuperuserWhileOwned(o.PlatformRolesOwned, in.Superuser != nil); err != nil {
 		return nil, err
 	}
-	if in.MembershipOrg != nil || in.RemoveFromOrg != nil {
+	membershipWrite := in.MembershipOrg != nil || in.RemoveFromOrg != nil
+	if in.MembershipOrg != nil && in.RemoveFromOrg != nil {
+		return nil, ErrOneMembershipStep
+	}
+	if membershipWrite {
 		if err := o.requireProvisioning(deref(in.Actor)); err != nil {
 			return nil, err
 		}
@@ -446,18 +450,42 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 	if in.Role != nil && in.MembershipOrg == nil {
 		return nil, refuse("--role requires --org.")
 	}
+	// The membership step goes first, through the route (no database write of
+	// this call has happened yet); the profile and password writes follow. A
+	// refused route leaves them unrun. The actor is read here, before any
+	// profile update: --actor may be the old email of the user being renamed.
+	var memberChanges []string
+	var shown *UpdateUserResult
+	if membershipWrite {
+		var plan membershipPlan
+		var userID uuid.UUID
+		err := o.inTransaction(ctx, func(store pgStore) error {
+			user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
+			if err != nil {
+				return err
+			}
+			userID, shown = user.ID, &UpdateUserResult{Email: user.Email, ID: user.ID}
+			if plan.actor, err = resolveActorOn(ctx, store, strings.TrimSpace(deref(in.Actor))); err != nil {
+				return err
+			}
+			return planMembershipChanges(ctx, store, user.ID, in, &plan)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if memberChanges, err = o.applyMembershipPlan(ctx, plan, userID); err != nil {
+			return nil, err
+		}
+		if !hasProfileChange && in.Password == nil {
+			shown.Changes = memberChanges
+			return shown, nil
+		}
+	}
 	var result *UpdateUserResult
-	var plan membershipPlan
 	err := o.inTransaction(ctx, func(store pgStore) error {
 		user, err := findUser(ctx, store, in.ID, in.Email, in.Username)
 		if err != nil {
 			return err
-		}
-		if in.MembershipOrg != nil || in.RemoveFromOrg != nil {
-			// The actor is read before the profile update: --actor may be the old email of the user being renamed.
-			if plan.actor, err = resolveActorOn(ctx, store, strings.TrimSpace(deref(in.Actor))); err != nil {
-				return err
-			}
 		}
 		changes := []string{}
 		shownEmail := user.Email
@@ -526,22 +554,13 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 			}
 			changes = append(changes, "password updated (existing sessions revoked)")
 		}
-		if in.MembershipOrg != nil || in.RemoveFromOrg != nil {
-			if err := planMembershipChanges(ctx, store, user.ID, in, &plan); err != nil {
-				return err
-			}
-		}
 		result = &UpdateUserResult{Email: shownEmail, ID: user.ID, Changes: changes}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	changes, err := o.applyMembershipPlan(ctx, plan, result.ID)
-	result.Changes = append(result.Changes, changes...)
-	if err != nil {
-		return nil, err
-	}
+	result.Changes = append(result.Changes, memberChanges...)
 	return result, nil
 }
 

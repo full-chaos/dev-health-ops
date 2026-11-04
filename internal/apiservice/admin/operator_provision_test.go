@@ -193,11 +193,10 @@ func TestOperatorMapsAuthServiceAnswers(t *testing.T) {
 	}
 }
 
-// A profile change with a membership change: the profile commits first, the
-// route call follows, and a refusal after that keeps the profile line out of
-// no output (the update fails) but the profile row stays: it is a separate
-// write, not part of auth-service's commit.
-func TestOperatorProfileAndMembershipUpdateRunsTheRouteAfterTheTransaction(t *testing.T) {
+// A profile change with a membership change: the route is called first, in
+// no transaction of this call; the profile writes follow, and a refused route
+// leaves them unrun.
+func TestOperatorMembershipRouteRunsBeforeTheProfileWrites(t *testing.T) {
 	db := &provisionDB{rows: operatorRows()}
 	fake := &fakeProvisioner{db: db}
 	in := operatorMembershipUpdates["add"]
@@ -206,9 +205,31 @@ func TestOperatorProfileAndMembershipUpdateRunsTheRouteAfterTheTransaction(t *te
 	if err != nil || len(result.Changes) != 2 {
 		t.Fatalf("err %v changes %v", err, result)
 	}
-	commit, call := slices.Index(db.log, "COMMIT"), slices.Index(db.log, "auth:add")
-	if commit < 0 || call < commit {
-		t.Fatalf("COMMIT at %d, route call at %d, want the call after the commit: %q", commit, call, db.log)
+	call := slices.Index(db.log, "auth:add")
+	begins := 0
+	for i, sql := range db.log {
+		if sql == "BEGIN" {
+			begins++
+			if begins == 2 && i < call {
+				t.Fatalf("the profile transaction began before the route call: %q", db.log)
+			}
+		}
+	}
+	if call < 0 || begins != 2 {
+		t.Fatalf("route call at %d, %d transactions: %q", call, begins, db.log)
+	}
+	db = &provisionDB{rows: operatorRows()}
+	fake = &fakeProvisioner{db: db, err: refusedWith(409, "already_member")}
+	if _, err = (Operator{db: db, Provisioner: fake}).UpdateUser(context.Background(), in); err == nil {
+		t.Fatal("a refused route left the update to succeed")
+	}
+	for _, sql := range db.log {
+		if strings.Contains(sql, "UPDATE users") || strings.Contains(sql, "password_hash =") {
+			t.Fatalf("a refused route was followed by a profile write: %q", db.log)
+		}
+	}
+	if n := strings.Count(strings.Join(db.log, "\n"), "BEGIN"); n != 1 {
+		t.Fatalf("%d transactions after a refused route, want only the read one: %q", n, db.log)
 	}
 }
 
@@ -272,16 +293,19 @@ func TestOperatorCreateOrgStillRefusesWithTheSwitchOn(t *testing.T) {
 	}
 }
 
-// --org and --remove-from-org for the same organization: the add comes first,
-// so the removal finds the member it added.
-func TestOperatorAddThenRemoveOfOneOrgCallsBoth(t *testing.T) {
-	db := &provisionDB{rows: operatorRows()}
-	fake := &fakeProvisioner{db: db}
-	in := operatorMembershipUpdates["add"]
-	in.RemoveFromOrg = strp("acme")
-	result, err := Operator{db: db, Provisioner: fake}.UpdateUser(context.Background(), in)
-	if err != nil || !slices.Equal(fake.calls, []string{"add", "remove"}) || len(result.Changes) != 2 {
-		t.Fatalf("err %v calls %v changes %v, want add then remove", err, fake.calls, result)
+// --org with --remove-from-org is refused before any database or route call:
+// a second step could fail after the first was sent.
+func TestOperatorTwoMembershipStepsAreRefusedBeforeAnyWrite(t *testing.T) {
+	for name, first := range map[string]string{"add then remove": "add", "role then remove": "role"} {
+		db := &provisionDB{rows: operatorRowsFor(first)}
+		fake := &fakeProvisioner{db: db}
+		in := operatorMembershipUpdates[first]
+		in.RemoveFromOrg = strp("other")
+		in.FullName = strp("New Name")
+		_, err := Operator{db: db, Provisioner: fake}.UpdateUser(context.Background(), in)
+		if !errors.Is(err, ErrOneMembershipStep) || len(db.log) != 0 || len(fake.calls) != 0 {
+			t.Fatalf("%s: err %v database calls %v route calls %v, want ErrOneMembershipStep and none", name, err, db.log, fake.calls)
+		}
 	}
 }
 
@@ -306,8 +330,8 @@ func TestOperatorDeleteWiresTheDeprovisionCall(t *testing.T) {
 	}
 }
 
-// --actor may be the old email of the user the same call renames: it is read
-// before the profile update (whose first statement reads the user by id).
+// --actor may be the old email of the user the same call renames: it is read,
+// with the user, before the route call and before any profile statement.
 func TestOperatorActorIsReadBeforeTheProfileUpdate(t *testing.T) {
 	db := &provisionDB{rows: operatorRows()}
 	fake := &fakeProvisioner{db: db}
@@ -317,16 +341,15 @@ func TestOperatorActorIsReadBeforeTheProfileUpdate(t *testing.T) {
 	if _, err := (Operator{db: db, Provisioner: fake}).UpdateUser(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
-	emailReads, profile := 0, -1
-	for _, sql := range db.log {
-		switch {
-		case strings.Contains(sql, "FROM users WHERE lower(email) = $1"):
+	call := slices.Index(db.log, "auth:add")
+	emailReads := 0
+	for _, sql := range db.log[:max(call, 0)] {
+		if strings.Contains(sql, "FROM users WHERE lower(email) = $1") {
 			emailReads++
-		case strings.Contains(sql, "FROM users WHERE id = $1") && profile < 0:
-			profile = emailReads
 		}
 	}
-	if emailReads < 2 || profile != 2 {
-		t.Fatalf("email reads before the profile update: %d, want 2 (user, actor): %q", profile, db.log)
+	profile := slices.IndexFunc(db.log, func(sql string) bool { return strings.Contains(sql, "FROM users WHERE id = $1") })
+	if call < 0 || emailReads != 2 || profile < call {
+		t.Fatalf("email reads before the route %d (want user and actor), route at %d, profile read at %d: %q", emailReads, call, profile, db.log)
 	}
 }

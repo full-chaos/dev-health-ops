@@ -52,9 +52,17 @@ var (
 
 const externalIdentityKeyIndex = "external_identities_issuer_provider_subject_key"
 
+// concurrentProjection is the type of the errors that end a first projection
+// another call of the same row already committed. Each is success to its
+// caller and a declared audit.Mutation refusal, so the rolled-back Commit logs
+// at WARN with this type name as its refusal class, not at ERROR.
+type concurrentProjection string
+
+func (e concurrentProjection) Error() string { return string(e) }
+
 // errProjectedConcurrently ends a legacy projection whose identity row a
 // concurrent call already wrote for the same principal; it is success.
-var errProjectedConcurrently = errors.New("identity: projected concurrently")
+var errProjectedConcurrently error = concurrentProjection("identity: projected concurrently")
 
 // LegacyMatch lets IdentityBySubject find a user go-api provisioned before the
 // users cutover, by the provider subject go-api stored in public.users
@@ -218,8 +226,9 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 			// by the caller from DisabledAt.
 			return s.attachIdentity(ctx, tx, linkID, key, principal, false, errProjectedConcurrently, nil)
 		},
-		Audit:  identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
-		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
+		Audit:    identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
+		Events:   []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
+		Refusals: []error{errProjectedConcurrently},
 	})
 	if errors.Is(err, errProjectedConcurrently) {
 		return nil

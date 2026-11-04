@@ -2571,29 +2571,7 @@ secrets:
     file: ${ACR_FALKORDB_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_password}
 configs:
   auth_issuer_nginx:
-    content: |
-      worker_processes 1;
-      pid /tmp/nginx.pid;
-      events { worker_connections 128; }
-      http {
-        access_log off;
-        client_body_temp_path /tmp/client_body;
-        proxy_temp_path /tmp/proxy;
-        fastcgi_temp_path /tmp/fastcgi;
-        uwsgi_temp_path /tmp/uwsgi;
-        scgi_temp_path /tmp/scgi;
-        resolver 127.0.0.11 valid=1s ipv6=off;
-        server {
-          listen 8443 ssl;
-          ssl_protocols TLSv1.2 TLSv1.3;
-          ssl_certificate /run/tls/issuer.pem;
-          ssl_certificate_key /run/tls/issuer.key;
-          set $$auth_upstream http://auth-service:8095;
-          location = /.well-known/openid-configuration { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
-          location = /.well-known/jwks.json { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
-          location / { return 404; }
-        }
-      }
+    file: ./auth-issuer.nginx.conf
 x-acr-build:
   context: ./acr
   dockerfile: Dockerfile

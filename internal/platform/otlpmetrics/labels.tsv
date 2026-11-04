@@ -42,6 +42,7 @@ devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apis
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
+dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go

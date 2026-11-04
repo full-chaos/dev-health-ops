@@ -294,7 +294,14 @@ type ProvisionRequest struct {
 	// id); a social key derives both from itself.
 	LegacyProvider string
 	LegacySubject  string
+	// SAMLNameID is the assertion NameID's own Format and SPNameQualifier of a SAML sign-up, written to
+	// public.users as go-api writes them (saml_nameid_format, saml_sp_name_qualifier): as asserted, an empty
+	// string stays an empty string. nil for every other account (NULL).
+	SAMLNameID *SAMLNameIDParts
 }
+
+// SAMLNameIDParts are the NameID attributes the SAML identity key needs besides the NameID value.
+type SAMLNameIDParts struct{ Format, SPNameQualifier string }
 
 // ProvisionFederated creates a user principal, its auth.users row and its
 // external identity in one audit.Commit (reason principal_provisioned). It

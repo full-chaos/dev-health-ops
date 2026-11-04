@@ -1,0 +1,6 @@
+./capability.go
+./compatibility.go
+./guard.go
+./json.go
+./registry.go
+./types.go

@@ -1,0 +1,15 @@
+./components.go
+./constants.go
+./effort.go
+./evidence.go
+./id.go
+./ids.go
+./issuesize.go
+./labels.go
+./membership.go
+./python_decimal_runs_generated.go
+./quality.go
+./repoeffort.go
+./taxonomy.go
+./telemetrylabels.go
+./timebounds.go

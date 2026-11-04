@@ -1,0 +1,4 @@
+./embed.go
+./endpoint_profiles_auth_service.go
+./endpoint_profiles_go_api.go
+./endpoint_profiles_query_api.go

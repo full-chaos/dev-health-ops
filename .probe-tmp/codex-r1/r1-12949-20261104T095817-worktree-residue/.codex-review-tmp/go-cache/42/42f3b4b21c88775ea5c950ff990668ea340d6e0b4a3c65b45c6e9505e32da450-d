@@ -1,0 +1,15 @@
+./bounded_chain.go
+./error_attrs.go
+./error_span_attrs.go
+./key_redaction.go
+./keys.go
+./logging.go
+./persisted.go
+./provider_id.go
+./redact_keyed.go
+./text.go
+./transport.go
+./transport_shared.go
+./urlpath.go
+./userinfo.go
+./value_redaction.go

@@ -1,0 +1,7 @@
+./boundary.go
+./flag.go
+./hidden.go
+./redactfmt.go
+./registry.go
+./source.go
+./value.go

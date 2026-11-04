@@ -288,6 +288,8 @@ func TestNoTeamOwnershipRepositoryFallbackProviderEntityMatrix(t *testing.T) {
 		seedPullRequestLinks(t, ctx, conn, r2+"#pr3", r2, at, ambiguous[1])
 
 		seedIssueEdge(t, ctx, conn, provider+":a", provider+":b", "", at)
+		// :h needs an edge to become a (reference-only, one-node) unit like the others.
+		seedIssueEdge(t, ctx, conn, hoursIssue, provider+":a", "", at)
 		seedIssueEdge(t, ctx, conn, memberOnly[0], memberOnly[1], "", at)
 		seedIssueEdge(t, ctx, conn, inactiveOnly[0], inactiveOnly[1], "", at)
 		seedIssueEdge(t, ctx, conn, outOfWindow[0], outOfWindow[1], "", at)

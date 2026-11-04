@@ -64,7 +64,7 @@ func TestCreateAuditedForADisabledPrincipalWritesNothing(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)
 	principal := e.principal(t, ctx)
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal.String())
+	e.deactivate(t, ctx, principal)
 	_, err := e.store.CreateAudited(ctx, principal, nil, []string{"pwd"}, signInEvent(principal))
 	if !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Fatalf("err = %v, want ErrPrincipalUnavailable", err)

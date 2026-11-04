@@ -251,6 +251,9 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, session.ErrPrincipalUnavailable):
 		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonDeactivated}, nil)
 		return
+	case errors.Is(err, session.ErrOrganizationUnavailable):
+		h.rec.refuse(w, r, opSessionIssue, refusal{http.StatusForbidden, reasonNotEntitled}, nil)
+		return
 	case err != nil:
 		h.rec.refuse(w, r, opSessionIssue, unavailable(reasonStoreUnavailable), err)
 		return

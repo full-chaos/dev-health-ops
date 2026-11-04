@@ -67,8 +67,10 @@ type pdpSeen struct {
 type testPDP struct {
 	srv     *httptest.Server
 	verdict func(action string) (bool, string)
-	mu      sync.Mutex
-	seen    []pdpSeen
+	// obligations, when set, ride on every allow.
+	obligations map[string]any
+	mu          sync.Mutex
+	seen        []pdpSeen
 }
 
 func newTestPDP(t *testing.T, verdict func(action string) (bool, string)) *testPDP {
@@ -102,11 +104,15 @@ func newTestPDP(t *testing.T, verdict func(action string) (bool, string)) *testP
 		p.mu.Unlock()
 		allowed, reason := p.verdict(body.Action)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		answer := map[string]any{
 			"schema_version": "authorization_decision.v1", "decision_id": "dec_" + strings.Repeat("A", 26), "allowed": allowed,
 			"reason_code": reason, "principal_id": "prn_TESTPRINCIPAL", "organization_id": org, "policy_revision": 1,
 			"expires_at": time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05Z"),
-		})
+		}
+		if allowed && p.obligations != nil {
+			answer["obligations"] = p.obligations
+		}
+		_ = json.NewEncoder(w).Encode(answer)
 	}))
 	t.Cleanup(p.srv.Close)
 	return p

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"regexp"
@@ -26,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -73,6 +75,9 @@ type AuthProxyConfig struct {
 	Timeout time.Duration
 	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING.
 	OrgProvisioning bool
+	// ClientAddrKey is AUTH_CLIENT_ADDR_SIGNING_KEY: with it every forward and every session issue carries a proof of
+	// the X-Forwarded-For value (internal/auth/clientaddr, CHAOS-11645). nil sends no proof.
+	ClientAddrKey *clientaddr.ProofKey
 }
 
 // Enabled reports whether a's routes go to auth-service.
@@ -89,6 +94,12 @@ func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && 
 // owner able to rotate it.
 func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, error) {
 	cfg := AuthProxyConfig{On: map[AuthAggregate]bool{}}
+	rawKey, _ := lookup(clientaddr.EnvSigningKey)
+	key, err := clientaddr.ParseSigningKey(rawKey)
+	if err != nil {
+		return AuthProxyConfig{}, err
+	}
+	cfg.ClientAddrKey = key
 	anyOn := false
 	for _, aggregate := range AuthAggregates {
 		name := AuthProxyFlagEnv(aggregate)
@@ -156,6 +167,7 @@ func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool), cred
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
 	}
+	client.SetClientAddrProof(cfg.ClientAddrKey)
 	return client, nil
 }
 
@@ -213,7 +225,7 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 	for _, aggregate := range AuthAggregates {
 		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
 	}
-	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()))
+	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()), slog.Bool("client_addr_proof", cfg.ClientAddrKey != nil))
 	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
 }
 
@@ -521,11 +533,15 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 		return
 	}
 	out.Header = outboundHeader(r.Header)
-	if address := clientip.FromRequest(r); address != "" {
-		out.Header.Set("X-Forwarded-For", address)
-	}
 	if requestID != "" {
 		out.Header.Set(httpapi.RequestIDHeader, requestID)
+	}
+	if address := clientip.FromRequest(r); address != "" {
+		out.Header.Set("X-Forwarded-For", address)
+		// The proof covers the request id set above: it is the last header written.
+		if addr, parseErr := netip.ParseAddr(address); parseErr == nil {
+			clientaddr.SetProof(out, p.cfg.ClientAddrKey, time.Now(), addr)
+		}
 	}
 	start := time.Now()
 	response, err := p.transport.RoundTrip(out)

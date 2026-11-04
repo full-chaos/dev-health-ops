@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
@@ -173,6 +174,16 @@ var optionRegistry = []Option{
 		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
 		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
+	},
+	{
+		Flag: "client-addr-mode", Env: EnvClientAddrMode, Kind: KindString, Default: string(clientaddr.ModeCIDR), Group: GroupHTTP,
+		Usage: "how the client address is named: cidr (the trusted-proxy list), both (a valid go-api proof, else the list) or " +
+			"signed (a valid go-api proof, else the socket peer; the list is read only for GET and HEAD of the two well-known documents)",
+	},
+	{
+		Env: EnvClientAddrVerifyKey, Kind: KindString, Secret: true, Group: GroupHTTP,
+		Usage: "one or two <kid>:<key> entries (key base64url without padding, at least 32 bytes) that go-api's client-address " +
+			"proofs are checked with; " + EnvClientAddrVerifyKey + "_FILE reads it from a mounted file instead. Needed by modes both and signed",
 	},
 	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -13,12 +14,19 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/decisionstate"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // authorizeProfileRows is the endpoint-profile document the authorize routes
 // are looked up in; nil is the embedded document. Tests plant a document.
 var authorizeProfileRows []byte
+
+// sessionRefreshTTL is the one refresh lifetime of the process: the session stores and the decision reader
+// read session liveness with it, so the two cannot disagree on when a session without a credential ends.
+func sessionRefreshTTL() time.Duration {
+	return session.DefaultRefreshTTL
+}
 
 // authorizeRoutes builds the policy decision point routes over the signer's
 // published key set. A route mounts only when its endpoint-profile row exists.
@@ -29,7 +37,7 @@ var authorizeProfileRows []byte
 // decisionstate collects nothing.
 func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
 	signer authapi.AccessSigner, decisions *decisionFeed) ([]httpapi.Route, error) {
-	state, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema),
+	state, err := decisionstate.New(decisionstate.Config{Pool: pool, Schema: schema, Users: pgUsers(cfg, pool, schema), RefreshTTL: sessionRefreshTTL(),
 		CollectDependencies: decisions != nil})
 	if err != nil {
 		return nil, err

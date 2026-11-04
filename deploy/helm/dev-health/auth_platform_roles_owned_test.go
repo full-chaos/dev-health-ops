@@ -1,6 +1,7 @@
 package devhealth_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,10 @@ var platformRolesReaders = []struct{ kind, name string }{
 	{"Deployment", "a-dev-health-query-api"},
 	{"Job", "a-dev-health-auth-migrate"},
 	{"Job", "a-dev-health-auth-grants"},
+	// The River step reads it for the api role's users grants (postgres.APIPostureFor): the hook when it is on, the
+	// migrate Job (--river) when it is off.
+	{"Job", "a-dev-health-river-migrate"},
+	{"Job", "a-dev-health-migrate"},
 }
 
 const platformRolesEnv = "AUTH_PLATFORM_ROLES_OWNED"
@@ -34,7 +39,7 @@ func TestPlatformRolesOwnedFalseRendersNothing(t *testing.T) {
 	}
 }
 
-// True renders AUTH_PLATFORM_ROLES_OWNED=true on all six readers.
+// True renders AUTH_PLATFORM_ROLES_OWNED=true on every reader and the auth-backfill Job.
 func TestPlatformRolesOwnedTrueRendersOnEverySite(t *testing.T) {
 	args := phaseArgs(4, "--set", "authService.platformRolesOwned=true")
 	docs, out, err := renderAuth(t, args...)
@@ -110,5 +115,30 @@ func TestPlatformRolesOwnedIsCheckedWithNoConsumerRendered(t *testing.T) {
 	}
 	if _, out, err := renderAuth(t, base...); err != nil {
 		t.Fatalf("the default render with no consumer failed: %v\n%.300s", err, out)
+	}
+}
+
+// With the River hook off the migrate Job runs the River step (--river), so it carries the switch; with the hook on the
+// hook does. Either way the River step that grants the api role sees it.
+func TestPlatformRolesOwnedReachesTheRiverStepWithTheHookOff(t *testing.T) {
+	for _, owned := range []bool{true, false} {
+		args := phaseArgs(4, "--set", "migrations.hook.riverMigrate.enabled=false", "--set", fmt.Sprintf("authService.platformRolesOwned=%v", owned))
+		docs, out, err := renderAuth(t, args...)
+		if err != nil {
+			t.Fatalf("render: %v\n%.400s", err, out)
+		}
+		if authDoc(docs, "Job", "a-dev-health-river-migrate") != nil {
+			t.Fatal("the River hook rendered with migrations.hook.riverMigrate.enabled=false")
+		}
+		job := authDoc(docs, "Job", "a-dev-health-migrate")
+		if job == nil {
+			t.Fatal("no migrate Job in the render")
+		}
+		if !strings.Contains(fmt.Sprint(at(job, "spec", "template", "spec", "containers")), "--river") {
+			t.Fatal("the migrate Job does not run the River step")
+		}
+		if value, set := containerEnvValue(t, job, platformRolesEnv); set != owned || (owned && value != "true") {
+			t.Errorf("owned=%v: migrate Job %s=%q set=%v", owned, platformRolesEnv, value, set)
+		}
 	}
 }

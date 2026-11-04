@@ -70,7 +70,7 @@ var principalIDPattern = regexp.MustCompile(`^prn_[A-Za-z0-9_-]{1,64}$`)
 // routes: the access-token issuer and keys, audience dev-health-api only (a
 // token for any other audience is refused), leeway 0. No issuer or no
 // AUTH_ACR_WORKLOAD_SUBJECT means no workload path (nil): the routes then
-// refuse every workload token as not_configured and svc_acr_ is unchanged.
+// refuse every workload token as not_configured, so they serve no bearer.
 func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySource) (*acr.WorkloadAuth, error) {
 	issuer, _ := lookup(envAccessTokenIssuer)
 	issuer = strings.TrimSpace(issuer)

@@ -64,7 +64,7 @@ Design docs (read the guardrails at minimum):
 | `sso_oidc_exchange` | optional_feature | human | |
 | `org_context_header` | active | human | |
 | `impersonation_session` | active | human | |
-| `internal_svc_acr_token` | active | service_account | |
+| `internal_svc_acr_token` | **unconsumed** | service_account | no route accepts it (CHAOS-11242); stored rows list/rotate/revoke only |
 | `internal_svc_worker_token` | **unconsumed** | service_account | mint retired (CHAOS-10044); stored rows list/revoke only |
 | `acr_client_credential` | active | client_credential | |
 | `acr_device_flow_code` | active | human | |
@@ -357,8 +357,8 @@ the same code path as `svc_acr_*`
 (`internal/apiservice/admin/servicecredentials.go`), with
 its own scope set (`workers:read`, `workers:operate`,
 `internal/apiservice/admin/servicecredentials.go:36-44`). No HTTP route in ops, web, or acr was found
-that validates a `svc_worker_`-prefixed bearer token — `internal/apiservice/acr/internalauth.go:57-71`
-`extractToken` only accepts the `svc_acr_` prefix. Either this is
+that validates a `svc_worker_`-prefixed bearer token — the internal acr routes
+(`internal/apiservice/acr/internalauth.go`) accept only the acr-api workload token. Either this is
 scaffolding for a not-yet-wired consumer, or a consumer exists in the Go
 worker binaries or `dev-health-go` outside this lane's assigned read scope.
 Flagged rather than guessed.
@@ -380,9 +380,6 @@ Flagged rather than guessed.
 - **`license_key`** — whether `LicenseValidator`/`licensing/gating.py` fails
   open or closed when `LICENSE_PUBLIC_KEY` or the license string itself is
   unset was not traced to its call site.
-- **`internal_svc_acr_token`**'s outbound caller (where in the acr repo a
-  `svc_acr_*` token is actually sent as `Authorization: Bearer`) was not
-  located — acr's `internal/auth/` is inbound-credential-focused.
 - **`pagerduty_oauth_credential`** — the Python-side
   `oauth.py`/`oauth_lifecycle.py`/`oauth_storage.py`/`oauth_authorization_store.py`
   were only grepped for filenames, not read line by line.
@@ -417,8 +414,9 @@ fields; it cannot write.
 ## Go api: the internal listener (CHAOS-7181)
 
 The Go api serves `/api/v1/internal/acr/*` behind two controls: the network,
-and a `svc_acr_` bearer check on every route (CHAOS-9993; health and
-entitlements port `api/internal/acr.py`, llm-config adds its own scope). Those
+and the acr-api workload token on every route (the only bearer accepted; a
+`svc_acr_` service credential gets the uniform 401 before any credential read,
+CHAOS-11242). Those
 routes are mounted only on the
 internal listener (`--api-internal-addr` / `DEV_HEALTH_API_INTERNAL_ADDR`,
 chart `goApi.internal.port`, default 8091), never on the public api listener,

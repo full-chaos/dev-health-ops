@@ -6,7 +6,9 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -63,5 +65,77 @@ func TestNewReaderRefusesAPageSizeBelowOne(t *testing.T) {
 	}
 	if _, err := NewReader(neverQuerier{}, authSchema(t), 10); err != nil {
 		t.Fatalf("valid reader refused: %v", err)
+	}
+}
+
+type fakeQuerier struct{}
+
+func (*fakeQuerier) Query(context.Context, string, ...any) (pgx.Rows, error) { return nil, nil }
+
+func TestNewReaderRefusesATypedNilQuerier(t *testing.T) {
+	var typedNil *fakeQuerier
+	if _, err := NewReader(typedNil, authSchema(t), 10); err == nil {
+		t.Fatal("typed-nil querier accepted")
+	}
+}
+
+func TestNewReaderAcceptsANonNilPointerQuerier(t *testing.T) {
+	if _, err := NewReader(&fakeQuerier{}, authSchema(t), 10); err != nil {
+		t.Fatalf("non-nil pointer querier refused: %v", err)
+	}
+}
+
+type expiryRows struct {
+	pgx.Rows
+	expires *string
+	done    bool
+}
+
+func (r *expiryRows) Next() bool { d := r.done; r.done = true; return !d }
+func (r *expiryRows) Close()     {}
+func (r *expiryRows) Err() error { return nil }
+func (r *expiryRows) Scan(dest ...any) error {
+	*(dest[0].(*string)) = "mp-1"
+	*(dest[1].(*int64)) = 1
+	*(dest[2].(*string)) = "active"
+	*(dest[3].(**string)) = r.expires
+	return nil
+}
+
+type expiryQuerier struct{ expires *string }
+
+func (q expiryQuerier) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return &expiryRows{expires: q.expires}, nil
+}
+
+func readOneExpiry(t *testing.T, expires *string) ([]Projected, error) {
+	t.Helper()
+	r, err := NewReader(expiryQuerier{expires}, authSchema(t), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.ReadPage(context.Background(), uuid.New(), "")
+}
+
+func TestReadPageRefusesAnEmptyStoredExpiry(t *testing.T) {
+	empty := ""
+	if _, err := readOneExpiry(t, &empty); err == nil {
+		t.Fatal("empty non-NULL expiry accepted")
+	}
+}
+
+func TestReadPageNullExpiryIsNoExpiry(t *testing.T) {
+	got, err := readOneExpiry(t, nil)
+	if err != nil || len(got) != 1 || got[0].ExpiresAt != nil {
+		t.Fatalf("NULL expiry: %+v %v", got, err)
+	}
+}
+
+func TestReadPageParsesAValidExpiry(t *testing.T) {
+	v := "2026-11-03T10:00:00.5Z"
+	got, err := readOneExpiry(t, &v)
+	want, _ := time.Parse(time.RFC3339Nano, v)
+	if err != nil || len(got) != 1 || got[0].ExpiresAt == nil || !got[0].ExpiresAt.Equal(want) {
+		t.Fatalf("valid expiry: %+v %v", got, err)
 	}
 }

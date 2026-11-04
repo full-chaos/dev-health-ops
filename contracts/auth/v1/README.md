@@ -25,7 +25,7 @@ transport writes when it answers before a route (400, 404, 405, 413, 429, 500).
 
 The closed action and role catalogs `actions.v1` and `roles.v1` (CHAOS-10637) live in
 `vocabulary/` with `action-catalog.v1` and `role-catalog.v1` schemas; the Go package
-`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds
+`internal/auth/policycatalog` embeds and validates them. Catalog version 5 adds the marker role `platform_owner`, which holds no action (CHAOS-12294). Catalog version 9 gives `acr.context.read` to the roles that hold `git.read` (CHAOS-12347). Catalog version 10 adds `credentials.project`, which no role holds and a workload row lists (CHAOS-11196). Catalog version 3 adds Catalog version 12 adds `reports.write`, held by every organization role as the saved-report writes are open to every organization member today (CHAOS-12657).
 `billing.read`, `billing.manage` and `license.read` (CHAOS-11272), held as the billing and
 licensing routes allow today; they are catalog-only, so `/auth/me` does not serve them until a
 web-reviewed change does. Catalog version 2 gives every
@@ -33,7 +33,7 @@ action a `risk_class` and a `cache_class` (a high-risk action is never cached), 
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
 `vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
-`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys and the decision point never emits `*` in it; a read of every repository of the organization is `obligations.repository_scope: organization` (closed value, never together with an allowlist; a consumer that finds neither on an action that filters by repository denies), and a principal over the bound is denied with `repository_allowlist_too_large` (CHAOS-12852).
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,

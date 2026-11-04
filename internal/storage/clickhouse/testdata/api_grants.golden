@@ -13,7 +13,6 @@ GRANT SELECT ON default.team_metrics_daily
 GRANT SELECT ON default.work_item_metrics_daily
 GRANT SELECT ON default.repo_complexity_daily
 GRANT SELECT ON default.compounding_risk_daily
-GRANT INSERT ON default.telemetry_signal_bucket
 GRANT SELECT ON default.llm_token_usage
 GRANT SELECT ON default.work_unit_investments
 GRANT SELECT ON default.work_items

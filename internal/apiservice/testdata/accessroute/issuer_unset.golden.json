@@ -536,10 +536,13 @@
   },
   {
     "Name": "hs256 superuser impersonating",
-    "Status": 200,
+    "Status": 403,
     "Headers": {
       "Cache-Control": [
         "no-store"
+      ],
+      "Content-Length": [
+        "52"
       ],
       "Content-Security-Policy": [
         "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
@@ -572,7 +575,7 @@
         "true"
       ]
     },
-    "Body": "{\"impersonating\":\"00000000-0000-4000-8000-0000000000a6\",\"org\":\"00000000-0000-4000-8000-0000000000b3\",\"user\":{\"email\":\"\",\"full_name\":null,\"is_superuser\":true,\"org_id\":\"00000000-0000-4000-8000-0000000000b1\",\"role\":\"member\",\"token_version\":0,\"user_id\":\"00000000-0000-4000-8000-0000000000a5\",\"username\":null}}\n"
+    "Body": "{\"detail\":\"Not allowed in an impersonation session\"}"
   },
   {
     "Name": "hs256 unknown user",

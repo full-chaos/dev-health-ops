@@ -66,6 +66,7 @@ internal/auth/pushlifecycle
 internal/auth/pushreconcile
 internal/auth/pushreconcile/projectionreader
 internal/auth/ratelimitvalkey
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
@@ -112,6 +113,7 @@ internal/platform/logging
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol
+internal/platform/removedenv
 internal/platform/secrets
 internal/platform/shell
 internal/platform/timeoutclass

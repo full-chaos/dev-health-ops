@@ -69,7 +69,11 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{fmt.Sprintf("CREATE ROLE %q NOLOGIN", writer), fmt.Sprintf("CREATE ROLE %q NOLOGIN", caller)} {
+	peer, err := containers.RoleName("fence_push_peer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{fmt.Sprintf("CREATE ROLE %q NOLOGIN", writer), fmt.Sprintf("CREATE ROLE %q NOLOGIN", caller), fmt.Sprintf("CREATE ROLE %q NOLOGIN", peer)} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
@@ -77,9 +81,10 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 	t.Cleanup(func() {
 		containers.DropRole(admin, writer, t.Logf)
 		containers.DropRole(admin, caller, t.Logf)
+		containers.DropRole(admin, peer, t.Logf)
 	})
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role,
-		PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller}}); err != nil {
+		PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller, peer}}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 	schema, err := authschema.NewValidatedIdentifier("auth")

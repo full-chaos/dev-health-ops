@@ -268,8 +268,7 @@ func invalidProviderIDDetail() *pyjson.Object {
 
 func identityConflictDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
-	detail.Set("message", "This account is bound to another sign-in identity")
-	detail.Set("reason", "identity_conflict")
+	detail.Set("message", "This sign-in could not be completed. Contact your administrator if this continues.")
 	return detail
 }
 
@@ -302,7 +301,7 @@ func (h handlers) requireMembership(ctx context.Context, userID uuid.UUID, orgID
 
 func membershipRequiredDetail() *pyjson.Object {
 	detail := pyjson.NewObject()
-	detail.Set("message", "A membership in this organization is required")
+	detail.Set("message", identity.MembershipRequiredMessage)
 	detail.Set("reason", "membership_required")
 	return detail
 }

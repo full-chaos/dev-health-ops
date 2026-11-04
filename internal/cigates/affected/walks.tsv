@@ -2,7 +2,7 @@
 ci/tools/gotestfuncs	main.go	unexpressed	-	-
 cmd/dev-health-migration-matrix	contract_test.go	cmd/dev-health-migration-matrix	dir	*
 cmd/gqlgen-guard	main_test.go	unexpressed	-	-
-deploy/helm/dev-health	auth_orgs_owned_jobs_test.go	deploy/helm/dev-health/templates	tree	*
+deploy/helm/dev-health	auth_orgs_owned_removed_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_session_secret_script_test.go	unexpressed	-	-
 deploy/helm/dev-health	auth_sso_jit_test.go	deploy/helm/dev-health/templates	dir	*
 deploy/helm/dev-health	auth_switch_strict_test.go	deploy/helm/dev-health/templates	dir	*
@@ -13,6 +13,8 @@ internal/adminops	usersowned_test.go	internal/adminops	dir	*
 internal/api/billing	platform_action_test.go	internal/api/billing	dir	*
 internal/api/integrationsadmin/discoveryvenue	discover_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/policy	accessroute_test.go	.	tree	*.go
+internal/api/policy	delegated_test.go	internal/api	tree	*
+internal/api/policy	delegated_test.go	internal/apiservice	tree	*
 internal/api/policy	principalonce_test.go	internal/api/policy	dir	*
 internal/api/syncadmin	create_config_venue_oracle_integration_test.go	internal/api/syncadmin/testdata/jira_recorded	dir	*
 internal/api/syncadmin	dataset_writer_census_test.go	unexpressed	-	*.go
@@ -126,6 +128,7 @@ internal/auth/writerinventory	credential_registry_reader_census_test.go	internal
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
+internal/authzenforce	census_test.go	.	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*
 internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*
@@ -352,6 +355,7 @@ internal/platform/dialclass	dialclass_import_test.go	internal/platform/dialclass
 internal/platform/dialclass	dialclass_import_test.go	unexpressed	-	-
 internal/platform/fernet	fernet_test.go	.	tree	*.go
 internal/platform/otlpmetrics	labelcensus_test.go	.	tree	*.go
+internal/platform/removedenv	census_test.go	unexpressed	-	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
 internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*
@@ -411,6 +415,7 @@ internal/queryapi/rowview	census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-	*.go
 internal/queryapi/server	edge_users_test.go	unexpressed	-	-
+internal/queryapi/server	endpoint_profile_action_fields_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_rows_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_same_line_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go

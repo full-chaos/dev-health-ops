@@ -33,7 +33,11 @@ case "${a[0]} ${a[1]:-}" in
       exit 1
     fi
     cat >"$st/ns"; exit 0 ;;
-  "delete ns") rm -f "$st/ns"; exit 0 ;;
+  "delete ns")
+    rm -f "$st/ns"
+    # delfail: the delete answers an error (the namespace is gone anyway): the teardown must pass the rc on.
+    [ "${FAKE_SCEN:-}" = delfail ] && exit 1
+    exit 0 ;;
   "rollout status")
     # swap: the create was ours, then the namespace was replaced by one that carries another run's label.
     [ "${FAKE_SCEN:-}" = swap ] && printf 'drill-run: "someone-elses-run"\n' >"$st/ns"
@@ -100,6 +104,35 @@ check "run does not delete a namespace whose run label is not its own" "$r"
 grep -q 'REFUSED' "$root/swap.out" && r=ok || r=bad
 check "the label mismatch prints a refusal" "$r"
 
+# 1d. the teardown verb alone, on a namespace it has no create record for, must refuse: an unlabelled namespace
+# (both the record and the label are empty), and a record of another run id than DRILL_RUN_ID.
+mkdir -p "$root/tdbare.state" "$root/tdbare.dir"
+: >"$root/tdbare.state/ns"
+run_drill teardown tdbare
+if grep -q '^delete ns' "$root/tdbare.log"; then r=bad; else r=ok; fi
+check "teardown without a create record does not delete an unlabelled namespace" "$r"
+grep -q 'REFUSED' "$root/tdbare.out" && [[ "$(cat "$root/tdbare.rc")" != 0 ]] && r=ok || r=bad
+check "teardown without a create record refuses and exits non-zero" "$r"
+
+mkdir -p "$root/tdid.state" "$root/tdid.dir"
+printf 'drill-run: "mine-1"\n' >"$root/tdid.state/ns"
+printf 'rc=0 run=mine-1\n' >"$root/tdid.dir/ns-created"
+run_drill teardown tdid DRILL_RUN_ID=other-run
+if grep -q '^delete ns' "$root/tdid.log"; then r=bad; else r=ok; fi
+check "teardown with another run id does not delete the namespace" "$r"
+
+# 1e. a valid record and label: deleted, exit 0. A delete that fails: the rc is passed on, no "deleted" line.
+for scen in good delfail; do
+  mkdir -p "$root/td-$scen.state" "$root/td-$scen.dir"
+  printf 'drill-run: "mine-1"\n' >"$root/td-$scen.state/ns"
+  printf 'rc=0 run=mine-1\n' >"$root/td-$scen.dir/ns-created"
+  run_drill teardown "td-$scen" DRILL_RUN_ID=mine-1 FAKE_SCEN=$scen
+done
+grep -q '^delete ns drill-test' "$root/td-good.log" && grep -q 'ns=drill-test deleted' "$root/td-good.out" && [[ "$(cat "$root/td-good.rc")" == 0 ]] && r=ok || r=bad
+check "teardown deletes a namespace with its own record and label" "$r"
+if [[ "$(cat "$root/td-delfail.rc")" != 0 ]] && ! grep -q 'deleted' "$root/td-delfail.out"; then r=ok; else r=bad; fi
+check "a failed delete is not hidden: non-zero rc, no deleted line" "$r"
+
 # 1b. a namespace this run created is deleted when setup fails later.
 run_drill run own
 grep -q '^delete ns drill-test' "$root/own.log" && grep -q 'ns=drill-test deleted' "$root/own.out" && r=ok || r=bad
@@ -117,6 +150,17 @@ for scen in a b; do
 done
 grep -q 'login refused: s1 failed' "$root/login-a.out" && r=ok || r=bad
 check "login failure case a prints the whitelisted error text" "$r"
+
+# 3. the error-text helpers print no token or other key of a body, and no line of the script prints a response file
+# except through them.
+eval "$(sed -n '/^safe_err() {/,/^}/p;/^detail() {/p' "$script")"
+body="$root/body.json"
+printf '{"refresh_token":"REFRESH_SECRET_MARKER","session_access_token":"ACCESS_SECRET_MARKER","error":"bad request","detail":{"message":"nope","access_token":"ACCESS_SECRET_MARKER"},"reason_code":"reuse"}' >"$body"
+out="$(safe_err "$body") $(detail "$body")"
+if [[ "$out" == *SECRET_MARKER* || "$out" != *"bad request"* ]]; then r=bad; else r=ok; fi
+check "safe_err and detail print the whitelisted text and no token" "$r"
+if grep -nE '(echo|printf).*(jq|cat)[^|]*"\$tok/' "$script" | grep -vE 'safe_err|detail'; then r=bad; else r=ok; fi
+check "no echo or printf of a response file bypasses safe_err and detail" "$r"
 
 [[ "$fails" == 0 ]] || { echo "drill-refresh-reuse_test: $fails check(s) failed" >&2; exit 1; }
 echo "drill-refresh-reuse_test: ok"

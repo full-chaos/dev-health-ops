@@ -798,7 +798,7 @@ rendered one, a Secret reference included, and put a literal in the manifest. au
 names and proves each is refused.
 */}}
 {{- define "dev-health.authServiceEnvNames" -}}
-{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
+{{- $names := list "AUTH_DATABASE_URI" "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY" "AUTH_LOGIN_LOCKOUT_KEY" "AUTH_SOCIAL_LINK_ROUTES" "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE" "AUTH_WORKLOAD_EXCHANGE" "AUTH_WORKLOAD_TRUST_DOMAIN" "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER" "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL" "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE" "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE" "AUTH_USERS_OWNED" "AUTH_ORGS_OWNED" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_VALKEY_URI" "AUTH_SERVICE_TRUSTED_PROXIES" "AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND" "AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST" "AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND" "AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST" "OTEL_ENABLED" "OTEL_EXPORTER_OTLP_ENDPOINT" "OTEL_SAMPLE_RATE" "OTEL_SERVICE_NAME" "EMAIL_PROVIDER" "EMAIL_FROM_ADDRESS" "APP_BASE_URL" "AUTH_MAIL_ALLOW_CONSOLE" -}}
 {{- /* EMAIL_API_KEY is appended, not listed, so the worker allow-list keeps the only listed spelling (a chartgates planted defect edits it). */ -}}
 {{- $names = (append (append $names "EMAIL_API_KEY") "RESEND_API_KEY") -}}
 {{- range $provider := list "GITHUB" "GITLAB" "GOOGLE" }}{{- range $suffix := list "CLIENT_ID" "CLIENT_SECRET" }}{{- $names = append $names (printf "SOCIAL_%s_%s" $provider $suffix) }}{{- end }}{{- end -}}
@@ -1173,6 +1173,33 @@ schema Job and the grants Job.
 {{- if $ack -}}
 {{- if not (regexMatch "^[0-9a-f]{16}$" $ack) }}{{- fail "authService.migrate.acknowledgeGrantNarrowing must be the 16 lowercase hex characters of the digest a refused auth-migrate run prints" }}{{- end -}}
 -ack-grant-narrowing={{ $ack }}
+{{- end -}}
+{{- end }}
+
+{{/*
+The External Push lifecycle writer settings (CHAOS-10895, CHAOS-12828) of both auth-migrate Jobs, checked before either renders.
+writerRole and callerRoles go together: the grant pass runs only with a writer role, so callers without one were dropped
+silently and the function stayed unexecutable. The writer must differ from the runtime login and from every caller, a caller must
+differ from the runtime login, and no caller repeats. Renders nothing.
+*/}}
+{{- define "dev-health.authPushLifecycle" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $writer := trim (toString (default "" $m.pushLifecycle.writerRole)) -}}
+{{- $callers := default (list) $m.pushLifecycle.callerRoles -}}
+{{- if and (not $writer) $callers }}{{- fail "authService.migrate.pushLifecycle.callerRoles is set while writerRole is empty: the grant pass runs only with a writer role, so no caller would get EXECUTE; set pushLifecycle.writerRole too" }}{{- end -}}
+{{- if $writer }}
+{{- if not $callers }}{{- fail "authService.migrate.pushLifecycle.writerRole is set while callerRoles is empty: auth-migrate refuses a writer role with no caller; list the logins that may execute the function" }}{{- end -}}
+{{- if eq $writer (trim (toString $m.runtimeRole)) }}{{- fail "authService.migrate.pushLifecycle.writerRole must differ from authService.migrate.runtimeRole" }}{{- end -}}
+{{- if ne (len $callers) 2 }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles must list exactly two logins (go-api's API database role and the worker domain login), got %d" (len $callers)) }}{{- end -}}
+{{- $seen := dict -}}
+{{- range $callers }}
+{{- $raw := toString . -}}
+{{- $c := trim $raw -}}
+{{- if not $c }}{{- fail "authService.migrate.pushLifecycle.callerRoles has a blank entry; list two non-blank logins" }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
+{{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (hasKey $seen $c) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q must differ from the writer role, the runtime role and every other caller" $c) }}{{- end -}}
+{{- $_ := set $seen $c true -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

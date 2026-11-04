@@ -34,6 +34,7 @@ type pushFixture struct {
 	*auditFixture
 	caller     *pgxpool.Pool
 	callerRole string
+	peerRole   string // the second declared caller (the worker domain login)
 	writerRole string
 }
 
@@ -63,6 +64,10 @@ func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	peerRole, err := containers.RoleName("push_peer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writerRole, err := containers.RoleName("push_writer", instance)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +76,7 @@ func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
 	for _, statement := range []string{
 		fmt.Sprintf("CREATE ROLE %q", runtimeRole),
 		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", callerRole, password),
+		fmt.Sprintf("CREATE ROLE %q NOLOGIN", peerRole),
 		fmt.Sprintf("CREATE ROLE %q NOLOGIN", writerRole),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
@@ -79,12 +85,13 @@ func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
 	}
 	t.Cleanup(func() {
 		containers.DropRole(admin, writerRole, t.Logf)
+		containers.DropRole(admin, peerRole, t.Logf)
 		containers.DropRole(admin, callerRole, t.Logf)
 		containers.DropRole(admin, runtimeRole, t.Logf)
 	})
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{
 		Schema: "auth", RuntimeRole: runtimeRole, SessionReaderRoles: []string{callerRole},
-		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{callerRole},
+		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{callerRole, peerRole},
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -102,7 +109,7 @@ func newPushFixture(t *testing.T, ctx context.Context) *pushFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &pushFixture{auditFixture: &auditFixture{pool: admin, schema: schema}, caller: caller, callerRole: callerRole, writerRole: writerRole}
+	return &pushFixture{auditFixture: &auditFixture{pool: admin, schema: schema}, caller: caller, callerRole: callerRole, peerRole: peerRole, writerRole: writerRole}
 }
 
 func pushCreated(id string, scopes ...string) PushLifecycleEvent {

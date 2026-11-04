@@ -114,7 +114,7 @@ func TestSAMLRoutesAnswerConflictAndGate(t *testing.T) {
 		} `json:"detail"`
 	}
 	if rec.Code != http.StatusConflict || len(issuer.got) != 0 || json.Unmarshal(rec.Body.Bytes(), &conflict) != nil ||
-		conflict.Detail.ExistingProvider != "" || conflict.Detail.Message != saml.AccountExistsMessage {
+		conflict.Detail.ExistingProvider != "" || conflict.Detail.Message != saml.ConflictMessage {
 		t.Fatalf("collision %d %s", rec.Code, rec.Body)
 	}
 

@@ -171,6 +171,9 @@ type AuthorizeDeps struct {
 	// only while Ready reports the feed confirmed and caught up.
 	Cache DecisionCache
 	Ready func() bool
+	// CallerLimit is one caller workload's bucket on each PDP route, per
+	// process; a batch costs its decision count. Zero sets none.
+	CallerLimit PDPCallerLimit
 }
 
 type authorizeHandlers struct {
@@ -178,6 +181,7 @@ type authorizeHandlers struct {
 	rec        recorder
 	cache      cacheMetrics
 	decisionID func() (string, error)
+	limiters   map[string]*callerLimiter
 	// resolve, when set, resolves a principal reference in place of
 	// References.Resolve; only tests set it.
 	resolve func(reference string) (ReferencedPrincipal, string, error)
@@ -219,7 +223,11 @@ func AuthorizeRoutes(deps AuthorizeDeps) ([]httpapi.Route, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, cache: cache, decisionID: newDecisionID}
+	subjects := deps.Callers.callerSubjects()
+	h := authorizeHandlers{AuthorizeDeps: deps, rec: rec, cache: cache, decisionID: newDecisionID, limiters: map[string]*callerLimiter{
+		opAuthorize:      newCallerLimiter(pdpAuthorizeCallerLimitID, subjects, deps.CallerLimit),
+		opAuthorizeBatch: newCallerLimiter(pdpAuthorizeBatchCallerLimitID, subjects, deps.CallerLimit),
+	}}
 	var routes []httpapi.Route
 	for _, route := range []httpapi.Route{
 		{Method: http.MethodPost, Pattern: PatternAuthorize, Handler: http.HandlerFunc(h.authorize), MaxBodyBytes: maxAuthorizeBody, Admit: h.admit(opAuthorize)},
@@ -285,6 +293,9 @@ func (h authorizeHandlers) admit(op string) func(http.ResponseWriter, *http.Requ
 			h.rec.refuse(w, r, op, unauthorized(reasonInvalidCredentials), nil)
 			return nil, false
 		}
+		if !h.chargeCaller(w, r, op, caller.Subject, 1) {
+			return nil, false
+		}
 		return r.WithContext(context.WithValue(ctx, authorizeCallerKey{}, caller)), true
 	}
 }
@@ -318,7 +329,8 @@ type authorizeItem struct {
 func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op string, limit int64,
 	decode func([]byte) ([]AuthorizationQuestion, error)) ([]decisionDocument, bool) {
 	ctx := r.Context()
-	if _, admitted := ctx.Value(authorizeCallerKey{}).(AuthorizeCaller); !admitted {
+	caller, admitted := ctx.Value(authorizeCallerKey{}).(AuthorizeCaller)
+	if !admitted {
 		// The route's admission gate did not run: fail closed, and never verify
 		// the bearer here.
 		h.Logger.ErrorContext(ctx, "authorize handler reached without an admitted caller", "operation", op)
@@ -342,6 +354,10 @@ func (h authorizeHandlers) decide(w http.ResponseWriter, r *http.Request, op str
 	questions, err := decode(body)
 	if err != nil {
 		h.rec.refuse(w, r, op, refusal{http.StatusBadRequest, reasonMalformed}, nil)
+		return nil, false
+	}
+	// The admission gate charged one token; a batch costs its decision count.
+	if len(questions) > 1 && !h.chargeCaller(w, r, op, caller.Subject, len(questions)-1) {
 		return nil, false
 	}
 	items := make([]authorizeItem, len(questions))

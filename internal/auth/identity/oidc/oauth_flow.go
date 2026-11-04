@@ -14,6 +14,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity/social"
 )
 
@@ -150,8 +151,13 @@ func (s *Service) oauthTarget(row Provider) (oauthTarget, *Error) {
 		base := strings.TrimRight(eps.Social.GitLabBase, "/")
 		if row.OAuth.BaseURL != "" {
 			base = strings.TrimRight(row.OAuth.BaseURL, "/")
-			// A self-hosted instance is its own issuer.
-			t.issuer = base
+			// A self-hosted instance is its own issuer: the lowercase scheme and host of the row's base_url, the
+			// namespace of its numeric ids (identity.OAuthIssuer).
+			issuer, err := identity.OAuthIssuer(identity.ProviderGitLab, row.OAuth.BaseURL)
+			if err != nil {
+				return oauthTarget{}, deny(http.StatusBadRequest, ReasonMalformed, "OAuth provider base_url names no host")
+			}
+			t.issuer = issuer
 		}
 		t.endpoints.GitLabBase = base
 		t.authorize, t.token, t.pkce = base+"/oauth/authorize", base+"/oauth/token", true

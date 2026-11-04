@@ -551,16 +551,21 @@ var (
 // LooksSecret reports whether an environment variable's name says it holds a
 // secret (a token, password, key) rather than a plain setting.
 func LooksSecret(name string) bool {
-	return !nonSecretFlagNames[name] && secretNamePattern.MatchString(name)
+	return !nonSecretNames[name] && secretNamePattern.MatchString(name)
 }
 
-// nonSecretFlagNames are the boolean routing flags go-api reads (true or false). Their
-// names match secretNamePattern, but a value of "true" is not a secret and is below
-// MinRegisteredLength. The match is on the exact name, so a neighbour such as
-// AUTH_PROXY_CREDENTIALS_X is still a secret.
-var nonSecretFlagNames = map[string]bool{
+// nonSecretNames are settings whose names match secretNamePattern but whose values are
+// not secrets: the boolean routing flags go-api reads (true or false) and the two
+// auth-service access-token settings that hold a class label (AUTH_ACCESS_TOKEN_CLASS:
+// hs256_compat or eddsa, config.go accessTokenClass) and a whole-minute duration
+// (AUTH_ACCESS_TOKEN_LIFETIME, config.go accessTokenLifetime). Such a value is below
+// MinRegisteredLength, so registering it only logs a false warning. The match is on the
+// exact name, so a neighbour such as AUTH_PROXY_CREDENTIALS_X or AUTH_ACCESS_TOKEN is
+// still a secret.
+var nonSecretNames = map[string]bool{
 	"AUTH_PROXY_SESSIONS": true, "AUTH_PROXY_LOCAL_LOGIN": true, "AUTH_PROXY_CREDENTIALS": true,
 	"AUTH_PROXY_SOCIAL": true, "AUTH_PROXY_OIDC": true, "AUTH_PROXY_SAML": true,
+	"AUTH_ACCESS_TOKEN_CLASS": true, "AUTH_ACCESS_TOKEN_LIFETIME": true,
 }
 
 // GetenvNamed is os.Getenv for a helper that reads a variable chosen by name: the

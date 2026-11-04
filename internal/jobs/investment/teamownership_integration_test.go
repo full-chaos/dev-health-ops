@@ -130,6 +130,7 @@ func matrixRepoID(providerIndex, n int) string {
 //     author_membership) and team_memberships rows NEVER donate. This is the
 //     cell that must stay negative -- team authorization is ownership-derived,
 //     never person -> membership -> team.
+//
 // TestNoTeamOwnershipRepositoryFallbackProviderEntityMatrix (CHAOS-12949, chris:
 // "Drop fallback"): the same provider x entity fixtures that used to make the
 // team-ownership fallback allocate a donor team's repositories now leave every

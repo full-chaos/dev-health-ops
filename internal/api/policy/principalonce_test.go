@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -485,9 +486,15 @@ func guardProblemsWith(dir string, allowed []string, fallback types.Importer) []
 		return []string{"no production Go files parsed in " + dir}
 	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	thirdParty := newLocalImporter(fset, dir, fallback)
 	conf := types.Config{
-		Importer: newLocalImporter(fset, dir, fallback),
-		Error:    func(err error) { problems = append(problems, "type check: "+err.Error()) },
+		Importer: thirdParty,
+		Error: func(err error) {
+			if typeErr, ok := err.(types.Error); ok && thirdParty.unresolved(typeErr.Msg) {
+				return
+			}
+			problems = append(problems, "type check: "+err.Error())
+		},
 	}
 	_, _ = conf.Check("policy", fset, parsed, info)
 	for name, file := range files {
@@ -522,29 +529,63 @@ func guardProblemsWith(dir string, allowed []string, fallback types.Importer) []
 	return problems
 }
 
-// localImporter resolves the imports that belong to a module rooted at dir
-// from source and every other import with the source importer.
+// localImporter resolves the imports that belong to the module that holds dir
+// from source, the standard library with the fallback, and every other import
+// as an empty complete package: the guard needs only this module's constants.
 type localImporter struct {
 	fset     *token.FileSet
 	fallback types.Importer
 	root     string
 	module   string
 	cache    map[string]*types.Package
+	outside  map[string]bool
 }
 
 func newLocalImporter(fset *token.FileSet, dir string, fallback types.Importer) *localImporter {
-	l := &localImporter{fset: fset, fallback: fallback, root: dir, cache: map[string]*types.Package{}}
-	if mod, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
-		if fields := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0]); len(fields) == 2 && fields[0] == "module" {
-			l.module = fields[1]
+	l := &localImporter{fset: fset, fallback: fallback, root: dir, cache: map[string]*types.Package{}, outside: map[string]bool{}}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return l
+	}
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if mod, err := os.ReadFile(filepath.Join(cur, "go.mod")); err == nil {
+			if fields := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0]); len(fields) == 2 && fields[0] == "module" {
+				l.module, l.root = fields[1], cur
+			}
+			break
+		}
+		if filepath.Dir(cur) == cur {
+			break
 		}
 	}
 	return l
 }
 
+// unresolved reports whether a type error only names a member of an
+// out-of-module package.
+func (l *localImporter) unresolved(msg string) bool {
+	for name := range l.outside {
+		if strings.HasPrefix(msg, "undefined: "+name+".") {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *localImporter) Import(path string) (*types.Package, error) {
 	if l.module == "" || (path != l.module && !strings.HasPrefix(path, l.module+"/")) {
-		return l.fallback.Import(path)
+		if !strings.Contains(strings.SplitN(path, "/", 2)[0], ".") {
+			return l.fallback.Import(path)
+		}
+		elems := strings.Split(path, "/")
+		name := elems[len(elems)-1]
+		if match, _ := regexp.MatchString(`^v[0-9]+$`, name); match && len(elems) > 1 {
+			name = elems[len(elems)-2]
+		}
+		l.outside[name] = true
+		pkg := types.NewPackage(path, name)
+		pkg.MarkComplete()
+		return pkg, nil
 	}
 	if pkg, ok := l.cache[path]; ok {
 		return pkg, nil
@@ -564,10 +605,7 @@ func (l *localImporter) Import(path string) (*types.Package, error) {
 			files = append(files, file)
 		}
 	}
-	pkg, err := (&types.Config{Importer: l}).Check(path, l.fset, files, nil)
-	if err != nil {
-		return nil, err
-	}
+	pkg, _ := (&types.Config{Importer: l, Error: func(error) {}}).Check(path, l.fset, files, nil)
 	l.cache[path] = pkg
 	return pkg, nil
 }

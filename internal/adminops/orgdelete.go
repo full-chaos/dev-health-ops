@@ -27,9 +27,10 @@ import (
 // The refusal and done lines are logged on stderr.
 func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin orgs delete")
-	var orgID, analyticsDB optString
+	var orgID, analyticsDB, actor optString
 	flags.Var(&orgID, "org-id", "organization id (required)")
 	flags.Var(&analyticsDB, "analytics-db", "ClickHouse URI (default: CLICKHOUSE_URI or CLICKHOUSE_URI_FILE)")
+	flags.Var(&actor, "actor", "id or email of the active superuser that acts for the delete (required without --dry-run)")
 	dryRun := flags.Bool("dry-run", false, "return the deletion plan without deleting data")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
@@ -42,10 +43,18 @@ func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	if !ok {
 		return cli.ExitFailure
 	}
+	deleteConfig.Actor = actor.value
 	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
+	}
+	if !*dryRun {
+		provisioner, code := provisionerFromEnv(env)
+		if code != 0 {
+			return code
+		}
+		op.Provisioner = provisioner
 	}
 	op.Logger = logging.NewJSON(env.Stderr, slog.LevelInfo).With(slog.String("caller", "cli"))
 	plan, err := op.DeleteOrg(ctx, orgID.value, *dryRun, deleteConfig)

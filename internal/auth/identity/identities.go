@@ -56,13 +56,16 @@ const externalIdentityKeyIndex = "external_identities_issuer_provider_subject_ke
 // another call of the same row already committed. Each is success to its
 // caller and a declared audit.Mutation refusal, so the rolled-back Commit logs
 // at WARN with this type name as its refusal class, not at ERROR.
-type concurrentProjection string
+//
+// The sentinels are pointers, so errors.Is matches by identity: a string-kinded
+// value would match any separately built error with the same text.
+type concurrentProjection struct{ text string }
 
-func (e concurrentProjection) Error() string { return string(e) }
+func (e *concurrentProjection) Error() string { return e.text }
 
 // errProjectedConcurrently ends a legacy projection whose identity row a
 // concurrent call already wrote for the same principal; it is success.
-var errProjectedConcurrently error = concurrentProjection("identity: projected concurrently")
+var errProjectedConcurrently error = &concurrentProjection{"identity: projected concurrently"}
 
 // LegacyMatch lets IdentityBySubject find a user go-api provisioned before the
 // users cutover, by the provider subject go-api stored in public.users

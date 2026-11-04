@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"log/slog"
@@ -212,7 +213,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
 			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
@@ -278,8 +279,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
-			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
-			Delegator: deps.Delegator,
+			OrgState:           deps.OrgState,
+			Delegator:          deps.Delegator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -332,9 +333,9 @@ func configure(
 }
 
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
-// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
+// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
+	if deps.OrgState == nil || deps.Pool == nil {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
@@ -395,6 +396,7 @@ func configureWith(
 	logger *slog.Logger,
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
+	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
@@ -445,7 +447,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)

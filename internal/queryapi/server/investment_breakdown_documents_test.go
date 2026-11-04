@@ -76,6 +76,7 @@ func TestInvestmentBreakdown_BothTextsResolveToTheOneOperation(t *testing.T) {
 var scopedInvestmentBreakdownDocuments = []struct{ operation, name, text string }{
 	{"investmentBreakdownTeam", "InvestmentBreakdownTeam", registeredInvestmentBreakdownTeamDocument},
 	{"investmentBreakdownRepository", "InvestmentBreakdownRepository", registeredInvestmentBreakdownRepositoryDocument},
+	{"teamWorkItemBreakdown", "TeamWorkItemBreakdown", registeredTeamWorkItemBreakdownDocument},
 }
 
 // Each scoped text is the CURRENT investmentBreakdown text with only the operation name changed, so the three bodies

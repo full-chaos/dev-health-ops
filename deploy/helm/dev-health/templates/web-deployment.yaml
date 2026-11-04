@@ -73,17 +73,18 @@ spec:
           {{- /*
           CHAOS-12928: web refuses SSO completion unless AUTH_ACCESS_TOKEN_CLASS is eddsa (the
           only class that verifies signatures). A literal-on or valueFrom AUTH_SSO_ENABLED needs
-          a literal eddsa class here; the render cannot read a valueFrom, so it fails closed.
+          a literal eddsa class here; the render cannot read a valueFrom, so it fails closed. An
+          entry with a valueFrom counts as a reference even when it also carries an empty value.
           */}}
           {{- $ssoOn := false }}
           {{- $classEddsa := false }}
           {{- range .Values.web.extraEnv | default (list) }}
           {{- if eq (toString .name) "AUTH_SSO_ENABLED" }}
-          {{- if not (hasKey . "value") }}{{- $ssoOn = true }}
+          {{- if or .valueFrom (not (hasKey . "value")) }}{{- $ssoOn = true }}
           {{- else if has (lower (trim (toString .value))) (list "true" "1") }}{{- $ssoOn = true }}{{- end }}
           {{- end }}
           {{- if eq (toString .name) "AUTH_ACCESS_TOKEN_CLASS" }}
-          {{- $classEddsa = and (hasKey . "value") (eq (lower (trim (toString .value))) "eddsa") }}
+          {{- $classEddsa = and (not .valueFrom) (hasKey . "value") (eq (lower (trim (toString .value))) "eddsa") }}
           {{- end }}
           {{- if has .name (list "AUTH_SECRET" "NEXTAUTH_SECRET" "JWT_SECRET_KEY") }}
           {{- fail (printf "web.extraEnv must not set %s (CHAOS-10446): web.authSecret and web.env own the names AUTH_SECRET and NEXTAUTH_SECRET, and web never takes JWT_SECRET_KEY" .name) }}

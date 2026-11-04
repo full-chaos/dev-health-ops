@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -468,7 +469,12 @@ func TestDecideReadsBothTokenClasses(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := newAccessFixtureWith(t, append(rows, accessverify.Row{Service: AccessService, Profile: oauthDecideScope, AcceptsUser: true, LegacyHS256: true}), nil)
+		if !slices.ContainsFunc(rows, func(r accessverify.Row) bool {
+			return r.Service == AccessService && r.Profile == oauthDecideScope && r.AcceptsUser && r.LegacyHS256
+		}) {
+			t.Fatalf("the embedded document has no %s row accepting the user access token and the HS256 token", oauthDecideScope)
+		}
+		a := newAccessFixtureWith(t, rows, nil)
 		o := newOAuthFixture(t, a.fixture, nil)
 		if r := o.post(body, a.signClaims(a.claims())); r.Code != http.StatusOK {
 			t.Fatalf("%d %s", r.Code, r.Body)
@@ -601,8 +607,11 @@ func TestOAuthRoutesMountOnlyWithEveryRowAndTheirBodyPolicies(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	deps := OAuthDeps{Store: &oauthStoreFake{}, Registry: oauthRegistry(t), Limits: limits, Keys: signer, IssuerURL: oauthIssuer,
 		Session: Deps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer}}
-	if routes, err := OAuthRoutes(deps); err != nil || routes != nil {
-		t.Fatalf("the embedded document mounted %d routes, %v", len(routes), err)
+	if routes, err := OAuthRoutes(deps); err != nil || len(routes) != 5 {
+		t.Fatalf("the embedded document mounted %d routes, %v, want its five rows' routes", len(routes), err)
+	}
+	if routes, err := oauthRoutesRows(deps, nil); err != nil || routes != nil {
+		t.Fatalf("no document mounted %d routes, %v", len(routes), err)
 	}
 	if routes, err := oauthRoutesRows(deps, bytes.Replace(oauthRows(), []byte(`"method":"POST"`), []byte(`"method":"PUT"`), 1)); err != nil || routes != nil {
 		t.Fatalf("a missing row mounted %d routes, %v", len(routes), err)

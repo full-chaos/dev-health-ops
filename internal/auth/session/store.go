@@ -898,6 +898,26 @@ func (s *Store) Current(ctx context.Context, sessionID uuid.UUID) (Record, error
 	return record, nil
 }
 
+// CurrentWithClientClass is Current plus, in the same statement, the class of the
+// session's live OAuth grant (browser or mcp): "" when it has none or its grant is
+// revoked. A session has at most one grant (oauth_grants.session_id is unique).
+func (s *Store) CurrentWithClientClass(ctx context.Context, sessionID uuid.UUID) (Record, string, error) {
+	var class *string
+	record, err := scanRecord(s.pool.QueryRow(ctx, `SELECT `+s.sessionColumns()+`,
+		(SELECT g.client_class FROM `+s.q+`.oauth_grants g WHERE g.session_id = s.id AND g.revoked_at IS NULL)
+		FROM `+s.q+`.sessions s WHERE s.id = $1`, sessionID.String()), &class)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, "", ErrSessionNotFound
+	}
+	if err != nil {
+		return Record{}, "", fmt.Errorf("%w: reading the session: %w", ErrStore, err)
+	}
+	if class == nil {
+		return record, "", nil
+	}
+	return record, *class, nil
+}
+
 // requestIDOf is the audit request id of a write: the actor's, else the id of
 // the request the write runs in (internal/auth/requestid), so every audit row
 // a request writes carries it.

@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -940,4 +941,49 @@ func TestTheSchemaHoldsTheRequestAndGrantShapes(t *testing.T) {
 	if _, err := e.runtime.Exec(ctx, `DELETE FROM auth.oauth_grants WHERE id = $1`, approved.GrantID); err == nil {
 		t.Error("the runtime role deleted a grant")
 	}
+}
+
+// The session store's CurrentWithClientClass names the class of the session's live grant, for the
+// session state answer (acp condition 8 on CHAOS-12251): present for a live grant of
+// each class, absent on the web session that has none, and absent once the grant is
+// revoked. It runs as the runtime role auth-service runs.
+func TestCurrentNamesTheClassOfALiveGrantOnly(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	for _, class := range []string{ClassBrowser, ClassMCP} {
+		t.Run(class, func(t *testing.T) {
+			f := e.flow(t, ctx, class)
+			approved, err := e.store.Approve(ctx, f.decision())
+			if err != nil {
+				t.Fatalf("Approve: %v", err)
+			}
+			if got := current(t, ctx, e, approved.SessionID); got != class {
+				t.Fatalf("a live %s grant: client class %q", class, got)
+			}
+			if got := current(t, ctx, e, f.web); got != "" {
+				t.Fatalf("the web session, with no grant of its own: client class %q", got)
+			}
+			if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+				Apply: func(ctx context.Context, tx audit.TxOps) error {
+					_, err := tx.Exec(ctx, `UPDATE auth.oauth_grants SET revoked_at = clock_timestamp() WHERE id = $1`, approved.GrantID)
+					return err
+				},
+				Audit: audit.AuditEvent{EventType: "oauth.grant.revoked", Outcome: audit.OutcomeAllowed},
+			}); err != nil {
+				t.Fatalf("revoke the grant: %v", err)
+			}
+			if got := current(t, ctx, e, approved.SessionID); got != "" {
+				t.Fatalf("a revoked %s grant: client class %q", class, got)
+			}
+		})
+	}
+}
+
+func current(t *testing.T, ctx context.Context, e *env, id uuid.UUID) string {
+	t.Helper()
+	record, class, err := e.sessions.CurrentWithClientClass(ctx, id)
+	if err != nil || record.ID != id {
+		t.Fatalf("CurrentWithClientClass: %v %v", record.ID, err)
+	}
+	return class
 }

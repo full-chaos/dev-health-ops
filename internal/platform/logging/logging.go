@@ -163,7 +163,7 @@ func (r attrRedactor) replace(groups []string, attr slog.Attr) (result slog.Attr
 	if len(groups) == 0 && builtIn(attr) {
 		return attr
 	}
-	if protectedKeyCached(attr.Key) {
+	if protectedKeyCached(attr.Key) && !booleanFlagAttr(attr) {
 		return slog.String(attr.Key, redacted)
 	}
 	for _, group := range groups {
@@ -179,6 +179,16 @@ func (r attrRedactor) replace(groups []string, attr slog.Attr) (result slog.Attr
 		attr.Value = r.redactAny(value.Any())
 	}
 	return attr
+}
+
+// booleanFlagKeys are exact attribute keys whose names hold a protected word but whose value is a plain on/off flag.
+// An entry is exempt only while its value is a bool: any other kind under the same key stays masked. ProtectedKey is
+// shared with spans, JSON keys and text, and is not changed.
+var booleanFlagKeys = map[string]bool{"sessions_stub": true}
+
+// booleanFlagAttr reports whether attr is a bool under one of booleanFlagKeys.
+func booleanFlagAttr(attr slog.Attr) bool {
+	return booleanFlagKeys[attr.Key] && attr.Value.Resolve().Kind() == slog.KindBool
 }
 
 // builtIn reports whether attr is the handler's own time, level or source

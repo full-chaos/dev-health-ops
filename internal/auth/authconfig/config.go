@@ -127,8 +127,6 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
-	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
-	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvRevisionFeed is the revision feed switch (on or off, default off).
 	EnvRevisionFeed = "AUTH_REVISION_FEED"
 	// EnvPushProjection is the External Push projection switch (on or off, default off).
@@ -272,9 +270,6 @@ type Config struct {
 	// local credential links.
 	UsersOwned bool
 
-	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
-	// auth.organizations; the legacy login projection writes nothing.
-	OrgsOwned bool
 	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
 	RevisionFeed bool
 	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
@@ -595,9 +590,6 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
-		return Config{}, err
-	}
-	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
@@ -1183,9 +1175,6 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
 func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
-
-// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
-func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
 
 func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {

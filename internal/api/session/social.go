@@ -48,9 +48,9 @@ const providerUserIDInvalid = "The provider returned an invalid user id"
 // providerEmailUnusable is the one answer to a profile whose email the shared email text rule refuses; it names no value.
 const providerEmailUnusable = "The provider returned an unusable email address"
 
-// socialAccountExists is the 409 for an e-mail another account holds; it names
-// no sign-in method.
-const socialAccountExists = "An account with this email already exists. Please sign in with your existing sign-in method."
+// socialAccountExists is the one 409 answer for a social sign-in whose e-mail another account holds; it says
+// nothing about the account.
+const socialAccountExists = "This sign-in could not be completed. Contact your administrator if this continues."
 
 // socialLogin is POST /api/v1/auth/social-login (oauth.py).
 func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {

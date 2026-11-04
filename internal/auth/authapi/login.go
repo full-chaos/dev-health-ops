@@ -111,12 +111,17 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !admit(w, r, goAPIRefusal, PatternCompatLogin,
+	// The charge is taken before any work. A failure before the password is
+	// compared gives it back (CHAOS-12737), before the answer is written; a
+	// refused credential, a lock and a success stay charged.
+	refund, ok := admitRefundable(w, r, goAPIRefusal, PatternCompatLogin, h.rec.logger,
 		charge{h.loginIP, clientKey(r)},
-		charge{h.loginAccount, h.Limits.accountKey(r, input.email)}) {
+		charge{h.loginAccount, h.Limits.accountKey(r, input.email)})
+	if !ok {
 		return
 	}
 	if err := h.Issuer.Preflight(r.Context()); err != nil {
+		refund(r.Context())
 		h.unavailableCompat(w, r, opCompatLogin, err)
 		return
 	}
@@ -139,6 +144,9 @@ func (h compatHandlers) compatLogin(w http.ResponseWriter, r *http.Request) {
 		h.refuseCompat(w, r, opCompatLogin, http.StatusUnauthorized, reasonNotMember, textNotMember)
 		return
 	case err != nil:
+		if errors.Is(err, local.ErrBeforeCredentialCheck) {
+			refund(r.Context())
+		}
 		h.fail(w, r, opCompatLogin, err)
 		return
 	}

@@ -339,7 +339,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	object, ok := errs.Object(body)
 	patch := orgUpdate{}
 	if ok {
-		if v, present := h.optionalName(&errs, object); present {
+		if v, present := errs.OptionalString(object, "name", 0, 0); present {
 			patch.Name = &v
 		}
 		if v, present := errs.OptionalString(object, "description", 0, 0); present {
@@ -365,12 +365,6 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
-	}
-	patch.authOwned = h.orgsOwned()
-	if h.renamesInAuth(patch) {
-		if !h.renamePrecheck(w, r, *patch.Name) || !h.renameInAuth(w, r, orgID, *patch.Name) {
-			return
-		}
 	}
 	var authActive orgAuthStateFunc
 	if patch.IsActive != nil {

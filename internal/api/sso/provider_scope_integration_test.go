@@ -135,8 +135,13 @@ func TestSSOIdentityIsScopedToItsProvider(t *testing.T) {
 			if status != http.StatusConflict {
 				t.Fatalf("subject and email of an account of another provider: status=%d body=%v, want 409", status, body)
 			}
-			if detail, _ := body["detail"].(map[string]any); detail["reason"] != "identity_conflict" || body["access_token"] != nil {
-				t.Fatalf("body=%v, want reason identity_conflict and no token", body)
+			if detail, _ := body["detail"].(map[string]any); detail["message"] != "This sign-in could not be completed. Contact your administrator if this continues." || len(detail) != 1 || body["access_token"] != nil {
+				t.Fatalf("body=%v, want the one generic message, no reason and no token", body)
+			}
+			var conflictAudits int
+			if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure' AND error_message = 'identity conflict'`,
+				providerB.String()).Scan(&conflictAudits); err != nil || conflictAudits != 1 {
+				t.Fatalf("identity conflict audit rows for provider B = %d, err %v; want 1", conflictAudits, err)
 			}
 			untouched(t, ctx, st, ownerID)
 			assertNoRowsWritten(t, ctx, st, before)

@@ -116,6 +116,11 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	return provisioning, session, nil
 }
 
+// workloadInputError is a workload client error that names the bad input; its text is what the error always said.
+type workloadInputError struct{ variable, text string }
+
+func (e *workloadInputError) Error() string { return e.text }
+
 // newWorkloadClient builds the one workloadtoken.Client from AUTH_WORKLOAD_SUBJECT_FILE | AUTH_WORKLOAD_BOOTSTRAP_FILE,
 // AUTH_WORKLOAD_ISSUER and the origin of AUTH_PROXY_URL. Every error names the switches and selectors that asked for
 // it and the missing or invalid variable, never a path.
@@ -128,9 +133,10 @@ func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), 
 		}
 		parts = append(parts, fmt.Sprintf("%s is on and %s=%s", ask.flag, ask.selector, credentialWorkload))
 	}
-	fail := func(format string, args ...any) (*workloadtoken.Client, error) {
-		return nil, fmt.Errorf("%s: %s", strings.Join(parts, ", "), fmt.Sprintf(format, args...))
+	fail := func(variable, format string, args ...any) (*workloadtoken.Client, error) {
+		return nil, &workloadInputError{variable: variable, text: fmt.Sprintf("%s: %s", strings.Join(parts, ", "), fmt.Sprintf(format, args...))}
 	}
+	bothFiles := EnvAuthWorkloadSubjectFile + "," + EnvAuthWorkloadBootstrapFile
 	subjectPath, _ := lookup(EnvAuthWorkloadSubjectFile)
 	bootstrapPath, _ := lookup(EnvAuthWorkloadBootstrapFile)
 	subjectPath, bootstrapPath = strings.TrimSpace(subjectPath), strings.TrimSpace(bootstrapPath)
@@ -138,24 +144,24 @@ func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), 
 	var subjectEnv, path string
 	switch {
 	case subjectPath != "" && bootstrapPath != "":
-		return fail("set only one of %s and %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
+		return fail(bothFiles, "set only one of %s and %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
 	case subjectPath != "":
 		subject, subjectEnv, path = workloadtoken.KubernetesTokenFile(subjectPath), EnvAuthWorkloadSubjectFile, subjectPath
 	case bootstrapPath != "":
 		subject, subjectEnv, path = workloadtoken.BootstrapCredentialFile(bootstrapPath), EnvAuthWorkloadBootstrapFile, bootstrapPath
 	default:
-		return fail("set %s or %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
+		return fail(bothFiles, "set %s or %s", EnvAuthWorkloadSubjectFile, EnvAuthWorkloadBootstrapFile)
 	}
 	if !readableFile(path) {
-		return fail("%s must name a readable file", subjectEnv)
+		return fail(subjectEnv, "%s must name a readable file", subjectEnv)
 	}
 	issuer, _ := lookup(EnvAuthWorkloadIssuer)
 	issuer = strings.TrimSpace(issuer)
 	if issuer == "" {
-		return fail("%s is not set", EnvAuthWorkloadIssuer)
+		return fail(EnvAuthWorkloadIssuer, "%s is not set", EnvAuthWorkloadIssuer)
 	}
 	if u, err := url.Parse(issuer); err != nil || u.Scheme != "https" || u.Host == "" {
-		return fail("%s must be an https URL", EnvAuthWorkloadIssuer)
+		return fail(EnvAuthWorkloadIssuer, "%s must be an https URL", EnvAuthWorkloadIssuer)
 	}
 	client, err := workloadtoken.New(workloadtoken.Config{
 		ExchangeURL:    cfg.Upstream.String(),
@@ -166,7 +172,7 @@ func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), 
 		Transport:      exchangeTransport(),
 	})
 	if err != nil {
-		return fail("workload token client: %v", err)
+		return fail("", "workload token client: %v", err)
 	}
 	return client, nil
 }

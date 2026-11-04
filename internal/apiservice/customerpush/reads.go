@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -116,28 +117,7 @@ func sourceResponse(s sourceRow, warnings []string) *pyjson.Object {
 }
 
 // scopesValue is list(token.scopes or []) from the json column's text.
-func scopesValue(raw []byte) (pyjson.Value, error) {
-	if len(raw) == 0 {
-		return []pyjson.Value{}, nil
-	}
-	decoded, err := pyjson.Decode(raw)
-	if err != nil {
-		return nil, err
-	}
-	if decoded == nil {
-		return []pyjson.Value{}, nil
-	}
-	list, ok := decoded.([]pyjson.Value)
-	if !ok {
-		return nil, errors.New("scopes column is not a JSON list")
-	}
-	for _, item := range list {
-		if _, ok := item.(string); !ok {
-			return nil, errors.New("scopes column holds a non-string")
-		}
-	}
-	return list, nil
-}
+func scopesValue(raw []byte) (pyjson.Value, error) { return pushevent.ScopesValue(raw) }
 
 // tokenResponse is _token_to_response.
 func tokenResponse(t tokenRow) (*pyjson.Object, error) {

@@ -191,6 +191,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
+			if r.Pattern != stopImpersonationPattern && ImpersonationFrom(r.Context()) != nil {
+				g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
+					slog.String("path", r.Pattern), slog.String("action", gt.action))
+				g.observeShadow(r, caller, bearer, false)
+				WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+				return
+			}
 		}
 		g.observeShadow(r, caller, bearer, true)
 		next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
@@ -229,6 +236,9 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz,
 				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)))
 		}
 		authFailure(w, "Invalid or expired token", err)
+		return nil, false
+	}
+	if g.RefuseDelegated(w, r, user) {
 		return nil, false
 	}
 	switch {
@@ -285,6 +295,9 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	switch {
 	case err == nil:
+		if g.RefuseDelegated(w, r, user) {
+			return nil, false
+		}
 		return user, true
 	case isRefusal(err):
 		return nil, true
@@ -295,3 +308,11 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 		return nil, false
 	}
 }
+
+// msgImpersonationDenied is the detail of a platform wrap's refusal of a
+// request that holds an impersonation session.
+const msgImpersonationDenied = "Not allowed in an impersonation session"
+
+// stopImpersonationPattern is the one platform route that stays reachable in
+// an impersonation session: it ends the session.
+const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"

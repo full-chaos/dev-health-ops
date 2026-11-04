@@ -67,6 +67,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -398,7 +399,10 @@ func configureWith(
 	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		var onlyShadow bool
+		if authProxy, onlyShadow = shadowOnlyProxyFault(envsecrets.ProcessLookup); !onlyShadow {
+			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		}
 	}
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
@@ -418,7 +422,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_platform_roles_owned", "api_platform_roles_owned_config_invalid", err)
 	}
-	deps.PushLifecycleEvents, err = ParsePushLifecycleEvents(envsecrets.ProcessLookup)
+	deps.PushLifecycleEvents, err = pushevent.ParsePushLifecycleEvents(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_push_lifecycle_events", "api_push_lifecycle_events_config_invalid", err)
@@ -461,6 +465,11 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_authz_enforce", "api_authz_enforce_config_invalid", err)
 		}
 		protected.guard.SetEnforcer(enforcer)
+		sharedWorkload := provisioningCred.workload
+		if sharedWorkload == nil {
+			sharedWorkload = sessionCred.workload
+		}
+		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
@@ -709,6 +718,11 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, err
 	}
+	delegated, err := goAPIDelegatedRows()
+	if err != nil {
+		return protection{}, err
+	}
+	auth.DelegatedRows(delegated)
 	rows, err := goAPIScopeRows()
 	if err != nil {
 		return protection{}, err

@@ -179,10 +179,9 @@ authService:
   #      4  users owned: the credential routes too (AUTH_PROXY_CREDENTIALS) and
   #         AUTH_USERS_OWNED. Meaning (D6358): auth-service writes the existing
   #         public users table; no auth-schema copy, no projection.
-  #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
-  #         the existing public organizations and memberships tables.
-  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #      5  cancelled (D6651): public.organizations and public.memberships stay the
+  #         authority. Phase 5 and AUTH_ORGS_OWNED (any extraEnv list) are refused at render.
+  #    Phase 4 is the highest phase. Rollback from phase 4 is NOT one upgrade: stage goApi,
   #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
   #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
@@ -217,8 +216,8 @@ authService:
   enforce:
     goApi: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
-  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true is refused at every phase until
+  #    CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -403,6 +402,16 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
+  # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize and /v1/authorize:batch), per pod.
+  #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
+  #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst
+  #    must be at least 100: the render refuses less. routePerSecond/routeBurst: the ceiling of all callers together
+  #    (from the 5.19 load test; revisit with CHAOS-12705). They render AUTH_SERVICE_PDP_*_RATE_LIMIT_*.
+  pdpRateLimit:
+    callerPerSecond: 150
+    callerBurst: 300
+    routePerSecond: 2000
+    routeBurst: 4000
   # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
   #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
   #    action: Kubernetes >= 1.30 (the image has no shell).
@@ -480,8 +489,9 @@ authService:
     sessionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
-    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE
-    #    only; AUTH_PUSH_LIFECYCLE_CALLER_ROLES). The writer role must exist and
+    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and
+    #    the worker domain login of the expiry sweeper; AUTH_PUSH_LIFECYCLE_CALLER_ROLES).
+    #    Both or neither: the render refuses one without the other, and callerRoles lists exactly two logins (CHAOS-12828). The writer role must exist and
     #    the migration login must be a member of it BEFORE this Job runs: a
     #    privileged step, see docs/contribute/architecture/auth-control-plane-deployment.md.
     #    Empty leaves the function unexecutable (go-api's AUTH_PUSH_LIFECYCLE_EVENTS
@@ -547,7 +557,7 @@ authService:
     runId: ""
     activeDeadlineSeconds: 1800
     ttlSecondsAfterFinished: 86400
-    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED are refused here.
+    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED (removed, D6651) are refused here.
     extraEnv: []
     resources:
       requests:

@@ -302,6 +302,7 @@ devhealth_scheduler_zero_planned_occurrences_total		code: internal/scheduler/syn
 devhealth_sync_coverage_cache_invalidations_consumed_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_coverage_cache_invalidations_emitted_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_run_zero_unit_finalizations_total	provider,reason	code: internal/jobruntime/telemetry.go
+external_push_expiry_sweep_tokens_total	outcome	code: internal/jobs/pushexpiry/handler.go
 fixed_scheduler_cold_starts_total	schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_consecutive_failures		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_failures_total		code: internal/scheduler/fixed/loop.go

@@ -27,3 +27,6 @@ func shadowCallerKind(user *User) string {
 	}
 	return ShadowCallerMember
 }
+
+// ShadowEnabled reports whether a shadow is installed beside the guard.
+func (g *Guard) ShadowEnabled() bool { return g.pdp.shadow != nil }

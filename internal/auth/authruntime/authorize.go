@@ -35,6 +35,7 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 		return nil, err
 	}
 	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger,
+		CallerLimit: authapi.PDPCallerLimit{PerSecond: cfg.PDPCaller.PerSecond, Burst: cfg.PDPCaller.Burst},
 		Audit: func(ctx context.Context, events []audit.AuditEvent) error {
 			return audit.AppendAll(ctx, pool, schema, events...)
 		}}

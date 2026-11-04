@@ -296,20 +296,23 @@ func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
 // names it, and until its line in scan.go carries a comment naming the stdlib contract that makes it synchronous.
 func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
 	t.Parallel()
-	want := []string{"(*testing.T).Run", "path/filepath.Walk", "path/filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable"}
-	var got []string
-	for k := range pureCallees {
-		got = append(got, k)
+	want := map[string]int{"(*testing.T).Run": 1, "path/filepath.Walk": 1, "path/filepath.WalkDir": 1, "slices.SortFunc": 1, "slices.SortStableFunc": 1, "sort.Slice": 1, "sort.SliceStable": 1}
+	render := func(m map[string]int) string {
+		var kv []string
+		for k, i := range m {
+			kv = append(kv, k+"@"+strconv.Itoa(i))
+		}
+		sort.Strings(kv)
+		return strings.Join(kv, ",")
 	}
-	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("pureCallees is %v, the pinned set is %v: pin the new entry here and give its line a comment naming the contract", got, want)
+	if got := render(pureCallees); got != render(want) {
+		t.Fatalf("pureCallees (callee@index of its function value) is %s, the pinned set is %s: pin the new entry or the moved index here and give its line a comment naming the contract", got, render(want))
 	}
 	src, err := os.ReadFile("scan.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range want {
+	for k := range want {
 		found := false
 		for _, line := range strings.Split(string(src), "\n") {
 			if strings.Contains(line, `"`+k+`":`) {
@@ -588,5 +591,34 @@ func TestPlanForIgnoresAnInheritedQualitySelection(t *testing.T) {
 	plan := planFor(t, repoRoot(t), "test-shard-plan", 1, 1)
 	if len(plan) <= 100 || !plan["internal/teamid"] {
 		t.Errorf("the test plan holds %d package(s) under an inherited selection, want the whole plan incl. internal/teamid", len(plan))
+	}
+}
+
+// CHAOS-11499: the scan result may not depend on the host arch. A file named for one arch is ignored by go list on the other, and an
+// ignored file is scanned untyped, so a scan of the host arch alone refuses it on one host and accepts it on another.
+func TestTheScanDoesNotDependOnTheHostArch(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_" + arch + ".go": "package a\n\nfunc G() int { return 2 }\n"}
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "arch_"+arch+".go: the file was not type-checked") {
+			t.Errorf("a file for %s only: want it refused on every host, got:\n%s", arch, got)
+		}
+	}
+}
+
+func TestAnInheritedGOARCHDoesNotChangeTheScan(t *testing.T) {
+	files := func() map[string]string {
+		return map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_amd64.go": "package a\n\nfunc G() int { return 2 }\n", "a/arch_arm64.go": "package a\n\nfunc H() int { return 3 }\n"}
+	}
+	var results []string
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Setenv("GOARCH", arch)
+		results = append(results, problemsOf(t, files(), rowA))
+	}
+	if results[0] != results[1] {
+		t.Fatalf("the scan differs by GOARCH:\namd64:\n%s\narm64:\n%s", results[0], results[1])
+	}
+	if results[0] == "" {
+		t.Fatal("arch-named files were accepted")
 	}
 }

@@ -382,7 +382,10 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	} else {
 		result, err = h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
 	}
-	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	// The store refuses an auth-service credential whose public user is inactive or gone under the session lock
+	// (D6651) and names the locked session. As for a guard refusal, the user read below decides go-api's answer and
+	// row and revokes the session, and nothing is minted.
+	guardRefused := errors.Is(err, session.ErrGuardRefused) || storeRefusedUser(result) && legacy == nil
 	if err != nil && !guardRefused {
 		h.fail(w, r, opCompatRefresh, err)
 		return
@@ -490,6 +493,12 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
 	setSessionAccessToken(out, tokens)
 	writeCompatModel(w, out)
+}
+
+// storeRefusedUser reports the store's refusal of a session whose public user
+// is inactive or gone, naming the locked session.
+func storeRefusedUser(result session.Result) bool {
+	return result.Reason == session.ReasonPrincipalDeactivated && result.Session.ID != uuid.Nil
 }
 
 // isJWT reports a token in compact JWS form (three dot-separated parts). An

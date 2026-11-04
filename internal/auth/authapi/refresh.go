@@ -112,7 +112,9 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.Sessions.ExchangeGuarded(ctx, credential, h.refreshGuard)
-	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	// A store refusal of a session whose public user is inactive or gone (D6651) is answered like a guard refusal:
+	// the user read below decides the reason and revokes the session.
+	guardRefused := errors.Is(err, session.ErrGuardRefused) || err == nil && storeRefusedUser(result)
 	if !guardRefused && (err != nil || !result.Reason.Success()) {
 		h.rec.refuse(w, r, opRefresh, exchangeRefusal(result.Reason), err)
 		return

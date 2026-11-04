@@ -29,15 +29,15 @@ Ask Dev needs entitlement flags, a model for the organization, and an Ask Dev se
 | Flag | What it does | Default |
 | --- | --- | --- |
 | `ask_dev` | The in-app Ask Dev layer, and admission by the Ask Dev service | Off until enabled for an organization or license |
-| `agent_context_runtime` | The earlier grant for the same capability. It still admits an organization until it is retired | Off until enabled |
+| `agent_context_runtime` | The earlier grant for the same capability. The Ask Dev service also checks it for browser calls, but treats `ask_dev` as satisfying it, so a legacy grant alone does not admit browser calls | Off until enabled |
 | `ask_dev_contextual_entrypoints` | The page-context chips on product pages | Off until enabled |
-| `ask_dev_wave_3_1` | Server-owned question interpretation | Off until enabled |
+| `ask_dev_wave_3_1` | Registered in the feature registry. No Ask Dev runtime reader for it was found on main, so enabling it has no effect on Ask Dev today | Off until enabled |
 
 See [Feature flags and availability](../../reference/configuration/feature-flags.md) for how the gates relate. No flag grants another.
 
 ### The two gates differ
 
-The Ask Dev service admits a caller when `ask_dev` **or** `agent_context_runtime` is on. The web app shows the Ask Dev button only when `ask_dev` **and** `agent_context_runtime` are both on. From reading the code, an organization with only `ask_dev` is admitted by the service and is not shown the button; this follows from the two checks and has not been reproduced. To be sure users see Ask Dev, enable both flags.
+For a browser call, which is what the web app makes, the Ask Dev service requires `ask_dev`. It also checks `agent_context_runtime`, but Dev Health sends that as `ask_dev` or the legacy grant, so `ask_dev` alone satisfies it, and a legacy grant alone does not. The web app shows the Ask Dev button only when `ask_dev` **and** `agent_context_runtime` are both on in its own feature map. Whether that map applies the same rule was not traced. If it reads the raw grants, an organization with only `ask_dev` is admitted by the service and is not shown the button; this follows from reading the code and has not been reproduced. To be sure users see Ask Dev, enable both flags.
 
 ## The model
 

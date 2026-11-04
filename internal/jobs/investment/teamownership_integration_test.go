@@ -341,8 +341,8 @@ func TestNoTeamOwnershipRepositoryFallbackProviderEntityMatrix(t *testing.T) {
 	}
 	coverage.assertComplete()
 
-	// Total allocated effort of the org is unchanged by the drop: no
-	// team_ownership row exists anywhere after the run.
+	// No team_ownership row exists anywhere after the run. (Total effort is not
+	// asserted here beyond each unit's own row above.)
 	var teamRows uint64
 	if err := conn.QueryRow(ctx, `SELECT count() FROM work_unit_repo_effort FINAL WHERE org_id = ? AND allocation_source = 'team_ownership'`, hierarchyCascadeTestOrg).Scan(&teamRows); err != nil {
 		t.Fatal(err)

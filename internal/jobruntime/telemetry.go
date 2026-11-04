@@ -4477,15 +4477,15 @@ func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *stri
 // writeInvestmentRepoAttribution renders CHAOS-5458's per-source counter: how
 // many components one investment.materialize run resolved a repository for
 // via own-signal edges/churn, the CHAOS-5359/5459 hierarchy cascade
-// (ancestor/children), the CHAOS-5460 NxM team-ownership fallback, or none of
-// the above (unassigned). Every source is emitted on every run, including
+// (ancestor/children), or none of the above (unassigned). The CHAOS-5460 team
+// source was removed by CHAOS-12949. Every source is emitted on every run, including
 // zero, so a source that stops firing reads as an explicit zero rather than a
 // missing series -- same discipline as writeTeamRepoOwnershipDerivation, and
 // the exact lesson that function's own doc comment names: a metric that is
 // only ever incremented and never rendered here is recorded and never
 // exported.
 func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *strings.Builder) {
-	writeMetadata(output, "dev_health_investment_repo_attribution_total", "Components investment.materialize's native executor resolved a repository for in one run, by source: own (own-edges or PR/commit churn), ancestor/children (CHAOS-5359/5459 issue-hierarchy cascade), team (CHAOS-5460 NxM team-ownership fallback), or unassigned (CHAOS-5458).", "counter")
+	writeMetadata(output, "dev_health_investment_repo_attribution_total", "Components investment.materialize's native executor resolved a repository for in one run, by source: own (own-edges or PR/commit churn), ancestor/children (CHAOS-5359/5459 issue-hierarchy cascade), or unassigned (CHAOS-5458).", "counter")
 	for _, source := range investmentRepoAttributionSources() {
 		writeUintSample(output, "dev_health_investment_repo_attribution_total",
 			[]metricLabel{{"source", string(source)}}, collector.investmentRepoAttribution[source])

@@ -183,22 +183,12 @@ type Stats struct {
 }
 
 // logRepoAttribution emits the run's closed repo-attribution partition -- own,
-// ancestor, children, team and unassigned (CHAOS-5458) -- as one structured
-// log line carrying BOTH halves that used to live on two separate lines
-// correlated only by run_id: the cascade fields the OLD "investment repo
-// attribution" line had (own_signal/hierarchy_ancestor/hierarchy_children/
-// cascade_hop*/unassigned), PLUS the team partition and its NxM fan-out
-// (team_fallback/team_repo_shares) that only ever appeared on "investment team
-// repository fallback". That second line is UNCHANGED and still emitted
-// (logOwnershipFallback, called right before this) -- it carries the fuller
-// ownership-outcome breakdown (own_repo/stronger_allocation/direct_repo_
-// evidence/no_eligible_owner/donor_rows/donor_issues) that has no place in a
-// five-way closed partition. RepoAttributionCountsFromStats' own doc comment
-// has the proof that team is always a subset of the pre-team-split unassigned
-// count, which is what makes folding it into this line's `unassigned` field
-// exact rather than approximate. Called on every run, including a
-// zero-component run, so a stalled fleet reads as explicit zeros rather than
-// a missing line.
+// ancestor, children and unassigned (CHAOS-5458) -- as one structured log line:
+// the cascade fields (own_signal/hierarchy_ancestor/hierarchy_children/
+// cascade_hop*) and the unassigned count. There is no team bucket and no
+// separate "investment team repository fallback" line any more (CHAOS-12949).
+// Called on every run, including a zero-component run, so a stalled fleet reads
+// as explicit zeros rather than a missing line.
 func (m *Materializer) logRepoAttribution(ctx context.Context, cfg Config, stats Stats) {
 	counts := RepoAttributionCountsFromStats(stats)
 	m.logger.InfoContext(ctx, "investment repo attribution",

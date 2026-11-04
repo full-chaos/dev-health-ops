@@ -239,14 +239,14 @@ func (c legacyClaims) recordedIdentity(issuer, audience string) string {
 }
 
 // userToken is the user access token of the same caller: the user, the
-// organization and the impersonating actor. The other arguments are the
-// users row's, which the api reads live.
+// organization, the impersonating actor and the token version its session
+// pins. The other arguments are the users row's, which the api reads live.
 func (c legacyClaims) userToken() (edtokens.Claims, error) {
 	user, err := uuid.Parse(c.UserID)
 	if err != nil {
 		return edtokens.Claims{}, fmt.Errorf("user_id %q is not a UUID: a user access token names a principal", c.UserID)
 	}
-	out := edtokens.Claims{UserID: user, OrgID: c.OrgID}
+	out := edtokens.Claims{UserID: user, OrgID: c.OrgID, TokenVersion: c.TokenVersion}
 	if c.ImpersonatingUserID != nil {
 		actor, err := uuid.Parse(*c.ImpersonatingUserID)
 		if err != nil {

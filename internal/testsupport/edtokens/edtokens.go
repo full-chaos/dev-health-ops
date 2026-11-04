@@ -43,7 +43,13 @@ type Issuer struct {
 	priv     ed25519.PrivateKey
 	keys     authverify.StaticKeys
 	mu       sync.Mutex
-	sessions map[uuid.UUID]uuid.UUID
+	sessions map[uuid.UUID]session
+}
+
+// session is a minted token's session: its user and the users.token_version it began at.
+type session struct {
+	principal    uuid.UUID
+	tokenVersion int64
 }
 
 // New returns an Issuer with a fresh key.
@@ -53,16 +59,18 @@ func New(t testing.TB) *Issuer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]uuid.UUID{}}
+	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
 }
 
-// Claims are the inputs of one token. OrgID "" mints a token without an organization.
+// Claims are the inputs of one token. OrgID "" mints a token without an organization. TokenVersion is the
+// users.token_version the token's session begins at: the api refuses the token once the users row moves past it.
 type Claims struct {
-	UserID   uuid.UUID
-	OrgID    string
-	Actor    *uuid.UUID
-	IssuedAt time.Time
-	Lifetime time.Duration
+	UserID       uuid.UUID
+	OrgID        string
+	Actor        *uuid.UUID
+	TokenVersion int64
+	IssuedAt     time.Time
+	Lifetime     time.Duration
 }
 
 // PrincipalID is the wire form of a user id in a token's sub and act.sub.
@@ -105,7 +113,7 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 	}
 	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	i.mu.Lock()
-	i.sessions[sid] = c.UserID
+	i.sessions[sid] = session{principal: c.UserID, tokenVersion: c.TokenVersion}
 	i.mu.Unlock()
 	return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(i.priv, []byte(signing))), nil
 }
@@ -130,11 +138,12 @@ type Store struct {
 func (s Store) SessionState(_ context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
 	s.issuer.mu.Lock()
 	defer s.issuer.mu.Unlock()
-	principal, ok := s.issuer.sessions[id]
+	minted, ok := s.issuer.sessions[id]
 	if !ok {
 		return policy.SessionRow{}, false, nil
 	}
-	return policy.SessionRow{PrincipalID: principal}, true, nil
+	version := minted.tokenVersion
+	return policy.SessionRow{PrincipalID: minted.principal, LegacyTokenVersion: &version}, true, nil
 }
 
 // Store wraps base so the session check sees this Issuer's sessions.

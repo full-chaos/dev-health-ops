@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
@@ -195,6 +197,14 @@ func TestGoMintedTokensKeyTheCallerThePythonTokenKeyed(t *testing.T) {
 	}
 	if full.OrgID == nil || *full.OrgID != o1 || full.ActorSubject == nil || *full.ActorSubject != edtokens.PrincipalID(uuid.MustParse(s1)) {
 		t.Errorf("full: org %v actor %v, want the seed's organization and impersonating user", full.OrgID, full.ActorSubject)
+	}
+	// The session pins the seed's token_version, as create_access_token's tv claim does.
+	sid, err := sessionid.Parse(full.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row, found, _ := v.TokenIssuer.Store(policy.PGStore{}).SessionState(context.Background(), sid); !found || row.LegacyTokenVersion == nil || *row.LegacyTokenVersion != 4 {
+		t.Errorf("full: session %+v found=%v, want token_version 4 pinned", row, found)
 	}
 	// JWT_ISSUER and JWT_AUDIENCE on the Python plane are the recorded token's.
 	custom := frozenVenue("JWT_ISSUER=iss-x", "JWT_AUDIENCE=aud-y")

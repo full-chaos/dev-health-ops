@@ -54,6 +54,24 @@ func TestMintedTokenVerifiesWithItsSessionLive(t *testing.T) {
 	if err != nil || !found || row.PrincipalID != user || row.Revoked {
 		t.Fatalf("the minted session is not live for its user: %+v found=%v err=%v", row, found, err)
 	}
+	if row.LegacyTokenVersion == nil || *row.LegacyTokenVersion != 0 {
+		t.Fatalf("the minted session pins token_version %v, want 0 (the api refuses a session without a pin)", row.LegacyTokenVersion)
+	}
+	pinned, err := issuer.Mint(edtokens.Claims{UserID: user, TokenVersion: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedClaims, err := issuer.Verifier(t).Verify(pinned, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedSID, err := sessionid.Parse(pinnedClaims.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row, _, _ := store.SessionState(context.Background(), pinnedSID); row.LegacyTokenVersion == nil || *row.LegacyTokenVersion != 3 {
+		t.Fatalf("a token minted at token_version 3 pins %v", row.LegacyTokenVersion)
+	}
 	if _, found, _ := store.SessionState(context.Background(), uuid.New()); found {
 		t.Fatal("a session this issuer never minted is found")
 	}

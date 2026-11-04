@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -423,6 +425,8 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	var parsed []*ast.File
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -432,6 +436,13 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		files[name] = file
+		parsed = append(parsed, file)
+	}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}}
+	_, _ = conf.Check("policy", fset, parsed, info)
+	for name, file := range files {
 		if name == "scope.go" || name == "accessroute.go" {
 			for _, spec := range file.Imports {
 				if path, _ := strconv.Unquote(spec.Path.Value); path == "encoding/base64" || path == "encoding/json" {
@@ -441,18 +452,29 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch typed := node.(type) {
-			case *ast.BasicLit:
-				if typed.Kind == token.STRING && typed.Value == `"Authorization"` && !slices.Contains(allowed, name) {
+			case ast.Expr:
+				if value := info.Types[typed].Value; value != nil && value.Kind() == constant.String &&
+					strings.EqualFold(constant.StringVal(value), "Authorization") && !slices.Contains(allowed, name) {
 					t.Errorf("%s reads the Authorization header", fset.Position(typed.Pos()))
 				}
-			case *ast.CallExpr:
-				if ident, ok := typed.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
-					t.Errorf("%s calls BearerToken", fset.Position(typed.Pos()))
+			}
+			if call, ok := node.(*ast.CallExpr); ok {
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
+					t.Errorf("%s calls BearerToken", fset.Position(call.Pos()))
 				}
 			}
 			return true
 		})
 	}
+}
+
+// emptyImporter lets go/types fold constants without resolving imports.
+type emptyImporter struct{}
+
+func (emptyImporter) Import(path string) (*types.Package, error) {
+	pkg := types.NewPackage(path, filepath.Base(path))
+	pkg.MarkComplete()
+	return pkg, nil
 }
 
 // TestProductionChainsInstallPrincipalFirst pins the two production scope

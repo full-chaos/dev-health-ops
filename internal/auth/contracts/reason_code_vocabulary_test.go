@@ -242,6 +242,7 @@ var approvedAuditReasonCodes = []string{
 	"internal_error",
 	"compromised",
 	"domain_revoked",
+	"org_deprovisioned",
 	"owner_request",
 	"role_granted",
 	"role_revoked",

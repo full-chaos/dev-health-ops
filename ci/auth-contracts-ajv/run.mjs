@@ -158,6 +158,7 @@ const APPROVED_AUDIT = [
   "internal_error",
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
   "role_granted",
   "role_revoked",

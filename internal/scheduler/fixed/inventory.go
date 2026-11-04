@@ -23,6 +23,7 @@ const (
 	ProducerDimensionFold          = "dimension_fold"
 	ProducerLLMBudgetStale         = "llm_budget_stale_reservations"
 	ProducerProviderRevocations    = "provider_oauth_revocations"
+	ProducerPushExpirySweep        = "external_push_expiry_sweep"
 	ProducerRetentionCleanup       = "retention_cleanup"
 )
 
@@ -338,6 +339,23 @@ func checkedInSchedules() []Schedule {
 				"for a credential that is gone stays owed otherwise, CHAOS-12010). Each run " +
 				"re-reads the due rows, so a missed run is repaired by the next one; a 5 minute " +
 				"period emits every 5 to 10 minutes.",
+		},
+		{
+			ID:               "external_push_expiry_sweep",
+			Native:           true,
+			Cadence:          EveryInterval(15 * time.Minute),
+			Timezone:         inventoryTimezone,
+			CatchUp:          CatchUpSkip,
+			UniquenessWindow: 2 * time.Hour,
+			TargetKind:       jobcontract.KindExternalPushExpirySweep,
+			ProducerID:       ProducerPushExpirySweep,
+			MaxAttempts:      2,
+			AlertThreshold:   90 * time.Minute,
+			Rationale: "Sends an expired lifecycle event for each External Push token that " +
+				"expired and was not revoked. The job does nothing while the push lifecycle " +
+				"events flag is off. Each run re-reads the expired tokens in its window, so a " +
+				"missed run is repaired by the next one; a 15 minute period emits every 15 to " +
+				"30 minutes.",
 		},
 		{
 			ID: "phone_home_heartbeat",

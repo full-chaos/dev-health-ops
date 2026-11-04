@@ -19,3 +19,5 @@ A pull request should state:
 - migration, deployment, documentation, and follow-up effects.
 
 Separate unrelated IA, content, framework, hosting, and operational changes. Request human reviewers for the decision domain even when automation is green.
+
+The PR title is `<type>(<area>): CHAOS-<n> <description>` with exactly one id. The `pr-title` check enforces it.

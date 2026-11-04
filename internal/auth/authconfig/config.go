@@ -52,24 +52,28 @@ const Service = "auth-service"
 // Environment variable names. Declared as constants so the option registry,
 // the resolution sites and the tests all name the same string.
 const (
-	EnvLogLevel               = "AUTH_SERVICE_LOG_LEVEL"
-	EnvShutdownTimeout        = "AUTH_SERVICE_SHUTDOWN_TIMEOUT"
-	EnvHealthCheckTimeout     = "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT"
-	EnvAPIAddress             = "AUTH_SERVICE_HTTP_ADDR"
-	EnvOperatorAddress        = "AUTH_SERVICE_OPERATOR_HTTP_ADDR"
-	EnvRequestTimeout         = "AUTH_SERVICE_REQUEST_TIMEOUT"
-	EnvMaxBodyBytes           = "AUTH_SERVICE_MAX_BODY_BYTES"
-	EnvRateLimitPerSecond     = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
-	EnvRateLimitBurst         = "AUTH_SERVICE_RATE_LIMIT_BURST"
-	EnvPublicMaxInFlight      = "AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT"
-	EnvPublicRateLimit        = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND"
-	EnvPublicRateLimitBurst   = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST"
-	EnvDatabaseURI            = "AUTH_DATABASE_URI"
-	EnvDatabaseSchema         = "AUTH_DATABASE_SCHEMA"
-	EnvDatabaseMaxConns       = "AUTH_DATABASE_MAX_CONNS"
-	EnvDatabaseConnectTimeout = "AUTH_DATABASE_CONNECT_TIMEOUT"
-	EnvSigningKeyFile         = "AUTH_SIGNING_KEY_FILE"
-	EnvSigningKeyID           = "AUTH_SIGNING_KEY_ID"
+	EnvLogLevel                = "AUTH_SERVICE_LOG_LEVEL"
+	EnvShutdownTimeout         = "AUTH_SERVICE_SHUTDOWN_TIMEOUT"
+	EnvHealthCheckTimeout      = "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT"
+	EnvAPIAddress              = "AUTH_SERVICE_HTTP_ADDR"
+	EnvOperatorAddress         = "AUTH_SERVICE_OPERATOR_HTTP_ADDR"
+	EnvRequestTimeout          = "AUTH_SERVICE_REQUEST_TIMEOUT"
+	EnvMaxBodyBytes            = "AUTH_SERVICE_MAX_BODY_BYTES"
+	EnvRateLimitPerSecond      = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
+	EnvRateLimitBurst          = "AUTH_SERVICE_RATE_LIMIT_BURST"
+	EnvPublicMaxInFlight       = "AUTH_SERVICE_PUBLIC_MAX_IN_FLIGHT"
+	EnvPublicRateLimit         = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_PER_SECOND"
+	EnvPublicRateLimitBurst    = "AUTH_SERVICE_PUBLIC_RATE_LIMIT_BURST"
+	EnvPDPCallerRateLimit      = "AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND"
+	EnvPDPCallerRateLimitBurst = "AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST"
+	EnvPDPRouteRateLimit       = "AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND"
+	EnvPDPRouteRateLimitBurst  = "AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST"
+	EnvDatabaseURI             = "AUTH_DATABASE_URI"
+	EnvDatabaseSchema          = "AUTH_DATABASE_SCHEMA"
+	EnvDatabaseMaxConns        = "AUTH_DATABASE_MAX_CONNS"
+	EnvDatabaseConnectTimeout  = "AUTH_DATABASE_CONNECT_TIMEOUT"
+	EnvSigningKeyFile          = "AUTH_SIGNING_KEY_FILE"
+	EnvSigningKeyID            = "AUTH_SIGNING_KEY_ID"
 	// EnvSigningKeySetFile names a key-set manifest (several keys, each with a
 	// kid and a rotation state) in place of the single key file and kid.
 	EnvSigningKeySetFile = "AUTH_SIGNING_KEYSET_FILE"
@@ -159,20 +163,26 @@ func SocialClientSecretEnv(provider string) string {
 }
 
 const (
-	defaultAPIAddress             = ":8095"
-	defaultOperatorAddress        = ":8096"
-	defaultDatabaseSchema         = "auth"
-	defaultShutdownTimeout        = 30 * time.Second
-	defaultHealthCheckTimeout     = 2 * time.Second
-	defaultRequestTimeout         = 10 * time.Second
-	defaultMaxBodyBytes           = int64(1 << 20)
-	defaultRateLimitPerSecond     = float64(20)
-	defaultRateLimitBurst         = 40
-	defaultPublicMaxInFlight      = 256
-	defaultPublicRateLimit        = float64(500)
-	defaultPublicRateLimitBurst   = 1000
-	defaultDatabaseMaxConns       = int32(8)
-	defaultDatabaseConnectTimeout = 5 * time.Second
+	defaultAPIAddress           = ":8095"
+	defaultOperatorAddress      = ":8096"
+	defaultDatabaseSchema       = "auth"
+	defaultShutdownTimeout      = 30 * time.Second
+	defaultHealthCheckTimeout   = 2 * time.Second
+	defaultRequestTimeout       = 10 * time.Second
+	defaultMaxBodyBytes         = int64(1 << 20)
+	defaultRateLimitPerSecond   = float64(20)
+	defaultRateLimitBurst       = 40
+	defaultPublicMaxInFlight    = 256
+	defaultPublicRateLimit      = float64(500)
+	defaultPublicRateLimitBurst = 1000
+	// defaultPDPCallerRateLimit is one caller workload's budget on one PDP route, per pod; the effective
+	// per-caller limit is this times the pod count. The route ceiling is from CHAOS-10854 (5.19): revisit with CHAOS-12705.
+	defaultPDPCallerRateLimit      = float64(150)
+	defaultPDPCallerRateLimitBurst = 300
+	defaultPDPRouteRateLimit       = float64(2000)
+	defaultPDPRouteRateLimitBurst  = 4000
+	defaultDatabaseMaxConns        = int32(8)
+	defaultDatabaseConnectTimeout  = 5 * time.Second
 	// go-api's JWT_ISSUER and JWT_AUDIENCE defaults (internal/platform/config).
 	defaultAccessTokenIssuer   = "dev-health-ops"
 	defaultAccessTokenAudience = "dev-health-api"
@@ -220,6 +230,10 @@ type Config struct {
 	// Public is the admission class of the key and discovery routes: its own
 	// in-flight cap and per-route bucket, apart from the shared ones.
 	Public PublicAdmission
+	// PDPCaller is the token bucket of one caller workload on one PDP route; PDPRoute is the ceiling of all callers
+	// together on that route. Each is per pod.
+	PDPCaller RateLimit
+	PDPRoute  RateLimit
 
 	DatabaseURI secrets.Value
 	// ValkeyURI is AUTH_VALKEY_URI: the shared rate-limit store.
@@ -388,6 +402,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("access_lifetime", c.Session.AccessLifetime.String()),
 		slog.Bool("workload_exchange_enabled", c.WorkloadExchange.Enabled),
 		slog.Bool("workload_bootstrap_enabled", c.WorkloadExchange.Bootstrap),
+		slog.Bool("service_account_exchange_enabled", c.WorkloadExchange.ServiceAccountKey),
 		slog.Bool("issue_route_workload_enabled", c.SessionIssueWorkloadSubject != ""),
 		slog.Int("authorize_caller_count", len(c.AuthorizeCallerSubjects)),
 		slog.Bool("acr_events_workload_enabled", c.AcrEventsWorkloadSubject != ""),
@@ -483,6 +498,24 @@ func Load(spec Spec) (Config, error) {
 		lookup, EnvPublicRateLimitBurst, defaultPublicRateLimitBurst, minRateLimitBurst, maxRateLimitBurst,
 	); err != nil {
 		return Config{}, err
+	}
+
+	for _, b := range []struct {
+		dst  *RateLimit
+		rate string
+		burs string
+		r    float64
+		bu   int
+	}{
+		{&cfg.PDPCaller, EnvPDPCallerRateLimit, EnvPDPCallerRateLimitBurst, defaultPDPCallerRateLimit, defaultPDPCallerRateLimitBurst},
+		{&cfg.PDPRoute, EnvPDPRouteRateLimit, EnvPDPRouteRateLimitBurst, defaultPDPRouteRateLimit, defaultPDPRouteRateLimitBurst},
+	} {
+		if b.dst.PerSecond, err = float(lookup, b.rate, b.r, minRateLimitPerSecond, maxRateLimitPerSecond); err != nil {
+			return Config{}, err
+		}
+		if b.dst.Burst, err = smallInteger(lookup, b.burs, b.bu, minRateLimitBurst, maxRateLimitBurst); err != nil {
+			return Config{}, err
+		}
 	}
 
 	// secrets.Resolve is the platform's direct-value/_FILE mutual exclusion

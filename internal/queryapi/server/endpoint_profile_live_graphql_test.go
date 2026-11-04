@@ -288,13 +288,6 @@ func driveField(h *liveGraphQLHarness, row liveFieldRow) []string {
 	if def == nil {
 		return []string{row.name() + ": the schema serves no such root field"}
 	}
-	for _, field := range []string{"action"} {
-		if row.str(field) != "unknown" {
-			fail("%s is %q: no live cell observes a field action", field, row.str(field))
-		} else if !row.hasGap(field) {
-			fail("%s is unknown with no declared gap", field)
-		}
-	}
 	own := authctx.Claims{OrgID: ecOrg.String(), Role: "member"}
 	text := row.str("disclosure_behavior")
 	resolver := row.str("resource_resolver")

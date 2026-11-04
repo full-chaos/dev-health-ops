@@ -47,8 +47,9 @@
     },
     "resource_key": {
       "type": "string",
-      "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$",
-      "description": "Canonical lowercase owner/repo, or the literal * for every repository of the organization (the pattern of authorization_request.v1 and of resource_grants_repository_key_canonical)."
+      "pattern": "^(?:[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?/(?:[a-z0-9]|[a-z0-9.][a-z0-9._-]{0,98}[a-z0-9])|\\*)$",
+      "maxLength": 255,
+      "description": "Canonical lowercase repository key: a path of 2 to 20 segments (owner/repo, or owner/group/.../repo) of at most 255 bytes, or the literal * for every repository of the organization (the pattern of authorization_request.v1)."
     },
     "expires_at": {
       "type": [

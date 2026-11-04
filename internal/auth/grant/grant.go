@@ -7,12 +7,12 @@ package grant
 
 import (
 	"errors"
-	"regexp"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 // KindRepository is the one resource kind a grant covers (migration 0020).
@@ -40,7 +40,7 @@ var (
 	ErrPrincipalNotFound = membership.ErrPrincipalNotFound
 	ErrRevisionConflict  = membership.ErrRevisionConflict
 
-	ErrKeyInvalid     = errors.New("grant: the repository key is not owner/repo or *")
+	ErrKeyInvalid     = errors.New("grant: the repository key is not a repository path (2-20 segments) or *")
 	ErrRoleInvalid    = errors.New("grant: the role is not viewer, member or admin")
 	ErrOriginInvalid  = errors.New("grant: the origin is not api or backfill")
 	ErrActorRequired  = errors.New("grant: an api grant names the principal that makes it")
@@ -70,18 +70,13 @@ func ValidRole(role string) bool {
 	return false
 }
 
-// keyPattern is the repository key of authorization_request.v1 and of
-// migration 0020's resource_grants_repository_key_canonical; tests hold the
-// three equal.
-const keyPattern = `^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`
+// KeyPattern is the pattern ValidKey holds: the repository key of
+// authorization_request.v1, authorization_decision.v1 and grant-read.v1.
+func KeyPattern() string { return repokey.SchemaPattern }
 
-var keyRE = regexp.MustCompile(keyPattern)
-
-// KeyPattern is the pattern ValidKey holds.
-func KeyPattern() string { return keyPattern }
-
-// ValidKey is true for the canonical lowercase owner/repo or the literal *.
-func ValidKey(key string) bool { return keyRE.MatchString(key) }
+// ValidKey is true for the canonical lowercase repository key (2-20 segments,
+// at most 255 bytes) or the literal *.
+func ValidKey(key string) bool { return repokey.Valid(key) }
 
 // Actor is who asks for a change; Authorize decides on the locked rows.
 type Actor = membership.Actor

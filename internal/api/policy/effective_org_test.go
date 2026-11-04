@@ -116,10 +116,18 @@ func TestIdentityRoutesKeepTheOwnOrg(t *testing.T) {
 	store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 	store.sessions[userID] = &Impersonation{AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID}
 	token := sign(t, claims(superClaims))
-	for _, level := range []Authz{Authenticated, Superuser} {
-		got := serve(effectiveOrgStack(t, store, level), http.MethodGet, "/x", map[string]string{"Authorization": "Bearer " + token})
+	auth := authenticator(t, store)
+	scope := NewScope(auth, quiet())
+	guard := NewGuard(auth, quiet())
+	// The stop route is the one platform route served inside a session.
+	mux := http.NewServeMux()
+	mux.Handle("GET /x", guard.Wrap(Authenticated, actingOrg))
+	mux.Handle("POST /api/v1/admin/impersonate/stop", guard.WrapPlatform(ActionAdminImpersonate, actingOrg))
+	stack := scope.Principal(scope.OrgScope(scope.Impersonation(mux)))
+	for _, route := range []struct{ method, path string }{{http.MethodGet, "/x"}, {http.MethodPost, "/api/v1/admin/impersonate/stop"}} {
+		got := serve(stack, route.method, route.path, map[string]string{"Authorization": "Bearer " + token})
 		if got.status != 200 || got.body != "acting="+ownOrg {
-			t.Errorf("level %v: %d %s, want the admin's own org", level, got.status, got.body)
+			t.Errorf("%s %s: %d %s, want the admin's own org", route.method, route.path, got.status, got.body)
 		}
 	}
 }

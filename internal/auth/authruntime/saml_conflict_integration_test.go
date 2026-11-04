@@ -38,7 +38,7 @@ import (
 const (
 	samlConflictBase      = "https://sp.example.test/api/v1/auth"
 	samlConflictIdPEntity = "https://idp.example.test/metadata"
-	samlConflictDetail    = "More than one account carries this sign-in. Contact your organization administrator."
+	samlConflictDetail    = "This sign-in could not be completed. Contact your administrator if this continues."
 )
 
 // samlConflictIdP signs assertions for one provider row with a key made at run time.
@@ -251,9 +251,11 @@ func (e *samlConflictEnv) key(t *testing.T, nameID string) identity.ExternalKey 
 func wantSAMLConflictRefusal(t *testing.T, rec *httptest.ResponseRecorder) {
 	t.Helper()
 	var got struct {
-		Detail string `json:"detail"`
+		Detail struct {
+			Message string `json:"message"`
+		} `json:"detail"`
 	}
-	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.Detail != samlConflictDetail {
+	if rec.Code != http.StatusConflict || json.Unmarshal(rec.Body.Bytes(), &got) != nil || got.Detail.Message != samlConflictDetail {
 		t.Fatalf("ACS = %d %s; want 409 %q", rec.Code, rec.Body.String(), samlConflictDetail)
 	}
 }

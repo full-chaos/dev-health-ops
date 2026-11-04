@@ -72,6 +72,7 @@ internal/auth/requestid
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/chmigrate
 internal/cli

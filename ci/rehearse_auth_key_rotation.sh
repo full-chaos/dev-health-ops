@@ -236,6 +236,9 @@ write_manifest a:active
 stage_keys a.pem
 
 # go-api presents its workload token on the session issue route: the bootstrap credential and the api principal first.
+# The bootstrap pulls in auth-migrate, which grants auth.sessions to AUTH_SESSION_READER_ROLES (the override): those roles
+# come from go-river-provision (go-api's chain), so it runs first.
+compose --profile auth run --rm --pull never go-river-provision >/dev/null || die "go-river-provision failed"
 auth_workload_session_issue compose --pull never || die "the go-api workload credential is not ready"
 registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api query-api auth-service issuer-tls
 psql_one() { compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"; }

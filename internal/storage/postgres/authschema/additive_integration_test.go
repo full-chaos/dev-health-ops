@@ -229,7 +229,7 @@ func diffIsAdditive(before, after schemaShape) []string {
 		}
 		if now != was {
 			regressions = append(regressions,
-				fmt.Sprintf("constraint %s redefined %q -> %q", key, was, now))
+				redefinedRegression(key, was, now))
 		}
 	}
 	for key := range before.triggers {
@@ -263,11 +263,25 @@ type additiveExemption struct {
 	// it matches by migration name, so a renumber is a file rename only.
 	name       string
 	regression string
-	reason     string
+	// redefined holds the raw key, old and new definitions of a redefined
+	// constraint; its text is quoted at test time, as diffIsAdditive quotes it.
+	redefined [3]string
+	reason    string
 }
 
 func (e additiveExemption) covers(m Migration) bool {
 	return (e.version != 0 && e.version == m.Version) || (e.name != "" && e.name == m.Name)
+}
+
+func (e additiveExemption) text() string {
+	if e.redefined[0] != "" {
+		return redefinedRegression(e.redefined[0], e.redefined[1], e.redefined[2])
+	}
+	return e.regression
+}
+
+func redefinedRegression(key, was, now string) string {
+	return fmt.Sprintf("constraint %s redefined %q -> %q", key, was, now)
 }
 
 var additiveExemptions = []additiveExemption{
@@ -484,11 +498,11 @@ var additiveExemptions = []additiveExemption{
 	},
 	{
 		name: "grant_repository_key_nested",
-		// Built with diffIsAdditive's own %q format: the pattern's backslash is escaped there.
-		regression: fmt.Sprintf("constraint %s redefined %q -> %q",
+		redefined: [3]string{
 			"resource_grants.resource_grants_repository_key_canonical",
 			`CHECK (((resource_kind <> 'repository'::text) OR (resource_id ~ '^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$'::text)))`,
-			`CHECK (((resource_kind <> 'repository'::text) OR ((resource_id ~ '`+repokey.SchemaPattern+`'::text) AND (octet_length(resource_id) <= 255))))`),
+			`CHECK (((resource_kind <> 'repository'::text) OR ((resource_id ~ '` + repokey.SchemaPattern + `'::text) AND (octet_length(resource_id) <= 255))))`,
+		},
 		reason: "the repository grant key admits a nested path of 2-20 segments in at most 255 bytes; " +
 			"every segment now ends in [a-z0-9], and the migration refuses while a row would break that (CHAOS-12785)",
 	},
@@ -534,8 +548,8 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 			}
 			var kept []string
 			for _, regression := range regressions {
-				if regression == exemption.regression {
-					exemptionUsed[exemption.regression] = true
+				if regression == exemption.text() {
+					exemptionUsed[exemption.text()] = true
 					continue
 				}
 				kept = append(kept, regression)
@@ -551,9 +565,9 @@ func TestEveryMigrationStepIsAdditive(t *testing.T) {
 			len(after.relations)-len(before.relations), len(after.columns)-len(before.columns))
 	}
 	for _, exemption := range additiveExemptions {
-		if !exemptionUsed[exemption.regression] {
+		if !exemptionUsed[exemption.text()] {
 			t.Errorf("stale additive exemption, remove it: migration %04d %q %q (%s)",
-				exemption.version, exemption.name, exemption.regression, exemption.reason)
+				exemption.version, exemption.name, exemption.text(), exemption.reason)
 		}
 	}
 	if steps != len(migrations) {

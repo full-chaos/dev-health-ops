@@ -674,47 +674,16 @@ func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, ro
 // probeState carries what the probe learned about the model across rounds.
 type probeState struct {
 	dropped []string
-	// effort is the reasoning_effort the provider's refusal told the probe to
-	// send instead ("none"); empty until a refusal offers it.
+	// effort is the reasoning_effort the ladder settled on ("none"); empty until
+	// a refusal moves the probe off the default.
 	effort string
 }
 
-// reasoningEffortNoneOffered reports that a refusal of reasoning_effort offers
-// "none" as a value (CHAOS-12116: gpt-6-luna refuses minimal, and refuses
-// function tools with any other effort or none at all, so dropping the field
-// cannot pass; only "none" does).
-func reasoningEffortNoneOffered(failure *providerFailure, req chatCompletionRequest) bool {
+// reasoningEffortRefused reports a 400/422 invalid_request refusal of
+// reasoning_effort for a request that carries one. The message text is never read.
+func reasoningEffortRefused(failure *providerFailure, req chatCompletionRequest) bool {
 	return failure.code == errCodeInvalidRequest && (failure.detail.status == 400 || failure.detail.status == 422) &&
-		failure.detail.refusedParam() == "reasoning_effort" && req.ReasoningEffort != "" && req.ReasoningEffort != "none" &&
-		noneListedAsOffer(failure.detail.message)
-}
-
-var (
-	supportedValuesRe = regexp.MustCompile(`(?is)supported values are:(.*)`)
-	setEffortToRe     = regexp.MustCompile(`(?i)set reasoning_effort to\s*['"]([^'"]*)['"]`)
-	sentenceEndRe     = regexp.MustCompile(`\.(\s|$)`)
-	quotedTokenRe     = regexp.MustCompile(`['"]([^'"]*)['"]`)
-)
-
-// noneListedAsOffer reports that a refusal message lists "none" as an allowed
-// value: a quoted token in its "Supported values are:" list, or the quoted value
-// after "set reasoning_effort to". A mention elsewhere is not an offer.
-func noneListedAsOffer(message string) bool {
-	if m := supportedValuesRe.FindStringSubmatch(message); m != nil {
-		list := m[1]
-		if loc := sentenceEndRe.FindStringIndex(list); loc != nil {
-			list = list[:loc[0]]
-		}
-		for _, tok := range quotedTokenRe.FindAllStringSubmatch(list, -1) {
-			if strings.EqualFold(strings.TrimSpace(tok[1]), "none") {
-				return true
-			}
-		}
-	}
-	if m := setEffortToRe.FindStringSubmatch(message); m != nil {
-		return strings.EqualFold(strings.TrimSpace(m[1]), "none")
-	}
-	return false
+		failure.detail.refusedParam() == "reasoning_effort" && req.ReasoningEffort != ""
 }
 
 // runRound posts one probe round. A 400/422 that names a bounded parameter the
@@ -734,15 +703,31 @@ func (p *openAICompatibleReadinessProber) runRound(
 		return resp, nil
 	}
 	p.logFailedRound(ctx, round, 1, failure)
-	if reasoningEffortNoneOffered(failure, req) {
-		req.ReasoningEffort = "none"
-		state.effort = "none"
-		resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
-		if failure != nil {
-			p.logFailedRound(ctx, round, 2, failure)
-			return nil, failure
+	if reasoningEffortRefused(failure, req) {
+		// CHAOS-12116: fixed ladder current -> "none" -> omit, at most 3 probes per round.
+		steps := []string{"none", ""}
+		if req.ReasoningEffort == "none" {
+			steps = steps[1:]
 		}
-		return resp, nil
+		attempt := 1
+		for _, step := range steps {
+			attempt++
+			req.ReasoningEffort = step
+			resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
+			if failure == nil {
+				if step == "" {
+					state.effort = ""
+					state.dropped = append(state.dropped, "reasoning_effort")
+				} else {
+					state.effort = step
+				}
+				return resp, nil
+			}
+			p.logFailedRound(ctx, round, attempt, failure)
+			if step == "" || !reasoningEffortRefused(failure, req) {
+				return nil, failure
+			}
+		}
 	}
 	name := refusedBoundedParam(failure, req)
 	if name == "" {

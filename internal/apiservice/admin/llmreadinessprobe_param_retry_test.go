@@ -136,8 +136,8 @@ func TestReadinessProbeDropsRefusedReasoningEffortAndRetries(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{"reasoning_effort": paramRefusal("reasoning_effort", "unsupported_value")})
 	outcome, code := readinessProbeOver(f, "gpt-5-mini")
 	wantReady(t, outcome, code)
-	if got := f.countKey("reasoning_effort", false); got != 1 {
-		t.Fatalf("round 1 requests with reasoning_effort = %d, want exactly 1", got)
+	if got := f.countKey("reasoning_effort", false); got != 2 {
+		t.Fatalf("round 1 requests with reasoning_effort = %d, want 2 (current value, then none, then omitted)", got)
 	}
 	if got := f.countKey("reasoning_effort", true); got != 0 {
 		t.Fatalf("round 2 requests with reasoning_effort = %d, want 0", got)

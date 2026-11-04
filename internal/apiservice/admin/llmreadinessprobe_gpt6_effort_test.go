@@ -1,10 +1,15 @@
 package admin
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -83,8 +88,8 @@ func TestReadinessProbeGPT6LunaPassesWithReasoningEffortNone(t *testing.T) {
 	}
 }
 
-// A model that refuses minimal but does not offer none keeps the old behaviour: drop and retry once.
-func TestReadinessProbeRefusedEffortWithoutANoneOfferIsStillDropped(t *testing.T) {
+// A model that refuses every effort value ends the ladder with the param omitted.
+func TestReadinessProbeRefusedEffortEndsOmitted(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{"reasoning_effort": paramRefusal("reasoning_effort", "unsupported_value")})
 	outcome, code := readinessProbeOver(f, "gpt-5-mini")
 	wantReady(t, outcome, code)
@@ -107,49 +112,6 @@ func TestReadinessProbeOtherParamRefusalMentioningNoneLeavesTheEffort(t *testing
 		if v, ok := c.body["reasoning_effort"]; ok && v == "none" {
 			t.Fatalf("a parallel_tool_calls refusal swapped reasoning_effort to none: %v", c.body)
 		}
-	}
-}
-
-// A round already sending none that is refused (round 2 here) falls back to dropping the field.
-func TestReadinessProbeRefusedNoneIsDropped(t *testing.T) {
-	refusal := `{"error":{"message":"'reasoning_effort' does not support 'none' here. Supported values are: 'none'.","type":"invalid_request_error","param":"reasoning_effort","code":"unsupported_value"}}`
-	var mu sync.Mutex
-	var seen []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		var body map[string]any
-		_ = json.Unmarshal(raw, &body)
-		effort, has := body["reasoning_effort"].(string)
-		mu.Lock()
-		if has {
-			seen = append(seen, effort)
-		} else {
-			seen = append(seen, "<absent>")
-		}
-		mu.Unlock()
-		if has && isRound2Request(raw) {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(refusal))
-			return
-		}
-		if has && effort == "minimal" {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(lunaRefusesMinimal))
-			return
-		}
-		if !isRound2Request(raw) {
-			writeToolCallJSON(w)
-			return
-		}
-		writeFinalAnswerJSON(w, `{"kind":"final_answer","value":{"nonce":"ready-v1"}}`)
-	}))
-	t.Cleanup(server.Close)
-	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
-	wantReady(t, outcome, code)
-	mu.Lock()
-	defer mu.Unlock()
-	if seen[len(seen)-1] != "<absent>" {
-		t.Fatalf("efforts sent = %v; a refused none must end in a dropped field", seen)
 	}
 }
 
@@ -178,34 +140,9 @@ func TestReadinessProbeServerErrorNamingEffortAndNoneIsNotSwapped(t *testing.T) 
 	}
 }
 
-func TestNoneListedAsOffer(t *testing.T) {
-	cases := []struct {
-		name, msg string
-		want      bool
-	}{
-		{"single quotes list", "'reasoning_effort' does not support 'minimal'. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'.", true},
-		{"double quotes list", `Supported values are: "none", "low".`, true},
-		{"case-insensitive header", `SUPPORTED VALUES ARE: 'None', 'low'.`, true},
-		{"tools form single", "use /v1/responses or set reasoning_effort to 'none'.", true},
-		{"tools form double", `set reasoning_effort to "none".`, true},
-		{"negative mention", "'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium'.", false},
-		{"try mention", "unsupported; try 'none'.", false},
-		{"list without none", "Supported values are: 'low', 'high'.", false},
-		{"none after list sentence", "Supported values are: 'low'. Do not use 'none'.", false},
-		{"set to other value", "set reasoning_effort to 'low'.", false},
-		{"empty", "", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := noneListedAsOffer(c.msg); got != c.want {
-				t.Fatalf("noneListedAsOffer(%q) = %v, want %v", c.msg, got, c.want)
-			}
-		})
-	}
-}
-
-// refuseEffortFake refuses every reasoning_effort other than "none" with the given status and message.
-func refuseEffortFake(t *testing.T, status int, message string) (*httptest.Server, func() []string) {
+// ladderFake answers by effort ("<absent>" when the field is missing) and round: refuse(effort, round2)
+// returns true to refuse with status and message, which always name reasoning_effort.
+func ladderFake(t *testing.T, status int, message string, refuse func(effort string, round2 bool) bool) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
 	var efforts []string
@@ -217,19 +154,19 @@ func refuseEffortFake(t *testing.T, status int, message string) (*httptest.Serve
 		var req map[string]any
 		_ = json.Unmarshal(raw, &req)
 		effort, has := req["reasoning_effort"].(string)
-		mu.Lock()
-		if has {
-			efforts = append(efforts, effort)
-		} else {
-			efforts = append(efforts, "<absent>")
+		if !has {
+			effort = "<absent>"
 		}
+		round2 := isRound2Request(raw)
+		mu.Lock()
+		efforts = append(efforts, effort)
 		mu.Unlock()
-		if has && effort != "none" {
+		if refuse(effort, round2) {
 			w.WriteHeader(status)
 			_, _ = w.Write(body)
 			return
 		}
-		if !isRound2Request(raw) {
+		if !round2 {
 			writeToolCallJSON(w)
 			return
 		}
@@ -239,26 +176,88 @@ func refuseEffortFake(t *testing.T, status int, message string) (*httptest.Serve
 	return server, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), efforts...) }
 }
 
-func TestReadinessProbeNoneRefusedAsUnsupportedIsNeverSent(t *testing.T) {
-	msg := "'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium'."
+func probeWithLog(server *httptest.Server) (readinessProbeResult, []map[string]any) {
+	var buf bytes.Buffer
+	res := detailProberOver(slog.New(slog.NewJSONHandler(&buf, nil))).probeDetail(context.Background(), "openai", "gpt-6-luna", server.URL, "test-key")
+	var lines []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil {
+			lines = append(lines, m)
+		}
+	}
+	return res, lines
+}
+
+// (a) any 400/422 refusal of reasoning_effort, with any text, makes the next probe send none.
+func TestReadinessProbeEffortRefusalAnyTextSendsNoneNext(t *testing.T) {
+	messages := []string{
+		"Do not set reasoning_effort to 'none'",
+		"Supported values are: none, low, medium.",
+		"",
+		"'reasoning_effort' does not support 'minimal'. Supported values are: 'low'.",
+	}
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity} {
-		server, efforts := refuseEffortFake(t, status, msg)
-		outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
-		wantReady(t, outcome, code)
-		for _, e := range efforts() {
-			if e == "none" {
-				t.Fatalf("status %d: efforts sent = %v; none was not offered and must not be sent", status, efforts())
+		for _, msg := range messages {
+			server, efforts := ladderFake(t, status, msg, func(e string, _ bool) bool { return e == "minimal" })
+			outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+			wantReady(t, outcome, code)
+			if got, want := efforts(), []string{"minimal", "none", "none"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("status %d msg %q: efforts = %v, want %v", status, msg, got, want)
 			}
 		}
 	}
 }
 
-func TestReadinessProbeDoubleQuotedSupportedListRetriesWithNone(t *testing.T) {
-	server, efforts := refuseEffortFake(t, http.StatusBadRequest, `'reasoning_effort' does not support 'minimal'. Supported values are: "none", "low", "medium".`)
+// (b) none refused too: the next probe omits the param, and later rounds omit it.
+func TestReadinessProbeNoneRefusedTooOmitsTheParam(t *testing.T) {
+	server, efforts := ladderFake(t, http.StatusBadRequest, "nope", func(e string, _ bool) bool { return e != "<absent>" })
+	res, _ := probeWithLog(server)
+	wantReady(t, res.Outcome, res.SafeErrorCode)
+	if got, want := efforts(), []string{"minimal", "none", "<absent>", "<absent>"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("efforts = %v, want %v", got, want)
+	}
+	if !reflect.DeepEqual(res.DroppedParams, []string{"reasoning_effort"}) {
+		t.Fatalf("DroppedParams = %v, want [reasoning_effort]", res.DroppedParams)
+	}
+}
+
+// (c) all three steps refused: exactly 3 requests, classified failure, no 4th request.
+func TestReadinessProbeAllLadderStepsRefusedStopsAtThree(t *testing.T) {
+	server, efforts := ladderFake(t, http.StatusUnprocessableEntity, "nope", func(string, bool) bool { return true })
+	res, lines := probeWithLog(server)
+	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
+	if got, want := efforts(), []string{"minimal", "none", "<absent>"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("efforts = %v, want %v", got, want)
+	}
+	if len(lines) != 3 {
+		t.Fatalf("log lines = %d, want 3", len(lines))
+	}
+}
+
+// (d) a round already at none that is refused omits the param: at most 2 probes.
+func TestReadinessProbeRefusedNoneRoundTwoOmitsInTwoProbes(t *testing.T) {
+	server, efforts := ladderFake(t, http.StatusBadRequest, "nope", func(e string, round2 bool) bool {
+		return e == "minimal" || (round2 && e == "none")
+	})
 	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
 	wantReady(t, outcome, code)
-	got := efforts()
-	if len(got) == 0 || got[len(got)-1] != "none" {
-		t.Fatalf("efforts sent = %v; the retry must carry none", got)
+	if got, want := efforts(), []string{"minimal", "none", "none", "<absent>"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("efforts = %v, want %v", got, want)
+	}
+}
+
+// (g) each failed step writes one Info line naming reasoning_effort with its attempt number.
+func TestReadinessProbeLadderLogsEachFailedStep(t *testing.T) {
+	server, _ := ladderFake(t, http.StatusBadRequest, "nope", func(e string, _ bool) bool { return e != "<absent>" })
+	res, lines := probeWithLog(server)
+	wantReady(t, res.Outcome, res.SafeErrorCode)
+	if len(lines) != 2 {
+		t.Fatalf("log lines = %d, want 2: %v", len(lines), lines)
+	}
+	for i, l := range lines {
+		if l["error_param"] != "reasoning_effort" || l["level"] != "INFO" || l["round"] != float64(1) || l["attempt"] != float64(i+1) {
+			t.Fatalf("line %d = %v, want INFO round 1 attempt %d error_param reasoning_effort", i, l, i+1)
+		}
 	}
 }

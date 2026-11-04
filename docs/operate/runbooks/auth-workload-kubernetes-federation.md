@@ -197,6 +197,31 @@ table lists every reason of the closed set, and a docs test keeps it equal to `i
 | bootstrap | unavailable | `selfcheck_not_yet_valid` | The minted token was not yet valid. | The clock of the auth-service node. |
 | bootstrap | unavailable | `selfcheck_expired` | The minted token was already expired. | The clock of the auth-service node. |
 | bootstrap | issued | `issued` | A workload token was issued. | None. |
+| service_account_key | refused | `malformed` | The presented value does not have the shape of a service account key. | The caller sends the whole `fcsak_` value that the key verb answered once, with no edit and no newline added. |
+| service_account_key | refused | `unknown` | No service account key has that digest. | The key belongs to this environment; it was issued here. |
+| service_account_key | refused | `wrong_class` | The row with that digest is not a service account key. | The caller sent another credential. Send the `fcsak_` key. |
+| service_account_key | refused | `not_platform` | The key row is not owned by the platform registry. | A key row written by hand. Issue a key with the key verb. |
+| service_account_key | refused | `wrong_kind` | The key's principal is not a service account. | A key row written by hand. Issue a key with the key verb. |
+| service_account_key | refused | `revoked` | The key is revoked. | A rotation overlap ended, or a revoke ran. Issue or rotate a key. |
+| service_account_key | refused | `expired` | The key is at or past its expiry. | Rotate before the expiry the key verb answered. |
+| service_account_key | refused | `account_disabled` | The service account is disabled. | Enable the service account if the disable was a mistake. |
+| service_account_key | refused | `principal_disabled` | The principal of the service account is disabled. | Find out why it was disabled before any enable. |
+| service_account_key | refused | `org_suspended` | The organization of the service account is suspended. | The organization state; reactivate the organization if the suspend was a mistake. |
+| service_account_key | refused | `resolve_refused` | The registry named a reason outside the closed set. | auth-service and auth-migrate run the same build. |
+| service_account_key | refused | `audience_refused` | The requested audience is not `dev-health-api`. | The `audience` the caller sends. A key exchange always asks for `dev-health-api`. |
+| service_account_key | refused | `scope_refused` | The request names a scope. | A key holds no scope. Send no `scope` parameter. |
+| service_account_key | refused | `lifetime_too_short` | The key has less than one second left. | Rotate the key. |
+| service_account_key | unavailable | `store_error` | The key read failed. | The `postgres` readiness check; the database login. |
+| service_account_key | unavailable | `signer_unavailable` | The signing key or its key set could not be read. | The `signing_key` readiness check. |
+| service_account_key | unavailable | `audit_unavailable` | The audit row for the issued token could not be written. | The `postgres` readiness check. |
+| service_account_key | unavailable | `selfcheck_contract` | The minted token did not match the service account token contract. | A build mismatch. Report it with the request id. |
+| service_account_key | unavailable | `selfcheck_unknown_kid` | The minted token names a key that the published key set does not hold. | The key set and the signing key id. |
+| service_account_key | unavailable | `selfcheck_signature` | The minted token did not verify under the published keys. | The signing key and the published key set belong together. |
+| service_account_key | unavailable | `selfcheck_issuer` | The minted token's issuer is not the verifier's issuer. | `AUTH_TOKEN_ISSUER_URL` is the https issuer. |
+| service_account_key | unavailable | `selfcheck_audience` | The minted token's audience did not verify. | A build mismatch. Report it with the request id. |
+| service_account_key | unavailable | `selfcheck_not_yet_valid` | The minted token was not yet valid. | The clock of the auth-service node. |
+| service_account_key | unavailable | `selfcheck_expired` | The minted token was already expired. | The clock of the auth-service node. |
+| service_account_key | issued | `issued` | A service account token was issued. | None. |
 | none | invalid | `invalid_request` | The request is malformed, or names a subject type that is off. | The form fields, the media type, and that `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true` for the subject type. |
 
 The registry's own Info line `workload: resolve refused` carries a finer cause than the exchange reason:

@@ -3,12 +3,12 @@ package workerservice
 import (
 	"context"
 	"log/slog"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile/reconcilejob"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -18,7 +18,7 @@ import (
 // never stops the worker, so a failure is logged and the worker runs without the probe. It returns the stop func
 // of the probe, or nil.
 func startPushReconcileProbe(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) func() error {
-	lookup := os.LookupEnv
+	lookup := envsecrets.ProcessLookup
 	if !reconcilejob.Enabled(lookup) || pool == nil {
 		return nil
 	}

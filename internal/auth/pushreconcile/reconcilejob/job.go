@@ -15,8 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/apiservice/customerpush"
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile/pagereader"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -110,7 +110,7 @@ func Sleep(ctx context.Context, d time.Duration) error {
 // by id with their projection rows, every finding except extra. Projection
 // sweep: projection rows by reference with their tokens, extra findings only.
 // Each page pair is one REPEATABLE READ, READ ONLY snapshot.
-func NewPass(db customerpush.TxBeginner, schema authschema.ValidatedIdentifier, batch int, now func() time.Time) PassFunc {
+func NewPass(db pagereader.TxBeginner, schema authschema.ValidatedIdentifier, batch int, now func() time.Time) PassFunc {
 	if now == nil {
 		now = time.Now
 	}
@@ -118,8 +118,8 @@ func NewPass(db customerpush.TxBeginner, schema authschema.ValidatedIdentifier, 
 		var out Pass
 		after := uuid.Nil
 		for {
-			pair, err := page(ctx, func(c context.Context) (customerpush.PagePair, error) {
-				return customerpush.ReadDomainPage(c, db, schema, after, batch)
+			pair, err := page(ctx, func(c context.Context) (pagereader.PagePair, error) {
+				return pagereader.ReadDomainPage(c, db, schema, after, batch)
 			})
 			if err != nil {
 				return Pass{}, err
@@ -143,8 +143,8 @@ func NewPass(db customerpush.TxBeginner, schema authschema.ValidatedIdentifier, 
 		}
 		position := ""
 		for {
-			pair, err := page(ctx, func(c context.Context) (customerpush.PagePair, error) {
-				return customerpush.ReadProjectionPage(c, db, schema, position, batch)
+			pair, err := page(ctx, func(c context.Context) (pagereader.PagePair, error) {
+				return pagereader.ReadProjectionPage(c, db, schema, position, batch)
 			})
 			if err != nil {
 				return Pass{}, err
@@ -174,7 +174,7 @@ func NewPass(db customerpush.TxBeginner, schema authschema.ValidatedIdentifier, 
 	}
 }
 
-func page(ctx context.Context, read func(context.Context) (customerpush.PagePair, error)) (customerpush.PagePair, error) {
+func page(ctx context.Context, read func(context.Context) (pagereader.PagePair, error)) (pagereader.PagePair, error) {
 	pageCtx, cancel := context.WithTimeout(ctx, PageTimeout)
 	defer cancel()
 	return read(pageCtx)

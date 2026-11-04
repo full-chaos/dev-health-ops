@@ -46,6 +46,10 @@ const (
 	// decisionstate builds the membership from the pair it read: its org id is
 	// always the asked organization, so org_mismatch on a membership is unreachable.
 	azMembershipOrgIsTheKey azExclusion = "membership_org_is_the_key"
+	// public.memberships holds a row or none (D6651): invited, suspended and
+	// removed have no row, and no row denies no_membership. Pinned by the cell
+	// that deletes the public row.
+	azMembershipStatusHasNoPublicRow azExclusion = "membership_status_has_no_public_row"
 	// The router denies every delegated session delegation_invalid until the
 	// decision core decides delegation on this route.
 	azDelegatedSessionPending azExclusion = "delegated_session_pending"
@@ -53,7 +57,7 @@ const (
 
 var azExclusionReasons = []azExclusion{
 	azWorkloadPrincipalUnreachable, azServiceAccountUnreachable, azStateFailureIs503, azStatusNotRepresentable,
-	azPlainSnapshotUnreachable, azMembershipOrgIsTheKey, azDelegatedSessionPending,
+	azPlainSnapshotUnreachable, azMembershipOrgIsTheKey, azMembershipStatusHasNoPublicRow, azDelegatedSessionPending,
 }
 
 // A reason that rests on how the real stack is built names the cell that pins
@@ -62,8 +66,9 @@ var azExclusionReasons = []azExclusion{
 type azPinCell struct{ file, fn string }
 
 var azExclusionPinCells = map[azExclusion]azPinCell{
-	azMembershipOrgIsTheKey:     {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
-	azServiceAccountUnreachable: {"../decisionstate/decisionstate_serviceaccount_integration_test.go", "TestServiceAccountSnapshotGrantStates"},
+	azMembershipOrgIsTheKey:          {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
+	azServiceAccountUnreachable:      {"../decisionstate/decisionstate_serviceaccount_integration_test.go", "TestServiceAccountSnapshotGrantStates"},
+	azMembershipStatusHasNoPublicRow: {"../decisionstate/decisionstate_public_integration_test.go", "TestPublicRowsDenyWhenInactiveOrRemoved"},
 }
 
 var azCorpusExclusions = map[string]azExclusion{
@@ -90,6 +95,11 @@ var azCorpusExclusions = map[string]azExclusion{
 	"principal-status-uppercase-active": azStatusNotRepresentable,
 
 	"repo-plain-snapshot-has-no-grants": azPlainSnapshotUnreachable,
+
+	"membership-invited":       azMembershipStatusHasNoPublicRow,
+	"membership-removed":       azMembershipStatusHasNoPublicRow,
+	"membership-suspended":     azMembershipStatusHasNoPublicRow,
+	"repo-membership-inactive": azMembershipStatusHasNoPublicRow,
 
 	"cross-org-membership-row-for-other-org": azMembershipOrgIsTheKey,
 	"repo-membership-org-mismatch":           azMembershipOrgIsTheKey,
@@ -253,9 +263,6 @@ var (
 	azPrincipalStatuses    = []string{"active", "suspended"}
 	azOrganizationStatuses = []string{"active", "suspended"}
 	azMembershipStatuses   = []string{"active", "invited", "suspended", "removed"}
-	// auth.memberships.role is closed (migration 0019); an active membership is
-	// go-api's public row, whose role column takes any text.
-	azAuthMembershipRoles = []string{"viewer", "member", "admin", "owner"}
 	// auth.resource_grants.role_key references auth.roles; the replay seeds
 	// platform_admin there (a role the catalog scopes to the platform).
 	azGrantRoles = []string{"viewer", "member", "admin", "platform_admin"}
@@ -303,14 +310,8 @@ func azBlocker(v azVector) (azExclusion, error) {
 		if !slices.Contains(azMembershipStatuses, m.Status) {
 			return azStatusNotRepresentable, nil
 		}
-		if m.Status == "active" {
-			continue
-		}
-		if !slices.Contains(azAuthMembershipRoles, m.Role) {
-			return "", fmt.Errorf("membership %s: role %q has no auth row form", key, m.Role)
-		}
-		if _, ok := s.Organizations[key]; !ok {
-			return "", fmt.Errorf("membership %s: an auth row needs the organization projected", key)
+		if m.Status != "active" {
+			return azMembershipStatusHasNoPublicRow, nil
 		}
 	}
 	for i, g := range s.Grants {

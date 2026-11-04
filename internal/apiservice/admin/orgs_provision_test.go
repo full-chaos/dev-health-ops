@@ -153,6 +153,9 @@ var errReadFailed = errors.New("provisionDB: the read failed")
 // provTarget into every uuid.UUID: a row whose columns the test does not read.
 type zeroFill struct{}
 
+// idFill is zeroFill with the given id in every uuid.UUID target.
+type idFill struct{ id uuid.UUID }
+
 func scanValues(values, dest []any) error {
 	if len(values) == 1 && values[0] == (failRead{}) {
 		return errReadFailed
@@ -166,6 +169,18 @@ func scanValues(values, dest []any) error {
 			}
 		}
 		return nil
+	}
+	if len(values) == 1 {
+		if fill, ok := values[0].(idFill); ok {
+			for _, target := range dest {
+				v := reflect.ValueOf(target).Elem()
+				v.Set(reflect.Zero(v.Type()))
+				if id, ok := target.(*uuid.UUID); ok {
+					*id = fill.id
+				}
+			}
+			return nil
+		}
 	}
 	if len(values) != len(dest) {
 		return errProvNoDB
@@ -203,12 +218,21 @@ func (r *provisionRows) Close()                 {}
 // in the database log (so the order against the SQL is one list) and answers
 // err, or a success naming the requested rows.
 type fakeProvisioner struct {
-	db    *provisionDB
-	err   error
-	calls []string
-	args  [][]any
+	db  *provisionDB
+	err error
+	// failOn, when set, limits err to that verb (add, role, remove ...).
+	failOn string
+	calls  []string
+	args   [][]any
 	// role, when set, is the role a success answers (an accept's invite role).
 	role string
+}
+
+func (f *fakeProvisioner) errFor(verb string) error {
+	if f.failOn != "" && f.failOn != verb {
+		return nil
+	}
+	return f.err
 }
 
 func (f *fakeProvisioner) record(verb string, args ...any) {
@@ -219,17 +243,17 @@ func (f *fakeProvisioner) record(verb string, args ...any) {
 
 func (f *fakeProvisioner) AddMember(_ context.Context, org, principal, actor uuid.UUID, role string, invitedBy *uuid.UUID) (authprovision.Membership, error) {
 	f.record("add", org, principal, actor, role, invitedBy)
-	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.err
+	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.errFor("add")
 }
 
 func (f *fakeProvisioner) ChangeRole(_ context.Context, org, principal, actor uuid.UUID, role string) (authprovision.Membership, error) {
 	f.record("role", org, principal, actor, role)
-	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.err
+	return authprovision.Membership{ID: provMember, OrgID: org, PrincipalID: principal, Role: role, Status: "active"}, f.errFor("role")
 }
 
 func (f *fakeProvisioner) RemoveMember(_ context.Context, org, principal, actor uuid.UUID) error {
 	f.record("remove", org, principal, actor)
-	return f.err
+	return f.errFor("remove")
 }
 
 func (f *fakeProvisioner) TransferOwnership(_ context.Context, org, from, to, actor uuid.UUID) error {

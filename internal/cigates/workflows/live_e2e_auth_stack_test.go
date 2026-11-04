@@ -146,3 +146,38 @@ func TestLiveE2EQueryAPIEnvIsProdsFlagSet(t *testing.T) {
 		t.Fatalf("FAIL: query-api env %v lacks the sessions flag or the access token issuer", env)
 	}
 }
+
+// The web workflow runs the script by a path relative to the ops checkout. `up` changes directory into the state
+// directory before it starts auth-service through `with-env`, so that re-exec has to name the script by an absolute path.
+func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T) {
+	root := repoRoot(t)
+	fake := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(fake, "go"), "#!/bin/sh\nwhile [ \"$1\" != -o ]; do shift; done\nprintf '#!/bin/sh\\necho started\\n' > \"$2\"\nchmod 755 \"$2\"\n")
+	write(filepath.Join(fake, "psql"), "#!/bin/sh\ncase \"$*\" in *-At*) echo 3b1e2c4d-5f60-4a71-8b92-0c1d2e3f4a5b ;; esac\n")
+	write(filepath.Join(fake, "sleep"), "#!/bin/sh\nexit 0\n")
+	state := filepath.Join(t.TempDir(), "state")
+	write(filepath.Join(fake, "curl"), "#!/bin/sh\ngrep -q '^started$' '"+state+"/logs/auth-service.log'\n")
+	write(filepath.Join(fake, "dho"), "#!/bin/sh\nexit 0\n")
+
+	cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", "up", state)
+	cmd.Dir = root
+	cmd.Env = []string{
+		"PATH=" + fake + ":" + os.Getenv("PATH"),
+		"PGUSER=postgres",
+		"PGPASSWORD=placeholder-for-fake-psql",                // gitleaks:allow -- placeholder value for the fake psql, not a credential
+		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123", // gitleaks:allow -- placeholder value fed to the fakes, not a credential
+		"DHO_BIN=" + filepath.Join(fake, "dho"),
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		logged, _ := os.ReadFile(filepath.Join(state, "logs", "auth-service.log"))
+		t.Fatalf("FAIL: up by a relative path did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
+	}
+}

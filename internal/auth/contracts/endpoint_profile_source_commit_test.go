@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -91,6 +92,96 @@ func lineOfText(text string, line int) (string, bool) {
 	return lines[line-1], true
 }
 
+// staleAnchorProblem judges one file:line against the file at source_commit (then) and in the tree (now); empty means it holds.
+func staleAnchorProblem(name, what string, a lineAnchor, commit, then, now string) string {
+	oldLine, okThen := lineOfText(then, a.line)
+	newLine, okNow := lineOfText(now, a.line)
+	shifted := okNow && countLine(then, newLine) == 1 && countLine(now, newLine) == 1
+	if shifted || (okThen && okNow && oldLine == newLine) {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s%s:%d reads %q at source_commit %s but %q in the tree: the anchors were not derived against source_commit (stale base)", name, what, a.file, a.line, strings.TrimSpace(oldLine), commit, strings.TrimSpace(newLine))
+}
+
+// CHAOS-11371. A free-text cite in a row string (disclosure_behavior, resource_resolver, ...) is a full repo path and a
+// line, <dir>/<file>.go:<n>, and is judged like a structured anchor: the file exists at source_commit and in the tree,
+// and line n holds the same text at both, or a text unique in both. A cite with no directory (store.go:125) or with only
+// a line (:359) names no file the gate can open, so it is refused. NOT enforced: that the line is the RIGHT symbol.
+var (
+	fullCite     = regexp.MustCompile(`[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+\.go:\d+`)
+	baseNameCite = regexp.MustCompile(`(?:^|[^A-Za-z0-9_./-])[A-Za-z0-9_-]+\.go:\d+`)
+	lineOnlyCite = regexp.MustCompile(`(?:^|[\s(,;]):\d+\b`)
+)
+
+func collectFreeTextCites(node any, cites map[lineAnchor]bool, undirected map[string]bool) {
+	switch value := node.(type) {
+	case string:
+		for _, cite := range fullCite.FindAllString(value, -1) {
+			at := strings.LastIndex(cite, ":")
+			if n, err := strconv.Atoi(cite[at+1:]); err == nil {
+				cites[lineAnchor{cite[:at], n}] = true
+			}
+		}
+		for _, loose := range baseNameCite.FindAllString(value, -1) {
+			undirected[strings.TrimLeft(loose, " (,;")] = true
+		}
+		for _, loose := range lineOnlyCite.FindAllString(value, -1) {
+			undirected[strings.TrimLeft(loose, " (,;")] = true
+		}
+	case map[string]any:
+		for _, child := range value {
+			collectFreeTextCites(child, cites, undirected)
+		}
+	case []any:
+		for _, child := range value {
+			collectFreeTextCites(child, cites, undirected)
+		}
+	}
+}
+
+func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]bool, rewrites map[lineAnchor]rewrittenEntry, rows any) []string {
+	cites := map[lineAnchor]bool{}
+	undirected := map[string]bool{}
+	collectFreeTextCites(rows, cites, undirected)
+	var problems []string
+	loose := make([]string, 0, len(undirected))
+	for cite := range undirected {
+		loose = append(loose, cite)
+	}
+	sort.Strings(loose)
+	for _, cite := range loose {
+		problems = append(problems, fmt.Sprintf("%s: free-text cite %q has no directory or no file: write <dir>/<file>.go:<line>", name, cite))
+	}
+	ordered := make([]lineAnchor, 0, len(cites))
+	for a := range cites {
+		if _, declared := rewrites[a]; !declared && !structured[a] {
+			ordered = append(ordered, a)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].file != ordered[j].file {
+			return ordered[i].file < ordered[j].file
+		}
+		return ordered[i].line < ordered[j].line
+	})
+	for _, a := range ordered {
+		then, err := gitOut(repo, "show", commit+":"+a.file)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: free-text cite %s:%d: %s does not exist at source_commit %s", name, a.file, a.line, a.file, commit))
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(repo, a.file))
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: free-text cite %s:%d: %v", name, a.file, a.line, err))
+			continue
+		}
+		if problem := staleAnchorProblem(name, "free-text cite ", a, commit, then, string(raw)); problem != "" {
+			problems = append(problems, problem)
+		}
+	}
+	return problems
+}
+
 // problemsForSourceCommit returns one message per defect; empty means both
 // halves hold. repo is a git working tree whose HEAD is the tree under test.
 func problemsForSourceCommit(repo, name string, document map[string]any) []string {
@@ -143,13 +234,11 @@ func problemsForSourceCommit(repo, name string, document map[string]any) []strin
 			problems = append(problems, problemsForRewrite(name, commit, entry, then, string(raw))...)
 			continue
 		}
-		oldLine, okThen := lineOfText(then, a.line)
-		newLine, okNow := lineOfText(string(raw), a.line)
-		shifted := okNow && countLine(then, newLine) == 1 && countLine(string(raw), newLine) == 1
-		if !shifted && (!okThen || !okNow || oldLine != newLine) {
-			problems = append(problems, fmt.Sprintf("%s: %s:%d reads %q at source_commit %s but %q in the tree: the anchors were not derived against source_commit (stale base)", name, a.file, a.line, strings.TrimSpace(oldLine), commit, strings.TrimSpace(newLine)))
+		if problem := staleAnchorProblem(name, "", a, commit, then, string(raw)); problem != "" {
+			problems = append(problems, problem)
 		}
 	}
+	problems = append(problems, freeTextCiteProblems(repo, name, commit, anchors, rewrites, document["rows"])...)
 	for _, a := range sortedAnchors(rewrites) {
 		if !matched[a] {
 			problems = append(problems, fmt.Sprintf("%s: rewritten anchor %s:%d matches no anchor of the rows", name, a.file, a.line))
@@ -281,6 +370,11 @@ func TestSourceCommitFixtureRejectsAnUnreachableCommit(t *testing.T) {
 
 func fixtureRepoWith(t *testing.T, before, after string) (dir, base, tip string) {
 	t.Helper()
+	return fixtureRepoAt(t, "routes.go", before, after)
+}
+
+func fixtureRepoAt(t *testing.T, file, before, after string) (dir, base, tip string) {
+	t.Helper()
 	dir = t.TempDir()
 	run := func(args ...string) string {
 		out, err := gitOut(dir, append([]string{"-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"}, args...)...)
@@ -291,12 +385,15 @@ func fixtureRepoWith(t *testing.T, before, after string) (dir, base, tip string)
 	}
 	run("init", "-q")
 	write := func(content string) {
-		if err := os.WriteFile(filepath.Join(dir, "routes.go"), []byte(content), 0o644); err != nil {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, file)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	write(before)
-	run("add", "routes.go")
+	run("add", file)
 	run("commit", "-q", "-m", "base")
 	base = run("rev-parse", "HEAD")
 	write(after)
@@ -486,5 +583,77 @@ func TestSourceCommitRewrittenAnchorRejectsAMalformedEntryAndADuplicate(t *testi
 		if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "rewritten_anchors") {
 			t.Errorf("%s: not refused as a rewritten_anchors defect: %v", name, problems)
 		}
+	}
+}
+
+const (
+	citeBefore = "package x\n\nfunc a() {}\nmux.Handle(\"/a\", h)\n"
+	citeAfter  = "package x\n\nfunc a() {}\nfunc b() {}\nmux.Handle(\"/a\", h)\n"
+	citeFile   = "internal/x/routes.go"
+)
+
+func inventoryWithText(commit string, text string) map[string]any {
+	raw, err := json.Marshal(map[string]any{
+		"source_commit": commit,
+		"rows": []any{map[string]any{
+			"source":              map[string]any{"file": citeFile, "line": 1},
+			"disclosure_behavior": text,
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		panic(err)
+	}
+	return document
+}
+
+func TestSourceCommitFreeTextCiteAcceptsALineThatHoldsAndOneShiftedWithUniqueText(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	for _, text := range []string{"answers 404 (internal/x/routes.go:3)", "answers 404 (internal/x/routes.go:5; internal/x/routes.go:3)"} {
+		if problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, text)); len(problems) != 0 {
+			t.Fatalf("%q was refused: %v", text, problems)
+		}
+	}
+}
+
+func TestSourceCommitFreeTextCiteRejectsALineThatMovedUnderTheCite(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go:4)")), "free-text cite internal/x/routes.go:4", "stale base")
+}
+
+func TestSourceCommitFreeTextCiteRejectsALineBeyondTheFile(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go:99)")), "free-text cite internal/x/routes.go:99", "stale base")
+}
+
+func TestSourceCommitFreeTextCiteRejectsAFileThatDoesNotExist(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/gone.go:3)")), "internal/x/gone.go:3", "does not exist at source_commit")
+}
+
+func TestSourceCommitFreeTextCiteRejectsAFileThatIsNotInTheTree(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	if err := os.Remove(filepath.Join(dir, citeFile)); err != nil {
+		t.Fatal(err)
+	}
+	problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go:3)"))
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "free-text cite internal/x/routes.go:3") {
+		t.Fatalf("a cite to a file absent from the tree was not refused: %v", problems)
+	}
+}
+
+func TestSourceCommitFreeTextCiteRefusesACiteWithNoDirectoryAndALineOnlyCite(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (routes.go:3)")), `"routes.go:3"`, "write <dir>/<file>.go:<line>")
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "answers 404 (internal/x/routes.go:3 and :4)")), `":4"`, "write <dir>/<file>.go:<line>")
+}
+
+func TestSourceCommitFreeTextCiteIgnoresTextThatIsNotACite(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "listens on [::1]:8080, ratio 1:2, see routes.go and internal/x/routes.go")); len(problems) != 0 {
+		t.Fatalf("plain text was read as a cite: %v", problems)
 	}
 }

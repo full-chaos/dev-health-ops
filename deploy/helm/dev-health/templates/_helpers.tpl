@@ -903,8 +903,8 @@ the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and 
 {{- end -}}
 
 {{/*
-"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
-auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
+"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api, the
+auth Jobs and the River step (river-migrate hook, migrate Job) render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
 moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
 */}}
 {{- define "dev-health.platformRolesOwned" -}}

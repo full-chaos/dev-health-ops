@@ -170,22 +170,31 @@ func (s *Store) legacyUser(ctx context.Context, key ExternalKey, legacy LegacyMa
 		if legacy.AuthProvider != string(key.Provider) || legacy.MembershipOrg != nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
-		rows, err = s.pool.Query(ctx, `SELECT id, true, true FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
+		rows, err = s.pool.Query(ctx, `SELECT u.id, true, true FROM public.users u WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+NotSelfHostedGitLabSQL("u"),
 			legacy.AuthProvider, stored)
 	default:
 		if legacy.AuthProvider == "" || legacy.MembershipOrg == nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
 		bound, scope := `true`, `true`
-		if isSSORelinkProtocol(legacy.AuthProvider) {
+		args := []any{legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg}
+		switch {
+		case isSSORelinkProtocol(legacy.AuthProvider):
 			bound, scope = ssoBoundToKeySQL("u", "$3"), ssoCarrierScopeSQL("u", "$3")
+		case key.Provider.IsSSO() && legacy.AuthProvider == string(ProviderGitLab):
+			// An OAuth key's issuer is the social issuer, or for GitLab the instance host of the row's base_url: the
+			// numeric id is that instance's, so only the account of that instance carries it.
+			var needsIssuer bool
+			scope, needsIssuer = OAuthAccountScopeSQL("u", key.Issuer, "$5")
+			if needsIssuer {
+				args = append(args, key.Issuer)
+			}
 		}
 		rows, err = s.pool.Query(ctx, `SELECT u.id, EXISTS (SELECT 1 FROM public.sso_providers sp
     JOIN public.memberships m ON m.org_id = sp.org_id
     WHERE sp.id = $3::uuid AND sp.org_id = $4 AND m.user_id = u.id), `+bound+`
 FROM public.users u
-WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope,
-			legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg)
+WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope, args...)
 	}
 	if err != nil {
 		return uuid.Nil, false, s.storeErr(ctx, "read legacy user", err)
@@ -285,7 +294,14 @@ type ProvisionRequest struct {
 	// id); a social key derives both from itself.
 	LegacyProvider string
 	LegacySubject  string
+	// SAMLNameID is the assertion NameID's own Format and SPNameQualifier of a SAML sign-up, written to
+	// public.users as go-api writes them (saml_nameid_format, saml_sp_name_qualifier): as asserted, an empty
+	// string stays an empty string. nil for every other account (NULL).
+	SAMLNameID *SAMLNameIDParts
 }
+
+// SAMLNameIDParts are the NameID attributes the SAML identity key needs besides the NameID value.
+type SAMLNameIDParts struct{ Format, SPNameQualifier string }
 
 // ProvisionFederated creates a user principal, its auth.users row and its
 // external identity in one audit.Commit (reason principal_provisioned). It
@@ -614,6 +630,9 @@ func identityEvent(eventType string, key ExternalKey, target, subject string) au
 }
 
 func (s *Store) countLink(ctx context.Context, action string, err error) {
+	if audit.Rehearsing(ctx) {
+		return
+	}
 	outcome := "ok"
 	switch {
 	case err == nil:

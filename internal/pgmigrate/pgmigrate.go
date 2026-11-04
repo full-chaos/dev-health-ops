@@ -53,7 +53,9 @@
 package pgmigrate
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -332,7 +334,44 @@ const (
 	// StateAuthSchemaMismatch: objects but no alembic_version, and the auth
 	// migrator's lineage sits in a schema other than the configured auth schema.
 	StateAuthSchemaMismatch
+	// StateChainRevisionUnapplied: alembic_version is at or above the ledger
+	// revision, and a chain revision at or below the recorded head has no ledger
+	// row (or the ledger table is absent).
+	StateChainRevisionUnapplied
+	// StateChainRevisionSHAMismatch: a ledger row the migrator wrote (source
+	// apply) records a sha256 other than the build's file for that revision.
+	StateChainRevisionSHAMismatch
 )
+
+// LedgerTable is the applied-revision ledger; the chain revision whose file is
+// named *_add_dho_chain_applied.sql creates it.
+const LedgerTable = "dho_chain_applied"
+
+const ledgerFileSuffix = "_add_" + LedgerTable + ".sql"
+
+// LedgerRow is one ledger row as observe reads it: SHA256 is "" for a seed row.
+type LedgerRow struct {
+	SHA256 string
+	Seed   bool
+}
+
+// ledgerIndex is the position of the ledger revision in chain, or -1 when this
+// chain does not carry it.
+func ledgerIndex(chain []ChainFile) int {
+	for index, file := range chain {
+		if strings.HasSuffix(file.Name, ledgerFileSuffix) {
+			return index
+		}
+	}
+	return -1
+}
+
+// FileSHA256 is the sha256 of a chain file's SQL, the value chain_manifest.tsv
+// and the ledger record.
+func FileSHA256(file ChainFile) string {
+	sum := sha256.Sum256([]byte(file.SQL))
+	return hex.EncodeToString(sum[:])
+}
 
 // Observation is what Decide needs to know about a database.
 type Observation struct {
@@ -355,6 +394,10 @@ type Observation struct {
 	// the auth lineage's bookkeeping table under a name the auth migrator could
 	// own ("" when none); set only for a database without alembic_version.
 	AuthLineageElsewhere string
+	// HasLedger reports whether public.dho_chain_applied exists; Ledger holds
+	// its rows by revision.
+	HasLedger bool
+	Ledger    map[string]LedgerRow
 }
 
 // Plan is the decision Upgrade acts on.
@@ -371,6 +414,14 @@ type Plan struct {
 	Unknown []string
 	// AuthSchemaFound is the schema StateAuthSchemaMismatch found.
 	AuthSchemaFound string
+	// Unapplied are the chain revisions at or below the recorded head with no
+	// ledger row (StateChainRevisionUnapplied); LedgerAbsent is set when the
+	// ledger table itself is missing.
+	Unapplied    []string
+	LedgerAbsent bool
+	// SHAMismatch are the revisions whose apply row records another file
+	// (StateChainRevisionSHAMismatch).
+	SHAMismatch []string
 }
 
 // applicationHead is the baseline head the chain continues: the one that is
@@ -449,7 +500,46 @@ func Decide(observation Observation, baseline Baseline, chain []ChainFile, known
 			return Plan{State: StateSchemaMismatch, MissingTables: absent}
 		}
 	}
+	if plan, refused := checkLedger(observation, chain, position); refused {
+		return plan
+	}
 	return Plan{State: StateAtHead, ApplicationHead: current, Pending: chain[position+1:]}
+}
+
+// checkLedger judges the ledger of a database whose recorded chain position is
+// position. Below the ledger revision there is no ledger to judge. At or above it,
+// every chain revision through position needs a row, and a row the migrator wrote
+// (apply) must carry the build file's sha256; a seed row has no sha and is never
+// compared.
+func checkLedger(observation Observation, chain []ChainFile, position int) (Plan, bool) {
+	ledger := ledgerIndex(chain)
+	if ledger < 0 || position < ledger {
+		return Plan{}, false
+	}
+	if !observation.HasLedger {
+		var all []string
+		for _, file := range chain[:position+1] {
+			all = append(all, file.Revision)
+		}
+		return Plan{State: StateChainRevisionUnapplied, Unapplied: all, LedgerAbsent: true}, true
+	}
+	var unapplied, mismatch []string
+	for _, file := range chain[:position+1] {
+		row, ok := observation.Ledger[file.Revision]
+		switch {
+		case !ok:
+			unapplied = append(unapplied, file.Revision)
+		case !row.Seed && row.SHA256 != FileSHA256(file):
+			mismatch = append(mismatch, file.Revision)
+		}
+	}
+	if len(unapplied) > 0 {
+		return Plan{State: StateChainRevisionUnapplied, Unapplied: unapplied}, true
+	}
+	if len(mismatch) > 0 {
+		return Plan{State: StateChainRevisionSHAMismatch, SHAMismatch: mismatch}, true
+	}
+	return Plan{}, false
 }
 
 // unknownRevisions are the recorded revisions outside known, sorted. A nil known
@@ -536,6 +626,37 @@ func (e AuthSchemaMismatchError) Error() string {
 	return fmt.Sprintf("the database holds %d object(s) and the auth migrator's lineage in schema %q, but %s names %q for this migrator; "+
 		"set %s=%s for the ops migrator (the value auth-migrate runs with); if %q is not the auth schema this database is foreign; "+
 		"refusing to apply the head", e.Objects, e.Found, AuthSchemaEnv, e.Configured, AuthSchemaEnv, e.Found, e.Found)
+}
+
+// ChainRevisionUnappliedError is the refusal for a database whose
+// alembic_version claims chain revisions the ledger has no row for.
+type ChainRevisionUnappliedError struct {
+	Recorded     []string
+	Unapplied    []string
+	LedgerAbsent bool
+}
+
+func (e ChainRevisionUnappliedError) Error() string {
+	if e.LedgerAbsent {
+		return fmt.Sprintf("alembic_version records %v, at or above the revision that creates public.%s, but the table is absent: "+
+			"the database does not show which chain revisions ran. Nothing was changed", e.Recorded, LedgerTable)
+	}
+	return fmt.Sprintf("alembic_version records %v, but public.%s has no row for chain revision(s) %v at or below it: "+
+		"they were never applied by dho (a hand-set alembic_version, or a revision merged below the head). Nothing was changed",
+		e.Recorded, LedgerTable, e.Unapplied)
+}
+
+// ChainRevisionSHAMismatchError is the refusal for a database whose ledger
+// records, for a revision the migrator applied, another file than the build's.
+type ChainRevisionSHAMismatchError struct {
+	Recorded  []string
+	Revisions []string
+}
+
+func (e ChainRevisionSHAMismatchError) Error() string {
+	return fmt.Sprintf("public.%s records chain revision(s) %v as applied from a file whose sha256 differs from this build's "+
+		"(another build applied a different file under the same number; alembic_version holds %v). Nothing was changed",
+		LedgerTable, e.Revisions, e.Recorded)
 }
 
 // SchemaMismatchError is the refusal for a database whose alembic_version

@@ -2,15 +2,16 @@ package authconfig
 
 import "testing"
 
-func TestOwnedLookupsShareOneParse(t *testing.T) {
-	for _, value := range []string{"", "false", "true", "TRUE", " true ", "False", "yes", "1", "on", "enabled"} {
-		users, uerr := UsersOwnedFromLookup(lookupFrom(map[string]string{EnvUsersOwned: value}))
-		orgs, oerr := OrgsOwnedFromLookup(lookupFrom(map[string]string{EnvOrgsOwned: value}))
-		if (uerr == nil) != (oerr == nil) || users != orgs {
-			t.Fatalf("value %q: users=%v/%v orgs=%v/%v", value, users, uerr, orgs, oerr)
+func TestUsersOwnedLookupParse(t *testing.T) {
+	for value, want := range map[string]bool{"": false, "false": false, "true": true, "TRUE": true, " true ": true, "False": false} {
+		got, err := UsersOwnedFromLookup(lookupFrom(map[string]string{EnvUsersOwned: value}))
+		if err != nil || got != want {
+			t.Fatalf("value %q: got %v, %v; want %v", value, got, err, want)
 		}
 	}
-	if _, err := OrgsOwnedFromLookup(lookupFrom(map[string]string{EnvOrgsOwned: "maybe"})); err == nil || err.Error() != "AUTH_ORGS_OWNED must be true or false" {
-		t.Fatalf("err = %v", err)
+	for _, value := range []string{"yes", "1", "on", "enabled", "maybe"} {
+		if _, err := UsersOwnedFromLookup(lookupFrom(map[string]string{EnvUsersOwned: value})); err == nil || err.Error() != "AUTH_USERS_OWNED must be true or false" {
+			t.Fatalf("value %q: err = %v", value, err)
+		}
 	}
 }

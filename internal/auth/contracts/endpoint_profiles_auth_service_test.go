@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +74,38 @@ func TestAuthServiceEndpointProfilesValidateAndUseTheClosedVocabularies(t *testi
 	}
 	if !frozen["refresh_credential"] {
 		t.Error("the refresh_credential class is missing from credential-classes.json")
+	}
+}
+
+// The refresh route takes the go-api refresh JWT and the opaque refresh
+// credential in one body field; the row lists both and the selector gate
+// proves them apart by shape.
+func TestTheRefreshRowListsBothBodyCarriedClasses(t *testing.T) {
+	found := false
+	for _, row := range authServiceRows(t) {
+		if id, _ := row["id"].(string); !strings.HasPrefix(id, "POST /api/v1/auth/refresh ") {
+			continue
+		}
+		found = true
+		var classes []string
+		for _, class := range row["accepted_credential_classes"].([]any) {
+			classes = append(classes, class.(string))
+		}
+		if !slices.Equal(classes, []string{"ops_refresh_token", "refresh_credential"}) {
+			t.Errorf("refresh row accepts %v, want ops_refresh_token and refresh_credential", classes)
+		}
+		want := map[string]any{"kind": "body_field", "name": "refresh_token"}
+		if selector, _ := row["class_disambiguator"].(map[string]any); selector["kind"] != want["kind"] || selector["name"] != want["name"] {
+			t.Errorf("refresh row class_disambiguator %v, want %v", row["class_disambiguator"], want)
+		}
+		if gaps, _ := row["gaps"].([]any); len(gaps) != 0 {
+			t.Errorf("refresh row still declares gaps: %v", gaps)
+		}
+		if err := CheckClassSelector(row, realRegistry(t)); err != nil {
+			t.Errorf("selector gate refuses the refresh row: %v", err)
+		}
+	}
+	if !found {
+		t.Fatal("refresh row not found in endpoint-profiles.auth-service.json")
 	}
 }

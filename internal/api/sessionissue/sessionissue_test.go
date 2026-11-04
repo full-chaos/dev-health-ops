@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 )
 
 // testToken is an auth-session-issuer credential built at run time.
@@ -307,5 +309,43 @@ func TestIssueRefusesAnErrorDocumentWithARepeatedMember(t *testing.T) {
 	var refused *RefusedError
 	if errors.Is(err, ErrSessionEnded) || errors.As(err, &refused) || !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("err = %v, want a plain ErrUnavailable (not ErrSessionEnded, not a refusal document)", err)
+	}
+}
+
+// With a signing key the issue carries a proof of its X-Forwarded-For value that auth-service's verifier accepts;
+// without one it carries none.
+func TestIssueProvesTheClientAddress(t *testing.T) {
+	entry := "k1:" + base64.RawURLEncoding.EncodeToString([]byte(strings.Repeat("i", 32)))
+	keys, err := clientaddr.ParseProofKeys(clientaddr.EnvVerifyKey, entry, clientaddr.MaxVerifyKeys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := clientaddr.NewVerifier(keys)
+	for _, withKey := range []bool{true, false} {
+		var outcome clientaddr.Outcome
+		var proofs []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, outcome = verifier.Check(r)
+			proofs = r.Header.Values(clientaddr.ProofHeader)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"access_token":"a","refresh_token":"r","token_type":"bearer"}`)
+		}))
+		client, err := New(baseOf(t, server.URL), testToken(t), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if withKey {
+			client.SetClientAddrProof(&keys[0])
+		}
+		if _, err := client.Issue(context.Background(), endUserRequest(), Request{PrincipalID: uuid.New(), AMR: []string{"pwd"}}); err != nil {
+			t.Fatalf("Issue: %v", err)
+		}
+		server.Close()
+		switch {
+		case withKey && outcome != clientaddr.OutcomeValid:
+			t.Errorf("with a key: proof outcome %s, want valid", outcome)
+		case !withKey && len(proofs) != 0:
+			t.Errorf("without a key: proof lines %q, want none", proofs)
+		}
 	}
 }

@@ -54,6 +54,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
@@ -73,6 +74,7 @@ internal/auth/publicaudit
 internal/auth/pushevent
 internal/auth/pushlifecycle
 internal/auth/pushreconcile
+internal/auth/pushreconcile/projectionreader
 internal/auth/ratelimitvalkey
 internal/auth/repokey
 internal/auth/requestid

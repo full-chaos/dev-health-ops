@@ -324,7 +324,7 @@ func reasonSets(d docTree) ([]reasonRow, []string) {
 	if len(selfCheck) == 0 {
 		errs = append(errs, "reasons.go: selfCheckReasons not found")
 	}
-	if len(slices["resolveReasons"]) == 0 || len(slices["bootstrapResolveReasons"]) == 0 {
+	if len(slices["resolveReasons"]) == 0 || len(slices["bootstrapResolveReasons"]) == 0 || len(slices["keyResolveReasons"]) == 0 {
 		errs = append(errs, "reasons.go: the resolve reason slices were not found")
 	}
 	common := []string{c("reasonResolveRefused"), c("reasonAudienceRefused"), c("reasonScopeRefused"), c("reasonLifetimeTooShort")}
@@ -341,8 +341,11 @@ func reasonSets(d docTree) ([]reasonRow, []string) {
 		[]string{c("reasonSignerUnavailable"), c("reasonAuditUnavailable")}, selfCheck)
 	add("bootstrap", "refused", []string{c("reasonMalformed")}, slices["bootstrapResolveReasons"], common)
 	add("bootstrap", "unavailable", []string{c("reasonSignerUnavailable"), c("reasonAuditUnavailable")}, selfCheck)
+	add("service_account_key", "refused", []string{c("reasonMalformed")}, slices["keyResolveReasons"], common)
+	add("service_account_key", "unavailable", []string{c("reasonStoreError"), c("reasonSignerUnavailable"), c("reasonAuditUnavailable")}, selfCheck)
 	add("kubernetes", "issued", []string{c("reasonIssued")})
 	add("bootstrap", "issued", []string{c("reasonIssued")})
+	add("service_account_key", "issued", []string{c("reasonIssued")})
 	add("none", "invalid", []string{c("reasonInvalidRequest")})
 	for name := range consts {
 		if strings.HasPrefix(name, "reason") && !used[name] {

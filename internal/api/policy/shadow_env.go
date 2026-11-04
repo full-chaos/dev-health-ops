@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -22,6 +23,12 @@ const (
 	// EnvShadowPDPInFlight bounds the calls in flight, 1 or more; unset is 32.
 	EnvShadowPDPInFlight = "AUTH_SHADOW_PDP_MAX_IN_FLIGHT"
 )
+
+// ShadowInputError is the error a NewDecider returns when a named environment input is missing or bad.
+// Variable names the input or inputs (comma separated), never a value or a path.
+type ShadowInputError struct{ Variable string }
+
+func (e *ShadowInputError) Error() string { return "shadow input: " + e.Variable }
 
 // ShadowEnvDeps are what a service brings to ShadowFromEnv.
 type ShadowEnvDeps struct {
@@ -46,6 +53,9 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 		logger.ErrorContext(ctx, "api shadow pdp disabled: a missing input or a bad value", slog.String("variable", variable))
 		recordShadowStateSafe(ctx, false, true)
 		return nil
+	}
+	if lookup == nil {
+		return disabled("lookup")
 	}
 	read := func(key string) string {
 		value, _ := lookup(key)
@@ -93,6 +103,10 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 	}
 	decider, err := deps.NewDecider()
 	if err != nil || decider == nil {
+		var input *ShadowInputError
+		if errors.As(err, &input) && input.Variable != "" {
+			return disabled(input.Variable)
+		}
 		return disabled("decider")
 	}
 	cfg.Decider = decider

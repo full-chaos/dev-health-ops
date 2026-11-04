@@ -99,6 +99,18 @@ type rowQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// RowQuerier is a connection or transaction a read runs on.
+type RowQuerier = rowQuerier
+
+// ResolveOn is Resolve on q, so a caller's transaction reads its own snapshot.
+func (s *Store) ResolveOn(ctx context.Context, q RowQuerier, principal uuid.UUID) (Authority, error) {
+	a, err := s.resolveOn(ctx, q, principal)
+	if err != nil {
+		return Authority{}, s.storeErr(ctx, "resolve", err)
+	}
+	return a, nil
+}
+
 // Resolve is the platform authority principal holds now. Any read failure is
 // the zero Authority and an error: no authority is ever assumed.
 func (s *Store) Resolve(ctx context.Context, principal uuid.UUID) (Authority, error) {

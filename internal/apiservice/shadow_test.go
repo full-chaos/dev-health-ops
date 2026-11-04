@@ -135,7 +135,7 @@ func runNewShadow(t *testing.T, env map[string]string, shared *workloadtoken.Cli
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	s := newShadow(cfg, rec.lookup, shared, slog.New(slog.NewTextHandler(&logs, nil)))
+	s := newShadow(newDecisionPoint(cfg, rec.lookup, shared), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil)))
 	return s, logs.String(), rec
 }
 

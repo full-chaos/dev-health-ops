@@ -459,17 +459,14 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
-		enforcer, err := buildEnforcer(envsecrets.ProcessLookup, logger, authProxy, sharedWorkloadClient(provisioningCred, sessionCred))
+		decisionPoint := newDecisionPoint(authProxy, envsecrets.ProcessLookup, sharedWorkloadClient(provisioningCred, sessionCred))
+		enforcer, err := buildEnforcer(envsecrets.ProcessLookup, logger, decisionPoint)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_authz_enforce", "api_authz_enforce_config_invalid", err)
 		}
 		protected.guard.SetEnforcer(enforcer)
-		sharedWorkload := provisioningCred.workload
-		if sharedWorkload == nil {
-			sharedWorkload = sessionCred.workload
-		}
-		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
+		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.

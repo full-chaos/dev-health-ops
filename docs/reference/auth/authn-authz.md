@@ -158,7 +158,7 @@ A switch per action namespace and service lets the policy decision point decide 
 - A caller the decision point cannot judge keeps the legacy answer: a legacy HS256 token, a delegated (impersonation) session, an organization route with no organization. The request is counted in `dev_health_authz_enforcement_unjudged_total` by route and reason (`hs256`, `delegated`, `no_org`).
 - A route with no action in its row is never enforced. Authentication and the token organization's membership read still run first.
 - Rollback is removing the namespace from the list and rolling go-api. The switch holds no policy data, and the legacy path reads the same live membership, user and session rows, so a revoked caller stays refused.
-- go-api needs a way to ask: `AUTH_PROXY_URL`, and a workload credential (`AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE`, and `AUTH_WORKLOAD_ISSUER`). A start with a namespace on and one of them missing is refused, naming the variable. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS`.
+- go-api needs a way to ask: `AUTH_PROXY_URL`, and a workload credential (`AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE`, and `AUTH_WORKLOAD_ISSUER`). A start with a namespace on and one of them missing is refused, naming the variable. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS`. The switch and the shadow (`AUTH_SHADOW_PDP`) ask through one decision point client, which uses the workload token of the provisioning or session client when go-api built one.
 
 ### Organization scope
 

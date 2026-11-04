@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,6 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-go/pep"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
 
@@ -25,7 +30,7 @@ func TestNoCellOnBuildsNoEnforcer(t *testing.T) {
 		"unset": {},
 		"blank": {authzenforce.GoAPI.Env(): "  "},
 	} {
-		enf, err := buildEnforcer(lookupFrom(env), quietLogger(), AuthProxyConfig{}, nil)
+		enf, err := buildEnforcer(lookupFrom(env), quietLogger(), newDecisionPoint(AuthProxyConfig{}, lookupFrom(env), nil))
 		if enf != nil || err != nil {
 			t.Errorf("%s: enforcer %v err %v, want neither", name, enf, err)
 		}
@@ -35,7 +40,7 @@ func TestNoCellOnBuildsNoEnforcer(t *testing.T) {
 func TestABadEnforceValueIsOffNeverAStartError(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	enf, err := buildEnforcer(lookupFrom(map[string]string{authzenforce.GoAPI.Env(): "nope,*,Billing"}), logger, AuthProxyConfig{}, nil)
+	enf, err := buildEnforcer(lookupFrom(map[string]string{authzenforce.GoAPI.Env(): "nope,*,Billing"}), logger, newDecisionPoint(AuthProxyConfig{}, lookupFrom(nil), nil))
 	if enf != nil || err != nil {
 		t.Fatalf("a value with no accepted namespace: enforcer %v err %v, want neither", enf, err)
 	}
@@ -45,7 +50,7 @@ func TestABadEnforceValueIsOffNeverAStartError(t *testing.T) {
 }
 
 func TestACellOnNeedsTheAuthServiceUpstream(t *testing.T) {
-	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), AuthProxyConfig{}, nil)
+	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), newDecisionPoint(AuthProxyConfig{}, lookupFrom(enforceEnv(nil)), nil))
 	if err == nil || !strings.Contains(err.Error(), "GO_API_AUTHZ_ENFORCE") || !strings.Contains(err.Error(), EnvAuthProxyURL) {
 		t.Fatalf("err = %v, want one naming GO_API_AUTHZ_ENFORCE and %s", err, EnvAuthProxyURL)
 	}
@@ -56,7 +61,7 @@ func TestACellOnNeedsTheAuthServiceUpstream(t *testing.T) {
 
 func TestACellOnNeedsAWorkloadCredential(t *testing.T) {
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), proxy, nil)
+	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), newDecisionPoint(proxy, lookupFrom(enforceEnv(nil)), nil))
 	if err == nil || !strings.Contains(err.Error(), "GO_API_AUTHZ_ENFORCE") || !strings.Contains(err.Error(), EnvAuthWorkloadSubjectFile) {
 		t.Fatalf("err = %v, want one naming GO_API_AUTHZ_ENFORCE and %s", err, EnvAuthWorkloadSubjectFile)
 	}
@@ -65,7 +70,7 @@ func TestACellOnNeedsAWorkloadCredential(t *testing.T) {
 func TestACellOnBuildsTheEnforcerFromTheWorkloadInputs(t *testing.T) {
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
 	env := enforceEnv(map[string]string{EnvAuthWorkloadSubjectFile: subjectFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer})
-	enf, err := buildEnforcer(lookupFrom(env), quietLogger(), proxy, nil)
+	enf, err := buildEnforcer(lookupFrom(env), quietLogger(), newDecisionPoint(proxy, lookupFrom(env), nil))
 	if err != nil || enf == nil {
 		t.Fatalf("enforcer %v err %v, want an enforcer", enf, err)
 	}
@@ -78,7 +83,7 @@ func TestACellOnReusesTheSharedWorkloadClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	enf, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), proxy, shared)
+	enf, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), newDecisionPoint(proxy, lookupFrom(enforceEnv(nil)), shared))
 	if err != nil || enf == nil {
 		t.Fatalf("enforcer %v err %v, want one built over the shared client with no workload env", enf, err)
 	}
@@ -86,7 +91,7 @@ func TestACellOnReusesTheSharedWorkloadClient(t *testing.T) {
 
 func TestOnlyTheEnforcementCellsOfGoAPINeedTheCredential(t *testing.T) {
 	env := map[string]string{authzenforce.QueryAPI.Env(): "billing"}
-	if enf, err := buildEnforcer(lookupFrom(env), quietLogger(), AuthProxyConfig{}, nil); enf != nil || err != nil {
+	if enf, err := buildEnforcer(lookupFrom(env), quietLogger(), newDecisionPoint(AuthProxyConfig{}, lookupFrom(env), nil)); enf != nil || err != nil {
 		t.Fatalf("query-api's variable reached go-api's builder: %v %v", enf, err)
 	}
 }
@@ -148,5 +153,48 @@ func TestGoAPIBuildsOneDecisionPointClient(t *testing.T) {
 	}
 	if len(builders) != 1 || !strings.HasSuffix(builders[0], " x1") {
 		t.Fatalf("pep.New calls: %v, want one call in one file", builders)
+	}
+}
+
+// The shadow and the Enforcer get the same client, so one workload exchange serves both.
+func TestTheShadowAndTheEnforcerShareOneDecisionPointClient(t *testing.T) {
+	pdp := newShadowPDPServer(t)
+	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: pdp.URL})
+	dp := newDecisionPoint(proxy, lookupFrom(map[string]string{EnvAuthWorkloadBootstrapFile: bootstrapFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer}), nil)
+	enforce, err := dp.decider(workloadAsk{flag: authzenforce.GoAPI.Env() + " lists a namespace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shadow, err := dp.decider(workloadAsk{flag: policy.EnvShadowPDP, selector: "the shadow PDP credential"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enforce != shadow {
+		t.Fatal("the shadow and the Enforcer got two decision point clients")
+	}
+	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, goAPIAccessService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := rows[shadowRowKey(t)]
+	request := pep.Request{PrincipalReference: shadowTestBearer, Action: row.Action, ResourceType: row.ResourceType,
+		ResourceKey: "11111111-1111-4111-8111-111111111111", OrganizationID: "11111111-1111-4111-8111-111111111111"}
+	for _, d := range []pep.Decider{enforce, shadow} {
+		d.Decide(context.Background(), request)
+	}
+	if auths, _, _, exchanges := pdp.snapshot(); len(auths) != 2 || exchanges != 1 {
+		t.Fatalf("PDP calls = %d, workload exchanges = %d; want 2 calls over 1 exchange", len(auths), exchanges)
+	}
+}
+
+// A failed build is not kept: the next asker's error names its own switch.
+func TestAFailedDecisionPointBuildNamesEachAsker(t *testing.T) {
+	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
+	dp := newDecisionPoint(proxy, lookupFrom(nil), nil)
+	for _, flag := range []string{"FIRST_ASKER", "SECOND_ASKER"} {
+		_, err := dp.decider(workloadAsk{flag: flag})
+		if err == nil || !strings.HasPrefix(err.Error(), flag+": ") {
+			t.Fatalf("err = %v, want one that starts with %s", err, flag)
+		}
 	}
 }

@@ -1895,7 +1895,7 @@ services:
     working_dir: /smoke
   # ---- the acr venue stack (CHAOS-10004): was the compose project dev-health-acr-mcp on this host ----
   # Profiles: `acr` starts everything; `acr-venue` starts only what must exist before acr-api (the database, its roles, the
-  # migrations, the grants, the entitlement stand-in). Start with plain docker compose:
+  # migrations, the grants). Start with plain docker compose:
   #   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
   #     -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
   # Every long-running service is in `acr` (a service whose dependency is in an inactive profile is an invalid project, so
@@ -1913,9 +1913,8 @@ services:
   # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE is passed through, EMPTY unless the environment sets it (empty = acr's own behaviour);
   # no tracked env file sets it, and none may on bigboy (chris: a persistent BYO setting bills his key). `ops` makes acr read an
   # org's BYO LLM config from ops' internal route with the workload token; set it for one run in the
-  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is not used by acr-api (no
-  # dependency, no URL) and is no rollback for it: it checks a static bearer, and acr-api sends a workload token. It stays defined,
-  # in profile acr-venue.
+  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is gone (CHAOS-12976): prod has none
+  # (deploy values.acr-prod.yaml "No stand-in on prod"), and it checked a static bearer where acr-api now sends a workload token.
   # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
   # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each is REQUIRED (`:?`): with a pin missing every compose command fails, naming it, instead of
   # a default tag that could start a wrong image. So the acr lines must be in a host's _records/images.env BEFORE its checkout holds this file.
@@ -2054,41 +2053,6 @@ services:
     - type: bind
       source: /var/lib/oci-cache/mcp-venue/postgres-data
       target: /var/lib/postgresql
-  acr-entitlement-standin:
-    container_name: dev-health-acr-mcp-acr-entitlement-standin-1
-    command:
-    - |
-      set -eu
-      T="$$(cat /run/secrets/acr_entitlement_token)"
-      sed "s|@TOKEN@|$$T|" /tpl/nginx.conf.tpl > /tmp/nginx.conf
-      exec nginx -c /tmp/nginx.conf -g 'daemon off;'
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-        reservations:
-          cpus: 0.01
-          memory: 16M
-    entrypoint: [/bin/sh, -c]
-    healthcheck:
-      interval: 10s
-      retries: 5
-      test: [CMD, wget, --spider, -q, 'http://127.0.0.1:8088/healthz']
-      timeout: 5s
-    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
-    networks:
-      acr: null
-    profiles: [acr, acr-venue]
-    restart: unless-stopped
-    secrets: [acr_entitlement_token]
-    volumes:
-    - type: bind
-      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/acr-entitlement-standin/nginx.conf.tpl
-      target: /tpl/nginx.conf.tpl
-      read_only: true
-    - type: volume
-      source: acr_entitlement_tmp
-      target: /tmp
   acr-api:
     container_name: dev-health-acr-mcp-acr-api-1
     command: [serve]
@@ -2580,8 +2544,6 @@ volumes:
     driver: local
   valkey_data:
     driver: local
-  acr_entitlement_tmp:
-    name: dev-health-acr-entitlement-tmp
   auth_signing_keys:
     driver: local
   acr_workload_bootstrap:
@@ -2605,8 +2567,6 @@ secrets:
     file: ${ACR_EVIDENCE_KEYS_FILE:-/var/lib/oci-cache/mcp-venue/secrets/evidence_keys}
   acr_openai_api_key:
     file: /var/lib/oci-cache/mcp-venue/secrets/openai_api_key
-  acr_entitlement_token:
-    file: ${ACR_ENTITLEMENT_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/entitlement_token}
   acr_falkordb_acl:
     file: ${ACR_FALKORDB_ACL_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_acl}
   acr_falkordb_password:

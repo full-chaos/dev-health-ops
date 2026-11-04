@@ -46,10 +46,6 @@ const (
 	// decisionstate builds the membership from the pair it read: its org id is
 	// always the asked organization, so org_mismatch on a membership is unreachable.
 	azMembershipOrgIsTheKey azExclusion = "membership_org_is_the_key"
-	// public.memberships holds a row or none (D6651): invited, suspended and
-	// removed have no row, and no row denies no_membership. Pinned by the cell
-	// that deletes the public row.
-	azMembershipStatusHasNoPublicRow azExclusion = "membership_status_has_no_public_row"
 	// The router denies every delegated session delegation_invalid until the
 	// decision core decides delegation on this route.
 	azDelegatedSessionPending azExclusion = "delegated_session_pending"
@@ -57,7 +53,7 @@ const (
 
 var azExclusionReasons = []azExclusion{
 	azWorkloadPrincipalUnreachable, azServiceAccountUnreachable, azStateFailureIs503, azStatusNotRepresentable,
-	azPlainSnapshotUnreachable, azMembershipOrgIsTheKey, azMembershipStatusHasNoPublicRow, azDelegatedSessionPending,
+	azPlainSnapshotUnreachable, azMembershipOrgIsTheKey, azDelegatedSessionPending,
 }
 
 // A reason that rests on how the real stack is built names the cell that pins
@@ -66,9 +62,8 @@ var azExclusionReasons = []azExclusion{
 type azPinCell struct{ file, fn string }
 
 var azExclusionPinCells = map[azExclusion]azPinCell{
-	azMembershipOrgIsTheKey:          {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
-	azServiceAccountUnreachable:      {"../decisionstate/decisionstate_serviceaccount_integration_test.go", "TestServiceAccountSnapshotGrantStates"},
-	azMembershipStatusHasNoPublicRow: {"../decisionstate/decisionstate_public_integration_test.go", "TestPublicRowsDenyWhenInactiveOrRemoved"},
+	azMembershipOrgIsTheKey:     {"../decisionstate/decisionstate_integration_test.go", "TestSnapshotMembershipOrgIsTheAskedOrg"},
+	azServiceAccountUnreachable: {"../decisionstate/decisionstate_serviceaccount_integration_test.go", "TestServiceAccountSnapshotGrantStates"},
 }
 
 var azCorpusExclusions = map[string]azExclusion{
@@ -95,11 +90,6 @@ var azCorpusExclusions = map[string]azExclusion{
 	"principal-status-uppercase-active": azStatusNotRepresentable,
 
 	"repo-plain-snapshot-has-no-grants": azPlainSnapshotUnreachable,
-
-	"membership-invited":       azMembershipStatusHasNoPublicRow,
-	"membership-removed":       azMembershipStatusHasNoPublicRow,
-	"membership-suspended":     azMembershipStatusHasNoPublicRow,
-	"repo-membership-inactive": azMembershipStatusHasNoPublicRow,
 
 	"cross-org-membership-row-for-other-org": azMembershipOrgIsTheKey,
 	"repo-membership-org-mismatch":           azMembershipOrgIsTheKey,
@@ -311,7 +301,7 @@ func azBlocker(v azVector) (azExclusion, error) {
 			return azStatusNotRepresentable, nil
 		}
 		if m.Status != "active" {
-			return azMembershipStatusHasNoPublicRow, nil
+			return azStatusNotRepresentable, nil
 		}
 	}
 	for i, g := range s.Grants {

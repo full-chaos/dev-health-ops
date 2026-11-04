@@ -528,7 +528,6 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 		{errors.New("other"), 503, provUnavailable},
 		{refusedWith(409, "users_not_owned"), 503, provUnavailable},
 		{refusedWith(409, "state_changed"), 503, provUnavailable},
-		{refusedWith(409, "organization_suspended"), 503, provUnavailable},
 		{refusedWith(400, "malformed"), 503, provUnavailable},
 		{refusedWith(401, ""), 503, provUnavailable},
 	}
@@ -573,6 +572,104 @@ func TestProvisionRefusalsMapToTodaysAnswers(t *testing.T) {
 				t.Fatalf("%s %v: steps after the refused call: %v", route.name, tc.err, db.log)
 			}
 		}
+	}
+}
+
+// CHAOS-11800 (pm 2026-11-03): a client error is never a 503. One cell per
+// refusal reason of each member route; a dependency failure stays 503.
+func TestProvisionClientRefusalsAre4xx(t *testing.T) {
+	type cell struct {
+		route  string
+		status int
+		reason string
+		code   int
+		text   string
+	}
+	cells := []cell{
+		{"add", 404, "principal_not_found", 404, "User not found"},
+		{"add", 404, "inviter_not_found", 404, "Inviter not found"},
+		{"add", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"add", 403, "deactivated", 403, "Account is deactivated"},
+		{"add", 409, "membership_suspended", 409, "Membership is suspended"},
+		{"role", 404, "principal_not_found", 404, "Membership not found"},
+		{"role", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"role", 403, "deactivated", 403, "Account is deactivated"},
+		{"role", 409, "membership_suspended", 404, "Membership not found"},
+		{"remove", 404, "principal_not_found", 404, "Membership not found"},
+		{"remove", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"remove", 403, "deactivated", 403, "Account is deactivated"},
+		{"transfer", 404, "principal_not_found", 400, "Target user is not a member"},
+		{"transfer", 409, "organization_suspended", 403, "Organization is suspended"},
+		{"transfer", 403, "deactivated", 403, "Account is deactivated"},
+	}
+	for _, c := range cells {
+		t.Run(c.route+"_"+c.reason, func(t *testing.T) {
+			for _, route := range provisionRoutes {
+				if route.name != c.route {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(c.status, c.reason)}), route)
+				if code != c.code || body != provDetail(c.text) {
+					t.Errorf("%s %s: %d %s, want %d %s", c.route, c.reason, code, body, c.code, provDetail(c.text))
+				}
+			}
+		})
+	}
+	t.Run("dependency_failure_stays_503", func(t *testing.T) {
+		for _, err := range []error{authprovision.ErrUnavailable, refusedWith(503, "dependency_unavailable"), refusedWith(500, "principal_not_found"), refusedWith(502, "")} {
+			for _, route := range provisionRoutes {
+				if route.name == "invite" {
+					continue
+				}
+				db := &provisionDB{rows: provisionRowsFor()}
+				code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: err}), route)
+				if code != 503 || body != provUnavailable {
+					t.Errorf("%s %v: %d %s, want 503", route.name, err, code, body)
+				}
+			}
+		}
+	})
+}
+
+// The wire reason auth-service sends for a deactivated actor is
+// principal_deactivated (internal/auth/authapi/wire.go): the four member routes
+// and the invite route answer 403, organization creation keeps its 503.
+func TestProvisionPrincipalDeactivatedIs403OnMemberAndInviteRoutes(t *testing.T) {
+	for _, route := range provisionRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			db := &provisionDB{rows: provisionRowsFor()}
+			code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(403, "principal_deactivated")}), route)
+			if code != 403 || body != provDetail("Account is deactivated") {
+				t.Errorf("%s: %d %s, want 403 Account is deactivated", route.name, code, body)
+			}
+		})
+	}
+	t.Run("create_organization_keeps_503", func(t *testing.T) {
+		db := newOrgCreateDB()
+		auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB, err: refusedWith(403, "principal_deactivated")}}
+		if code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner); code != http.StatusServiceUnavailable || body != unavailableBody() {
+			t.Errorf("create org: %d %s, want the 503", code, body)
+		}
+	})
+}
+
+// CHAOS-11800 (pm 2026-11-03): the strict role rule stays. With the proxy on, an
+// empty or non-catalog role is a 400 and auth-service is never called; the
+// legacy row orgs_crud.json "add member empty role" (201, proxy OFF) is an
+// accepted divergence: no role outside the catalog.
+func TestProvisionAddEmptyRoleIsRefusedWithProxyOn(t *testing.T) {
+	for name, role := range map[string]string{"empty": "", "banana": "banana"} {
+		t.Run(name, func(t *testing.T) {
+			route := provisionRoutes[0]
+			route.body = `{"user_id": "` + provTarget.String() + `", "role": "` + role + `"}`
+			db := &provisionDB{rows: provisionRowsFor()}
+			auth := &fakeProvisioner{db: db}
+			code, body := callRoute(newProvisionHandlers(db, auth), route)
+			if code != 400 || body != provDetail("Invalid role: "+role) || len(auth.calls) != 0 {
+				t.Errorf("role %q: %d %s calls %v, want 400 Invalid role and no auth call", role, code, body, auth.calls)
+			}
+		})
 	}
 }
 

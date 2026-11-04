@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -99,7 +100,7 @@ func TestPreclaimReadinessRetriesRefusedDialUntilEndpointReturns(t *testing.T) {
 	if got := attempts.Load(); got != 3 {
 		t.Fatalf("check ran %d times, want 3", got)
 	}
-	want := []time.Duration{preclaimReadinessInitialBackoff, 2 * preclaimReadinessInitialBackoff}
+	want := []time.Duration{2 * time.Second, 4 * time.Second}
 	if got := clock.recordedWaits(); !slices.Equal(got, want) {
 		t.Fatalf("waits = %v, want %v", got, want)
 	}
@@ -218,5 +219,26 @@ func TestPreclaimReadinessPermanentErrorStillExitsAtOnce(t *testing.T) {
 				t.Fatalf("attempts=%d waits=%v, want 1 and none", attempts.Load(), clock.recordedWaits())
 			}
 		})
+	}
+}
+
+func TestWorkerStartupRetryDoesNotAttemptAtOrAfterBudget(t *testing.T) {
+	t.Parallel()
+	process := newTestRiverWorkerProcess(t)
+	process.budget = 20 * time.Second
+	clock := newFakeRetryClock()
+	process.now, process.sleep = clock.Now, clock.Sleep
+	begin := clock.Now()
+	var starts []time.Duration
+	process.startClient = func(context.Context) error {
+		starts = append(starts, clock.Now().Sub(begin))
+		return fmt.Errorf("start producer: %w", syscall.ECONNREFUSED)
+	}
+	if err := process.Start(context.Background()); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("Start() = %v, want the dial cause", err)
+	}
+	want := []time.Duration{0, 2 * time.Second, 6 * time.Second, 14 * time.Second}
+	if !slices.Equal(starts, want) {
+		t.Fatalf("attempt starts = %v, want %v (none at or after the 20s budget)", starts, want)
 	}
 }

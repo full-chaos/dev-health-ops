@@ -4,13 +4,14 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "obligations": {
+      "repository_scope": "organization",
       "tenant_scope": "org-a"
     },
     "policy_revision": 12,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },
-  "id": "org-filtered-wildcard-grant-is-unrestricted",
+  "id": "org-filtered-member-default-is-organization-scope",
   "layer": "pdp",
   "request": {
     "action": "analytics.read",
@@ -21,24 +22,7 @@
   "state": {
     "catalog": "embedded",
     "clock": "2027-01-15T08:00:00Z",
-    "grants": [
-      {
-        "expires_at": null,
-        "org_id": "org-a",
-        "resource_key": "*",
-        "resource_kind": "repository",
-        "revoked": false,
-        "role": "viewer"
-      },
-      {
-        "expires_at": null,
-        "org_id": "org-a",
-        "resource_key": "acme/api",
-        "resource_kind": "repository",
-        "revoked": false,
-        "role": "viewer"
-      }
-    ],
+    "grants": [],
     "grants_error": false,
     "memberships": {
       "org-a": {
@@ -56,5 +40,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "a live wildcard grant reads every repository: no allowlist, and no wildcard on the wire."
+  "why": "no grant row of any state: the membership default reads every repository, so the allow carries repository_scope organization and its tenant scope, and no allowlist."
 }

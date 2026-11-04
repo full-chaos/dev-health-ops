@@ -1,6 +1,7 @@
 package authorization
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -37,12 +38,37 @@ func TestOrgAllowCarriesTheTenantScope(t *testing.T) {
 	}
 }
 
-func TestMemberWithNoGrantRowIsUnrestrictedInsideTheOrganization(t *testing.T) {
+// obligationWire is the JSON of the obligations a decision core allow holds: the members a consumer reads.
+func obligationWire(t *testing.T, o *Obligations) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// wantOrganizationScope fails unless o states a read of every repository of the organization by
+// repository_scope organization, with no allowlist member and the tenant scope.
+func wantOrganizationScope(t *testing.T, name string, o *Obligations) {
+	t.Helper()
+	if o == nil {
+		t.Errorf("%s: no obligations, want repository_scope organization", name)
+		return
+	}
+	m := obligationWire(t, o)
+	if m["repository_scope"] != "organization" || o.RepositoryRestricted || len(o.RepositoryAllowlist) != 0 || o.TenantScope != testOrg {
+		t.Errorf("%s: obligations %v, want repository_scope organization, the tenant scope and no allowlist", name, m)
+	}
+}
+
+func TestMemberWithNoGrantRowReadsEveryRepositoryByRepositoryScope(t *testing.T) {
 	for _, role := range []string{"viewer", "member", "admin", "owner"} {
-		o := orgAllowObligations(t, role)
-		if o == nil || o.TenantScope != testOrg || o.RepositoryRestricted || len(o.RepositoryAllowlist) != 0 {
-			t.Errorf("%s with no grant row: %+v, want tenant scope only", role, o)
-		}
+		wantOrganizationScope(t, role+" with no grant row", orgAllowObligations(t, role))
 	}
 }
 
@@ -53,10 +79,31 @@ func TestMemberWithLiveGrantsGetsTheSortedKeys(t *testing.T) {
 	}
 }
 
-func TestAWildcardGrantEmitsNoWildcard(t *testing.T) {
-	o := orgAllowObligations(t, "member", liveGrant("*"), liveGrant("acme/api"))
-	if o == nil || o.RepositoryRestricted || len(o.RepositoryAllowlist) != 0 || o.TenantScope != testOrg {
-		t.Fatalf("a live wildcard grant: %+v, want tenant scope only (unrestricted), no list", o)
+func TestAWildcardGrantIsRepositoryScopeNotAWildcard(t *testing.T) {
+	wantOrganizationScope(t, "a live wildcard grant", orgAllowObligations(t, "member", liveGrant("*"), liveGrant("acme/api")))
+}
+
+func TestARestrictedAllowCarriesNoRepositoryScope(t *testing.T) {
+	for name, rows := range map[string][]Grant{
+		"live keys": {liveGrant("acme/api")},
+		"none live": {revokedGrant("acme/api")},
+	} {
+		o := orgAllowObligations(t, "member", rows...)
+		if m := obligationWire(t, o); m["repository_scope"] != nil || !o.RepositoryRestricted {
+			t.Errorf("%s: obligations %v, want the allowlist member alone", name, m)
+		}
+	}
+}
+
+func TestAnUnfilteredOrgAllowCarriesNoRepositoryMember(t *testing.T) {
+	for _, action := range []string{"org.read", "teams.read", "settings.read"} {
+		d := NewEvaluator().Evaluate(orgRequest(action), repoSnapshot("member", liveGrant("acme/api")))
+		if !d.Allowed {
+			t.Fatalf("%s: %+v", action, d)
+		}
+		if m := obligationWire(t, d.Obligations); m["repository_scope"] != nil || m["repository_allowlist"] != nil {
+			t.Errorf("%s: obligations %v, want no repository member", action, m)
+		}
 	}
 }
 
@@ -71,9 +118,7 @@ func TestGrantsThatAreNotLiveLeaveNoneNotUnrestricted(t *testing.T) {
 	} {
 		o := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), repoSnapshot("member", rows...)).Obligations
 		if name == "only another org" {
-			if o == nil || o.RepositoryRestricted {
-				t.Errorf("%s: rows of another organization are ignored, the pair has no row: %+v", name, o)
-			}
+			wantOrganizationScope(t, name+": rows of another organization are ignored, the pair has no row", o)
 			continue
 		}
 		if o == nil || !o.RepositoryRestricted || len(o.RepositoryAllowlist) != 0 {
@@ -172,7 +217,11 @@ func TestObligationEqualsTheRepositoryDecisionForEveryRoleClass(t *testing.T) {
 				o := d.Obligations
 				for _, key := range keys {
 					want := e.evaluateRepository(Request{Action: action, ResourceKind: "repository", OrganizationID: testOrg, ResourceKey: key}, act, s, 1).Allowed
-					got := o != nil && (!o.RepositoryRestricted || slices.Contains(o.RepositoryAllowlist, key))
+					m := obligationWire(t, o)
+					if (m["repository_scope"] != nil) == o.RepositoryRestricted {
+						t.Errorf("%s %s %s: obligations %v, want exactly one repository member", role, action, setName, m)
+					}
+					got := o != nil && (m["repository_scope"] == "organization" || slices.Contains(o.RepositoryAllowlist, key))
 					if got != want {
 						t.Errorf("%s %s %s key %s: obligation says %v, the repository decision says %v (%+v)", role, action, setName, key, got, want, o)
 					}

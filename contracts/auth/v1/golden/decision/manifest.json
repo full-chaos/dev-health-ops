@@ -149,8 +149,8 @@
       "layer": "pdp"
     },
     {
-      "file": "org-filtered-member-default-is-unrestricted.json",
-      "id": "org-filtered-member-default-is-unrestricted",
+      "file": "org-filtered-member-default-is-organization-scope.json",
+      "id": "org-filtered-member-default-is-organization-scope",
       "layer": "pdp"
     },
     {
@@ -169,8 +169,8 @@
       "layer": "pdp"
     },
     {
-      "file": "org-filtered-wildcard-grant-is-unrestricted.json",
-      "id": "org-filtered-wildcard-grant-is-unrestricted",
+      "file": "org-filtered-wildcard-grant-is-organization-scope.json",
+      "id": "org-filtered-wildcard-grant-is-organization-scope",
       "layer": "pdp"
     },
     {

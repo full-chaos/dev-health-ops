@@ -40,13 +40,29 @@ func TestAuthorizeEmitsTheResolvedAllowlistOfARealDecision(t *testing.T) {
 	validateSurface(t, "authorization_decision.v1", rec.Body.Bytes())
 }
 
-func TestAuthorizeStatesAnUnrestrictedMemberByItsTenantScopeAlone(t *testing.T) {
+func TestAuthorizeStatesAnOrganizationWideReadByRepositoryScope(t *testing.T) {
+	for name, grants := range map[string][]authorization.Grant{
+		"no grant row":        nil,
+		"a live wildcard row": {repoGrant("*"), repoGrant("acme/api")},
+	} {
+		h := newAuthorizeHandlerFixture(t)
+		h.withGrants("member", grants...)
+		rec := h.one(h.question("analytics.read", "organization", "acme", h.org))
+		o := parseDecision(t, rec).Obligations
+		if o == nil || o.TenantScope == nil || *o.TenantScope != h.org || o.RepositoryAllowlist != nil ||
+			o.RepositoryScope == nil || *o.RepositoryScope != "organization" {
+			t.Errorf("%s: obligations %+v in %s, want repository_scope organization and no allowlist", name, o, rec.Body)
+		}
+		validateSurface(t, "authorization_decision.v1", rec.Body.Bytes())
+	}
+}
+
+func TestAuthorizeSendsARestrictedListWithoutRepositoryScope(t *testing.T) {
 	h := newAuthorizeHandlerFixture(t)
-	h.withGrants("member")
+	h.withGrants("member", repoGrant("acme/api"))
 	rec := h.one(h.question("analytics.read", "organization", "acme", h.org))
-	o := parseDecision(t, rec).Obligations
-	if o == nil || o.TenantScope == nil || *o.TenantScope != h.org || o.RepositoryAllowlist != nil {
-		t.Fatalf("obligations %+v in %s", o, rec.Body)
+	if strings.Contains(rec.Body.String(), `"repository_scope"`) || !strings.Contains(rec.Body.String(), `"repository_allowlist":["acme/api"]`) {
+		t.Fatalf("a narrowed allow carries the allowlist alone: %s", rec.Body)
 	}
 }
 
@@ -57,8 +73,8 @@ func TestAuthorizeNeverEmitsAWildcardAllowlist(t *testing.T) {
 	if strings.Contains(rec.Body.String(), `"*"`) {
 		t.Fatalf("a wildcard reached the wire: %s", rec.Body)
 	}
-	if o := parseDecision(t, rec).Obligations; o == nil || o.TenantScope == nil {
-		t.Fatalf("an unrestricted allow still carries its tenant scope: %s", rec.Body)
+	if o := parseDecision(t, rec).Obligations; o == nil || o.TenantScope == nil || o.RepositoryScope == nil {
+		t.Fatalf("an organization-wide allow carries its tenant scope and repository_scope: %s", rec.Body)
 	}
 }
 

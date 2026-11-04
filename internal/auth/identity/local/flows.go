@@ -135,19 +135,19 @@ func newSecret() (contracts.SecretString, [32]byte, error) {
 
 // issueAndSend stores a new credential and sends its link. A zero principal
 // is a decoy: the same two calls, nothing stored and nothing sent.
-func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose Purpose, ttl time.Duration, to string, name *string) error {
+func (f *Flows) issueAndSend(ctx context.Context, principal uuid.UUID, purpose Purpose, ttl time.Duration, to string, name *string, notice Purpose) error {
 	secret, hash, err := newSecret()
 	if err != nil {
 		return err
 	}
-	deliver := principal != uuid.Nil
+	deliver := principal != uuid.Nil || notice != ""
 	if err := f.links.IssueBound(ctx, IssueRequest{PrincipalID: principal, Purpose: purpose, TokenHash: hash, TTL: ttl}); errors.Is(err, ErrResetRequestNotRecorded) {
 		// Nothing was stored: the same mail work as a decoy, and the same answer.
 		deliver = false
 	} else if err != nil {
 		return fmt.Errorf("local: issuing a link credential: %w", err)
 	}
-	msg := Message{Purpose: purpose, To: to, FullName: name, Secret: secret, Deliver: deliver}
+	msg := Message{Purpose: mailPurpose(purpose, notice), To: to, FullName: name, Secret: secret, Deliver: deliver}
 	if err := f.mail.Send(ctx, msg); err != nil {
 		slog.WarnContext(ctx, "local: link mail not sent", "purpose", string(purpose), logging.ErrorAttr(err))
 	}
@@ -196,6 +196,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if v := passwordRefusal(req.Password); v != nil {
 		return FlowOutcome{Kind: FlowPolicy, Violations: v}, nil
 	}
+	prov := ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: "", OrganizationName: req.OrganizationName}
 	existing, err := f.accounts.ByEmail(ctx, email)
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: loading the user: %w", err)
@@ -204,33 +205,32 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: hashing the password: %w", err)
 	}
+	prov.PasswordHash = hash
 	if existing != nil {
-		return f.noticeExisting(ctx, email), nil
+		return f.noticeExisting(ctx, prov, true)
 	}
-	id, err := f.accounts.ProvisionLocal(ctx, ProvisionLocalRequest{Email: email, FullName: req.FullName, PasswordHash: hash, OrganizationName: req.OrganizationName})
+	id, err := f.accounts.ProvisionLocal(ctx, prov)
 	if errors.Is(err, identity.ErrEmailTaken) {
-		return f.noticeExisting(ctx, email), nil
+		return f.noticeExisting(ctx, prov, false)
 	}
 	if errors.Is(err, identity.ErrOrganizationSlugCollision) {
 		slog.WarnContext(ctx, "local: the organization slug is taken; the sign-up wrote nothing")
-		return FlowOutcome{Kind: FlowOK}, nil
+		return f.completeUnsent(ctx, prov, req.FullName)
 	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
 	}
-	if err := f.issueAndSend(ctx, id, PurposeEmailVerification, VerificationTTL, email, req.FullName); err != nil {
+	if err := f.issueAndSend(ctx, id, PurposeEmailVerification, VerificationTTL, email, req.FullName, ""); err != nil {
 		return FlowOutcome{}, err
 	}
 	return FlowOutcome{Kind: FlowOK}, nil
 }
 
-// noticeExisting answers a sign-up for a taken address like an accepted one and
-// tells the owner by mail; the hash of the submitted password is discarded.
-func (f *Flows) noticeExisting(ctx context.Context, email string) FlowOutcome {
-	if err := f.mail.Send(ctx, Message{Purpose: PurposeAccountExists, To: email, Deliver: true}); err != nil {
-		slog.WarnContext(ctx, "local: account notice not sent", logging.ErrorAttr(err))
-	}
-	return FlowOutcome{Kind: FlowOK}
+// noticeExisting answers a sign-up for a taken address like an accepted one and tells the owner by mail,
+// in the steps of a new account (see rehearseNotice); the hash of the submitted password is discarded.
+// The wire answer and the work are equal for a new and a taken address.
+func (f *Flows) noticeExisting(ctx context.Context, prov ProvisionLocalRequest, decoy bool) (FlowOutcome, error) {
+	return f.rehearseNotice(ctx, prov, decoy)
 }
 
 // Verify consumes a verification link and marks the e-mail verified.
@@ -283,7 +283,7 @@ func (f *Flows) reissue(ctx context.Context, email string, purpose Purpose, ttl 
 	if user != nil && eligible(user) {
 		principal, name = user.ID, user.FullName
 	}
-	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, name)
+	return f.issueAndSend(ctx, principal, purpose, ttl, normalized, name, "")
 }
 
 // linkDigest is the stored form of a one-time link secret: the SHA-256 of 32
@@ -389,3 +389,34 @@ func (f *Flows) changeLocked(ctx context.Context, req ChangeRequest) (FlowOutcom
 // notServiceProvider is Forgot's eligibility: a service-provider account (identity.IsServiceProvider) gets no reset
 // link and is answered as an unknown address.
 func notServiceProvider(u *User) bool { return !identity.IsServiceProvider(u.AuthProvider) }
+
+// rehearseNotice takes the steps Register takes for a new address: a rolled-back provision (when decoy; a write that lost
+// the race to the same address has made its own), a decoy link credential and one mail, the notice of the owner.
+func (f *Flows) rehearseNotice(ctx context.Context, prov ProvisionLocalRequest, decoy bool) (FlowOutcome, error) {
+	if decoy {
+		if err := f.accounts.ProvisionLocalDecoy(ctx, prov); err != nil {
+			return FlowOutcome{}, fmt.Errorf("local: rehearsing the sign-up: %w", err)
+		}
+	}
+	if err := f.issueAndSend(ctx, uuid.Nil, PurposeEmailVerification, VerificationTTL, prov.Email, nil, PurposeAccountExists); err != nil {
+		return FlowOutcome{}, err
+	}
+	return FlowOutcome{Kind: FlowOK}, nil
+}
+
+// mailPurpose is the purpose of the mail: the notice's when there is one.
+func mailPurpose(purpose, notice Purpose) Purpose {
+	if notice != "" {
+		return notice
+	}
+	return purpose
+}
+
+// completeUnsent finishes a sign-up that wrote nothing in the steps of a new account: a decoy link credential and a
+// decoy verification mail (Deliver false), so no credential and no outbound mail is left.
+func (f *Flows) completeUnsent(ctx context.Context, prov ProvisionLocalRequest, name *string) (FlowOutcome, error) {
+	if err := f.issueAndSend(ctx, uuid.Nil, PurposeEmailVerification, VerificationTTL, prov.Email, name, ""); err != nil {
+		return FlowOutcome{}, err
+	}
+	return FlowOutcome{Kind: FlowOK}, nil
+}

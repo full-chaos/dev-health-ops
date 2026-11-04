@@ -50,8 +50,8 @@ func TestAuthOwnerRoleRefusals(t *testing.T) {
 		"a session reader":  {"--set-json", `authService.migrate.sessionReaderRoles=["pinned_owner"]`},
 		"the go-api reader": {"--set", "authService.migrate.sessionReaders.goApi=pinned_owner"},
 		"the query reader":  {"--set", "authService.migrate.sessionReaders.queryApi=pinned_owner"},
-		"the push writer":   {"--set", "authService.migrate.pushLifecycle.writerRole=pinned_owner", "--set-json", `authService.migrate.pushLifecycle.callerRoles=["api"]`},
-		"a push caller":     {"--set", "authService.migrate.pushLifecycle.writerRole=push_writer", "--set-json", `authService.migrate.pushLifecycle.callerRoles=["pinned_owner"]`},
+		"the push writer":   {"--set", "authService.migrate.pushLifecycle.writerRole=pinned_owner", "--set-json", `authService.migrate.pushLifecycle.callerRoles=["api","domain"]`},
+		"a push caller":     {"--set", "authService.migrate.pushLifecycle.writerRole=push_writer", "--set-json", `authService.migrate.pushLifecycle.callerRoles=["pinned_owner","domain"]`},
 	}
 	for name, extra := range cases {
 		t.Run(name, func(t *testing.T) {

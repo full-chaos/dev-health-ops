@@ -27,7 +27,7 @@ The JSON files are the single source. `internal/auth/policycatalog` embeds them,
 
 Names are dotted and namespaced. A bare single segment is not an action (the pattern is `^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`). No action means "all actions".
 
-25 actions are organization actions. 3 are platform actions. 16 are high risk. 12 are low risk.
+28 actions are organization actions. 10 are platform actions. 25 are high risk. 13 are low risk.
 
 | Action | Scope | Resource kind | Risk class | Cache class |
 | --- | --- | --- | --- | --- |
@@ -61,8 +61,14 @@ Names are dotted and namespaced. A bare single segment is not an action (the pat
 | `acr.credential.issue` | organization | organization | high | `none` |
 | `admin.users` | platform | platform | high | `none` |
 | `admin.orgs` | platform | platform | high | `none` |
+| `admin.impersonate` | platform | platform | high | `none` |
 | `authz.decide` | platform | platform | high | `none` |
+| `admin.billing` | platform | platform | high | `none` |
+| `admin.flags` | platform | platform | high | `none` |
+| `admin.audit` | platform | platform | high | `none` |
+| `admin.telemetry` | platform | platform | high | `none` |
 | `credentials.project` | platform | platform | high | `none` |
+| `admin.stats` | platform | platform | high | `none` |
 
 Source: `contracts/auth/v1/vocabulary/actions.v1.json`. `resource_kind` equals `scope` for every action except `acr.context.read` and `acr.evidence.read`, whose resource is a repository. The kind set is `platform`, `organization` and `repository`; a scope is `platform` or `organization` only.
 
@@ -70,7 +76,7 @@ Source: `contracts/auth/v1/vocabulary/actions.v1.json`. `resource_kind` equals `
 
 | Cache class | Actions |
 | --- | --- |
-| `none` | All 23 high-risk actions. A decision for these is never reused. |
+| `none` | All 25 high-risk actions. A decision for these is never reused. |
 | `decision_bound` | The low-risk actions except `git.read`, `acr.context.read` and `acr.evidence.read`. |
 | `resource_revision_bound` | `git.read`, `acr.context.read` and `acr.evidence.read`. |
 
@@ -82,12 +88,12 @@ A high-risk action must have cache class `none`. The loader refuses a catalog th
 
 | Role | Scope | Actions held |
 | --- | --- | --- |
-| `viewer` | organization | 10 of 28 |
-| `member` | organization | 11 of 28 |
-| `admin` | organization | 22 of 28 |
-| `owner` | organization | 23 of 28 |
-| `platform_admin` | platform | 2 of 28 |
-| `platform_owner` | platform | 0 of 28 |
+| `viewer` | organization | 12 of 38 |
+| `member` | organization | 13 of 38 |
+| `admin` | organization | 24 of 38 |
+| `owner` | organization | 25 of 38 |
+| `platform_admin` | platform | 8 of 38 |
+| `platform_owner` | platform | 0 of 38 |
 
 Each role lists its actions explicitly. There is no inheritance, no wildcard and no all-actions role. Which role holds which action:
 
@@ -123,9 +129,16 @@ Each role lists its actions explicitly. There is no inheritance, no wildcard and
 | `acr.credential.issue` |  |  |  |  |  |
 | `admin.users` |  |  |  |  | yes |
 | `admin.orgs` |  |  |  |  | yes |
+| `admin.impersonate` |  |  |  |  | yes |
 | `authz.decide` |  |  |  |  |  |
+| `admin.billing` |  |  |  |  | yes |
+| `admin.flags` |  |  |  |  | yes |
+| `admin.audit` |  |  |  |  | yes |
+| `admin.telemetry` |  |  |  |  | yes |
+| `credentials.project` |  |  |  |  |  |
+| `admin.stats` |  |  |  |  | yes |
 
-No role holds `members.update`, `authz.decide`, `acr.evidence.read` or `acr.credential.issue` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 9); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
+No role holds `members.update`, `authz.decide`, `credentials.project`, `acr.evidence.read` or `acr.credential.issue` yet, so the decision core denies them to every role until a roles change grants them. `acr.context.read` is held by the roles that hold `git.read` (catalog version 9); the decision core serves a repository request by the membership default or a repository grant, so a role that holds the action is allowed by default.
 
 Every action names `impersonation` (`denied` or `allowed`): whether a delegated session may exercise it. `acr.context.read` is `allowed` (a read, low risk). `acr.evidence.read` is `allowed` (a read, low risk). `members.update`, `authz.decide` and `acr.credential.issue` are `denied`. A delegated session gets it only when the actor role holds it: `viewer`, `member`, `admin` and `owner` do.
 
@@ -182,7 +195,7 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 
 | Field | Values |
 | --- | --- |
-| `authorization_decision.v1` `reason_code` | `allowed_by_repository_grant`, `grant_absent`, `repository_not_granted`, `platform_role_absent` |
+| `authorization_decision.v1` `reason_code` | 24 values; see [reason codes](reason-codes.md) |
 | `audit-event.v1` `attributes.reason_code` | 65 values; the file lists them |
 | `revoked_reason` of a credential | `compromised`, `domain_revoked`, `owner_request` |
 
@@ -204,6 +217,6 @@ From `contracts/auth/v1/README.md`:
 - Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.
 - Version 12: `reports.write` (organization scope, organization resource kind, high risk, `none`, impersonation `denied`), held by `viewer`, `member`, `admin` and `owner` (CHAOS-12657). It covers the five saved-report GraphQL writes. Those writes check only the caller's organization today, never a role (`requireMutationOrg`, `internal/queryapi/graph/reports_mutations.go`), so every organization role holds it. It is catalog-only: `/auth/me` does not serve it. Narrowing it to a smaller role set is a separate decision.
 
-## Planned, not built
+## Platform actions
 
-The catalog on `main` has no platform action other than `admin.users`, `admin.orgs` and `authz.decide`. The superuser-inherited sites in go-api have no explicit platform action yet. CHAOS-11847 plans `admin.billing`, `admin.flags`, `admin.audit`, `admin.impersonate`, `admin.telemetry` and `admin.stats`. CHAOS-10987 (delegated session) also changes the catalog. Neither change is on `main`, and the version number each will take is not fixed here.
+The catalog holds 10 platform actions: `admin.users`, `admin.orgs`, `admin.impersonate`, `authz.decide`, `admin.billing`, `admin.flags`, `admin.audit`, `admin.telemetry`, `credentials.project` and `admin.stats`. Each is high risk with cache class `none`. `platform_admin` holds 8 of them. `authz.decide` and `credentials.project` are held by no role.

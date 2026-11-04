@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,13 +33,22 @@ type Reader struct {
 
 // NewReader returns a reader over db for the auth schema.
 func NewReader(db Querier, schema authschema.ValidatedIdentifier, pageSize int) (*Reader, error) {
-	if db == nil {
+	if isNilQuerier(db) {
 		return nil, errors.New("acrreconcile: nil querier")
 	}
 	if pageSize < 1 {
 		return nil, fmt.Errorf("acrreconcile: page size %d is below 1", pageSize)
 	}
 	return &Reader{db: db, pageSQL: PageSQL(schema), orgsSQL: orgsSQL(schema), pageSize: pageSize}, nil
+}
+
+// isNilQuerier reports a nil interface and a typed-nil pointer held in one.
+func isNilQuerier(db Querier) bool {
+	if db == nil {
+		return true
+	}
+	v := reflect.ValueOf(db)
+	return v.Kind() == reflect.Ptr && v.IsNil()
 }
 
 // PageSQL is the one statement of ReadPage.
@@ -93,7 +103,7 @@ func (r *Reader) ReadPage(ctx context.Context, org uuid.UUID, after string) ([]P
 			return nil, fmt.Errorf("acrreconcile: scan projection row: %w", err)
 		}
 		p.Status = pushlifecycle.Status(status)
-		if expires != nil && *expires != "" {
+		if expires != nil {
 			t, err := time.Parse(time.RFC3339Nano, *expires)
 			if err != nil {
 				return nil, fmt.Errorf("acrreconcile: projection expiry of %s: %w", p.ID, err)

@@ -594,21 +594,65 @@ func TestPlanForIgnoresAnInheritedQualitySelection(t *testing.T) {
 	}
 }
 
-// CHAOS-11499: the scan result may not depend on the host arch. A file named for one arch is ignored by go list on the other, and an
-// ignored file is scanned untyped, so a scan of the host arch alone refuses it on one host and accepts it on another.
-func TestTheScanDoesNotDependOnTheHostArch(t *testing.T) {
+// CHAOS-11499: the scan result may not depend on the host arch. A file named for one arch is ignored by go list on the other; it is
+// judged by the arch that type-checks it, and a file no CI arch type-checks stays refused as untyped.
+func archOnlyFiles(arch string, dirty bool) map[string]map[string]string {
+	body := "func G() int { return 2 }\n"
+	if dirty {
+		body = "func G() int { go func() {}(); return 2 }\n"
+	}
+	tag := "//go:build " + arch + "\n\n"
+	return map[string]map[string]string{
+		"suffix source":        {"a/x_" + arch + ".go": "package a\n\n" + body},
+		"suffix internal test": {"a/x_" + arch + "_test.go": "package a\n\n" + body},
+		"suffix external test": {"a/x_" + arch + "_test.go": "package a_test\n\n" + body},
+		"tag source":           {"a/xt.go": tag + "package a\n\n" + body},
+		"tag internal test":    {"a/xt_test.go": tag + "package a\n\n" + body},
+		"tag external test":    {"a/xt_test.go": tag + "package a_test\n\n" + body},
+	}
+}
+
+func TestACleanArchOnlyFileIsAcceptedOnEveryHost(t *testing.T) {
 	t.Parallel()
 	for _, arch := range []string{"amd64", "arm64"} {
-		files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_" + arch + ".go": "package a\n\nfunc G() int { return 2 }\n"}
-		if got := problemsOf(t, files, rowA); !strings.Contains(got, "arch_"+arch+".go: the file was not type-checked") {
-			t.Errorf("a file for %s only: want it refused on every host, got:\n%s", arch, got)
+		for name, extra := range archOnlyFiles(arch, false) {
+			files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+			for k, v := range extra {
+				files[k] = v
+			}
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: a clean file was refused:\n%s", name, arch, got)
+			}
 		}
+	}
+}
+
+func TestADirtyArchOnlyFileIsRefusedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		for name, extra := range archOnlyFiles(arch, true) {
+			files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+			for k, v := range extra {
+				files[k] = v
+			}
+			if got := problemsOf(t, files, rowA); !strings.Contains(got, "go statement") {
+				t.Errorf("%s for %s only: a goroutine was accepted:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAFileNoCIArchTypeChecksIsStillRefusedAsUntyped(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_windows.go": "package a\n\nfunc W() int { return 4 }\n"}
+	if got := problemsOf(t, files, rowA); !strings.Contains(got, "x_windows.go: the file was not type-checked") {
+		t.Errorf("a windows-only file: want it refused as untyped, got:\n%s", got)
 	}
 }
 
 func TestAnInheritedGOARCHDoesNotChangeTheScan(t *testing.T) {
 	files := func() map[string]string {
-		return map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_amd64.go": "package a\n\nfunc G() int { return 2 }\n", "a/arch_arm64.go": "package a\n\nfunc H() int { return 3 }\n"}
+		return map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_amd64.go": "package a\n\nfunc G() int { return 2 }\n", "a/arch_arm64.go": "package a\n\nfunc H() int { return 3 }\n", "a/arch_windows.go": "package a\n\nfunc W() int { return 4 }\n"}
 	}
 	var results []string
 	for _, arch := range []string{"amd64", "arm64"} {

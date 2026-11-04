@@ -381,7 +381,7 @@ func goFilesOf(p *goPackage, tests bool) []string {
 	return files
 }
 
-func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string) []string {
+func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string, typedAnywhere map[string]bool) []string {
 	var out []string
 	if p.Error != nil {
 		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
@@ -406,8 +406,16 @@ func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErr
 			out = append(out, "imports out-of-module package "+imp+" (code outside the standard library and this module can run user code on goroutines of its own)")
 		}
 	}
+	ignored := map[string]bool{}
+	for _, f := range p.IgnoredGoFiles {
+		ignored[f] = true
+	}
 	for _, f := range goFilesOf(p, tests) {
-		out = append(out, scanFile(filepath.Join(p.Dir, f), ts)...)
+		path := filepath.Join(p.Dir, f)
+		if ignored[f] && typedAnywhere[path] {
+			continue
+		}
+		out = append(out, scanFile(path, ts)...)
 	}
 	return out
 }
@@ -416,11 +424,20 @@ func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErr
 func Check(root string, rows []Row) ([]string, error) {
 	seen := map[string]bool{}
 	var problems []string
+	var loads []*archLoad
+	typedAnywhere := map[string]bool{}
 	for _, goarch := range ciArches {
-		got, err := checkFor(root, goarch, rows)
+		l, err := loadArch(root, goarch, rows)
 		if err != nil {
 			return nil, fmt.Errorf("GOARCH=%s: %w", goarch, err)
 		}
+		for name := range l.ts {
+			typedAnywhere[name] = true
+		}
+		loads = append(loads, l)
+	}
+	for _, l := range loads {
+		got := judge(l, rows, typedAnywhere)
 		for _, p := range got {
 			if !seen[p] {
 				seen[p] = true
@@ -432,12 +449,18 @@ func Check(root string, rows []Row) ([]string, error) {
 	return problems, nil
 }
 
-func checkFor(root, goarch string, rows []Row) ([]string, error) {
+type archLoad struct {
+	modpath  string
+	pkgs     map[string]*goPackage
+	ts       typeStore
+	loadErrs map[string][]string
+}
+
+func loadArch(root, goarch string, rows []Row) (*archLoad, error) {
 	modpath, pkgs, err := goList(root, goarch)
 	if err != nil {
 		return nil, err
 	}
-	var problems []string
 	need := map[string]bool{}
 	for _, r := range rows {
 		if p := pkgs[modpath+"/"+r.Package]; p != nil {
@@ -456,6 +479,13 @@ func checkFor(root, goarch string, rows []Row) ([]string, error) {
 			return nil, err
 		}
 	}
+	return &archLoad{modpath, pkgs, ts, loadErrs}, nil
+}
+
+// judge: a file that some CI arch type-checked is judged by that arch alone, so the arch that ignores it does not report it untyped.
+func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool) []string {
+	modpath, pkgs, ts, loadErrs := l.modpath, l.pkgs, l.ts, l.loadErrs
+	var problems []string
 	for _, r := range rows {
 		full := modpath + "/" + r.Package
 		p := pkgs[full]
@@ -473,12 +503,12 @@ func checkFor(root, goarch string, rows []Row) ([]string, error) {
 		if r.Class != "none" || r.Witness != "-" {
 			problems = append(problems, r.Package+": only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
 		}
-		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs) {
+		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs, typedAnywhere) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 		}
 	}
 	sort.Strings(problems)
-	return problems, nil
+	return problems
 }
 
 // stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,

@@ -2,8 +2,10 @@ package authapi
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,4 +156,59 @@ func TestANilRevokedAtRecordsNoLag(t *testing.T) {
 	at := time.Now().Add(-2 * time.Second)
 	rec.observeRevocationLag(context.Background(), &at, at.Add(2*time.Second))
 	wantLag(t, reader, 1, 2)
+}
+
+func TestValidateRefusalOfASessionRevokedInItsOwnRowRecordsItsLag(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		eddsa bool
+		token func(*validateFixture) string
+	}{
+		{"HS256", false, func(f *validateFixture) string { return f.hs256Token(nil) }},
+		{"EdDSA", true, func(f *validateFixture) string { return f.eddsaToken("dev-health-api") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newValidateFixture(t, tc.eddsa)
+			reader, provider := accessMeter()
+			f.meter = provider.Meter("test")
+			t0 := time.Now().UTC()
+			f.issuer.now = func() time.Time { return t0 }
+			f.build()
+			at := t0.Add(-7 * time.Second)
+			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, Revoked: true, LegacyTokenVersion: f.record.LegacyTokenVersion}
+			record := f.record
+			record.RevokedAt = &at
+			f.sessions.records[f.record.ID] = record
+			response := f.post(f.server, tokenBody(tc.token(f)), nil)
+			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"valid":false`) {
+				t.Fatalf("validate = %d %s", response.Code, response.Body)
+			}
+			wantLag(t, reader, 1, 7)
+		})
+	}
+}
+
+func TestValidateRefusalOfARevokedRowThatIsNotTheTokenOwnersRecordsNoLag(t *testing.T) {
+	f := newValidateFixture(t, false)
+	reader, provider := accessMeter()
+	f.meter = provider.Meter("test")
+	f.build()
+	at := time.Now().Add(-7 * time.Second)
+	f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: uuid.New(), Revoked: true, LegacyTokenVersion: f.record.LegacyTokenVersion}
+	record := f.record
+	record.RevokedAt = &at
+	f.sessions.records[f.record.ID] = record
+	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	wantLag(t, reader, 0, 0)
+}
+
+func TestValidateRefusalOfARevokedRowWithNoAuthServiceSessionRecordsNoLag(t *testing.T) {
+	f := newValidateFixture(t, false)
+	reader, provider := accessMeter()
+	f.meter = provider.Meter("test")
+	f.build()
+	f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, Revoked: true, LegacyTokenVersion: f.record.LegacyTokenVersion}
+	delete(f.sessions.records, f.record.ID)
+	f.post(f.server, tokenBody(f.hs256Token(nil)), nil)
+	wantLag(t, reader, 0, 0)
 }

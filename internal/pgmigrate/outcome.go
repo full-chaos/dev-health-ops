@@ -51,8 +51,10 @@ func isRefusal(err error) bool {
 	var mismatch SchemaMismatchError
 	var down DowngradeRefusal
 	var authMismatch AuthSchemaMismatchError
+	var unapplied ChainRevisionUnappliedError
+	var shaMismatch ChainRevisionSHAMismatchError
 	return errors.As(err, &below) || errors.As(err, &belowBaseline) || errors.As(err, &ahead) || errors.As(err, &foreign) ||
-		errors.As(err, &mismatch) || errors.As(err, &down) || errors.As(err, &authMismatch)
+		errors.As(err, &mismatch) || errors.As(err, &down) || errors.As(err, &authMismatch) || errors.As(err, &unapplied) || errors.As(err, &shaMismatch)
 }
 
 func logRunOutcome(logger *slog.Logger, direction string, from []string, requested string, observed []string, outcome string) {

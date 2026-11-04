@@ -3,12 +3,12 @@ package contracts_test
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
@@ -64,11 +64,15 @@ var wireProducers = []wireProducer{
 
 func wireRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("no caller")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	root, err := contracts.RepoRoot(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
 }
 
 func readRepoFile(t *testing.T, rel string) string {

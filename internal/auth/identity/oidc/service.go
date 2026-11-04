@@ -597,8 +597,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
 	case errors.Is(err, ErrIdentityAmbiguous):
-		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
-			"More than one account carries this sign-in. Contact your organization administrator.")
+		return Login{}, ambiguousIdentity()
 	case errors.Is(err, ErrNotOrgMember):
 		return Login{}, notMember(row)
 	case errors.Is(err, ErrIdentityNotFound):
@@ -800,9 +799,16 @@ func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message 
 	return nil
 }
 
+// conflictMessage is the one 409 answer for a sign-in that finds an account already holding the e-mail or the
+// subject; it says nothing about which. The reason stays in the log and the audit row.
+const conflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
+
+func ambiguousIdentity() *Error {
+	return deny(http.StatusConflict, ReasonIdentityConflict, conflictMessage)
+}
+
 func conflict() *Error {
-	return deny(http.StatusConflict, ReasonEmailCollision,
-		"An account with this email address already exists. Sign in with your existing method, then link this provider.")
+	return deny(http.StatusConflict, ReasonEmailCollision, conflictMessage)
 }
 
 var errInsecureURL = errors.New("must use the https:// scheme (or an http:// loopback address)")

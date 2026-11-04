@@ -394,6 +394,16 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
+  # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize and /v1/authorize:batch), per pod.
+  #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
+  #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst
+  #    must be at least 100: the render refuses less. routePerSecond/routeBurst: the ceiling of all callers together
+  #    (from the 5.19 load test; revisit with CHAOS-12705). They render AUTH_SERVICE_PDP_*_RATE_LIMIT_*.
+  pdpRateLimit:
+    callerPerSecond: 150
+    callerBurst: 300
+    routePerSecond: 2000
+    routeBurst: 4000
   # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
   #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
   #    action: Kubernetes >= 1.30 (the image has no shell).
@@ -471,8 +481,9 @@ authService:
     sessionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
-    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE
-    #    only; AUTH_PUSH_LIFECYCLE_CALLER_ROLES). The writer role must exist and
+    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and
+    #    the worker domain login of the expiry sweeper; AUTH_PUSH_LIFECYCLE_CALLER_ROLES).
+    #    Both or neither: the render refuses one without the other, and callerRoles lists exactly two logins (CHAOS-12828). The writer role must exist and
     #    the migration login must be a member of it BEFORE this Job runs: a
     #    privileged step, see docs/contribute/architecture/auth-control-plane-deployment.md.
     #    Empty leaves the function unexecutable (go-api's AUTH_PUSH_LIFECYCLE_EVENTS
@@ -1854,7 +1865,7 @@ valkey:
   #    it, exactly as today) and the auth-service rate-limit user with a HASHED
   #    password:
   #      user default on nopass ~* &* +@all
-  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
+  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +decr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
   #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
   #    default user keeps access to every key, the auth rate-limit counters
   #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the

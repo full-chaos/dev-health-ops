@@ -25,10 +25,10 @@ func TestValidKey(t *testing.T) {
 	long := strings.Repeat("a", 100)
 	for key, want := range map[string]bool{
 		"acme/api": true, "a/b": true, "*": true, "acme/api.v2": true, "acme/my_repo-1": true, "0a/9z": true,
-		long + "/" + long: true,
-		"Acme/api":        false, "acme/API": false, "acme": false, "": false, "acme/api/extra": false, "a/b/c": false,
+		long + "/" + long: true, "a/b/c": true, "acme/api/extra": true, "a/.b": true,
+		"Acme/api": false, "acme/API": false, "acme": false, "": false,
 		"**": false, "a/*": false, "*/b": false, "*/*": false, " *": false, "* ": false, "acme/api\n": false,
-		"/b": false, "a/": false, ".a/b": false, "a/.b": false, "-a/b": false, "a/-b": false,
+		"/b": false, "a/": false, ".a/b": false, "-a/b": false, "a/-b": false,
 		long + "a/b": false, "a/" + long + "a": false, "acme/apı": false, "acme/api\x00": false,
 	} {
 		if got := ValidKey(key); got != want {
@@ -136,12 +136,12 @@ func TestKeyPatternIsTheContractAndTheMigrationPattern(t *testing.T) {
 	if node != KeyPattern() {
 		t.Fatalf("authorization_request.v1 key pattern = %v, Store pattern = %q", node, KeyPattern())
 	}
-	sql, err := os.ReadFile(filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations", "0020_grant_service_account_workload_shape.sql"))
+	sql, err := os.ReadFile(filepath.Join(root, "internal", "storage", "postgres", "authschema", "migrations", "0053_grant_repository_key_nested.sql"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(sql), "resource_id ~ '"+KeyPattern()+"'") {
-		t.Fatalf("migration 0020 does not hold the Store key pattern %q", KeyPattern())
+		t.Fatalf("migration 0053 does not hold the Store key pattern %q", KeyPattern())
 	}
 }
 

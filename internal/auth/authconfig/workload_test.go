@@ -187,3 +187,54 @@ func TestTheWorkloadBootstrapSubjectLoadsAloneOrWithKubernetes(t *testing.T) {
 		t.Fatalf("a typo was not refused by name only: %v", err)
 	}
 }
+
+// AUTH_SERVICE_ACCOUNT_EXCHANGE turns the service account key subject on, alone
+// or with the other subjects. It is off by default, needs the token issuer, and
+// a value other than true or false refuses startup by name only.
+func TestTheServiceAccountKeySubjectIsOffByDefaultAndLoadsAlone(t *testing.T) {
+	off := baseEnv()
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(off)})
+	if err != nil || cfg.WorkloadExchange.ServiceAccountKey || cfg.WorkloadExchange.Mounted() {
+		t.Fatalf("unset: %+v %v", cfg.WorkloadExchange, err)
+	}
+	off[EnvServiceAccountExchange] = "false"
+	if cfg, err = Load(Spec{LookupEnv: lookupFrom(off)}); err != nil || cfg.WorkloadExchange.ServiceAccountKey || cfg.WorkloadExchange.Mounted() {
+		t.Fatalf("false: %+v %v", cfg.WorkloadExchange, err)
+	}
+
+	alone := baseEnv()
+	alone[EnvTokenIssuerURL] = "https://auth.example.com"
+	alone[EnvServiceAccountExchange] = "true"
+	cfg, err = Load(Spec{LookupEnv: lookupFrom(alone)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WorkloadExchange != (WorkloadExchange{ServiceAccountKey: true}) || !cfg.WorkloadExchange.Mounted() {
+		t.Fatalf("key subject alone: %+v", cfg.WorkloadExchange)
+	}
+	rendered := fmt.Sprint(slog.GroupValue(cfg.SafeAttrs()...))
+	if !strings.Contains(rendered, "service_account_exchange_enabled=true") {
+		t.Fatalf("the startup line does not say the key subject is on: %s", rendered)
+	}
+
+	all := workloadEnv()
+	all[EnvWorkloadBootstrap] = "true"
+	all[EnvServiceAccountExchange] = "true"
+	if cfg, err = Load(Spec{LookupEnv: lookupFrom(all)}); err != nil || !cfg.WorkloadExchange.Enabled || !cfg.WorkloadExchange.Bootstrap || !cfg.WorkloadExchange.ServiceAccountKey {
+		t.Fatalf("all three subjects: %+v %v", cfg.WorkloadExchange, err)
+	}
+
+	noIssuer := baseEnv()
+	noIssuer[EnvServiceAccountExchange] = "true"
+	if _, err = Load(Spec{LookupEnv: lookupFrom(noIssuer)}); err == nil ||
+		!strings.Contains(err.Error(), EnvServiceAccountExchange) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+		t.Fatalf("the key subject without the token issuer: %v", err)
+	}
+
+	typo := baseEnv()
+	typo[EnvTokenIssuerURL] = "https://auth.example.com"
+	typo[EnvServiceAccountExchange] = "yes"
+	if _, err = Load(Spec{LookupEnv: lookupFrom(typo)}); err == nil || !strings.Contains(err.Error(), EnvServiceAccountExchange) || strings.Contains(err.Error(), "yes") {
+		t.Fatalf("a typo was not refused by name only: %v", err)
+	}
+}

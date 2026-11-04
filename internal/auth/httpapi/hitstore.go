@@ -66,6 +66,18 @@ type CounterStore interface {
 	Backend() string
 }
 
+// Refunder is the optional seam of a CounterStore that can give one charge
+// back: it lowers the counter of hit by one, never below 0, and never creates
+// a counter (an expired window has nothing to give back). A store without it
+// keeps every charge, which is the safe side.
+type Refunder interface {
+	Refund(ctx context.Context, hit Hit) error
+}
+
+// ErrNoRefund is what KeyedLimiter.Refund returns for a store that has no
+// Refund: the charge stays.
+var ErrNoRefund = errors.New("httpapi: the counter store cannot refund a charge")
+
 // MemoryCounters is the in-process CounterStore: one set of window counters
 // per limit ID. It is per process, so with several api replicas the effective
 // limit is per replica -- acceptable for development and tests, which is why
@@ -116,8 +128,21 @@ func (m *MemoryCounters) Peek(_ context.Context, hit Hit) (int64, error) {
 	return int64(counters.peek(hit.Key, hit.Path)), nil
 }
 
+// Refund implements Refunder.
+func (m *MemoryCounters) Refund(_ context.Context, hit Hit) error {
+	m.mu.Lock()
+	counters := m.windows[hit.Limit.ID]
+	m.mu.Unlock()
+	if counters != nil {
+		counters.unhit(hit.Key, hit.Path)
+	}
+	return nil
+}
+
 // Backend implements CounterStore.
 func (m *MemoryCounters) Backend() string { return "memory" }
+
+var _ Refunder = (*MemoryCounters)(nil)
 
 // KeyedLimiter is the one rate limiter: a fixed window of Limit.Count hits
 // per Limit.Window per (caller key, exact request path), counted in a
@@ -196,6 +221,21 @@ func (l *KeyedLimiter) Allow(ctx context.Context, key, path string) (bool, error
 		RateLimitRejections.inc(l.limit.ID)
 	}
 	return allowed, nil
+}
+
+// Refund gives back one hit counted by Allow for (key, path), once: the
+// counter drops by one and stays at 0 or above, and an expired window or a
+// pair with no counter is left alone. A store that is no Refunder answers
+// ErrNoRefund and the charge stays. A nil limiter has nothing to give back.
+func (l *KeyedLimiter) Refund(ctx context.Context, key, path string) error {
+	if l == nil {
+		return nil
+	}
+	refunder, ok := l.store.(Refunder)
+	if !ok {
+		return ErrNoRefund
+	}
+	return refunder.Refund(ctx, Hit{Limit: l.limit, Key: key, Path: path})
 }
 
 // LimitCounter counts events per limit id and writes them in the operator
@@ -342,3 +382,10 @@ func limitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter, depend
 		})
 	}
 }
+
+// DeclareRejections makes the rejection series of an in-process limiter exist at zero. Such a limiter has no
+// counter store, so it has no store-error series.
+func DeclareRejections(id string) { RateLimitRejections.declare(id) }
+
+// CountRejection counts one hit an in-process limiter refused.
+func CountRejection(id string) { RateLimitRejections.inc(id) }

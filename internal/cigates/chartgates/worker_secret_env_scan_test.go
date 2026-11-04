@@ -1,11 +1,15 @@
 package chartgates_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -410,7 +414,7 @@ func checkSources(sources map[string]string) []envUnit {
 		}
 		byPkg[key][path] = file
 	}
-	im := &sourceImporter{fset: fset, std: importer.Default(), done: map[string]*types.Package{}, pkgs: map[string]map[string]*ast.File{}}
+	im := &sourceImporter{fset: fset, std: importer.ForCompiler(fset, "gc", goListExport), done: map[string]*types.Package{}, pkgs: map[string]map[string]*ast.File{}}
 	for key, files := range byPkg {
 		if !strings.HasSuffix(key.name, "_test") {
 			im.pkgs[key.dir] = files
@@ -445,8 +449,32 @@ func (im *sourceImporter) Import(path string) (*types.Package, error) {
 			return im.done[path], nil
 		}
 	}
-	return im.std.Import(path)
+	pkg, err := im.std.Import(path)
+	if err != nil && (!strings.Contains(strings.SplitN(path, "/", 2)[0], ".") || strings.HasPrefix(path, modulePath+"/")) {
+		panic(fmt.Sprintf("reader scan fixture: import %q failed, so its lookups would resolve to nothing: %v", path, err))
+	}
+	return pkg, err
 }
+
+// goListExport finds a package's export data with the go command on PATH. importer.Default asks go/build's GOROOT,
+// which is empty in a -trimpath test binary when GOROOT is not in the environment (the CI legs run go test -trimpath
+// with GOTOOLCHAIN=local), so every standard import failed there and resolved to nothing.
+func goListExport(path string) (io.ReadCloser, error) {
+	file, ok := goListExports.Load(path)
+	if !ok {
+		out, err := exec.Command("go", "list", "-export", "-f", "{{.Export}}", path).Output()
+		if err != nil {
+			return nil, fmt.Errorf("go list -export %s: %w", path, err)
+		}
+		file, _ = goListExports.LoadOrStore(path, strings.TrimSpace(string(out)))
+	}
+	if file.(string) == "" {
+		return nil, fmt.Errorf("go list -export %s: no export data", path)
+	}
+	return os.Open(file.(string))
+}
+
+var goListExports sync.Map
 
 func (im *sourceImporter) check(path string, files map[string]*ast.File) *types.Info {
 	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
@@ -579,6 +607,16 @@ func TestWorkerSecretKeyReaderScanInjectedFieldOfAnotherPackage(t *testing.T) {
 
 // Multi-file cells, each a small module tree: the forms the r1 review of CHAOS-12688 executed against the name-keyed
 // scan, and the ones the typed scan adds. want is whether wantFile is a reader of SOME_KEY.
+// A fixture whose standard import cannot be loaded must fail loudly, never scan as "no reader".
+func TestWorkerSecretKeyReaderScanImportFailureIsLoud(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered == nil || !strings.Contains(fmt.Sprint(recovered), "import \"nosuchstd/pkg\" failed") {
+			t.Errorf("a failed standard import gave %v, want a panic naming the import", recovered)
+		}
+	}()
+	scanEnvReaders(map[string]string{"internal/x/x.go": "package x\nimport \"nosuchstd/pkg\"\nfunc f() string { return pkg.Getenv(\"SOME_KEY\") }\n"})
+}
+
 func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
 	mod := strings.TrimSuffix(secretsImportPath, "/"+secretsDir)
 	envStruct := "type Env struct{ Lookup func(string) (string, bool) }\n"

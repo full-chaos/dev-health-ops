@@ -163,6 +163,10 @@ func (h *handlers) stopDelegatedImpersonation(w http.ResponseWriter, r *http.Req
 		policy.WriteDetail(w, http.StatusBadRequest, "No active impersonation session", nil)
 		return
 	}
+	if user.SessionID == nil {
+		policy.WriteDetail(w, http.StatusConflict, "Impersonation needs an authentication-service session; sign in again", nil)
+		return
+	}
 	sessionID, err := uuid.Parse(active.ID)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin impersonate stop: session id unreadable", slog.Any("error", err))

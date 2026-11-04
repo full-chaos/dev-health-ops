@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,4 +179,59 @@ func TestIdentityAccountsMapsAnUnusableVerificationLink(t *testing.T) {
 	if err := acc.SetEmailVerifiedConsuming(context.Background(), uuid.New(), [32]byte{3}); !errors.Is(err, ErrVerificationLinkUnusable) {
 		t.Fatalf("an unusable link = %v, want ErrVerificationLinkUnusable", err)
 	}
+}
+
+// The decoy provision runs in a rehearsal, under a throwaway address, and keeps the real request's other fields.
+func TestProvisionLocalDecoyRunsInARehearsalUnderAThrowawayAddress(t *testing.T) {
+	store := &recordingStore{}
+	name, org := "Ada", "Acme"
+	var sawRehearsal bool
+	acc := IdentityAccounts{Store: rehearsalProbe{recordingStore: store, saw: &sawRehearsal}}
+	req := ProvisionLocalRequest{Email: "known@example.com", FullName: &name, PasswordHash: "$2b$12$hash", OrganizationName: &org}
+	if err := acc.ProvisionLocalDecoy(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	got := store.provisioned
+	if !sawRehearsal {
+		t.Error("the provision did not run in a rehearsal")
+	}
+	if got.Email == "known@example.com" || !strings.HasPrefix(got.Email, "rehearsal-") {
+		t.Errorf("decoy address = %q", got.Email)
+	}
+	if got.FullName != &name || got.Organization == nil || got.Organization.Name != org || got.PasswordHash == nil || *got.PasswordHash != "$2b$12$hash" {
+		t.Errorf("decoy request = %+v, want the real request's name, organization and hash", got)
+	}
+}
+
+type rehearsalProbe struct {
+	*recordingStore
+	saw *bool
+}
+
+func (p rehearsalProbe) ProvisionLocal(ctx context.Context, r identity.LocalProvisionRequest) (uuid.UUID, error) {
+	*p.saw = audit.Rehearsing(ctx)
+	return p.recordingStore.ProvisionLocal(ctx, r)
+}
+
+// The refusals the real sign-up swallows are not errors of the decoy.
+func TestProvisionLocalDecoySwallowsOnlyTheRefusalsARealSignUpSwallows(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		wantNil bool
+	}{{identity.ErrEmailTaken, true}, {identity.ErrOrganizationSlugCollision, true}, {errors.New("db down"), false}} {
+		acc := IdentityAccounts{Store: failingProvision{recordingStore: &recordingStore{}, err: tc.err}}
+		err := acc.ProvisionLocalDecoy(context.Background(), ProvisionLocalRequest{Email: "a@example.com", PasswordHash: "$2b$12$hash"})
+		if (err == nil) != tc.wantNil {
+			t.Errorf("%v: decoy error = %v", tc.err, err)
+		}
+	}
+}
+
+type failingProvision struct {
+	*recordingStore
+	err error
+}
+
+func (p failingProvision) ProvisionLocal(context.Context, identity.LocalProvisionRequest) (uuid.UUID, error) {
+	return uuid.Nil, p.err
 }

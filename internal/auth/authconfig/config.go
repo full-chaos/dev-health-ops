@@ -137,6 +137,10 @@ const (
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
+	// EnvClientAddrMode selects the client-address rule (cidr, both or signed; default cidr).
+	EnvClientAddrMode = clientaddr.EnvMode
+	// EnvClientAddrVerifyKey is the client-address proof key list (one or two "kid:key" entries).
+	EnvClientAddrVerifyKey = clientaddr.EnvVerifyKey
 )
 
 // EnvValkeyURI is the Valkey login that holds the rate-limit counters of the
@@ -261,6 +265,11 @@ type Config struct {
 
 	// TrustedProxies are the peers whose X-Forwarded-For names the client.
 	TrustedProxies clientaddr.Trust
+
+	// ClientAddrMode is how the client address is named (clientaddr.Policy).
+	ClientAddrMode clientaddr.Mode
+	// ClientAddrKeys are the client-address proof keys; none in mode cidr is allowed.
+	ClientAddrKeys []clientaddr.ProofKey
 
 	// Social is each social provider's OAuth client, keyed by provider. A
 	// provider without both values answers go-api's 503.
@@ -391,6 +400,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
 		slog.Bool("membership_routes_enabled", c.Provisioning.Routes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
+		slog.String("client_addr_mode", string(c.ClientAddrMode)),
+		slog.Int("client_addr_key_count", len(c.ClientAddrKeys)),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
@@ -584,6 +595,9 @@ func Load(spec Spec) (Config, error) {
 			contracts.PlatformAPIAudience, contracts.SessionRouteAudience)
 	}
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
+		return Config{}, err
+	}
+	if cfg.ClientAddrMode, cfg.ClientAddrKeys, err = clientAddrSetting(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
@@ -1009,6 +1023,27 @@ func layered(overrides map[string]string, environment secrets.LookupEnv) secrets
 		}
 		return environment(key)
 	}
+}
+
+// clientAddrSetting reads the client-address mode and its proof keys. Modes both and signed need a key: without one
+// no proof could ever be valid, and mode signed would name every proxied caller by go-api's pod address.
+func clientAddrSetting(lookup secrets.LookupEnv) (clientaddr.Mode, []clientaddr.ProofKey, error) {
+	mode, err := clientaddr.ParseMode(valueOf(lookup, EnvClientAddrMode))
+	if err != nil {
+		return "", nil, err
+	}
+	raw, _, err := secrets.ResolveSecret(EnvClientAddrVerifyKey, lookup)
+	if err != nil {
+		return "", nil, err
+	}
+	keys, err := clientaddr.ParseProofKeys(EnvClientAddrVerifyKey, raw.Reveal(), clientaddr.MaxVerifyKeys)
+	if err != nil {
+		return "", nil, err
+	}
+	if mode != clientaddr.ModeCIDR && len(keys) == 0 {
+		return "", nil, fmt.Errorf("%s=%s needs %s", EnvClientAddrMode, mode, EnvClientAddrVerifyKey)
+	}
+	return mode, keys, nil
 }
 
 func valueOf(lookup secrets.LookupEnv, key string) string {

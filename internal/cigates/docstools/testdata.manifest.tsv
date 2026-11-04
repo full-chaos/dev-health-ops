@@ -1,7 +1,7 @@
 # Every file under internal/cigates/docstools/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
-# python-recorded set: 1557ba1fbeb1e69009f7f3c7703fcd94db00e7027a580420533697255ccf03e7 (6400 files)
+# python-recorded set: a785dc699d8fb9c0a3182377b2b8f06fd3bd23e72b4e8f28680e0adff5065091 (6400 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-910b8cf9568e7a57ecb534123f424665d028789d5185034e3b694be2f8517c88	hand-written	README.md
+0b9be22a5ef17f4440f1dd44a6889de17151527a3fd38afdb8894cc0f5936271	hand-written	README.md
 9c2bf709880d5f65d9dde65999f1f3868f1f9eea3afd523817fa10676fb9d53a	python-recorded	argparse-cases.json
 8a509c842354e26c0722fb393f7701c3e6b9425a04c36cf5d686505374c59afd	python-recorded	helpers/a11yaudit.jsonl
 2c860a742c5c226525ac871c5d377d4c685b6e282c8c4a924c2a811471b2ebab	python-recorded	helpers/b64decode.jsonl
@@ -1330,18 +1330,18 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded
 106fac777d2c5bd7e77a4694d8c35950feceaf097b0ecd4d6d0a0efbb859f1eb	python-recorded	parity/a11y-fail-skip-link-not-fragment/stdout
 4b382174be9fa269865b1478e093cc39b48afd04804ba48982ee255a61c95931	python-recorded	parity/a11y-fail-sort-order/args
 dd28c5a725f417b8cdc038d3ad95646bd0a567fe1ed4845b7c6a8db8ceeba09c	python-recorded	parity/a11y-fail-sort-order/in/extra.css.fixture
-79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/B.html.fixture
+79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/C.html.fixture
 79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/Z/x.html.fixture
 79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a-b.html.fixture
 79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a.html.fixture
-79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a/B.html.fixture
+79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a/C.html.fixture
 79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a/b.html.fixture
 79f9c0424eab2f87850a42994f6896bfff9b98b20a9ca6434b16334ed6293aed	python-recorded	parity/a11y-fail-sort-order/in/site/a/c/d.html.fixture
 03f5b3d34a4aedd916c4980bf5d9f7650bc237c5e7f793e9d8dbe131f9a85344	python-recorded	parity/a11y-fail-sort-order/in/site/index.html.fixture
-72acb8a3adc059ee631d0d37fb68c9785a64ee56f76db57f19c908eb8611603e	python-recorded	parity/a11y-fail-sort-order/out/.build/docs-accessibility-audit.tsv
+0323f4358d448c1c21aadda975dd135a317100d47a9f7df85ab17005f11e9d93	python-recorded	parity/a11y-fail-sort-order/out/.build/docs-accessibility-audit.tsv
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/a11y-fail-sort-order/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/a11y-fail-sort-order/stderr
-3f2614da664316c5f22e3bd7f41a7679a63b7bd6cd236b242b15763f08126c2e	python-recorded	parity/a11y-fail-sort-order/stdout
+a0e425952b50418769421026ec9accb8845c9e33fb6cce925e54ac03105c35b7	python-recorded	parity/a11y-fail-sort-order/stdout
 4b382174be9fa269865b1478e093cc39b48afd04804ba48982ee255a61c95931	python-recorded	parity/a11y-fail-tabindex-4301-digits/args
 dd28c5a725f417b8cdc038d3ad95646bd0a567fe1ed4845b7c6a8db8ceeba09c	python-recorded	parity/a11y-fail-tabindex-4301-digits/in/extra.css.fixture
 03f5b3d34a4aedd916c4980bf5d9f7650bc237c5e7f793e9d8dbe131f9a85344	python-recorded	parity/a11y-fail-tabindex-4301-digits/in/site/index.html.fixture
@@ -2960,14 +2960,14 @@ daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	pa
 faf1877f41e580ff8d95b3d2dee42647a5d81f816975d7f9ac064fa940f5cdc9	hand-written	parity/check-investment-drift-missing-doc/stderr.traceback
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-missing-doc/stdout
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-nested-docs-order/args
-a8998c17c5616c43221868bb5033ec4563128506859c257515d964cbf732812a	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/B.md
+a8998c17c5616c43221868bb5033ec4563128506859c257515d964cbf732812a	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/C.md
 42f36632856a75db81a25b8275bc4eb793f3b94f5becf7420a80bee8205af8c5	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/a.md
 32226aef4160fce9f1b82f2015972f39777dc3129130836b1c142098705c178b	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/b.md
 16a305e285cda654449d5bd0721b6e51b51200b1ed7218db08e248a991cccf59	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/b/z.md
 189bb206cccfa3c7de9b4e4a908ef475f9820f09ff91c0f12183149c16c3d870	hand-written	parity/check-investment-drift-nested-docs-order/in/docs/reference/taxonomies/investment.md
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-nested-docs-order/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/check-investment-drift-nested-docs-order/stderr
-4e083893a38bab48258a8e1264e8bed45d91f76a475ca77ab86e27d0e2da965a	python-recorded	parity/check-investment-drift-nested-docs-order/stdout
+c96f2d2d5c80116ca19f57adb8c1dc359f04315097ddb077b55acc7073a848fc	python-recorded	parity/check-investment-drift-nested-docs-order/stdout
 daa66e6ef3ea1dca15392a2a686a175e50dec9f9fef750b12aa32a9e26972c9f	hand-written	parity/check-investment-drift-no-markers/args
 4f34a982271baf9d262a04ae08dab0e0bf8b22564a21779699576c3684172975	hand-written	parity/check-investment-drift-no-markers/in/docs/reference/taxonomies/investment.md
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/check-investment-drift-no-markers/rc
@@ -3695,14 +3695,14 @@ bdf5c86381988c01337fdbbad28f2d15b56e78164bd0300ce0bffe1f30899162	python-recorded
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-parent-escape-inside/stderr
 2be00a8777620b5165efe69163a152e19342feb93529c49902a697cb34d7fe5c	python-recorded	parity/links-parent-escape-inside/stdout
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-path-sort-order/args
-1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/B.html.fixture
+1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/C.html.fixture
 1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/a.html.fixture
 1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/b-c.html.fixture
 1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/b.html.fixture
 1438b8736f35a486099f2893aaf242c0e637271be0e7e133846839ef1669c03b	python-recorded	parity/links-path-sort-order/in/site/b/z.html.fixture
 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865	python-recorded	parity/links-path-sort-order/rc
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855	python-recorded	parity/links-path-sort-order/stderr
-6ef8b9ad86c7b3f921009bb3ee9149bc8114719b9252bd4890cb159fce50f87d	python-recorded	parity/links-path-sort-order/stdout
+1ae042b10d05db9b29921f8a88fab9678cb4e5d1137a53614f05d96c8ae2fd44	python-recorded	parity/links-path-sort-order/stdout
 2a437b65d3934443368e0a05e8da74c54d4a5d2cae400dcedece137e09e9d2ec	python-recorded	parity/links-percent-encoded/args
 249fac96ec8a4d9f285c6c0eec3c1fcbb7edab33416f20a3d1980b981043c6ad	python-recorded	parity/links-percent-encoded/in/site/a b.html.fixture
 f7842d2eafa00070ec797495b92b28c791fb97811acf1f38f41fc9c34261210d	python-recorded	parity/links-percent-encoded/in/site/caf{E9}.html.fixture
@@ -6017,7 +6017,7 @@ dd85d0f36acea8ca4fe539455458199d01fa3d16df52208d05fd6a5b05474b49	python-recorded
 62f40a125754fdda53a68ee12b2c5a7e314fd5a9756c6e19265380bade66a0ef	python-recorded	parity/pub-page-uppercase-md-extension/args
 4e4fad82c0b9770eed99013617fa6165e8f5ff66ac4d1ad2d06af7f5bbc1f278	python-recorded	parity/pub-page-uppercase-md-extension/in/docs-data/ia/main.tsv.fixture
 686ab5f5ce7faa46f6731a0e686aa67694c1c41e99472d47a5b84078f40f1398	python-recorded	parity/pub-page-uppercase-md-extension/in/docs-data/redirects.tsv.fixture
-73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac	python-recorded	parity/pub-page-uppercase-md-extension/in/docs/UP.MD.fixture
+73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac	python-recorded	parity/pub-page-uppercase-md-extension/in/docs/UPPER.MD.fixture
 73cb3858a687a8494ca3323053016282f3dad39d42cf62ca4e79dda2aac7d9ac	python-recorded	parity/pub-page-uppercase-md-extension/in/docs/Up.Md.fixture
 1ec75c9f3d27b87c55c9c6e690304b38241b68936139ab687b2591a41b99d452	python-recorded	parity/pub-page-uppercase-md-extension/in/docs/guide/advanced/index.md.fixture
 5ef76b03026269900f46688a8b03e3fa547c5b61ea444a7f84f4f29e814c4431	python-recorded	parity/pub-page-uppercase-md-extension/in/docs/guide/intro.md.fixture

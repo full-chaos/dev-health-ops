@@ -74,3 +74,86 @@ func TestMaskUnreachableHidesTheTextAndKeepsTheCause(t *testing.T) {
 		t.Fatal("a final error and nil must pass through unchanged")
 	}
 }
+
+type dialRetryClock struct {
+	at    time.Time
+	waits []time.Duration
+}
+
+func (c *dialRetryClock) now() time.Time { return c.at }
+func (c *dialRetryClock) sleep(_ context.Context, wait time.Duration) {
+	c.at = c.at.Add(wait)
+	c.waits = append(c.waits, wait)
+}
+
+func TestDialRetryDoesNotAttemptAtOrAfterBudget(t *testing.T) {
+	clock := &dialRetryClock{at: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	retry := DialRetry{Budget: 20 * time.Second, Now: clock.now, Sleep: clock.sleep}
+	var starts []time.Duration
+	begin := clock.at
+	err := retry.Do(context.Background(), func(context.Context) error {
+		starts = append(starts, clock.at.Sub(begin))
+		return syscall.ECONNREFUSED
+	})
+	if !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("err = %v, want the dial cause", err)
+	}
+	for _, at := range starts {
+		if at >= 20*time.Second {
+			t.Fatalf("attempt started at %v, at or after the 20s budget (starts=%v)", at, starts)
+		}
+	}
+	if len(starts) != 4 {
+		t.Fatalf("attempts = %d (%v), want 4 at 0s 2s 6s 14s", len(starts), starts)
+	}
+}
+
+func TestDialRetryRetryableOverrideAndGiveUpHook(t *testing.T) {
+	soft := errors.New("soft")
+	final := errors.New("final")
+	type giveUp struct {
+		attempt   int
+		exhausted bool
+		called    int
+	}
+	run := func(budget time.Duration, failures ...error) (error, giveUp, int) {
+		clock := &dialRetryClock{at: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+		var got giveUp
+		calls := 0
+		err := DialRetry{
+			Budget: budget, Now: clock.now, Sleep: clock.sleep,
+			Retryable: func(err error) bool { return errors.Is(err, soft) },
+			OnGiveUp: func(attempt int, _ time.Duration, exhausted bool) {
+				got.attempt, got.exhausted = attempt, exhausted
+				got.called++
+			},
+		}.Do(context.Background(), func(context.Context) error {
+			defer func() { calls++ }()
+			if calls < len(failures) {
+				return failures[calls]
+			}
+			return nil
+		})
+		return err, got, calls
+	}
+	if err, got, calls := run(time.Minute, soft, soft, final); !errors.Is(err, final) || calls != 3 || got != (giveUp{3, false, 1}) {
+		t.Fatalf("final after soft retries: err=%v calls=%d giveUp=%+v", err, calls, got)
+	}
+	if err, got, calls := run(5*time.Second, soft, soft, soft, soft, soft); !errors.Is(err, soft) || got.called != 1 || !got.exhausted || got.attempt != calls {
+		t.Fatalf("budget spent: err=%v calls=%d giveUp=%+v", err, calls, got)
+	}
+	if err, got, _ := run(time.Minute, soft, soft); err != nil || got.called != 0 {
+		t.Fatalf("success: err=%v giveUp=%+v", err, got)
+	}
+}
+
+func TestDialRetryGiveUpReportsExhaustedWhenTheBudgetIsAlreadySpent(t *testing.T) {
+	exhausted, calls := false, 0
+	err := DialRetry{
+		Budget:   0,
+		OnGiveUp: func(_ int, _ time.Duration, spent bool) { exhausted, calls = spent, calls+1 },
+	}.Do(context.Background(), func(context.Context) error { return syscall.ECONNREFUSED })
+	if !errors.Is(err, syscall.ECONNREFUSED) || !exhausted || calls != 1 {
+		t.Fatalf("err=%v exhausted=%v hookCalls=%d, want the cause, true, 1", err, exhausted, calls)
+	}
+}

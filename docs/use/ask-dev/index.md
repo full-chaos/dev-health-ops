@@ -68,7 +68,7 @@ Ask Dev words its explanations as what the evidence *appears* or *suggests*. Che
 
 Your history lists your conversations. You can reopen one or delete it. Deleting cannot be undone, and it does not stop a question that is still running. Renaming a conversation is not available.
 
-Retention is a per-conversation tier of 0 days or 30 days. A conversation from the web app uses the service default, which is 0 days: the content is meant to be removed 24 hours after its last turn. Removal depends on the operator having turned on the retention cleanup job, and the web app does not request the 30-day tier. Do not rely on a conversation being kept.
+Retention is a per-conversation tier of 0 days or 30 days. A conversation from the web app uses the service default, which is 0 days: the content is meant to be removed 24 hours after its last turn. An expired conversation is not served on any read; the stored rows are removed only where the operator has turned on the Ask Dev service's retention cleanup job, and the web app does not request the 30-day tier. Do not rely on a conversation being kept.
 
 ## If it does not work
 

@@ -68,7 +68,7 @@ When the model cannot be used, users meet one of the refusals in [Ask Dev model 
 
 - Stopping a running question needs the run lease turned on in the Ask Dev service (`ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED`, default off).
 - Streaming needs `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (default off). With it off the panel says Ask Dev is not available.
-- Removing expired conversations needs `ACR_ASK_DEV_RETENTION_ENABLED` (default off). See [Privacy and telemetry](../security-and-audit/privacy.md) for what is stored and for how long.
+- Removing expired conversations from the Ask Dev service's own store needs `ACR_ASK_DEV_RETENTION_ENABLED`, a setting of the Ask Dev service (default off); expired conversations are not served on any read either way. Older rows in the Dev Health database are purged by Dev Health's own daily cleanup. See [Privacy and telemetry](../security-and-audit/privacy.md) for what is stored and for how long.
 - Titles that show the first question need `ACR_THREAD_LIST_FIRST_QUESTION_ENABLED` (default off).
 
 ## Turn it off

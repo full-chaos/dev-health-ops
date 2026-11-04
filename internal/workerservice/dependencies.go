@@ -766,12 +766,12 @@ func (component workerProcessComponent) Start(ctx context.Context) error {
 			var rollback []error
 			for index := len(started) - 1; index >= 0; index-- {
 				if stopErr := started[index].Shutdown(rollbackCtx); stopErr != nil {
-					rollback = append(rollback, stopErr)
+					rollback = append(rollback, postgres.MaskUnreachable(stopErr))
 				}
 			}
 			if component.presence != nil {
 				if stopErr := component.presence.Shutdown(rollbackCtx); stopErr != nil {
-					rollback = append(rollback, stopErr)
+					rollback = append(rollback, postgres.MaskUnreachable(stopErr))
 				}
 			}
 			return errors.Join(postgres.MaskUnreachable(err), errors.Join(rollback...))

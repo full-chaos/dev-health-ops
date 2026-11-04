@@ -39,6 +39,8 @@ SVC="${RELEASE}-dev-health-auth-service"
 sec="$DRILL_DIR/sec"
 tok="$DRILL_DIR/tokens"
 EMAIL="drill-reuse@example.com"
+# One id per run. The namespace is created with it as a label and the teardown deletes only a namespace that carries it.
+RUN_ID="${DRILL_RUN_ID:-}"
 
 k() { kubectl -n "$DRILL_NS" "$@"; }
 fail() { echo "FAIL: $*"; exit 1; }
@@ -110,12 +112,23 @@ mk_secret() { # NAME KEY=FILE...
   k create secret generic "$name" "${a[@]}" --dry-run=client -o yaml | k apply -f - >/dev/null
 }
 
+new_run_id() { RUN_ID="$(date -u +%Y%m%dt%H%M%Sz)-$$-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"; }
+
+# create_ns : create the namespace with this run's label in ONE call (an existing namespace is AlreadyExists, never
+# changed), and record the create rc and the run id in $DRILL_DIR/ns-created only after the create succeeded.
+create_ns() {
+  [ -n "$RUN_ID" ] || new_run_id
+  printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n  labels:\n    drill-run: "%s"\n' "$DRILL_NS" "$RUN_ID" |
+    kubectl create -f - >/dev/null || return $?
+  printf 'rc=0 run=%s\n' "$RUN_ID" >"$DRILL_DIR/ns-created"
+}
+
 setup() {
   need_images
   gen_secrets
   kubectl get ns "$DRILL_NS" >/dev/null 2>&1 && fail "namespace $DRILL_NS exists: use a fresh name"
-  kubectl create ns "$DRILL_NS" >/dev/null
-  echo "ns=$DRILL_NS created"
+  create_ns
+  echo "ns=$DRILL_NS created (run $RUN_ID)"
   if [ -n "${PULL_SECRET_SOURCE:-}" ]; then
     # By pipe only; never printed.
     kubectl -n "${PULL_SECRET_SOURCE%%/*}" get secret "${PULL_SECRET_SOURCE#*/}" -o json |
@@ -219,7 +232,13 @@ refresh() { # REFRESH_FILE OUT_JSON -> status
 }
 take() { jq -je ".$2 // empty" "$1" || { echo "FAIL: no $2 in $(basename "$1")" >&2; return 1; }; }
 sha12() { sha256sum "$1" | cut -c1-12; }
-detail() { jq -r '(.detail.message // .detail // .reason_code // "-") | tostring' "$1" 2>/dev/null || echo "-"; }
+# Error text of a response, from a fixed set of keys only, string values only, short, plain characters. The body, and
+# every other key (refresh_token, access_token, session_access_token, ...), is never printed.
+safe_err() { # FILE -> one line
+  jq -r '[.error?, .code?, .reason_code?, .detail?, (.detail? | objects | .message?)] | map(strings | select(length <= 80)
+    | gsub("[^A-Za-z0-9 _.:,-]"; "?")) | if length == 0 then "-" else join(" | ") end' "$1" 2>/dev/null || echo "-"
+}
+detail() { jq -r '(.detail | if type == "object" then .message else . end) // .reason_code // "-" | if type == "string" and length <= 80 then gsub("[^A-Za-z0-9 _.:,-]"; "?") else "-" end' "$1" 2>/dev/null || echo "-"; }
 current() { # ACCESS_FILE OUT -> status
   curl -s -o "$2" -w '%{http_code}' --max-time 20 -H @<(printf 'Authorization: Bearer %s\n' "$(cat "$1")") "http://127.0.0.1:$LOCAL_PORT/v1/sessions/current"
 }
@@ -255,7 +274,7 @@ cells() {
   s="$(login s2)"; want "login S2" "$s" 200 || bad=1
   take "$tok/s2.login.json" refresh_token >"$tok/s2.R0"
   s="$(login s1)"; want "login S1" "$s" 200 || bad=1
-  [ "$bad" = 0 ] || { echo "login refused: $(jq -c . "$tok/s1.login.json" | cut -c1-300)"; echo "DRILL FAILED"; return 1; }
+  [ "$bad" = 0 ] || { echo "login refused: s1 $(safe_err "$tok/s1.login.json"); s2 $(safe_err "$tok/s2.login.json")"; echo "DRILL FAILED"; return 1; }
   take "$tok/s1.login.json" refresh_token >"$tok/R0"
   take "$tok/s1.login.json" access_token >"$tok/A0"
   local sid
@@ -290,7 +309,7 @@ cells() {
   s="$(refresh "$tok/R2" "$tok/legit-after.json")"; want "C2 legit refresh R2" "$s" 401 || bad=1
   echo "  legit refresh text: $(detail "$tok/legit-after.json")"
   s="$(current "$tok/A2" "$tok/cur-after.json")"; want "C2 legit access token on /v1/sessions/current" "$s" 401 || bad=1
-  echo "  current refusal: $(jq -c '{reason_code: (.reason_code // .error.reason_code // .code // null)}' "$tok/cur-after.json" 2>/dev/null || echo -)"
+  echo "  current refusal: $(safe_err "$tok/cur-after.json")"
 
   echo "== C3 the whole family is dead"
   s="$(refresh "$tok/R1" "$tok/attack-r1.json")"; want "C3 attacker replays R1" "$s" 401 || bad=1
@@ -314,8 +333,19 @@ cells() {
   echo "DRILL OK"
 }
 
+# teardown : delete the namespace ONLY when this run created it: $DRILL_DIR/ns-created holds a successful create (rc=0)
+# and a run id, that id is this run's, and the live namespace carries the same id as its drill-run label. Otherwise it
+# refuses and returns non-zero. Every step is rc guarded with `|| return $?` (errexit is off when a caller runs
+# `teardown || ...`).
 teardown() {
-  kubectl delete ns "$DRILL_NS" --wait=true --timeout=300s >/dev/null
+  local made have
+  made="$(sed -n 's/^rc=0 run=\([a-z0-9-]*\)$/\1/p' "$DRILL_DIR/ns-created" 2>/dev/null)" || made=""
+  have="$(kubectl get ns "$DRILL_NS" -o 'jsonpath={.metadata.labels.drill-run}' 2>/dev/null)" || have=""
+  if [ -z "$made" ] || { [ -n "$RUN_ID" ] && [ "$RUN_ID" != "$made" ]; } || [ "$have" != "$made" ]; then
+    echo "REFUSED: ns=$DRILL_NS was not created by this run: not deleting it"
+    return 1
+  fi
+  kubectl delete ns "$DRILL_NS" --wait=true --timeout=300s >/dev/null || return $?
   if kubectl get ns "$DRILL_NS" >/dev/null 2>&1; then echo "ns=$DRILL_NS still present"; return 1; fi
   echo "ns=$DRILL_NS deleted"
 }
@@ -327,7 +357,8 @@ case "${1:-}" in
   run)
     # A subshell with errexit on (not under || or &&, which would turn errexit off inside it): a failure or a FAIL
     # exit in setup or cells ends the subshell, and the teardown still runs.
-    # Never tear down a namespace this run did not create.
+    # Never tear down a namespace this run did not create: the teardown checks the create record and the run label.
+    [ -n "$RUN_ID" ] || new_run_id
     kubectl get ns "$DRILL_NS" >/dev/null 2>&1 && fail "namespace $DRILL_NS exists: use a fresh name"
     set +e
     (

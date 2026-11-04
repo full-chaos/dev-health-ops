@@ -453,6 +453,12 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 		if err != nil {
 			return err
 		}
+		if in.MembershipOrg != nil || in.RemoveFromOrg != nil {
+			// The actor is read before the profile update: --actor may be the old email of the user being renamed.
+			if plan.actor, err = resolveActorOn(ctx, store, strings.TrimSpace(deref(in.Actor))); err != nil {
+				return err
+			}
+		}
 		changes := []string{}
 		shownEmail := user.Email
 		if hasProfileChange {
@@ -521,8 +527,7 @@ func (o Operator) UpdateUser(ctx context.Context, in UpdateUserInput) (*UpdateUs
 			changes = append(changes, "password updated (existing sessions revoked)")
 		}
 		if in.MembershipOrg != nil || in.RemoveFromOrg != nil {
-			plan, err = planMembershipChanges(ctx, store, user.ID, in)
-			if err != nil {
+			if err := planMembershipChanges(ctx, store, user.ID, in, &plan); err != nil {
 				return err
 			}
 		}

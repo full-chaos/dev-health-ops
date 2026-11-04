@@ -305,3 +305,28 @@ func TestOperatorDeleteWiresTheDeprovisionCall(t *testing.T) {
 		t.Fatalf("calls %v args %v, want one deprovision of the org by the actor", fake.calls, fake.args)
 	}
 }
+
+// --actor may be the old email of the user the same call renames: it is read
+// before the profile update (whose first statement reads the user by id).
+func TestOperatorActorIsReadBeforeTheProfileUpdate(t *testing.T) {
+	db := &provisionDB{rows: operatorRows()}
+	fake := &fakeProvisioner{db: db}
+	in := operatorMembershipUpdates["add"]
+	in.Actor = strp("a@example.test")
+	in.FullName = strp("New Name")
+	if _, err := (Operator{db: db, Provisioner: fake}).UpdateUser(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	emailReads, profile := 0, -1
+	for _, sql := range db.log {
+		switch {
+		case strings.Contains(sql, "FROM users WHERE lower(email) = $1"):
+			emailReads++
+		case strings.Contains(sql, "FROM users WHERE id = $1") && profile < 0:
+			profile = emailReads
+		}
+	}
+	if emailReads < 2 || profile != 2 {
+		t.Fatalf("email reads before the profile update: %d, want 2 (user, actor): %q", profile, db.log)
+	}
+}

@@ -81,24 +81,18 @@ type membershipPlan struct {
 // planMembershipChanges reads what the update needs (the actor, the
 // organizations, the current memberships) inside the update's transaction and
 // writes nothing: the writes are auth-service's, after the transaction.
-func planMembershipChanges(ctx context.Context, store pgStore, userID uuid.UUID, in UpdateUserInput) (membershipPlan, error) {
-	var plan membershipPlan
-	actor, err := resolveActorOn(ctx, store, strings.TrimSpace(deref(in.Actor)))
-	if err != nil {
-		return plan, err
-	}
-	plan.actor = actor
+func planMembershipChanges(ctx context.Context, store pgStore, userID uuid.UUID, in UpdateUserInput, plan *membershipPlan) error {
 	if in.MembershipOrg != nil {
 		org, err := resolveOrg(ctx, store, *in.MembershipOrg)
 		if err != nil {
-			return plan, err
+			return err
 		}
 		if org == nil {
-			return plan, refuse("Organization '%s' not found.", *in.MembershipOrg)
+			return refuse("Organization '%s' not found.", *in.MembershipOrg)
 		}
 		existing, err := store.membershipByOrgUser(ctx, org.ID, userID)
 		if err != nil {
-			return plan, err
+			return err
 		}
 		role := "member"
 		kind := membershipAdd
@@ -113,14 +107,14 @@ func planMembershipChanges(ctx context.Context, store pgStore, userID uuid.UUID,
 	if in.RemoveFromOrg != nil {
 		org, err := resolveOrg(ctx, store, *in.RemoveFromOrg)
 		if err != nil {
-			return plan, err
+			return err
 		}
 		if org == nil {
-			return plan, refuse("Organization '%s' not found.", *in.RemoveFromOrg)
+			return refuse("Organization '%s' not found.", *in.RemoveFromOrg)
 		}
 		existing, err := store.membershipByOrgUser(ctx, org.ID, userID)
 		if err != nil {
-			return plan, err
+			return err
 		}
 		kind := membershipRemove
 		addedHere := len(plan.steps) == 1 && plan.steps[0].kind == membershipAdd && plan.steps[0].org.ID == org.ID
@@ -129,7 +123,7 @@ func planMembershipChanges(ctx context.Context, store pgStore, userID uuid.UUID,
 		}
 		plan.steps = append(plan.steps, membershipStep{kind: kind, org: *org})
 	}
-	return plan, nil
+	return nil
 }
 
 // applyMembershipPlan sends each step to auth-service, which writes both

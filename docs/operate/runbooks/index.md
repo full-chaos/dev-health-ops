@@ -22,6 +22,7 @@ lifecycle: active
 - [Auth users-owned flip and rollback](auth-users-owned-flip-and-rollback.md)
 - [Auth platform roles flip and rollback](auth-platform-roles-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)
+- [Push projection drift alerts](auth-push-projection-drift-alerts.md)
 - [Auth users flip-back grants](auth-users-flip-back-grants.md)
 - [Workload bootstrap credential](auth-workload-bootstrap-credential.md)
 - [Service accounts](auth-service-accounts.md)

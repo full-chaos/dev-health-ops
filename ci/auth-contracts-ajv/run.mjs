@@ -212,6 +212,7 @@ const APPROVED_AUDIT = [
 const APPROVED_DECISION = [
   "allowed_by_repository_grant",
   "grant_absent",
+  "repository_allowlist_too_large",
   "repository_not_granted",
   "platform_role_absent",
   "allowed_by_membership_default",

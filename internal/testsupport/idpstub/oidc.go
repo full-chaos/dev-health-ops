@@ -450,7 +450,11 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if override != nil {
-		answer := deepCopyClaims(override)
+		answer, err := copyClaims(override)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		if edit := o.currentOverride(); edit != nil {
 			edit(answer)
 		}
@@ -468,38 +472,15 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, answer)
 }
 
-func deepCopyClaims(m map[string]any) map[string]any {
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = deepCopyValue(v)
+// copyClaims copies the claims through JSON: the stub answers JSON, so the wire form is the truth.
+func copyClaims(m map[string]any) (map[string]any, error) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
 	}
-	return out
-}
-
-func deepCopyValue(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		return deepCopyClaims(x)
-	case []any:
-		out := make([]any, len(x))
-		for i, e := range x {
-			out[i] = deepCopyValue(e)
-		}
-		return out
-	case []string:
-		return append([]string(nil), x...)
-	case map[string]string:
-		out := make(map[string]string, len(x))
-		for k, e := range x {
-			out[k] = e
-		}
-		return out
-	case []map[string]any:
-		out := make([]map[string]any, len(x))
-		for i, e := range x {
-			out[i] = deepCopyClaims(e)
-		}
-		return out
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
 	}
-	return v
+	return out, nil
 }

@@ -38,10 +38,15 @@ func TestOAuthSSOKeysGitLabComBaseURLIsSocialNamespace(t *testing.T) {
 	}
 }
 
-func TestOAuthSSOKeysSelfHostedGitLabNotJoinedToGitLabCom(t *testing.T) {
-	key, selfHosted := OAuthSSOKey(cand(uuid.New(), uuid.New(), "gitlab", "123", "https://git.corp.example"))
-	if key != nil || !selfHosted {
-		t.Fatalf("self-hosted row carried: key=%v selfHosted=%v", key, selfHosted)
+func TestOAuthSSOKeysSelfHostedGitLabKeyCarriesTheInstanceHost(t *testing.T) {
+	row := uuid.New()
+	for base, issuer := range map[string]string{
+		"https://git.corp.example": "https://git.corp.example", "https://Git.Corp.Example/gl/": "https://git.corp.example"} {
+		key, selfHosted := OAuthSSOKey(cand(uuid.New(), row, "gitlab", "123", base))
+		want := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(row.String()), Subject: "123"}
+		if key == nil || *key != want || selfHosted {
+			t.Fatalf("base_url %q: key=%v selfHosted=%v, want %+v", base, key, selfHosted, want)
+		}
 	}
 }
 

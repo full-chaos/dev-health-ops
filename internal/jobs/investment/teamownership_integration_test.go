@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -131,7 +130,13 @@ func matrixRepoID(providerIndex, n int) string {
 //     author_membership) and team_memberships rows NEVER donate. This is the
 //     cell that must stay negative -- team authorization is ownership-derived,
 //     never person -> membership -> team.
-func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
+// TestNoTeamOwnershipRepositoryFallbackProviderEntityMatrix (CHAOS-12949, chris:
+// "Drop fallback"): the same provider x entity fixtures that used to make the
+// team-ownership fallback allocate a donor team's repositories now leave every
+// unit without repository evidence unattributed -- an 'empty' row (effort 0) or
+// an 'active_hours_unassigned' row (effort > 0), repo_id NULL, never a
+// team_ownership row. Units with direct repository evidence keep it.
+func TestNoTeamOwnershipRepositoryFallbackProviderEntityMatrix(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
@@ -237,6 +242,14 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 			seedMatrixWorkItem(t, ctx, conn, issue, provider, at)
 			seedAttribution(t, ctx, conn, issue, provider, team, attrSource, 1, at)
 		}
+		// An eligible donor team, live ownership and 12 active hours: the unit has
+		// positive effort and no repository evidence, so it must keep its 12 hours
+		// as UNATTRIBUTED effort (active_hours_unassigned), not as a team share.
+		hoursIssue := provider + ":h"
+		seedMatrixWorkItem(t, ctx, conn, hoursIssue, provider, at)
+		seedAttribution(t, ctx, conn, hoursIssue, provider, teamA, attrSource, 1, at)
+		mustTeamOwnershipExec(t, ctx, conn, `INSERT INTO work_item_cycle_times (org_id, work_item_id, provider, type, active_time_hours, created_at, computed_at) VALUES (?, ?, ?, 'task', 12, ?, ?)`,
+			hierarchyCascadeTestOrg, hoursIssue, provider, at, at)
 		for i, issue := range memberOnly {
 			seedMatrixWorkItem(t, ctx, conn, issue, provider, at)
 			source := "assignee_membership"
@@ -296,159 +309,100 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if stats.Components == 0 {
+		t.Fatal("the run materialized no components")
+	}
 	for _, provider := range wtiProviders {
-		var got []string
+		// issues + teams: eligible donor teams with live ownership. No unit takes
+		// a repository from them; each keeps an unattributed row.
 		for _, issue := range []string{provider + ":a", provider + ":b"} {
 			unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
-			repos, provenance, weightSum, _ := readRepoEffort(t, ctx, conn, unit)
-			got = append(got, repos...)
-			want := wantRepos[provider][issue]
-			if len(repos) != len(want) {
-				t.Errorf("%s issue %s: persisted repos=%v want %v", provider, issue, repos, want)
-				continue
-			}
-			for i, repo := range want {
-				if repos[i] != repo {
-					t.Errorf("%s issue %s: repo[%d]=%s want %s", provider, issue, i, repos[i], repo)
-				}
-				if provenance[repo] != "team:"+wantTeams[provider][issue] {
-					t.Errorf("%s issue %s: %s provenance=%q want %q", provider, issue, repo, provenance[repo], "team:"+wantTeams[provider][issue])
-				}
-			}
-			if math.Abs(weightSum-1) > 1e-12 {
-				t.Errorf("%s issue %s: allocation weights sum to %g, want 1", provider, issue, weightSum)
-			}
+			assertUnattributedOnly(t, ctx, conn, provider, issue, unit, "empty", 0)
 		}
-		coverage.cover(provider, "issues", "primary "+attributionSourceFor[provider]+" attribution on each one-node issue unit allocated its team's repositories with weights summing to 1")
-		coverage.cover(provider, "teams", "team_repo_ownership from two is_active teams; each unit's provenance names its own team, also for the shared repo")
-
+		coverage.cover(provider, "issues", "primary "+attributionSourceFor[provider]+" attribution on a one-node issue unit with an owning team allocates no repository")
+		coverage.cover(provider, "teams", "team_repo_ownership from two is_active teams donates nothing")
 		if provider == "github" {
-			coverage.cover(provider, "projects", "n/a -- GitHub has no native project entity, the repository is the scope; second donor arm uses the `native` ownership source instead")
+			coverage.cover(provider, "projects", "n/a -- GitHub has no native project entity, the repository is the scope")
 		} else {
-			coverage.cover(provider, "projects", "team_project_ownership-derived `inferred` repository ownership donated r2/r3 for "+provider+"-team-b")
+			coverage.cover(provider, "projects", "team_project_ownership-derived repository ownership donates nothing")
 		}
-
-		// members: a component whose only attribution is membership-derived
-		// must keep its unassigned allocation. Its team owns a live repository,
-		// so the ONLY thing keeping it out is the source filter.
-		for _, issue := range []string{provider + ":m1", provider + ":m2"} {
-			memberUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
-			if repos, _, _, _ := readRepoEffort(t, ctx, conn, memberUnit); len(repos) != 0 {
-				t.Errorf("%s members: membership-derived attribution on %s donated %v", provider, issue, repos)
-			}
+		// positive effort: 12 active hours stay as unattributed effort.
+		hoursUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: provider + ":h"}})
+		assertUnattributedOnly(t, ctx, conn, provider, provider+":h", hoursUnit, "active_hours_unassigned", 12)
+		// members, inactive team: still nothing.
+		for _, issue := range []string{provider + ":m1", provider + ":m2", provider + ":i1", provider + ":i2"} {
+			unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
+			assertUnattributedOnly(t, ctx, conn, provider, issue, unit, "empty", 0)
 		}
-		coverage.cover(provider, "members", "assignee_membership + author_membership attributions and team_memberships rows donated nothing, though "+provider+"-team-members owns a live repository")
-
-		// teams (negative half): an inactive team never donates.
-		for _, issue := range []string{provider + ":i1", provider + ":i2"} {
-			inactiveUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
-			if repos, _, _, _ := readRepoEffort(t, ctx, conn, inactiveUnit); len(repos) != 0 {
-				t.Errorf("%s teams: deactivated team donated %v to %s", provider, repos, issue)
-			}
-		}
-
-		// The manual ownership row belongs to an ELIGIBLE team on an eligible
-		// issue -- only source='manual' keeps it out.
-		for _, repo := range got {
-			if repo == matrixRepoID(indexOfProvider(provider), 6) {
-				t.Errorf("%s: manual ownership row was allocated", provider)
-			}
-		}
+		coverage.cover(provider, "members", "assignee_membership + author_membership attributions and team_memberships rows donate nothing")
 	}
 	coverage.assertComplete()
 
-	// Telemetry. The outcome buckets must partition every component, and every
-	// field must be present even at zero -- a counter that disappears at zero
-	// cannot be told apart from one that was never computed.
-	if stats.Components != 40 {
-		t.Fatalf("components=%d, want 40 (4 providers x (8 one-node issue units + 2 pull request units))", stats.Components)
-	}
-	if stats.RepoOwnershipFallback != 8 {
-		t.Errorf("allocated=%d, want 8", stats.RepoOwnershipFallback)
-	}
-	if stats.RepoOwnershipNoEligible != 16 {
-		t.Errorf("no_eligible_owner=%d, want 16", stats.RepoOwnershipNoEligible)
-	}
-	// Measured, not pinned at zero: direct evidence outranks an AVAILABLE donor.
-	if stats.RepoOwnershipOwnRepo != 4 {
-		t.Errorf("own_repo=%d, want 4", stats.RepoOwnershipOwnRepo)
-	}
-	if stats.RepoOwnershipDirectRepo != 4 {
-		t.Errorf("direct_repo_evidence=%d, want 4", stats.RepoOwnershipDirectRepo)
-	}
-	if stats.RepoOwnershipRepoShares != 20 {
-		t.Errorf("repo_shares=%d, want 20", stats.RepoOwnershipRepoShares)
-	}
-	if stats.RepoOwnershipWindowSkipped != 8 {
-		t.Errorf("window_skipped=%d, want 8", stats.RepoOwnershipWindowSkipped)
-	}
-	if stats.RepoOwnershipDonorIssues != 32 {
-		t.Errorf("donor_issues=%d, want the 32 issues with an eligible primary attribution", stats.RepoOwnershipDonorIssues)
-	}
-	if stats.RepoOwnershipDonorRows == 0 {
-		t.Error("donor_rows=0 while 4 components allocated")
-	}
-	partition := stats.RepoOwnershipFallback + stats.RepoOwnershipOwnRepo + stats.RepoOwnershipStrongerEffort +
-		stats.RepoOwnershipDirectRepo + stats.RepoOwnershipNoEligible + stats.RepoOwnershipWindowSkipped
-	if partition != stats.Components {
-		t.Errorf("outcome partition sums to %d, want components=%d", partition, stats.Components)
-	}
-	line := lastLogLine(t, logs.String(), "investment team repository fallback")
-	for _, field := range []string{
-		"components=40", "allocated=8", "repo_shares=20", "own_repo=4",
-		"direct_repo_evidence=4", "no_eligible_owner=16", "window_skipped=8", "donor_issues=32",
-	} {
-		if !strings.Contains(line, field) {
-			t.Errorf("telemetry line is missing %q (explicit zeros are required): %s", field, line)
-		}
-	}
-
-	// F2 (codex r1): a run with ZERO components returns early. The documented
-	// contract says the fallback record is emitted on EVERY run, with every
-	// field present at zero -- that is the whole point of the explicit-zeros
-	// design, and an empty org is exactly the case where "did the fallback do
-	// nothing, or did it never run" matters most.
-	emptyLogs := &bytes.Buffer{}
-	emptyMaterializer, err := NewMaterializer(reader, writer, categorize.MockProvider{}, slog.New(slog.NewTextHandler(emptyLogs, nil)))
-	if err != nil {
+	// Total allocated effort of the org is unchanged by the drop: no
+	// team_ownership row exists anywhere after the run.
+	var teamRows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_unit_repo_effort FINAL WHERE org_id = ? AND allocation_source = 'team_ownership'`, hierarchyCascadeTestOrg).Scan(&teamRows); err != nil {
 		t.Fatal(err)
 	}
-	emptyStats, err := emptyMaterializer.Run(ctx, Config{
-		OrgID: "00000000-0000-4000-8000-000000000009", FromTS: at.Add(-time.Hour), ToTS: at.Add(2 * time.Hour),
-		RunID: "empty-org", ComputedAt: at.Add(2 * time.Hour), ProviderName: "mock",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if emptyStats.Components != 0 {
-		t.Fatalf("fixture is not an empty org: components=%d", emptyStats.Components)
-	}
-	emptyLine := lastLogLine(t, emptyLogs.String(), "investment team repository fallback")
-	for _, field := range []string{
-		"components=0", "allocated=0", "repo_shares=0", "own_repo=0", "stronger_allocation=0",
-		"direct_repo_evidence=0", "no_eligible_owner=0", "window_skipped=0", "donor_rows=0", "donor_issues=0",
-	} {
-		if !strings.Contains(emptyLine, field) {
-			t.Errorf("empty-org telemetry is missing %q: %s", field, emptyLine)
-		}
+	if teamRows != 0 {
+		t.Fatalf("%d work_unit_repo_effort rows carry allocation_source team_ownership", teamRows)
 	}
 
-	// A failed donor read must stop the run before it writes a new generation.
-	// Dropping this instance's table is a real failure, not a fake configured
-	// to return the expected answer.
-	mustTeamOwnershipExec(t, ctx, conn, `DROP TABLE work_item_team_attributions`)
-	if _, err = materializer.Run(ctx, Config{
+	// Skip-existing path (Force=false, unchanged units): a later run writes a
+	// NEWER allocation generation and still no team_ownership row.
+	second := at.Add(4 * time.Hour)
+	if _, err := materializer.Run(ctx, Config{
 		OrgID: hierarchyCascadeTestOrg, FromTS: at.Add(-time.Hour), ToTS: at.Add(2 * time.Hour),
-		RunID: "failed-donor-read", ComputedAt: at.Add(3 * time.Hour), ProviderName: "mock",
-	}); err == nil {
-		t.Fatal("missing donor table was treated as missing ownership")
-	}
-	var writes uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM work_unit_repo_effort WHERE org_id = ? AND categorization_run_id = 'failed-donor-read'`, hierarchyCascadeTestOrg).Scan(&writes); err != nil {
+		RunID: "team-ownership-matrix-rerun", ComputedAt: second, ProviderName: "mock",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if writes != 0 {
-		t.Fatalf("failed donor read wrote %d allocation rows", writes)
+	for _, provider := range wtiProviders {
+		unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: provider + ":a"}})
+		var newest time.Time
+		if err := conn.QueryRow(ctx, `SELECT max(computed_at) FROM work_unit_repo_effort WHERE org_id = ? AND work_unit_id = ?`, hierarchyCascadeTestOrg, unit).Scan(&newest); err != nil {
+			t.Fatal(err)
+		}
+		if !newest.Equal(second) {
+			t.Errorf("%s: newest allocation generation of %s is %s, want the rerun %s", provider, unit, newest, second)
+		}
+		assertUnattributedOnly(t, ctx, conn, provider, provider+":a", unit, "empty", 0)
+	}
+}
+
+// assertUnattributedOnly reads the NEWEST generation of the unit's allocation
+// rows and requires exactly one row: repo_id NULL, the given source and effort,
+// and no team_ownership row.
+func assertUnattributedOnly(t *testing.T, ctx context.Context, conn driver.Conn, provider, issue, workUnitID, wantSource string, wantEffort float64) {
+	t.Helper()
+	rows, err := conn.Query(ctx, `
+		SELECT repo_id IS NULL, allocation_source, effort_value
+		FROM work_unit_repo_effort
+		WHERE org_id = ? AND work_unit_id = ? AND computed_at = (SELECT max(computed_at) FROM work_unit_repo_effort WHERE org_id = ? AND work_unit_id = ?)`,
+		hierarchyCascadeTestOrg, workUnitID, hierarchyCascadeTestOrg, workUnitID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	n := 0
+	for rows.Next() {
+		var isNull bool
+		var source string
+		var effort float64
+		if err := rows.Scan(&isNull, &source, &effort); err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if source == "team_ownership" || !isNull || source != wantSource || effort != wantEffort {
+			t.Errorf("%s %s: newest allocation row repo_null=%v source=%q effort=%g, want repo NULL, source %q, effort %g",
+				provider, issue, isNull, source, effort, wantSource, wantEffort)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("%s %s: %d newest allocation rows, want exactly 1", provider, issue, n)
 	}
 }
 

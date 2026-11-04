@@ -28,6 +28,8 @@ ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 source "${SCRIPT_DIR}/lib/auth_rotation_probe.sh"
 # shellcheck source=ci/lib/registry_retry.sh
 source "${SCRIPT_DIR}/lib/registry_retry.sh"
+# shellcheck source=ci/lib/auth_workload_session_issue.sh
+source "${SCRIPT_DIR}/lib/auth_workload_session_issue.sh"
 
 readonly PG_IMAGE="postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15"
 readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
@@ -121,9 +123,9 @@ POSTGRES_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 AUTH_RUNTIME_DATABASE_PASSWORD="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
 AUTH_SESSION_SUCCESSOR_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
 AUTH_LOGIN_LOCKOUT_KEY="$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-AUTH_SESSION_ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-[[ "${AUTH_SESSION_ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
-export POSTGRES_PASSWORD AUTH_RUNTIME_DATABASE_PASSWORD AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_TOKEN
+export POSTGRES_PASSWORD AUTH_RUNTIME_DATABASE_PASSWORD AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY
+# go-api's workload token carries the rehearsal issuer: auth-service signs under it (the override) and go-api checks it.
+export AUTH_TOKEN_ISSUER_URL="${ISSUER_URL}"
 # go-api mail settings come from the webproof override; mail is not delivered in this rehearsal (the user is verified in SQL).
 export AUTH_PROOF_SMTP_PORT=2525
 export REHEARSAL_ISSUER_URL="${ISSUER_URL}"
@@ -233,15 +235,10 @@ docker volume inspect "${KEYS_VOL}" >/dev/null 2>&1 || die "the keys volume ${KE
 write_manifest a:active
 stage_keys a.pem
 
+# go-api presents its workload token on the session issue route: the bootstrap credential and the api principal first.
+auth_workload_session_issue compose --pull never || die "the go-api workload credential is not ready"
 registry_retry_run rotation-up -- compose --profile auth up --no-build --pull never --detach --wait --wait-timeout 900 go-api query-api auth-service issuer-tls
 psql_one() { compose exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" -At -c "$1"; }
-compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
-  < <(printf '\\set token %s\n' "'${AUTH_SESSION_ISSUE_TOKEN}'"; cat <<'SQL'
-INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
-        '["sessions:issue"]', now());
-SQL
-  ) || die "could not store the session issue credential"
 
 # A recreated container gets new ephemeral host ports: read them again after every recreate.
 refresh_ports() {

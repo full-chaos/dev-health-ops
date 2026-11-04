@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: auth-valkey}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: auth-valkey}}
+  template:
+    metadata: {labels: {app: auth-valkey}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 999, runAsGroup: 999}
+      containers:
+        - name: valkey
+          image: ${LOCAL_VALKEY}
+          imagePullPolicy: IfNotPresent
+          args: [--save, "", --appendonly, "no"]
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          readinessProbe:
+            exec: {command: [valkey-cli, ping]}
+            periodSeconds: 2
+---
+apiVersion: v1
+kind: Service
+metadata: {name: auth-valkey}
+spec:
+  selector: {app: auth-valkey}
+  ports: [{port: 6379, targetPort: 6379}]

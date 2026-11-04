@@ -124,6 +124,14 @@
     {
       "file": "decision-valid-allowlist-at-the-bound.json",
       "why": "256 keys is the largest allowlist the schema admits."
+    },
+    {
+      "file": "decision-valid-allow-repository-scope-organization.json",
+      "why": "A principal that reads every repository of the organization: repository_scope organization plus the tenant scope. The decision point never states it as an allowlist wildcard or as a missing member."
+    },
+    {
+      "file": "decision-valid-reason-repository-allowlist-too-large.json",
+      "why": "A deny for a principal that can read more repositories than an allowlist may hold (256): the list is never truncated."
     }
   ],
   "reject": [
@@ -312,6 +320,18 @@
       "expect_instance_location": "/obligations/redaction",
       "expect_keyword": "uniqueItems",
       "why": "A repeated redaction class is malformed, as a repeated allowlist key is."
+    },
+    {
+      "file": "decision-invalid-repository-scope-and-allowlist.json",
+      "expect_instance_location": "/obligations",
+      "expect_keyword": "not",
+      "why": "repository_scope and repository_allowlist say the same thing two ways; a decision carries one."
+    },
+    {
+      "file": "decision-invalid-repository-scope-unknown-value.json",
+      "expect_instance_location": "/obligations/repository_scope",
+      "expect_keyword": "enum",
+      "why": "The member is closed to organization; an unknown scope makes the decision invalid and the consumer denies."
     }
   ],
   "reject_by_client": [

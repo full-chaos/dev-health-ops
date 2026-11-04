@@ -132,6 +132,11 @@ func readerViolationsOf(ctx context.Context, conn *pgx.Conn, options Options, ro
 			return nil, err
 		}
 		detail := label + " " + reader
+		roleViolations, err := readerRolePostureViolations(ctx, conn, kind, reader)
+		if err != nil {
+			return nil, err
+		}
+		violations = append(violations, roleViolations...)
 		var usage, create bool
 		if err := conn.QueryRow(ctx, `SELECT has_schema_privilege($1, $2, 'USAGE'), has_schema_privilege($1, $2, 'CREATE')`,
 			reader, options.Schema).Scan(&usage, &create); err != nil {
@@ -216,4 +221,66 @@ func readerViolationsOf(ctx context.Context, conn *pgx.Conn, options Options, ro
 		}
 	}
 	return violations, nil
+}
+
+// readerRoleAttributes are the role ATTRIBUTES a reader must not hold. Each
+// confers capability outside the object-privilege model, so no has_*_privilege
+// check sees it.
+type readerRoleAttributes struct {
+	Superuser, CreateRole, CreateDB, BypassRLS, Replication bool
+}
+
+// readerAttributeViolations names each risky attribute the reader holds.
+func readerAttributeViolations(kind, reader string, attrs readerRoleAttributes) []Violation {
+	var violations []Violation
+	for _, attribute := range []struct {
+		held bool
+		name string
+	}{
+		{attrs.Superuser, "SUPERUSER"},
+		{attrs.CreateRole, "CREATEROLE"},
+		{attrs.CreateDB, "CREATEDB"},
+		{attrs.BypassRLS, "BYPASSRLS"},
+		{attrs.Replication, "REPLICATION"},
+	} {
+		if attribute.held {
+			violations = append(violations, Violation{Kind: kind, Object: reader, Privilege: attribute.name,
+				Detail: fmt.Sprintf("%s %s holds a role attribute that bypasses the grants; remedy: ALTER ROLE %s NO%s",
+					strings.ReplaceAll(kind, "_", " "), reader, reader, attribute.name)})
+		}
+	}
+	return violations
+}
+
+// readerMembershipViolations keeps the memberships a reader can use that no
+// effective-privilege check sees: server-defined roles and ordinary roles
+// reachable only through SET ROLE. Inherited ordinary memberships stay out;
+// their privileges already show in the table, column and sequence checks.
+func readerMembershipViolations(kind, reader string, memberships []Violation) []Violation {
+	var violations []Violation
+	for _, membership := range memberships {
+		if !membership.SystemRole {
+			continue
+		}
+		violations = append(violations, Violation{Kind: kind, Object: membership.Object, Privilege: "MEMBER",
+			Detail: fmt.Sprintf("%s %s can reach role %s; remedy: REVOKE %q FROM %q",
+				strings.ReplaceAll(kind, "_", " "), reader, membership.Object, membership.Object, reader)})
+	}
+	return violations
+}
+
+// readerRolePostureViolations reads the reader's attributes and memberships.
+func readerRolePostureViolations(ctx context.Context, conn *pgx.Conn, kind, reader string) ([]Violation, error) {
+	var attrs readerRoleAttributes
+	if err := conn.QueryRow(ctx,
+		`SELECT rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolreplication FROM pg_roles WHERE rolname = $1`,
+		reader).Scan(&attrs.Superuser, &attrs.CreateRole, &attrs.CreateDB, &attrs.BypassRLS, &attrs.Replication); err != nil {
+		return nil, fmt.Errorf("%w: role attributes of %s %q", ErrMigrationFailed, strings.ReplaceAll(kind, "_", " "), reader)
+	}
+	violations := readerAttributeViolations(kind, reader, attrs)
+	memberships, err := roleMemberships(ctx, conn, reader, attrs.Superuser)
+	if err != nil {
+		return nil, err
+	}
+	return append(violations, readerMembershipViolations(kind, reader, memberships)...), nil
 }

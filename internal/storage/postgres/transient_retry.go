@@ -24,6 +24,12 @@ type DialRetry struct {
 	// OnRetry runs before each wait. It receives no error: the error text can
 	// name the dial address.
 	OnRetry func(attempt int, elapsed, wait time.Duration)
+	// Retryable overrides IsTransientDialError as the retry classifier.
+	Retryable func(error) bool
+	// OnGiveUp runs once when the loop returns a failed attempt. exhausted is
+	// true when the failure was retryable but the budget or the context ended
+	// the loop; false for a final error. It receives no error.
+	OnGiveUp func(attempt int, elapsed time.Duration, exhausted bool)
 }
 
 // Do runs attempt until it succeeds, fails with a final error, or the budget
@@ -36,15 +42,29 @@ func (retry DialRetry) Do(ctx context.Context, attempt func(context.Context) err
 	if sleep == nil {
 		sleep = dialRetrySleep
 	}
+	retryable := retry.Retryable
+	if retryable == nil {
+		retryable = IsTransientDialError
+	}
+	giveUp := func(attemptNum int, elapsed time.Duration, exhausted bool) {
+		if retry.OnGiveUp != nil {
+			retry.OnGiveUp(attemptNum, elapsed, exhausted)
+		}
+	}
 	start := now()
 	backoff := dialRetryInitialBackoff
 	for attemptNum := 1; ; attemptNum++ {
 		err := attempt(ctx)
-		if err == nil || !IsTransientDialError(err) || ctx.Err() != nil {
-			return err
+		if err == nil {
+			return nil
 		}
 		elapsed := now().Sub(start)
-		if elapsed >= retry.Budget {
+		if !retryable(err) {
+			giveUp(attemptNum, elapsed, false)
+			return err
+		}
+		if ctx.Err() != nil || elapsed >= retry.Budget {
+			giveUp(attemptNum, elapsed, true)
 			return err
 		}
 		wait := backoff
@@ -59,6 +79,10 @@ func (retry DialRetry) Do(ctx context.Context, attempt func(context.Context) err
 		}
 		sleep(ctx, wait)
 		backoff = min(backoff*2, dialRetryMaxBackoff)
+		if elapsed = now().Sub(start); elapsed >= retry.Budget {
+			giveUp(attemptNum, elapsed, true)
+			return err
+		}
 	}
 }
 

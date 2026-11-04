@@ -127,8 +127,6 @@ const (
 
 	// EnvUsersOwned is the D3c users-owned switch (true or false, default false).
 	EnvUsersOwned = "AUTH_USERS_OWNED"
-	// EnvOrgsOwned is the organizations-owned switch (true or false, default false).
-	EnvOrgsOwned = "AUTH_ORGS_OWNED"
 	// EnvRevisionFeed is the revision feed switch (on or off, default off).
 	EnvRevisionFeed = "AUTH_REVISION_FEED"
 	// EnvPushProjection is the External Push projection switch (on or off, default off).
@@ -139,6 +137,10 @@ const (
 	// EnvTrustedProxies lists the proxies whose X-Forwarded-For names the
 	// client (internal/auth/clientaddr).
 	EnvTrustedProxies = clientaddr.Env
+	// EnvClientAddrMode selects the client-address rule (cidr, both or signed; default cidr).
+	EnvClientAddrMode = clientaddr.EnvMode
+	// EnvClientAddrVerifyKey is the client-address proof key list (one or two "kid:key" entries).
+	EnvClientAddrVerifyKey = clientaddr.EnvVerifyKey
 )
 
 // EnvValkeyURI is the Valkey login that holds the rate-limit counters of the
@@ -264,6 +266,11 @@ type Config struct {
 	// TrustedProxies are the peers whose X-Forwarded-For names the client.
 	TrustedProxies clientaddr.Trust
 
+	// ClientAddrMode is how the client address is named (clientaddr.Policy).
+	ClientAddrMode clientaddr.Mode
+	// ClientAddrKeys are the client-address proof keys; none in mode cidr is allowed.
+	ClientAddrKeys []clientaddr.ProofKey
+
 	// Social is each social provider's OAuth client, keyed by provider. A
 	// provider without both values answers go-api's 503.
 	Social map[string]SocialClient
@@ -272,9 +279,6 @@ type Config struct {
 	// local credential links.
 	UsersOwned bool
 
-	// OrgsOwned is AUTH_ORGS_OWNED: auth-service is the only writer of
-	// auth.organizations; the legacy login projection writes nothing.
-	OrgsOwned bool
 	// RevisionFeed is AUTH_REVISION_FEED=on: the outbox publisher has a Valkey sink and this replica subscribes.
 	RevisionFeed bool
 	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
@@ -396,6 +400,8 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.Bool("social_link_routes_enabled", c.Session.SocialLinkRoutes),
 		slog.Bool("membership_routes_enabled", c.Provisioning.Routes),
 		slog.Int("trusted_proxy_count", c.TrustedProxies.Len()),
+		slog.String("client_addr_mode", string(c.ClientAddrMode)),
+		slog.Int("client_addr_key_count", len(c.ClientAddrKeys)),
 		slog.String("jwt_issuer", c.Session.AccessIssuer),
 		slog.String("jwt_audience", c.Session.AccessAudience),
 		slog.String("access_class", c.Session.AccessClass),
@@ -591,13 +597,13 @@ func Load(spec Spec) (Config, error) {
 	if cfg.TrustedProxies, err = clientaddr.ParseTrust(valueOf(lookup, EnvTrustedProxies)); err != nil {
 		return Config{}, err
 	}
+	if cfg.ClientAddrMode, cfg.ClientAddrKeys, err = clientAddrSetting(lookup); err != nil {
+		return Config{}, err
+	}
 	if cfg.Social, err = socialClients(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.UsersOwned, err = usersOwned(lookup); err != nil {
-		return Config{}, err
-	}
-	if cfg.OrgsOwned, err = orgsOwned(lookup); err != nil {
 		return Config{}, err
 	}
 	if cfg.PlatformRolesOwned, err = rule.OwnedFromLookup(lookup); err != nil {
@@ -1019,6 +1025,27 @@ func layered(overrides map[string]string, environment secrets.LookupEnv) secrets
 	}
 }
 
+// clientAddrSetting reads the client-address mode and its proof keys. Modes both and signed need a key: without one
+// no proof could ever be valid, and mode signed would name every proxied caller by go-api's pod address.
+func clientAddrSetting(lookup secrets.LookupEnv) (clientaddr.Mode, []clientaddr.ProofKey, error) {
+	mode, err := clientaddr.ParseMode(valueOf(lookup, EnvClientAddrMode))
+	if err != nil {
+		return "", nil, err
+	}
+	raw, _, err := secrets.ResolveSecret(EnvClientAddrVerifyKey, lookup)
+	if err != nil {
+		return "", nil, err
+	}
+	keys, err := clientaddr.ParseProofKeys(EnvClientAddrVerifyKey, raw.Reveal(), clientaddr.MaxVerifyKeys)
+	if err != nil {
+		return "", nil, err
+	}
+	if mode != clientaddr.ModeCIDR && len(keys) == 0 {
+		return "", nil, fmt.Errorf("%s=%s needs %s", EnvClientAddrMode, mode, EnvClientAddrVerifyKey)
+	}
+	return mode, keys, nil
+}
+
 func valueOf(lookup secrets.LookupEnv, key string) string {
 	value, ok := lookup(key)
 	if !ok {
@@ -1183,9 +1210,6 @@ func tokenIssuerURL(lookup secrets.LookupEnv) (string, error) {
 // usersOwned reads AUTH_USERS_OWNED: unset or empty is false; anything but
 // true or false is refused.
 func usersOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvUsersOwned) }
-
-// orgsOwned reads AUTH_ORGS_OWNED with the same rule as AUTH_USERS_OWNED.
-func orgsOwned(lookup secrets.LookupEnv) (bool, error) { return ownedSwitch(lookup, EnvOrgsOwned) }
 
 func ownedSwitch(lookup secrets.LookupEnv, name string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {

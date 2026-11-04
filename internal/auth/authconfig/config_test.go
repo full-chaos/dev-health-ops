@@ -318,7 +318,6 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
 		EnvUsersOwned:                  "true",
-		EnvOrgsOwned:                   "true",
 		EnvRevisionFeed:                "on",
 		EnvPushProjection:              "on",
 		rule.OwnedEnv:                  "true",
@@ -355,13 +354,13 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvAcrEventsWorkloadSubject:    "prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
+		EnvClientAddrMode:              "signed",
 		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
 		"SOCIAL_GOOGLE_CLIENT_ID":      "google-client",
 	}
 	read := map[string]func(Config) string{
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
-		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
 		EnvPushProjection:              func(c Config) string { return strconv.FormatBool(c.PushProjection) },
 		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
@@ -398,6 +397,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
 		EnvAcrEventsWorkloadSubject:    func(c Config) string { return c.AcrEventsWorkloadSubject },
 		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
+		EnvClientAddrMode:              func(c Config) string { return string(c.ClientAddrMode) },
 		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
 		"SOCIAL_GOOGLE_CLIENT_ID":      func(c Config) string { return c.Social["google"].ID },
@@ -439,6 +439,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvClientAddrMode {
+				env[EnvClientAddrVerifyKey] = "k1:" + strings.Repeat("A", 43)
 			}
 			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects || option.Env == EnvAcrEventsWorkloadSubject {
 				env[EnvTokenIssuerURL] = "https://auth.example.com"
@@ -546,40 +549,6 @@ func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
 		if _, err := Load(Spec{LookupEnv: lookupFrom(env)}); err == nil {
 			t.Fatalf("%s=%s loaded; want a refusal", EnvUsersOwned, value)
 		}
-	}
-}
-
-func TestOrgsOwnedDefaultsOff(t *testing.T) {
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
-	if err != nil || cfg.OrgsOwned {
-		t.Fatalf("default OrgsOwned = %v, err %v; want false", cfg.OrgsOwned, err)
-	}
-}
-
-func TestOrgsOwnedParsesLikeUsersOwned(t *testing.T) {
-	for _, value := range []string{"", "false", "true", "TRUE", " true ", "False", "yes", "1", "on", "enabled"} {
-		users, orgs := baseEnv(), baseEnv()
-		users[EnvUsersOwned], orgs[EnvOrgsOwned] = value, value
-		uc, uerr := Load(Spec{LookupEnv: lookupFrom(users)})
-		oc, oerr := Load(Spec{LookupEnv: lookupFrom(orgs)})
-		if (uerr == nil) != (oerr == nil) {
-			t.Fatalf("value %q: AUTH_USERS_OWNED err=%v, AUTH_ORGS_OWNED err=%v; the parse rules differ", value, uerr, oerr)
-		}
-		if uerr == nil && uc.UsersOwned != oc.OrgsOwned {
-			t.Fatalf("value %q: UsersOwned=%v OrgsOwned=%v", value, uc.UsersOwned, oc.OrgsOwned)
-		}
-	}
-}
-
-func TestOrgsOwnedDoesNotMountAnyRoute(t *testing.T) {
-	env := baseEnv()
-	env[EnvOrgsOwned] = "true"
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err != nil || !cfg.OrgsOwned {
-		t.Fatalf("OrgsOwned = %v, err %v", cfg.OrgsOwned, err)
-	}
-	if cfg.LimitedRoutesMounted() {
-		t.Fatal("AUTH_ORGS_OWNED mounted a rate-limited route")
 	}
 }
 

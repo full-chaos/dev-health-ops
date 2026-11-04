@@ -52,9 +52,20 @@ var (
 
 const externalIdentityKeyIndex = "external_identities_issuer_provider_subject_key"
 
+// concurrentProjection is the type of the errors that end a first projection
+// another call of the same row already committed. Each is success to its
+// caller and a declared audit.Mutation refusal, so the rolled-back Commit logs
+// at WARN with this type name as its refusal class, not at ERROR.
+//
+// The sentinels are pointers, so errors.Is matches by identity: a string-kinded
+// value would match any separately built error with the same text.
+type concurrentProjection struct{ text string }
+
+func (e *concurrentProjection) Error() string { return e.text }
+
 // errProjectedConcurrently ends a legacy projection whose identity row a
 // concurrent call already wrote for the same principal; it is success.
-var errProjectedConcurrently = errors.New("identity: projected concurrently")
+var errProjectedConcurrently error = &concurrentProjection{"identity: projected concurrently"}
 
 // LegacyMatch lets IdentityBySubject find a user go-api provisioned before the
 // users cutover, by the provider subject go-api stored in public.users
@@ -159,22 +170,31 @@ func (s *Store) legacyUser(ctx context.Context, key ExternalKey, legacy LegacyMa
 		if legacy.AuthProvider != string(key.Provider) || legacy.MembershipOrg != nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
-		rows, err = s.pool.Query(ctx, `SELECT id, true, true FROM public.users WHERE auth_provider = $1 AND auth_provider_id = $2`,
+		rows, err = s.pool.Query(ctx, `SELECT u.id, true, true FROM public.users u WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+NotSelfHostedGitLabSQL("u"),
 			legacy.AuthProvider, stored)
 	default:
 		if legacy.AuthProvider == "" || legacy.MembershipOrg == nil {
 			return uuid.Nil, false, ErrInvalidLegacyMatch
 		}
 		bound, scope := `true`, `true`
-		if isSSORelinkProtocol(legacy.AuthProvider) {
+		args := []any{legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg}
+		switch {
+		case isSSORelinkProtocol(legacy.AuthProvider):
 			bound, scope = ssoBoundToKeySQL("u", "$3"), ssoCarrierScopeSQL("u", "$3")
+		case key.Provider.IsSSO() && legacy.AuthProvider == string(ProviderGitLab):
+			// An OAuth key's issuer is the social issuer, or for GitLab the instance host of the row's base_url: the
+			// numeric id is that instance's, so only the account of that instance carries it.
+			var needsIssuer bool
+			scope, needsIssuer = OAuthAccountScopeSQL("u", key.Issuer, "$5")
+			if needsIssuer {
+				args = append(args, key.Issuer)
+			}
 		}
 		rows, err = s.pool.Query(ctx, `SELECT u.id, EXISTS (SELECT 1 FROM public.sso_providers sp
     JOIN public.memberships m ON m.org_id = sp.org_id
     WHERE sp.id = $3::uuid AND sp.org_id = $4 AND m.user_id = u.id), `+bound+`
 FROM public.users u
-WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope,
-			legacy.AuthProvider, stored, string(key.Provider), *legacy.MembershipOrg)
+WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope, args...)
 	}
 	if err != nil {
 		return uuid.Nil, false, s.storeErr(ctx, "read legacy user", err)
@@ -218,8 +238,9 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 			// by the caller from DisabledAt.
 			return s.attachIdentity(ctx, tx, linkID, key, principal, false, errProjectedConcurrently, nil)
 		},
-		Audit:  identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
-		Events: []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
+		Audit:    identityAudit("auth.identity.projected", "identity_projected", key, target, subject, Actor{}),
+		Events:   []audit.OutboxEvent{identityEvent("external_identity.linked", key, target, subject)},
+		Refusals: []error{errProjectedConcurrently},
 	})
 	if errors.Is(err, errProjectedConcurrently) {
 		return nil
@@ -602,6 +623,9 @@ func identityEvent(eventType string, key ExternalKey, target, subject string) au
 }
 
 func (s *Store) countLink(ctx context.Context, action string, err error) {
+	if audit.Rehearsing(ctx) {
+		return
+	}
 	outcome := "ok"
 	switch {
 	case err == nil:

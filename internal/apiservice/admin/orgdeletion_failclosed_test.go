@@ -138,7 +138,7 @@ func TestOperatorDeleteOrgRefusesWithoutAUsableClickHouse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var logs bytes.Buffer
 			db := &touchRecorder{}
-			operator := Operator{db: db, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+			operator := Operator{db: db, Logger: slog.New(slog.NewJSONHandler(&logs, nil)), Provisioner: &fakeProvisioner{db: &provisionDB{}}}
 			var err error
 			func() {
 				defer func() {
@@ -146,7 +146,7 @@ func TestOperatorDeleteOrgRefusesWithoutAUsableClickHouse(t *testing.T) {
 						err = fmt.Errorf("panicked: %v", panicked)
 					}
 				}()
-				_, err = operator.DeleteOrg(context.Background(), uuid.NewString(), tc.dryRun, DeleteOrgConfig{ClickHouseDSN: tc.dsn})
+				_, err = operator.DeleteOrg(context.Background(), uuid.NewString(), tc.dryRun, DeleteOrgConfig{ClickHouseDSN: tc.dsn, Actor: operatorActorFlag})
 			}()
 			var refusal *OperatorError
 			if !errors.As(err, &refusal) || refusal.Message != wantOrgDeletionRefusedDetail {

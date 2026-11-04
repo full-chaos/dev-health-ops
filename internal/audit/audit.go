@@ -566,6 +566,9 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 			return err
 		}
 	}
+	if Rehearsing(ctx) {
+		return nil
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
 	}
@@ -574,14 +577,17 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 
 func logCommitFailure(ctx context.Context, m Mutation, err error) {
 	level, msg := slog.LevelError, "audit: Commit failed; its own transaction rolled back"
+	args := []any{"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
+		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err)}
 	for _, refusal := range m.Refusals {
 		if errors.Is(err, refusal) {
 			level, msg = slog.LevelWarn, "audit: Commit refused; its own transaction rolled back"
+			// The Go type name of the declared refusal, never its text.
+			args = append(args, "refusal", logging.ErrorType(refusal))
 			break
 		}
 	}
-	slog.Log(ctx, level, msg, "audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
-		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
+	slog.Log(ctx, level, msg, args...)
 }
 
 // outboxOrder is the order a mutation's events are written in:

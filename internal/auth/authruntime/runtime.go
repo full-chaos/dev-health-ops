@@ -51,6 +51,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -103,7 +104,7 @@ func sessionRoutes(
 		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
+		Pool: pool, Schema: schema, Logger: logger, RefreshTTL: sessionRefreshTTL(), UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {
@@ -305,6 +306,11 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 			"guidance", "pass these as flags in the deployed command so the configuration is visible where it is deployed",
 		)
 	}
+
+	if _, err := apimetrics.Install(); err != nil {
+		logger.Warn("install the OTel meter provider", "error", err)
+	}
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()
@@ -813,6 +819,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 			routes[i].RateLimitBurst = cfg.PDPRoute.Burst
 		}
 	}
+	policy := clientAddrPolicy(cfg, logger)
 	return httpapi.ServerOptions{
 		PublicMaxInFlight: cfg.Public.MaxInFlight,
 		Address:           cfg.APIAddress,
@@ -828,7 +835,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// carry X-Auth-Request-ID as route answers do. The client address
 		// (every audit row and session) and the user agent (every session)
 		// are bound by internal/auth/clientaddr.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), publicaudit.Middleware},
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.PolicyMiddleware(policy), publicaudit.Middleware},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
@@ -837,7 +844,23 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		ExplicitHead: true,
 		// Each access line also carries this service's wire id and the
 		// caller's id, which join it to go-api's proxy line.
-		AccessAttrs: accessLogIDs(cfg.TrustedProxies),
+		AccessAttrs: accessLogIDs(policy),
+	}
+}
+
+// clientAddrPolicy is the client-address rule of the API listener (CHAOS-11645): the mode, the trusted-proxy list and
+// the proof keys. A failed proof check logs its outcome and route class only.
+func clientAddrPolicy(cfg authconfig.Config, logger *slog.Logger) clientaddr.Policy {
+	mode := cfg.ClientAddrMode
+	if mode == "" {
+		mode = clientaddr.ModeCIDR
+	}
+	return clientaddr.Policy{
+		Mode: mode, Trust: cfg.TrustedProxies, Verifier: clientaddr.NewVerifier(cfg.ClientAddrKeys),
+		Log: func(ctx context.Context, outcome, route string) {
+			logger.WarnContext(ctx, "client address proof refused", slog.String("outcome", outcome), slog.String("route", route),
+				slog.String("mode", string(mode)))
+		},
 	}
 }
 

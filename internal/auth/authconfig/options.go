@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
@@ -175,6 +176,16 @@ var optionRegistry = []Option{
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
 	},
 	{
+		Flag: "client-addr-mode", Env: EnvClientAddrMode, Kind: KindString, Default: string(clientaddr.ModeCIDR), Group: GroupHTTP,
+		Usage: "how the client address is named: cidr (the trusted-proxy list), both (a valid go-api proof, else the list) or " +
+			"signed (a valid go-api proof, else the socket peer; the list is read only for GET and HEAD of the two well-known documents)",
+	},
+	{
+		Env: EnvClientAddrVerifyKey, Kind: KindString, Secret: true, Group: GroupHTTP,
+		Usage: "one or two <kid>:<key> entries (key base64url without padding, at least 32 bytes) that go-api's client-address " +
+			"proofs are checked with; " + EnvClientAddrVerifyKey + "_FILE reads it from a mounted file instead. Needed by modes both and signed",
+	},
+	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,
 		Usage: "PostgreSQL DSN for the auth-owned schema; " + EnvDatabaseURI +
 			"_FILE reads it from a mounted file instead (the two are mutually exclusive)",
@@ -285,10 +296,6 @@ var optionRegistry = []Option{
 	{
 		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
-	},
-	{
-		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
-		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
 		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,

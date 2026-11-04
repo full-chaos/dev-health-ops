@@ -647,6 +647,8 @@ func TestEveryReasonIsAWireCodeOrAStateFailure(t *testing.T) {
 	}
 }
 
+var contractOnlyReasonCodes = []string{"repository_allowlist_too_large"}
+
 func TestTheWireReasonCodesAreTheSchemaAndVocabularySets(t *testing.T) {
 	root := repoRoot(t)
 	var schema struct {
@@ -663,7 +665,10 @@ func TestTheWireReasonCodesAreTheSchemaAndVocabularySets(t *testing.T) {
 		} `json:"decision_reason_code"`
 	}
 	readJSON(t, filepath.Join(contracts.ContractsDir(root), "vocabulary", "reason-codes.json"), &vocab)
-	want := AuthorizeWireReasonCodes()
+	// contractOnlyReasonCodes are in the contract before the decision core can return them (the PDP leaf that
+	// emits repository_allowlist_too_large removes its row here).
+	want := append(AuthorizeWireReasonCodes(), contractOnlyReasonCodes...)
+	slices.Sort(want)
 	for name, got := range map[string][]string{"schema enum": schema.Properties.ReasonCode.Enum, "vocabulary": vocab.DecisionReasonCode.Values} {
 		got = slices.Clone(got)
 		slices.Sort(got)

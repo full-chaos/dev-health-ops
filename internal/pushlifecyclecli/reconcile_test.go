@@ -129,8 +129,8 @@ func TestC40eAReadErrorExitsOneWithOneFixedLine(t *testing.T) {
 }
 
 func TestC40fFlagsReachTheRun(t *testing.T) {
-	_, _, _, calls := runReconcileVerb(t, []string{"-batch", "7", "-confirm-delay", "0s"}, map[string]string{"POSTGRES_URI": canaryDSN, "AUTH_DATABASE_SCHEMA": "authx"}, cleanReport, nil)
-	if len(calls) != 1 || calls[0] != (reconcileCall{"authx", 7, 0}) {
+	_, _, _, calls := runReconcileVerb(t, []string{"-batch", "7", "-confirm-delay", "2s"}, map[string]string{"POSTGRES_URI": canaryDSN, "AUTH_DATABASE_SCHEMA": "authx"}, cleanReport, nil)
+	if len(calls) != 1 || calls[0] != (reconcileCall{"authx", 7, 2 * time.Second}) {
 		t.Fatalf("calls = %+v", calls)
 	}
 }
@@ -177,7 +177,7 @@ func TestC41bPoolOpenErrorHasAFixedMessage(t *testing.T) {
 
 // C42: bad flags are refused before any connection.
 func TestC42BadFlagsRefusedBeforeConnecting(t *testing.T) {
-	for _, args := range [][]string{{"extra"}, {"-batch", "0"}, {"-batch", "1001"}, {"-dsn-env", "lower"}, {"-confirm-delay", "-1s"}, {"-nope"}} {
+	for _, args := range [][]string{{"extra"}, {"-batch", "0"}, {"-batch", "1001"}, {"-dsn-env", "lower"}, {"-confirm-delay", "-1s"}, {"-confirm-delay", "0s"}, {"-nope"}} {
 		if code, _, _, calls := runReconcileVerb(t, args, okLookup, cleanReport, nil); code != cli.ExitUsage || len(calls) != 0 {
 			t.Errorf("args %v: code %d calls %d, want usage and no run", args, code, len(calls))
 		}

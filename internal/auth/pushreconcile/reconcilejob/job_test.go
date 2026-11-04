@@ -53,14 +53,16 @@ func TestC47RunKeepsOnlyTheFindingsBothPassesReport(t *testing.T) {
 	}
 }
 
-func TestC47bDelayZeroRunsOnePassAndReportsItsFindings(t *testing.T) {
-	pass, calls := fixedPass(Pass{Findings: []pushreconcile.Finding{f("status", "a")}})
-	rep, err := Run(context.Background(), pass, 0, func(context.Context, time.Duration) error {
-		t.Fatal("slept with delay 0")
-		return nil
-	})
-	if err != nil || *calls != 1 || rep.Passes != 1 || len(rep.Drift) != 1 || rep.Transient != 0 {
-		t.Fatalf("calls %d passes %d drift %v transient %d err %v", *calls, rep.Passes, rep.Drift, rep.Transient, err)
+func TestC47bDelayZeroOrLessIsRefusedWithNoReport(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		pass, calls := fixedPass(Pass{Findings: []pushreconcile.Finding{f("status", "a")}})
+		rep, err := Run(context.Background(), pass, d, func(context.Context, time.Duration) error {
+			t.Fatal("slept with a nonpositive delay")
+			return nil
+		})
+		if err == nil || *calls != 0 || rep.Passes != 0 || len(rep.Drift) != 0 {
+			t.Fatalf("delay %v: calls %d report %+v err %v", d, *calls, rep, err)
+		}
 	}
 }
 

@@ -178,6 +178,7 @@ nav:
           - Prod k3s operate: operate/runbooks/prod-k3s-deploy-and-operate.md
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
+          - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
           - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
           - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
@@ -247,6 +248,9 @@ nav:
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - Auth access-token claims and validation: reference/auth/access-token-claims.md
       - Auth JWKS and discovery: reference/auth/jwks-and-discovery.md
+      - Auth decision clients: reference/auth/decision-clients.md
+      - Auth reason codes: reference/auth/reason-codes.md
+      - Auth entitlement boundary: reference/auth/entitlement-boundary.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md
@@ -310,6 +314,7 @@ nav:
           - Auth Control Plane contracts and SDK: contribute/architecture/auth-control-plane-contracts.md
           - Auth Control Plane audit and outbox: contribute/architecture/auth-control-plane-audit-outbox.md
           - Auth Control Plane Go gates: contribute/architecture/auth-control-plane-go-gates.md
+          - Auth policy decision contributor guide: contribute/architecture/auth-pdp-contributor-guide.md
       - Develop and test:
           - contribute/development/index.md
           - Commands: contribute/development/commands.md

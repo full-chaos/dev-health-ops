@@ -8,7 +8,6 @@ import (
 	"encoding/pem"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -76,28 +75,39 @@ func TestInstallationTokenAttemptTimesOutAndIsRetried(t *testing.T) {
 	})
 }
 
+// Every attempt hangs until its own timeout. In the bubble the timeout runs
+// on the virtual clock, which moves only when every goroutine is blocked, so
+// the JWT signing inside an attempt cannot spend its budget: each of the three
+// attempts reaches the transport, whatever the host load.
 func TestInstallationTokenGivesUpAfterThreeTimedOutAttempts(t *testing.T) {
 	previousTimeout, previousDelay := installationTokenTimeout, installationTokenRetryDelay
 	installationTokenTimeout, installationTokenRetryDelay = 50*time.Millisecond, 5*time.Millisecond
 	t.Cleanup(func() { installationTokenTimeout, installationTokenRetryDelay = previousTimeout, previousDelay })
-
-	var requests atomic.Int32
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		select {
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
-	t.Cleanup(func() { close(release); server.Close() })
-
-	h := handlers{client: &http.Client{}}
 	gc := &githubCredentials{appID: "1", privateKey: testPrivateKey(t), installationID: "111", app: true}
-	if _, err := h.installationToken(context.Background(), gc, server.URL); err == nil {
-		t.Fatal("a hung exchange answered a token")
-	}
-	if got := requests.Load(); got != 3 {
-		t.Errorf("%d requests, want 3", got)
-	}
+
+	synctest.Test(t, func(t *testing.T) {
+		var requests atomic.Int32
+		transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			requests.Add(1)
+			<-request.Context().Done()
+			return nil, request.Context().Err()
+		})
+		h := handlers{client: &http.Client{Transport: transport}}
+		start := time.Now()
+		_, err := h.installationToken(context.Background(), gc, "https://api.github.test")
+		returnedAt := time.Now()
+		if err == nil {
+			t.Fatal("a hung exchange answered a token")
+		}
+		if !transientTokenError(err) {
+			t.Errorf("err %v; want the transient failure of the last timed-out attempt", err)
+		}
+		if got := requests.Load(); got != int32(installationTokenAttempts) {
+			t.Errorf("%d requests, want %d", got, installationTokenAttempts)
+		}
+		want := start.Add(3*installationTokenTimeout + installationTokenRetryDelay + 2*installationTokenRetryDelay)
+		if !returnedAt.Equal(want) {
+			t.Errorf("the exchange gave up at %v of virtual time after the start, want %v (three attempt timeouts and the retry delays 5 ms and 10 ms)", returnedAt.Sub(start), want.Sub(start))
+		}
+	})
 }

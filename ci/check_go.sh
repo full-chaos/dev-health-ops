@@ -854,11 +854,12 @@ cigates_go_test_timeout() {
 check_census_ops() {
   local modpath cmd=(go test -mod=readonly -trimpath -count=1)
   if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--print-cmd" ]; }; then die "census-ops accepts only an optional --print-cmd"; fi
-  modpath="$(cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off go list -m)" || die "go list -m failed"
+  modpath="$(awk '$1 == "module" { print $2; exit }' "${ROOT}/go.mod")"
+  [ -n "${modpath}" ] || die "no module line in ${ROOT}/go.mod"
   cmd+=(-timeout "$(cigates_go_test_timeout "${modpath}/internal/cigates/..." "${modpath}/internal/testsupport/..." "${modpath}/internal/httpguard/...")")
   cmd+=(./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/...)
   if [ "${1:-}" = "--print-cmd" ]; then printf '%s\n' "${cmd[*]}"; return 0; fi
-  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOWORK=off "${cmd[@]}")
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOENV=off GOWORK=off "${cmd[@]}")
 }
 
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.

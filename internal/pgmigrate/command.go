@@ -171,7 +171,13 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		var foreign ForeignDatabaseError
 		var mismatch SchemaMismatchError
 		var authMismatch AuthSchemaMismatchError
+		var unapplied ChainRevisionUnappliedError
+		var shaMismatch ChainRevisionSHAMismatchError
 		switch {
+		case errors.As(err, &unapplied):
+			return writeError(env.Stderr, ReasonChainRevisionUnapplied, err.Error())
+		case errors.As(err, &shaMismatch):
+			return writeError(env.Stderr, ReasonChainRevisionSHAMismatch, err.Error())
 		case errors.As(err, &authMismatch):
 			return writeError(env.Stderr, ReasonAuthSchemaMismatch, err.Error())
 		case errors.As(err, &mismatch):

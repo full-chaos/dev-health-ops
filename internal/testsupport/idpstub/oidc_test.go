@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -415,6 +417,203 @@ func TestOIDCAuthorizeRedirectsToExactlyTheRegisteredURIWithCodeAndState(t *test
 		}
 		if loc.Query().Get("code") == "" || loc.Query().Get("state") != "st-9" || (want.Query().Get("keep") != "" && loc.Query().Get("keep") != "1") {
 			t.Fatalf("redirect query = %v", loc.Query())
+		}
+	}
+}
+
+func TestOIDCOverrideEditsExplicitUserinfo(t *testing.T) {
+	edit := func(c map[string]any) { c["sub"] = "overridden" }
+	for name, setup := range map[string]func() (*idpstub.OIDC, *httptest.Server){
+		"Override option": func() (*idpstub.OIDC, *httptest.Server) {
+			return startOIDC(t, idpstub.OIDCOptions{Override: edit})
+		},
+		"SetOverride": func() (*idpstub.OIDC, *httptest.Server) {
+			o, srv := startOIDC(t, idpstub.OIDCOptions{})
+			o.SetOverride(edit)
+			return o, srv
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			o, srv := setup()
+			explicit := map[string]any{"sub": "explicit", "email": "e@example.test"}
+			o.SetUserinfo(explicit)
+			_, info := getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+			if info["sub"] != "overridden" || info["email"] != "e@example.test" {
+				t.Fatalf("userinfo = %v", info)
+			}
+			if explicit["sub"] != "explicit" {
+				t.Fatalf("the stored explicit answer was edited: %v", explicit)
+			}
+		})
+	}
+}
+
+func TestOIDCOverrideLeavesTheStoredUserinfoAnswerUnchanged(t *testing.T) {
+	o, srv := startOIDC(t, idpstub.OIDCOptions{Override: func(c map[string]any) { c["sub"] = "overridden"; delete(c, "email") }})
+	explicit := map[string]any{"sub": "explicit", "email": "e@example.test"}
+	o.SetUserinfo(explicit)
+	for i := 0; i < 2; i++ {
+		getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+	}
+	if explicit["sub"] != "explicit" || explicit["email"] != "e@example.test" || len(explicit) != 2 {
+		t.Fatalf("the stored explicit answer changed: %v", explicit)
+	}
+}
+
+// scribble zeroes every element of a map or slice claim, whatever its Go type, so a copy that aliases the stored answer shows the change.
+func scribble(v any) {
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Map:
+		for _, k := range rv.MapKeys() {
+			rv.SetMapIndex(k, reflect.Zero(rv.Type().Elem()))
+		}
+	case reflect.Slice:
+		for i := 0; i < rv.Len(); i++ {
+			rv.Index(i).Set(reflect.Zero(rv.Type().Elem()))
+		}
+	}
+}
+
+func nestedClaimKinds() map[string]any {
+	return map[string]any{
+		"map any":             map[string]any{"k": "v"},
+		"slice any":           []any{"a", "b"},
+		"slice string":        []string{"a", "b"},
+		"map string":          map[string]string{"k": "v"},
+		"slice map any":       []map[string]any{{"k": "v"}},
+		"map slice string":    map[string][]string{"k": {"before", "keep"}},
+		"slice map string":    []map[string]string{{"k": "before"}},
+		"slice int":           []int{1, 2},
+		"map int":             map[string]int{"k": 1},
+		"map any nested":      map[string]any{"k": map[string]any{"j": []any{"x"}}},
+		"slice of slice":      [][]string{{"a"}, {"b"}},
+		"map map string":      map[string]map[string]string{"k": {"j": "v"}},
+		"slice float":         []float64{1.5, 2.5},
+		"map bool":            map[string]bool{"k": true},
+		"slice bool":          []bool{true, false},
+		"map any slice any":   map[string]any{"k": []any{map[string]any{"j": "v"}}},
+		"slice any with nils": []any{nil, "a"},
+	}
+}
+
+func overrideSetups(t *testing.T, edit func(map[string]any)) map[string]func() (*idpstub.OIDC, *httptest.Server) {
+	return map[string]func() (*idpstub.OIDC, *httptest.Server){
+		"Override option": func() (*idpstub.OIDC, *httptest.Server) {
+			return startOIDC(t, idpstub.OIDCOptions{Override: edit})
+		},
+		"SetOverride": func() (*idpstub.OIDC, *httptest.Server) {
+			o, srv := startOIDC(t, idpstub.OIDCOptions{})
+			o.SetOverride(edit)
+			return o, srv
+		},
+	}
+}
+
+func rawUserinfo(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	res, err := srv.Client().Get(srv.URL + "/userinfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var sb strings.Builder
+	if _, err := io.Copy(&sb, res.Body); err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func TestOIDCOverrideLeavesNestedStoredUserinfoUnchanged(t *testing.T) {
+	edit := func(c map[string]any) { scribble(c["n"]) }
+	for name, claim := range nestedClaimKinds() {
+		for mode, setup := range overrideSetups(t, edit) {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				o, srv := setup()
+				explicit := map[string]any{"sub": "explicit", "n": claim}
+				want, err := json.Marshal(explicit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				o.SetUserinfo(explicit)
+				rawUserinfo(t, srv)
+				if got, _ := json.Marshal(explicit); string(got) != string(want) {
+					t.Fatalf("the stored explicit answer changed: %s, want %s", got, want)
+				}
+				o.SetOverride(nil)
+				if got := rawUserinfo(t, srv); got != string(want) {
+					t.Fatalf("userinfo after clearing the override = %s, want %s", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestOIDCOverrideKeepsTypedNilClaimsAsJSONNull(t *testing.T) {
+	nils := map[string]any{
+		"groups": []any(nil), "profile": map[string]any(nil), "names": []string(nil),
+		"labels": map[string]string(nil), "rows": []map[string]any(nil), "counts": map[string]int(nil),
+	}
+	for mode, setup := range overrideSetups(t, func(c map[string]any) { c["sub"] = "overridden" }) {
+		t.Run(mode, func(t *testing.T) {
+			o, srv := setup()
+			explicit := map[string]any{"sub": "explicit"}
+			for k, v := range nils {
+				explicit[k] = v
+			}
+			o.SetUserinfo(explicit)
+			_, info := getJSON(t, srv.Client(), srv.URL+"/userinfo", "x")
+			for k := range nils {
+				if v, ok := info[k]; !ok || v != nil {
+					t.Fatalf("claim %q = %v (present %v), want JSON null", k, v, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestOIDCOverrideWireFormEqualsTheStoredAnswer(t *testing.T) {
+	explicit := map[string]any{"sub": "explicit", "nil": []any(nil)}
+	for name, claim := range nestedClaimKinds() {
+		explicit[name] = claim
+	}
+	want, err := json.Marshal(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for mode, setup := range overrideSetups(t, func(map[string]any) {}) {
+		t.Run(mode, func(t *testing.T) {
+			o, srv := setup()
+			o.SetUserinfo(explicit)
+			if got := rawUserinfo(t, srv); got != string(want) {
+				t.Fatalf("wire form = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestOIDCOverrideKeepsTheNumericWireFormOfExplicitUserinfo(t *testing.T) {
+	cells := map[string]any{
+		"int64 above 2^53":       int64(9007199254740993),
+		"uint64 max":             uint64(18446744073709551615),
+		"nested int64":           map[string]any{"k": int64(9007199254740993)},
+		"slice int64":            []any{int64(9007199254740993)},
+		"long decimal":           json.Number("0.1234567890123456789"),
+		"beyond the float range": json.Number("1e1000"),
+	}
+	for name, claim := range cells {
+		for mode, setup := range overrideSetups(t, func(c map[string]any) { c["sub"] = "overridden" }) {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				o, srv := setup()
+				o.SetUserinfo(map[string]any{"sub": "explicit", "n": claim})
+				want, err := json.Marshal(map[string]any{"sub": "overridden", "n": claim})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := rawUserinfo(t, srv); got != string(want) {
+					t.Fatalf("userinfo = %s, want %s", got, want)
+				}
+			})
 		}
 	}
 }

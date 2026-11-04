@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -456,6 +456,10 @@ usage() {
          Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
          CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
          line without a cap. ci/check_golden_drift.sh takes it once for its rows.
+  census-ops
+         (CHAOS-12939) The ops census: go test -count=1 over ./internal/cigates/... ./internal/testsupport/...
+         ./internal/httpguard/... with the -timeout of cigates_go_test_timeout (20m while the cigates packages
+         are listed).
   job-timeout MINUTES
          Print the go test -timeout, in seconds, of one integration call whose
          own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
@@ -842,6 +846,18 @@ cigates_go_test_timeout() {
     esac
   done
   printf '10m\n'
+}
+
+# check_census_ops: the ops census (CHAOS-12939): go test over the cigates, testsupport and httpguard packages with the
+# -timeout of cigates_go_test_timeout, so a caller with no -timeout of its own never meets the 10m default in internal/cigates/scripts.
+check_census_ops() {
+  local modpath cmd=(go test -mod=readonly -trimpath -count=1)
+  [ "$#" -eq 0 ] || die "census-ops accepts no arguments"
+  modpath="$(awk '$1 == "module" { print $2; exit }' "${ROOT}/go.mod")"
+  [ -n "${modpath}" ] || die "no module line in ${ROOT}/go.mod"
+  cmd+=(-timeout "$(cigates_go_test_timeout "${modpath}/internal/cigates/..." "${modpath}/internal/testsupport/..." "${modpath}/internal/httpguard/...")")
+  cmd+=(./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/...)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOENV=off GOWORK=off "${cmd[@]}")
 }
 
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
@@ -4793,9 +4809,34 @@ check_auth_history() {
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 
+# auth_race_timeout_min (CHAOS-12938): the per-package go test -timeout of the auth race leg, in whole minutes: the heaviest race
+# weight (ci/go_race_weights.d) of a package under AUTH_PACKAGES, times 1.5, rounded up, never under 10. The go default of 10 min
+# timed out internal/auth/authapi (hosted race runs of 459 to 600 s). No row under AUTH_PACKAGES refuses: the budget has no source.
+auth_race_timeout_min() {
+  local pkg pat rows heaviest
+  local -a pats=()
+  for pkg in "${AUTH_PACKAGES[@]}"; do
+    pat="${pkg#./}"
+    case "${pat}" in */...) pat="${pat%/...}/" ;; *) pat="${pat}"$'\t' ;; esac
+    pats+=("${pat}")
+  done
+  rows="$(race_weights_rows)" || return 2
+  heaviest="$(printf '%s\n' "${rows}" | awk -F'\t' -v pats="$(printf '%s\n' "${pats[@]}")" '
+    BEGIN { n = split(pats, p, "\n") }
+    $2 ~ /^[0-9]+$/ { for (i = 1; i <= n; i++) { k = $1 (substr(p[i], length(p[i])) == "\t" ? "\t" : "/"); if (index(k, p[i]) == 1 && $2 + 0 > max) max = $2 + 0 } }
+    END { print max + 0 }')"
+  [ "${heaviest}" -gt 0 ] || die "auth race: no race weight row under AUTH_PACKAGES in ci/go_race_weights.d; the go test -timeout has no source"
+  local min=$(((heaviest * 3 + 119) / 120))
+  [ "${min}" -ge 10 ] || min=10
+  printf '%s\n' "${min}"
+}
+
 check_auth_race() {
-  printf 'auth go test -race\n'
-  auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
+  local min tmo
+  min="$(auth_race_timeout_min)" || return 2
+  tmo="$(job_go_test_timeout "${min}")" || return 2
+  printf 'auth go test -race (per-package -timeout %s)\n' "${tmo}"
+  auth_go test -mod=readonly -trimpath -count=1 -race -timeout="${tmo}" "${AUTH_PACKAGES[@]}"
 }
 
 # check_auth_race_integration (CHAOS-10207): auth concurrency proofs need BOTH
@@ -5225,6 +5266,10 @@ case "${1:-all}" in
     ;;
   integration-vet)
     check_integration_vet
+    ;;
+  census-ops)
+    shift
+    check_census_ops "$@"
     ;;
   integration-coverage)
     check_integration_coverage

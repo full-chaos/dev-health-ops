@@ -310,9 +310,9 @@ func LookupAdminPrincipal(ctx context.Context, db RowQuerier, orgID string, opts
 }
 
 // lookupSQLFor is the lookup statement: lookupSQL while the platform roles
-// switch is off; while on, the superuser column is public is_superuser OR the
-// platform role rule over the auth schema, in the same statement, so a failed
-// auth read fails the lookup.
+// switch is off; while on, the superuser column is the platform role rule over
+// the auth schema alone (public is_superuser is a frozen copy then, CHAOS-10993),
+// in the same statement, so a failed auth read fails the lookup.
 func lookupSQLFor(opts Options) (string, error) {
 	if !opts.PlatformRolesOwned {
 		return lookupSQL, nil
@@ -325,7 +325,7 @@ func lookupSQLFor(opts Options) (string, error) {
 		return "", fmt.Errorf("edgetokenmint: auth schema %q is not a usable schema name", schema)
 	}
 	holds := rule.HoldsSQL(pgx.Identifier{schema}.Sanitize(), "u.id", "'"+rule.PlatformAdmin+"'")
-	return strings.Replace(lookupSQL, "u.is_superuser,", "(u.is_superuser OR "+holds+"),", 1), nil
+	return strings.Replace(lookupSQL, "u.is_superuser,", holds+",", 1), nil
 }
 
 func lookupPrincipal(ctx context.Context, db RowQuerier, principalID, orgID string, opts Options) (Principal, error) {

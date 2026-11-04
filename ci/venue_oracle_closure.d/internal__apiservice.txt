@@ -54,6 +54,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
@@ -73,15 +74,19 @@ internal/auth/publicaudit
 internal/auth/pushevent
 internal/auth/pushlifecycle
 internal/auth/pushreconcile
+internal/auth/pushreconcile/projectionreader
 internal/auth/ratelimitvalkey
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/serviceaccount
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
+internal/authzenforce
 internal/chmigrate
 internal/cigates/bigboyrender
 internal/cli

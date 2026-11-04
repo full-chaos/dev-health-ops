@@ -289,3 +289,35 @@ func TestObligationsDocNamesTheRegistryAndTheCap(t *testing.T) {
 		t.Errorf("%s still says no service issues a decision", obligationsDocPath)
 	}
 }
+
+func TestParseDecisionKeepsTheRepositoryScope(t *testing.T) {
+	raw := readRoot(t, "contracts/auth/v1/examples/authorization_decision/decision-valid-allow-repository-scope-organization.json")
+	d, err := ParseAuthorizationDecision(testRoot(t), raw, authorizationNow)
+	if err != nil {
+		t.Fatalf("a decision with repository_scope organization is refused: %v", err)
+	}
+	if d.Obligations == nil || d.Obligations.RepositoryScope == nil || *d.Obligations.RepositoryScope != "organization" ||
+		d.Obligations.RepositoryAllowlist != nil {
+		t.Fatalf("obligations %+v", d.Obligations)
+	}
+}
+
+func TestRepositoryScopeIsClosedToOrganization(t *testing.T) {
+	var schema struct {
+		Properties struct {
+			Obligations struct {
+				Properties struct {
+					RepositoryScope struct {
+						Enum []string `json:"enum"`
+					} `json:"repository_scope"`
+				} `json:"properties"`
+			} `json:"obligations"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(readRoot(t, decisionSchemaPath), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties.Obligations.Properties.RepositoryScope.Enum; len(got) != 1 || got[0] != "organization" {
+		t.Fatalf("repository_scope enum %v, want [organization]", got)
+	}
+}

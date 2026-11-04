@@ -243,6 +243,11 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 		// real, distinct-from-default value; a present null is a
 		// string_type 422 -- a live round found Go collapsing "" to the
 		// default and silently accepting null.
+		// Accepted divergence (CHAOS-11800, pm 2026-11-03): this row is the legacy
+		// answer (proxy OFF only, as this venue runs). With
+		// AUTH_PROXY_ORG_PROVISIONING on, an empty or non-catalog role answers
+		// 400 "Invalid role: ..." (pinned in TestProvisionAddEmptyRoleIsRefusedWithProxyOn)
+		// because of: no role outside the catalog. No pin row: Go matches Python here.
 		{Name: "add member empty role", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: jsonHeaders("owner"),
 			Body: venueoracle.B64(fmt.Sprintf(`{"user_id":%q,"role":""}`, emptyRoleTargetID.String()))},
 		{Name: "add member null role", Method: "POST", Path: "/api/v1/admin/orgs/" + orgID.String() + "/members", Headers: jsonHeaders("owner"),

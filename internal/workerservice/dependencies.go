@@ -61,15 +61,6 @@ const (
 	// the log site, and the test assert on ONE string rather than three copies
 	// of a literal that can drift apart (CHAOS-5034).
 	reasonShutdownTimeoutBelowDrainBudget = "shutdown_timeout_below_drain_budget"
-
-	// preclaimReadinessInitialBackoff and preclaimReadinessMaxBackoff shape
-	// the wait between preclaim-readiness retries. Doubling from a short
-	// first wait means a dependency that clears in a couple of seconds
-	// (typical connection-pool contention easing) is retried almost right
-	// away, while a longer outage does not hammer an already-struggling
-	// Postgres with a retry every couple of seconds for minutes on end.
-	preclaimReadinessInitialBackoff = 2 * time.Second
-	preclaimReadinessMaxBackoff     = 30 * time.Second
 )
 
 var errWorkerDependencyUnavailable = errors.New("worker readiness dependency is unavailable")
@@ -600,27 +591,26 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 		return errWorkerDependencyUnavailable
 	}
 	var latest health.Readiness
-	err := startupRetryBudget(
-		ctx, component.budget, component.now, component.sleep, component.jitter,
-		func(ctx context.Context) error {
-			latest = component.registry.CheckRequired(ctx)
-			if latest.Ready {
-				return nil
-			}
-			return errWorkerDependencyUnavailable
-		},
-		func(error) bool { return preclaimReadinessRetryable(latest) },
-		func(attempt int, elapsed, wait time.Duration, _ error) {
+	err := postgres.DialRetry{
+		Budget: component.budget, Now: component.now, Sleep: component.sleep, Jitter: component.jitter,
+		Retryable: func(error) bool { return preclaimReadinessRetryable(latest) },
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
 			component.logRetry(ctx, latest, attempt, elapsed, wait)
 		},
-		func(attempt int, elapsed time.Duration, _ error, budgetExhausted bool) {
+		OnGiveUp: func(attempt int, elapsed time.Duration, budgetExhausted bool) {
 			reason := "dependency_check_failed"
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
 			component.logRefusal(ctx, latest, reason, attempt, elapsed)
 		},
-	)
+	}.Do(ctx, func(ctx context.Context) error {
+		latest = component.registry.CheckRequired(ctx)
+		if latest.Ready {
+			return nil
+		}
+		return errWorkerDependencyUnavailable
+	})
 	if err != nil {
 		return errWorkerDependencyUnavailable
 	}
@@ -628,72 +618,6 @@ func (component preclaimReadinessComponent) Start(ctx context.Context) error {
 		component.claim.markRuntimeLive()
 	}
 	return nil
-}
-
-// startupRetryBudget runs attempt repeatedly, backing off between tries up to
-// budget, for as long as retryable classifies the most recent failure as
-// transient. It is the one implementation of the roll-storm retry shape more
-// than one startup dependency needs: a fleet-wide helm roll restarts every
-// worker group's Deployments together, Postgres and its pooler saturate for
-// the length of that burst, and a dependency that merely timed out during it
-// is not broken -- it is worth retrying with backoff rather than exiting the
-// process on the first attempt. A failure retryable classifies as
-// non-transient exits immediately, exactly as a single unretried attempt
-// always did, and so does an exhausted budget.
-//
-// preclaimReadinessComponent.Start and riverWorkerProcess.Start share this
-// loop rather than each keeping their own copy of the backoff shape (start
-// small, double, cap, spend down to zero as the budget runs out), so the two
-// call sites that exist to survive the same production event cannot drift
-// apart from each other.
-func startupRetryBudget(
-	ctx context.Context,
-	budget time.Duration,
-	now func() time.Time,
-	sleep func(context.Context, time.Duration),
-	jitter func(time.Duration) time.Duration,
-	attempt func(context.Context) error,
-	retryable func(error) bool,
-	onRetry func(attemptNum int, elapsed, wait time.Duration, err error),
-	onGiveUp func(attemptNum int, elapsed time.Duration, err error, budgetExhausted bool),
-) error {
-	if now == nil {
-		now = time.Now
-	}
-	if sleep == nil {
-		sleep = preclaimReadinessSleep
-	}
-
-	start := now()
-	backoff := preclaimReadinessInitialBackoff
-	for attemptNum := 1; ; attemptNum++ {
-		err := attempt(ctx)
-		if err == nil {
-			return nil
-		}
-		elapsed := now().Sub(start)
-		if !retryable(err) {
-			onGiveUp(attemptNum, elapsed, err, false)
-			return err
-		}
-		if elapsed >= budget || ctx.Err() != nil {
-			onGiveUp(attemptNum, elapsed, err, true)
-			return err
-		}
-		wait := backoff
-		if jitter != nil {
-			wait = jitter(wait)
-		}
-		if remaining := budget - elapsed; wait > remaining {
-			wait = remaining
-		}
-		onRetry(attemptNum, elapsed, wait, err)
-		sleep(ctx, wait)
-		backoff *= 2
-		if backoff > preclaimReadinessMaxBackoff {
-			backoff = preclaimReadinessMaxBackoff
-		}
-	}
 }
 
 // preclaimReadinessRetryable reports whether every currently failing check
@@ -712,18 +636,6 @@ func preclaimReadinessRetryable(readiness health.Readiness) bool {
 		}
 	}
 	return true
-}
-
-func preclaimReadinessSleep(ctx context.Context, wait time.Duration) {
-	if wait <= 0 {
-		return
-	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-	}
 }
 
 // logRefusal reports the terminal (non-retrying) failure of preclaim
@@ -839,7 +751,7 @@ func (component workerProcessComponent) Errors() <-chan error {
 func (component workerProcessComponent) Start(ctx context.Context) error {
 	if component.presence != nil {
 		if err := retryPresenceStart(ctx, component, component.presence.Start); err != nil {
-			return err
+			return postgres.MaskUnreachable(err)
 		}
 	}
 	started := make([]lifecycle.Component, 0, len(component.components))
@@ -854,15 +766,15 @@ func (component workerProcessComponent) Start(ctx context.Context) error {
 			var rollback []error
 			for index := len(started) - 1; index >= 0; index-- {
 				if stopErr := started[index].Shutdown(rollbackCtx); stopErr != nil {
-					rollback = append(rollback, stopErr)
+					rollback = append(rollback, postgres.MaskUnreachable(stopErr))
 				}
 			}
 			if component.presence != nil {
 				if stopErr := component.presence.Shutdown(rollbackCtx); stopErr != nil {
-					rollback = append(rollback, stopErr)
+					rollback = append(rollback, postgres.MaskUnreachable(stopErr))
 				}
 			}
-			return errors.Join(err, errors.Join(rollback...))
+			return errors.Join(postgres.MaskUnreachable(err), errors.Join(rollback...))
 		}
 		started = append(started, child)
 	}
@@ -1315,7 +1227,7 @@ func configureWorkerDependenciesWithSources(
 		registry: registry,
 		logger:   logger,
 		budget:   cfg.PreclaimReadinessTimeout,
-		jitter:   startupRetryJitter,
+		jitter:   postgres.DialRetryJitter,
 		claim:    claim,
 	})
 	if len(active.queues) == 0 {
@@ -1366,7 +1278,7 @@ func configureWorkerDependenciesWithSources(
 	)
 	components = append(components, workerProcessComponent{
 		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, grace: dependencies.shutdownGrace, presence: presence,
-		startBudget: cfg.PreclaimReadinessTimeout, jitter: startupRetryJitter, logger: logger,
+		startBudget: cfg.PreclaimReadinessTimeout, jitter: postgres.DialRetryJitter, logger: logger,
 	})
 	return components, nil
 }

@@ -48,6 +48,9 @@ type Accounts interface {
 	ByID(ctx context.Context, id uuid.UUID) (*User, error)
 	// ProvisionLocal returns identity.ErrEmailTaken for a taken email.
 	ProvisionLocal(ctx context.Context, req ProvisionLocalRequest) (uuid.UUID, error)
+	// ProvisionLocalDecoy runs the statements of ProvisionLocal for an address that is not stored and rolls them back:
+	// nothing is written and no event is queued. It stands in for ProvisionLocal when the address is already taken.
+	ProvisionLocalDecoy(ctx context.Context, req ProvisionLocalRequest) error
 	// PeekVerificationLink reads the principal of a live verification link
 	// and consumes nothing.
 	PeekVerificationLink(ctx context.Context, tokenHash [32]byte) (principalID uuid.UUID, ok bool, err error)

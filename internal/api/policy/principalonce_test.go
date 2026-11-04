@@ -429,7 +429,11 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 // Header[key] read.
 func headerKey(node ast.Node, info *types.Info) (ast.Expr, bool) {
 	isHeader := func(expr ast.Expr) bool {
-		switch info.Types[expr].Type.String() {
+		typ := info.Types[expr].Type
+		if typ == nil {
+			return false
+		}
+		switch typ.String() {
 		case "net/http.Header", "net/textproto.MIMEHeader":
 			return true
 		}

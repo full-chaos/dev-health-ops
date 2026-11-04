@@ -303,3 +303,156 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a
   }
 }
 ```
+
+## Auth push projection
+
+The reader of the `external_push_credential` outbox exports three gauges (`internal/auth/pushprojection/reader.go:194-204`). Two rules read them; `alerts/rules.yml` holds them in group `auth_push_projection`:
+
+- `AuthPushProjectionParkedStuck`: `min_over_time(devhealth_auth_push_projection_parked_rows[15m]) > 0`. Rows are parked for a retry (a gap or a parent not seen yet) at every step of 15 minutes. 15 m = 3 x the 5 min retry-backoff cap (`reader.go:48-49`). Severity warning, channel `accounts-email`, evaluation 15m, frequency 5m. In the builder form this is `min` over time with the threshold above 0 at all times in the 15 minute window.
+- `AuthPushProjectionFinalRows`: `devhealth_auth_push_projection_final_rows > 0`. Any row parked for good (malformed, unknown organization, conflict) is a defect to look at. This is the "drift alert" that the metric text refers to. Severity warning, channel `accounts-email`, evaluation 5m, frequency 5m.
+
+There is no rule on `devhealth_auth_push_projection_lag`: it counts outbox ids, not seconds, and stays above 0 for up to 1 hour after a decided event (Horizon, `reader.go:81`), so a lag rule would fire without a fault. PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are builder threshold rules that name the `accounts-email` channel and do not use the notification policy (`usePolicy` is false). The JSON is applied by hand in SigNoz.
+
+```json
+{
+  "alert": "AuthPushProjectionParkedStuck",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "devhealth_auth_push_projection_parked_rows",
+                "timeAggregation": "min",
+                "spaceAggregation": "min"
+              }
+            ],
+            "filter": {
+              "expression": "deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "15m",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "go-api"
+  },
+  "annotations": {
+    "summary": "auth push projection: rows parked for a retry for 15 minutes",
+    "description": "The push projection reader had parked rows (a gap or a parent not seen yet) at every step of the last 15 minutes. 15 m = 3 x the 5 min retry-backoff cap (reader.go:48-49), so a row that only waited for its parent has been retried at least three times at the cap. Next: the reader log and the projection_retry rows of stream external_push."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthPushProjectionFinalRows",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "devhealth_auth_push_projection_final_rows",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "filter": {
+              "expression": "deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0,
+          "op": "above",
+          "matchType": "at_least_once",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "5m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "go-api"
+  },
+  "annotations": {
+    "summary": "auth push projection: a row is parked for good",
+    "description": "This is the drift alert that the metric text of devhealth_auth_push_projection_final_rows refers to. A row is parked for good (malformed, unknown organization or conflict) and the projection will not retry it: a defect to look at. Next: the external_push_credential outbox rows that the reader step counted as final."
+  }
+}
+```

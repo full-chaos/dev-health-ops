@@ -1117,6 +1117,49 @@ groups:
             per class, so read samples, not counts).
 
   # ---------------------------------------------------------------------------
+  # Auth push projection (CHAOS-12927). The reader of the external_push_credential
+  # outbox (internal/auth/pushprojection/reader.go:194-204) exports three gauges.
+  # The lag gauge counts outbox ids, not seconds, and stays above 0 for up to 1 h
+  # after a decided event (Horizon), so no rule reads it. Created in SigNoz by hand
+  # as builder threshold rules (PromQL does not evaluate there):
+  # docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: auth_push_projection
+    interval: 1m
+    rules:
+      - alert: AuthPushProjectionParkedStuck
+        expr: |
+          min_over_time(devhealth_auth_push_projection_parked_rows[15m]) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "auth push projection: rows parked for a retry for 15 minutes"
+          description: |
+            The push projection reader had parked rows (a gap or a parent not
+            seen yet) at every step of the last 15 minutes. 15 m = 3 x the 5 min
+            retry-backoff cap (reader.go:48-49), so a row that was only waiting
+            for its parent has been retried at least three times at the cap.
+            Next: the reader log and the projection_retry rows of stream
+            external_push.
+
+      - alert: AuthPushProjectionFinalRows
+        expr: |
+          devhealth_auth_push_projection_final_rows > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "auth push projection: a row is parked for good"
+          description: |
+            This is the drift alert that the metric text of
+            devhealth_auth_push_projection_final_rows refers to. A row is parked
+            for good (malformed, unknown organization or conflict) and the
+            projection will not retry it: a defect to look at. Next: the
+            external_push_credential outbox rows that the reader step counted
+            as final.
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

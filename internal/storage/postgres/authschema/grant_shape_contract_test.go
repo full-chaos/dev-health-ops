@@ -62,16 +62,24 @@ func schemaPattern(t *testing.T, file string, path ...string) string {
 	return pattern
 }
 
-// The database refuses a repository grant key that the authorization request
-// would not accept: the CHECK pattern is the authorization_request.v1 pattern.
+// The table CHECK keeps the two-segment key until the migration that widens it
+// rolls; the authorization_request.v1 key (2-20 segments) is a superset of it,
+// so the database never accepts a key the request would refuse.
 func TestRepositoryGrantKeyCheckIsTheContractPattern(t *testing.T) {
-	want := schemaPattern(t, "authorization_request.v1.schema.json", "then", "properties", "resource", "properties", "key", "pattern")
+	const tableFloor = `^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`
 	match := regexp.MustCompile(`(?s)resource_grants_repository_key_canonical\s+CHECK\s*\(\s*resource_kind <> 'repository' OR resource_id ~ '([^']*)'\s*\)`).FindStringSubmatch(grantShapeMigration(t))
 	if match == nil {
 		t.Fatal("resource_grants_repository_key_canonical is not the expected CHECK shape")
 	}
-	if match[1] != want {
-		t.Fatalf("grant key CHECK pattern = %q, authorization_request.v1 repository key pattern = %q", match[1], want)
+	if match[1] != tableFloor {
+		t.Fatalf("grant key CHECK pattern = %q, want the table floor %q", match[1], tableFloor)
+	}
+	request := regexp.MustCompile(schemaPattern(t, "authorization_request.v1.schema.json", "then", "properties", "resource", "properties", "key", "pattern"))
+	floor := regexp.MustCompile(tableFloor)
+	for _, key := range []string{"*", "acme/api", "a/b", "acme/api.v2", "0a/9z"} {
+		if floor.MatchString(key) && !request.MatchString(key) {
+			t.Errorf("the table accepts %q, the authorization_request.v1 key pattern refuses it", key)
+		}
 	}
 }
 

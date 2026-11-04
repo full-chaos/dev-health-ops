@@ -4,6 +4,7 @@ import (
 	"regexp"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 const (
@@ -17,9 +18,6 @@ const (
 var (
 	actionShape = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
 	orgIDShape  = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
-	// repoKeyShape is the repository key of authorization_request.v1 and of
-	// resource_grants (migration 0020): one "owner/repo" pair or "*".
-	repoKeyShape = regexp.MustCompile(`^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\*)$`)
 )
 
 // NormalizeRequest accepts only a canonical request and returns it
@@ -35,7 +33,7 @@ func NormalizeRequest(r Request) (Request, bool) {
 			return Request{}, false
 		}
 	case resourceRepository:
-		if !repoKeyShape.MatchString(r.ResourceKey) || len(r.OrganizationID) > maxFieldLen || !orgIDShape.MatchString(r.OrganizationID) {
+		if !repokey.Valid(r.ResourceKey) || len(r.OrganizationID) > maxFieldLen || !orgIDShape.MatchString(r.OrganizationID) {
 			return Request{}, false
 		}
 	case resourcePlatform:

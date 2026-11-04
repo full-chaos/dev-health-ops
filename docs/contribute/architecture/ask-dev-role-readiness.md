@@ -25,6 +25,7 @@ different, non-retryable outcome from a transient one (the network blipped).
 
 !!! warning "Deprecated: records a removed surface"
     **Status:** Deprecated. This page records the design of the Python Ask Dev surface (`/api/v1/dev`), which the Go api does not serve. Ask Dev now runs in the Ask Dev service and is called by the browser, and it is not turned on in production today.
+    **Affected versions:** the removed Python surface only. **Review date:** none; the page stays as a record of the design.
     **Replacement:** [Turn on Ask Dev](../../admin/ask-dev/index.md) and [Ask a question and read the answer](../../use/ask-dev/index.md).
 
 ## Why one badge was not enough

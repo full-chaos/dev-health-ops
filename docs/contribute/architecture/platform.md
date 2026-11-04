@@ -98,7 +98,7 @@ flowchart LR
     D --> O
 ```
 
-The model may help present the result. It does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome. See [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the runtime and wire invariants.
+The model may help present the result. It does not own subject resolution, mandatory source selection, canonical facts, metrics, health states, evidence, or the final safe outcome. The deprecated [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) pages record these invariants for the removed Python Ask Dev surface.
 
 ACR is a separate Go service family for agent-facing Context Fabric access:
 
@@ -170,4 +170,4 @@ A process can be live and healthy while its deployment group is disabled. Produc
 
 ## Contributor navigation
 
-Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. Use [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the deterministic investigation boundary. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.
+Use [Data and storage boundaries](data-and-storage.md) for database, River, outbox, and migration responsibilities. Use [Stable contracts](contracts.md) for public and internal contract changes. The deprecated [Ask Dev subject preflight](ask-dev-subject-preflight.md) and [Ask Dev v2 contracts](ask-dev-contracts-v2.md) pages record the deterministic investigation boundary of the removed Python Ask Dev surface. Use [Workers, schedules, and queues](../../operate/configure/workers-and-schedules.md) for deployment ownership and migration gates.

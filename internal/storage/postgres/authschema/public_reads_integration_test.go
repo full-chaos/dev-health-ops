@@ -24,10 +24,10 @@ import (
 var publicReadOracle = map[string][]string{
 	"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 		"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"},
-	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"},
+	"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"},
 	"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 		"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-	"organizations":                {"id", "slug", "name", "is_active", "tier"},
+	"organizations":                {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
 	"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
 	"org_licenses":                 {"org_id", "tier", "features_override"},
 	"org_activity":                 {"org_id", "has_data", "computed_at"},
@@ -107,13 +107,23 @@ func (e *publicReadsEnv) rename(t *testing.T, ctx context.Context, from, to stri
 }
 
 // extraColumn returns a real column of public.<table> that the manifest does
-// not list.
+// not list. When the manifest lists every column of the table, the migration
+// role adds one in this test's database, so a new column must stay unreadable.
 func (e *publicReadsEnv) extraColumn(t *testing.T, ctx context.Context, table string) string {
 	t.Helper()
 	var column string
-	if err := e.admin.QueryRow(ctx, `SELECT column_name FROM information_schema.columns
+	err := e.admin.QueryRow(ctx, `SELECT column_name FROM information_schema.columns
 		WHERE table_schema = 'public' AND table_name = $1 AND column_name <> ALL($2::text[])
-		ORDER BY ordinal_position LIMIT 1`, table, publicReadOracle[table]).Scan(&column); err != nil {
+		ORDER BY ordinal_position LIMIT 1`, table, publicReadOracle[table]).Scan(&column)
+	if errors.Is(err, pgx.ErrNoRows) {
+		column = "ops_unlisted_probe"
+		if _, err := e.migration.Exec(ctx, fmt.Sprintf(`ALTER TABLE public.%s ADD COLUMN %s text`,
+			Quote(mustValidatedIdentifier(table)), Quote(mustValidatedIdentifier(column)))); err != nil {
+			t.Fatalf("add a column outside the manifest to public.%s: %v", table, err)
+		}
+		return column
+	}
+	if err != nil {
 		t.Fatalf("a column of public.%s outside the manifest: %v", table, err)
 	}
 	return column

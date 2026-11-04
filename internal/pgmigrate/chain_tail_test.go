@@ -222,7 +222,7 @@ func TestAPlantedGoOnlyTailIsAcceptedEverywhere(t *testing.T) {
 					t.Errorf("revision %s is not known to the build", file.Revision)
 				}
 			}
-			plan := Decide(Observation{HasVersionTable: true, Versions: []string{cutoverRevision, last}, PublicTables: []string{"users"}}, Baseline{Cutover: true, Heads: []string{cutoverRevision, applicationHead(baseline)}, Schema: baseline.Schema}, chain, known)
+			plan := Decide(Observation{HasVersionTable: true, Versions: []string{cutoverRevision, last}, PublicTables: []string{"users"}, HasLedger: true, Ledger: appliedLedger(chain)}, Baseline{Cutover: true, Heads: []string{cutoverRevision, applicationHead(baseline)}, Schema: baseline.Schema}, chain, known)
 			if plan.State != StateAtHead || plan.ApplicationHead != last {
 				t.Errorf("a database at %s decides %+v, want at-head %s", last, plan, last)
 			}

@@ -1,6 +1,7 @@
 package chartgates_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -64,10 +65,19 @@ func sloRuleText(g *guard) {
 
 func sloBuilderMatchesTheRule(g *guard) {
 	for _, w := range sloRules {
+		n := 0
+		for _, m := range orgActivityBlock.FindAllStringSubmatch(g.read(orgActivityDocRel), -1) {
+			var r map[string]any
+			if json.Unmarshal([]byte(m[1]), &r) == nil && r["alert"] == w.alert {
+				n++
+			}
+		}
+		g.expect(n == 1, "%s has %d builder JSON blocks in %s, want 1", w.alert, n, orgActivityDocRel)
 		root := orgActivityBuilder(g, w.alert)
 		if root == nil {
 			continue
 		}
+		sloBuilderKeysAreBound(g, w, root)
 		cond := mp(root["condition"])
 		q := list(mp(cond["compositeQuery"])["queries"])
 		g.expect(len(q) == 1, "%s has %d queries, want 1", w.alert, len(q))
@@ -106,6 +116,134 @@ func sloBuilderMatchesTheRule(g *guard) {
 		g.expect(mp(root["notificationSettings"])["usePolicy"] == false, "%s must name its channel and not use the notification policy", w.alert)
 		labels := mp(root["labels"])
 		g.expect(str(labels["severity"]) == w.severity && str(labels["team"]) == "platform" && str(labels["service"]) == "auth-service", "%s labels are %v", w.alert, labels)
+	}
+}
+
+// sloBuilderInert are the only builder keys that do not change what the rule evaluates; each says why.
+var sloBuilderInert = map[string]string{
+	"annotations.summary":     "notification title text only",
+	"annotations.description": "notification body text only",
+}
+
+// sloBuilderFilterKey is bound by the order-free clause check in sloBuilderMatchesTheRule, not by its exact text.
+const sloBuilderFilterKey = "condition.compositeQuery.queries[0].spec.filter.expression"
+
+func sloJSON(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// sloBuilderWant is every evaluated key of one builder block with its JSON value. Labels and channels route the
+// alert, so they are bound too.
+func sloBuilderWant(w sloRule) map[string]string {
+	const q, cq = "condition.compositeQuery.queries[0].", "condition.compositeQuery."
+	const s, a, th = q + "spec.", q + "spec.aggregations[0].", "condition.thresholds.spec[0]."
+	space := w.quantile
+	if space == "" {
+		space = "max"
+	}
+	target, _ := strconv.ParseFloat(w.target, 64)
+	return map[string]string{
+		"alert":                          sloJSON(w.alert),
+		"alertType":                      sloJSON("METRIC_BASED_ALERT"),
+		"ruleType":                       sloJSON("threshold_rule"),
+		"schemaVersion":                  sloJSON("v2alpha1"),
+		cq + "queryType":                 sloJSON("builder"),
+		cq + "panelType":                 sloJSON("graph"),
+		cq + "unit":                      sloJSON(sloUnit),
+		q + "type":                       sloJSON("builder_query"),
+		s + "name":                       sloJSON("A"),
+		s + "signal":                     sloJSON("metrics"),
+		s + "stepInterval":               sloJSON(60),
+		s + "disabled":                   sloJSON(false),
+		a + "metricName":                 sloJSON(w.metric),
+		a + "timeAggregation":            sloJSON(w.timeAgg),
+		a + "spaceAggregation":           sloJSON(space),
+		sloBuilderFilterKey:              "",
+		"condition.selectedQueryName":    sloJSON("A"),
+		"condition.thresholds.kind":      sloJSON("basic"),
+		th + "name":                      sloJSON(w.severity),
+		th + "target":                    sloJSON(target),
+		th + "targetUnit":                sloJSON(sloUnit),
+		th + "op":                        sloJSON("above"),
+		th + "matchType":                 sloJSON(sloMatchType),
+		th + "channels[0]":               sloJSON(orgActivityChannel),
+		"evaluation.kind":                sloJSON("rolling"),
+		"evaluation.spec.evalWindow":     sloJSON(w.window),
+		"evaluation.spec.frequency":      sloJSON("1m"),
+		"notificationSettings.usePolicy": sloJSON(false),
+		"labels.severity":                sloJSON(w.severity),
+		"labels.team":                    sloJSON("platform"),
+		"labels.environment":             sloJSON(sloEnv),
+		"labels.service":                 sloJSON(sloService),
+	}
+}
+
+// sloFlatten writes each leaf of v as path -> JSON value (an empty object or list is a leaf too) and returns the
+// keys that hold a path character, which could forge the path of another key.
+func sloFlatten(v any, path string, out map[string]string) (bad []string) {
+	switch x := v.(type) {
+	case map[string]any:
+		if len(x) == 0 {
+			out[path] = "{}"
+		}
+		for k, e := range x {
+			if strings.ContainsAny(k, ".[]") {
+				bad = append(bad, path+"/"+k)
+				continue
+			}
+			p := k
+			if path != "" {
+				p = path + "." + k
+			}
+			bad = append(bad, sloFlatten(e, p, out)...)
+		}
+	case []any:
+		if len(x) == 0 {
+			out[path] = "[]"
+		}
+		for i, e := range x {
+			bad = append(bad, sloFlatten(e, fmt.Sprintf("%s[%d]", path, i), out)...)
+		}
+	default:
+		out[path] = sloJSON(x)
+	}
+	return bad
+}
+
+// sloBuilderKeysAreBound refuses a block unless every key is bound to the rule or named inert: a changed value, a
+// missing key and an unknown key each refuse.
+func sloBuilderKeysAreBound(g *guard, w sloRule, root map[string]any) {
+	got := map[string]string{}
+	for _, k := range sloFlatten(root, "", got) {
+		g.failf("%s builder key %q holds a path character (. [ ]), refused", w.alert, k)
+	}
+	want := sloBuilderWant(w)
+	keys := make([]string, 0, len(got))
+	for k := range got {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		wv, bound := want[k]
+		_, inert := sloBuilderInert[k]
+		switch {
+		case inert || k == sloBuilderFilterKey:
+		case !bound:
+			g.failf("%s builder key %s is not a known field (value %s), refused", w.alert, k, got[k])
+		case got[k] != wv:
+			g.failf("%s builder key %s = %s, want %s", w.alert, k, got[k], wv)
+		}
+	}
+	keys = keys[:0]
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, ok := got[k]; !ok {
+			g.failf("%s builder key %s is missing, want %s", w.alert, k, want[k])
+		}
 	}
 }
 
@@ -216,12 +354,12 @@ var (
 )
 
 // sloRow is one expected row of the SLO table. Every cell is bound: label (first-cell prefix), routes (the
-// backticked paths of the first cell), SLI substrings, target, window and source (exact cells), and the alerts the
-// status cell names. A row without a target says exactly "target not set".
+// backticked paths of the first cell), SLI substrings, target, window and source (exact cells), the alerts the
+// status cell names and the exact status cell (pin). A row without a target says exactly "target not set".
 type sloRow struct {
-	label, sli, target, window, source string
-	routes, alerts, status             []string
-	noAlert                            bool
+	label, sli, target, window, source, pin string
+	routes, alerts, status                  []string
+	noAlert                                 bool
 }
 
 func sloTableRows(g *guard) (intro string, rows [][]string) {
@@ -264,21 +402,31 @@ func sloExpectedRows() []sloRow {
 	outMin := func() string { f, _ := strconv.Atoi(outbox.target); return strconv.Itoa(f/60) + " minutes" }()
 	return []sloRow{
 		{label: "auth-service, all routes", sli: "`dev_health_api_http_requests_total`", target: "99.95%", window: "30 days", source: "CHAOS-11220",
-			alerts: []string{"AuthService5xx", "AuthServiceHighServerErrorRate"}},
+			alerts: []string{"AuthService5xx", "AuthServiceHighServerErrorRate"},
+			pin:    "Target only; no production measurement. Alerts: `AuthService5xx` (any 5xx in 5 minutes, live in SigNoz) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for 10 minutes, in `alerts/rules.yml`, not yet created in SigNoz). No burn-rate rule."},
 		{label: "PDP", sli: "p95, p99 latency; error rate", target: "p95 < " + sloMs(p95) + ", p99 < " + sloMs(p99) + ", errors 0",
 			window: "Load leg (`ci/pdp_load_k3s.sh`); alert window " + sloMinutes(p95.window), source: "CHAOS-10854, CHAOS-12705 (\"do not loosen the SLO\")",
-			routes: []string{"/v1/authorize", "/v1/authorize:batch"}, alerts: []string{p95.alert, p99.alert}},
+			routes: []string{"/v1/authorize", "/v1/authorize:batch"}, alerts: []string{p95.alert, p99.alert},
+			pin: "Not yet met at peak (CHAOS-12705). At normal load it holds: low p95 7.1 ms, high 10.2, deny 7.6, batch-10 16.4. At 200 requests/s (client concurrency 64): authorize-high p95 2075 ms with 6.9% dropped, authorize-deny p95 32.6 ms and p99 120 ms, authorize-batch-10 p50 2.6 s with 38% dropped; batch-100 is recorded, not gated (82% dropped). Recorded baseline: run `lead-10854-k3s-v5`. Alerts: `" + p95.alert + "`, `" + p99.alert + "`."},
 		{label: "Session issue", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "CHAOS-11220",
-			routes: []string{"/internal/v1/sessions"}, alerts: []string{tok.alert}},
+			routes: []string{"/internal/v1/sessions"}, alerts: []string{tok.alert},
+			pin: "Measured, one pod of 1 CPU: p95 under 10 ms up to 400 requests/s; 161 ms at 800 requests/s ([capacity](../../operate/plan/auth-service-capacity.md)). Alert: `" + tok.alert + "`."},
 		{label: "Refresh", sli: "p95 latency", target: "< " + sloMs(tok), window: sloMinutes(tok.window), source: "CHAOS-11220",
-			routes: []string{"/v1/token/refresh"}, alerts: []string{tok.alert}},
-		{label: "JWKS", sli: "p95 latency", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/.well-known/jwks.json"}, noAlert: true},
-		{label: "Exchange", sli: "latency, outcome", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/internal/v1/token/exchange"}, noAlert: true},
+			routes: []string{"/v1/token/refresh"}, alerts: []string{tok.alert},
+			pin: "Measured: p95 about 7 ms at 300 requests/s; 6.8 ms with 6 times the refresh rate (10-minute token lifetime). Alert: `" + tok.alert + "`."},
+		{label: "JWKS", sli: "p95 latency", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/.well-known/jwks.json"}, noAlert: true,
+			pin: "Measured baseline: p95 under 2 ms up to 1600 requests/s per pod. No alert."},
+		{label: "Exchange", sli: "latency, outcome", target: "target not set", window: "-", source: "no ticket or page states one", routes: []string{"/internal/v1/token/exchange"}, noAlert: true,
+			pin: "No measurement: the load harness covers issue, refresh and JWKS. No alert."},
 		{label: "Audit outbox", sli: "`" + outbox.metric + "`", target: "under " + outMin, window: sloMinutes(outbox.window), source: "this page, before CHAOS-11220",
-			alerts: []string{outbox.alert}, status: []string{"(above " + outbox.target + " seconds)"}},
-		{label: "Revocation propagation", sli: "`auth.session.revocation_lag`", target: "target not set", window: "-", source: "no ticket or page states one", noAlert: true},
-		{label: "Readiness", sli: "`dev_health_runtime_ready == 1`", target: "99.9%", window: "30 days", source: "this page, kept"},
-		{label: "Readiness", sli: "Time to ready after a start", target: "under 60 s", window: "per start", source: "this page, kept"},
+			alerts: []string{outbox.alert}, status: []string{"(above " + outbox.target + " seconds)"},
+			pin: "Metric exists; not measured under load. Alert: `" + outbox.alert + "` (above " + outbox.target + " seconds)."},
+		{label: "Revocation propagation", sli: "`auth.session.revocation_lag`", target: "target not set", window: "-", source: "no ticket or page states one", noAlert: true,
+			pin: "The SLI is named; the metric is not on main yet. No alert."},
+		{label: "Readiness", sli: "`dev_health_runtime_ready == 1`", target: "99.9%", window: "30 days", source: "this page, kept",
+			pin: "Proposed, not measured in production."},
+		{label: "Readiness", sli: "Time to ready after a start", target: "under 60 s", window: "per start", source: "this page, kept",
+			pin: "Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready."},
 	}
 }
 
@@ -309,7 +457,7 @@ func sloTableRowsBindToTheRules(g *guard) {
 			if used[i] || !strings.HasPrefix(r[0], w.label) {
 				continue
 			}
-			if sameLabel[w.label] == 1 || strings.Contains(r[1], w.sli) {
+			if sameLabel[w.label] == 1 || (len(r) > 1 && strings.Contains(r[1], w.sli)) {
 				found = i
 				break
 			}
@@ -320,6 +468,9 @@ func sloTableRowsBindToTheRules(g *guard) {
 		}
 		used[found] = true
 		c := rows[found]
+		if len(c) != 6 {
+			continue // sloTableRows recorded the cell count; the cells of this row cannot be read by position
+		}
 		var gotRoutes []string
 		for _, m := range sloRouteTok.FindAllStringSubmatch(c[0], -1) {
 			gotRoutes = append(gotRoutes, m[1])
@@ -340,6 +491,7 @@ func sloTableRowsBindToTheRules(g *guard) {
 		for _, s := range w.status {
 			g.expect(strings.Contains(c[5], s), "%s: status does not say %q", at, s)
 		}
+		g.expect(c[5] == w.pin, "%s: status is %q, want exactly %q", at, c[5], w.pin)
 		for _, a := range gotAlerts {
 			if len(w.routes) > 0 {
 				unionRoutes[a] = append(unionRoutes[a], gotRoutes...)
@@ -514,4 +666,255 @@ func TestAuthSLOTableGuardRowSetDefects(t *testing.T) {
 			return strings.Replace(doc, sloRowLine(t, doc, "Refresh "), sloRowLine(t, doc, "Session issue "), 1)
 		}), sloTableRowsBindToTheRules, "(Refresh): first cell: no unmatched row"},
 	})
+}
+
+// sloBuilderEdit decodes the builder block of one alert, lets edit change it and writes it back as JSON.
+func sloBuilderEdit(alert string, edit func(t *testing.T, root map[string]any)) func(*testing.T, string) {
+	return func(t *testing.T, dir string) {
+		t.Helper()
+		p := rootPath(dir, orgActivityDocRel)
+		doc := mustRead(t, p)
+		for _, m := range orgActivityBlock.FindAllStringSubmatchIndex(doc, -1) {
+			var r map[string]any
+			if json.Unmarshal([]byte(doc[m[2]:m[3]]), &r) != nil || r["alert"] != alert {
+				continue
+			}
+			edit(t, r)
+			b, err := json.MarshalIndent(r, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(doc[:m[2]]+string(b)+doc[m[3]:]), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		t.Fatalf("no builder block for %s", alert)
+	}
+}
+
+// sloPathEdit applies f to the value at a flattened path (a.b[0].c); f returns the new value, or keep=false to
+// delete it. A path that does not reach its parent fails the test: the defect did not land.
+func sloPathEdit(t *testing.T, root map[string]any, path string, f func(old any, ok bool) (v any, keep bool)) {
+	t.Helper()
+	var steps []any
+	for _, seg := range strings.Split(path, ".") {
+		name, rest, _ := strings.Cut(seg, "[")
+		steps = append(steps, name)
+		for rest != "" {
+			n, tail, _ := strings.Cut(rest, "]")
+			i, err := strconv.Atoi(n)
+			if err != nil {
+				t.Fatalf("bad path %s", path)
+			}
+			steps = append(steps, i)
+			rest = strings.TrimPrefix(tail, "[")
+		}
+	}
+	var cur any = root
+	var holder map[string]any
+	var hkey string
+	for _, s := range steps[:len(steps)-1] {
+		switch k := s.(type) {
+		case string:
+			holder, hkey = mp(cur), k
+			cur = holder[k]
+		case int:
+			if k >= len(list(cur)) {
+				t.Fatalf("path %s does not exist, the defect did not land", path)
+			}
+			cur = list(cur)[k]
+		}
+		if cur == nil {
+			t.Fatalf("path %s does not exist, the defect did not land", path)
+		}
+	}
+	switch k := steps[len(steps)-1].(type) {
+	case string:
+		m := mp(cur)
+		old, ok := m[k]
+		if v, keep := f(old, ok); keep {
+			m[k] = v
+		} else if ok {
+			delete(m, k)
+		} else {
+			t.Fatalf("path %s does not exist, the defect did not land", path)
+		}
+	case int:
+		l := list(cur)
+		if k >= len(l) {
+			t.Fatalf("path %s does not exist, the defect did not land", path)
+		}
+		if v, keep := f(l[k], true); keep {
+			l[k] = v
+		} else {
+			holder[hkey] = append(append([]any{}, l[:k]...), l[k+1:]...)
+		}
+	}
+}
+
+func sloSet(path string, v any) func(*testing.T, map[string]any) {
+	return func(t *testing.T, r map[string]any) {
+		sloPathEdit(t, r, path, func(any, bool) (any, bool) { return v, true })
+	}
+}
+
+func sloOther(v any) any {
+	switch x := v.(type) {
+	case string:
+		return x + "-changed"
+	case float64:
+		return x + 1
+	case bool:
+		return !x
+	}
+	return "changed"
+}
+
+func TestAuthSLOBuilderGuardEveryKey(t *testing.T) {
+	var cases []planted
+	add := func(name, alert string, edit func(*testing.T, map[string]any), want string) {
+		cases = append(cases, planted{name, []string{orgActivityDocRel}, sloBuilderEdit(alert, edit), sloBuilderMatchesTheRule, want})
+	}
+	const s = "condition.compositeQuery.queries[0].spec."
+	for _, w := range sloRules {
+		a := w.alert
+		want := sloBuilderWant(w)
+		keys := make([]string, 0, len(want))
+		for k := range want {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			changed, removed := a+" builder key "+k+" = ", a+" builder key "+k+" is missing"
+			if k == "alert" {
+				changed, removed = "has no builder JSON block for "+a, "has no builder JSON block for "+a
+			}
+			if k == sloBuilderFilterKey {
+				changed = a + " filter is"
+			}
+			add(a+"/"+k+"/changed", a, func(t *testing.T, r map[string]any) {
+				sloPathEdit(t, r, k, func(old any, ok bool) (any, bool) {
+					if !ok {
+						t.Fatalf("%s has no key %s, the defect did not land", a, k)
+					}
+					return sloOther(old), true
+				})
+			}, changed)
+			add(a+"/"+k+"/removed", a, func(t *testing.T, r map[string]any) {
+				sloPathEdit(t, r, k, func(any, bool) (any, bool) { return nil, false })
+			}, removed)
+		}
+		for _, k := range []struct {
+			name, path string
+			v          any
+			leaf       string
+		}{
+			{"root-disabled", "disabled", true, "disabled"},
+			{"group-by", s + "groupBy", []any{map[string]any{"name": "route"}}, s + "groupBy[0].name"},
+			{"empty-group-by", s + "groupBy", []any{}, s + "groupBy"},
+			{"having", s + "having", map[string]any{"expression": "count() > 1"}, s + "having.expression"},
+			{"functions", s + "functions", []any{map[string]any{"name": "cutOffMin"}}, s + "functions[0].name"},
+			{"reduce-to", s + "aggregations[0].reduceTo", "avg", s + "aggregations[0].reduceTo"},
+			{"recovery-target", "condition.thresholds.spec[0].recoveryTarget", 0, "condition.thresholds.spec[0].recoveryTarget"},
+		} {
+			add(a+"/unknown/"+k.name, a, sloSet(k.path, k.v), a+" builder key "+k.leaf+" is not a known field")
+		}
+		add(a+"/unknown/second-query", a, func(t *testing.T, r map[string]any) {
+			q := mp(mp(r["condition"])["compositeQuery"])
+			q["queries"] = append(list(q["queries"]), map[string]any{"type": "builder_query", "spec": map[string]any{"name": "B"}})
+		}, a+" builder key condition.compositeQuery.queries[1].spec.name is not a known field")
+		add(a+"/forged-path-key", a, func(t *testing.T, r map[string]any) {
+			sloPathEdit(t, r, "condition.selectedQueryName", func(any, bool) (any, bool) { return nil, false })
+			r["condition.selectedQueryName"] = "A"
+		}, a+" builder key \"/condition.selectedQueryName\" holds a path character")
+		add(a+"/r1b-signal-logs", a, sloSet(s+"signal", "logs"), a+" builder key "+s+"signal = ")
+		add(a+"/r1b-query-type-promql", a, sloSet("condition.compositeQuery.queryType", "promql"), a+" builder key condition.compositeQuery.queryType = ")
+		add(a+"/r1b-selected-query-b", a, sloSet("condition.selectedQueryName", "B"), a+" builder key condition.selectedQueryName = ")
+		add(a+"/r1b-disabled", a, sloSet(s+"disabled", true), a+" builder key "+s+"disabled = ")
+		cases = append(cases, planted{a + "/second-block", []string{orgActivityDocRel}, func(t *testing.T, dir string) {
+			p := rootPath(dir, orgActivityDocRel)
+			doc := mustRead(t, p)
+			for _, m := range orgActivityBlock.FindAllStringSubmatch(doc, -1) {
+				if strings.Contains(m[1], `"alert": "`+a+`"`) {
+					if err := os.WriteFile(p, []byte(doc+"\n"+m[0]+"\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+			}
+			t.Fatalf("no builder block for %s", a)
+		}, sloBuilderMatchesTheRule, a + " has 2 builder JSON blocks"})
+	}
+	runPlanted(t, cases)
+}
+
+func TestAuthSLOBuilderGuardAcceptsInertKeys(t *testing.T) {
+	real := realRoot(t)
+	for _, w := range sloRules {
+		for k := range sloBuilderInert {
+			t.Run(w.alert+"/"+k, func(t *testing.T) {
+				root := t.TempDir()
+				copyPath(t, real, root, orgActivityDocRel)
+				sloBuilderEdit(w.alert, sloSet(k, "other text"))(t, root)
+				g := &guard{root: root, tmp: t.TempDir()}
+				sloBuilderMatchesTheRule(g)
+				if len(g.v) != 0 {
+					t.Fatalf("an inert key change was refused: %v", g.v)
+				}
+			})
+		}
+	}
+}
+
+// sloRowPrefixes name each SLO table row by a unique line prefix and the label the guard reports.
+var sloRowPrefixes = []struct{ prefix, label string }{
+	{"auth-service, all routes ", "auth-service, all routes"},
+	{"PDP ", "PDP"},
+	{"Session issue ", "Session issue"},
+	{"Refresh ", "Refresh"},
+	{"JWKS ", "JWKS"},
+	{"Exchange ", "Exchange"},
+	{"Audit outbox ", "Audit outbox"},
+	{"Revocation propagation ", "Revocation propagation"},
+	{"Readiness | Fraction", "Readiness"},
+	{"Readiness | Time to ready", "Readiness"},
+}
+
+func sloRowEdit(prefix string, f func(line string) string) func(*testing.T, string) {
+	return sloRowsMut(func(t *testing.T, doc string) string {
+		l := sloRowLine(t, doc, prefix)
+		return strings.Replace(doc, l, f(l), 1)
+	})
+}
+
+func TestAuthSLOTableGuardStatusPins(t *testing.T) {
+	var cases []planted
+	for _, r := range sloRowPrefixes {
+		cases = append(cases, planted{"status-changed/" + r.prefix, []string{sloTableRel}, sloRowEdit(r.prefix, func(l string) string {
+			return strings.TrimSuffix(l, " |") + " Measured: p95 5 ms. |"
+		}), sloTableRowsBindToTheRules, "(" + r.label + "): status is"})
+	}
+	cases = append(cases,
+		planted{"r1b-jwks-baseline-changed", []string{sloTableRel}, mut(sloTableRel, "p95 under 2 ms up to 1600", "p95 under 22 ms up to 1600"), sloTableRowsBindToTheRules, "(JWKS): status is"},
+		planted{"r1b-exchange-invented-baseline", []string{sloTableRel}, mut(sloTableRel, "| No measurement: the load harness covers issue, refresh and JWKS. No alert. |", "| Measured baseline: p95 17 ms. No alert. |"), sloTableRowsBindToTheRules, "(Exchange): status is"},
+		planted{"r1b-revocation-invented-baseline", []string{sloTableRel}, mut(sloTableRel, "the metric is not on main yet. No alert. |", "the metric is not on main yet. Measured baseline: p95 17 ms. No alert. |"), sloTableRowsBindToTheRules, "(Revocation propagation): status is"},
+		planted{"no-target-row-names-another-alert", []string{sloTableRel}, mut(sloTableRel, "covers issue, refresh and JWKS. No alert. |", "covers issue, refresh and JWKS. No alert; see AuthTokenLatencyP95High. |"), sloTableRowsBindToTheRules, "(Exchange): status is"},
+	)
+	runPlanted(t, cases)
+}
+
+func TestAuthSLOTableGuardCellCount(t *testing.T) {
+	var cases []planted
+	for _, r := range sloRowPrefixes {
+		cases = append(cases, planted{"status-cell-dropped/" + r.prefix, []string{sloTableRel}, sloRowEdit(r.prefix, func(l string) string {
+			body := strings.TrimSuffix(l, " |")
+			return body[:strings.LastIndex(body, " | ")] + " |"
+		}), sloTableRowsBindToTheRules, "has 5 cells, want 6: | " + r.prefix})
+	}
+	cases = append(cases,
+		planted{"extra-cell", []string{sloTableRel}, sloRowEdit("JWKS ", func(l string) string { return l + " extra |" }), sloTableRowsBindToTheRules, "has 7 cells, want 6: | JWKS "},
+		planted{"one-cell-row", []string{sloTableRel}, sloRowEdit("Readiness | Time to ready", func(string) string { return "| Readiness |" }), sloTableRowsBindToTheRules, "has 1 cells, want 6: | Readiness |"},
+	)
+	runPlanted(t, cases)
 }

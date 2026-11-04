@@ -334,6 +334,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvPublicMaxInFlight:           "17",
 		EnvPublicRateLimit:             "7.5",
 		EnvPublicRateLimitBurst:        "19",
+		EnvPDPCallerRateLimit:          "11.5",
+		EnvPDPCallerRateLimitBurst:     "123",
+		EnvPDPRouteRateLimit:           "13.5",
+		EnvPDPRouteRateLimitBurst:      "321",
 		EnvDatabaseSchema:              "authtest",
 		EnvDatabaseMaxConns:            "11",
 		EnvDatabaseConnectTimeout:      "3s",
@@ -373,6 +377,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvPublicMaxInFlight:           func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
 		EnvPublicRateLimit:             func(c Config) string { return ftoa(c.Public.PerSecond) },
 		EnvPublicRateLimitBurst:        func(c Config) string { return itoa(int64(c.Public.Burst)) },
+		EnvPDPCallerRateLimit:          func(c Config) string { return ftoa(c.PDPCaller.PerSecond) },
+		EnvPDPCallerRateLimitBurst:     func(c Config) string { return itoa(int64(c.PDPCaller.Burst)) },
+		EnvPDPRouteRateLimit:           func(c Config) string { return ftoa(c.PDPRoute.PerSecond) },
+		EnvPDPRouteRateLimitBurst:      func(c Config) string { return itoa(int64(c.PDPRoute.Burst)) },
 		EnvDatabaseSchema:              func(c Config) string { return c.DatabaseSchema },
 		EnvDatabaseMaxConns:            func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
 		EnvDatabaseConnectTimeout:      func(c Config) string { return c.DatabaseConnectTimeout.String() },
@@ -634,5 +642,27 @@ func TestRateLimitBurstRefusesAValueBeyondIntRange(t *testing.T) {
 	e[EnvRateLimitBurst] = "1.5"
 	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
 		t.Errorf("1.5: error = %v, want an integer refusal", err)
+	}
+}
+
+func TestPDPRateLimitDefaultsAndRanges(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (RateLimit{PerSecond: 150, Burst: 300}); cfg.PDPCaller != want {
+		t.Errorf("PDPCaller = %+v, want %+v", cfg.PDPCaller, want)
+	}
+	if want := (RateLimit{PerSecond: 2000, Burst: 4000}); cfg.PDPRoute != want {
+		t.Errorf("PDPRoute = %+v, want %+v", cfg.PDPRoute, want)
+	}
+	for _, env := range []string{EnvPDPCallerRateLimit, EnvPDPCallerRateLimitBurst, EnvPDPRouteRateLimit, EnvPDPRouteRateLimitBurst} {
+		for _, value := range []string{"0", "100001", "x"} {
+			e := baseEnv()
+			e[env] = value
+			if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil {
+				t.Errorf("%s=%s accepted, want a range refusal", env, value)
+			}
+		}
 	}
 }

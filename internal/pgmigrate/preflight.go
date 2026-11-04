@@ -57,6 +57,12 @@ const (
 	// ReasonSettingsMismatch: the environment the hook would run in differs from
 	// the baseline's settings, and the hook refuses before it touches the database.
 	ReasonSettingsMismatch = "settings_mismatch"
+	// ReasonChainRevisionUnapplied: a chain revision at or below the recorded head has no
+	// ledger row (public.dho_chain_applied), or the ledger table is absent.
+	ReasonChainRevisionUnapplied = "chain_revision_unapplied"
+	// ReasonChainRevisionSHAMismatch: a ledger row the migrator wrote records another
+	// file than the build's for that revision.
+	ReasonChainRevisionSHAMismatch = "chain_revision_sha_mismatch"
 )
 
 const (
@@ -142,6 +148,10 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAuthSchemaMismatch
 	case StateSchemaMismatch:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonSchemaMismatch
+	case StateChainRevisionUnapplied:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonChainRevisionUnapplied
+	case StateChainRevisionSHAMismatch:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonChainRevisionSHAMismatch
 	}
 	return report
 }

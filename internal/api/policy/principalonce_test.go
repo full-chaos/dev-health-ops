@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"go/ast"
 	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -424,6 +425,29 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 	}
 }
 
+// headerKey returns the key expression of a Header.Get, Header.Values or
+// Header[key] read.
+func headerKey(node ast.Node, info *types.Info) (ast.Expr, bool) {
+	isHeader := func(expr ast.Expr) bool {
+		switch info.Types[expr].Type.String() {
+		case "net/http.Header", "net/textproto.MIMEHeader":
+			return true
+		}
+		return false
+	}
+	switch typed := node.(type) {
+	case *ast.CallExpr:
+		if sel, ok := typed.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Get" || sel.Sel.Name == "Values") && len(typed.Args) == 1 && isHeader(sel.X) {
+			return typed.Args[0], true
+		}
+	case *ast.IndexExpr:
+		if isHeader(typed.X) {
+			return typed.Index, true
+		}
+	}
+	return nil, false
+}
+
 // authorizationGuardProblems scans the production files of dir and returns
 // every read of the Authorization header outside allowed, and every reason
 // the scan cannot be trusted.
@@ -448,8 +472,14 @@ func authorizationGuardProblems(dir string, allowed []string) []string {
 		files[name] = file
 		parsed = append(parsed, file)
 	}
+	if len(parsed) == 0 {
+		return []string{"no production Go files parsed in " + dir}
+	}
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
-	conf := types.Config{Importer: emptyImporter{}, Error: func(error) {}}
+	conf := types.Config{
+		Importer: newLocalImporter(fset, dir),
+		Error:    func(err error) { problems = append(problems, "type check: "+err.Error()) },
+	}
 	_, _ = conf.Check("policy", fset, parsed, info)
 	for name, file := range files {
 		if name == "scope.go" || name == "accessroute.go" {
@@ -467,6 +497,11 @@ func authorizationGuardProblems(dir string, allowed []string) []string {
 					problems = append(problems, fset.Position(typed.Pos()).String()+" reads the Authorization header")
 				}
 			}
+			if !slices.Contains(allowed, name) {
+				if key, ok := headerKey(node, info); ok && info.Types[key].Value == nil {
+					problems = append(problems, fset.Position(key.Pos()).String()+" reads a header with a key that is not a constant")
+				}
+			}
 			if call, ok := node.(*ast.CallExpr); ok {
 				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
 					problems = append(problems, fset.Position(call.Pos()).String()+" calls BearerToken")
@@ -478,12 +513,53 @@ func authorizationGuardProblems(dir string, allowed []string) []string {
 	return problems
 }
 
-// emptyImporter lets go/types fold constants without resolving imports.
-type emptyImporter struct{}
+// localImporter resolves the imports that belong to a module rooted at dir
+// from source and every other import with the source importer.
+type localImporter struct {
+	fset     *token.FileSet
+	fallback types.Importer
+	root     string
+	module   string
+	cache    map[string]*types.Package
+}
 
-func (emptyImporter) Import(path string) (*types.Package, error) {
-	pkg := types.NewPackage(path, filepath.Base(path))
-	pkg.MarkComplete()
+func newLocalImporter(fset *token.FileSet, dir string) *localImporter {
+	l := &localImporter{fset: fset, fallback: importer.ForCompiler(fset, "source", nil), root: dir, cache: map[string]*types.Package{}}
+	if mod, err := os.ReadFile(filepath.Join(dir, "go.mod")); err == nil {
+		if fields := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0]); len(fields) == 2 && fields[0] == "module" {
+			l.module = fields[1]
+		}
+	}
+	return l
+}
+
+func (l *localImporter) Import(path string) (*types.Package, error) {
+	if l.module == "" || (path != l.module && !strings.HasPrefix(path, l.module+"/")) {
+		return l.fallback.Import(path)
+	}
+	if pkg, ok := l.cache[path]; ok {
+		return pkg, nil
+	}
+	dir := filepath.Join(l.root, strings.TrimPrefix(strings.TrimPrefix(path, l.module), "/"))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []*ast.File
+	for _, entry := range entries {
+		if name := entry.Name(); strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+			file, err := parser.ParseFile(l.fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, file)
+		}
+	}
+	pkg, err := (&types.Config{Importer: l}).Check(path, l.fset, files, nil)
+	if err != nil {
+		return nil, err
+	}
+	l.cache[path] = pkg
 	return pkg, nil
 }
 
@@ -530,6 +606,7 @@ func TestAuthorizationGuardResolvesImportedConstants(t *testing.T) {
 	}
 	for name, files := range refused {
 		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
 			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) == 0 {
 				t.Fatal("guard passed; want it to refuse")
 			}
@@ -543,10 +620,11 @@ func TestAuthorizationGuardResolvesImportedConstants(t *testing.T) {
 	accepted := map[string]map[string]string{
 		"clean module":           nil,
 		"allowed file reads it":  {"principalonce.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Authorization) }\n"},
-		"other header, constant": {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(\"X-Org-Id\") }\n"},
+		"other header, constant": {"scope.go": head + "var _ = hdr.Author\n\nfunc f(r *http.Request) string { return r.Header.Get(\"X-Org-Id\") }\n"},
 	}
 	for name, files := range accepted {
 		t.Run("accepts "+name, func(t *testing.T) {
+			t.Parallel()
 			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) != 0 {
 				t.Fatalf("guard refused: %v", problems)
 			}

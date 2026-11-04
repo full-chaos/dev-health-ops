@@ -25,8 +25,8 @@ type sloRule struct {
 }
 
 var sloRules = []sloRule{
-	{"AuthPDPLatencyP95High", `histogram_quantile(0.95, sum by (le) (rate(` + sloDuration + `_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.025`, "5m", "5m", "warning", sloDuration, "p95", "/v1/authorize|/v1/authorize:batch", "0.025", "rate"},
-	{"AuthPDPLatencyP99High", `histogram_quantile(0.99, sum by (le) (rate(` + sloDuration + `_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.075`, "5m", "5m", "warning", sloDuration, "p99", "/v1/authorize|/v1/authorize:batch", "0.075", "rate"},
+	{"AuthzLatencyP95High", `histogram_quantile(0.95, sum by (le) (rate(` + sloDuration + `_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.025`, "5m", "5m", "warning", sloDuration, "p95", "/v1/authorize|/v1/authorize:batch", "0.025", "rate"},
+	{"AuthzLatencyP99High", `histogram_quantile(0.99, sum by (le) (rate(` + sloDuration + `_bucket{job="auth-service",route=~"/v1/authorize|/v1/authorize:batch"}[5m]))) > 0.075`, "5m", "5m", "warning", sloDuration, "p99", "/v1/authorize|/v1/authorize:batch", "0.075", "rate"},
 	{"AuthTokenLatencyP95High", `histogram_quantile(0.95, sum by (le) (rate(` + sloDuration + `_bucket{job="auth-service",route=~"/internal/v1/sessions|/v1/token/refresh"}[5m]))) > 0.2`, "5m", "5m", "warning", sloDuration, "p95", "/internal/v1/sessions|/v1/token/refresh", "0.2", "rate"},
 	{"AuthOutboxOldestPendingHigh", `max(` + sloOutboxAge + `{job="auth-service"}) > 300`, "5m", "5m", "warning", sloOutboxAge, "", "", "300", "latest"},
 }

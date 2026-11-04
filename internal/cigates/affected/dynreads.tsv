@@ -52,6 +52,7 @@ internal/auth/acrmint	census_test.go
 internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
+internal/auth/authapi	authorize_loadprofile_test.go
 internal/auth/authapi	authorize_request_test.go
 internal/auth/authapi	authorize_test.go
 internal/auth/authapi	hung_read_test.go
@@ -179,6 +180,7 @@ internal/cigates/bigboyrender	projectscope.go
 internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
+internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go

@@ -419,10 +419,19 @@ func TestScopeWithoutPrincipalDecisionFailsClosed(t *testing.T) {
 // Principal step and the route guard read the Authorization header or call
 // BearerToken, and the scope files decode no token segment.
 func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
-	allowed := []string{"principalonce.go", "guard.go"}
-	entries, err := os.ReadDir(".")
+	for _, problem := range authorizationGuardProblems(".", []string{"principalonce.go", "guard.go"}) {
+		t.Error(problem)
+	}
+}
+
+// authorizationGuardProblems scans the production files of dir and returns
+// every read of the Authorization header outside allowed, and every reason
+// the scan cannot be trusted.
+func authorizationGuardProblems(dir string, allowed []string) []string {
+	var problems []string
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatal(err)
+		return []string{err.Error()}
 	}
 	fset := token.NewFileSet()
 	files := map[string]*ast.File{}
@@ -432,9 +441,9 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatal(err)
+			return []string{err.Error()}
 		}
 		files[name] = file
 		parsed = append(parsed, file)
@@ -446,7 +455,7 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 		if name == "scope.go" || name == "accessroute.go" {
 			for _, spec := range file.Imports {
 				if path, _ := strconv.Unquote(spec.Path.Value); path == "encoding/base64" || path == "encoding/json" {
-					t.Errorf("%s imports %s", name, path)
+					problems = append(problems, name+" imports "+path)
 				}
 			}
 		}
@@ -455,17 +464,18 @@ func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
 			case ast.Expr:
 				if value := info.Types[typed].Value; value != nil && value.Kind() == constant.String &&
 					strings.EqualFold(constant.StringVal(value), "Authorization") && !slices.Contains(allowed, name) {
-					t.Errorf("%s reads the Authorization header", fset.Position(typed.Pos()))
+					problems = append(problems, fset.Position(typed.Pos()).String()+" reads the Authorization header")
 				}
 			}
 			if call, ok := node.(*ast.CallExpr); ok {
 				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
-					t.Errorf("%s calls BearerToken", fset.Position(call.Pos()))
+					problems = append(problems, fset.Position(call.Pos()).String()+" calls BearerToken")
 				}
 			}
 			return true
 		})
 	}
+	return problems
 }
 
 // emptyImporter lets go/types fold constants without resolving imports.
@@ -475,6 +485,73 @@ func (emptyImporter) Import(path string) (*types.Package, error) {
 	pkg := types.NewPackage(path, filepath.Base(path))
 	pkg.MarkComplete()
 	return pkg, nil
+}
+
+// plantModule writes a throwaway module with an imported header-name package
+// and the given files, and returns its root.
+func plantModule(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	all := map[string]string{
+		"go.mod":     "module example.test/p\n\ngo 1.21\n",
+		"hdr/hdr.go": "package hdr\n\nconst Authorization = \"Authorization\"\nconst Author = \"Author\"\n",
+		"clean.go":   "package p\n\nfunc clean() int { return 1 }\n",
+	}
+	for name, body := range files {
+		all[name] = body
+	}
+	for name, body := range all {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// TestAuthorizationGuardResolvesImportedConstants plants reads the guard must
+// refuse (a key built from an imported constant, a local alias of one, an
+// imported prefix, a read inside ReadOnce) and cases it must fail closed on.
+func TestAuthorizationGuardResolvesImportedConstants(t *testing.T) {
+	allowed := []string{"principalonce.go", "guard.go"}
+	const head = "package p\n\nimport (\n\t\"net/http\"\n\n\t\"example.test/p/hdr\"\n)\n\n"
+	refused := map[string]map[string]string{
+		"imported constant direct":         {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Authorization) }\n"},
+		"local alias of imported constant": {"scope.go": head + "const key = hdr.Authorization\n\nfunc f(r *http.Request) string { return r.Header.Get(key) }\n"},
+		"imported prefix plus suffix":      {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Author + \"ization\") }\n"},
+		"read inside ReadOnce":             {"request_reads.go": head + "type A struct{}\n\nfunc (a *A) ReadOnce(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t_ = r.Header.Get(hdr.Authorization)\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n"},
+		"unresolved key in Get":            {"scope.go": head + "func f(r *http.Request, key string) string { return r.Header.Get(key) }\n"},
+		"unresolved key in Values":         {"scope.go": head + "func f(r *http.Request, key string) []string { return r.Header.Values(key) }\n"},
+		"unresolved key in index":          {"scope.go": head + "func f(r *http.Request, key string) []string { return r.Header[key] }\n"},
+		"type error":                       {"scope.go": "package p\n\nfunc f() int { return missing }\n"},
+	}
+	for name, files := range refused {
+		t.Run("refuses "+name, func(t *testing.T) {
+			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) == 0 {
+				t.Fatal("guard passed; want it to refuse")
+			}
+		})
+	}
+	t.Run("refuses a scan of zero files", func(t *testing.T) {
+		if problems := authorizationGuardProblems(t.TempDir(), allowed); len(problems) == 0 {
+			t.Fatal("guard passed with no files; want it to refuse")
+		}
+	})
+	accepted := map[string]map[string]string{
+		"clean module":           nil,
+		"allowed file reads it":  {"principalonce.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Authorization) }\n"},
+		"other header, constant": {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(\"X-Org-Id\") }\n"},
+	}
+	for name, files := range accepted {
+		t.Run("accepts "+name, func(t *testing.T) {
+			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) != 0 {
+				t.Fatalf("guard refused: %v", problems)
+			}
+		})
+	}
 }
 
 // TestProductionChainsInstallPrincipalFirst pins the two production scope

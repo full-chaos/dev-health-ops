@@ -125,6 +125,9 @@ func requireOneRefusal(t *testing.T, lines []map[string]any, eventType string) {
 // C1: a first principal projection that loses the race at its commit is
 // success, logged as one WARN refusal, never ERROR.
 func TestRaceLostPrincipalProjectionLogsAWarnRefusal(t *testing.T) {
+	if raceEnabled {
+		t.Logf("%s %s", raceMarker, t.Name())
+	}
 	e := getEnv(t)
 	ctx := context.Background()
 	id := uuid.New()
@@ -145,6 +148,9 @@ func TestRaceLostPrincipalProjectionLogsAWarnRefusal(t *testing.T) {
 
 // C2: the same for a first organization projection.
 func TestRaceLostOrganizationProjectionLogsAWarnRefusal(t *testing.T) {
+	if raceEnabled {
+		t.Logf("%s %s", raceMarker, t.Name())
+	}
 	e := getEnv(t)
 	ctx := context.Background()
 	id := uuid.New()
@@ -200,6 +206,9 @@ func TestOrganizationSlugCollisionStillLogsError(t *testing.T) {
 // C4: a legacy identity projection that loses the race at its commit is
 // success, logged as one WARN refusal, never ERROR.
 func TestRaceLostIdentityProjectionLogsAWarnRefusal(t *testing.T) {
+	if raceEnabled {
+		t.Logf("%s %s", raceMarker, t.Name())
+	}
 	e := getEnv(t)
 	ctx := context.Background()
 	user := e.seedUser(t, ctx, uniqueEmail("lostid"), true, true)

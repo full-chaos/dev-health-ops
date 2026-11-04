@@ -64,6 +64,7 @@ internal/auth/delegationinput	deps_test.go	unexpressed
 internal/auth/entitlement	deps_test.go	internal/auth/...
 internal/auth/entitlement	deps_test.go	unexpressed
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
+internal/authzenforce	census_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
 internal/cigates/affected	always_select_test.go	unexpressed
 internal/cigates/affected	ci_script_helpers_test.go	unexpressed

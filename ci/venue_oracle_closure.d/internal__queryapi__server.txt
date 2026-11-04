@@ -62,6 +62,7 @@ internal/auth/sessionid
 internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
+internal/authzenforce
 internal/backfillrun
 internal/cacheinvalidation
 internal/chmigrate

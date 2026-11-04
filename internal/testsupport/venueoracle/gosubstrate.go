@@ -7,13 +7,12 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
@@ -21,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	chstorage "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // A venue runs no Python: the Python plane's answers come from the golden, and
@@ -31,8 +31,8 @@ import (
 //   - the PostgreSQL schema: pgmigrate (`dho migrate postgres upgrade`),
 //     whose baseline is the executed Alembic chain;
 //   - the ClickHouse schema: chmigrate (`dho migrate clickhouse upgrade`);
-//   - the access tokens: edgetoken.Signer, the Go port of
-//     AuthService.create_access_token;
+//   - the access tokens: user access tokens (EdDSA) of the venue's TokenIssuer,
+//     each keyed to the caller of AuthService.create_access_token's token;
 //   - CallPython: the Go ports in goCallPorts, each the one production code
 //     uses for the same value.
 //
@@ -172,10 +172,12 @@ var mintKwargs = map[string]bool{
 	"username": true, "full_name": true, "token_version": true, "impersonating_user_id": true,
 }
 
-// mintGo mints the seed's tokens with the Go minter under the Python plane's
-// issuer and audience (JWT_ISSUER and JWT_AUDIENCE, AuthService's defaults
-// when unset).
-func (v *Venue) mintGo(t *testing.T, key string, specs map[string]map[string]any) map[string]string {
+// mintGo mints the seed's tokens as user access tokens (EdDSA) of the venue's
+// TokenIssuer, and records for each the caller the recording's HS256 token
+// named: create_access_token's payload for the same arguments under the Python
+// plane's issuer and audience (JWT_ISSUER and JWT_AUDIENCE, AuthService's
+// defaults when unset), so a replayed request keys the recorded one.
+func (v *Venue) mintGo(t *testing.T, specs map[string]map[string]any) map[string]string {
 	t.Helper()
 	issuer, ok := v.pythonPlaneLookup("JWT_ISSUER")
 	if !ok {
@@ -185,30 +187,80 @@ func (v *Venue) mintGo(t *testing.T, key string, specs map[string]map[string]any
 	if !ok {
 		audience = "dev-health-api"
 	}
-	signer, err := edgetoken.NewSigner(key, issuer, audience)
-	if err != nil {
-		t.Fatalf("frozen venue: %v", err)
+	if v.TokenIssuer == nil {
+		v.TokenIssuer = edtokens.New(t)
 	}
-	now := time.Now()
 	tokens := make(map[string]string, len(specs))
 	for name, spec := range specs {
 		claims, err := accessClaims(spec)
 		if err != nil {
 			t.Fatalf("frozen venue: token %q: %v", name, err)
 		}
-		token, err := signer.Access(claims, now, uuid.NewString())
+		mint, err := claims.userToken()
 		if err != nil {
 			t.Fatalf("frozen venue: token %q: %v", name, err)
 		}
+		token, err := v.TokenIssuer.Mint(mint)
+		if err != nil {
+			t.Fatalf("frozen venue: token %q: %v", name, err)
+		}
+		recordedCallers.Store(token, claims.recordedIdentity(issuer, audience))
 		tokens[name] = token
 	}
 	return tokens
 }
 
+// recordedCallers maps a minted user access token to the bearer identity of
+// the recording's HS256 token for the same caller (bearerIdentity).
+var recordedCallers sync.Map
+
+// legacyClaims are create_access_token's keyword arguments, with its defaults.
+type legacyClaims struct {
+	UserID, Email, OrgID, Role              string
+	Username, FullName, ImpersonatingUserID *string
+	IsSuperuser                             bool
+	TokenVersion                            int64
+}
+
+// recordedIdentity is the bearer identity of create_access_token's token for
+// these arguments: its header and payload minus the volatile claims.
+func (c legacyClaims) recordedIdentity(issuer, audience string) string {
+	payload := map[string]any{
+		"sub": c.UserID, "email": c.Email, "org_id": c.OrgID, "role": c.Role, "is_superuser": c.IsSuperuser,
+		"tv": c.TokenVersion, "type": "access", "iss": issuer, "aud": audience,
+	}
+	for name, value := range map[string]*string{"username": c.Username, "full_name": c.FullName, "impersonating_user_id": c.ImpersonatingUserID} {
+		if value != nil {
+			payload[name] = *value
+		}
+	}
+	canonical, _ := json.Marshal(payload)
+	return `Bearer header:{"alg":"HS256","typ":"JWT"} claims:` + string(canonical)
+}
+
+// userToken is the user access token of the same caller: the user, the
+// organization and the impersonating actor. The other arguments are the
+// users row's, which the api reads live.
+func (c legacyClaims) userToken() (edtokens.Claims, error) {
+	user, err := uuid.Parse(c.UserID)
+	if err != nil {
+		return edtokens.Claims{}, fmt.Errorf("user_id %q is not a UUID: a user access token names a principal", c.UserID)
+	}
+	out := edtokens.Claims{UserID: user, OrgID: c.OrgID}
+	if c.ImpersonatingUserID != nil {
+		actor, err := uuid.Parse(*c.ImpersonatingUserID)
+		if err != nil {
+			return edtokens.Claims{}, fmt.Errorf("impersonating_user_id %q is not a UUID", *c.ImpersonatingUserID)
+		}
+		out.Actor = &actor
+	}
+	return out, nil
+}
+
 // accessClaims reads create_access_token's keyword arguments, with its
 // defaults: org_id "", role "member", is_superuser False, token_version 0.
-func accessClaims(spec map[string]any) (edgetoken.AccessClaims, error) {
-	claims := edgetoken.AccessClaims{Role: "member"}
+func accessClaims(spec map[string]any) (legacyClaims, error) {
+	claims := legacyClaims{Role: "member"}
 	for name := range spec {
 		if !mintKwargs[name] {
 			return claims, fmt.Errorf("create_access_token argument %q has no Go counterpart", name)

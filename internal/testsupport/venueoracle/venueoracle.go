@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
@@ -121,6 +122,8 @@ type Venue struct {
 	Root string
 	// Tokens are the minted access tokens, by seed name.
 	Tokens map[string]string
+	// TokenIssuer minted Tokens; a test api verifies them with TokenIssuer.Authenticator.
+	TokenIssuer *edtokens.Issuer
 	// Roles are the provisioned role names: domain, queue, coordinator, api.
 	Roles map[string]string
 	// SourceDB is the Python plane's database; GoDB is its copy.
@@ -260,7 +263,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	admin.Close()
 	if len(specs) > 0 {
-		v.Tokens = v.mintGo(t, options.JWTKey, specs)
+		v.Tokens = v.mintGo(t, specs)
 	}
 
 	// 2. Two identical copies: Python serves the source, Go serves the copy.

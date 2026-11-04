@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // pythonCiphertext is encrypt_value's output for pythonPlaintext under
@@ -158,36 +159,56 @@ func TestAccessClaimsReadCreateAccessTokenArgumentsWithItsDefaults(t *testing.T)
 }
 
 // The request key of a frozen golden holds a bearer token by its claims
-// (bearerIdentity), so a Go-minted token must name the same caller the
-// recording's Python-minted token named. The claims below are
-// create_access_token's payload for the same arguments (auth.py), minus the
-// volatile ones.
+// (bearerIdentity), so a Go-minted token must key the caller the recording's
+// Python-minted token named. The claims below are create_access_token's
+// payload for the same arguments (auth.py), minus the volatile ones; the token
+// itself is a user access token of the venue's issuer.
 func TestGoMintedTokensKeyTheCallerThePythonTokenKeyed(t *testing.T) {
+	const u1, u2, s1, o1 = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-0000000000a1", "00000000-0000-4000-8000-0000000000b1"
 	v := frozenVenue()
-	tokens := v.mintGo(t, "frozen-venue-mint-key-0123456789abcdef", map[string]map[string]any{
-		"plain": {"user_id": "u-1", "email": "a@b.c"},
-		"full": {"user_id": "u-2", "email": "d@e.f", "org_id": "o-1", "role": "admin", "is_superuser": true,
-			"username": "n", "full_name": "N", "token_version": 4, "impersonating_user_id": "s-1"},
+	tokens := v.mintGo(t, map[string]map[string]any{
+		"plain": {"user_id": u1, "email": "a@b.c"},
+		"full": {"user_id": u2, "email": "d@e.f", "org_id": o1, "role": "admin", "is_superuser": true,
+			"username": "n", "full_name": "N", "token_version": 4, "impersonating_user_id": s1},
 	})
 	want := map[string]string{
-		"plain": `{"aud":"dev-health-api","email":"a@b.c","is_superuser":false,"iss":"dev-health-ops","org_id":"","role":"member","sub":"u-1","tv":0,"type":"access"}`,
-		"full":  `{"aud":"dev-health-api","email":"d@e.f","full_name":"N","impersonating_user_id":"s-1","is_superuser":true,"iss":"dev-health-ops","org_id":"o-1","role":"admin","sub":"u-2","tv":4,"type":"access","username":"n"}`,
+		"plain": `{"aud":"dev-health-api","email":"a@b.c","is_superuser":false,"iss":"dev-health-ops","org_id":"","role":"member","sub":"` + u1 + `","tv":0,"type":"access"}`,
+		"full":  `{"aud":"dev-health-api","email":"d@e.f","full_name":"N","impersonating_user_id":"` + s1 + `","is_superuser":true,"iss":"dev-health-ops","org_id":"` + o1 + `","role":"admin","sub":"` + u2 + `","tv":4,"type":"access","username":"n"}`,
 	}
+	verifier := v.TokenIssuer.Verifier(t)
 	for name, claims := range want {
 		identity := bearerIdentity("Bearer " + tokens[name])
 		if identity != `Bearer header:{"alg":"HS256","typ":"JWT"} claims:`+claims {
 			t.Errorf("%s: %s", name, identity)
 		}
+		got, err := verifier.Verify(tokens[name], time.Now())
+		if err != nil {
+			t.Fatalf("%s: the minted token is not a user access token of the venue's issuer: %v", name, err)
+		}
+		if got.Subject != edtokens.PrincipalID(uuid.MustParse(map[string]string{"plain": u1, "full": u2}[name])) {
+			t.Errorf("%s: sub %s", name, got.Subject)
+		}
 	}
-	// JWT_ISSUER and JWT_AUDIENCE on the Python plane are the token's.
-	custom := frozenVenue("JWT_ISSUER=iss-x", "JWT_AUDIENCE=aud-y")
-	token := custom.mintGo(t, "frozen-venue-mint-key-0123456789abcdef", map[string]map[string]any{"t": {"user_id": "u", "email": "e"}})["t"]
-	verifier, err := edgetoken.New("frozen-venue-mint-key-0123456789abcdef", "iss-x", "aud-y")
+	full, err := verifier.Verify(tokens["full"], time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifier.Verify(token); err != nil {
-		t.Fatalf("a token minted under JWT_ISSUER/JWT_AUDIENCE does not verify under them: %v", err)
+	if full.OrgID == nil || *full.OrgID != o1 || full.ActorSubject == nil || *full.ActorSubject != edtokens.PrincipalID(uuid.MustParse(s1)) {
+		t.Errorf("full: org %v actor %v, want the seed's organization and impersonating user", full.OrgID, full.ActorSubject)
+	}
+	// JWT_ISSUER and JWT_AUDIENCE on the Python plane are the recorded token's.
+	custom := frozenVenue("JWT_ISSUER=iss-x", "JWT_AUDIENCE=aud-y")
+	token := custom.mintGo(t, map[string]map[string]any{"t": {"user_id": u1, "email": "e"}})["t"]
+	if identity := bearerIdentity("Bearer " + token); !strings.Contains(identity, `"aud":"aud-y"`) || !strings.Contains(identity, `"iss":"iss-x"`) {
+		t.Errorf("the recorded caller does not carry JWT_ISSUER/JWT_AUDIENCE: %s", identity)
+	}
+}
+
+// A seed whose user is not a UUID cannot be a user access token's principal: the venue refuses it by name.
+func TestGoMintRefusesANonUUIDUser(t *testing.T) {
+	_, err := (legacyClaims{UserID: "u-1"}).userToken()
+	if err == nil || !strings.Contains(err.Error(), "not a UUID") {
+		t.Fatalf("err %v, want a refusal naming the user id", err)
 	}
 }
 

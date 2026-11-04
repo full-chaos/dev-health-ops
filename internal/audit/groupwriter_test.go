@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -27,6 +29,7 @@ type groupDB struct {
 	inCommit int        // rows held in a Commit
 	hold     chan struct{}
 	bad      string
+	meta     map[string]string // request id -> "client_ip|user_agent" of its inserted row
 }
 
 type groupTx struct {
@@ -59,8 +62,19 @@ func (tx *groupTx) Exec(_ context.Context, sql string, args ...any) (pgconn.Comm
 			return pgconn.CommandTag{}, errors.New("insert refused")
 		}
 		tx.rows = append(tx.rows, *id)
+		if tx.db.meta == nil {
+			tx.db.meta = map[string]string{}
+		}
+		tx.db.meta[*id] = textOf(args[8]) + "|" + textOf(args[9])
 	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+func textOf(v any) string {
+	if p, ok := v.(*string); ok && p != nil {
+		return *p
+	}
+	return "<nil>"
 }
 
 func (tx *groupTx) Commit(context.Context) error {
@@ -381,6 +395,42 @@ func TestGroupWriterNeverWritesACancelledQueuedCall(t *testing.T) {
 				t.Fatalf("cancelled queued calls committed %d rows over 50 runs, want 0", committed)
 			}
 		})
+	}
+}
+
+// TestGroupWriterKeepsEachCallsRequestMetadata: every row carries the client
+// address and user agent of its own call, also when another call leads the
+// shared transaction; the leading call's rows are the control.
+func TestGroupWriterKeepsEachCallsRequestMetadata(t *testing.T) {
+	db := &groupDB{hold: make(chan struct{})}
+	w := newTestGroupWriter(t, db, 1, 0)
+	request := func(n int) context.Context {
+		ctx := clientaddr.With(context.Background(), netip.MustParseAddr(fmt.Sprintf("198.51.100.%d", n)))
+		return clientaddr.WithUserAgent(ctx, fmt.Sprintf("client-%d", n))
+	}
+	want := func(n int) string { return fmt.Sprintf("198.51.100.%d|client-%d", n, n) }
+	first := appendAsync(w, request(10), idOf(10))
+	waitFor(t, "the first commit to start", func() bool { in, _, _ := db.state(); return in == 1 })
+	group := []<-chan error{appendAsync(w, request(11), idOf(11))}
+	waitFor(t, "one queued call", func() bool { return w.queued() == 1 })
+	group = append(group, appendAsync(w, request(12), idOf(12)))
+	waitFor(t, "two queued calls", func() bool { return w.queued() == 2 })
+	close(db.hold)
+	for _, r := range append(group, first) {
+		if err := <-r; err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, commits, _ := db.state()
+	if len(commits) != 2 || len(commits[1]) != 2 {
+		t.Fatalf("commits = %v, want the first call alone, then the two queued calls together", commits)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for _, n := range []int{10, 11, 12} {
+		if got := db.meta[idOf(n)]; got != want(n) {
+			t.Errorf("row of call %d: client_ip|user_agent = %q, want %q", n, got, want(n))
+		}
 	}
 }
 

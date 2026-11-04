@@ -50,7 +50,8 @@ go_api_prove_e2e_pgx_uri() {
   printf '%s' "${POSTGRES_URI/+asyncpg/}"
 }
 
-# The proof service principal fixture, through the dho admin verbs of the caller (e2e_dho_admin) where one exists, and
+# The proof service principal fixture, through the dho admin verbs of the caller (e2e_dho_admin) where one exists (the
+# membership is a raw write: the dho membership verbs go through auth-service), and
 # a plain SELECT for the shape check (e2e_psql of the caller). The users row itself comes from the application schema
 # migration, never from this fixture. E2E_ORG_ID is a fixed uuid. The one raw write left is bump-token-version: no
 # dho verb exists for advancing token_version alone (`users delete` also ends the login, `users update --password`
@@ -71,7 +72,12 @@ go_api_prove_e2e_principal() {
       fi
       ;;
     grant-membership)
-      e2e_dho_admin users update --id "${id}" --org "${E2E_ORG_ID}" --role viewer >/dev/null
+      # A raw write: the dho membership verbs send the change to auth-service (CHAOS-11799), and this job runs none.
+      e2e_psql -c "
+        UPDATE memberships SET role = 'viewer', updated_at = now() WHERE org_id = '${E2E_ORG_ID}' AND user_id = '${id}';
+        INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+          SELECT gen_random_uuid(), '${E2E_ORG_ID}', '${id}', 'viewer', now(), now(), now()
+          WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE org_id = '${E2E_ORG_ID}' AND user_id = '${id}');" >/dev/null
       ;;
     seed-session)
       # An access token is accepted only for a live session of its principal, pinned to the principal's token_version

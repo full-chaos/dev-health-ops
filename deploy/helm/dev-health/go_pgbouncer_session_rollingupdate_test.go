@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,13 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 			t.Errorf("%s render: %d kept-Job policy blocks, want one per auth-migrate Job", name, n)
 		}
 		tip = strings.ReplaceAll(tip, keptJob, "    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\nspec:\n  backoffLimit:")
+		// The auth-service Deployment gained the four PDP rate-limit env entries after the base: they are left out of the tip,
+		// four per Deployment where it renders.
+		pdpEnv := regexp.MustCompile(`            - name: AUTH_SERVICE_PDP_[A-Z_]+\n              value: "[^"]*"\n`)
+		if n := len(pdpEnv.FindAllString(tip, -1)); n != 4*strings.Count(tip, "kind: Deployment\nmetadata:\n  name: a-dev-health-auth-service\n") {
+			t.Errorf("%s render: %d PDP rate-limit env entries, want four per auth-service Deployment", name, n)
+		}
+		tip = pdpEnv.ReplaceAllString(tip, "")
 		// The Valkey args gained a pinned --appendfsync after the base: that one pair is left out of the tip, exactly once.
 		fsyncArgs := "            - --appendfsync\n            - everysec\n"
 		if n := strings.Count(tipValkey, fsyncArgs); n != 1 {

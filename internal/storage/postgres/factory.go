@@ -135,8 +135,10 @@ func resolvedCredentials(poolConfig *pgxpool.Config) []string {
 // password that came from PGUSER, PGPASSWORD, a password file or a service file,
 // which never appear in the URI yet appear in a server's failure text. A CLI verb
 // that opens PostgreSQL itself (a raw pgx connection or pool, not Open) builds its
-// boundary here. A URI pgx cannot parse gets the URI's own components (the parse
-// error, which the driver returns again, carries no resolved credential).
+// boundary here. A DSN pgx cannot parse (URI or key=value form) gets a boundary
+// that fails closed: Redact returns a fixed placeholder, because the driver's
+// parse error echoes the DSN with only its password masked and the login cannot
+// be found in a string that does not parse.
 func Boundary(uri string) secrets.Boundary {
 	// The connection parser first: it is what pgx.Connect uses and what
 	// pgxpool.ParseConfig delegates to after it strips the pool_* parameters, so the
@@ -151,7 +153,7 @@ func Boundary(uri string) secrets.Boundary {
 	if poolConfig, err := parseConfig(uri); err == nil {
 		return secrets.NewBoundaryWith(uri, resolvedCredentials(poolConfig)...)
 	}
-	return secrets.NewBoundary(uri)
+	return secrets.NewUnparsableBoundary(uri)
 }
 
 func parseConfig(uri string) (*pgxpool.Config, error) {

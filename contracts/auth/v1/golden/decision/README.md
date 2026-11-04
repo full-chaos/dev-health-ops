@@ -67,10 +67,11 @@ sorted by relative path (slash form, byte order). For each file the hashed bytes
 (`internal/auth/authorization/golden_decision_test.go`; the router replay compares the same value on the wire).
 
 - `null`: a deny, and the allow of a platform action (no tenant).
-- An object: `tenant_scope` is the request's organization on every organization or repository allow. `repository_allowlist` is present only
-  for a `repository_scope: filtered` action or a repository-kind action. `[]` means none and is never left out. A principal that reads every
-  repository of the organization (no grant row of any state, or a live wildcard grant) has no `repository_allowlist` member; the string `*`
-  never appears in an emitted allowlist, and a repository request for `*` is refused with `invalid_request`.
+- An object: `tenant_scope` is the request's organization on every organization or repository allow. A repository member is present only
+  for a `repository_scope: filtered` catalog action or a repository-kind action, and it is exactly one of `repository_scope` and
+  `repository_allowlist`. A principal that reads every repository of the organization (no grant row of any state, or a live wildcard grant)
+  has `repository_scope: organization` and no allowlist. Otherwise `repository_allowlist` is present; `[]` means none and is never left out.
+  The string `*` never appears in an emitted allowlist, and a repository request for `*` is refused with `invalid_request`.
 - A repository-kind allow carries `[request key]`. An organization-scope filtered allow carries the keys of the principal's live grants whose
   role holds the action, sorted and unique, at most 256; one more is the deny `repository_allowlist_too_large`.
 - The rule equals `evaluateRepository`: a key is in the allowlist exactly when the repository decision of the same principal, action and key

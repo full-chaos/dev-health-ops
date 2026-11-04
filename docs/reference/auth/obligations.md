@@ -21,11 +21,8 @@ lifecycle: active
 An authorization decision answers one question: may this principal perform this action on this resource. A decision that allows may carry obligations. An obligation is a condition the resource service must enforce on the allowed request.
 {: .fc-page-lede }
 
-!!! note "Delegated sessions only"
-    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841), and the decision document has an `obligations` member. The decision point puts obligations on the allow of a delegated (impersonation) session only: `tenant_scope`, `minimum_assurance` and, for a repository request, a one-key `repository_allowlist`. A plain session's allow carries none, and `redaction` is not set yet (CHAOS-12656). No service enforces an obligation yet. See [Status](#status).
-
-!!! warning "No ordinary allow carries an obligation yet"
-    The wire contract, the Go parser and the decision document member exist on `main`. The decision point writes the obligations a decision holds, but no policy sets them for an ordinary allow yet (CHAOS-12851); only a delegated allow carries them today (see the note above), and no service enforces an obligation. `repository_scope` and the reason `repository_allowlist_too_large` are in the contract before the decision point emits them. See [Status](#status).
+!!! warning "No consumer enforces an obligation yet"
+    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841). Every allow of an organization or repository action carries `tenant_scope` and, for an action that reads repository-bound data, `repository_scope` or `repository_allowlist` (CHAOS-12851). A delegated (impersonation) allow also carries `minimum_assurance`. The redaction rules are empty, so no allow carries `redaction` yet. No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -45,7 +42,7 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | Member | Rule |
 | --- | --- |
 | `allowed` | Required. A strict JSON boolean. No default. Missing, null, `"true"` or `1` is invalid. |
-| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum (24 values, including `impersonation_denied` and `delegation_invalid`). See [reason codes](reason-codes.md). |
+| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum (25 values, including `impersonation_denied` and `delegation_invalid`). See [reason codes](reason-codes.md). |
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |
@@ -66,6 +63,21 @@ The set is closed (six members). `additionalProperties` is false. A decision tha
 | `step_up` | boolean | Make the caller complete step-up authentication before the action proceeds. |
 
 Ignoring an obligation is ignoring a denial (guardrail G-29 in the schema text).
+
+### Allow rule of the decision point
+
+The decision point (`internal/auth/authorization/scope.go`) sets the obligations of an allow from the snapshot it already read. No extra read is made.
+
+| Allow | Obligations |
+| --- | --- |
+| Platform action | None. |
+| Organization action whose catalog `repository_scope` is `none` | `tenant_scope` (the question's organization). |
+| Organization action whose catalog `repository_scope` is `filtered`, principal with no grant row of any state (membership default) or with a live `*` grant | `tenant_scope` and `repository_scope: organization`. |
+| Organization action whose catalog `repository_scope` is `filtered`, other principals | `tenant_scope` and `repository_allowlist`: the keys of the live grants (not revoked, not expired) whose role holds the action, sorted. `[]` when none is live. One grant row of any state ends the membership default, for an owner too. |
+| Repository-kind action (`acr.context.read`, `acr.evidence.read`) | `tenant_scope` and `repository_allowlist` with the one requested key. A request for `*` is refused with `invalid_request`. |
+| Delegated session | The obligations above, plus `minimum_assurance`. |
+
+The allowlist is the same rule as a repository decision: a key is in it exactly when a repository question for that key would allow. More than 256 keys is the deny `repository_allowlist_too_large`. The list is never truncated. The catalog actions marked `filtered` are listed in the [policy catalog](policy-catalog.md).
 
 ### Redaction classes
 
@@ -100,8 +112,8 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | Part | State |
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
-| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny with obligations, a repeated or malformed key, more than 256 keys, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
-| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session (CHAOS-12438, CHAOS-12798). The policy that sets `tenant_scope`, `repository_allowlist` and `repository_scope` on an ordinary allow: CHAOS-12851. The policy that sets `redaction` is a later change of CHAOS-12656. The PEP client learns `repository_scope` and the new reason first: CHAOS-12853. The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
+| `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny or platform allow with obligations, an organization allow without its tenant scope, a repeated, malformed or `*` key, more than 256 keys, a `repository_scope` other than `organization` or one beside an allowlist, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
+| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session (CHAOS-12438, CHAOS-12798). The policy that sets `tenant_scope`, `repository_allowlist` and `repository_scope` on every allow: CHAOS-12851 (see [Allow rule of the decision point](#allow-rule-of-the-decision-point)). The redaction rules ship empty (CHAOS-12656). The PEP client reads `repository_scope` and the reason `repository_allowlist_too_large` from dev-health-go v0.44.0 (CHAOS-12853). The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
 | Decision clients | On `main`: the Go client `pep` (CHAOS-10844) and the web TypeScript client (CHAOS-10846). See [decision clients](decision-clients.md). |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |

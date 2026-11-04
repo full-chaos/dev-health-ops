@@ -674,6 +674,19 @@ func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, ro
 // probeState carries what the probe learned about the model across rounds.
 type probeState struct {
 	dropped []string
+	// effort is the reasoning_effort the provider's refusal told the probe to
+	// send instead ("none"); empty until a refusal offers it.
+	effort string
+}
+
+// reasoningEffortNoneOffered reports that a refusal of reasoning_effort offers
+// "none" as a value (CHAOS-12116: gpt-6-luna refuses minimal, and refuses
+// function tools with any other effort or none at all, so dropping the field
+// cannot pass; only "none" does).
+func reasoningEffortNoneOffered(failure *providerFailure, req chatCompletionRequest) bool {
+	return failure.code == errCodeInvalidRequest && (failure.detail.status == 400 || failure.detail.status == 422) &&
+		failure.detail.refusedParam() == "reasoning_effort" && req.ReasoningEffort != "" && req.ReasoningEffort != "none" &&
+		strings.Contains(strings.ToLower(failure.detail.message), "'none'")
 }
 
 // runRound posts one probe round. A 400/422 that names a bounded parameter the
@@ -685,11 +698,24 @@ func (p *openAICompatibleReadinessProber) runRound(
 	for _, name := range state.dropped {
 		dropRequestParam(&req, name)
 	}
+	if state.effort != "" && req.ReasoningEffort != "" {
+		req.ReasoningEffort = state.effort
+	}
 	resp, failure := p.doCompletion(ctx, baseURL, apiKey, req)
 	if failure == nil {
 		return resp, nil
 	}
 	p.logFailedRound(ctx, round, 1, failure)
+	if reasoningEffortNoneOffered(failure, req) {
+		req.ReasoningEffort = "none"
+		state.effort = "none"
+		resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
+		if failure != nil {
+			p.logFailedRound(ctx, round, 2, failure)
+			return nil, failure
+		}
+		return resp, nil
+	}
 	name := refusedBoundedParam(failure, req)
 	if name == "" {
 		return nil, failure

@@ -106,6 +106,7 @@
       "organization_inactive",
       "platform_role_absent",
       "principal_inactive",
+      "repository_allowlist_too_large",
       "repository_not_granted",
       "resource_mismatch",
       "role_lacks_action",

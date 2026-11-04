@@ -112,5 +112,15 @@ else
   bad login-signs-by-waits-a-refresh-then-logs-in-once
 fi
 
+# The run id lands in a record: anything but a numeric CI run id is refused before any docker call.
+for bad_id in "svc_authsess_$(printf '%043d' 0)" "postgresql://db.internal:5432/ops" "MC4CAQAwBQYDK2VwBCIEIGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJhZGJh"; do
+  rc=0
+  out="$(REHEARSAL_RUN_ID="${bad_id}" REHEARSAL_DIR="${T}/rid" REHEARSAL_IMAGES_ENV="${T}/tag.env" run bash "${SCRIPT}" --stage smoke 2>&1)" || rc=$?
+  if [ "${rc}" = 1 ] && grep -q 'REHEARSAL_RUN_ID' <<<"${out}" && [ ! -e "${T}/rid" ] && ! grep -qF -- "${bad_id}" <<<"${out}"; then ok run-id-refused-before-any-work; else bad "run-id-refused-before-any-work (rc ${rc})"; fi
+done
+rc=0
+out="$(REHEARSAL_RUN_ID=12345 REHEARSAL_DIR="${T}/rid2" REHEARSAL_IMAGES_ENV="${T}/tag.env" run bash "${SCRIPT}" --stage smoke 2>&1)" || rc=$?
+if [ "${rc}" = 1 ] && grep -q 'not a registry digest reference' <<<"${out}" && ! grep -q 'REHEARSAL_RUN_ID' <<<"${out}"; then ok numeric-run-id-passes-the-check; else bad "numeric-run-id-passes-the-check (rc ${rc})"; fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -623,7 +624,7 @@ ORDER BY 1, 2, 3, 4`
 	const legacyRows = `
 SELECT table_name::text, column_name::text, privilege_type::text, (is_grantable = 'YES')
 FROM information_schema.column_privileges
-WHERE table_schema = 'public' AND grantee = current_user AND table_name = $1
+WHERE table_schema = 'public' AND grantee = current_user AND table_name = ANY($1::text[])
 ORDER BY 1, 2, 3, 4`
 	read := func(pool *pgxpool.Pool, query string, params ...any) []string {
 		rows, err := pool.Query(ctx, query, params...)
@@ -644,6 +645,13 @@ ORDER BY 1, 2, 3, 4`
 			t.Fatal(err)
 		}
 		return out
+	}
+	// caller_column_grants holds every column-scoped table of the posture, so the oracle reads all of them.
+	var colTables []string
+	for _, pair := range posture.ColumnScoped {
+		if !slices.Contains(colTables, pair.TableName) {
+			colTables = append(colTables, pair.TableName)
+		}
 	}
 	pool := env.pools[roles.domain]
 	shapes := []struct {
@@ -686,7 +694,7 @@ ORDER BY 1, 2, 3, 4`
 			run(shape.apply)
 			defer run(shape.revert)
 			got := read(pool, rowsQuery, args...)
-			want := read(pool, legacyRows, values["colTable"])
+			want := read(pool, legacyRows, colTables)
 			if fmt.Sprint(got) != fmt.Sprint(want) {
 				t.Fatalf("caller_column_grants rows differ from information_schema.column_privileges:\n got  %v\n want %v", got, want)
 			}

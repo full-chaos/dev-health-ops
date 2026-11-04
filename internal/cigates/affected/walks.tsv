@@ -199,6 +199,7 @@ internal/cigates/releasetag	parity_test.go	unexpressed	-	-
 internal/cigates/releasetag	refusals_test.go	internal/cigates/releasetag	dir	*
 internal/cigates/routing	chart_test.go	unexpressed	-	-
 internal/cigates/scripts	auth_queue_relevance_test.go	ci/lib	dir	*
+internal/cigates/scripts	census_ops_script_test.go	unexpressed	-	-
 internal/cigates/scripts	chmigrate_archive_frozen_test.go	internal/chmigrate/archive	tree	*
 internal/cigates/scripts	chmigrate_history_frozen_test.go	internal/chmigrate/history	dir	*
 internal/cigates/scripts	golden_drift_test.go	unexpressed	-	-

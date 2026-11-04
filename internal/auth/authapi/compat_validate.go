@@ -294,6 +294,7 @@ func (h validateHandler) compatValidate(w http.ResponseWriter, r *http.Request) 
 			h.unavailableCompat(w, r, opCompatValidate, err)
 			return
 		case record.RevokedAt != nil:
+			h.rec.observeRevocationLag(ctx, record.RevokedAt, h.Issuer.now())
 			h.refuseToken(w, r, reasonSessionRevoked)
 			return
 		case !record.ExpiresAt.After(h.Issuer.now()):

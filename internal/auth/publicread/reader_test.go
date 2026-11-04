@@ -421,7 +421,7 @@ func TestStatementsCarryTheirContract(t *testing.T) {
 		"principal_get_user":  append([]string{"WHERE u.id = $1"}, rev("principal", "prn_", "u.id")...),
 		"principal_get_other": append([]string{"WHERE p.id = $1 AND p.kind IN ('service_account', 'workload')", `"auth".principals p`}, rev("principal", "prn_", "p.id")...),
 		"principals_list": append([]string{"WHERE m.org_id = $1", "sa.organization_id = $1", "w.organization_id = $1", "x.kind = $2", "x.id > $3", "ORDER BY x.id", "LIMIT $4",
-			`"auth".service_accounts sa`, `"auth".workloads w`}, append(rev("principal", "prn_", "x.id"), rev("membership", "mbr_", "x.mid")...)...),
+			`"auth".service_accounts sa`, `"auth".workloads w`, "p.kind = 'service_account'", "p.kind = 'workload'"}, append(rev("principal", "prn_", "x.id"), rev("membership", "mbr_", "x.mid")...)...),
 	}
 	stmts := Statements(`"auth"`)
 	for name, parts := range want {

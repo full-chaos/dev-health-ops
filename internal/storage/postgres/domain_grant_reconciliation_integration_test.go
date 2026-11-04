@@ -641,6 +641,7 @@ func startGrantHarness(t *testing.T, ctx context.Context) (*pgxpool.Pool, string
 		"CREATE TABLE public.daily_metrics_partition_recompute_events (id uuid PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_tokens (id bigint PRIMARY KEY, org_id text, source_id bigint, scopes text[], expires_at timestamptz, revoked_at timestamptz, token_hash text)",
 		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
 		`CREATE TABLE public.feature_flags (
 			id uuid PRIMARY KEY, key text NOT NULL UNIQUE, min_tier text NOT NULL,

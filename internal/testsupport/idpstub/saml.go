@@ -81,7 +81,7 @@ type ResponseSpec struct {
 	SignResponse, UnsignedAssertion                          bool
 	SigMethod                                                string
 	NameIDComment                                            bool
-	// SkipSign strips every signature block after signing; TamperAfterSign edits the email in the signed text.
+	// SkipSign strips every signature block after signing; TamperAfterSign breaks the first signature value after signing.
 	SkipSign, TamperAfterSign bool
 }
 
@@ -354,10 +354,32 @@ func (s *SAML) Response(spec ResponseSpec) ([]byte, error) {
 			out = out[:start] + out[start+end+len("</ds:Signature>"):]
 		}
 	}
-	if spec.TamperAfterSign && spec.Email != "" {
-		out = strings.Replace(out, spec.Email, "tampered-"+spec.Email, 1)
+	if spec.TamperAfterSign {
+		out = breakFirstSignature(out)
 	}
 	return []byte(out), nil
+}
+
+// breakFirstSignature changes the first base64 character of the first SignatureValue. Every signed response
+// carries one, whatever the email text holds or how XML escapes it, so the signature check always fails.
+func breakFirstSignature(doc string) string {
+	const open = "<ds:SignatureValue>"
+	i := strings.Index(doc, open)
+	if i < 0 {
+		return doc
+	}
+	at := i + len(open)
+	for at < len(doc) && (doc[at] == ' ' || doc[at] == '\n' || doc[at] == '\r' || doc[at] == '\t') {
+		at++
+	}
+	if at >= len(doc) || doc[at] == '<' {
+		return doc
+	}
+	flipped := byte('A')
+	if doc[at] == 'A' {
+		flipped = 'B'
+	}
+	return doc[:at] + string(flipped) + doc[at+1:]
 }
 
 // ResponseB64 is the response base64-encoded, the form a browser posts as SAMLResponse.

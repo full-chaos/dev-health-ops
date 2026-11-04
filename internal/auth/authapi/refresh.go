@@ -112,10 +112,11 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := h.Sessions.ExchangeGuarded(ctx, credential, h.refreshGuard)
-	// A store refusal of a session whose public user is inactive or gone (D6651) is answered like a guard refusal:
-	// the user read below decides the reason and revokes the session.
-	guardRefused := errors.Is(err, session.ErrGuardRefused) || err == nil && storeRefusedUser(result)
-	if !guardRefused && (err != nil || !result.Reason.Success()) {
+	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	// The store refused the locked session because its public user is inactive or gone (D6651). The user read below
+	// decides the reason, and the session is revoked whatever that read finds.
+	storeRefused := err == nil && storeRefusedUser(result)
+	if !guardRefused && !storeRefused && (err != nil || !result.Reason.Success()) {
 		h.rec.refuse(w, r, opRefresh, exchangeRefusal(result.Reason), err)
 		return
 	}
@@ -135,6 +136,16 @@ func (h handlers) refresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.rec.refuse(w, r, opRefresh, unauthorized(reason), nil)
+		return
+	}
+	if storeRefused {
+		// The store's lock read refused the user and the read above finds it active (a concurrent change): nothing
+		// was rotated, the refused session ends.
+		if _, revokeErr := h.Sessions.Revoke(ctx, record.ID, session.Actor{RequestID: requestid.Audit(ctx)}); revokeErr != nil {
+			h.rec.refuse(w, r, opRefresh, unavailable(reasonStoreUnavailable), revokeErr)
+			return
+		}
+		h.rec.refuse(w, r, opRefresh, unauthorized(reasonRevisionStale), nil)
 		return
 	}
 	switch checkPin(ctx, h.rec.logger, record, user) {

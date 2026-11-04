@@ -103,7 +103,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+	routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}

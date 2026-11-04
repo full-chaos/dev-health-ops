@@ -60,7 +60,12 @@ func TestJWKSAnswersWhileDependencyRoutesStall(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
 	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: "/v1/stall", Handler: stall}}
-	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{Keys: fixedKeys{set}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})...)
+	jwks := authapi.NewJWKSDocument(authapi.JWKSDocumentConfig{Keys: fixedKeys{set}})
+	if err := jwks.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = jwks.Shutdown(context.Background()) })
+	routes = append(routes, authapi.WellKnownRoutes(authapi.WellKnownDeps{JWKS: jwks, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})...)
 	server, err := httpapi.NewServer(apiServerOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), routes))
 	if err != nil {
 		t.Fatalf("server: %v", err)

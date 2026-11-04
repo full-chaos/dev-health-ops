@@ -545,7 +545,7 @@ if ! grep -q "|saml|${SAML_ID}|" <<<"${SNAP3}"; then die "S3: the SSO user does 
 pass "S3 go-api wrote the SAML user at phase 3 (auth_provider, sso_provider_id set); ${SNAP3##*$'\n'}"
 
 # ---- S4 U1 and the barrier -------------------------------------------------------------------------------------------------------------------
-barrier() { RELEASE="${RELEASE}" NAMESPACE="${NS}" bash "${ROOT}/deploy/scripts/auth-users-owned-barrier.sh" "$1"; }
+barrier() { env RELEASE="${RELEASE}" NAMESPACE="${NS}" bash "${ROOT}/deploy/scripts/auth-users-owned-barrier.sh" "$1"; }
 helm_cluster U1 --wait >/dev/null
 K rollout status deploy/"${FULL}-go-api" --timeout=300s >/dev/null
 barrier up-go-api || die "S4: the up-go-api barrier did not pass"

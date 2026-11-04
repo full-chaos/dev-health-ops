@@ -303,3 +303,301 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a
   }
 }
 ```
+
+## Auth service SLO alerts
+
+The table of targets, windows and sources is in the [auth readiness and SLO reference](../../reference/auth/readiness-and-slo.md) (CHAOS-11220). Four rules in `alerts/rules.yml`, group `auth_slo`, evaluate it: PDP p95 above 25 ms, PDP p99 above 75 ms, session issue or refresh p95 above 200 ms, and the oldest pending outbox event above 300 seconds. Each fires when the condition holds for five minutes. The latency rules read `dev_health_api_http_request_duration_seconds` filtered by `route`; 25 ms, 75 ms and 200 ms are bucket edges of that histogram, so the quantile is not rounded up to the next edge. Availability is not a rule of this group: `AuthService5xx` (any 5xx in five minutes, live) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for ten minutes, in `alerts/rules.yml`, not yet created in SigNoz) cover it, and no burn-rate rule exists.
+
+These four blocks are derived from `alerts/rules.yml` and are not yet imported. Before you save a rule, run its query over the last hour in SigNoz: "no data" (and not 0) means the series does not reach SigNoz yet (the auth-service series is empty until go-api forwards routes to it), so stop and report. The notification channel is `accounts-email`; the policy is not used.
+
+```json
+{
+  "alert": "AuthzLatencyP95High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p95"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/v1/authorize', '/v1/authorize:batch') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.025,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth PDP p95 latency above 25 ms",
+    "description": "The p95 of POST /v1/authorize and /v1/authorize:batch on the auth service was above 25 ms for five minutes (target p95 < 25 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthzLatencyP99High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p99"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/v1/authorize', '/v1/authorize:batch') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.075,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth PDP p99 latency above 75 ms",
+    "description": "The p99 of POST /v1/authorize and /v1/authorize:batch on the auth service was above 75 ms for five minutes (target p99 < 75 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthTokenLatencyP95High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p95"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/internal/v1/sessions', '/v1/token/refresh') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.2,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth token issue or refresh p95 latency above 200 ms",
+    "description": "The p95 of session issue and refresh on the auth service was above 200 ms for five minutes (target p95 < 200 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthOutboxOldestPendingHigh",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "devhealth_auth_outbox_oldest_pending_age_seconds",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 300,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth outbox oldest pending event older than 5 minutes",
+    "description": "The oldest unpublished auth outbox event was older than 300 seconds for five minutes (target: under 5 minutes)."
+  }
+}
+```

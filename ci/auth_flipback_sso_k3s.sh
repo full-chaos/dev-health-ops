@@ -112,7 +112,8 @@ KUBECONFIG_FILE="${AUTH_FB_KUBECONFIG:-}"
 
 # ---- helm layers: one function per chart step, used by the plan and by the run -----------------------------------------------------
 write_base_values() { # FILE
-  cat >"$1" <<EOF
+  : >"$1"
+  cat >>"$1" <<EOF1
 web: {enabled: false}
 goWorkers: {enabled: false}
 valkey: {enabled: true}
@@ -126,6 +127,8 @@ goApi:
   sessionIssue: {secretName: session-issue}
   extraArgs: ["--health-check-timeout=10s"]
   readinessProbe: {timeoutSeconds: 10}
+EOF1
+  cat >>"$1" <<EOF2
   livenessProbe: {timeoutSeconds: 10}
   extraEnv:
     - {name: VALKEY_URI, value: "redis://${FULL}-valkey:6379/1"}
@@ -136,6 +139,8 @@ authService:
   image: {repository: "${IMG_SVC}", pullPolicy: IfNotPresent}
   database: {secretName: auth-db}
   signingKey: {secretName: auth-key, keyId: fb}
+EOF2
+  cat >>"$1" <<EOF3
   sessionKeys: {successor: {secretName: auth-session}, loginLockout: {secretName: auth-lockout}}
   valkey: {secretName: auth-ratelimit}
   social: {secretName: auth-social}
@@ -144,6 +149,8 @@ authService:
   trustedProxiesWideAccepted: true
   migrate:
     secretName: auth-migrate-db
+EOF3
+  cat >>"$1" <<EOF4
     image: {repository: "${IMG_MIG}", pullPolicy: IfNotPresent}
     sessionReaders: {goApi: devhealth_api, queryApi: devhealth_query_api}
   networkPolicy:
@@ -152,6 +159,8 @@ authService:
       database:
         to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: ${RELEASE}, app.kubernetes.io/component: postgresql}}}]
       valkey:
+EOF4
+  cat >>"$1" <<EOF5
         to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: ${RELEASE}, app.kubernetes.io/component: valkey}}}]
       mail:
         to: [{ipBlock: {cidr: 198.51.100.7/32}}]
@@ -160,10 +169,12 @@ migrations:
   hook:
     image: "${IMG_DHO}"
     pullPolicy: IfNotPresent
+EOF5
+  cat >>"$1" <<EOF6
     provisionRoles: {enabled: true, image: "${IMG_DHO}", pullPolicy: IfNotPresent}
     riverMigrate: {enabled: true, image: "${IMG_DHO}", pullPolicy: IfNotPresent}
     routeActivate: {enabled: false, image: "${IMG_DHO}", pullPolicy: IfNotPresent}
-EOF
+EOF6
 }
 write_secret_values() { # FILE API_PASSWORD JWT_KEY  (the file is mode 0600; the session issue token lives in its own Secret)
   (
@@ -350,7 +361,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 
   -addext "subjectAltName=DNS:${IDP_HOST}" -keyout "${WORK}/idp.key" -out "${WORK}/idp.pem" 2>/dev/null
 K create secret generic idp-tls --from-file=server.pem="${WORK}/idp.pem" --from-file=server.key="${WORK}/idp.key" >/dev/null
 IDP_USER="saml-sub-1,saml.one@${DOMAIN},SAML One"
-K apply -f - >/dev/null <<EOF
+{
+  cat <<EOF1
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: idpstub, labels: {app: idpstub}}
@@ -362,6 +374,8 @@ spec:
     spec:
       automountServiceAccountToken: false
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+EOF1
+  cat <<EOF2
       containers:
         - name: idpstub
           image: ${IMG_IDP}
@@ -369,6 +383,8 @@ spec:
           args: ["saml", "-listen", ":8443", "-cert", "/certs/server.pem", "-key", "/certs/server.key", "-base-url", "https://${IDP_HOST}",
                  "-sp-entity-id", "${SP_ENTITY}", "-user", "${IDP_USER}"]
           ports: [{name: https, containerPort: 8443}]
+EOF2
+  cat <<EOF3
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
           volumeMounts: [{name: tls, mountPath: /certs, readOnly: true}]
       volumes: [{name: tls, secret: {secretName: idp-tls}}]
@@ -378,8 +394,11 @@ kind: Service
 metadata: {name: idpstub}
 spec:
   selector: {app: idpstub}
+EOF3
+  cat <<EOF4
   ports: [{name: https, port: 443, targetPort: https}]
-EOF
+EOF4
+} | K apply -f - >/dev/null
 K rollout status deploy/idpstub --timeout=180s >/dev/null
 pass "S0 the identity provider stub runs (SAML mode, local image ${IMG_IDP})"
 
@@ -496,15 +515,18 @@ SAML_CERT="$(cat "${WORK}/idp.body")"
 grep -q 'BEGIN CERTIFICATE' <<<"${SAML_CERT}" || die "S2: the stub served no SAML certificate"
 SAML_CONFIG_JSON="$(jq -nc --arg ip "${IDP_HOST}" --arg cert "${SAML_CERT}" --arg sp "${SP_ENTITY}" '{entity_id: ("https://" + $ip + "/saml/metadata"), sso_url: ("https://" + $ip + "/saml/sso"),
   certificate: $cert, sp_entity_id: $sp, sp_acs_url: "https://sp.fb.test/api/v1/auth/saml/{provider_id}/acs"}')"
-SAML_ID="$(pgq <<EOF
+SAML_ID="$({
+  cat <<EOF1
 WITH p AS (SELECT gen_random_uuid() AS id)
 INSERT INTO sso_providers (id, org_id, name, protocol, status, is_default, allow_idp_initiated, auto_provision_users, default_role, config, encrypted_secrets, allowed_domains, created_at, updated_at)
 SELECT p.id, o.id, 'fb-saml', 'saml', 'active', false, true, true, 'member',
+EOF1
+  cat <<EOF2
   replace(\$cfg\$${SAML_CONFIG_JSON}\$cfg\$, '{provider_id}', p.id::text)::json, NULL, '["${DOMAIN}"]'::json, now(), now()
 FROM p, organizations o WHERE o.name = 'FB Org'
 RETURNING id;
-EOF
-)"
+EOF2
+} | pgq)"
 [[ "${SAML_ID}" =~ ^[0-9a-f-]{36}$ ]] || die "S2: the provider INSERT returned no id: ${SAML_ID}"
 pass "S2 a SAML provider row exists and is active (one INSERT in this namespace, auto-provision on, allowed_domains ${DOMAIN})"
 

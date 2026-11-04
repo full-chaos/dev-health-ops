@@ -54,7 +54,7 @@ case "$*" in
   *"auth can-i"*) printf '%s\n' "${STUB_CAN_I:-no}" ;;
   *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${STUB_GIT_VERSION:-v1.36.4+k3s1}" ;;
   *"get configmap fb-run"*) [ -n "${STUB_TOKEN:-}" ] && printf '%s' "$STUB_TOKEN" || exit 1 ;;
-  *) [ "${STUB_PERMISSIVE:-0}" = 1 ] && exit 0 || exit 1 ;;
+  *) [ -t 0 ] || cat >/dev/null; [ "${STUB_PERMISSIVE:-0}" = 1 ] && exit 0 || exit 1 ;;
 esac
 `
 

@@ -54,6 +54,10 @@
       "why": "A grant carries its expiry (TRD section 9; Q2 default keep)."
     },
     {
+      "file": "valid-resource-grant-nested.json",
+      "why": "A grant on a nested repository key (2 to 20 segments)."
+    },
+    {
       "file": "valid-resource-grant-organization-wide.json",
       "why": "The explicit organization-wide key `*`."
     },
@@ -230,6 +234,24 @@
       "expect_instance_location": "/payload/change/resource_key",
       "expect_keyword": "pattern",
       "why": "Repository keys are canonical lowercase owner/repo (TRD section 9)."
+    },
+    {
+      "file": "invalid-change-resource-key-21-segments.json",
+      "expect_instance_location": "/payload/change/resource_key",
+      "expect_keyword": "pattern",
+      "why": "21 segments is one past the deepest key."
+    },
+    {
+      "file": "invalid-change-resource-key-empty-segment.json",
+      "expect_instance_location": "/payload/change/resource_key",
+      "expect_keyword": "pattern",
+      "why": "An empty segment is no segment."
+    },
+    {
+      "file": "invalid-change-resource-key-trailing-slash.json",
+      "expect_instance_location": "/payload/change/resource_key",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash leaves the last segment empty."
     },
     {
       "file": "invalid-change-credential-id-not-a-credential.json",

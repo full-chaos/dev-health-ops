@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,7 @@ type Issuer struct {
 type session struct {
 	principal    uuid.UUID
 	tokenVersion int64
+	expiresAt    time.Time
 }
 
 // New returns an Issuer with a fresh key.
@@ -113,9 +115,28 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 	}
 	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	i.mu.Lock()
-	i.sessions[sid] = session{principal: c.UserID, tokenVersion: c.TokenVersion}
+	i.sessions[sid] = session{principal: c.UserID, tokenVersion: c.TokenVersion, expiresAt: now.Add(lifetime)}
 	i.mu.Unlock()
 	return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(i.priv, []byte(signing))), nil
+}
+
+// Session is the session of a minted token: the auth-service session row a production token names.
+type Session struct {
+	ID, Principal uuid.UUID
+	TokenVersion  int64
+	ExpiresAt     time.Time
+}
+
+// Sessions are the sessions of every token this Issuer minted, ordered by id.
+func (i *Issuer) Sessions() []Session {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	out := make([]Session, 0, len(i.sessions))
+	for id, minted := range i.sessions {
+		out = append(out, Session{ID: id, Principal: minted.principal, TokenVersion: minted.tokenVersion, ExpiresAt: minted.expiresAt})
+	}
+	slices.SortFunc(out, func(a, b Session) int { return strings.Compare(a.ID.String(), b.ID.String()) })
+	return out
 }
 
 // Verifier verifies a token of this Issuer as the api does.

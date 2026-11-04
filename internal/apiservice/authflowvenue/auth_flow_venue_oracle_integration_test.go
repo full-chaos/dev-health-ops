@@ -27,12 +27,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	mailpkg "github.com/full-chaos/dev-health-ops/internal/mail"
@@ -1088,6 +1091,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
+	routeVenueTokens(t, ctx, venue, auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {
 		t.Fatal(err)
@@ -1112,6 +1116,37 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// routeVenueTokens routes auth by the go-api endpoint-profile rows: the venue's tokens verify as user access
+// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions), and the
+// HS256 tokens the go-api session routes mint in this flow verify on the rows that list legacy_hs256.
+func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venue, auth *policy.Authenticator, logger *slog.Logger) {
+	t.Helper()
+	venue.WriteAuthSessions(t, ctx)
+	rows, err := accessrouting.Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := func(ctx context.Context, token string) (any, error) {
+		user, err := auth.AuthenticateLegacy(ctx, token)
+		switch {
+		case err == nil:
+			return user, nil
+		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
+			return nil, err
+		default:
+			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
+		}
+	}
+	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t), Legacy: legacy,
+		Meter: noop.NewMeterProvider().Meter("venue"), Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(accessrouting.Adapter{Validator: validator}, accessrouting.Service); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // venueRoot is the repository root, where the venue finds the Python api.

@@ -95,6 +95,11 @@ type Options struct {
 	// JWTKey is JWT_SECRET_KEY on the Python plane; the Go api must be given
 	// the same key.
 	JWTKey string
+	// LegacyHS256Tokens mints the seed's tokens as HS256 access tokens under
+	// JWTKey, as the recording's were, for a Go plane that still verifies only
+	// that class (the query-api edge). Unset, they are user access tokens of
+	// TokenIssuer.
+	LegacyHS256Tokens bool
 	// PythonEnv is the Python plane's settings the golden was recorded under,
 	// for example SETTINGS_ENCRYPTION_KEY: the Go ports of the substrate
 	// (gosubstrate.go) read them.
@@ -124,7 +129,8 @@ type Venue struct {
 	Tokens map[string]string
 	// TokenIssuer minted Tokens; a test api verifies them with TokenIssuer.Authenticator.
 	TokenIssuer *edtokens.Issuer
-	// Roles are the provisioned role names: domain, queue, coordinator, api.
+	// Roles are the provisioned role names: domain, queue, coordinator, api, and auth_runtime once
+	// WriteAuthSessions ran.
 	Roles map[string]string
 	// SourceDB is the Python plane's database; GoDB is its copy.
 	SourceDB, GoDB string
@@ -142,6 +148,11 @@ type Venue struct {
 	clickHouseURI, clickHouseHTTPURI     string
 	PythonClickHouseDB, GoClickHouseDB   string
 	clickHouseAPIRole, clickHouseAPIPass string
+
+	// authRuntimeRole is the auth runtime role name WriteAuthSessions provisions.
+	authRuntimeRole string
+	// legacyTokenKey, when set, is the key mintGo signs HS256 tokens under (Options.LegacyHS256Tokens).
+	legacyTokenKey string
 
 	// frozen is a venue built for a frozen golden or a Go-only test. Every
 	// venue is one: no Python plane can be served.
@@ -175,6 +186,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a venue needs its golden (Options.Golden) or Options.GoOnly: no Python plane can be served")
 	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options)}
+	if options.LegacyHS256Tokens {
+		v.legacyTokenKey = options.JWTKey
+	}
 	if options.External != nil {
 		return startExternal(t, ctx, options, v)
 	}
@@ -291,6 +305,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 			t.Fatal(err)
 		}
 		v.Roles[name] = role
+	}
+	if v.authRuntimeRole, err = authRuntimeRoleName(instance); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		// The roles hold privileges inside the Go copy; DROP ROLE fails while

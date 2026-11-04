@@ -80,6 +80,32 @@ func TestMintedTokenVerifiesWithItsSessionLive(t *testing.T) {
 	}
 }
 
+// Sessions lists every minted session with its user, token_version pin and expiry: the rows a venue writes as
+// auth-service sessions.
+func TestSessionsListEveryMintedSession(t *testing.T) {
+	issuer := edtokens.New(t)
+	user, at := uuid.New(), time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, version := range []int64{0, 7} {
+		if _, err := issuer.Mint(edtokens.Claims{UserID: user, TokenVersion: version, IssuedAt: at, Lifetime: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessions := issuer.Sessions()
+	if len(sessions) != 2 {
+		t.Fatalf("%d sessions, want 2", len(sessions))
+	}
+	pins := map[int64]bool{}
+	for _, session := range sessions {
+		if session.Principal != user || !session.ExpiresAt.Equal(at.Add(time.Minute)) || session.ID == uuid.Nil {
+			t.Errorf("session %+v, want user %s expiring %s", session, user, at.Add(time.Minute))
+		}
+		pins[session.TokenVersion] = true
+	}
+	if !pins[0] || !pins[7] {
+		t.Errorf("pins %v, want 0 and 7", pins)
+	}
+}
+
 // The Authenticator verifies this Issuer's key only: an HS256 bearer and another issuer's token are refused on
 // a row that takes the user access token, before any store read (the store has no pool).
 func TestAuthenticatorRefusesWhatThisIssuerDidNotMint(t *testing.T) {

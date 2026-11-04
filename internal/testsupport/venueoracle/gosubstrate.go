@@ -9,10 +9,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/passwordhash"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
@@ -187,6 +189,9 @@ func (v *Venue) mintGo(t *testing.T, specs map[string]map[string]any) map[string
 	if !ok {
 		audience = "dev-health-api"
 	}
+	if v.legacyTokenKey != "" {
+		return v.mintLegacy(t, specs, issuer, audience)
+	}
 	if v.TokenIssuer == nil {
 		v.TokenIssuer = edtokens.New(t)
 	}
@@ -205,6 +210,33 @@ func (v *Venue) mintGo(t *testing.T, specs map[string]map[string]any) map[string
 			t.Fatalf("frozen venue: token %q: %v", name, err)
 		}
 		recordedCallers.Store(token, claims.recordedIdentity(issuer, audience))
+		tokens[name] = token
+	}
+	return tokens
+}
+
+// mintLegacy mints the seed's tokens as create_access_token's HS256 tokens
+// under the venue's legacy key (Options.LegacyHS256Tokens): the bearer is the
+// recorded one's class, so it keys the recorded request as it is.
+func (v *Venue) mintLegacy(t *testing.T, specs map[string]map[string]any, issuer, audience string) map[string]string {
+	t.Helper()
+	signer, err := edgetoken.NewSigner(v.legacyTokenKey, issuer, audience)
+	if err != nil {
+		t.Fatalf("frozen venue: %v", err)
+	}
+	now := time.Now()
+	tokens := make(map[string]string, len(specs))
+	for name, spec := range specs {
+		c, err := accessClaims(spec)
+		if err != nil {
+			t.Fatalf("frozen venue: token %q: %v", name, err)
+		}
+		token, err := signer.Access(edgetoken.AccessClaims{UserID: c.UserID, Email: c.Email, OrgID: c.OrgID, Role: c.Role,
+			IsSuperuser: c.IsSuperuser, Username: c.Username, FullName: c.FullName, TokenVersion: c.TokenVersion,
+			ImpersonatingUserID: c.ImpersonatingUserID}, now, uuid.NewString())
+		if err != nil {
+			t.Fatalf("frozen venue: token %q: %v", name, err)
+		}
 		tokens[name] = token
 	}
 	return tokens

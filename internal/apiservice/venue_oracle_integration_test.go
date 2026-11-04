@@ -18,7 +18,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/metric/noop"
 
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -285,11 +287,25 @@ func startVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, venue *
 }
 
 // startVenueAPIWith is startVenueAPI with adjust applied to the built Deps
-// before the routes are composed.
+// before the routes are composed. The api verifies the venue's tokens as user
+// access tokens by the route's endpoint-profile row, with the venue's issuer key
+// as the only key, and reads each token's session in the auth schema of the Go
+// copy (venueoracle.WriteAuthSessions), as production does.
 func startVenueAPIWith(t *testing.T, ctx context.Context, cfg config.Config, venue *venueoracle.Venue, adjust func(*Deps)) string {
 	t.Helper()
+	venue.WriteAuthSessions(t, ctx)
+	routed := func(deps *Deps) {
+		if venue.TokenIssuer != nil {
+			if err := accessrouting.RouteUserTokens(deps.Auth, venue.TokenIssuer.Verifier(t), noop.NewMeterProvider().Meter("venue"), quietLogger()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if adjust != nil {
+			adjust(deps)
+		}
+	}
 	registry := health.NewRegistry(5 * time.Second)
-	components, err := configureWith(ctx, cfg, registry, quietLogger(), adjust)
+	components, err := configureWith(ctx, cfg, registry, quietLogger(), routed)
 	if err != nil {
 		t.Fatal(err)
 	}

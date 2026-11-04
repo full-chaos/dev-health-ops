@@ -10,6 +10,8 @@ source_of_truth:
   - contracts/auth/v1/graphql-field-actions.json
   - contracts/auth/v1/endpoint-profile.schema.json
   - internal/queryapi/graph/field_action_map_test.go
+  - internal/queryapi/graph/field_actions.go
+  - internal/queryapi/server/route_actions.go
   - internal/queryapi/graph/operation_org_guard.go
   - contracts/graphql/v1/schema.graphql
   - internal/api/policy/guard.go
@@ -31,7 +33,7 @@ The action map joins each route and GraphQL field to a catalog action from the [
 | query-api GraphQL | A valid credential, then `OperationOrgGuard` for the `orgId` argument. | No |
 | auth-service | The credential class and scope of the route. | No |
 
-The rows are held to source by Go tests. The profile rows are checked against the served routes. The GraphQL map is checked against the served schema and against handler source (`internal/queryapi/graph/field_action_map_test.go`). Nothing in the serving path reads the rows, so a runtime change does not fail a row. CHAOS-11042 plans a check that drives each route and field through the real handler.
+The rows are held to source by Go tests. The profile rows are checked against the served routes. The GraphQL map is checked against the served schema and against handler source (`internal/queryapi/graph/field_action_map_test.go`). Nothing in the serving path reads the rows, so a runtime change does not fail a row. CHAOS-11042 plans a check that drives each route and field through the real handler. The query-api and GraphQL actions are held to two Go tables (`internal/queryapi/server/route_actions.go`, `internal/queryapi/graph/field_actions.go`) and to a parity cell that compares each action's catalog role grants with what today's guard admits.
 
 !!! warning "Do not read a mapped action as an allow"
     The `billing.read` routes are at the `Authenticated` level today, so any valid token passes the route level. The catalog gives `billing.read` to every organization role, so the two agree here. For other routes the level and the catalog can differ, and the row says so in its `gaps`. Read the route level to know what is enforced.
@@ -44,7 +46,8 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 | --- | --- |
 | absent | Not applicable. The surface has nothing to say (all 33 public go-api rows). |
 | a catalog action id | The catalog action the route maps to. |
-| `null` (go-api) or `"unknown"` (query-api and the GraphQL map) | Undetermined. The row's `gaps` must hold an entry that begins with `action:`. The query-api and GraphQL gap text also says that no consumer may treat the row as allow. |
+| `null` (go-api) | Undetermined. The row's `gaps` must hold an entry that begins with `action:`. |
+| `"unknown"` (query-api and the GraphQL map) | Not allowed. Every protected query-api row and every GraphQL field names a catalog action. |
 
 ## go-api
 
@@ -121,7 +124,7 @@ Each profile row (`contracts/auth/v1/endpoint-profile.schema.json`) has an `acti
 
 Source: `contracts/auth/v1/endpoint-profiles.go-api.json`. "Route level today" is the `policy.*` validator named in the row.
 
-These 16 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `members.update`, `org.read`, `org.write`, `org.delete`, `acr.context.read`, `admin.users`, `authz.decide`, `admin.telemetry`. No query-api row or GraphQL field maps to a catalog action either (see below).
+These 17 catalog actions have no go-api route that maps to them: `analytics.read`, `analytics.export`, `metrics.read`, `metrics.compute`, `work_items.read`, `work_items.sync`, `git.read`, `git.sync`, `members.update`, `org.read`, `org.write`, `org.delete`, `acr.context.read`, `admin.users`, `authz.decide`, `admin.telemetry`, `reports.write`. Of these, query-api rows and GraphQL fields map to `analytics.read`, `metrics.read`, `work_items.read`, `git.read`, `org.read`, `admin.telemetry` and `reports.write` (see below).
 
 ### Routes with no action
 
@@ -179,55 +182,59 @@ Each gap entry says "this leaf does not extend the vocabulary": the profile leaf
 
 ## query-api
 
-45 rows: 37 protected and 8 public. Every protected row has `action: "unknown"` with a declared gap tracked in CHAOS-11042. The rows state what each surface accepts, not what each resolver enforces. query-api has no single authorization chokepoint, so per-resolver checks are not profiled.
+45 rows: 37 protected and 8 public. Every protected row names a catalog action; the public rows name none. Each action is the one whose catalog role grants allow exactly what today's guard allows (parity, CHAOS-12657): every organization role holds `analytics.read`, `metrics.read`, `work_items.read`, `git.read` and `org.read`, and today's guard reads the caller's organization and no role. query-api enforces none of these actions yet; the rows state a mapping for a later decision request, not a check. query-api has no single authorization chokepoint, so per-resolver checks are not profiled.
 
-| Method and route | Class | Accepted credential classes |
-| --- | --- | --- |
-| `api_route /api/v1/` | public | none |
-| `GET /api/v1/drilldown/issues` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/drilldown/issues` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/drilldown/prs` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/drilldown/prs` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/explain` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/explain` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/filters/options` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/flame` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/flame/aggregated` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/heatmap` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/home` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/home` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/investment` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/investment` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/investment/explain` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/investment/sunburst` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/meta` | public | none |
-| `GET /api/v1/opportunities` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/opportunities` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/people` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/metric` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/people/{person_id}/summary` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/quadrant` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/sankey` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/sankey` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /api/v1/work-units` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/work-units` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `GET /buildinfo` | protected | `effective_principal_envelope` |
-| `GET /graphql` | protected | `ops_access_token_hs256`, `user_access_token` |
-| `POST /graphql` | protected | `ops_access_token_hs256`, `user_access_token` |
-| `api_route /healthz` | public | none |
-| `GET /healthz` | public | none |
-| `GET /metrics` | public | none |
-| `POST /query` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /query` | protected | none |
-| `POST /query/proof` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /query/proof-write` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `POST /query/run-operation` | protected | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
-| `api_route /readyz` | public | none |
-| `GET /readyz` | public | none |
-| `GET /registry` | public | none |
+The six dispatcher rows (`/graphql`, `/query` on the query and internal listeners and on the mcp listener, `/query/proof`, `/query/run-operation`) carry the minimum action the legacy guard requires at the route, `analytics.read`; the action of each root field, in the GraphQL field map below, decides per operation. `/buildinfo` is `org.read` (legacy admits any verified credential) and `/query/proof-write` is `analytics.read` (legacy requires an allowlisted organization and no role).
+
+**Deliberate change candidates, not made here:** `/buildinfo` to `admin.telemetry`; `/query/proof-write` to `settings.write`; the MCP caller class refuses an identity with the admin, owner or operator role while the catalog grants `analytics.read` to admin and owner (`POST /query` on the mcp listener).
+
+| Method and route | Class | Action | Accepted credential classes |
+| --- | --- | --- | --- |
+| `api_route /api/v1/` | public | none | none |
+| `GET /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/explain` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/filters/options` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/flame` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/flame/aggregated` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/heatmap` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/home` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/investment` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/investment/explain` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/investment/sunburst` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/meta` | public | none | none |
+| `GET /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/opportunities` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/people` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/issues` | protected | `work_items.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/people/{person_id}/drilldown/prs` | protected | `git.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/people/{person_id}/metric` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/people/{person_id}/summary` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/quadrant` | protected | `metrics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/sankey` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/work-units` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /api/v1/work-units/{work_unit_id}/explain` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `GET /buildinfo` | protected | `org.read` | `effective_principal_envelope` |
+| `GET /graphql` | protected | `analytics.read` | `ops_access_token_hs256`, `user_access_token` |
+| `POST /graphql` | protected | `analytics.read` | `ops_access_token_hs256`, `user_access_token` |
+| `api_route /healthz` | public | none | none |
+| `GET /healthz` | public | none | none |
+| `GET /metrics` | public | none | none |
+| `POST /query` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /query` | protected | `analytics.read` | none |
+| `POST /query/proof` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /query/proof-write` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `POST /query/run-operation` | protected | `analytics.read` | `effective_principal_envelope`, `ops_access_token_hs256`, `user_access_token` |
+| `api_route /readyz` | public | none | none |
+| `GET /readyz` | public | none | none |
+| `GET /registry` | public | none | none |
 
 Source: `contracts/auth/v1/endpoint-profiles.query-api.json`.
 
@@ -237,9 +244,19 @@ The 48 auth-service rows have no `action` field. See the route table in [authent
 
 ## GraphQL field map
 
-`contracts/auth/v1/graphql-field-actions.json` lists every served root field: 51 fields (46 `Query`, 5 `Mutation`). The served schema (`contracts/graphql/v1/schema.graphql`) has a `Query` and a `Mutation` type and no `Subscription` type. The guard test `internal/queryapi/graph/field_action_map_test.go` fails when a served field has no row or has more than one, when a row names a field that is not served, when the map's `catalog_version` differs from the catalog's, when an action is not `unknown`, when an `unknown` has no gap that names CHAOS-11042, or when a statement fails its source proof.
+`contracts/auth/v1/graphql-field-actions.json` lists every served root field: 51 fields (46 `Query`, 5 `Mutation`). The served schema (`contracts/graphql/v1/schema.graphql`) has a `Query` and a `Mutation` type and no `Subscription` type. The guard test `internal/queryapi/graph/field_action_map_test.go` fails when a served field has no row or has more than one, when a row names a field that is not served, when the map's `catalog_version` differs from the catalog's, when an action is empty, `unknown`, not in the catalog or not the field action table's, when a platform action sits on a field whose resolver is not `none`, when an action row still carries an `action:` gap, or when a statement fails its source proof.
 
-Every row has `action: "unknown"`. query-api enforces no catalog action on a field today. Each row has a gap that names CHAOS-11042 and says no consumer may treat the row as allow.
+Every field names a catalog action, the same one `internal/queryapi/graph/field_actions.go` holds. query-api enforces none of them today. Each action allows exactly what today's guard allows (parity):
+
+| Action | Fields |
+| --- | --- |
+| `admin.telemetry` (1) | `Query.productTelemetryPlatformDashboard` |
+| `analytics.read` (28) | `Query.catalog`, `Query.analytics`, `Query.productTelemetryDashboard`, `Query.home`, `Query.featureFlags`, `Query.featureFlagEvents`, `Query.securityAlerts`, `Query.securityOverview`, `Query.savedReports`, `Query.savedReport`, `Query.reportRuns`, `Query.capacityForecast`, `Query.capacityForecasts`, `Query.throughputForecast`, `Query.operatingReview`, `Query.sourceHealth`, `Query.recommendations`, `Query.experiments`, `Query.aiImpactSummary`, `Query.aiComparison`, `Query.aiReviewLoad`, `Query.aiRiskBreakdown`, `Query.aiOpportunities`, `Query.improveOpportunities`, `Query.aiGovernanceSummary`, `Query.aiWorkflowDrilldown`, `Query.aiAttributedPrs`, `Query.aiAttributionOverview` |
+| `git.read` (5) | `Query.workGraphEdges`, `Query.pr`, `Query.workGraphFlow`, `Query.workGraphArtifacts`, `Query.reviewEdges` |
+| `integrations.read` (1) | `Query.dataHealth` |
+| `metrics.read` (9) | `Query.busFactor`, `Query.compoundingRisk`, `Query.testopsRisk`, `Query.testopsJobFailures`, `Query.coverageBaselines`, `Query.coverageScopeBaseline`, `Query.complexityTimeseries`, `Query.hotspots`, `Query.cognitiveLoad` |
+| `reports.write` (5) | `Mutation.createSavedReport`, `Mutation.updateSavedReport`, `Mutation.deleteSavedReport`, `Mutation.cloneSavedReport`, `Mutation.triggerReport` |
+| `work_items.read` (2) | `Query.workItemTeamAttributions`, `Query.workUnitTeamAttributions` |
 
 ### Which organization a field uses
 
@@ -264,11 +281,12 @@ The guard reads only fields' own arguments named `orgId` or `org_id`. An organiz
 
 ### Fields with their own check
 
-7 rows say "no catalog action covers this field" instead of "not enforced": `Query.productTelemetryPlatformDashboard`, `Query.dataHealth`, `Mutation.createSavedReport`, `Mutation.updateSavedReport`, `Mutation.deleteSavedReport`, `Mutation.cloneSavedReport`, `Mutation.triggerReport`.
+7 fields have their own check: `Query.productTelemetryPlatformDashboard`, `Query.dataHealth`, `Mutation.createSavedReport`, `Mutation.updateSavedReport`, `Mutation.deleteSavedReport`, `Mutation.cloneSavedReport`, `Mutation.triggerReport`.
 
-- `productTelemetryPlatformDashboard` is refused with `AUTHORIZATION_ERROR` unless `producttelemetry.RequirePlatformAdmin` passes the caller.
-- `dataHealth` is refused with `AUTHORIZATION_ERROR` unless `datahealth.RequireOperator` passes the caller.
-- The five saved-report mutations apply `requireMutationOrg` after the guard: `Authorization required` when the caller has no organization, `Access denied` when the `orgId` is not the caller's organization.
+- `productTelemetryPlatformDashboard` is refused with `AUTHORIZATION_ERROR` unless `producttelemetry.RequirePlatformAdmin` passes the caller, which requires `admin.telemetry` outside an impersonation: its action is `admin.telemetry`, an exact match.
+- `dataHealth` is refused with `AUTHORIZATION_ERROR` unless `datahealth.RequireOperator` passes the caller: a holder of `admin.stats`, or the role admin, owner or operator. Its action is `integrations.read`, which the organization roles admin and owner hold. The `operator` role and `admin.stats` holders have no organization role in the catalog; that difference is a deliberate change candidate.
+- The five saved-report mutations apply `requireMutationOrg` after the guard: `Authorization required` when the caller has no organization, `Access denied` when the `orgId` is not the caller's organization. No role is read, so every organization role can write them today: their action is the new `reports.write` (catalog version 12), held by viewer, member, admin and owner.
+- `sourceHealth` has no role gate, only the organization guard, so its action is `analytics.read`. Narrowing it to `integrations.read` (admin and owner) is a deliberate change candidate, not made here.
 - `complexityTimeseries` answers `AUTHORIZATION_ERROR` for a request with no organization.
 
 Source for this section: the `disclosure_behavior` and `gaps` members of `contracts/auth/v1/graphql-field-actions.json`.
@@ -278,6 +296,7 @@ Source for this section: the `disclosure_behavior` and `gaps` members of `contra
 | Item | Ticket |
 | --- | --- |
 | Check each query-api route and GraphQL field against live behaviour. | CHAOS-11042 |
+| Narrow, widen or split any query-api action away from today's guard (the deliberate change candidates above). | decided later, on its own |
 | Explicit platform actions for the superuser-only handlers. Not in the catalog on `main`. | CHAOS-11847 |
 | Replace the route levels with decisions from the policy decision point. | CHAOS-10841 |
 

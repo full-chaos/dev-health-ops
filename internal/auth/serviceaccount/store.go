@@ -77,9 +77,8 @@ func New(cfg Config) (*Store, error) {
 		metric.WithDescription("Service account mutations, by verb and outcome.")); err != nil {
 		return nil, fmt.Errorf("serviceaccount: registering the mutation counter: %w", err)
 	}
-	if s.keyResolves, err = meter.Int64Counter("auth.serviceaccount.key_resolves",
-		metric.WithDescription("Service account key resolves, by outcome.")); err != nil {
-		return nil, fmt.Errorf("serviceaccount: registering the key resolve counter: %w", err)
+	if s.keyResolves, err = registerKeyResolves(meter); err != nil {
+		return nil, err
 	}
 	return s, nil
 }

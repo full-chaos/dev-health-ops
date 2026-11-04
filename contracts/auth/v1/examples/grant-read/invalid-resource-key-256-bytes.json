@@ -1,0 +1,12 @@
+{
+  "schema_version": "grant-read.v1",
+  "grant_id": "grt_EXAMPLE0000000000000001",
+  "organization_id": "org_EXAMPLE0000000000000001",
+  "principal_id": "prn_EXAMPLE0000000000000001",
+  "role": "viewer",
+  "resource_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expires_at": null,
+  "status": "active",
+  "revision": 1,
+  "created_at": "2026-11-02T10:00:00Z"
+}

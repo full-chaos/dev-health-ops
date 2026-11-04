@@ -71,6 +71,14 @@ func (h *handlers) writeProvisionUnavailable(w http.ResponseWriter) {
 	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.UnavailableText), nil)
 }
 
+// withDeactivated adds the wire reason auth-service sends for a deactivated
+// actor; only the member and invite routes carry it, organization creation
+// keeps its own answer.
+func withDeactivated(answers map[string]provisionAnswer) map[string]provisionAnswer {
+	answers["principal_deactivated"] = provisionAnswer{http.StatusForbidden, "Account is deactivated"}
+	return answers
+}
+
 func invalidRole(role string) map[string]provisionAnswer {
 	return map[string]provisionAnswer{"role_invalid": {http.StatusBadRequest, "Invalid role: " + role}}
 }
@@ -86,7 +94,7 @@ func (h *handlers) addMemberInAuth(ctx context.Context, w http.ResponseWriter, u
 		answers[principalNotFound] = provisionAnswer{http.StatusNotFound, "User not found"}
 		answers["inviter_not_found"] = provisionAnswer{http.StatusNotFound, "Inviter not found"}
 		answers["membership_suspended"] = provisionAnswer{http.StatusConflict, "Membership is suspended"}
-		h.writeProvisionRefusal(ctx, w, "add_member", err, answers)
+		h.writeProvisionRefusal(ctx, w, "add_member", err, withDeactivated(answers))
 		return
 	}
 	h.writeMembershipReadBack(ctx, w, orgID, target, http.StatusCreated)
@@ -99,7 +107,7 @@ func (h *handlers) updateMemberRoleInAuth(ctx context.Context, w http.ResponseWr
 		answers[principalNotFound] = provisionAnswer{http.StatusNotFound, "Membership not found"}
 		answers["membership_suspended"] = provisionAnswer{http.StatusNotFound, "Membership not found"}
 		answers["last_owner"] = provisionAnswer{http.StatusBadRequest, "Cannot remove the last owner of an organization"}
-		h.writeProvisionRefusal(ctx, w, "update_member_role", err, answers)
+		h.writeProvisionRefusal(ctx, w, "update_member_role", err, withDeactivated(answers))
 		return
 	}
 	h.writeMembershipReadBack(ctx, w, orgID, target, http.StatusOK)
@@ -125,11 +133,11 @@ func (h *handlers) writeMembershipReadBack(ctx context.Context, w http.ResponseW
 
 func (h *handlers) removeMemberInAuth(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID, target uuid.UUID) {
 	if err := h.orgProvision.RemoveMember(ctx, orgID, target, user.ID); err != nil {
-		h.writeProvisionRefusal(ctx, w, "remove_member", err, map[string]provisionAnswer{
+		h.writeProvisionRefusal(ctx, w, "remove_member", err, withDeactivated(map[string]provisionAnswer{
 			"membership_not_found": {http.StatusNotFound, "Membership not found"},
 			principalNotFound:      {http.StatusNotFound, "Membership not found"},
 			"last_owner":           {http.StatusBadRequest, "Cannot remove the last owner of an organization"},
-		})
+		}))
 		return
 	}
 	out := pyjson.NewObject()
@@ -155,11 +163,11 @@ func (h *handlers) transferOwnershipInAuth(ctx context.Context, w http.ResponseW
 		return
 	}
 	if err := h.orgProvision.TransferOwnership(ctx, orgID, from, to, user.ID); err != nil {
-		h.writeProvisionRefusal(ctx, w, "transfer_ownership", err, map[string]provisionAnswer{
+		h.writeProvisionRefusal(ctx, w, "transfer_ownership", err, withDeactivated(map[string]provisionAnswer{
 			"not_owner":         {http.StatusBadRequest, "Source user is not an owner"},
 			"target_not_member": {http.StatusBadRequest, "Target user is not a member"},
 			principalNotFound:   {http.StatusBadRequest, "Target user is not a member"},
-		})
+		}))
 		return
 	}
 	out := pyjson.NewObject()
@@ -186,7 +194,7 @@ func (h *handlers) createOrgInviteInAuth(ctx context.Context, w http.ResponseWri
 		answers := invalidRole(role)
 		answers["invite_pending"] = provisionAnswer{http.StatusConflict, errPendingInviteExists.Error()}
 		answers["organization_not_found"] = provisionAnswer{http.StatusNotFound, "Organization not found"}
-		h.writeProvisionRefusal(ctx, w, "create_org_invite", err, answers)
+		h.writeProvisionRefusal(ctx, w, "create_org_invite", err, withDeactivated(answers))
 		return
 	}
 	// The mail needs only what go-api holds and the answered token, so it goes

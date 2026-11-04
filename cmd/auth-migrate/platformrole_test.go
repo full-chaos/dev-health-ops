@@ -29,7 +29,10 @@ func TestParsePlatformRoleBootstrapArgs(t *testing.T) {
 
 func TestExecutePlatformRoleBootstrapRefusesBeforeReadingTheEnvironment(t *testing.T) {
 	var stderr strings.Builder
-	lookup := func(string) (string, bool) {
+	lookup := func(key string) (string, bool) {
+		if key == "AUTH_ORGS_OWNED" {
+			return "", false
+		}
 		t.Fatal("the environment was read for a bad command line")
 		return "", false
 	}

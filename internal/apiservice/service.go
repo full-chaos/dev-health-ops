@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"log/slog"
@@ -212,7 +213,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
 			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
@@ -278,7 +279,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
-			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
+			OrgState:           deps.OrgState,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -331,9 +332,9 @@ func configure(
 }
 
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
-// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
+// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
+	if deps.OrgState == nil || deps.Pool == nil {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
@@ -394,12 +395,16 @@ func configureWith(
 	logger *slog.Logger,
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
+	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		var onlyShadow bool
+		if authProxy, onlyShadow = shadowOnlyProxyFault(envsecrets.ProcessLookup); !onlyShadow {
+			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		}
 	}
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
@@ -440,7 +445,7 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, envsecrets.ProcessLookup, provisioningCred)
@@ -456,6 +461,11 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
+		sharedWorkload := provisioningCred.workload
+		if sharedWorkload == nil {
+			sharedWorkload = sessionCred.workload
+		}
+		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.

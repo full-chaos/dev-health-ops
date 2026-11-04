@@ -50,6 +50,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
+env:
+  GOPROXY: https://proxy.golang.org|direct
+
 jobs:
   venue-oracles-changed:
     if: (!(github.event_name == 'pull_request' && github.event.pull_request.draft && !contains(github.event.pull_request.labels.*.name, 'ci:full')))

@@ -267,7 +267,7 @@ func TestRedirectRule(t *testing.T) {
 	}
 }
 
-func TestReasonsAreAuthOutcomeCodes(t *testing.T) {
+func TestOIDCReasonsAreAuthOutcomeCodes(t *testing.T) {
 	contract := map[string]bool{}
 	for _, code := range contracts.AuthOutcomeReasonCodes {
 		contract[code] = true

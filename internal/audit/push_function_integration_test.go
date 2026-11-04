@@ -250,7 +250,7 @@ func TestPushWriterHoldsExactlyTheDeclaredSet(t *testing.T) {
 		}
 		if _, err := authschema.Apply(ctx, env.pool, authschema.Options{
 			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{env.callerRole},
-			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole},
+			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole, env.peerRole},
 		}); err != nil {
 			t.Fatalf("Apply after an owner change: %v", err)
 		}
@@ -268,7 +268,7 @@ func TestPushWriterHoldsExactlyTheDeclaredSet(t *testing.T) {
 		}
 		_, err := authschema.Apply(ctx, env.pool, authschema.Options{
 			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{env.callerRole},
-			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole},
+			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole, env.peerRole},
 		})
 		if err == nil || !strings.Contains(err.Error(), "push_writer_drift") {
 			t.Fatalf("a drifted grant to the writer: err = %v, want a posture violation naming the table", err)
@@ -281,7 +281,7 @@ func TestPushWriterHoldsExactlyTheDeclaredSet(t *testing.T) {
 		}
 		_, err := authschema.Apply(ctx, env.pool, authschema.Options{
 			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{env.callerRole},
-			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole},
+			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole, env.peerRole},
 		})
 		if err == nil || !strings.Contains(err.Error(), "member of") {
 			t.Fatalf("a membership of the writer: err = %v, want a posture violation", err)
@@ -294,7 +294,7 @@ func TestPushWriterHoldsExactlyTheDeclaredSet(t *testing.T) {
 		}
 		_, _ = authschema.Apply(ctx, env.pool, authschema.Options{
 			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{env.callerRole},
-			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole},
+			PushLifecycleWriterRole: env.writerRole, PushLifecycleCallerRoles: []string{env.callerRole, env.peerRole},
 		})
 		if q(`SELECT has_table_privilege($1, 'auth.principals', 'SELECT')`, env.writerRole) {
 			t.Error("the writer still reads auth.principals after a grants run")

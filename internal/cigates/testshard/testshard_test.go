@@ -391,7 +391,8 @@ func assertCensusSplitOverTheShards(t *testing.T, census string) {
 	var want []string
 	for _, l := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
-			want = append(want, l)
+			cols := strings.Split(l, "\t")
+			want = append(want, strings.Trim(cols[0], " \t\r")+"\t"+strings.Trim(cols[1], " \t\r"))
 		}
 	}
 	var got []string

@@ -447,7 +447,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 123,
+          "line": 129,
           "note": "func newValidateAuth",
           "path": "internal/auth/authapi/compat_validate.go"
         },

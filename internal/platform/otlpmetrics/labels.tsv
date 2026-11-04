@@ -22,6 +22,7 @@ auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.serviceaccount.key_resolves	outcome	code: internal/auth/serviceaccount/keys.go
 auth.serviceaccount.mutations	outcome,verb	code: internal/auth/serviceaccount/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
+auth.session.revocation_to_refusal_seconds		code: internal/auth/authapi/revocation_lag.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
 auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go
 auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go

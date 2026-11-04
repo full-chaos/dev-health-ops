@@ -2,8 +2,8 @@
 // workload presents a Kubernetes projected ServiceAccount token (TokenReview
 // authenticates it, the registry maps it to its binding) or a Compose
 // bootstrap credential (the registry resolves its digest), and the route
-// answers a workload-token.v1 token for one audience. Internal-only; mounted
-// when AUTH_WORKLOAD_EXCHANGE or AUTH_WORKLOAD_BOOTSTRAP is on.
+// answers a workload-token.v1 token for one audience (a service account key:
+// service-account-token.v1). Internal-only; mounted when a subject switch is on.
 package workloadexchange
 
 import (
@@ -102,11 +102,11 @@ type Deps struct {
 	// (NewReviewValidator); nil turns the Kubernetes subject off.
 	Validator authverify.SubjectTokenValidator
 	Registry  Registry
-	// Bootstrap resolves a Compose bootstrap credential by its digest; nil
-	// turns the bootstrap subject off.
-	Bootstrap BootstrapRegistry
-	// RefusalReason names why Registry.Resolve refused, for the log line and
-	// the counter only.
+	// Bootstrap and ServiceAccountKeys resolve a Compose bootstrap credential
+	// and a service account key by digest; nil turns that subject off.
+	Bootstrap          BootstrapRegistry
+	ServiceAccountKeys ServiceAccountKeyRegistry
+	// RefusalReason names why Registry.Resolve refused, for the log line and the counter only.
 	RefusalReason func(error) string
 	Signer        Signer
 	// Audit writes the issued-token audit row (audit.Append).
@@ -164,6 +164,7 @@ type exchangeRequest struct {
 	subjectToken string
 	audience     string
 	scope        []string
+	scopePresent bool
 }
 
 type issuedAnswer struct {
@@ -175,8 +176,8 @@ type issuedAnswer struct {
 
 // ServeHTTP is POST /internal/v1/token/exchange. After the request shape is
 // valid, every refusal answers 400 invalid_grant and every dependency failure
-// 503; only the log line and the counter name the reason. A bootstrap subject
-// goes to serveBootstrap; a JWT subject reads the store only after TokenReview.
+// 503; only the log line and the counter name the reason. A bootstrap or key
+// subject goes to its own handler; a JWT subject reads the store after TokenReview.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	req, ok := h.parseRequest(r)
@@ -184,8 +185,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.answer(w, r, outcomeInvalid, reasonInvalidRequest, audienceNone)
 		return
 	}
-	if req.subjectType == TokenTypeWorkloadBootstrap {
-		h.serveBootstrap(w, r, req)
+	// The bootstrap and key subjects are served apart from TokenReview.
+	if h.serveStoreSubject(w, r, req) {
 		return
 	}
 	audience := audienceLabel(req.audience)
@@ -353,12 +354,15 @@ func (h *handler) parseRequest(r *http.Request) (exchangeRequest, bool) {
 	if err != nil {
 		return exchangeRequest{}, false
 	}
+	// A key holds no scope: any scope field on a key subject, well formed or
+	// not, is left to the key handler's one scope refusal.
+	keySubject := len(values["subject_token_type"]) == 1 && values.Get("subject_token_type") == TokenTypeServiceAccountKey
 	for name, list := range values {
-		if !requestFields[name] || len(list) != 1 {
+		if !requestFields[name] || len(list) != 1 && !(keySubject && name == "scope") {
 			return exchangeRequest{}, false
 		}
 	}
-	if values.Get("grant_type") != GrantTypeTokenExchange || !h.subjectOn(values.Get("subject_token_type")) {
+	if values.Get("grant_type") != GrantTypeTokenExchange || !h.subjectServed(values.Get("subject_token_type")) {
 		return exchangeRequest{}, false
 	}
 	req := exchangeRequest{
@@ -369,6 +373,10 @@ func (h *handler) parseRequest(r *http.Request) (exchangeRequest, bool) {
 		return exchangeRequest{}, false
 	}
 	if list, present := values["scope"]; present {
+		req.scopePresent = true
+		if keySubject {
+			return req, true
+		}
 		actions := strings.Split(list[0], " ")
 		if len(actions) > maxScopeActions {
 			return exchangeRequest{}, false

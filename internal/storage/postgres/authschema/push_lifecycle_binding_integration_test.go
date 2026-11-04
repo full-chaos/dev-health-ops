@@ -66,7 +66,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 	t.Cleanup(admin.Close)
 
 	names := map[string]string{}
-	for _, prefix := range []string{"auth_bind_login", "auth_bind_runtime", "auth_bind_writer", "auth_bind_caller"} {
+	for _, prefix := range []string{"auth_bind_login", "auth_bind_runtime", "auth_bind_writer", "auth_bind_caller", "auth_bind_peer"} {
 		name, err := containers.RoleName(prefix, instance)
 		if err != nil {
 			t.Fatal(err)
@@ -80,6 +80,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 	login, runtime, writer, caller := names["auth_bind_login"], names["auth_bind_runtime"], names["auth_bind_writer"], names["auth_bind_caller"]
 	loginID, runtimeID := mustValidatedIdentifier(login), mustValidatedIdentifier(runtime)
 	writerID, callerID := mustValidatedIdentifier(writer), mustValidatedIdentifier(caller)
+	peer := names["auth_bind_peer"]
 	membership := fmt.Sprintf("GRANT %s TO %s WITH INHERIT TRUE, SET TRUE", Quote(writerID), Quote(loginID))
 	if !inherit {
 		membership = fmt.Sprintf("GRANT %s TO %s WITH INHERIT FALSE, SET TRUE", Quote(writerID), Quote(loginID))
@@ -89,6 +90,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 		fmt.Sprintf("CREATE ROLE %s", Quote(runtimeID)),
 		fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(writerID)),
 		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(callerID), fixturePassword),
+		fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(mustValidatedIdentifier(peer))),
 		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(loginID)),
 		membership,
 	} {
@@ -97,6 +99,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 		}
 	}
 	t.Cleanup(func() {
+		containers.DropRole(admin, peer, t.Logf)
 		containers.DropRole(admin, caller, t.Logf)
 		containers.DropRole(admin, writer, t.Logf)
 		containers.DropRole(admin, runtime, t.Logf)
@@ -106,7 +109,7 @@ func newBindingUpgrade(t *testing.T, ctx context.Context, inherit bool) *binding
 		admin: admin, uri: fixtureDSN(t, instance.URI, login), login: login, writer: writer, caller: caller,
 		options: Options{
 			Schema: "auth", RuntimeRole: runtime, SessionReaderRoles: []string{caller},
-			PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller},
+			PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller, peer},
 		},
 	}
 }

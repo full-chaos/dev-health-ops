@@ -1,6 +1,32 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 29,
+      "now": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/members\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.addMember)))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/members\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 36,
+      "now": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.updateMemberRole)))},",
+      "was": "\t\t{Method: http.MethodPatch, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 37,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.guard.Wrap(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.removeMember)))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: orgsPrefix + \"/orgs/{org_id}/members/{user_id}\", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},"
+    },
+    {
+      "file": "internal/apiservice/admin/orgs.go",
+      "line": 38,
+      "now": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/transfer-ownership\", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.transferOwnership)))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: orgsPrefix + \"/orgs/{org_id}/transfer-ownership\", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [

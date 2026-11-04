@@ -60,11 +60,12 @@ type authorizationManifest struct {
 
 // Tokens read off google/jsonschema-go for the keywords this corpus asserts.
 var goAuthorizationKeywordTokens = map[string]string{
-	"maxItems": "maxItems:",
-	"minItems": "minItems:",
-	"maximum":  "maximum:",
-	"not":      "not:",
-	"type":     "type:",
+	"maxItems":  "maxItems:",
+	"maxLength": "maxLength:",
+	"minItems":  "minItems:",
+	"maximum":   "maximum:",
+	"not":       "not:",
+	"type":      "type:",
 }
 
 func authorizationTokenFor(keyword string) (string, bool) {
@@ -483,5 +484,23 @@ func TestTheTypedParserRefusesAnImpossibleCalendarDate(t *testing.T) {
 	}
 	if decision, err := ParseAuthorizationDecision(root, []byte(raw), authorizationNow); err == nil {
 		t.Fatalf("an impossible expiry date parsed: %+v", decision)
+	}
+}
+
+// The wire form of a delegated allow of /v1/authorize: tenant_scope,
+// minimum_assurance and a one-key repository_allowlist, expiring at the
+// decision time. It parses, and it is not cacheable.
+func TestParseDelegatedAllowWithObligationsIsUseOnce(t *testing.T) {
+	raw := []byte(`{"schema_version":"authorization_decision.v1","decision_id":"dec_ABCDEFGHIJKLMNOPQRSTUVWXYZ","allowed":true,` +
+		`"reason_code":"allowed_by_role","principal_id":"prn_t9UvRnQ4QpeQv2DA8zePlg","organization_id":"0f1b6c1e-6a8b-4c35-9a0e-5b0d6a2f7c11",` +
+		`"policy_revision":9,"expires_at":"2026-09-03T05:00:00.000000Z","obligations":{"tenant_scope":"0f1b6c1e-6a8b-4c35-9a0e-5b0d6a2f7c11",` +
+		`"minimum_assurance":"aal1","repository_allowlist":["full-chaos/dev-health-ops"]}}`)
+	d, err := ParseAuthorizationDecision(testRoot(t), raw, authorizationNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Cacheable || d.Obligations == nil || d.Obligations.MinimumAssurance == nil || *d.Obligations.MinimumAssurance != "aal1" ||
+		d.Obligations.RepositoryAllowlist == nil || len(*d.Obligations.RepositoryAllowlist) != 1 || d.Obligations.StepUp != nil {
+		t.Fatalf("%+v %+v", d, d.Obligations)
 	}
 }

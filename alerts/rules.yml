@@ -1087,6 +1087,120 @@ groups:
             stopped reporting is not the same as a fresh table).
 
   # ---------------------------------------------------------------------------
+  # Push credential projection (CHAOS-10897). The reconcile compares the push
+  # projection with the credential domain; drift and run series come from the
+  # worker probe (off until PUSH_RECONCILE_PROBE is on), the parked and final
+  # row gauges from the projection reader. Created in SigNoz by hand as builder
+  # threshold rules (PromQL does not evaluate there) and routed by the
+  # notification policy to accounts-email:
+  # docs/operate/runbooks/auth-push-projection-drift-alerts.md. Only the status
+  # and scopes rule is critical.
+  # ---------------------------------------------------------------------------
+  - name: auth_push_projection
+    interval: 1m
+    rules:
+      - alert: PushCredentialProjectionDrift
+        expr: |
+          max by (class) (devhealth_auth_push_reconcile_drift) > 0
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push credential projection differs from the domain"
+          description: |
+            Class {{ $labels.class }}: two confirmed reconcile passes ten
+            minutes apart saw the push projection differ from the credential
+            domain. Next: Step 3 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      - alert: PushCredentialProjectionDriftLive
+        expr: |
+          max by (class) (devhealth_auth_push_reconcile_drift{class=~"status|scopes"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Push projection holds a credential live or wider than the domain"
+          description: |
+            Class {{ $labels.class }}: the projection reads a credential as
+            live that the domain ended, or with wider scopes. Next: Step 3 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      # min over 1 h: the reader horizon is 1 h and its retry backoff tops out at 5 min
+      - alert: PushProjectionParkedGap
+        expr: |
+          min_over_time(devhealth_auth_push_projection_parked_rows[1h]) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection rows stayed parked for an hour"
+          description: |
+            Parked projection rows did not clear for an hour, longer than the
+            retry backoff allows. Next: Step 4 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      - alert: PushProjectionFinalRows
+        expr: |
+          max(devhealth_auth_push_projection_final_rows) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection has final rows that need a person"
+          description: |
+            Final projection rows (malformed, unknown organization or
+            conflict) stay for five minutes and are never retried. Next: Step
+            4 in docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+      # A reconcile that stops cannot raise the drift rules; no sample is not zero.
+      - alert: PushReconcileNotRunning
+        expr: |
+          sum(increase(devhealth_auth_push_reconcile_runs_total{outcome="ok"}[3h])) == 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Push projection reconcile has not completed for three hours"
+          description: |
+            No reconcile pass finished ok in three hours, so the drift rules
+            cannot fire. Next: Step 5 in
+            docs/operate/runbooks/auth-push-projection-drift-alerts.md.
+
+  # ---------------------------------------------------------------------------
+  # Auth shadow PDP (CHAOS-10849). The go-api shadow harness compares the legacy
+  # guard with the new policy decision and counts a mismatch by namespace, caller
+  # and class. Labels stay in that closed set: namespace (action namespace, not the
+  # k8s one), caller, class on the mismatch counter and result on the results
+  # counter. No organization, user, route, action or decision id. The series is
+  # absent, not 0, until the first mismatch, and absent until the shadow is wired
+  # and AUTH_SHADOW_PDP is on, so the rule is inert before that. Created in SigNoz
+  # by hand as a builder threshold rule (PromQL does not evaluate there):
+  # docs/operate/observe/dashboards-and-alerts.md.
+  # ---------------------------------------------------------------------------
+  - name: auth_shadow
+    interval: 1m
+    rules:
+      - alert: AuthShadowMismatchUnresolved
+        expr: |
+          sum(increase(dev_health_api_shadow_mismatch_total{class="unresolved"}[1h])) > 0
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "auth shadow PDP: an unresolved mismatch with the legacy guard"
+          description: |
+            The shadow policy decision differed from the legacy guard and no
+            reviewed class covers the difference. Next: the dashboard "Dev Health -
+            Auth Shadow Mismatch (production)" for the action namespace and caller,
+            then the go-api WARN log "api shadow pdp: mismatch with the legacy
+            guard" (action, route, reason_code, decision_id; one line per second
+            per class, so read samples, not counts).
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

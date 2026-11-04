@@ -50,7 +50,7 @@ The checked-in sync-dispatch routes target River and declare no rollback transpo
 
 > **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This section is a record of the Python surface that was removed.
 
-Ask Dev remains part of the existing Python application and API. It is not a browser-side agent, a new generic agent service, or an MCP-driven web chatbot. The authoritative Ask Dev runtime path is:
+Ask Dev was part of the existing Python application and API, and this diagram records that removed runtime path. Ask Dev now runs in the Ask Dev service, which the browser calls directly; see [Turn on Ask Dev](../../admin/ask-dev/index.md). The removed path was:
 
 ```mermaid
 flowchart LR
@@ -77,7 +77,7 @@ flowchart LR
     D --> O[Audit, traces, Prometheus, LLM usage]
 ```
 
-The app-wide Ask Dev window and `/dev` workspace share this same backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
+In that removed design the app-wide Ask Dev window and `/dev` workspace shared one backend, conversation identity, scope, streaming run, answer contract, evidence authorization, and retention policy.
 
 Wave 3.1 makes the investigation lifecycle server-owned. Mandatory retrieval and canonical synthesis happen before optional model narration:
 

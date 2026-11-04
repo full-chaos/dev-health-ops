@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -168,9 +169,29 @@ func newWorkloadClient(cfg AuthProxyConfig, lookup func(string) (string, bool), 
 		Transport:      exchangeTransport(),
 	})
 	if err != nil {
+		var refused *workloadtoken.ConfigFieldError
+		if errors.As(err, &refused) {
+			if variable := refusedConfigVariable(refused.Field, subjectEnv); variable != "" {
+				return fail(variable, "%s is refused by the workload token client: %v", variable, err)
+			}
+		}
 		return fail("", "workload token client: %v", err)
 	}
 	return client, nil
+}
+
+// refusedConfigVariable names the environment variable a refused workloadtoken.Config field was read from. The
+// timeout and the transport are set in code, so they name none.
+func refusedConfigVariable(field workloadtoken.ConfigField, subjectEnv string) string {
+	switch field {
+	case workloadtoken.FieldIssuer:
+		return EnvAuthWorkloadIssuer
+	case workloadtoken.FieldExchangeURL:
+		return EnvAuthProxyURL
+	case workloadtoken.FieldSubject:
+		return subjectEnv
+	}
+	return ""
 }
 
 // exchangeTransport carries the workload exchange: the shared outbound transport, no environment proxy.

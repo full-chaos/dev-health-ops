@@ -225,6 +225,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.revokeKeyOnce", Table: "auth.credential_registry", Verb: "UPDATE"},
+	// CHAOS-12680 (pm answers-12680-1 Q1 (b)): an organization deprovision revokes the organization's service-account keys
+	// in its own audit.Commit.
+	{File: "internal/auth/orgdeprovision/keys.go", Func: "keyPlan.apply", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.principals", Verb: "UPDATE"},

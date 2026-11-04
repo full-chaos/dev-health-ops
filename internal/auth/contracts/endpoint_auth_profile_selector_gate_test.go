@@ -732,3 +732,56 @@ func TestSelectorGateRefusesPrefixWithForbiddenCharacter(t *testing.T) {
 		t.Fatal("gate accepted prefix:bad!, which the registry schema forbids")
 	}
 }
+
+func bodySelectorProfile(t *testing.T) map[string]any {
+	t.Helper()
+	return multiClassProfile(t, []any{"ops_refresh_token", "refresh_credential"}, "body_field", "refresh_token")
+}
+
+func TestSelectorGateAcceptsJWTAndOpaqueOnOneBodyField(t *testing.T) {
+	registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "opaque:dhr1_"))
+	if err := CheckClassSelector(bodySelectorProfile(t), registry); err != nil {
+		t.Fatalf("gate refused jwt and opaque:dhr1_ on one body field: %v", err)
+	}
+}
+
+func TestSelectorGateRefusesBodyClassesThatOverlapUnderABodyFieldSelector(t *testing.T) {
+	for name, pair := range map[string][2]ClassMarker{
+		"jwt and jwt":                     {bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "jwt")},
+		"jwt and prefix":                  {bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", "prefix:dhr1_")},
+		"opaque and opaque, same value":   {bodyMarker("refresh_token", "opaque:dhr1_"), bodyMarker("refresh_token", "opaque:dhr1_")},
+		"opaque and opaque, nested value": {bodyMarker("refresh_token", "opaque:dhr1_"), bodyMarker("refresh_token", "opaque:dhr1_x")},
+		"opaque and prefix, same value":   {bodyMarker("refresh_token", "opaque:dhr1_"), bodyMarker("refresh_token", "prefix:dhr1_")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := CheckClassSelector(bodySelectorProfile(t), bodyPairRegistry(pair[0], pair[1])); err == nil {
+				t.Fatal("gate accepted two body classes it cannot tell apart")
+			}
+		})
+	}
+}
+
+func TestSelectorGateRefusesAnOpaqueShapeThatIsNotAValue(t *testing.T) {
+	for _, shape := range []string{"opaque:", "opaque:bad!", "opaque:a.b"} {
+		registry := bodyPairRegistry(bodyMarker("refresh_token", "jwt"), bodyMarker("refresh_token", shape))
+		if err := CheckClassSelector(bodySelectorProfile(t), registry); err == nil {
+			t.Fatalf("gate accepted body shape %q", shape)
+		}
+	}
+}
+
+func TestSelectorGateRefusesABodyFieldSelectorTheClassDoesNotHold(t *testing.T) {
+	holder := bodyMarker("refresh_token", "jwt")
+	for name, other := range map[string]ClassMarker{
+		"jwt shape on another field":    bodyMarker("refresh_credential", "jwt"),
+		"prefix shape on another field": bodyMarker("refresh_credential", "prefix:dhr1_"),
+		"opaque shape on another field": bodyMarker("refresh_credential", "opaque:dhr1_"),
+		"head marker only":              {Kind: "authorization_scheme", Name: "Bearer"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := CheckClassSelector(bodySelectorProfile(t), bodyPairRegistry(holder, other)); err == nil {
+				t.Fatal("gate accepted a body_field selector that one accepted class does not hold")
+			}
+		})
+	}
+}

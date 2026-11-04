@@ -23,6 +23,9 @@ const (
 
 	enforceDefaultTimeout = 2 * time.Second
 	enforceRetryAfter     = "5"
+
+	enforceUnavailableDetail     = "Authorization service temporarily unavailable"
+	enforceNoDecisionPointReason = "authz_enforce_no_decision_point"
 )
 
 // EnforceConfig builds an Enforcer.
@@ -53,11 +56,13 @@ type Enforcer struct {
 	sw      authzenforce.Switch
 	timeout time.Duration
 	logger  *slog.Logger
+	// unconfigured: no decision point client; every request of a namespace switched on is refused.
+	unconfigured bool
 }
 
 // NewEnforcer checks cfg.
 func NewEnforcer(cfg EnforceConfig) (*Enforcer, error) {
-	if cfg.Decider == nil {
+	if cfg.Decider == nil && !cfg.Unconfigured {
 		return nil, errors.New("enforce: no decider")
 	}
 	if len(cfg.Rows) == 0 {
@@ -71,7 +76,7 @@ func NewEnforcer(cfg EnforceConfig) (*Enforcer, error) {
 	if service := cfg.Switch.Service(); service != "" && service != authzenforce.GoAPI {
 		return nil, errors.New("enforce: the switch is not go-api's")
 	}
-	e := &Enforcer{decider: cfg.Decider, rows: cfg.Rows, sw: cfg.Switch, timeout: cfg.Timeout, logger: cfg.Logger}
+	e := &Enforcer{decider: cfg.Decider, rows: cfg.Rows, sw: cfg.Switch, timeout: cfg.Timeout, logger: cfg.Logger, unconfigured: cfg.Unconfigured}
 	if e.timeout <= 0 {
 		e.timeout = enforceDefaultTimeout
 	}
@@ -92,6 +97,8 @@ const (
 	enforceDeny
 	// enforceUnavailable: no verdict could be had. The route is refused with a 503.
 	enforceUnavailable
+	// enforceNoDecisionPoint: go-api has no decision point client. The route is refused with a 503 and a reason code.
+	enforceNoDecisionPoint
 )
 
 // enforceObservation is what the guard tells the Enforcer about one authenticated request. It holds values only.
@@ -110,6 +117,10 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 	row, ok := e.rows[o.pattern]
 	if !ok || !e.sw.On(row.Namespace) {
 		return enforceNotCovered
+	}
+	if e.unconfigured {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		return enforceNoDecisionPoint
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {
@@ -197,10 +208,16 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enfor
 		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil})
 }
 
-// writeEnforceRefusal answers a request the decision point refused or could not judge.
+// writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.
 func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerdict) {
-	if verdict == enforceUnavailable {
-		WriteDetail(w, http.StatusServiceUnavailable, "Authorization service temporarily unavailable", http.Header{"Retry-After": []string{enforceRetryAfter}})
+	switch verdict {
+	case enforceUnavailable:
+		WriteDetail(w, http.StatusServiceUnavailable, enforceUnavailableDetail, http.Header{"Retry-After": []string{enforceRetryAfter}})
+		return
+	case enforceNoDecisionPoint:
+		detail := ErrorDetail(enforceUnavailableDetail)
+		detail.Set("reason_code", enforceNoDecisionPointReason)
+		WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
 		return
 	}
 	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)

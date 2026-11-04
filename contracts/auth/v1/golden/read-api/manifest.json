@@ -308,6 +308,21 @@
       "kind": "exchange"
     },
     {
+      "id": "list-principals-workload-without-membership",
+      "file": "list-principals-workload-without-membership.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-service-account-with-membership",
+      "file": "list-principals-service-account-with-membership.json",
+      "kind": "exchange"
+    },
+    {
+      "id": "list-principals-workload-with-membership",
+      "file": "list-principals-workload-with-membership.json",
+      "kind": "exchange"
+    },
+    {
       "id": "list-organizations-first-page",
       "file": "list-organizations-first-page.json",
       "kind": "exchange"

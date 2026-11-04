@@ -25,6 +25,7 @@ type schemaNode struct {
 	Not           *schemaNode            `json:"not"`
 	Enum          []string               `json:"enum"`
 	Pattern       string                 `json:"pattern"`
+	MaxLength     *int                   `json:"maxLength"`
 	Type          string                 `json:"type"`
 	MinItems      *int                   `json:"minItems"`
 	MaxItems      *int                   `json:"maxItems"`
@@ -195,6 +196,13 @@ func TestVocabularyMatchesTheSchema(t *testing.T) {
 		}
 		if rule.pattern != pattern || !reflect.DeepEqual(sorted(rule.enum), sorted(enumValues)) {
 			t.Errorf("change.%s rule: Go pattern %q enum %v, schema pattern %q enum %v", name, rule.pattern, rule.enum, pattern, enumValues)
+		}
+		schemaMax := 0
+		if node.MaxLength != nil {
+			schemaMax = *node.MaxLength
+		}
+		if schemaMax != rule.maxBytes {
+			t.Errorf("change.%s length bound: Go %d bytes, schema maxLength %v", name, rule.maxBytes, node.MaxLength)
 		}
 	}
 }

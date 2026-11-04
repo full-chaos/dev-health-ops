@@ -46,20 +46,20 @@ VALUES ($1, $2, 'local', true, true, false, 0, now(), now())`, uuid.New(), email
 func assertIdentityConflict(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID, body map[string]any) {
 	t.Helper()
 	detail, _ := body["detail"].(map[string]any)
-	if detail["reason"] != "identity_conflict" || body["access_token"] != nil {
-		t.Fatalf("body=%v, want reason identity_conflict and no token", body)
+	if detail["message"] != "This sign-in could not be completed. Contact your administrator if this continues." || len(detail) != 1 || body["access_token"] != nil {
+		t.Fatalf("body=%v, want the one generic message, no reason and no token", body)
 	}
 	var providerStatus string
 	var audits int
 	if err := st.pool.QueryRow(ctx, `SELECT status FROM sso_providers WHERE id = $1`, providerID).Scan(&providerStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure'`,
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure' AND error_message = 'identity conflict'`,
 		providerID.String()).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
 	if providerStatus != "active" || audits != 1 {
-		t.Fatalf("provider status=%q failure audits=%d, want active and 1", providerStatus, audits)
+		t.Fatalf("provider status=%q failure audits=%d, want active and 1 audit row naming the identity conflict", providerStatus, audits)
 	}
 }
 

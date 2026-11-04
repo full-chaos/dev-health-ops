@@ -33,7 +33,7 @@ type fakeReads struct {
 	mems      []publicread.Membership
 	memsMore  bool
 	prin      publicread.Principal
-	prins     []publicread.Principal
+	prins     []publicread.PrincipalOf
 	prinsMore bool
 
 	after *uuid.UUID
@@ -72,7 +72,7 @@ func (f *fakeReads) Principal(_ context.Context, id uuid.UUID) (publicread.Princ
 	return f.prin, f.err
 }
 
-func (f *fakeReads) Principals(_ context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]publicread.Principal, bool, error) {
+func (f *fakeReads) Principals(_ context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]publicread.PrincipalOf, bool, error) {
 	f.note(after, limit, org)
 	f.kind = kind
 	return f.prins, f.prinsMore, f.err
@@ -172,7 +172,7 @@ func seedReads(f *provFixture) {
 	f.reads.org, f.reads.mem, f.reads.mems = organization, member, []publicread.Membership{member}
 	f.reads.of = []publicread.OrganizationOf{{Organization: organization, Membership: member}}
 	f.reads.prin = publicread.Principal{ID: f.target, Kind: "user", Active: true, Revision: 3}
-	f.reads.prins = []publicread.Principal{f.reads.prin}
+	f.reads.prins = []publicread.PrincipalOf{{Principal: f.reads.prin, Membership: &member}}
 	f.grantReads.one = f.grants.out
 	f.grantReads.all = []grant.Grant{f.grants.out}
 }
@@ -748,7 +748,13 @@ func loadCorpus(t *testing.T, f *provFixture, op string, response json.RawMessag
 	case "principals_list":
 		f.reads.prins, f.reads.prinsMore = nil, hasCursor
 		for _, it := range items {
-			f.reads.prins = append(f.reads.prins, principal(it.(map[string]any)))
+			pair := it.(map[string]any)
+			item := publicread.PrincipalOf{Principal: principal(pair["principal"].(map[string]any))}
+			if m, ok := pair["membership"].(map[string]any); ok {
+				mem := membership(m)
+				item.Membership = &mem
+			}
+			f.reads.prins = append(f.reads.prins, item)
 		}
 	case "organizations_list":
 		f.reads.of, f.reads.ofMore = nil, hasCursor

@@ -140,7 +140,7 @@ func TestReaderOverTheRealSchemasAsTheRuntimeRole(t *testing.T) {
 		t.Fatalf("unknown principal: %v", err)
 	}
 	list, more, err := reader.Principals(ctx, orgA, "", nil, 10)
-	if err != nil || more || len(list) != 3 || list[0].ID != users[0] {
+	if err != nil || more || len(list) != 3 || list[0].Principal.ID != users[0] {
 		t.Fatalf("principals = %+v more=%v err=%v", list, more, err)
 	}
 	list, _, err = reader.Principals(ctx, orgA, "workload", nil, 10)

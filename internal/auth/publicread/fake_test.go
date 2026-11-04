@@ -237,17 +237,21 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 	case "principals_list":
 		org := *uuidArg(args[0])
 		kind, _ := args[1].(*string)
-		var all []Principal
-		for _, mem := range src.mems {
+		type listed struct {
+			Principal
+			mem *fMem
+		}
+		var all []listed
+		for i, mem := range src.mems {
 			for _, u := range src.users {
 				if mem.OrgID == org && u.ID == mem.UserID {
-					all = append(all, Principal{ID: u.ID, Kind: "user", Active: u.Active})
+					all = append(all, listed{Principal{ID: u.ID, Kind: "user", Active: u.Active}, &src.mems[i]})
 				}
 			}
 		}
 		for _, p := range f.auth.principals {
 			if p.OrgID == org && p.Kind != "user" {
-				all = append(all, Principal{ID: p.ID, Kind: p.Kind, Active: p.Active})
+				all = append(all, listed{Principal: Principal{ID: p.ID, Kind: p.Kind, Active: p.Active}})
 			}
 		}
 		sort.Slice(all, func(i, j int) bool { return all[i].ID.String() < all[j].ID.String() })
@@ -255,7 +259,12 @@ func (f *fakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, er
 			if (kind != nil && p.Kind != *kind) || (after(2) != nil && p.ID.String() <= after(2).String()) || len(out.rows) >= limit(3) {
 				continue
 			}
-			out.rows = append(out.rows, []any{p.ID, p.Kind, p.Active, f.rev("principal", "prn_", p.ID)})
+			row := []any{p.ID, p.Kind, p.Active, f.rev("principal", "prn_", p.ID), (*uuid.UUID)(nil), (*string)(nil), (*time.Time)(nil), (*time.Time)(nil), (*time.Time)(nil), int64(0)}
+			if m := p.mem; m != nil {
+				role, created, updated := m.Role, m.Created, m.Updated
+				row[4], row[5], row[6], row[7], row[8], row[9] = &m.ID, &role, m.Joined, &created, &updated, f.rev("membership", "mbr_", m.ID)
+			}
+			out.rows = append(out.rows, row)
 		}
 	default:
 		return nil, fmt.Errorf("fake: no statement %q", m[1])

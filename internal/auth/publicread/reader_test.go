@@ -313,11 +313,17 @@ func TestPrincipalListOrgBound(t *testing.T) {
 	db.auth.principals = []fPrincipal{{id[4], "service_account", true, org}, {id[5], "workload", true, other}}
 	r, _, _ := newReader(t, db)
 	items, more, err := r.Principals(context.Background(), org, "", nil, 10)
-	if err != nil || more || len(items) != 2 || items[0].ID != id[2] || items[1].ID != id[4] {
+	if err != nil || more || len(items) != 2 || items[0].Principal.ID != id[2] || items[1].Principal.ID != id[4] {
 		t.Fatalf("principals = %+v more=%v err=%v", items, more, err)
 	}
+	if m := items[0].Membership; m == nil || m.ID != db.public.mems[0].ID || m.OrgID != org || m.PrincipalID != id[2] || m.Role != "member" {
+		t.Fatalf("a user item holds its membership of the organization, got %+v", m)
+	}
+	if items[1].Principal.Kind != "service_account" || items[1].Membership != nil {
+		t.Fatalf("a service account item holds no membership, got %+v", items[1])
+	}
 	items, _, err = r.Principals(context.Background(), org, "service_account", nil, 10)
-	if err != nil || len(items) != 1 || items[0].Kind != "service_account" {
+	if err != nil || len(items) != 1 || items[0].Principal.Kind != "service_account" || items[0].Membership != nil {
 		t.Fatalf("kind filter = %+v, %v", items, err)
 	}
 	sql := Statements(`"auth"`)["principals_list"]
@@ -393,7 +399,7 @@ func TestStatementsCarryTheirContract(t *testing.T) {
 		"principal_get_user":  append([]string{"WHERE u.id = $1"}, rev("principal", "prn_", "u.id")...),
 		"principal_get_other": append([]string{"WHERE p.id = $1 AND p.kind <> 'user'", `"auth".principals p`}, rev("principal", "prn_", "p.id")...),
 		"principals_list": append([]string{"WHERE m.org_id = $1", "sa.organization_id = $1", "w.organization_id = $1", "x.kind = $2", "x.id > $3", "ORDER BY x.id", "LIMIT $4",
-			`"auth".service_accounts sa`, `"auth".workloads w`}, rev("principal", "prn_", "x.id")...),
+			`"auth".service_accounts sa`, `"auth".workloads w`}, append(rev("principal", "prn_", "x.id"), rev("membership", "mbr_", "x.mid")...)...),
 	}
 	stmts := Statements(`"auth"`)
 	for name, parts := range want {

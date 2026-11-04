@@ -12,7 +12,7 @@ import (
 
 // bearerClasses are the credential classes carried as an Authorization bearer
 // token: a row accepting one must declare a bearer security requirement.
-var bearerClasses = map[string]bool{"ops_access_token_hs256": true}
+var bearerClasses = map[string]bool{"ops_access_token_hs256": true, "user_access_token": true, "workload_token": true}
 
 func loadOpenAPIRaw(t *testing.T) map[string]any {
 	t.Helper()
@@ -524,6 +524,14 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 			op := document["paths"].(map[string]any)["/v1/sessions/current"].(map[string]any)["get"].(map[string]any)
 			delete(op, "security")
 		},
+		"POST /v1/authorize loses its security requirement": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/v1/authorize"].(map[string]any)["post"].(map[string]any)
+			delete(op, "security")
+		},
+		"POST /v1/authorize:batch loses its security requirement": func(document map[string]any) {
+			op := document["paths"].(map[string]any)["/v1/authorize:batch"].(map[string]any)["post"].(map[string]any)
+			delete(op, "security")
+		},
 		"a protected operation names a scheme that is not a bearer": func(document map[string]any) {
 			document["components"].(map[string]any)["securitySchemes"].(map[string]any)["apiKeyOnly"] = map[string]any{"type": "apiKey", "in": "header", "name": "X-Key"}
 			op := document["paths"].(map[string]any)["/v1/sessions/revoke"].(map[string]any)["post"].(map[string]any)
@@ -571,6 +579,58 @@ func TestTheOpenAPIPathGateRefusesPlantedMismatches(t *testing.T) {
 		plant(document)
 		if len(openAPIPathProblems(document, rows)) == 0 {
 			t.Errorf("%s: the gate reported nothing", name)
+		}
+	}
+}
+
+// bearerClassCensusProblems: every class a row in the OpenAPI gate's scope accepts whose registry transport is an
+// inbound Authorization bearer must be in bearerClasses, or the gate would not require a bearer security scheme for it.
+func bearerClassCensusProblems(rows []map[string]any, registry classRegistryDocument, set map[string]bool) (problems []string, measured int) {
+	transport := map[string]string{}
+	for _, class := range registry.Classes {
+		transport[class.ClassID] = class.Transport.HeaderOrCookie
+	}
+	for _, row := range rows {
+		id, _ := row["id"].(string)
+		route, _ := row["route"].(string)
+		if !strings.HasSuffix(id, "@api]") || strings.HasPrefix(route, compatPathPrefix) || strings.HasPrefix(route, internalPathPrefix) {
+			continue
+		}
+		classes, _ := jsonStringList(row["accepted_credential_classes"])
+		for _, class := range classes {
+			if !strings.HasPrefix(transport[class], "Authorization: Bearer") {
+				continue
+			}
+			measured++
+			if !set[class] {
+				problems = append(problems, fmt.Sprintf("profile row %q accepts %s, an Authorization bearer class, which bearerClasses does not list", id, class))
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems, measured
+}
+
+func TestEveryBearerClassAGatedRowAcceptsIsInTheBearerSet(t *testing.T) {
+	problems, measured := bearerClassCensusProblems(authServiceRows(t), loadClassRegistryDocument(t), bearerClasses)
+	for _, problem := range problems {
+		t.Error(problem)
+	}
+	if measured == 0 {
+		t.Fatal("no gated row accepts an Authorization bearer class: the census measured nothing")
+	}
+}
+
+func TestTheBearerClassCensusRefusesAClassMissingFromTheSet(t *testing.T) {
+	rows := authServiceRows(t)
+	registry := loadClassRegistryDocument(t)
+	for _, class := range []string{"ops_access_token_hs256", "user_access_token", "workload_token"} {
+		set := map[string]bool{}
+		for name := range bearerClasses {
+			set[name] = name != class
+		}
+		if problems, _ := bearerClassCensusProblems(rows, registry, set); len(problems) == 0 {
+			t.Errorf("bearerClasses without %s: the census reported nothing", class)
 		}
 	}
 }

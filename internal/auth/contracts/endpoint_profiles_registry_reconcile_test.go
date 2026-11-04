@@ -25,10 +25,13 @@ type classRegistryAnchor struct {
 
 type classRegistryDocument struct {
 	Classes []struct {
-		ClassID string   `json:"class_id"`
-		Status  string   `json:"status"`
-		Gaps    []string `json:"gaps"`
-		Issuer  struct {
+		ClassID   string   `json:"class_id"`
+		Status    string   `json:"status"`
+		Gaps      []string `json:"gaps"`
+		Transport struct {
+			HeaderOrCookie string `json:"header_or_cookie"`
+		} `json:"transport"`
+		Issuer struct {
 			Anchors []*classRegistryAnchor `json:"anchors"`
 		} `json:"issuer"`
 		Consumers []struct {

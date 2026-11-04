@@ -591,3 +591,29 @@ func TestOIDCOverrideWireFormEqualsTheStoredAnswer(t *testing.T) {
 		})
 	}
 }
+
+func TestOIDCOverrideKeepsTheNumericWireFormOfExplicitUserinfo(t *testing.T) {
+	cells := map[string]any{
+		"int64 above 2^53":       int64(9007199254740993),
+		"uint64 max":             uint64(18446744073709551615),
+		"nested int64":           map[string]any{"k": int64(9007199254740993)},
+		"slice int64":            []any{int64(9007199254740993)},
+		"long decimal":           json.Number("0.1234567890123456789"),
+		"beyond the float range": json.Number("1e1000"),
+	}
+	for name, claim := range cells {
+		for mode, setup := range overrideSetups(t, func(c map[string]any) { c["sub"] = "overridden" }) {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				o, srv := setup()
+				o.SetUserinfo(map[string]any{"sub": "explicit", "n": claim})
+				want, err := json.Marshal(map[string]any{"sub": "overridden", "n": claim})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := rawUserinfo(t, srv); got != string(want) {
+					t.Fatalf("userinfo = %s, want %s", got, want)
+				}
+			})
+		}
+	}
+}

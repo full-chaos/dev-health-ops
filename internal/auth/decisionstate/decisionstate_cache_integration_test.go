@@ -18,11 +18,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/grantend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/revisionfeed"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 func (e *env) collecting(t *testing.T, owned bool) *Reader {
 	t.Helper()
-	r, err := New(Config{Pool: e.runtime, Schema: e.schema, Users: authapi.PGUsers{Pool: e.runtime, AuthSchema: e.schema, PlatformRolesOwned: owned},
+	r, err := New(Config{Pool: e.runtime, Schema: e.schema, RefreshTTL: session.DefaultRefreshTTL, Users: authapi.PGUsers{Pool: e.runtime, AuthSchema: e.schema, PlatformRolesOwned: owned},
 		CollectDependencies: true})
 	if err != nil {
 		t.Fatal(err)

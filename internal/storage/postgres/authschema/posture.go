@@ -214,7 +214,7 @@ func VerifyRuntimePosture(ctx context.Context, conn *pgx.Conn, options Options) 
 	}
 	violations = append(violations, attributes...)
 
-	memberships, err := roleMemberships(ctx, conn, options, superuser)
+	memberships, err := roleMemberships(ctx, conn, options.RuntimeRole, superuser)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +678,7 @@ func runtimeRoleAttributes(ctx context.Context, conn *pgx.Conn, options Options)
 
 // roleMemberships reports the roles the runtime role belongs to, as context
 // for a failure the effective-privilege checks already found.
-func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, superuser bool) ([]Violation, error) {
+func roleMemberships(ctx context.Context, conn *pgx.Conn, role string, superuser bool) ([]Violation, error) {
 	if superuser {
 		// pg_has_role is true for a superuser against every predefined role,
 		// so enumerating them here would bury the one finding that matters
@@ -731,7 +731,7 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 		WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = $1)
 		  AND r.oid >= $2
 		  AND NOT (pg_has_role($1, r.oid, 'SET') AND NOT pg_has_role($1, r.oid, 'USAGE'))
-		ORDER BY 2 DESC, 3 DESC, 1`, options.RuntimeRole, int32(systemRoleOIDBoundary))
+		ORDER BY 2 DESC, 3 DESC, 1`, role, int32(systemRoleOIDBoundary))
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading role memberships", ErrMigrationFailed)
 	}
@@ -745,7 +745,7 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 			return nil, fmt.Errorf("%w: reading a role membership", ErrMigrationFailed)
 		}
 		detail := fmt.Sprintf(
-			"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+			"likely cause of the privileges above; remedy: REVOKE %q FROM %q", name, role,
 		)
 		if setOnly {
 			// An ordinary role the runtime reaches only by SET ROLE: its
@@ -754,7 +754,7 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 			// rule as for the server-defined roles.
 			detail = fmt.Sprintf(
 				"reachable only through SET ROLE: its privileges are invisible to every effective-privilege check; "+
-					"remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+					"remedy: REVOKE %q FROM %q", name, role,
 			)
 		} else if systemRole {
 			// Not "the cause of the privileges above" — there are none. That
@@ -763,7 +763,7 @@ func roleMemberships(ctx context.Context, conn *pgx.Conn, options Options, super
 			// report will mention it.
 			detail = fmt.Sprintf(
 				"server-defined role: confers capability no object-privilege check can see; "+
-					"remedy: REVOKE %q FROM %q", name, options.RuntimeRole,
+					"remedy: REVOKE %q FROM %q", name, role,
 			)
 		}
 		context = append(context, Violation{

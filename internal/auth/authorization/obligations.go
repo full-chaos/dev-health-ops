@@ -9,12 +9,18 @@ const AuditReasonOwnerExempt = "owner_exempt"
 // repositories is denied with ReasonRepositoryAllowlistTooLarge; a list is never truncated.
 const MaxRepositoryAllowlist = 256
 
+// RepositoryScopeOrganization is the one repository_scope value: a read of every repository of the tenant.
+const RepositoryScopeOrganization = "organization"
+
 // Obligations are the enforceable obligations of an allow
-// (authorization_decision.v1). Redaction and step_up are never set here.
+// (authorization_decision.v1). step_up is never set here.
 type Obligations struct {
 	TenantScope      string `json:"tenant_scope,omitempty"`
 	MinimumAssurance string `json:"minimum_assurance,omitempty"`
-	// RepositoryAllowlist is the one repository key of a repository request.
+	// RepositoryScope is RepositoryScopeOrganization when the allow reads every repository of the tenant.
+	// It and the allowlist member are never both present.
+	RepositoryScope string `json:"repository_scope,omitempty"`
+	// RepositoryAllowlist is the repository keys the allow may read, sorted; never "*".
 	RepositoryAllowlist []string `json:"repository_allowlist,omitempty"`
 	// RepositoryRestricted is true when the allowlist member is present, an
 	// empty list included: an empty allowlist means NONE, and a slice that is

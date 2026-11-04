@@ -12,8 +12,9 @@ import (
 // membership default); a pair with rows reads the keys of its live grants whose role holds the action, and a live
 // wildcard grant reads every repository.
 //
-// unrestricted is true when every repository is readable: the decision then carries no allowlist, because the
-// decision point cannot list the repositories of an organization and no wildcard is ever emitted. Otherwise keys
+// unrestricted is true when every repository is readable: the decision then carries repository_scope organization
+// and no allowlist, because the decision point cannot list the repositories of an organization and no wildcard is
+// ever emitted. Otherwise keys
 // is the sorted, unique list, empty for none. why is ReasonRepositoryAllowlistTooLarge when the list would pass
 // MaxRepositoryAllowlist: it is never truncated.
 func (e *Evaluator) repositoryScope(role string, act policycatalog.Action, rows []Grant, now int64) (keys []string, unrestricted bool, why Reason) {
@@ -72,7 +73,9 @@ func (e *Evaluator) organizationAllow(r Request, act policycatalog.Action, s Sna
 		if why != "" {
 			return deny(why)
 		}
-		if !unrestricted {
+		if unrestricted {
+			o.RepositoryScope = RepositoryScopeOrganization
+		} else {
 			o.RepositoryRestricted, o.RepositoryAllowlist = true, keys
 		}
 	}

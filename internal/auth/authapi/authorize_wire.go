@@ -73,6 +73,7 @@ const maxRepositoryAllowlist = authorization.MaxRepositoryAllowlist
 // is written as [] and never omitted, which a consumer would read as unrestricted.
 type wireObligations struct {
 	TenantScope         *string   `json:"tenant_scope,omitempty"`
+	RepositoryScope     *string   `json:"repository_scope,omitempty"`
 	RepositoryAllowlist *[]string `json:"repository_allowlist,omitempty"`
 	Redaction           *[]string `json:"redaction,omitempty"`
 	MinimumAssurance    *string   `json:"minimum_assurance,omitempty"`
@@ -99,10 +100,11 @@ var redactionClasses = func() map[string]bool {
 }()
 
 // wireObligationsOf maps a decision's obligations to the wire. A deny carries
-// none, and an obligation outside the contract (a repeated or malformed key, more
-// than maxRepositoryAllowlist keys, an unregistered class, an unknown assurance
-// level, a tenant scope that is not the question's organization) is an error:
-// the caller does not serve the decision.
+// none, and an obligation outside the contract (a repeated, malformed or "*" key,
+// more than maxRepositoryAllowlist keys, a repository_scope other than
+// organization or one beside an allowlist, an unregistered class, an unknown
+// assurance level, a tenant scope that is not the question's organization) is an
+// error: the caller does not serve the decision.
 func wireObligationsOf(d authorization.Decision, organizationID string) (*wireObligations, error) {
 	o := d.Obligations
 	if o == nil {
@@ -118,6 +120,13 @@ func wireObligationsOf(d authorization.Decision, organizationID string) (*wireOb
 		}
 		scope := o.TenantScope
 		w.TenantScope = &scope
+	}
+	if o.RepositoryScope != "" {
+		if o.RepositoryScope != authorization.RepositoryScopeOrganization || o.RepositoryRestricted || len(o.RepositoryAllowlist) > 0 {
+			return nil, errObligationsInvalid
+		}
+		scope := o.RepositoryScope
+		w.RepositoryScope = &scope
 	}
 	if o.RepositoryRestricted || len(o.RepositoryAllowlist) > 0 {
 		if len(o.RepositoryAllowlist) > maxRepositoryAllowlist {

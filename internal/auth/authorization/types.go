@@ -131,7 +131,8 @@ type Decision struct {
 	// membership-default allow alike. 0 for every other decision, and for a
 	// repository action whose catalog cache class is none.
 	ExpiresAtUnixNano int64
-	// Obligations is set only on an allow of a delegated session.
+	// Obligations is set on every allow of an organization or repository action; a deny and a
+	// platform allow carry none.
 	Obligations *Obligations
 	// Audit is set only on an allow that the owner exemption made possible.
 	Audit *DelegationAudit

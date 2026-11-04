@@ -353,6 +353,9 @@ func goldenObligationsJSON(t *testing.T, o *Obligations) string {
 	if o.TenantScope != "" {
 		m["tenant_scope"] = o.TenantScope
 	}
+	if o.RepositoryScope != "" {
+		m["repository_scope"] = o.RepositoryScope
+	}
 	if o.RepositoryRestricted || len(o.RepositoryAllowlist) > 0 {
 		keys := append([]string{}, o.RepositoryAllowlist...)
 		m["repository_allowlist"] = keys

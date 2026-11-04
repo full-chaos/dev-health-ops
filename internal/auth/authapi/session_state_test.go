@@ -22,7 +22,7 @@ import (
 // stateRowsDocument is an endpoint-profile document that holds the session
 // state route's row, as B's contract change will.
 var stateRowsDocument = []byte(`{"rows":[{"service":"` + AccessService + `","method":"POST","route":"` + PatternSessionState +
-	`","accepted_credential_classes":["internal_svc_authsess_token","workload_token"]}]}`)
+	`","accepted_credential_classes":["workload_token"]}]}`)
 
 // countingCurrent counts the session reads of the state route.
 type countingCurrent struct {
@@ -64,9 +64,6 @@ func stateServerCounting(t *testing.T, f *compatFixture, rows []byte) (http.Hand
 	}
 	sessions := &countingCurrent{CompatSessions: f.sessions}
 	deps := CompatDeps{Sessions: sessions, Users: f.users, Issuer: f.issuer, IssueWorkload: f.workload, Logger: logger}
-	if f.creds != nil {
-		deps.ServiceCredentials = f.creds
-	}
 	h := compatHandlers{CompatDeps: deps, rec: rec}
 	mux := http.NewServeMux()
 	for _, route := range MarkResponseModels(h.withSessionStateRouteRows(nil, rows)) {
@@ -95,16 +92,16 @@ func doState(t *testing.T, server http.Handler, body string, header map[string]s
 // logs no "not mounted" line; a document without the row mounts nothing.
 func TestSessionStateRouteIsMountedOnlyWithItsProfileRow(t *testing.T) {
 	f := newCompatFixture(t)
-	if response := f.do(http.MethodPost, PatternSessionState, stateBody(f.record.ID.String()), issuerBearer); response.Code != http.StatusOK {
+	if response := f.do(http.MethodPost, PatternSessionState, stateBody(f.record.ID.String()), issuerBearer()); response.Code != http.StatusOK {
 		t.Fatalf("POST %s = %d %s, want 200 (the embedded document holds the row)", PatternSessionState, response.Code, response.Body)
 	}
 	if strings.Contains(f.logs.String(), "auth session route not mounted") {
 		t.Fatalf("the route is mounted but a line says it is not: %s", f.logs)
 	}
-	if code, _ := doState(t, stateServer(t, f, []byte(`{"rows":[]}`)), stateBody(f.record.ID.String()), issuerBearer); code != http.StatusNotFound {
+	if code, _ := doState(t, stateServer(t, f, []byte(`{"rows":[]}`)), stateBody(f.record.ID.String()), issuerBearer()); code != http.StatusNotFound {
 		t.Fatalf("with a document without the row the route answers %d, want 404", code)
 	}
-	if code, _ := doState(t, stateServer(t, f, stateRowsDocument), stateBody(f.record.ID.String()), issuerBearer); code != http.StatusOK {
+	if code, _ := doState(t, stateServer(t, f, stateRowsDocument), stateBody(f.record.ID.String()), issuerBearer()); code != http.StatusOK {
 		t.Fatalf("with the row the route answers %d, want 200", code)
 	}
 }
@@ -135,7 +132,7 @@ func TestSessionStateAnswersTheSessionAsAuthServiceDecidesIt(t *testing.T) {
 		"no organization or pin": {unbound.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":null,"revoked":false,"expired":false,"legacy_token_version":null}`},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response := (&fixture{server: server}).do(http.MethodPost, PatternSessionState, stateBody(tc.id.String()), issuerBearer)
+			response := (&fixture{server: server}).do(http.MethodPost, PatternSessionState, stateBody(tc.id.String()), issuerBearer())
 			if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != tc.want {
 				t.Fatalf("%d %s, want 200 %s", response.Code, response.Body, tc.want)
 			}
@@ -156,17 +153,18 @@ func TestSessionStateRefusesAndReadsNothing(t *testing.T) {
 		status int
 		reason string
 	}{
-		"no bearer":                {stateBody(id), nil, http.StatusUnauthorized, reasonInvalidCredentials},
-		"not a service credential": {stateBody(id), map[string]string{"Authorization": "Bearer fcacr_0123456789abcdef"}, http.StatusUnauthorized, reasonInvalidCredentials},
-		"not json":                 {`session_id`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"empty object":             {`{}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"another member":           {`{"session_id":"` + id + `","principal_id":"` + id + `"}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"twice":                    {`{"session_id":"` + id + `","session_id":"` + id + `"}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"not a uuid":               {stateBody("ses_x"), issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"upper case uuid":          {stateBody(strings.ToUpper(id)), issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"a number":                 {`{"session_id":7}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"null":                     {`{"session_id":null}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
-		"trailing data":            {stateBody(id) + `{}`, issuerBearer, http.StatusBadRequest, reasonMalformed},
+		"no bearer":                 {stateBody(id), nil, http.StatusUnauthorized, reasonInvalidCredentials},
+		"not a workload token":      {stateBody(id), map[string]string{"Authorization": "Bearer fcacr_0123456789abcdef"}, http.StatusUnauthorized, reasonInvalidCredentials},
+		"retired issuer credential": {stateBody(id), retiredSessionIssuerBearer, http.StatusUnauthorized, reasonInvalidCredentials},
+		"not json":                  {`session_id`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"empty object":              {`{}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"another member":            {`{"session_id":"` + id + `","principal_id":"` + id + `"}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"twice":                     {`{"session_id":"` + id + `","session_id":"` + id + `"}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"not a uuid":                {stateBody("ses_x"), issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"upper case uuid":           {stateBody(strings.ToUpper(id)), issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"a number":                  {`{"session_id":7}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"null":                      {`{"session_id":null}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
+		"trailing data":             {stateBody(id) + `{}`, issuerBearer(), http.StatusBadRequest, reasonMalformed},
 	} {
 		t.Run(name, func(t *testing.T) {
 			before := sessions.count()
@@ -179,31 +177,21 @@ func TestSessionStateRefusesAndReadsNothing(t *testing.T) {
 			}
 		})
 	}
-	f.creds.refusal = "revoked"
-	if code, answer := doState(t, server, stateBody(id), issuerBearer); code != http.StatusUnauthorized || answer["reason_code"] != reasonInvalidCredentials {
-		t.Fatalf("a refused service credential: %d %v, want 401 invalid_credentials", code, answer)
-	}
 }
 
 func TestSessionStateNamesAnUnknownSessionAndFailsClosedOnTheStore(t *testing.T) {
 	f := newCompatFixture(t)
 	server := stateServer(t, f, stateRowsDocument)
-	if code, answer := doState(t, server, stateBody(uuid.NewString()), issuerBearer); code != http.StatusNotFound || answer["reason_code"] != reasonSessionNotFound {
+	if code, answer := doState(t, server, stateBody(uuid.NewString()), issuerBearer()); code != http.StatusNotFound || answer["reason_code"] != reasonSessionNotFound {
 		t.Fatalf("an unknown session: %d %v, want 404 %s", code, answer, reasonSessionNotFound)
 	}
 	f.sessions.currentErr = errors.New("connection refused")
-	if code, answer := doState(t, server, stateBody(f.record.ID.String()), issuerBearer); code != http.StatusServiceUnavailable || answer["reason_code"] != reasonStoreUnavailable {
+	if code, answer := doState(t, server, stateBody(f.record.ID.String()), issuerBearer()); code != http.StatusServiceUnavailable || answer["reason_code"] != reasonStoreUnavailable {
 		t.Fatalf("a store failure: %d %v, want 503 %s", code, answer, reasonStoreUnavailable)
-	}
-	f.sessions.currentErr = nil
-	f.creds.err = errors.New("credential store down")
-	if code, answer := doState(t, server, stateBody(f.record.ID.String()), issuerBearer); code != http.StatusServiceUnavailable {
-		t.Fatalf("a credential store failure: %d %v, want 503", code, answer)
 	}
 }
 
-// The go-api workload token is admitted as on the session issue route, and
-// without a service credential lookup.
+// The go-api workload token is admitted as on the session issue route.
 func TestSessionStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	w := newWorkloadIssueFixture(t)
 	server := stateServer(t, w.compatFixture, stateRowsDocument)
@@ -211,19 +199,14 @@ func TestSessionStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if code, answer := doState(t, server, stateBody(w.record.ID.String()), header); code != http.StatusOK || answer["principal_id"] != w.principal.String() {
 		t.Fatalf("%d %v, want 200 for the go-api workload token", code, answer)
 	}
-	if len(w.creds.checked()) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", w.creds.checked())
-	}
 	wrongAudience, _ := w.mint("workload+jwt", func(c *contracts.WorkloadTokenClaims) { c.Aud = "dev-health-api" })
 	if code, _ := doState(t, server, stateBody(w.record.ID.String()), wrongAudience); code != http.StatusUnauthorized {
 		t.Fatalf("a workload token for another audience: %d, want 401", code)
 	}
 }
 
-// The route mounts only when its row lists every credential class the handler
-// is configured to admit: a row that leaves out the go-api workload token while
-// the workload binding is configured, or the session issuer class while service
-// credentials are, mounts nothing (a row may not under-describe the route).
+// The route mounts only when the workload binding is configured and its row
+// lists the go-api workload token (a row may not under-describe the route).
 func TestSessionStateRouteMountsOnlyWhenItsRowListsEveryAdmittedClass(t *testing.T) {
 	row := func(classes string) []byte {
 		return []byte(`{"rows":[{"service":"` + AccessService + `","method":"POST","route":"` + PatternSessionState +
@@ -231,17 +214,15 @@ func TestSessionStateRouteMountsOnlyWhenItsRowListsEveryAdmittedClass(t *testing
 	}
 	const issuer, workload = `"internal_svc_authsess_token"`, `"workload_token"`
 	for name, tc := range map[string]struct {
-		creds, workload bool
-		classes         string
-		mounted         bool
+		workload bool
+		classes  string
+		mounted  bool
 	}{
-		"both admitted, both listed":         {true, true, issuer + "," + workload, true},
-		"both admitted, issuer only listed":  {true, true, issuer, false},
-		"both admitted, workload only":       {true, true, workload, false},
-		"issuer admitted, issuer listed":     {true, false, issuer, true},
-		"workload admitted, workload listed": {false, true, workload, true},
-		"workload admitted, issuer listed":   {false, true, issuer, false},
-		"no class listed":                    {true, true, ``, false},
+		"workload admitted, workload listed": {true, workload, true},
+		"workload admitted, both listed":     {true, issuer + "," + workload, true},
+		"workload admitted, issuer listed":   {true, issuer, false},
+		"no workload binding":                {false, issuer + "," + workload, false},
+		"no class listed":                    {true, ``, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec, err := newRecorder(slog.New(slog.DiscardHandler), otel.Meter("session-state-test"))
@@ -249,9 +230,6 @@ func TestSessionStateRouteMountsOnlyWhenItsRowListsEveryAdmittedClass(t *testing
 				t.Fatal(err)
 			}
 			h := compatHandlers{rec: rec}
-			if tc.creds {
-				h.ServiceCredentials = &fakeServiceCredentials{id: "issuer"}
-			}
 			if tc.workload {
 				h.IssueWorkload = &SessionIssueWorkload{}
 			}

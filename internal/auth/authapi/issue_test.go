@@ -1,55 +1,16 @@
 package authapi
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/edgetokenmint"
 )
-
-// fakeServiceCredentials accepts any token unless refusal or err is set.
-type fakeServiceCredentials struct {
-	id      string
-	refusal servicecred.Refusal
-	err     error
-	mu      sync.Mutex
-	seen    []string
-}
-
-// checked is the tokens Check saw, copied under the lock.
-func (f *fakeServiceCredentials) checked() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.seen)
-}
-
-func (f *fakeServiceCredentials) Check(_ context.Context, token contracts.SecretString) (servicecred.Credential, servicecred.Refusal, error) {
-	f.mu.Lock()
-	f.seen = append(f.seen, token.Reveal())
-	f.mu.Unlock()
-	if f.err != nil {
-		return servicecred.Credential{}, "", f.err
-	}
-	if f.refusal != "" {
-		return servicecred.Credential{}, f.refusal, nil
-	}
-	return servicecred.Credential{ID: f.id}, "", nil
-}
-
-// issuerToken is a well-shaped svc_authsess_ credential: the route hands only that class to the credential check.
-const issuerToken = "svc_authsess_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-
-var issuerBearer = map[string]string{"Authorization": "Bearer " + issuerToken}
 
 func issueBody(principal uuid.UUID, org string, amr string) string {
 	orgJSON := "null"
@@ -61,7 +22,7 @@ func issueBody(principal uuid.UUID, org string, amr string) string {
 
 func TestIssueSessionCreatesAnAuditedSessionAndAnswersThePair(t *testing.T) {
 	f := newCompatFixture(t)
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, f.org.String(), "pwd"), issuerBearer())
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
@@ -77,9 +38,12 @@ func TestIssueSessionCreatesAnAuditedSessionAndAnswersThePair(t *testing.T) {
 		event.OrganizationID == nil || *event.OrganizationID != f.org.String() || event.RequestID == nil {
 		t.Fatalf("audit event %+v", event)
 	}
+	if event.ActorPrincipalID == nil || *event.ActorPrincipalID != testIssueSubjectID().String() {
+		t.Fatalf("audit actor %v, want the go-api workload principal", event.ActorPrincipalID)
+	}
 	attrs := event.Attributes
 	if attrs["reason_code"] != "accepted" || attrs["target_kind"] != "session" || attrs["source"] != "go-api-delegated" ||
-		attrs["credential_id"] != f.creds.id || strings.Join(attrs["amr"].([]string), ",") != "pwd" {
+		attrs["workload_jti"] == "" || attrs["workload_jti"] == nil || attrs["credential_id"] != nil || strings.Join(attrs["amr"].([]string), ",") != "pwd" {
 		t.Fatalf("audit attributes %v", attrs)
 	}
 	body := decodeObject(t, response.Body.Bytes())
@@ -100,7 +64,7 @@ func TestIssueSessionCreatesAnAuditedSessionAndAnswersThePair(t *testing.T) {
 
 func TestIssueSessionWithoutAnOrganization(t *testing.T) {
 	f := newCompatFixture(t)
-	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "fed"), issuerBearer)
+	response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "fed"), issuerBearer())
 	if response.Code != http.StatusOK || len(f.sessions.created) != 1 || f.sessions.created[0].org != nil ||
 		strings.Join(f.sessions.created[0].amr, ",") != "fed" || f.sessions.created[0].event.OrganizationID != nil {
 		t.Fatalf("status %d created %+v: %s", response.Code, f.sessions.created, response.Body)
@@ -117,11 +81,10 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 		reason    string
 		noProject bool
 	}{
-		"no bearer":             {header: map[string]string{}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
-		"basic auth":            {header: map[string]string{"Authorization": "Basic Z29vZA=="}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
-		"refused credential":    {mutate: func(f *compatFixture) { f.creds.refusal = servicecred.RefusedRevoked }, status: http.StatusUnauthorized, reason: "invalid_credentials"},
-		"credential store down": {mutate: func(f *compatFixture) { f.creds.err = errors.New("db down") }, status: http.StatusServiceUnavailable, reason: "store_unavailable"},
-		"unknown user":          {body: func(*compatFixture) string { return issueBody(stranger, "", "pwd") }, status: http.StatusForbidden, reason: "principal_not_found"},
+		"no bearer":          {header: map[string]string{}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
+		"basic auth":         {header: map[string]string{"Authorization": "Basic Z29vZA=="}, status: http.StatusUnauthorized, reason: "invalid_credentials"},
+		"retired credential": {header: retiredSessionIssuerBearer, status: http.StatusUnauthorized, reason: "invalid_credentials"},
+		"unknown user":       {body: func(*compatFixture) string { return issueBody(stranger, "", "pwd") }, status: http.StatusForbidden, reason: "principal_not_found"},
 		"inactive user": {mutate: func(f *compatFixture) {
 			user := f.users.users[f.principal]
 			user.IsActive = false
@@ -170,7 +133,7 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 		if tc.mutate != nil {
 			tc.mutate(f)
 		}
-		header := issuerBearer
+		header := issuerBearer()
 		if tc.header != nil {
 			header = tc.header
 		}
@@ -192,17 +155,19 @@ func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
 func TestIssueSessionMapsAnInvalidAMRAndAStoreFailure(t *testing.T) {
 	f := newCompatFixture(t)
 	f.sessions.createErr = session.ErrInvalidAMR
-	expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "pwd"), issuerBearer), http.StatusUnauthorized, "malformed")
+	expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "pwd"), issuerBearer()), http.StatusUnauthorized, "malformed")
 	f = newCompatFixture(t)
 	f.sessions.createErr = errors.Join(session.ErrStore, errors.New("down"))
-	expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "pwd"), issuerBearer), http.StatusServiceUnavailable, "store_unavailable")
+	expectError(t, f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "pwd"), issuerBearer()), http.StatusServiceUnavailable, "store_unavailable")
 }
 
-func TestIssueSessionIsMountedOnlyWithServiceCredentials(t *testing.T) {
+func TestIssueSessionIsMountedOnlyWithTheWorkloadPath(t *testing.T) {
 	f := newCompatFixture(t)
-	f.creds = nil
+	f.workload = nil
 	f.buildCompat()
-	if response := f.do(http.MethodPost, PatternIssueSession, issueBody(f.principal, "", "pwd"), issuerBearer); response.Code != http.StatusNotFound {
-		t.Fatalf("without service credentials the route answers %d, want 404", response.Code)
+	for _, pattern := range []string{PatternIssueSession, PatternSessionState, PatternDelegatedSession, PatternDelegatedSessionEnd} {
+		if response := f.do(http.MethodPost, pattern, issueBody(f.principal, "", "pwd"), issuerBearer()); response.Code != http.StatusNotFound {
+			t.Fatalf("%s without the workload path answers %d, want 404", pattern, response.Code)
+		}
 	}
 }

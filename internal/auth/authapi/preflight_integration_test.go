@@ -94,6 +94,11 @@ func newPreflightStoreOwned(t *testing.T, ctx context.Context, owned bool) *pref
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The default go-api workload principal (issuerBearer's subject): the session and delegation audit rows name it as
+	// their actor.
+	if _, err := admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'go-api-test')`, testIssueSubjectID().String()); err != nil {
+		t.Fatalf("seed workload principal: %v", err)
+	}
 	return &preflightStore{admin: admin, runtime: runtime, schema: schema, store: store}
 }
 
@@ -173,18 +178,18 @@ func TestIssueSignerUnavailableWritesNoSessionRow(t *testing.T) {
 	users := fakeUsers{users: map[uuid.UUID]UserState{principal: {Email: "ada@example.com", IsActive: true}}}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: p.store, Users: users, Issuer: newEdDSAIssuer(t, unreadableKeySigner(t), testAudience),
-		Logger:             slog.New(slog.DiscardHandler),
-		Projector:          &fakeProjector{orgs: map[uuid.UUID]bool{}, gone: map[uuid.UUID]bool{}},
-		AppendAudit:        func(context.Context, audit.AuditEvent) error { return nil },
-		ServiceCredentials: &fakeServiceCredentials{id: uuid.NewString()},
-		Limits:             mustLimits(t, httpapi.NewMemoryCounters(nil)),
+		Logger:        slog.New(slog.DiscardHandler),
+		Projector:     &fakeProjector{orgs: map[uuid.UUID]bool{}, gone: map[uuid.UUID]bool{}},
+		AppendAudit:   func(context.Context, audit.AuditEvent) error { return nil },
+		IssueWorkload: testIssueWorkload(),
+		Limits:        mustLimits(t, httpapi.NewMemoryCounters(nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := serveRoutes(routes)
 
-	response := post(server, PatternIssueSession, issueBody(principal, "", "pwd"), issuerBearer)
+	response := post(server, PatternIssueSession, issueBody(principal, "", "pwd"), issuerBearer())
 	expectError(t, response, http.StatusServiceUnavailable, reasonDependency)
 	if n := p.count(t, ctx, `SELECT count(*) FROM auth.sessions WHERE principal_id = $1`, principal.String()); n != 0 {
 		t.Fatalf("%d session rows written before the token could be signed", n)

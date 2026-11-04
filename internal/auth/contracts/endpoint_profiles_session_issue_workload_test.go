@@ -19,58 +19,50 @@ func sessionIssueRow(t *testing.T) map[string]any {
 	return nil
 }
 
-// The session issue route accepts the go-api workload token beside the
-// svc_authsess_ credential. The workload token is chosen by the JOSE typ of its
-// header, a selector only that class owns.
-func TestTheSessionIssueRowAcceptsTheWorkloadTokenAndKeepsTheServiceCredential(t *testing.T) {
+// The session issue route accepts only the go-api workload token: the
+// svc_authsess_ credential is retired there. One class needs no selector, and
+// the row's validator is the workload path.
+func TestTheSessionIssueRowAcceptsOnlyTheWorkloadToken(t *testing.T) {
 	row := sessionIssueRow(t)
 	var classes []string
 	for _, class := range row["accepted_credential_classes"].([]any) {
 		classes = append(classes, class.(string))
 	}
-	slices.Sort(classes)
-	if !slices.Equal(classes, []string{"internal_svc_authsess_token", "workload_token"}) {
-		t.Fatalf("accepted classes %v", classes)
+	if !slices.Equal(classes, []string{"workload_token"}) {
+		t.Fatalf("accepted classes %v, want [workload_token]", classes)
 	}
-	selector, _ := row["class_disambiguator"].(map[string]any)
-	if selector["kind"] != "jwt_header_typ" || selector["name"] != "workload+jwt" {
-		t.Fatalf("class_disambiguator %v, want jwt_header_typ workload+jwt", selector)
+	if selector, has := row["class_disambiguator"]; has {
+		t.Fatalf("class_disambiguator %v on a one-class row", selector)
 	}
 	validator := row["primary_validator"].(map[string]any)["anchor"].(map[string]any)
-	if validator["path"] != "internal/auth/servicecred/servicecred.go" {
-		t.Fatalf("primary validator anchor %v: the compat class keeps its validator", validator)
+	if validator["path"] != "internal/auth/authapi/issue_workload.go" || validator["note"] != "func (s *SessionIssueWorkload) authorize" {
+		t.Fatalf("primary validator anchor %v, want the workload path", validator)
 	}
 	if row["source"].(map[string]any)["file"] != "internal/auth/authapi/compat.go" {
 		t.Fatalf("source %v", row["source"])
 	}
 }
 
-// R3: the selector gate itself accepts the row; no gate change is made.
+// R3: the selector gate itself accepts the one-class row; no gate change is made.
 func TestTheSelectorGateAcceptsTheSessionIssueRow(t *testing.T) {
 	row := sessionIssueRow(t)
-	profile := map[string]any{
-		"accepted_credential_classes": row["accepted_credential_classes"],
-		"class_disambiguator":         row["class_disambiguator"],
-	}
+	profile := map[string]any{"accepted_credential_classes": row["accepted_credential_classes"]}
 	if err := CheckClassSelector(profile, realRegistry(t)); err != nil {
 		t.Fatalf("the selector gate refuses the session issue row: %v", err)
 	}
-	profile["class_disambiguator"] = map[string]any{"kind": "jwt_header_typ", "name": "at+jwt"}
-	if err := CheckClassSelector(profile, realRegistry(t)); err == nil {
-		t.Fatal("the gate accepted a typ no accepted class owns")
-	}
 }
 
-// credential-classes.json names the route as a consumer of both classes at the
-// row's source line.
-func TestTheRegistryNamesTheSessionIssueRouteAsAConsumerOfBothClasses(t *testing.T) {
+// credential-classes.json names the route as a consumer of the workload token
+// at the row's source line, and no longer of the retired svc_authsess_ class.
+func TestTheRegistryNamesTheSessionIssueRouteAsAConsumerOfTheWorkloadTokenOnly(t *testing.T) {
 	registry := indexRegistry(loadClassRegistryDocument(t))
 	line := int(sessionIssueRow(t)["source"].(map[string]any)["line"].(float64))
 	key := anchorKey(authHTTPLayer+"compat.go", line)
-	for _, class := range []string{"workload_token", "internal_svc_authsess_token"} {
-		if !registry.consumers[class][key] {
-			t.Errorf("%s has no consumer anchored at %s", class, key)
-		}
+	if !registry.consumers["workload_token"][key] {
+		t.Errorf("workload_token has no consumer anchored at %s", key)
+	}
+	if registry.consumers["internal_svc_authsess_token"][key] {
+		t.Errorf("internal_svc_authsess_token still names a consumer at %s", key)
 	}
 }
 

@@ -10,15 +10,13 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 // PatternIssueSession is the session issue route go-api calls, with its
-// auth-session-issuer service credential, for the sign-in flows it still
+// workload token, for the sign-in flows it still
 // serves while auth-service owns sessions (AUTH_PROXY_SESSIONS). The go-api
 // proxy never forwards it: it forwards only /api/v1/auth routes.
 const PatternIssueSession = "/internal/v1/sessions"
@@ -41,12 +39,6 @@ const (
 	reasonInvalidCredentials = "invalid_credentials"
 	reasonNotEntitled        = "not_entitled"
 )
-
-// ServiceCredentials checks the bearer of the issue route
-// (*servicecred.PG).
-type ServiceCredentials interface {
-	Check(ctx context.Context, token contracts.SecretString) (servicecred.Credential, servicecred.Refusal, error)
-}
 
 // IssueSessions is the session domain the issue route drives
 // (*session.Store): a new session, or one that supersedes the caller's own
@@ -158,8 +150,8 @@ type issueAnswer struct {
 	SessionAccessToken string `json:"session_access_token,omitempty"`
 }
 
-// issueSession is POST /internal/v1/sessions. It refuses anything but a live
-// auth-session-issuer credential, an active user and, with an organization,
+// issueSession is POST /internal/v1/sessions. It refuses anything but the
+// go-api workload token, an active user and, with an organization,
 // a member of it. It creates the session (pinned to the user's
 // token_version) with its auth.session.issued audit row in one transaction
 // and answers the go-api compatible pair.
@@ -270,8 +262,8 @@ func (h compatHandlers) issueSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // issuedEvent is the auth.session.issued audit row: the user as subject, the
-// organization, the amr and the source, with the caller: a service credential
-// row id, or the workload principal as actor and the token's jti.
+// organization, the amr and the source, with the caller: the workload
+// principal as actor and the token's jti.
 func issuedEvent(ctx context.Context, req issueRequest, caller issueCaller) audit.AuditEvent {
 	principal := req.principal.String()
 	event := audit.AuditEvent{
@@ -282,13 +274,9 @@ func issuedEvent(ctx context.Context, req issueRequest, caller issueCaller) audi
 			"amr": append([]string(nil), req.amr...),
 		},
 	}
-	if caller.workload != nil {
-		actor := caller.workload.String()
-		event.ActorPrincipalID = &actor
-		event.Attributes["workload_jti"] = caller.jti
-	} else {
-		event.Attributes["credential_id"] = caller.credentialID
-	}
+	actor := caller.workload.String()
+	event.ActorPrincipalID = &actor
+	event.Attributes["workload_jti"] = caller.jti
 	if req.organization != nil {
 		org := req.organization.String()
 		event.OrganizationID = &org

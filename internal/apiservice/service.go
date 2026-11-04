@@ -434,7 +434,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_workload_credential", "api_workload_credential_config_invalid", err)
 	}
-	deps.SessionIssuer, err = sessionIssuer(authProxy, envsecrets.ProcessLookup, sessionCred)
+	deps.SessionIssuer, err = sessionIssuer(authProxy, sessionCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)

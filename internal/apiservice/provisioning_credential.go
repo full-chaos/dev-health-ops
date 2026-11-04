@@ -19,8 +19,9 @@ const (
 	// EnvAuthProvisioningCredential selects it: credentialWorkload or
 	// credentialSessionCompat. Unset is credentialSessionCompat.
 	EnvAuthProvisioningCredential = "AUTH_PROVISIONING_CREDENTIAL"
-	// EnvAuthSessionIssueCredential selects the credential of go-api's session issue client, the same two values; unset
-	// is credentialSessionCompat.
+	// EnvAuthSessionIssueCredential names the credential of go-api's session issue client: unset, empty or
+	// credentialWorkload. The session credential is retired on the session issue routes, so credentialSessionCompat
+	// (or any other value) is a start-up error.
 	EnvAuthSessionIssueCredential = "AUTH_SESSION_ISSUE_CREDENTIAL"
 	// EnvAuthWorkloadSubjectFile is a projected ServiceAccount token file,
 	// the workload exchange's subject on Kubernetes.
@@ -45,7 +46,8 @@ type provisioningCredential struct {
 	workload *workloadtoken.Client
 }
 
-// sessionCredential is the session issue client's credential choice, made once at start-up, as provisioningCredential.
+// sessionCredential is the session issue client's credential, made once at start-up: the workload token, set whenever
+// AUTH_PROXY_SESSIONS is on. The zero value (the switch off) builds no client.
 type sessionCredential struct {
 	workload *workloadtoken.Client
 }
@@ -71,8 +73,9 @@ func selectsWorkload(lookup func(string) (string, bool), flag, selector string, 
 	return false, fmt.Errorf("%s is on: %s must be %s or %s", flag, selector, credentialWorkload, credentialSessionCompat)
 }
 
-// newCredentials reads AUTH_PROVISIONING_CREDENTIAL when AUTH_PROXY_ORG_PROVISIONING is on and
-// AUTH_SESSION_ISSUE_CREDENTIAL when AUTH_PROXY_SESSIONS is on. When either selects workload ONE workloadtoken.Client
+// newCredentials reads AUTH_PROVISIONING_CREDENTIAL when AUTH_PROXY_ORG_PROVISIONING is on, and takes the workload
+// credential whenever AUTH_PROXY_SESSIONS is on (AUTH_SESSION_ISSUE_CREDENTIAL, when set, must say workload). When
+// either asks for workload ONE workloadtoken.Client
 // is built from the shared inputs and both clients share it. A selected workload credential with a missing or invalid
 // input is a start-up error naming it; there is no fallback to the session credential here or per request.
 func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (provisioningCredential, sessionCredential, error) {
@@ -90,14 +93,13 @@ func newCredentials(cfg AuthProxyConfig, lookup func(string) (string, bool)) (pr
 	}
 	if cfg.Enabled(AuthSessions) {
 		sessionsFlag := AuthProxyFlagEnv(AuthSessions)
-		ok, err := selectsWorkload(lookup, sessionsFlag, EnvAuthSessionIssueCredential, false)
-		if err != nil {
-			return provisioningCredential{}, sessionCredential{}, err
+		// The value is compared as it is: a padded or whitespace-only value is not one of the two.
+		if value, _ := lookup(EnvAuthSessionIssueCredential); value != "" && value != credentialWorkload {
+			return provisioningCredential{}, sessionCredential{}, fmt.Errorf("%s is on: %s must be %s (the %s credential is retired on the session issue routes)",
+				sessionsFlag, EnvAuthSessionIssueCredential, credentialWorkload, credentialSessionCompat)
 		}
-		if ok {
-			sessionAsks = true
-			asks = append(asks, workloadAsk{sessionsFlag, EnvAuthSessionIssueCredential})
-		}
+		sessionAsks = true
+		asks = append(asks, workloadAsk{sessionsFlag, EnvAuthSessionIssueCredential})
 	}
 	if len(asks) == 0 {
 		return provisioningCredential{}, sessionCredential{}, nil

@@ -86,8 +86,9 @@ type errorDocument struct {
 type recorder struct {
 	logger   *slog.Logger
 	outcomes metric.Int64Counter
-	// compatUses counts accepted svc_authsess_ uses of the session issue route.
-	compatUses metric.Int64Counter
+	// retiredRefusals counts, by operation, the session route requests refused because they presented the retired
+	// session issuer credential.
+	retiredRefusals metric.Int64Counter
 }
 
 func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
@@ -96,13 +97,15 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 	if err != nil {
 		return recorder{}, err
 	}
-	compatUses, err := meter.Int64Counter(compatUsesMetric,
-		metric.WithDescription("Accepted svc_authsess_ uses of the session issue route, by credential class."))
+	retiredRefusals, err := meter.Int64Counter(retiredRefusalsMetric,
+		metric.WithDescription("Session route requests refused because they presented the retired session issuer credential, by operation."))
 	if err != nil {
 		return recorder{}, err
 	}
-	compatUses.Add(context.Background(), 0, metric.WithAttributes(attribute.String("class", compatClass)))
-	return recorder{logger: logger, outcomes: outcomes, compatUses: compatUses}, nil
+	for _, op := range []string{opSessionIssue, opSessionState, opDelegatedStart, opDelegatedEnd} {
+		retiredRefusals.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
+	}
+	return recorder{logger: logger, outcomes: outcomes, retiredRefusals: retiredRefusals}, nil
 }
 
 func (rec recorder) record(ctx context.Context, operation, result, reason string, err error) {

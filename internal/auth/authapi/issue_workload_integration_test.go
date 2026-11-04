@@ -16,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
@@ -28,7 +27,6 @@ type workloadIssueLive struct {
 	server    http.Handler
 	signer    *token.Signer
 	keys      *issueCountingKeys
-	creds     *fakeServiceCredentials
 	user      uuid.UUID
 	workload  uuid.UUID
 	subject   string
@@ -50,16 +48,16 @@ func newWorkloadIssueLive(t *testing.T, ctx context.Context) *workloadIssueLive 
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := &workloadIssueLive{preflightStore: p, signer: signer, keys: keys, creds: &fakeServiceCredentials{id: uuid.NewString()}, user: user, workload: workload, subject: subject}
+	live := &workloadIssueLive{preflightStore: p, signer: signer, keys: keys, user: user, workload: workload, subject: subject}
 	users := &fakeUsers{users: map[uuid.UUID]UserState{user: {Email: "ada@example.com", IsActive: true}}}
 	routes, err := CompatRoutes(CompatDeps{
 		Sessions: p.store, Users: users, Issuer: newEdDSAIssuer(t, signer, testAudience),
 		Logger:        slog.New(slog.DiscardHandler),
 		Projector:     &fakeProjector{orgs: map[uuid.UUID]bool{}, gone: map[uuid.UUID]bool{}},
 		AppendAudit:   func(context.Context, audit.AuditEvent) error { return nil },
-		IssueWorkload: issueWorkload, ServiceCredentials: live.creds,
-		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
-		Limits: mustLimits(t, httpapi.NewMemoryCounters(nil)),
+		IssueWorkload: issueWorkload,
+		Meter:         sdkmetric.NewMeterProvider().Meter("test"),
+		Limits:        mustLimits(t, httpapi.NewMemoryCounters(nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -107,9 +105,6 @@ func TestIssueSessionWorkloadTokenOnTheLiveStore(t *testing.T) {
 		EventSessionIssued, l.user.String(), l.workload.String(), jti); n != 1 {
 		t.Fatalf("%d matching %s rows, want 1", n, EventSessionIssued)
 	}
-	if len(l.creds.checked()) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", l.creds.checked())
-	}
 }
 
 // I2: a token for the other workload audience is refused before any read and
@@ -119,8 +114,8 @@ func TestIssueSessionRefusesAWrongAudienceTokenOnTheLiveStore(t *testing.T) {
 	l := newWorkloadIssueLive(t, ctx)
 	header, _ := l.token(t, "dev-health-api")
 	expectError(t, post(l.server, PatternIssueSession, issueBody(l.user, "", "pwd"), header), http.StatusUnauthorized, reasonInvalidCredentials)
-	if l.keys.reads != 0 || len(l.creds.checked()) != 0 {
-		t.Fatalf("a wrong audience read the key set %d times and checked %d credentials", l.keys.reads, len(l.creds.checked()))
+	if l.keys.reads != 0 {
+		t.Fatalf("a wrong audience read the key set %d times", l.keys.reads)
 	}
 	if n := l.sessions(t, ctx); n != 0 {
 		t.Fatalf("%d session rows after a refusal", n)
@@ -143,22 +138,19 @@ func TestIssueSessionRefusesADeactivatedUserOnTheWorkloadPath(t *testing.T) {
 	}
 }
 
-// I4: svc_authsess_ still issues on the live store with its credential id in
-// the audit row and no workload_jti, and a revoked one is refused with no row.
-func TestIssueSessionKeepsTheServiceCredentialPathOnTheLiveStore(t *testing.T) {
+// I4: svc_authsess_ is refused on the live store before any read, and no row
+// is written.
+func TestIssueSessionRefusesTheRetiredServiceCredentialOnTheLiveStore(t *testing.T) {
 	ctx := context.Background()
 	l := newWorkloadIssueLive(t, ctx)
-	l.creds.refusal = servicecred.RefusedRevoked
-	expectError(t, post(l.server, PatternIssueSession, issueBody(l.user, "", "pwd"), issuerBearer), http.StatusUnauthorized, reasonInvalidCredentials)
+	expectError(t, post(l.server, PatternIssueSession, issueBody(l.user, "", "pwd"), retiredSessionIssuerBearer), http.StatusUnauthorized, reasonInvalidCredentials)
 	if n := l.sessions(t, ctx); n != 0 {
-		t.Fatalf("%d session rows for a revoked credential", n)
+		t.Fatalf("%d session rows for the retired credential", n)
 	}
-	l.creds.refusal = ""
-	if response := post(l.server, PatternIssueSession, issueBody(l.user, "", "pwd"), issuerBearer); response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
+	if n := l.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1`, EventSessionIssued); n != 0 {
+		t.Fatalf("%d %s rows for the retired credential, want 0", n, EventSessionIssued)
 	}
-	if n := l.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND attributes->>'credential_id' = $2 AND NOT (attributes ? 'workload_jti') AND actor_principal_id IS NULL`,
-		EventSessionIssued, l.creds.id); n != 1 {
-		t.Fatalf("%d matching %s rows, want 1", n, EventSessionIssued)
+	if l.keys.reads != 0 {
+		t.Fatalf("the retired credential read the key set %d times", l.keys.reads)
 	}
 }

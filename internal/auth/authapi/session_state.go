@@ -44,10 +44,8 @@ func (h compatHandlers) withSessionStateRoute(routes []httpapi.Route) []httpapi.
 }
 
 // withSessionStateRouteRows is withSessionStateRoute over a given document;
-// without a row that lists every class the handler admits (the session issuer
-// credential when service credentials are configured, the go-api workload
-// token when its binding is) it logs one line naming the route and mounts
-// nothing.
+// without a row that lists the class the handler admits (the go-api workload
+// token) it logs one line naming the route and mounts nothing.
 func (h compatHandlers) withSessionStateRouteRows(routes []httpapi.Route, rows []byte) []httpapi.Route {
 	if rowsAcceptFor(rows, []string{PatternSessionState}, h.issueCallerClasses()) != nil {
 		h.rec.logger.Info("auth session route not mounted: no endpoint-profile row", "route", PatternSessionState)
@@ -58,20 +56,15 @@ func (h compatHandlers) withSessionStateRouteRows(routes []httpapi.Route, rows [
 
 // issueCallerClasses are the credential classes issueCallerFor admits here.
 func (h compatHandlers) issueCallerClasses() []string {
-	var admitted []string
-	if h.ServiceCredentials != nil {
-		admitted = append(admitted, serviceSessionIssuerClass)
+	if h.IssueWorkload == nil {
+		return nil
 	}
-	if h.IssueWorkload != nil {
-		admitted = append(admitted, workloadTokenClass)
-	}
-	return admitted
+	return []string{workloadTokenClass}
 }
 
 // sessionState is POST /internal/v1/sessions/state: one strict object
 // {"session_id"} in, the session's state out. It takes the bearer the session
-// issue route takes (the session issuer service credential, or the go-api
-// workload token), checked the same way. It is read-only: no audit row, and no
+// issue route takes (the go-api workload token), checked the same way. It is read-only: no audit row, and no
 // last_seen_at stamp, so a state read never extends a session's idle expiry.
 func (h compatHandlers) sessionState(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

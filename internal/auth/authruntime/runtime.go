@@ -45,7 +45,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/publicaudit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -194,7 +193,7 @@ func compatRoutes(
 	}
 	deps := authapi.CompatDeps{
 		Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger, IssueWorkload: issueWorkload,
-		Projector: identities, Social: socialService, ServiceCredentials: servicecred.PG{Pool: pool},
+		Projector: identities, Social: socialService,
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, pool, schema, event)
 		},

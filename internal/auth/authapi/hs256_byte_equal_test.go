@@ -72,7 +72,7 @@ func hs256Answers(t *testing.T) map[string]hs256Answer {
 		map[string]string{refresh.principal.String(): "<principal>"})
 
 	issue := newCompatFixture(t)
-	record("POST /internal/v1/sessions", issue.do(http.MethodPost, PatternIssueSession, issueBody(issue.principal, issue.org.String(), "pwd"), issuerBearer), compatIDs(issue))
+	record("POST /internal/v1/sessions", issue.do(http.MethodPost, PatternIssueSession, issueBody(issue.principal, issue.org.String(), "pwd"), issuerBearer()), compatIDs(issue))
 
 	compatRefresh := newCompatFixture(t)
 	compatRefresh.sessions.result = accepted(compatRefresh.record)

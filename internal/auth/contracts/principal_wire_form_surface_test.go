@@ -46,8 +46,8 @@ var wireProducers = []wireProducer{
 	{"B6 credential principal_id", "internal/auth/authapi/provisioning_serviceaccount_keys.go", "PrincipalID: session.WirePrincipalID(k.Principal)", formS},
 	{"B6 credential created_by", "internal/auth/authapi/provisioning_serviceaccount_keys.go", "body.CreatedBy = session.WirePrincipalID(*k.CreatedBy)", formS},
 
-	{"B7 principal event", "internal/auth/identity/store.go", `AggregateID: provisioning.WireID("principal", principal)`, formU},
-	{"B7 user event", "internal/auth/identity/store.go", `AggregateID: provisioning.WireID("user", principal)`, formU},
+	{"B7 principal event", "internal/auth/copyproject/copyproject.go", `AggregateID: provisioning.WireID("principal", principal)`, formU},
+	{"B7 user event", "internal/auth/copyproject/copyproject.go", `AggregateID: provisioning.WireID("user", principal)`, formU},
 	{"B7 principal dependency", "internal/auth/decisionstate/decisionstate.go", `AggregateID: provisioning.WireID("principal", principal.String())`, formU},
 	{"B8 service account event", "internal/auth/serviceaccount/store.go", `func wire(id uuid.UUID) string { return provisioning.WireID("service_account", id.String()) }`, formU},
 	{"B8 owner principal", "internal/auth/serviceaccount/store.go", `func ownerWire(id uuid.UUID) string { return provisioning.WireID("principal", id.String()) }`, formU},

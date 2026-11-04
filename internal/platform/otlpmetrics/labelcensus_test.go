@@ -37,6 +37,8 @@ var manualInstruments = map[string]struct {
 	"workgraph_issue_pr_fallback_beside_native_issue_rows_total":        {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackBesideNativeIssueCounter", []string{}},
 	"workgraph_issue_pr_fallback_pull_request_issue_side_rows_total":    {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackPullRequestIssueSideCounter", []string{}},
 	"workgraph_issue_pr_fallback_invariant_checks_total":                {"internal/jobs/workgraph/issuepredges/invariant.go", "FallbackInvariantChecksCounter", []string{}},
+	"dev_health_authz_enforcement_enabled":                              {"internal/authzenforce/authzenforce.go", "enabledMetric", []string{"namespace", "service"}},
+	"dev_health_authz_enforcement_ignored_items":                        {"internal/authzenforce/authzenforce.go", "ignoredMetric", []string{"service"}},
 }
 
 type sourceFile struct {

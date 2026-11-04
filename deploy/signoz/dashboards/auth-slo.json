@@ -343,7 +343,7 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "description": "POST /v1/authorize p95. SLO line 25 ms (CHAOS-11220 row 2; alert AuthzLatencyP95High).",
+            "description": "POST /v1/authorize and :batch p95. SLO line 25 ms (CHAOS-11220 row 2; alert AuthzLatencyP95High).",
             "name": "Authorize p95"
           },
           "links": null,
@@ -402,7 +402,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/v1/authorize', '/v1/authorize:batch')"
                     },
                     "groupBy": [],
                     "legend": "",
@@ -422,7 +422,7 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "description": "POST /v1/authorize p99. SLO line 75 ms (CHAOS-11220 row 2; alert AuthzLatencyP99High). Resolves to bucket edges: 0.075 needs the edge added by CHAOS-11220.",
+            "description": "POST /v1/authorize and :batch p99. SLO line 75 ms (CHAOS-11220 row 2; alert AuthzLatencyP99High). 0.075 is a bucket edge of the duration histogram.",
             "name": "Authorize p99"
           },
           "links": null,
@@ -481,7 +481,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/v1/authorize', '/v1/authorize:batch')"
                     },
                     "groupBy": [],
                     "legend": "",
@@ -501,8 +501,8 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "description": "POST /v1/token/refresh p95. SLO line 200 ms (CHAOS-11220 rows 3,4; alert AuthTokenLatencyP95High).",
-            "name": "Token refresh p95"
+            "description": "Routes /internal/v1/sessions (issue) and /v1/token/refresh, p95. SLO line 200 ms (the SLO table rows 3 and 4; alert AuthTokenLatencyP95High).",
+            "name": "Token issue and refresh p95"
           },
           "links": null,
           "plugin": {
@@ -560,7 +560,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/token/refresh'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/sessions', '/v1/token/refresh')"
                     },
                     "groupBy": [],
                     "legend": "",
@@ -632,7 +632,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'GET /.well-known/jwks.json'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
                     },
                     "groupBy": [],
                     "legend": "rate",
@@ -661,7 +661,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'GET /.well-known/jwks.json'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/.well-known/jwks.json')"
                     },
                     "groupBy": [],
                     "legend": "p95",
@@ -733,7 +733,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /internal/v1/token/exchange'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
                     },
                     "groupBy": [],
                     "legend": "rate",
@@ -762,7 +762,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /internal/v1/token/exchange'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/internal/v1/token/exchange')"
                     },
                     "groupBy": [],
                     "legend": "p95",

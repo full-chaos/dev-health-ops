@@ -19,7 +19,6 @@ import (
 const (
 	authSLODashboardRel = "deploy/signoz/dashboards/auth-slo.json"
 	authSLOLabelsRel    = "internal/platform/otlpmetrics/labels.tsv"
-	authSLODurationName = "dev_health_api_http_request_duration_seconds"
 )
 
 var (
@@ -28,10 +27,8 @@ var (
 	// identity and unbounded labels: banned even where labels.tsv lists them for the metric (subject and
 	// audience are listed for auth.workload.exchanges).
 	authSLOBannedKeys = append([]string{"subject", "audience", "organization", "org_id", "user", "user_id", "credential", "token", "decision_id", "instance_id", "args"}, prohibitedLabels...)
-	// the SLO lines drawn on the latency and outbox panels; each is a number of the SLO table.
-	authSLOLines = map[string]float64{"authorize-p95": 0.025, "authorize-p99": 0.075, "token-p95": 0.2, "outbox-age": 300}
-	authSLOKey   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*(?:!=|=~|=|\bNOT IN\b|\bIN\b|\bNOT LIKE\b|\bLIKE\b|\bEXISTS\b)`)
-	authSLOQuote = regexp.MustCompile(`'[^']*'|"[^"]*"`)
+	authSLOKey        = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*(?:!=|=~|=|\bNOT IN\b|\bIN\b|\bNOT LIKE\b|\bLIKE\b|\bEXISTS\b)`)
+	authSLOQuote      = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 )
 
 type authSLOQuery struct {
@@ -175,28 +172,69 @@ func authSLOPanelsArePlaced(g *guard) {
 	g.expect(len(seen) == len(panels), "layout places %d panels of %d", len(seen), len(panels))
 }
 
-// authSLOLinesMatchTheTable pins the SLO line of each latency and outbox panel to the SLO table number and
-// the percentile of the panel to the one its name says. A panel line the table does not carry is wrong.
-func authSLOLinesMatchTheTable(g *guard) {
+// authSLOLineAlert names the SLO alert whose threshold each dashboard line draws. The alert rules
+// (sloRules, pinned to alerts/rules.yml and the builder JSON by the SLO alert guard) own the numbers: the
+// dashboard holds no copy of a rule, it only draws its line.
+var authSLOLineAlert = map[string]string{
+	"authorize-p95": "AuthzLatencyP95High",
+	"authorize-p99": "AuthzLatencyP99High",
+	"token-p95":     "AuthTokenLatencyP95High",
+	"outbox-age":    "AuthOutboxOldestPendingHigh",
+}
+
+var authSLOEdges = regexp.MustCompile(`var durationBuckets = \[\]float64\{([^}]*)\}`)
+
+// authSLOLinesMatchTheAlerts pins the line of each latency and outbox panel to the threshold of its alert,
+// its route set and percentile to the alert's, and each latency line to an edge of the duration histogram
+// (a percentile resolves to a bucket edge, so a line between two edges would never be crossed exactly).
+func authSLOLinesMatchTheAlerts(g *guard) {
 	root := authSLODoc(g)
 	if root == nil {
 		return
 	}
+	edges := map[string]bool{}
+	if m := authSLOEdges.FindStringSubmatch(g.read(sloDurationSrc)); m != nil {
+		for _, e := range strings.Split(m[1], ",") {
+			edges[strings.TrimSpace(e)] = true
+		}
+	} else {
+		g.failf("%s has no durationBuckets literal", sloDurationSrc)
+	}
 	panels := mp(mp(root["spec"])["panels"])
-	for id, want := range authSLOLines {
+	queries := map[string][]authSLOQuery{}
+	for _, q := range authSLOQueries(g) {
+		queries[q.panel] = append(queries[q.panel], q)
+	}
+	for id, alert := range authSLOLineAlert {
+		var rule *sloRule
+		for i := range sloRules {
+			if sloRules[i].alert == alert {
+				rule = &sloRules[i]
+			}
+		}
 		p, ok := panels[id]
-		if !ok {
-			g.failf("dashboard has no panel %s", id)
+		if rule == nil || !ok {
+			g.failf("panel %s or the rule %s is missing", id, alert)
 			continue
 		}
 		th := list(mp(mp(mp(mp(p)["spec"])["plugin"])["spec"])["thresholds"])
-		g.expect(len(th) == 1 && jsonNumber(mp(th[0])["value"]) == jsonNumber(want), "panel %s threshold line is %v, want %v (the SLO table)", id, th, want)
-	}
-	for _, q := range authSLOQueries(g) {
-		if q.panel == "authorize-p95" || q.panel == "token-p95" || q.panel == "authorize-p99" {
-			g.expect(q.metric == authSLODurationName, "panel %s reads %s, want %s", q.panel, q.metric, authSLODurationName)
-			g.expect(strings.Contains(q.filter, "listener = 'auth-api-http'") && strings.Contains(q.filter, "route = '"), "panel %s filter %q lacks the listener and route", q.panel, q.filter)
+		g.expect(len(th) == 1 && jsonNumber(mp(th[0])["value"]) == rule.target, "panel %s threshold line is %v, want %s (the threshold of %s)", id, th, rule.target, alert)
+		g.expect(len(queries[id]) == 1, "panel %s has %d queries, want 1", id, len(queries[id]))
+		if len(queries[id]) != 1 {
+			continue
 		}
+		q := queries[id][0]
+		g.expect(q.metric == rule.metric, "panel %s reads %s, want %s (the metric of %s)", id, q.metric, rule.metric, alert)
+		if rule.routes != "" {
+			var in []string
+			for _, r := range strings.Split(rule.routes, "|") {
+				in = append(in, "'"+r+"'")
+			}
+			g.expect(strings.Contains(q.filter, "route IN ("+strings.Join(in, ", ")+")"), "panel %s filter is %q, want route IN (%s), the routes of %s", id, q.filter, strings.Join(in, ", "), alert)
+			g.expect(edges[rule.target], "panel %s line %s is not a bucket edge of %s durationBuckets", id, rule.target, sloDurationSrc)
+		}
+		g.expect(strings.Contains(q.filter, "service.name = 'auth-service'"), "panel %s filter %q lacks the service", id, q.filter)
+		g.expect(rule.routes == "" || strings.Contains(q.filter, "listener = 'auth-api-http'"), "panel %s filter %q lacks the listener", id, q.filter)
 	}
 }
 
@@ -205,21 +243,23 @@ func TestAuthSLODashboardGuardsRealTree(t *testing.T) {
 		check{"authslo-metrics-are-emitted", authSLOMetricsAreEmitted},
 		check{"authslo-labels-are-bounded", authSLOLabelsAreBounded},
 		check{"authslo-panels-are-placed", authSLOPanelsArePlaced},
-		check{"authslo-lines-match-the-table", authSLOLinesMatchTheTable},
+		check{"authslo-lines-match-the-alerts", authSLOLinesMatchTheAlerts},
 	)
 }
 
 func TestAuthSLODashboardPlantedDefects(t *testing.T) {
-	d := []string{authSLODashboardRel, authSLOLabelsRel, "internal/auth", "internal/audit", "internal/api/externalingest"}
+	d := []string{authSLODashboardRel, authSLOLabelsRel, sloDurationSrc, "internal/auth", "internal/audit", "internal/api/externalingest"}
 	runPlanted(t, []planted{
 		{"identity-label-in-group-by", d, mut(authSLODashboardRel, `"name": "reason_code"`, `"name": "subject"`), authSLOLabelsAreBounded, `prohibited label "subject"`},
 		{"label-not-of-the-metric", d, mut(authSLODashboardRel, `"name": "disposition"`, `"name": "route"`), authSLOLabelsAreBounded, `neither a label of`},
 		{"metric-renamed", d, mut(authSLODashboardRel, `"metricName": "devhealth_auth_outbox_publisher_enabled"`, `"metricName": "devhealth_auth_outbox_publisher_on"`), authSLOMetricsAreEmitted, "does not list"},
 		{"shadow-series-added", d, mut(authSLODashboardRel, `"metricName": "devhealth_auth_outbox_publisher_enabled"`, `"metricName": "dev_health_api_shadow_mismatch_total"`), authSLOMetricsAreEmitted, "shadow dashboard"},
-		{"environment-filter-dropped", d, mut(authSLODashboardRel, `deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'`, `service.name = 'auth-service' AND listener = 'auth-api-http' AND route = 'POST /v1/authorize'`), authSLOLabelsAreBounded, "deployment.environment"},
+		{"environment-filter-dropped", d, mut(authSLODashboardRel, `deployment.environment = 'production' AND service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/v1/authorize', '/v1/authorize:batch')`, `service.name = 'auth-service' AND listener = 'auth-api-http' AND route IN ('/v1/authorize', '/v1/authorize:batch')`), authSLOLabelsAreBounded, "deployment.environment"},
 		{"panel-not-placed", d, mut(authSLODashboardRel, `"$ref": "#/spec/panels/ingest-audit"`, `"$ref": "#/spec/panels/request-rate"`), authSLOPanelsArePlaced, "twice"},
-		{"threshold-line-flipped", d, mut(authSLODashboardRel, `"value": 0.025`, `"value": 0.05`), authSLOLinesMatchTheTable, "authorize-p95"},
-		{"route-filter-dropped", d, mut(authSLODashboardRel, ` AND route = 'POST /v1/token/refresh'`, ``), authSLOLinesMatchTheTable, "lacks the listener and route"},
+		{"threshold-line-flipped", d, mut(authSLODashboardRel, `"value": 0.025`, `"value": 0.05`), authSLOLinesMatchTheAlerts, "authorize-p95"},
+		{"line-not-a-bucket-edge", d, mut(sloDurationSrc, "0.05, 0.075, 0.1,", "0.05, 0.1,"), authSLOLinesMatchTheAlerts, "not a bucket edge"},
+		{"route-set-narrowed", d, mut(authSLODashboardRel, `route IN ('/internal/v1/sessions', '/v1/token/refresh')`, `route IN ('/v1/token/refresh')`), authSLOLinesMatchTheAlerts, "the routes of AuthTokenLatencyP95High"},
+		{"percentile-source-metric-swapped", d, mut(authSLODashboardRel, `"metricName": "dev_health_api_http_request_duration_seconds"`, `"metricName": "dev_health_api_http_requests_total"`), authSLOLinesMatchTheAlerts, "the metric of"},
 	})
 }
 

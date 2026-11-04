@@ -67,6 +67,7 @@ op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-work
 op-rb-auth-service-accounts	op-runbooks	/operate/runbooks/auth-service-accounts/	Service accounts	runbook	true	public	active	false
 op-rb-auth-workload-kubernetes-federation	op-runbooks	/operate/runbooks/auth-workload-kubernetes-federation/	Kubernetes workload federation	runbook	true	public	active	false
 op-rb-auth-workload-assertion-key-rotation	op-runbooks	/operate/runbooks/auth-workload-assertion-key-rotation/	Web assertion key rotation	runbook	true	public	active	false
+op-rb-auth-client-address-proof	op-runbooks	/operate/runbooks/auth-client-address-proof/	Auth client-address proof	runbook	true	public	active	false
 op-rb-auth-legacy-compat	op-runbooks	/operate/runbooks/auth-legacy-compat-and-rollback/	Auth legacy compatibility and rollback	runbook	true	public	active	false	
 op-rb-external-push-lifecycle	op-runbooks	/operate/runbooks/external-push-lifecycle/	External Push lifecycle events	runbook	true	public	active	false	
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	

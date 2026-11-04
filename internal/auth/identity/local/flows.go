@@ -215,7 +215,7 @@ func (f *Flows) Register(ctx context.Context, req RegisterRequest) (FlowOutcome,
 	}
 	if errors.Is(err, identity.ErrOrganizationSlugCollision) {
 		slog.WarnContext(ctx, "local: the organization slug is taken; the sign-up wrote nothing")
-		return FlowOutcome{Kind: FlowOK}, nil
+		return f.completeUnsent(ctx, prov, req.FullName)
 	}
 	if err != nil {
 		return FlowOutcome{}, fmt.Errorf("local: creating the account: %w", err)
@@ -410,4 +410,13 @@ func mailPurpose(purpose, notice Purpose) Purpose {
 		return notice
 	}
 	return purpose
+}
+
+// completeUnsent finishes a sign-up that wrote nothing in the steps of a new account: a decoy link credential and a
+// decoy verification mail (Deliver false), so no credential and no outbound mail is left.
+func (f *Flows) completeUnsent(ctx context.Context, prov ProvisionLocalRequest, name *string) (FlowOutcome, error) {
+	if err := f.issueAndSend(ctx, uuid.Nil, PurposeEmailVerification, VerificationTTL, prov.Email, name, ""); err != nil {
+		return FlowOutcome{}, err
+	}
+	return FlowOutcome{Kind: FlowOK}, nil
 }

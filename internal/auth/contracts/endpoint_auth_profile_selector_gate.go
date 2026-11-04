@@ -100,12 +100,19 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 		if len(body) > 0 {
 			bodyMarkers = append(bodyMarkers, bodyCarried{id: id, markers: body})
 		}
-		if slices.ContainsFunc(class.Markers, func(marker ClassMarker) bool { return markerMatches(marker, kind, name) }) {
+		holds := slices.ContainsFunc(class.Markers, func(marker ClassMarker) bool { return markerMatches(marker, kind, name) })
+		if kind == bodyFieldKind && !holds {
+			return fmt.Errorf("accepted class %q has no body_field %s marker, so the selector cannot pick it", id, name)
+		}
+		if holds {
 			owners = append(owners, id)
 		}
 	}
 	if err := checkBodyClassesApart(bodyMarkers); err != nil {
 		return err
+	}
+	if kind == bodyFieldKind {
+		return nil
 	}
 	switch len(owners) {
 	case 1:
@@ -117,7 +124,7 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 	}
 }
 
-var bodyPrefixShape = regexp.MustCompile(`^prefix:[A-Za-z0-9_-]+$`)
+var bodyPrefixShape = regexp.MustCompile(`^(prefix|opaque):[A-Za-z0-9_-]+$`)
 
 type bodyCarried struct {
 	id      string
@@ -141,7 +148,7 @@ func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
 	}
 	for _, marker := range body {
 		if marker.Shape != "jwt" && !bodyPrefixShape.MatchString(marker.Shape) {
-			return nil, fmt.Errorf("accepted class %q body_field %s has shape %q, want jwt or prefix:<value>", id, marker.Name, marker.Shape)
+			return nil, fmt.Errorf("accepted class %q body_field %s has shape %q, want jwt, prefix:<value> or opaque:<value>", id, marker.Name, marker.Shape)
 		}
 	}
 	return body, nil
@@ -150,9 +157,10 @@ func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
 // checkBodyClassesApart proves no two body-carried classes of a route can be
 // confused: the same body field with the same shape, or with prefixes where
 // one begins with the other, is refused. A jwt is any three dot-separated
-// parts (credential-classes.schema.json, shape), and an opaque value after a
+// parts (credential-classes.schema.json, shape), and a value after a
 // prefix may hold dots, so a jwt overlaps every prefix: jwt and prefix:<v> on
-// one field are refused.
+// one field are refused. An opaque:<v> value holds no dot, so it is disjoint
+// from a jwt (two dots) and is told apart from other prefixes by <v> alone.
 func checkBodyClassesApart(classes []bodyCarried) error {
 	for i, a := range classes {
 		for _, b := range classes[i+1:] {
@@ -169,12 +177,23 @@ func checkBodyClassesApart(classes []bodyCarried) error {
 }
 
 func shapesOverlap(a, b string) bool {
-	pa, aPrefix := strings.CutPrefix(a, "prefix:")
-	pb, bPrefix := strings.CutPrefix(b, "prefix:")
-	if aPrefix && bPrefix {
+	pa, aValue := bodyShapeValue(a)
+	pb, bValue := bodyShapeValue(b)
+	if aValue && bValue {
 		return strings.HasPrefix(pa, pb) || strings.HasPrefix(pb, pa)
 	}
-	return a == b || aPrefix != bPrefix
+	if aValue != bValue {
+		return strings.HasPrefix(a, "prefix:") || strings.HasPrefix(b, "prefix:")
+	}
+	return a == b
+}
+
+// bodyShapeValue is the <value> of a prefix: or opaque: shape.
+func bodyShapeValue(shape string) (string, bool) {
+	if value, ok := strings.CutPrefix(shape, "prefix:"); ok {
+		return value, true
+	}
+	return strings.CutPrefix(shape, "opaque:")
 }
 
 // mediaType is a Content-Type value's media type: parameters (; charset=...) dropped, trimmed, lower-cased.

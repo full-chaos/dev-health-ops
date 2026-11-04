@@ -164,6 +164,10 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 			return AuthSchemaMismatchError{Found: plan.AuthSchemaFound, Configured: observation.AuthConfigured, Objects: observation.Objects}
 		case StateSchemaMismatch:
 			return SchemaMismatchError{Recorded: observation.Versions, MissingTables: plan.MissingTables}
+		case StateChainRevisionUnapplied:
+			return ChainRevisionUnappliedError{Recorded: observation.Versions, Unapplied: plan.Unapplied, LedgerAbsent: plan.LedgerAbsent}
+		case StateChainRevisionSHAMismatch:
+			return ChainRevisionSHAMismatchError{Recorded: observation.Versions, Revisions: plan.SHAMismatch}
 		case StateBelowHead:
 			if len(plan.Missing) == 1 && plan.Missing[0] == applicationHead(baseline) {
 				return BelowBaselineError{Recorded: observation.Versions, Baseline: applicationHead(baseline)}
@@ -200,9 +204,15 @@ func walkOnce(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []Ch
 			done.action = "up_to_date"
 		}
 		previous := plan.ApplicationHead
-		for _, file := range plan.Pending {
+		first := len(chain) - len(plan.Pending)
+		appliedInWalk := map[string]bool{}
+		for offset, file := range plan.Pending {
 			done.attempted = file.Revision
 			if err := applyChainFile(ctx, tx, file, previous); err != nil {
+				return err
+			}
+			appliedInWalk[file.Revision] = true
+			if err := recordLedger(ctx, tx, chain, first+offset, appliedInWalk); err != nil {
 				return err
 			}
 			previous = file.Revision
@@ -247,7 +257,11 @@ type Status struct {
 	Unknown []string `json:"unknown,omitempty"`
 	// MissingTables are the baseline tables a schema_mismatch database lacks.
 	MissingTables []string `json:"missing_tables,omitempty"`
-	Pending       []string `json:"pending,omitempty"`
+	// Unapplied are the chain revisions with no ledger row (chain_revision_unapplied).
+	Unapplied []string `json:"unapplied,omitempty"`
+	// SHAMismatch are the revisions whose ledger sha differs from the build's file.
+	SHAMismatch []string `json:"sha_mismatch,omitempty"`
+	Pending     []string `json:"pending,omitempty"`
 }
 
 // ReadStatus reports where the database stands without changing it.
@@ -276,10 +290,13 @@ func readStatus(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []
 		status.Missing = plan.Missing
 		status.Unknown = plan.Unknown
 		status.MissingTables = plan.MissingTables
+		status.Unapplied = plan.Unapplied
+		status.SHAMismatch = plan.SHAMismatch
 		for _, file := range plan.Pending {
 			status.Pending = append(status.Pending, file.Revision)
 		}
-		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch", StateAheadOfBuild: "ahead_of_build", StateAuthSchemaMismatch: "auth_schema_mismatch"}[plan.State]
+		status.State = map[State]string{StateEmpty: "empty", StateAtHead: "at_head", StateBelowHead: "below_head", StateForeign: "foreign", StateSchemaMismatch: "schema_mismatch", StateAheadOfBuild: "ahead_of_build", StateAuthSchemaMismatch: "auth_schema_mismatch",
+			StateChainRevisionUnapplied: ReasonChainRevisionUnapplied, StateChainRevisionSHAMismatch: ReasonChainRevisionSHAMismatch}[plan.State]
 		return nil
 	})
 	return status, err
@@ -438,7 +455,63 @@ func observe(ctx context.Context, tx pgx.Tx) (Observation, error) {
 	}
 	sort.Strings(versions)
 	observation.Versions = versions
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('public."+LedgerTable+"') IS NOT NULL").Scan(&observation.HasLedger); err != nil {
+		return observation, fmt.Errorf("look for %s: %w", LedgerTable, err)
+	}
+	if !observation.HasLedger {
+		return observation, nil
+	}
+	ledger, err := tx.Query(ctx, "SELECT revision, coalesce(sha256, ''), source FROM public."+LedgerTable)
+	if err != nil {
+		return observation, fmt.Errorf("read %s: %w", LedgerTable, err)
+	}
+	observation.Ledger = map[string]LedgerRow{}
+	for ledger.Next() {
+		var revision, sha, source string
+		if err := ledger.Scan(&revision, &sha, &source); err != nil {
+			ledger.Close()
+			return observation, fmt.Errorf("read %s: %w", LedgerTable, err)
+		}
+		observation.Ledger[revision] = LedgerRow{SHA256: sha, Seed: source == "seed"}
+	}
+	if err := ledger.Err(); err != nil {
+		return observation, fmt.Errorf("read %s: %w", LedgerTable, err)
+	}
 	return observation, nil
+}
+
+// recordLedger writes the ledger rows for chain[index], which the walk has just applied, in the walk's transaction.
+// The ledger revision itself first records every chain revision before it: 'apply' with its sha when this walk applied
+// it, 'seed' with no sha when alembic_version recorded it before the walk. A revision below the ledger revision has no
+// table to write to yet; the ledger revision records it.
+func recordLedger(ctx context.Context, tx pgx.Tx, chain []ChainFile, index int, appliedInWalk map[string]bool) error {
+	ledger := ledgerIndex(chain)
+	if ledger < 0 || index < ledger {
+		return nil
+	}
+	insert := func(file ChainFile, seed bool) error {
+		var sha any = FileSHA256(file)
+		source := "apply"
+		if seed {
+			sha, source = nil, "seed"
+		}
+		tag, err := tx.Exec(ctx, "INSERT INTO public."+LedgerTable+" (revision, sha256, source) VALUES ($1, $2, $3)", file.Revision, sha, source)
+		if err != nil {
+			return fmt.Errorf("%s: record it in %s: %w", file.Name, LedgerTable, err)
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("%s: record it in %s: %d rows", file.Name, LedgerTable, tag.RowsAffected())
+		}
+		return nil
+	}
+	if index == ledger {
+		for _, earlier := range chain[:ledger] {
+			if err := insert(earlier, !appliedInWalk[earlier.Revision]); err != nil {
+				return err
+			}
+		}
+	}
+	return insert(chain[index], false)
 }
 
 // setForTransaction sets each setting for tx only (is_local = true), in name order.

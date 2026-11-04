@@ -20,6 +20,7 @@ deploy/helm/dev-health	auth_phase_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
+internal/api/policy	delegated_test.go
 internal/api/policy	principalonce_test.go
 internal/api/syncadmin	dataset_writer_census_test.go
 internal/api/syncadmin	dataset_writer_lock_census_test.go
@@ -51,6 +52,7 @@ internal/auth/acrmint	census_test.go
 internal/auth/authapi	acr_events_test.go
 internal/auth/authapi	authorize_auth_test.go
 internal/auth/authapi	authorize_golden_test.go
+internal/auth/authapi	authorize_loadprofile_test.go
 internal/auth/authapi	authorize_request_test.go
 internal/auth/authapi	authorize_test.go
 internal/auth/authapi	hung_read_test.go
@@ -95,6 +97,7 @@ internal/auth/contracts	read_api_test.go
 internal/auth/contracts	reason_code_vocabulary_test.go
 internal/auth/contracts	refresh_response_v2_test.go
 internal/auth/contracts	reject_location_test.go
+internal/auth/contracts	repokey_cells_test.go
 internal/auth/contracts	retired_credential_class_test.go
 internal/auth/contracts	retired_legacy_ingest_test.go
 internal/auth/contracts	schema_dialect_test.go
@@ -129,9 +132,9 @@ internal/auth/ratelimitvalkey	acl_test.go
 internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
+internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
 internal/auth/writerinventory	membership_census_test.go
-internal/auth/writerinventory	organization_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
@@ -177,10 +180,12 @@ internal/cigates/bigboyrender	projectscope.go
 internal/cigates/bigboyrender	projectscope_test.go
 internal/cigates/bigboyrender	values.go
 internal/cigates/cachepoison	cachepoison_test.go
+internal/cigates/chartgates	alerts_auth_slo_test.go
 internal/cigates/chartgates	helpers_test.go
 internal/cigates/chartgates	overlay_test.go
 internal/cigates/chartgates	worker_secret_env_scan_test.go
 internal/cigates/chconstructor	chconstructor_test.go
+internal/cigates/checkgo	auth_race_budget_test.go
 internal/cigates/checkgo	check_go_script_test.go
 internal/cigates/checkgo	ci_script_helpers_test.go
 internal/cigates/checkgo	discovery_tree_test.go
@@ -454,6 +459,7 @@ internal/platform/logging	binaries_enumeration_test.go
 internal/platform/logging	provider_origin_sources_test.go
 internal/platform/otlpmetrics	labelcensus_test.go
 internal/platform/otlpmetrics	labelfragment_census_test.go
+internal/platform/removedenv	census_test.go
 internal/platform/secrets	envreads_test.go
 internal/platform/secrets	source.go
 internal/providerfoundation	classify_call_sites_test.go
@@ -584,6 +590,7 @@ internal/reconcilerservice	readiness_timeout_test.go
 internal/rivermigrate	deploy_wiring_test.go
 internal/scheduler/sync	venue_golden_address_test.go
 internal/storage/clickhouse/liverow	census_test.go
+internal/storage/postgres	api_authorization_platform_roles_test.go
 internal/storage/postgres	openers_test.go
 internal/storage/postgres	posture_cache_cadence_test.go
 internal/storage/postgres	posture_identity_sites_test.go

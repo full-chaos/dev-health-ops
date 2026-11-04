@@ -597,10 +597,9 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrInvalidKey):
 		return Login{}, authFailed(ReasonMalformed, err)
 	case errors.Is(err, ErrIdentityAmbiguous):
-		return Login{}, deny(http.StatusConflict, ReasonIdentityConflict,
-			"More than one account carries this sign-in. Contact your organization administrator.")
+		return Login{}, ambiguousIdentity()
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrIdentityNotFound):
 		return s.newAccount(ctx, row, v, requestID)
 	default:
@@ -626,7 +625,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case s.cfg.MembershipJIT != nil && row.AutoProvision:
 		var joined bool
 		if req.Role, joined = s.signInRole(ctx, row); !joined {
-			return Login{}, notMember()
+			return Login{}, notMember(row)
 		}
 		tokens, err = s.cfg.MembershipJIT.JoinAndIssue(ctx, principal.ID, org, req)
 		if errors.Is(err, identity.ErrAlreadyMember) {
@@ -635,7 +634,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 			}
 		}
 	default:
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	switch {
 	case err == nil:
@@ -644,7 +643,7 @@ func (s *Service) resolve(ctx context.Context, row Provider, v validated, reques
 	case errors.Is(err, ErrSignupNotAvailable):
 		return Login{}, deny(http.StatusForbidden, ReasonSignupUnavailable, "Sign-up through this provider is not available")
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrPrincipalDisabled):
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:
@@ -673,9 +672,14 @@ func refuseUnusableEmail(email string) *Error {
 		map[string]any{"message": "The identity provider returned an unusable email address", "reason": "invalid_provider_email"})
 }
 
-func notMember() *Error {
+// notMember keeps OAuth's earlier plain detail; OIDC answers go-api's structured detail.
+func notMember(row Provider) *Error {
+	if strings.HasPrefix(row.Protocol, "oauth_") {
+		return deny(http.StatusForbidden, ReasonMembershipRequired,
+			"This account is not a member of the provider's organization.")
+	}
 	return deny(http.StatusForbidden, ReasonMembershipRequired,
-		"This account is not a member of the provider's organization.")
+		map[string]any{"message": identity.MembershipRequiredMessage, "reason": string(ReasonMembershipRequired)})
 }
 
 // newAccount runs the e-mail checks. With JIT off it then refuses, writing
@@ -686,7 +690,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 		return Login{}, failure
 	}
 	if s.cfg.MembershipJIT == nil {
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	// An asserted email is the org's IdP's word: only a domain the row lists can make an account.
 	if len(row.AllowedDomains) == 0 {
@@ -694,7 +698,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	}
 	role, ok := s.signInRole(ctx, row)
 	if !ok {
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	}
 	p := v.profile
 	org := row.OrgID
@@ -716,7 +720,7 @@ func (s *Service) newAccount(ctx context.Context, row Provider, v validated, req
 	case errors.Is(err, ErrSessionUnavailable):
 		return Login{}, unavailable(err)
 	case errors.Is(err, ErrNotOrgMember):
-		return Login{}, notMember()
+		return Login{}, notMember(row)
 	case errors.Is(err, ErrPrincipalDisabled):
 		return Login{}, deny(http.StatusForbidden, ReasonPrincipalDeactivated, "User account is disabled")
 	default:
@@ -795,9 +799,16 @@ func (s *Service) auditDenial(ctx context.Context, row Provider, stage, message 
 	return nil
 }
 
+// conflictMessage is the one 409 answer for a sign-in that finds an account already holding the e-mail or the
+// subject; it says nothing about which. The reason stays in the log and the audit row.
+const conflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
+
+func ambiguousIdentity() *Error {
+	return deny(http.StatusConflict, ReasonIdentityConflict, conflictMessage)
+}
+
 func conflict() *Error {
-	return deny(http.StatusConflict, ReasonEmailCollision,
-		"An account with this email address already exists. Sign in with your existing method, then link this provider.")
+	return deny(http.StatusConflict, ReasonEmailCollision, conflictMessage)
 }
 
 var errInsecureURL = errors.New("must use the https:// scheme (or an http:// loopback address)")

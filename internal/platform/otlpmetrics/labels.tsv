@@ -1,5 +1,6 @@
 instrument	labels	reason
 auth.acr.access_mints	audience,outcome	code: internal/auth/acrmint/acrmint.go
+auth.client_addr.proofs	outcome,route	code: internal/auth/clientaddr/proof.go
 auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
 auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
@@ -10,6 +11,7 @@ auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/servic
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
 auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
+auth.publicread.unknown_role		code: internal/auth/publicread/publicread.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.local.reset_request_skipped	reason	code: internal/auth/identity/local/linkaudit.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
@@ -50,6 +52,7 @@ dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcount
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+dev_health_auth_orgs_owned_ignored		code: internal/platform/removedenv/removedenv.go
 devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
 devhealth_auth_credential_projection_total	domain,outcome	code: internal/auth/outboxprojection/project.go
@@ -175,6 +178,8 @@ workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/j
 dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
 dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go
+dev_health_authz_enforcement_enabled	namespace,service	code: internal/authzenforce/authzenforce.go
+dev_health_authz_enforcement_ignored_items	service	code: internal/authzenforce/authzenforce.go
 dev_health_benchmarking_nonfinite_percentile_inputs_total		code: internal/jobs/metrics/daily/benchmarking/nonfinite.go
 dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/benchmarking/metrics.go
 dev_health_cicd_duplicate_natural_key_total	dataset,provider,table	code: internal/providerfoundation/budget.go

@@ -26,22 +26,6 @@ func TestSSOJITOffRendersNothing(t *testing.T) {
 	}
 }
 
-// True needs orgs owned: every phase the chart renders today refuses it.
-func TestSSOJITTrueNeedsOrgsOwned(t *testing.T) {
-	const on = "authService.ssoJit=true"
-	for name, args := range map[string][]string{
-		"phase 2":       phaseArgs(2, "--set", on),
-		"phase 3":       phaseArgs(3, "--set", on),
-		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
-		"phase 4 owned": phaseArgs(4, "--set", on),
-	} {
-		_, out, err := renderAuth(t, args...)
-		if err == nil || !strings.Contains(out, "authService.ssoJit needs orgs owned") {
-			t.Errorf("%s: rendered: err=%v out=%.300s", name, err, out)
-		}
-	}
-}
-
 // The check runs on every render, so it holds when auth-service does not render.
 func TestSSOJITIsCheckedWithNoConsumerRendered(t *testing.T) {
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}

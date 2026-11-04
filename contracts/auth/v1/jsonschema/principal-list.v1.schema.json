@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/principal-list.v1.schema.json",
   "title": "Auth Control Plane principal list (v1 wire format)",
-  "description": "The principals that belong to one organization. An item pairs a principal-read.v1 body with the membership-read.v1 body that shows the principal belongs to the requested organization; the Go parser refuses a membership of another organization and a membership of another principal than the one beside it. The list is PAGED by a keyset cursor on the item id: a response holds at most 100 items, in ascending id order, and when more remain an opaque `next_cursor` the caller sends back. The LAST page omits `next_cursor`: absent is the only form of 'no more pages', never null or empty. A page with no items has no cursor. The schema cannot compare items, so the Go parser (ParseReadResponse) refuses an out-of-order page, a repeated id, an item the request did not ask for, a cursor that is not the last item's, and a page over the requested limit.",
+  "description": "The principals that belong to one organization. An item holds a principal-read.v1 body. A user item pairs it with the membership-read.v1 body that shows the user belongs to the requested organization; a service_account or workload item has NO membership (its organization binding is its own row, and no membership exists to show), and one beside it is refused. The Go parser refuses a membership of another organization and a membership of another principal than the one beside it. The list is PAGED by a keyset cursor on the item id: a response holds at most 100 items, in ascending id order, and when more remain an opaque `next_cursor` the caller sends back. The LAST page omits `next_cursor`: absent is the only form of 'no more pages', never null or empty. A page with no items has no cursor. The schema cannot compare items, so the Go parser (ParseReadResponse) refuses an out-of-order page, a repeated id, an item the request did not ask for, a cursor that is not the last item's, and a page over the requested limit.",
   "type": "object",
   "required": [
     "schema_version",
@@ -20,8 +20,7 @@
       "items": {
         "type": "object",
         "required": [
-          "principal",
-          "membership"
+          "principal"
         ],
         "additionalProperties": false,
         "properties": {
@@ -31,7 +30,49 @@
           "membership": {
             "$ref": "membership-read.v1.schema.json"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "type": "object",
+              "required": [
+                "principal"
+              ],
+              "properties": {
+                "principal": {
+                  "type": "object",
+                  "required": [
+                    "kind"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "user"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "membership"
+              ],
+              "properties": {
+                "membership": true
+              }
+            },
+            "else": {
+              "not": {
+                "type": "object",
+                "required": [
+                  "membership"
+                ],
+                "properties": {
+                  "membership": true
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "next_cursor": {

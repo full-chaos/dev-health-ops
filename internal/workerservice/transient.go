@@ -2,8 +2,6 @@ package workerservice
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -14,36 +12,17 @@ import (
 // can outlast; the classification lives with the pool code that logs it.
 func isTransientDialError(err error) bool { return postgres.IsTransientDialError(err) }
 
-// startupRetryJitter spreads a retry wait by up to +/-20% so replicas that
-// started together do not redial in lockstep. Production wiring only; a nil
-// jitter leaves the wait unchanged.
-func startupRetryJitter(wait time.Duration) time.Duration {
-	if wait <= 0 {
-		return wait
-	}
-	spread := int64(wait) / 5
-	if spread <= 0 {
-		return wait
-	}
-	var raw [8]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return wait
-	}
-	offset := int64(binary.BigEndian.Uint64(raw[:])%uint64(2*spread+1)) - spread
-	return wait + time.Duration(offset)
-}
-
 // retryPresenceStart retries the presence registration while the failure is a
 // transient dial error. Its log lines carry only bounded fields, never error
 // text, which can name the dial address.
 func retryPresenceStart(
 	ctx context.Context, component workerProcessComponent, start func(context.Context) error,
 ) error {
-	return startupRetryBudget(
-		ctx, component.startBudget, component.now, component.sleep, component.jitter,
-		start,
-		isTransientDialError,
-		func(attempt int, elapsed, wait time.Duration, _ error) {
+	var last error
+	return postgres.DialRetry{
+		Budget: component.startBudget, Now: component.now, Sleep: component.sleep, Jitter: component.jitter,
+		Retryable: isTransientDialError,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
 			if component.logger == nil {
 				return
 			}
@@ -55,7 +34,7 @@ func retryPresenceStart(
 				"retry_in", wait.String(),
 			)
 		},
-		func(attempt int, elapsed time.Duration, err error, budgetExhausted bool) {
+		OnGiveUp: func(attempt int, elapsed time.Duration, budgetExhausted bool) {
 			if component.logger == nil {
 				return
 			}
@@ -63,7 +42,7 @@ func retryPresenceStart(
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			if isTransientDialError(err) {
+			if isTransientDialError(last) {
 				component.logger.ErrorContext(ctx, "worker presence registration refused",
 					"error_category", "dependency_unavailable",
 					"cause", health.CauseUnreachable,
@@ -80,5 +59,8 @@ func retryPresenceStart(
 				"elapsed", elapsed.String(),
 			)
 		},
-	)
+	}.Do(ctx, func(ctx context.Context) error {
+		last = start(ctx)
+		return last
+	})
 }

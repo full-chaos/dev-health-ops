@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 // Surface is the wire contract this vocabulary mirrors
@@ -100,6 +102,7 @@ var provisioningAggregates = map[string]Aggregate{
 type changeMember struct {
 	enum     []string
 	pattern  string
+	maxBytes int
 	array    bool
 	minItems int
 	maxItems int
@@ -117,7 +120,7 @@ var provisioningChangeMembers = map[string]changeMember{
 	"provider":           {pattern: `^[a-z][a-z0-9_-]{1,31}$`},
 	"audiences":          {array: true, minItems: 1, maxItems: 16, pattern: `^[a-z][a-z0-9._:-]{0,63}$`},
 	"resource_type":      {enum: []string{"organization", "repository"}},
-	"resource_key":       {pattern: `^(\*|[a-z0-9._-]{1,100}/[a-z0-9._-]{1,100})$`},
+	"resource_key":       {pattern: repokey.SchemaPattern, maxBytes: repokey.MaxBytes},
 	"action_set":         {array: true, minItems: 1, maxItems: 64, pattern: `^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$`},
 	"effect":             {enum: []string{"allow", "deny"}},
 	"expires_at":         {pattern: wireTimestampPattern},
@@ -277,6 +280,9 @@ func checkChangeMember(name string, value any) error {
 	}
 	if !memberPattern[name].MatchString(text) {
 		return fmt.Errorf("%q is outside the pattern", text)
+	}
+	if rule.maxBytes > 0 && len(text) > rule.maxBytes {
+		return fmt.Errorf("is %d bytes; at most %d", len(text), rule.maxBytes)
 	}
 	if name == "expires_at" || name == "revoked_before" {
 		if _, err := time.Parse(time.RFC3339Nano, text); err != nil {

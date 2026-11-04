@@ -111,7 +111,9 @@ database would mark it fenced without applying any revocation. A restored databa
 
 go-api writes External Push credential lifecycle events to the auth outbox in the
 same transaction as the token change, behind `AUTH_PUSH_LIFECYCLE_EVENTS` (go-api,
-default off). Its login holds no table privilege in the auth schema: it holds
+default off). The expiry sweeper (`internal/jobs/pushexpiry`) writes expired events through the
+same function as the worker's domain login. Each of the two logins (go-api's `devhealth_api` and
+the worker's `devhealth_domain`) holds no table privilege in the auth schema: it holds
 `EXECUTE` on one function, `append_external_push_lifecycle_event`, which runs as a
 dedicated `NOLOGIN` owner holding exactly `INSERT` on `auth_outbox_events`,
 `SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions` and `USAGE` on the outbox
@@ -119,20 +121,35 @@ sequence. A posture check in every `auth-migrate` run pins that set.
 
 Roll order, each step before the next:
 
-1. **Privileged, by whoever creates the logins** (compose: `auth-provision` does it
+1. **Privileged, by whoever creates the logins** (production creates the auth logins by hand; the chart's
+   provision-roles hook does not create this role. Compose: `auth-provision` does it
    when `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` is set; bigboy and production: the postgres superuser, through `kubectl exec` on the postgres pod, the same step that provisions `devhealth_auth`):
-   `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. The
+   `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. Production:
+   `CREATE ROLE devhealth_auth_push_writer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`
+   and `GRANT devhealth_auth_push_writer TO devhealth_auth_migrator;`. Read back before the next step:
+   `rolcanlogin` is false and `pg_has_role('devhealth_auth_migrator', 'devhealth_auth_push_writer', 'MEMBER')` is true. The
    migration login (not a superuser) cannot do this itself, and it needs the
    membership for `ALTER FUNCTION ... OWNER TO`. A missing role, a role that can log in,
    or a missing membership stops `auth-migrate` with a message naming this step.
 2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
-   `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
-   `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
+   `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>,<worker domain login>` (production:
+   `devhealth_api,devhealth_domain`; Helm: `authService.migrate.pushLifecycle.writerRole` and
+   `callerRoles`, both the migrate and the grants Job; the chart refuses callers without a writer
+   role, a writer without callers, any caller count other than two, a blank or invalid caller, and a repeated or colliding role, at every authService.phase). Both logins must exist.
+   The change is values only: no migration adds the grant, and a plain SQL `GRANT` would be revoked by
+   the next grant pass, which keeps `EXECUTE` on exactly the callers (a session reader that is not a
+   caller is revoked, and a holder that is not a caller fails the posture check). Migration
    0044 creates the function and widens the revision table's two CHECKs, 0047 replaces its body; the grant
    pass hands the function to the writer, with `CREATE` on the schema granted and
    revoked inside one transaction, and gives `EXECUTE` to the callers only.
+   Before and after the Jobs, read the pods' posture (PODSNAP: go-api, the worker, the sweeper's
+   worker pod): every pod stays Ready, no `excess privileges` and no `missing` line. The grant is in
+   the auth schema, which `CheckRolePosture` (public and River schemas only) never reads, so an
+   image from before this change keeps its readiness; the role-posture manifests do not change.
 3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and
-   the grants missing, token writes fail as 500 and roll back.
+   the grants missing, token writes fail as 500 and roll back. Then the
+   `push-lifecycle backfill-created` verb (dry run, `-apply`, read-only readback), and only
+   after that the expiry sweeper's schedule row.
 
 Organization-wide tokens (no source) emit events too (CHAOS-12358). Every event
 carries a required `binding`: `source` (with `source_id`) or `organization`
@@ -183,7 +200,7 @@ rollback is the phase minus 1.
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api (two stages, `authService.loginStage`: `authService` first, then `goApi`), and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
-| 5 | Orgs owned | Unsupported. Do not set it (D6651). The chart refuses it at render. |
+| 5 | Orgs owned | **Cancelled (D6651).** Refused at render. `AUTH_ORGS_OWNED` is removed. |
 
 Phase 4 means (D6358, D6652) that auth-service owns the user write path and writes `public.users` in the same
 transaction. `public.users` is the authoritative user record (D6651). `auth.users` holds the auth-only data
@@ -191,7 +208,7 @@ transaction. `public.users` is the authoritative user record (D6651). `auth.user
 
 Phase 5 is cancelled (D6651). `public.organizations` and `public.memberships` are the authority, and the `auth`
 copies are never a decision input. Do not set phase 5 or `AUTH_ORGS_OWNED`: both are unsupported, and the chart
-refuses phase 5 at render.
+refuses phase 5 and `AUTH_ORGS_OWNED` (in any `extraEnv` list) at render.
 The credential routes move with users owned, not with login: go-api refuses
 `AUTH_USERS_OWNED` unless the credential routes go to auth-service. auth-service
 mounts them from phase 2 and answers 503 until users are owned.

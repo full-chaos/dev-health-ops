@@ -1,564 +1,468 @@
 {
-  "catalog_version": 11,
-  "description": "Lists every served GraphQL root field. query-api enforces no catalog action (actions.v1.json) on a field today, so every action is unknown with a declared gap. Every other statement is held to a source proof by the Go guard.",
+  "catalog_version": 12,
+  "description": "Lists every served GraphQL root field with the catalog action a decision request for it names (the Go table field_actions.go holds the same mapping). Each action allows exactly what today's guard allows (CHAOS-12657, parity); query-api enforces none of them yet. Every other statement is held to a source proof by the Go guard.",
   "rows": [
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "catalog",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Catalog in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "analytics",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Analytics in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "productTelemetryDashboard",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ProductTelemetryDashboard in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "admin.telemetry",
       "disclosure_behavior": "refused with AUTHORIZATION_ERROR unless producttelemetry.RequirePlatformAdmin passes the caller",
       "field": "productTelemetryPlatformDashboard",
       "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "parity note: the legacy gate requires admin.telemetry outside an impersonation (producttelemetry.RequirePlatformAdmin); the catalog marks admin.telemetry impersonation denied"
       ],
       "resolver": "queryResolver.ProductTelemetryPlatformDashboard in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "none: platform field; no organization is selected",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "home",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Home in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "git.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "workGraphEdges",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.WorkGraphEdges in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "git.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "pr",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Pr in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "git.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "workGraphFlow",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.WorkGraphFlow in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "git.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "workGraphArtifacts",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.WorkGraphArtifacts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "featureFlags",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.FeatureFlags in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "featureFlagEvents",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.FeatureFlagEvents in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "work_items.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "workItemTeamAttributions",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.WorkItemTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "work_items.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "workUnitTeamAttributions",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.WorkUnitTeamAttributions in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "securityAlerts",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.SecurityAlerts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "securityOverview",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.SecurityOverview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "savedReports",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.SavedReports in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "savedReport",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.SavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "reportRuns",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ReportRuns in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "capacityForecast",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CapacityForecast in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "capacityForecasts",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CapacityForecasts in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "throughputForecast",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ThroughputForecast in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "operatingReview",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.OperatingReview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "integrations.read",
       "disclosure_behavior": "refused with AUTHORIZATION_ERROR unless datahealth.RequireOperator passes the caller",
       "field": "dataHealth",
       "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "deliberate change candidate: the legacy gate also admits holders of admin.stats and the operator role (datahealth.RequireOperator), neither of which integrations.read covers; the organization roles it admits, admin and owner, are the same"
       ],
       "resolver": "queryResolver.DataHealth in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "sourceHealth",
       "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
+        "deliberate change candidate: narrowing to integrations.read (organization admin and owner) is a later decision; today every member of the organization may read it (datahealth/sourcehealth.go SourceHealth, an organization guard only)"
       ],
       "resolver": "queryResolver.SourceHealth in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "busFactor",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.BusFactor in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "compoundingRisk",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CompoundingRisk in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "testopsRisk",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.TestopsRisk in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "testopsJobFailures",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.TestopsJobFailures in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "coverageBaselines",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CoverageBaselines in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "coverageScopeBaseline",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CoverageScopeBaseline in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR (the field's own check); the field takes no orgId argument",
       "field": "complexityTimeseries",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ComplexityTimeseries in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR (the field's own check); the field takes no orgId argument",
       "field": "hotspots",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Hotspots in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "metrics.read",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR (the field's own check); the field takes no orgId argument",
       "field": "cognitiveLoad",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.CognitiveLoad in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "git.read",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR (the field's own check); the field takes no orgId argument",
       "field": "reviewEdges",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ReviewEdges in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "recommendations",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Recommendations in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "experiments",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.Experiments in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiImpactSummary",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiImpactSummary in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiComparison",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiComparison in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiReviewLoad",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiReviewLoad in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiRiskBreakdown",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiRiskBreakdown in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiOpportunities",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiOpportunities in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a request with no organization answers AUTHORIZATION_ERROR (the field's own check); the field takes no orgId argument",
       "field": "improveOpportunities",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.ImproveOpportunities in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_credential: the credential's organization (claims.OrgID); the field takes no orgId argument",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiGovernanceSummary",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiGovernanceSummary in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiWorkflowDrilldown",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiWorkflowDrilldown in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiAttributedPrs",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiAttributedPrs in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "analytics.read",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard)",
       "field": "aiAttributionOverview",
-      "gaps": [
-        "action: the action this field would map to is not enforced in query-api today; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "queryResolver.AiAttributionOverview in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Query"
     },
     {
-      "action": "unknown",
+      "action": "reports.write",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard); the mutation resolver then applies requireMutationOrg: 'Authorization required' when the caller has no organization, 'Access denied' when the orgId is not the caller's organization",
       "field": "createSavedReport",
-      "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "mutationResolver.CreateSavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Mutation"
     },
     {
-      "action": "unknown",
+      "action": "reports.write",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard); the mutation resolver then applies requireMutationOrg: 'Authorization required' when the caller has no organization, 'Access denied' when the orgId is not the caller's organization",
       "field": "updateSavedReport",
-      "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "mutationResolver.UpdateSavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Mutation"
     },
     {
-      "action": "unknown",
+      "action": "reports.write",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard); the mutation resolver then applies requireMutationOrg: 'Authorization required' when the caller has no organization, 'Access denied' when the orgId is not the caller's organization",
       "field": "deleteSavedReport",
-      "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "mutationResolver.DeleteSavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Mutation"
     },
     {
-      "action": "unknown",
+      "action": "reports.write",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard); the mutation resolver then applies requireMutationOrg: 'Authorization required' when the caller has no organization, 'Access denied' when the orgId is not the caller's organization",
       "field": "cloneSavedReport",
-      "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "mutationResolver.CloneSavedReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Mutation"
     },
     {
-      "action": "unknown",
+      "action": "reports.write",
       "disclosure_behavior": "a whole-operation error before any field runs: 'A valid organization ID is required' for an empty, padded or non-string orgId; 'Only one organization may be queried per operation' for differing orgIds; 'Authorization required' when the caller has no organization; 'Access denied: cannot query org' when the orgId is not the caller's organization, except that a verified non-impersonating superuser with an organization may name another and the operation then runs against it (OperationOrgGuard); the mutation resolver then applies requireMutationOrg: 'Authorization required' when the caller has no organization, 'Access denied' when the orgId is not the caller's organization",
       "field": "triggerReport",
-      "gaps": [
-        "action: no catalog action covers this field; declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow"
-      ],
+      "gaps": [],
       "resolver": "mutationResolver.TriggerReport in internal/queryapi/graph/schema.resolvers.go",
       "resource_resolver": "organization_from_argument: the orgId argument, checked by OperationOrgGuard against the credential's organization",
       "type": "Mutation"

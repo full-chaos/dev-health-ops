@@ -292,7 +292,8 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	// named action that set holds.
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive, Platform: user.Platform}, edgeAccepted
+	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
+		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform}, edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an

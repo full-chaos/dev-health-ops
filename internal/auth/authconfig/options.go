@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
@@ -150,9 +151,39 @@ var optionRegistry = []Option{
 		Usage: "instantaneous burst allowance per key and discovery route bucket",
 	},
 	{
+		Flag: "pdp-caller-rate-limit", Env: EnvPDPCallerRateLimit, Kind: KindFloat,
+		Default: fmt.Sprintf("%g", defaultPDPCallerRateLimit), Group: GroupHTTP,
+		Usage: "sustained requests per second one caller workload may send to one PDP route, per pod",
+	},
+	{
+		Flag: "pdp-caller-rate-limit-burst", Env: EnvPDPCallerRateLimitBurst, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPDPCallerRateLimitBurst), Group: GroupHTTP,
+		Usage: "burst allowance of one caller workload on one PDP route, per pod; a batch costs its decision count, so it must be at least 100",
+	},
+	{
+		Flag: "pdp-route-rate-limit", Env: EnvPDPRouteRateLimit, Kind: KindFloat,
+		Default: fmt.Sprintf("%g", defaultPDPRouteRateLimit), Group: GroupHTTP,
+		Usage: "sustained requests per second all callers together may send to one PDP route, per pod",
+	},
+	{
+		Flag: "pdp-route-rate-limit-burst", Env: EnvPDPRouteRateLimitBurst, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPDPRouteRateLimitBurst), Group: GroupHTTP,
+		Usage: "burst allowance of all callers together on one PDP route, per pod",
+	},
+	{
 		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
 		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",
+	},
+	{
+		Flag: "client-addr-mode", Env: EnvClientAddrMode, Kind: KindString, Default: string(clientaddr.ModeCIDR), Group: GroupHTTP,
+		Usage: "how the client address is named: cidr (the trusted-proxy list), both (a valid go-api proof, else the list) or " +
+			"signed (a valid go-api proof, else the socket peer; the list is read only for GET and HEAD of the two well-known documents)",
+	},
+	{
+		Env: EnvClientAddrVerifyKey, Kind: KindString, Secret: true, Group: GroupHTTP,
+		Usage: "one or two <kid>:<key> entries (key base64url without padding, at least 32 bytes) that go-api's client-address " +
+			"proofs are checked with; " + EnvClientAddrVerifyKey + "_FILE reads it from a mounted file instead. Needed by modes both and signed",
 	},
 	{
 		Env: EnvDatabaseURI, Kind: KindString, Secret: true, Group: GroupDatabase,
@@ -265,10 +296,6 @@ var optionRegistry = []Option{
 	{
 		Flag: "platform-roles-owned", Env: rule.OwnedEnv, Kind: KindString, Default: "false", Group: GroupSession,
 		Usage: "true when auth-service owns the platform roles: the sign-in state reads is_superuser from the auth platform role assignments. Mounts no route",
-	},
-	{
-		Flag: "orgs-owned", Env: EnvOrgsOwned, Kind: KindString, Default: "false", Group: GroupSession,
-		Usage: "true when auth-service is the only writer of organizations; the sign-in organization projection then reads no public table and writes nothing. Mounts no route",
 	},
 	{
 		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,

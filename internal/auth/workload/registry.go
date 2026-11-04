@@ -23,6 +23,7 @@ type registryFile struct {
 	Description   string `json:"description"`
 	Workloads     []struct {
 		Name           string   `json:"name"`
+		Owner          string   `json:"owner"`
 		Audiences      []string `json:"audiences"`
 		AllowedActions []string `json:"allowed_actions"`
 	} `json:"workloads"`
@@ -86,6 +87,9 @@ func LoadRegistry(registryJSON, audiencesJSON []byte, cat *policycatalog.Catalog
 			return nil, bad("workload name %q is invalid or repeated", w.Name)
 		}
 		seen[w.Name] = true
+		if ValidateOwner(w.Owner) != nil {
+			return nil, bad("workload %q must name an owner team (lowercase letters, digits and hyphens)", w.Name)
+		}
 		if w.Audiences == nil || w.AllowedActions == nil {
 			return nil, bad("workload %q must list audiences and allowed_actions, empty or not", w.Name)
 		}
@@ -100,7 +104,7 @@ func LoadRegistry(registryJSON, audiencesJSON []byte, cat *policycatalog.Catalog
 		if ValidateActions(cat, w.AllowedActions) != nil {
 			return nil, bad("workload %q has an allowed action outside the catalog", w.Name)
 		}
-		out = append(out, Spec{Name: w.Name, Audiences: w.Audiences, AllowedActions: w.AllowedActions})
+		out = append(out, Spec{Name: w.Name, Owner: w.Owner, Audiences: w.Audiences, AllowedActions: w.AllowedActions})
 	}
 	return out, nil
 }

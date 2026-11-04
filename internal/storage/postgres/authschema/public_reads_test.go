@@ -2,6 +2,7 @@ package authschema
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -12,10 +13,10 @@ func TestPublicReadColumnsMatchTheReviewedList(t *testing.T) {
 	want := map[string][]string{
 		"users": {"id", "email", "password_hash", "full_name", "username", "auth_provider", "auth_provider_id",
 			"is_active", "is_verified", "is_superuser", "token_version", "last_login_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"},
-		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id"},
+		"memberships": {"user_id", "org_id", "role", "joined_at", "created_at", "invited_by_id", "id", "updated_at"},
 		"sso_providers": {"id", "org_id", "protocol", "status", "allow_idp_initiated", "auto_provision_users", "default_role",
 			"config", "allowed_domains", "encrypted_secrets", "is_default", "created_at"},
-		"organizations":                {"id", "slug", "name", "is_active", "tier"},
+		"organizations":                {"id", "slug", "name", "is_active", "tier", "created_at", "updated_at"},
 		"saml_assertion_replays":       {"provider_id", "assertion_id", "expires_at"},
 		"org_licenses":                 {"org_id", "tier", "features_override"},
 		"org_activity":                 {"org_id", "has_data", "computed_at"},
@@ -74,11 +75,13 @@ func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
 }
 
 // The switch-gated write access to public.users is the reviewed column list
-// and nothing wider: token_version (the password bump) but no email or is_active update.
+// and nothing wider: token_version (the password bump) but no email or is_active update,
+// and no is_superuser in either list (CHAOS-10993: the column defaults to false and the
+// platform roles live in auth.platform_role_assignments).
 func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id"}
+		"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id"}
 	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
@@ -95,7 +98,28 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 			t.Errorf("UPDATE must not include %s", column)
 		}
 	}
+	for _, column := range append(append([]string{}, insert...), update...) {
+		if column == "is_superuser" {
+			t.Error("the runtime role must not write is_superuser")
+		}
+	}
 	if !have["token_version"] {
 		t.Error("UPDATE must include token_version: a password change ends go-api's tokens")
+	}
+}
+
+// The versioned read API reads the ops-schema record: the three columns it needs beyond the login path, and the membership id
+// whether or not auth-service owns users, are in the read manifest.
+func TestPublicReadColumnsManifestHasNewColumns(t *testing.T) {
+	held := map[string][]string{}
+	for _, entry := range PublicReadColumns() {
+		held[entry.Table] = entry.Columns
+	}
+	for table, columns := range map[string][]string{"memberships": {"id", "updated_at"}, "organizations": {"created_at", "updated_at"}} {
+		for _, column := range columns {
+			if !slices.Contains(held[table], column) {
+				t.Errorf("PublicReadColumns lacks %s.%s", table, column)
+			}
+		}
 	}
 }

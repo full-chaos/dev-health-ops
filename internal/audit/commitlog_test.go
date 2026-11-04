@@ -102,12 +102,55 @@ func TestCommitRefusalIsMatchedByIdentityAndKeepsTheFailureFields(t *testing.T) 
 		if rec["level"] != tc.level || failure["level"] != "ERROR" {
 			t.Errorf("%s: level %v (undeclared %v), want %s (ERROR)", name, rec["level"], failure["level"], tc.level)
 		}
+		if _, ok := failure["refusal"]; ok {
+			t.Errorf("%s: the undeclared line names a refusal: %v", name, failure)
+		}
+		if want := map[string]any{"WARN": "*errors.errorString", "ERROR": nil}[tc.level]; rec["refusal"] != want {
+			t.Errorf("%s: refusal %v, want %v", name, rec["refusal"], want)
+		}
 		for _, r := range []map[string]any{rec, failure} {
 			delete(r, "level")
 			delete(r, "msg")
+			delete(r, "refusal")
 		}
 		if !reflect.DeepEqual(rec, failure) {
 			t.Errorf("%s: fields %v, want the failure line's %v", name, rec, failure)
+		}
+	}
+}
+
+type probeRefusal string
+
+func (e probeRefusal) Error() string { return string(e) }
+
+// A declared refusal's WARN line names its Go type (the refusal class), never
+// its text; a failure the mutation does not declare names none.
+func TestCommitRefusalLineNamesTheRefusalTypeNotItsText(t *testing.T) {
+	refusal := probeRefusal("probe refusal text")
+	other := errors.New("other refusal text")
+	m := Mutation{Audit: AuditEvent{EventType: "auth.probe.failed", Outcome: OutcomeError}, OffStream: "probe", Refusals: []error{other, refusal}}
+	for name, tc := range map[string]struct {
+		err     error
+		level   string
+		refusal any
+	}{
+		"declared":   {fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, refusal), "WARN", "audit.probeRefusal"},
+		"undeclared": {fmt.Errorf("%w: applying the state mutation: %w", ErrMutationFailed, probeRefusal("probe refusal text 2")), "ERROR", nil},
+	} {
+		var buf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(logging.NewJSON(&buf, slog.LevelDebug))
+		logCommitFailure(context.Background(), m, tc.err)
+		slog.SetDefault(previous)
+		rec := map[string]any{}
+		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &rec); err != nil {
+			t.Fatalf("%s: %v: %s", name, err, buf.String())
+		}
+		if rec["level"] != tc.level || rec["refusal"] != tc.refusal {
+			t.Errorf("%s: level %v refusal %v, want %s %v", name, rec["level"], rec["refusal"], tc.level, tc.refusal)
+		}
+		if strings.Contains(buf.String(), "refusal text") {
+			t.Errorf("%s: the error text reached the log: %s", name, buf.String())
 		}
 	}
 }

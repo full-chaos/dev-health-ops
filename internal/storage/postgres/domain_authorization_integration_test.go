@@ -127,6 +127,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"CREATE TABLE public.external_ingest_batches (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.external_ingest_recompute_jobs (id bigint PRIMARY KEY, status text)",
 		"CREATE TABLE public.external_ingest_rejections (id bigint PRIMARY KEY)",
+		"CREATE TABLE public.external_ingest_tokens (id bigint PRIMARY KEY, org_id text, source_id bigint, scopes text[], expires_at timestamptz, revoked_at timestamptz, token_hash text)",
 		"CREATE TABLE public.external_ingest_sources (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.feature_flags (id bigint PRIMARY KEY)",
 		"CREATE TABLE public.org_feature_overrides (id bigint PRIMARY KEY)",
@@ -214,6 +215,7 @@ func TestDomainAuthorizationRequiresExactCanaryAndReconcilerPrivileges(t *testin
 		"GRANT SELECT, INSERT ON TABLE public.sync_run_post_dispatches, public.sync_compute_checkpoints TO " + authorizedDomainRole,
 		"GRANT SELECT, INSERT, UPDATE ON TABLE public.org_activity TO " + authorizedDomainRole,
 		"GRANT SELECT (completion_key), INSERT (completion_key) ON TABLE public.worker_job_completion_fences TO " + authorizedDomainRole,
+		"GRANT SELECT (id, org_id, source_id, scopes, expires_at, revoked_at) ON TABLE public.external_ingest_tokens TO " + authorizedDomainRole,
 		"GRANT UPDATE (is_active, updated_at, last_test_at, last_test_success, last_test_error) ON TABLE public.integration_credentials TO " + authorizedDomainRole,
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {

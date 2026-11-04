@@ -358,10 +358,11 @@ func TestRegisterCarriesAbsentAndEmptyFullNameApart(t *testing.T) {
 		body  string
 		empty bool
 		set   bool
+		want  string
 	}{
 		"absent": {body: `{"email":"a1@example.com","password":"Correct-horse-battery-9"}`},
 		"empty":  {body: `{"email":"a2@example.com","password":"Correct-horse-battery-9","full_name":""}`, set: true, empty: true},
-		"named":  {body: `{"email":"a3@example.com","password":"Correct-horse-battery-9","full_name":"Ann"}`, set: true},
+		"named":  {body: `{"email":"a3@example.com","password":"Correct-horse-battery-9","full_name":"Ann"}`, set: true, want: "Ann"},
 	} {
 		c := newCredFixture(t)
 		if got := c.call(http.MethodPost, PatternRegister, tc.body, nil); got.Code != http.StatusAccepted {
@@ -376,6 +377,8 @@ func TestRegisterCarriesAbsentAndEmptyFullNameApart(t *testing.T) {
 			t.Errorf("%s: full name %q, want nil", name, *got)
 		case tc.set && (got == nil || (*got == "") != tc.empty):
 			t.Errorf("%s: full name %v", name, got)
+		case tc.want != "" && *got != tc.want:
+			t.Errorf("%s: full name %q, want %q", name, *got, tc.want)
 		}
 	}
 }

@@ -1,0 +1,682 @@
+{
+  "name": "auth-shadow-mismatch",
+  "schemaVersion": "v6",
+  "spec": {
+    "display": {
+      "description": "Auth shadow PDP mismatches against the legacy guard, by action namespace and caller (CHAOS-10849). Labels: namespace, caller, class, result only. No data and an inert alert until the shadow is wired into go-api and AUTH_SHADOW_PDP is on.",
+      "name": "Dev Health - Auth Shadow Mismatch (production)"
+    },
+    "duration": "24h",
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "items": [
+            {
+              "content": {
+                "$ref": "#/spec/panels/unresolved-total"
+              },
+              "height": 7,
+              "width": 12,
+              "x": 0,
+              "y": 0
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/mismatch-by-namespace"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 7
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/mismatch-by-caller"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 7
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/mismatch-by-class"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 14
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/unresolved-namespace-caller"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 14
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/results-by-result"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 21
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/shadow-enabled"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 6,
+              "y": 21
+            },
+            {
+              "content": {
+                "$ref": "#/spec/panels/shadow-config-invalid"
+              },
+              "height": 7,
+              "width": 6,
+              "x": 0,
+              "y": 28
+            }
+          ]
+        }
+      }
+    ],
+    "links": null,
+    "panels": {
+      "unresolved-total": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Increase of unresolved mismatches over the dashboard range. No data until the shadow is wired and AUTH_SHADOW_PDP is on.",
+            "name": "Unresolved mismatches (range total)"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/NumberPanel",
+            "spec": {
+              "formatting": {
+                "decimalPrecision": "0",
+                "unit": ""
+              },
+              "thresholds": [
+                {
+                  "color": "#e5484d",
+                  "unit": "",
+                  "value": 0.5
+                }
+              ],
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_mismatch_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum",
+                        "reduceTo": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api' AND class = 'unresolved'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "mismatch-by-namespace": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Group: namespace (the action namespace, not the Kubernetes namespace).",
+            "name": "Mismatches by action namespace"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/BarChartPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "stackedBarChart": true,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_mismatch_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "namespace",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{namespace}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "mismatch-by-caller": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Group: caller (member, admin, superuser).",
+            "name": "Mismatches by caller"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/BarChartPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "stackedBarChart": true,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_mismatch_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "caller",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{caller}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "mismatch-by-class": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Group: class. Reviewed classes (legacy_bug, new_bug, intentional) are told apart from unresolved.",
+            "name": "Mismatches by class"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/BarChartPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "stackedBarChart": true,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_mismatch_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "class",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{class}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "unresolved-namespace-caller": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "Filter: class = unresolved. Shows which namespace x caller pairs block an enforcement switch.",
+            "name": "Unresolved by action namespace and caller"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TablePanel",
+            "spec": {
+              "formatting": {
+                "columnUnits": {},
+                "decimalPrecision": "0"
+              },
+              "thresholds": null,
+              "visualization": {
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "scalar",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_mismatch_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum",
+                        "reduceTo": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api' AND class = 'unresolved'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "namespace",
+                        "signal": "metrics"
+                      },
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "caller",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "results-by-result": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "match, mismatch, error, dropped, skipped. Zero mismatches is not good while all calls are error, dropped or skipped.",
+            "name": "Shadow results by result (coverage)"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/BarChartPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "formatting": {
+                "decimalPrecision": "2",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "stackedBarChart": true,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_results_total",
+                        "timeAggregation": "increase",
+                        "spaceAggregation": "sum"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [
+                      {
+                        "fieldContext": "attribute",
+                        "fieldDataType": "string",
+                        "name": "result",
+                        "signal": "metrics"
+                      }
+                    ],
+                    "legend": "{{result}}",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "shadow-enabled": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "dev_health_api_shadow_enabled (latest). 1 = the shadow PDP runs.",
+            "name": "Shadow enabled"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": {
+                  "fillLessThan": "",
+                  "fillOnlyBelow": false
+                }
+              },
+              "formatting": {
+                "decimalPrecision": "0",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_enabled",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "shadow-config-invalid": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "description": "dev_health_api_shadow_config_invalid (latest). 1 = the shadow switch value is invalid.",
+            "name": "Shadow config invalid"
+          },
+          "links": null,
+          "plugin": {
+            "kind": "signoz/TimeSeriesPanel",
+            "spec": {
+              "axes": {
+                "isLogScale": false,
+                "softMax": null,
+                "softMin": null
+              },
+              "chartAppearance": {
+                "fillMode": "none",
+                "lineInterpolation": "spline",
+                "lineStyle": "solid",
+                "showPoints": false,
+                "spanGaps": {
+                  "fillLessThan": "",
+                  "fillOnlyBelow": false
+                }
+              },
+              "formatting": {
+                "decimalPrecision": "0",
+                "unit": ""
+              },
+              "legend": {
+                "customColors": null,
+                "mode": "list",
+                "position": "bottom"
+              },
+              "thresholds": null,
+              "visualization": {
+                "fillSpans": false,
+                "timePreference": "global_time"
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "time_series",
+              "spec": {
+                "name": "A",
+                "plugin": {
+                  "kind": "signoz/BuilderQuery",
+                  "spec": {
+                    "aggregations": [
+                      {
+                        "metricName": "dev_health_api_shadow_config_invalid",
+                        "timeAggregation": "latest",
+                        "spaceAggregation": "max"
+                      }
+                    ],
+                    "disabled": false,
+                    "filter": {
+                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                    },
+                    "groupBy": [],
+                    "legend": "",
+                    "limit": 100,
+                    "name": "A",
+                    "order": [],
+                    "signal": "metrics",
+                    "source": ""
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "refreshInterval": "",
+    "variables": []
+  },
+  "tags": [
+    {
+      "key": "environment",
+      "value": "production"
+    },
+    {
+      "key": "component",
+      "value": "auth-shadow"
+    },
+    {
+      "key": "ticket",
+      "value": "CHAOS-10849"
+    }
+  ]
+}

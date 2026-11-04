@@ -20,7 +20,7 @@ import (
 )
 
 // TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass: an OAuth-SSO user with a carried social key is not ready until the
-// row key is carried, and a self-hosted row's user holds the guard until the row is gone.
+// row key is carried, and a self-hosted row's user is keyed by the instance host.
 func TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -80,7 +80,7 @@ func TestUsersOwnedGuardCountsOAuthSSOAsItsOwnClass(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf("oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d, oauth_sso_selfhosted_unbindable=%d", c.Missing, c.Ambiguous, c.SelfHostedUnbindable)
+		want := fmt.Sprintf("oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d", c.Missing, c.Ambiguous)
 		if err := checkUsersOwned(ctx, runtime, schema); err == nil || !strings.Contains(err.Error(), want) {
 			t.Fatalf("the guard and the count line disagree: want %q in %v (line %q)", want, err, c.Line())
 		}
@@ -164,7 +164,15 @@ VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, id, id.String()+"@
 	user("gitlab", "930002")
 	backfill()
 	carry()
-	check("self-hosted row's user is never carried", "oauth_sso_selfhosted_unbindable=1")
+	check("self-hosted row's user carries the instance-host key", "")
+	var hostedKeys int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE issuer = 'https://git.corp.example' AND provider = $1`, hosted.String()).Scan(&hostedKeys); err != nil || hostedKeys != 1 {
+		t.Fatalf("self-hosted instance keys = %d (%v), want 1", hostedKeys, err)
+	}
+	var socialKeys int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM auth.external_identities WHERE provider = 'gitlab' AND subject = '930002'`).Scan(&socialKeys); err != nil || socialKeys != 0 {
+		t.Fatalf("self-hosted user's gitlab.com social keys = %d (%v), want 0", socialKeys, err)
+	}
 	if _, err := admin.Exec(ctx, `UPDATE public.sso_providers SET status = 'disabled' WHERE id = $1`, hosted); err != nil {
 		t.Fatal(err)
 	}

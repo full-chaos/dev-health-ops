@@ -419,6 +419,7 @@ func copyDecision(d authorization.Decision) authorization.Decision {
 	if d.Obligations != nil {
 		o := *d.Obligations
 		o.RepositoryAllowlist = slices.Clone(o.RepositoryAllowlist)
+		o.Redaction = slices.Clone(o.Redaction)
 		d.Obligations = &o
 	}
 	return d

@@ -60,6 +60,7 @@ if [ -z "${POSTURE_CLEAN_ENV:-}" ]; then
 fi
 
 GIT=/usr/bin/git
+unset "${!GIT_@}"
 JQ=/usr/bin/jq
 SHA=/usr/bin/sha256sum
 MKTEMP=/usr/bin/mktemp

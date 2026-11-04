@@ -165,6 +165,7 @@ nav:
       - Security:
           - operate/security/index.md
           - Production hardening: operate/security/hardening.md
+          - External Push credentials: operate/security/external-push-credentials.md
       - Runbooks:
           - operate/runbooks/index.md
           - Ingestion failure: operate/runbooks/ingestion-failure.md
@@ -184,11 +185,14 @@ nav:
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
           - Auth platform roles flip and rollback: operate/runbooks/auth-platform-roles-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md
+          - Push projection drift alerts: operate/runbooks/auth-push-projection-drift-alerts.md
           - Auth users flip-back grants: operate/runbooks/auth-users-flip-back-grants.md
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
           - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
+          - Web assertion key rotation: operate/runbooks/auth-workload-assertion-key-rotation.md
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
+          - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
       - Prod cutover 2026-09-11:
           - operate/prod-cutover-2026-09-11-lessons/index.md
@@ -238,6 +242,7 @@ nav:
       - Auth decisions and obligations: reference/auth/obligations.md
       - Auth endpoint profiles: reference/auth/endpoint-profiles.md
       - Auth service configuration: reference/auth/configuration.md
+      - Auth External Push authority: reference/auth/external-push-authority.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
       - Auth organization and membership authority: reference/auth/org-membership-authority.md

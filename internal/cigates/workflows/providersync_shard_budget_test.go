@@ -446,7 +446,7 @@ func TestIntegrationTimeoutGuardCoversDirectWorkflowCalls(t *testing.T) {
 }
 
 // guardedCheckGoRe matches the runs of a workflow step that reach an integration go test site of check_go.sh or check_golden_drift.sh.
-var guardedCheckGoRe = regexp.MustCompile(`check_go\.sh (?:integration-shard\b(?:\s|"|$)|integration(?:\s|$)|venue-oracles\b|multi-replica-workers\b|ci-leg(?:\s|$)|ci(?:\s|$)|fast(?:\s|$)|all(?:\s|$)|auth(?:\s+race-integration\b|\s*$))|check_golden_drift\.sh run\b|check_go\.sh job-timeout\b|auth_corpus_external\.sh`)
+var guardedCheckGoRe = regexp.MustCompile(`check_go\.sh (?:integration-shard\b(?:\s|"|$)|integration(?:\s|$)|venue-oracles\b|multi-replica-workers\b|ci-leg(?:\s|$)|ci(?:\s|$)|fast(?:\s|$)|all(?:\s|$)|auth(?:\s+race(?:-integration)?\b|\s*$))|check_golden_drift\.sh run\b|check_go\.sh job-timeout\b|auth_corpus_external\.sh`)
 
 const jobCapEnv = "CHECK_GO_JOB_CAP_MIN"
 

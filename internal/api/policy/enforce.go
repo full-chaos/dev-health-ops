@@ -46,7 +46,8 @@ type EnforceConfig struct {
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,
-// because a guard that cannot get a verdict must not fall back to the check the switch replaced. The one
+// because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow that
+// carries an obligation is such a failure: go-api cannot carry the obligation out. The one
 // exception is a caller the decision point cannot judge (a legacy HS256 token, a delegated session, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
@@ -140,7 +141,13 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("namespace", row.Namespace), slog.String("reason", string(decision.Reason())))
 		return enforceUnavailable
 	}
-	if decision.Allowed() && !carriesObligation(decision.Obligations()) {
+	if decision.Allowed() && carriesObligation(decision.Obligations()) {
+		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
+		e.logger.WarnContext(ctx, "api enforcement: the allow carries an obligation go-api cannot carry out, no verdict, the route is refused",
+			slog.String("namespace", row.Namespace))
+		return enforceUnavailable
+	}
+	if decision.Allowed() {
 		countEnforce(ctx, row.Namespace, enforceOutcomeAllow)
 		return enforceAllow
 	}
@@ -176,8 +183,8 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	return ""
 }
 
-// carriesObligation reports whether an allow carries an obligation. This guard enforces none, so an allow that
-// carries one is a deny: an obligation it cannot carry out is not met.
+// carriesObligation reports whether an allow carries an obligation. This guard carries out none, so an allow that
+// carries one is no verdict: it is neither served nor a deny.
 func carriesObligation(o pep.Obligations) bool {
 	if _, ok := o.TenantScope(); ok {
 		return true

@@ -686,7 +686,35 @@ type probeState struct {
 func reasoningEffortNoneOffered(failure *providerFailure, req chatCompletionRequest) bool {
 	return failure.code == errCodeInvalidRequest && (failure.detail.status == 400 || failure.detail.status == 422) &&
 		failure.detail.refusedParam() == "reasoning_effort" && req.ReasoningEffort != "" && req.ReasoningEffort != "none" &&
-		strings.Contains(strings.ToLower(failure.detail.message), "'none'")
+		noneListedAsOffer(failure.detail.message)
+}
+
+var (
+	supportedValuesRe = regexp.MustCompile(`(?is)supported values are:(.*)`)
+	setEffortToRe     = regexp.MustCompile(`(?i)set reasoning_effort to\s*['"]([^'"]*)['"]`)
+	sentenceEndRe     = regexp.MustCompile(`\.(\s|$)`)
+	quotedTokenRe     = regexp.MustCompile(`['"]([^'"]*)['"]`)
+)
+
+// noneListedAsOffer reports that a refusal message lists "none" as an allowed
+// value: a quoted token in its "Supported values are:" list, or the quoted value
+// after "set reasoning_effort to". A mention elsewhere is not an offer.
+func noneListedAsOffer(message string) bool {
+	if m := supportedValuesRe.FindStringSubmatch(message); m != nil {
+		list := m[1]
+		if loc := sentenceEndRe.FindStringIndex(list); loc != nil {
+			list = list[:loc[0]]
+		}
+		for _, tok := range quotedTokenRe.FindAllStringSubmatch(list, -1) {
+			if strings.EqualFold(strings.TrimSpace(tok[1]), "none") {
+				return true
+			}
+		}
+	}
+	if m := setEffortToRe.FindStringSubmatch(message); m != nil {
+		return strings.EqualFold(strings.TrimSpace(m[1]), "none")
+	}
+	return false
 }
 
 // runRound posts one probe round. A 400/422 that names a bounded parameter the

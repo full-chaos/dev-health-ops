@@ -177,3 +177,88 @@ func TestReadinessProbeServerErrorNamingEffortAndNoneIsNotSwapped(t *testing.T) 
 		t.Fatalf("requests = %d, want 1 (the 500 is not a 400/422 refusal, so no swap request follows)", effortRequests)
 	}
 }
+
+func TestNoneListedAsOffer(t *testing.T) {
+	cases := []struct {
+		name, msg string
+		want      bool
+	}{
+		{"single quotes list", "'reasoning_effort' does not support 'minimal'. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'.", true},
+		{"double quotes list", `Supported values are: "none", "low".`, true},
+		{"case-insensitive header", `SUPPORTED VALUES ARE: 'None', 'low'.`, true},
+		{"tools form single", "use /v1/responses or set reasoning_effort to 'none'.", true},
+		{"tools form double", `set reasoning_effort to "none".`, true},
+		{"negative mention", "'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium'.", false},
+		{"try mention", "unsupported; try 'none'.", false},
+		{"list without none", "Supported values are: 'low', 'high'.", false},
+		{"none after list sentence", "Supported values are: 'low'. Do not use 'none'.", false},
+		{"set to other value", "set reasoning_effort to 'low'.", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := noneListedAsOffer(c.msg); got != c.want {
+				t.Fatalf("noneListedAsOffer(%q) = %v, want %v", c.msg, got, c.want)
+			}
+		})
+	}
+}
+
+// refuseEffortFake refuses every reasoning_effort other than "none" with the given status and message.
+func refuseEffortFake(t *testing.T, status int, message string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var efforts []string
+	body, _ := json.Marshal(map[string]any{"error": map[string]any{
+		"message": message, "type": "invalid_request_error", "param": "reasoning_effort", "code": "unsupported_value",
+	}})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(raw, &req)
+		effort, has := req["reasoning_effort"].(string)
+		mu.Lock()
+		if has {
+			efforts = append(efforts, effort)
+		} else {
+			efforts = append(efforts, "<absent>")
+		}
+		mu.Unlock()
+		if has && effort != "none" {
+			w.WriteHeader(status)
+			_, _ = w.Write(body)
+			return
+		}
+		if !isRound2Request(raw) {
+			writeToolCallJSON(w)
+			return
+		}
+		writeFinalAnswerJSON(w, `{"kind":"final_answer","value":{"nonce":"ready-v1"}}`)
+	}))
+	t.Cleanup(server.Close)
+	return server, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), efforts...) }
+}
+
+func TestReadinessProbeNoneRefusedAsUnsupportedIsNeverSent(t *testing.T) {
+	msg := "'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium'."
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity} {
+		server, efforts := refuseEffortFake(t, status, msg)
+		outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+		wantReady(t, outcome, code)
+		for _, e := range efforts() {
+			if e == "none" {
+				t.Fatalf("status %d: efforts sent = %v; none was not offered and must not be sent", status, efforts())
+			}
+		}
+	}
+}
+
+func TestReadinessProbeDoubleQuotedSupportedListRetriesWithNone(t *testing.T) {
+	server, efforts := refuseEffortFake(t, http.StatusBadRequest, `'reasoning_effort' does not support 'minimal'. Supported values are: "none", "low", "medium".`)
+	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+	wantReady(t, outcome, code)
+	got := efforts()
+	if len(got) == 0 || got[len(got)-1] != "none" {
+		t.Fatalf("efforts sent = %v; the retry must carry none", got)
+	}
+}

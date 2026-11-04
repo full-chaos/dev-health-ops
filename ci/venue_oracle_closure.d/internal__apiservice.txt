@@ -54,6 +54,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain

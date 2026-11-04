@@ -80,10 +80,10 @@ func (s *Store) CreateSupersedingAudited(ctx context.Context, principalID uuid.U
 		Audit:     event,
 		Also:      []audit.AuditEvent{revoked},
 		OffStream: audit.OffStreamSessionLifecycle,
-		Refusals:  []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable},
+		Refusals:  []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable, ErrOrganizationUnavailable},
 	})
 	if err != nil {
-		for _, refusal := range []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable} {
+		for _, refusal := range []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated, ErrPrincipalUnavailable, ErrOrganizationUnavailable} {
 			if errors.Is(err, refusal) {
 				s.logger.WarnContext(ctx, "superseding session issue refused",
 					"principal_id", principal, "predecessor_session_id", predecessorID, "reason", refusal.Error())

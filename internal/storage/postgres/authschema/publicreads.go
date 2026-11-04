@@ -66,10 +66,11 @@ func SessionReaderColumns() ColumnGrant {
 	return ColumnGrant{Table: "sessions", Columns: []string{"id", "principal_id", "revoked_at", "legacy_token_version"}}
 }
 
-// ProjectionReaderReads is everything a projection reader role reads in the auth schema.
+// ProjectionReaderReads is everything a projection reader role reads in the auth schema. scopes and source_id are
+// read by the External Push reconcile (CHAOS-10897) and never by the acr reconcile; no fingerprint, no terminal_at.
 func ProjectionReaderReads() []ColumnGrant {
 	return []ColumnGrant{{Table: "credential_projection", Columns: []string{
-		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at"}}}
+		"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at", "scopes", "source_id"}}}
 }
 
 // PlatformRoleReaderColumns is what a session reader role also reads while the

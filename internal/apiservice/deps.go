@@ -209,6 +209,9 @@ type Deps struct {
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.
 	SessionIssuer sessionissue.Issuer
+	// Delegator starts and ends the admin impersonation session at auth-service when AUTH_PROXY_IMPERSONATION is on;
+	// nil leaves go-api the writer of the session.
+	Delegator sessionissue.Delegator
 	// OrgReactivator reactivates an organization in auth-service before the
 	// admin PATCH writes is_active=true; nil (AUTH_PROXY_ORG_PROVISIONING off)
 	// leaves the PATCH as it was.

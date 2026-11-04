@@ -968,7 +968,8 @@ func TestCurrentNamesTheClassOfALiveGrantOnly(t *testing.T) {
 					_, err := tx.Exec(ctx, `UPDATE auth.oauth_grants SET revoked_at = clock_timestamp() WHERE id = $1`, approved.GrantID)
 					return err
 				},
-				Audit: audit.AuditEvent{EventType: "oauth.grant.revoked", Outcome: audit.OutcomeAllowed},
+				Audit:     audit.AuditEvent{EventType: "oauth.grant.revoked", Outcome: audit.OutcomeAllowed},
+				OffStream: audit.OffStreamSessionLifecycle,
 			}); err != nil {
 				t.Fatalf("revoke the grant: %v", err)
 			}

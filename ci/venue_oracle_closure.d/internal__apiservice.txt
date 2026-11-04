@@ -80,6 +80,7 @@ internal/auth/serviceaccount
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange

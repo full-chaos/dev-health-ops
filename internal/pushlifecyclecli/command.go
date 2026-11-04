@@ -123,7 +123,7 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho push-lifecycle reconcile", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", reconcilejob.DefaultBatch, "rows read per page")
-	delay := flags.Duration("confirm-delay", reconcilejob.DefaultConfirmDelay, "wait between the two passes (0 runs one pass)")
+	delay := flags.Duration("confirm-delay", reconcilejob.DefaultConfirmDelay, "wait between the two passes (must be positive)")
 	list := flags.Bool("list", false, "also print one line per finding: class and token id")
 	dsnEnv := flags.String("dsn-env", defaultDSNEnv, "name of the environment variable that holds the database URI (NAME or NAME_FILE)")
 	if err := flags.Parse(env.Args); err != nil {
@@ -132,8 +132,8 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 		}
 		return cli.ExitUsage
 	}
-	if flags.NArg() != 0 || *batch < 1 || *batch > maxReconcileBatch || *delay < 0 {
-		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted, -batch must be 1..1000 and -confirm-delay must not be negative")
+	if flags.NArg() != 0 || *batch < 1 || *batch > maxReconcileBatch || *delay <= 0 {
+		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted, -batch must be 1..1000 and -confirm-delay must be positive")
 		return cli.ExitUsage
 	}
 	if !envNamePattern.MatchString(*dsnEnv) {

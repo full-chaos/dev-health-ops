@@ -7,6 +7,7 @@ package reconcilejob
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -68,16 +69,19 @@ func CountByClass(findings []pushreconcile.Finding) map[pushreconcile.Class]int 
 	return out
 }
 
+// ErrNonPositiveDelay is returned by Run when the confirm delay is zero or less.
+var ErrNonPositiveDelay = errors.New("reconcilejob: confirm delay must be positive")
+
 // Run runs the first pass, waits delay, runs the second pass and keeps the
-// findings both report (pushreconcile.Confirm). A delay of zero or less runs
-// one pass and reports its findings as they are.
+// findings both report (pushreconcile.Confirm). A delay of zero or less is
+// refused: one pass cannot confirm a finding.
 func Run(ctx context.Context, pass PassFunc, delay time.Duration, sleep func(context.Context, time.Duration) error) (Report, error) {
+	if delay <= 0 {
+		return Report{}, ErrNonPositiveDelay
+	}
 	first, err := pass(ctx)
 	if err != nil {
 		return Report{}, err
-	}
-	if delay <= 0 {
-		return Report{Passes: 1, Tokens: first.Tokens, Projected: first.Projected, Drift: first.Findings}, nil
 	}
 	if err := sleep(ctx, delay); err != nil {
 		return Report{}, err

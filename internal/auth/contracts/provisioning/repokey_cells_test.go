@@ -8,22 +8,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/repokey/cells"
 )
 
-// The event member is the looser form of the key: groups of 1-100 characters
-// from the key alphabet, 2-20 of them. The cells it cannot decide (a dot
-// segment, a leading dot, the 255-byte total) are the grant store's.
-func TestProvisioningResourceKeyHoldsTheLooserCells(t *testing.T) {
+// The event member is the canonical key, held to the whole cell table in the Go
+// check and the schema alike.
+func TestProvisioningResourceKeyHoldsTheRepositoryKeyCells(t *testing.T) {
 	root, err := contracts.RepoRoot(".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	notDecided := map[string]bool{
-		"256 bytes": true, "dot segment": true, "dot-dot segment": true, "dot-dot last": true,
-		"dot last": true, "leading dot group": true, "leading dot owner": true,
-	}
 	for _, c := range append(cells.Table(), cells.Cell{Name: "organization-wide", Key: "*", Valid: true}) {
-		if notDecided[c.Name] {
-			continue
-		}
 		change := map[string]any{"resource_type": "repository", "resource_key": c.Key}
 		goErr := CheckEvent("resource_grant", "grt_EXAMPLE0000000000000001", "resource_grant.created", change)
 		raw, _ := json.Marshal(change)

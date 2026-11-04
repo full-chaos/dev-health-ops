@@ -323,14 +323,23 @@ func checkReadGet(op ReadOperation, req *ReadRequest, res readResourceWire) stri
 func checkReadListItem(op ReadOperation, req *ReadRequest, item readItemWire) string {
 	switch op.Name {
 	case "principals_list":
-		if item.Principal == nil || item.Membership == nil {
+		if item.Principal == nil {
 			return "item_pair_mismatch"
 		}
-		if item.Membership.OrganizationID != req.OrganizationID {
-			return "item_wrong_organization"
-		}
-		if item.Membership.PrincipalID != item.Principal.PrincipalID {
-			return "item_pair_mismatch"
+		if item.Principal.Kind != "user" {
+			if item.Membership != nil {
+				return "item_membership_forbidden"
+			}
+		} else {
+			if item.Membership == nil {
+				return "item_membership_missing"
+			}
+			if item.Membership.OrganizationID != req.OrganizationID {
+				return "item_wrong_organization"
+			}
+			if item.Membership.PrincipalID != item.Principal.PrincipalID {
+				return "item_pair_mismatch"
+			}
 		}
 		if req.Kind != "" && item.Principal.Kind != req.Kind {
 			return "kind_filter_mismatch"

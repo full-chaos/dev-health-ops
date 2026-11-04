@@ -429,8 +429,10 @@ func TestSettingTheProviderBackServesTheGenerativeRowsAgain(t *testing.T) {
 type exitClassifier struct {
 	mu        sync.Mutex
 	calls     int
-	stopUnit  string // this unit fails as a rejected key (the run stops)
-	blockAll  bool   // every unit waits for the run context to end
+	stopUnit  string        // this unit fails as a rejected key (the run stops)
+	blockAll  bool          // every unit waits for the run context to end
+	started   chan struct{} // closed at the first blocked call
+	startOnce sync.Once
 	cancelRun context.CancelFunc
 	cancelAt  int // after this many answered calls, cancel the run context
 }
@@ -441,6 +443,9 @@ func (c *exitClassifier) Classify(ctx context.Context, bundle units.TextBundle) 
 	call := c.calls
 	c.mu.Unlock()
 	if c.blockAll {
+		if c.started != nil {
+			c.startOnce.Do(func() { close(c.started) })
+		}
 		<-ctx.Done()
 		return decision.Classification{}, ctx.Err()
 	}
@@ -519,8 +524,15 @@ func TestEveryUnitAskedOfTheServedBackendIsInOneOutcomeCountOnEveryExit(t *testi
 			map[string]int{"ok": shadowGatePassUnits}},
 		{"deterministic stop", func(context.CancelFunc) *exitClassifier { return &exitClassifier{stopUnit: "A1"} }, true, nil},
 		{"run context ends during the categorization", func(cancel context.CancelFunc) *exitClassifier {
-			go func() { time.Sleep(300 * time.Millisecond); cancel() }()
-			return &exitClassifier{blockAll: true}
+			started := make(chan struct{})
+			go func() {
+				select {
+				case <-started:
+					cancel()
+				case <-h.ctx.Done():
+				}
+			}()
+			return &exitClassifier{blockAll: true, started: started}
 		}, true, nil},
 		{"a return after the categorization", func(cancel context.CancelFunc) *exitClassifier {
 			return &exitClassifier{cancelRun: cancel, cancelAt: shadowGatePassUnits}

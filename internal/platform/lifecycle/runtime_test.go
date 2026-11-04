@@ -434,3 +434,122 @@ func TestRuntimeLogsTheBoundAddressOfAListeningComponent(t *testing.T) {
 		t.Fatalf("%d listening lines, want 1 (the plain component has no address)", lines)
 	}
 }
+
+// drainingComponent returns from Shutdown at once, but its work (a handler that
+// ignores its cancelled context) ends only when drained closes.
+type drainingComponent struct {
+	name        string
+	record      func(string)
+	shutdownErr error
+	drained     chan struct{}
+}
+
+func (c *drainingComponent) Name() string                { return c.name }
+func (c *drainingComponent) Start(context.Context) error { return nil }
+func (c *drainingComponent) Drained() <-chan struct{}    { return c.drained }
+func (c *drainingComponent) Shutdown(context.Context) error {
+	c.record("stop:" + c.name)
+	return c.shutdownErr
+}
+
+// stopProbe records when its shutdown began and whether its context had already ended.
+type stopProbe struct {
+	name      string
+	record    func(string)
+	stoppedAt time.Time
+	expired   bool
+}
+
+func (c *stopProbe) Name() string                { return c.name }
+func (c *stopProbe) Start(context.Context) error { return nil }
+func (c *stopProbe) Shutdown(ctx context.Context) error {
+	c.record("stop:" + c.name)
+	c.stoppedAt, c.expired = time.Now(), ctx.Err() != nil
+	return nil
+}
+
+// The next component is stopped only after a drain source drained, also when that
+// is after the source's own attempt ended, while the global budget remains.
+func TestShutdownWaitsForTheDrainBeforeTheNextComponent(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var events []string
+		record := func(event string) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, event)
+		}
+		server := &drainingComponent{name: "server", record: record, drained: make(chan struct{})}
+		store := &stopProbe{name: "store", record: record}
+		go func() {
+			// Past the server's equal-share attempt (50ms), within the 100ms global budget.
+			time.Sleep(70 * time.Millisecond)
+			record("drained:server")
+			close(server.drained)
+		}()
+		runtime, err := New(Options{ShutdownTimeout: 100 * time.Millisecond})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runtime.shutdown(context.Background(), []Component{store, server}); err != nil {
+			t.Fatal(err)
+		}
+		<-server.drained
+		mu.Lock()
+		got := append([]string(nil), events...)
+		mu.Unlock()
+		if want := []string{"stop:server", "drained:server", "stop:store"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("shutdown order %v, want %v: the store must stop only after the server drained", got, want)
+		}
+		if store.expired {
+			t.Fatal("the store was stopped with an ended context, want the rest of the global budget")
+		}
+	})
+}
+
+// A drain source that never drains holds the next component only up to the global
+// deadline: the runtime still stops it, and returns both the component's own
+// shutdown error and the drain breach.
+func TestShutdownBoundsTheDrainWaitByTheGlobalDeadline(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		record := func(string) {}
+		server := &drainingComponent{
+			name: "server", record: record,
+			shutdownErr: errors.New("1 handlers still running"),
+			drained:     make(chan struct{}),
+		}
+		store := &stopProbe{name: "store", record: record}
+		const shutdownTimeout = 100 * time.Millisecond
+		runtime, err := New(Options{ShutdownTimeout: shutdownTimeout})
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		err = runtime.shutdown(context.Background(), []Component{store, server})
+		returnedAt := time.Now()
+		if store.stoppedAt.IsZero() {
+			t.Fatal("the store was never stopped")
+		}
+		if !store.stoppedAt.Equal(started.Add(shutdownTimeout)) {
+			t.Fatalf("the store was stopped at +%v of virtual time, want +%v: the drain wait ends at the global deadline", store.stoppedAt.Sub(started), shutdownTimeout)
+		}
+		if !returnedAt.Equal(started.Add(shutdownTimeout)) {
+			t.Fatalf("shutdown returned at +%v of virtual time, want +%v: the hard shutdown bound", returnedAt.Sub(started), shutdownTimeout)
+		}
+		if err == nil {
+			t.Fatal("expected the shutdown breach as an error")
+		}
+		for _, want := range []string{
+			"shutdown component server: 1 handlers still running",
+			"shutdown component server: not drained: context deadline exceeded",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("shutdown error %q, want it to contain %q", err, want)
+			}
+		}
+	})
+}

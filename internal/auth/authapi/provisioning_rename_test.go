@@ -19,30 +19,12 @@ func renameBody(f *provFixture, actor uuid.UUID, name string) string {
 	return encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": actor.String(), "name": name})
 }
 
-// Dark without its row: a document without the rename row answers 404, the store is not reached, one startup line names
-// it, and every other provisioning route is still built.
-func TestOrgRenameIsDarkWithoutItsProfileRow(t *testing.T) {
-	f := newProvFixtureWith(t, docWithoutRow(t, nil, PatternOrgRename))
-	if got := f.post(PatternOrgRename, renameBody(f, f.super, "New"), nil); got.Code != http.StatusNotFound {
-		t.Fatalf("rename without its row: %d %s, want 404", got.Code, got.Body)
-	}
-	if f.reactivate.renames != 0 {
-		t.Fatal("the store ran for a route that is not mounted")
-	}
-	lines := 0
-	for _, line := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
-		if strings.Contains(line, PatternOrgRename) {
-			lines++
-			if !strings.Contains(line, "not mounted") {
-				t.Fatalf("the startup line does not say the route is not mounted: %s", line)
-			}
-		}
-	}
-	if lines != 1 {
-		t.Fatalf("%d startup lines name the rename route, want 1: %s", lines, f.logs.String())
-	}
-	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
-		t.Fatalf("suspend beside the dark rename route: %d %s, want 200", got.Code, got.Body)
+// A document without the rename row refuses the service start, naming the route, and builds no route.
+func TestOrgRenameNeedsItsProfileRowToStart(t *testing.T) {
+	routes, err := ProvisioningRoutes(provisioningDepsOver(t, docWithoutRow(t, nil, PatternOrgRename), nil))
+	var refusal *ProvisioningRowError
+	if !errors.As(err, &refusal) || refusal.Route != "POST "+PatternOrgRename || routes != nil {
+		t.Fatalf("%d routes, %v; want none and a refusal naming the rename route", len(routes), err)
 	}
 }
 
@@ -62,10 +44,11 @@ func TestOrgRenameIsServedWithTheEmbeddedDocument(t *testing.T) {
 	}
 }
 
-// The route is not on the startup gate: a document without its row builds every other route.
-func TestOrgRenameIsNotOnTheStartupGate(t *testing.T) {
-	if slices.Contains(provisioningPatterns, PatternOrgRename) {
-		t.Fatal("the rename route is on the startup gate; it ships dark (D6617)")
+// The route is on the startup gate: its row is embedded on main, so the dark phase D6617 describes for it is over (a
+// new route still joins provisioningPatterns only in its PR-2).
+func TestOrgRenameIsOnTheStartupGate(t *testing.T) {
+	if !slices.Contains(provisioningPatterns, PatternOrgRename) {
+		t.Fatal("the rename route is not on the startup gate")
 	}
 	if !workloadOperations[opOrgRename] || provisioningRouteOps[opOrgRename] != PatternOrgRename {
 		t.Fatal("the rename route is not a workload operation mapped to its pattern")

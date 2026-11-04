@@ -29,6 +29,7 @@ internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/httpapi
@@ -43,6 +44,7 @@ internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/authzenforce
 internal/chmigrate
 internal/cli
 internal/edgetokenmint

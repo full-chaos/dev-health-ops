@@ -31,6 +31,13 @@ behaviour below holds for the path in use unless a line says otherwise.
 A sign-in is matched to an account by the identity that the provider asserts for
 the person. The email address never selects an account.
 
+A GitLab user id belongs to one GitLab instance. An organization's OAuth provider
+that names a self-hosted GitLab (`base_url`) keys its identities by that
+instance: the lowercase scheme and host of the `base_url`. A self-hosted user and
+a gitlab.com user with the same numeric id are two accounts, and a gitlab.com
+social sign-in never reaches a self-hosted account. The host is read from the
+provider configuration, never from the account.
+
 ## Sign-in outcomes
 
 | Situation | Outcome |

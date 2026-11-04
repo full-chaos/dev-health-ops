@@ -146,3 +146,14 @@ func TestDialRetryRetryableOverrideAndGiveUpHook(t *testing.T) {
 		t.Fatalf("success: err=%v giveUp=%+v", err, got)
 	}
 }
+
+func TestDialRetryGiveUpReportsExhaustedWhenTheBudgetIsAlreadySpent(t *testing.T) {
+	exhausted, calls := false, 0
+	err := DialRetry{
+		Budget:   0,
+		OnGiveUp: func(_ int, _ time.Duration, spent bool) { exhausted, calls = spent, calls+1 },
+	}.Do(context.Background(), func(context.Context) error { return syscall.ECONNREFUSED })
+	if !errors.Is(err, syscall.ECONNREFUSED) || !exhausted || calls != 1 {
+		t.Fatalf("err=%v exhausted=%v hookCalls=%d, want the cause, true, 1", err, exhausted, calls)
+	}
+}

@@ -231,7 +231,22 @@ VALUES ($1, $2, $11, $3, $4, $9, $10, $5, 'member', $6::json, $7::json, $8::json
 		opts.isDefault, !opts.disallowIdpInitiated, "Test Provider "+id.String()[:8]); err != nil {
 		t.Fatalf("seed provider: %v", err)
 	}
+	if opts.protocol == "oauth_gitlab" {
+		bindSelfHostedGitLabAccounts(t, ctx, pool)
+	}
 	return id
+}
+
+// bindSelfHostedGitLabAccounts binds the gitlab accounts the fixtures seed to the self-hosted GitLab provider row of
+// the stack, as go-api writes them (sso_provider_id), whichever of the account and the provider is seeded first. The
+// fixtures' GitLab is a loopback instance, never gitlab.com.
+func bindSelfHostedGitLabAccounts(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE protocol = 'oauth_gitlab'
+  AND coalesce(config::jsonb->>'base_url', '') <> '' ORDER BY created_at, id LIMIT 1)
+WHERE auth_provider = 'gitlab' AND sso_provider_id IS NULL`); err != nil {
+		t.Fatalf("bind gitlab accounts: %v", err)
+	}
 }
 
 func postJSON(t *testing.T, server *httptest.Server, path string, body map[string]any) (int, map[string]any) {

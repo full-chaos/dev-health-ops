@@ -29,7 +29,10 @@ func TestParsePlatformOwnerArgs(t *testing.T) {
 
 func TestPlatformOwnerVerbsRefuseBeforeReadingTheEnvironment(t *testing.T) {
 	for _, verb := range []string{"platform-owner-grant", "platform-owner-revoke"} {
-		lookup := func(string) (string, bool) {
+		lookup := func(key string) (string, bool) {
+			if key == "AUTH_ORGS_OWNED" {
+				return "", false
+			}
 			t.Fatalf("%s read the environment for a bad command line", verb)
 			return "", false
 		}

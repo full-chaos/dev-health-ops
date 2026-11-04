@@ -43,6 +43,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -64,7 +65,7 @@ const (
 	envProjectionReaders = "AUTH_PROJECTION_READER_ROLES"
 	// envPushWriter is the NOLOGIN role that owns the External Push lifecycle
 	// append function, and envPushCallers the logins that may execute it
-	// (go-api's). Both empty leaves the function unexecutable.
+	// (go-api's and the worker domain login's). Both empty leaves the function unexecutable.
 	envPushWriter  = "AUTH_PUSH_LIFECYCLE_WRITER_ROLE"
 	envPushCallers = "AUTH_PUSH_LIFECYCLE_CALLER_ROLES"
 )
@@ -94,6 +95,9 @@ func execute(
 	stdout io.Writer,
 	stderr io.Writer,
 ) int {
+	logger := logging.NewJSON(stderr, slog.LevelInfo)
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
+
 	if len(args) > 0 && args[0] == "keys" {
 		return executeKeys(parent, args[1:], lookup, stdout, stderr)
 	}
@@ -225,12 +229,6 @@ func execute(
 		return 1
 	}
 
-	orgsOwned, err := authconfig.OrgsOwnedFromLookup(lookup)
-	if err != nil {
-		fmt.Fprintf(stderr, "configuration error: %v\n", err)
-		return 1
-	}
-
 	platformRolesOwned, err := rule.OwnedFromLookup(lookup)
 	if err != nil {
 		fmt.Fprintf(stderr, "configuration error: %v\n", err)
@@ -262,7 +260,6 @@ func execute(
 		return 1
 	}
 
-	logger := logging.NewJSON(stderr, slog.LevelInfo)
 	if grantsOnly {
 		result, err := authschema.Grants(ctx, pool, authschema.Options{
 			Schema:                   schema,
@@ -273,7 +270,6 @@ func execute(
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
 			UsersOwned:               usersOwned,
-			OrgsOwned:                orgsOwned,
 			PlatformRolesOwned:       platformRolesOwned,
 			SchemaOwnerRole:          ownerRole,
 			AcknowledgeNarrowing:     strings.TrimSpace(*ackNarrowing),
@@ -296,7 +292,6 @@ func execute(
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
 		UsersOwned:               usersOwned,
-		OrgsOwned:                orgsOwned,
 		PlatformRolesOwned:       platformRolesOwned,
 		SchemaOwnerRole:          ownerRole,
 

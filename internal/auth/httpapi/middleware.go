@@ -380,8 +380,12 @@ func (b *Bucket) Allow() bool {
 // an unbounded period. time.Time.Sub uses the monotonic reading when both
 // values carry one, so this is a guard against the cases where it cannot,
 // not a claim that wall-clock jumps are the normal path.
-func (b *Bucket) take() (bool, time.Duration) {
-	if b == nil {
+func (b *Bucket) take() (bool, time.Duration) { return b.TakeN(1) }
+
+// TakeN is take for a request that costs n tokens (n < 1 costs none). A refusal spends nothing; the wait is
+// until n tokens are there. A cost above the burst can never be met: the wait then stays above zero for ever.
+func (b *Bucket) TakeN(n int) (bool, time.Duration) {
+	if b == nil || n < 1 {
 		return true, 0
 	}
 	b.mu.Lock()
@@ -395,12 +399,16 @@ func (b *Bucket) take() (bool, time.Duration) {
 		}
 		b.last = now
 	}
-	if b.tokens < 1 {
-		return false, time.Duration((1 - b.tokens) / b.perSecond * float64(time.Second))
+	cost := float64(n)
+	if b.tokens < cost {
+		return false, time.Duration((cost - b.tokens) / b.perSecond * float64(time.Second))
 	}
-	b.tokens--
+	b.tokens -= cost
 	return true, 0
 }
+
+// RetryAfterSeconds is the Retry-After value for a wait TakeN reported.
+func RetryAfterSeconds(wait time.Duration) int { return retryAfterSeconds(wait) }
 
 // retryAfterSeconds is a Retry-After value for wait: whole seconds, rounded
 // up, at least 1.

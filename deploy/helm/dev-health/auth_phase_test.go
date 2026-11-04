@@ -459,8 +459,8 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 					t.Errorf("auth-service mounts %s, but go-api does not forward it", aggregate)
 				}
 			}
-			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers || cfg.OrgsOwned {
-				t.Errorf("%s: owned switches auth-service users=%v orgs=%v, go-api users=%v; want users=%v and orgs=false", name, cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned, wantUsers)
+			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers {
+				t.Errorf("%s: owned switches auth-service users=%v, go-api users=%v; want users=%v", name, cfg.UsersOwned, goUsersOwned, wantUsers)
 			}
 			for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 				doc := authDoc(docs, "Job", job)

@@ -117,7 +117,7 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 			return deny(ReasonOrgMismatch)
 		}
 		if m.Status != StatusActive {
-			return deny(ReasonMembershipInactive)
+			return deny(ReasonNoMembership)
 		}
 		roleID = m.Role
 	default:

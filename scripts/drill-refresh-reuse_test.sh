@@ -42,7 +42,8 @@ case "${a[0]} ${a[1]:-}" in
     # FAKE_PF=fail: the forward cannot listen and exits 1 (a foreign process may hold the port). Otherwise it prints its
     # Forwarding line for the port it was given and stays alive until $FAKE_STATE/pf-die exists.
     if [ "${FAKE_PF:-}" = fail ]; then echo 'error: unable to listen on port' >&2; exit 1; fi
-    echo "Forwarding from 127.0.0.1:${a[2]%%:*} -> 8095"
+    # FAKE_PF=silent: alive, but no Forwarding line (the port may belong to a foreign process).
+    [ "${FAKE_PF:-}" = silent ] || echo "Forwarding from 127.0.0.1:${a[2]%%:*} -> 8095"
     while [ ! -e "$st/pf-die" ]; do sleep 0.2; done
     exit 0 ;;
   "rollout status")
@@ -171,6 +172,11 @@ for port in default 19991; do
   grep -q "ABORT: port-forward on 127.0.0.1:$want_port is not proven" "$root/pf-fail-$port.out" && [[ "$(cat "$root/pf-fail-$port.rc")" != 0 ]] && r=ok || r=bad
   check "dead port-forward ($port): abort with a named reason, non-zero rc" "$r"
 done
+run_drill cells pf-silent FAKE_CURL=a FAKE_PF=silent
+if [ -s "$root/pf-silent.state/cred-requests" ]; then r=bad; else r=ok; fi
+check "live port-forward without a Forwarding line: no credential request is sent" "$r"
+grep -q 'ABORT: port-forward on 127.0.0.1:18230 is not proven' "$root/pf-silent.out" && r=ok || r=bad
+check "live port-forward without a Forwarding line: abort with a named reason" "$r"
 run_drill cells pf-live FAKE_CURL=a LOCAL_PORT=19991
 grep -q 'Forwarding' "$root/pf-live.dir/port-forward.log" && [[ "$(wc -l <"$root/pf-live.state/cred-requests")" -ge 2 ]] && ! grep -q 'ABORT' "$root/pf-live.out" && r=ok || r=bad
 check "live port-forward (control): the cells proceed and send credentials" "$r"

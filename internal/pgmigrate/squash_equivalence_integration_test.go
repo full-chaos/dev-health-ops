@@ -152,6 +152,7 @@ func TestBaselineEqualsTheArchivedChain(t *testing.T) {
 
 	riverAndRoles(t, ctx, instance, aURI)
 	aFull := capture(t, ctx, instance, aDB, window{aStarted, time.Now()})
+	aFull.Data = withoutLedgerRowsOf(aFull.Data, archived)
 	riverAndRoles(t, ctx, instance, bURI)
 	bFull := capture(t, ctx, instance, bDB, window{bStarted, time.Now()})
 	if diff := compare(roundTrip(t, ctx, instance, admin, aFull), roundTrip(t, ctx, instance, admin, bFull)); diff != "" {

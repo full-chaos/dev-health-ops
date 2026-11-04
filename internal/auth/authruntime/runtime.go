@@ -806,6 +806,12 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 			routes[i].RateLimitPerSecond = cfg.Public.PerSecond
 			routes[i].RateLimitBurst = cfg.Public.Burst
 		}
+		// The PDP routes are not on the default bucket: one noisy caller would drain it for all (the per-caller
+		// buckets in authapi come first); this is the ceiling of all callers together.
+		if routes[i].Pattern == authapi.PatternAuthorize || routes[i].Pattern == authapi.PatternAuthorizeBatch {
+			routes[i].RateLimitPerSecond = cfg.PDPRoute.PerSecond
+			routes[i].RateLimitBurst = cfg.PDPRoute.Burst
+		}
 	}
 	policy := clientAddrPolicy(cfg, logger)
 	return httpapi.ServerOptions{

@@ -255,14 +255,14 @@ func TestRepoGrant_RequestKeyShape(t *testing.T) {
 	e := plantedEvaluator()
 	s := repoSnapshot("member", liveGrant("*"))
 	long := string(bytes.Repeat([]byte("a"), 101))
-	for _, key := range []string{"", "ACME/api", "acme/API", "a/b/c", "acme/api ", " acme/api", "acme/api\n", "acme/api\x00", "acme", "/api", "acme/", "**", "*/*", "acme/*", long + "/api", "acme/" + long, "-a/b", ".a/b"} {
+	for _, key := range []string{"", "ACME/api", "acme/API", "acme/api ", " acme/api", "acme/api\n", "acme/api\x00", "acme", "/api", "acme/", "**", "*/*", "acme/*", long + "/api", "acme/" + long, "-a/b", ".a/b"} {
 		out, ok := NormalizeRequest(repoRequest(key))
 		if ok || out != (Request{}) {
 			t.Errorf("accepted key %q", key)
 		}
 		wantDeny(t, "key "+key, e.Evaluate(repoRequest(key), s), ReasonInvalidRequest)
 	}
-	for _, key := range []string{"*", "a/b", "acme/api", "a.b-c_d/e", "0/0"} {
+	for _, key := range []string{"*", "a/b", "acme/api", "a.b-c_d/e", "0/0", "a/b/c", "acme/grp/.github"} {
 		if out, ok := NormalizeRequest(repoRequest(key)); !ok || out != repoRequest(key) {
 			t.Errorf("refused or changed key %q: %+v", key, out)
 		}

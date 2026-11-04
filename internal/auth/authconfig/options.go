@@ -151,6 +151,26 @@ var optionRegistry = []Option{
 		Usage: "instantaneous burst allowance per key and discovery route bucket",
 	},
 	{
+		Flag: "pdp-caller-rate-limit", Env: EnvPDPCallerRateLimit, Kind: KindFloat,
+		Default: fmt.Sprintf("%g", defaultPDPCallerRateLimit), Group: GroupHTTP,
+		Usage: "sustained requests per second one caller workload may send to one PDP route, per pod",
+	},
+	{
+		Flag: "pdp-caller-rate-limit-burst", Env: EnvPDPCallerRateLimitBurst, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPDPCallerRateLimitBurst), Group: GroupHTTP,
+		Usage: "burst allowance of one caller workload on one PDP route, per pod; a batch costs its decision count, so it must be at least 100",
+	},
+	{
+		Flag: "pdp-route-rate-limit", Env: EnvPDPRouteRateLimit, Kind: KindFloat,
+		Default: fmt.Sprintf("%g", defaultPDPRouteRateLimit), Group: GroupHTTP,
+		Usage: "sustained requests per second all callers together may send to one PDP route, per pod",
+	},
+	{
+		Flag: "pdp-route-rate-limit-burst", Env: EnvPDPRouteRateLimitBurst, Kind: KindInt,
+		Default: fmt.Sprintf("%d", defaultPDPRouteRateLimitBurst), Group: GroupHTTP,
+		Usage: "burst allowance of all callers together on one PDP route, per pod",
+	},
+	{
 		Flag: "trusted-proxies", Env: EnvTrustedProxies, Kind: KindString, Group: GroupHTTP,
 		Usage: "comma-separated IP addresses and strict CIDR networks of the proxies whose single " +
 			"X-Forwarded-For value names the client (the go-api proxy); \"*\" and hostnames are refused; empty trusts none",

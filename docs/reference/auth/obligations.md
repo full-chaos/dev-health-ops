@@ -21,8 +21,8 @@ lifecycle: active
 An authorization decision answers one question: may this principal perform this action on this resource. A decision that allows may carry obligations. An obligation is a condition the resource service must enforce on the allowed request.
 {: .fc-page-lede }
 
-!!! warning "No ordinary allow carries an obligation yet"
-    The wire contract and the Go parser exist on `main`. The auth-service serves `POST /v1/authorize` and `POST /v1/authorize:batch` (`contracts/auth/v1/openapi/auth-v1.openapi.json`), and the decision document has an `obligations` member. The decision point writes the obligations a decision carries, but the policy that sets them for an ordinary allow (tenant scope, repository allowlist, redaction) is not in yet, and a delegated allow, the only one that carries any, is denied before it is decided. No service enforces an obligation. See [Status](#status).
+!!! note "Delegated sessions only"
+    `POST /v1/authorize` and `POST /v1/authorize:batch` are served by the auth-service (`contracts/auth/v1/openapi/auth-v1.openapi.json`; CHAOS-10841), and the decision document has an `obligations` member. The decision point puts obligations on the allow of a delegated (impersonation) session only: `tenant_scope`, `minimum_assurance` and, for a repository request, a one-key `repository_allowlist`. A plain session's allow carries none, and `redaction` is not set yet (CHAOS-12656). No service enforces an obligation yet. See [Status](#status).
 
 ## Request
 
@@ -30,7 +30,7 @@ An authorization decision answers one question: may this principal perform this 
 
 - The principal is an opaque reference that the decision point resolves on the server. The request has no `roles`, `permissions`, `scopes` or `is_superuser` member, and `additionalProperties` is false, so a caller cannot add a claim.
 - `action` is a catalog action from the [policy catalog](policy-catalog.md). A bare `admin` is invalid.
-- `resource` has a `type` and a canonical lowercase `key`. The closed `type` values are `organization`, `repository`, `membership`, `service_account`, `grant`, `credential`, `session`, `signing_key`, `subscription` and `platform`. A repository key is `owner/repo` or `*` for organization-wide.
+- `resource` has a `type` and a canonical lowercase `key`. The closed `type` values are `organization`, `repository`, `membership`, `service_account`, `grant`, `credential`, `session`, `signing_key`, `subscription` and `platform`. A repository key is a lowercase path of 2 to 20 segments in at most 255 bytes (`owner/repo`, or `owner/group/repo` for nested GitLab groups) or `*` for organization-wide. A segment but the last holds 1 to 100 characters, starts and ends with a letter or digit and never starts with a dot; the last may start with a dot (`.github`). An empty segment, `.`, `..` and a trailing slash are refused.
 - `context` has a `request_id` and a `client_service`. The `client_service` is a label for metrics and audit. It confers nothing.
 
 A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisions, each with the zero-based `index` of the request it answers.
@@ -42,11 +42,11 @@ A batch request holds 1 to 100 requests. A batch response holds 1 to 100 decisio
 | Member | Rule |
 | --- | --- |
 | `allowed` | Required. A strict JSON boolean. No default. Missing, null, `"true"` or `1` is invalid. |
-| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum. |
+| `reason_code` | A closed enum: `decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json`, equal to the schema enum (24 values, including `impersonation_denied` and `delegation_invalid`). |
 | `decision_id` | Minted by the server (`dec_` plus 26 characters). Never copied from the caller. |
 | `organization_id` | Null only for a platform or pre-organization decision. |
 | `policy_revision` | The monotonic revision of the active policy set. Every allow-cache key binds it. |
-| `expires_at` | Required for an allow and a deny. After this instant the caller must not reuse the decision for a later request and must ask again. |
+| `expires_at` | Required for an allow and a deny. After this instant the caller must not reuse the decision for a later request and must ask again. The allow of a delegated session expires at the decision time: use it once. |
 | `obligations` | Present only on an allow. A deny that carries `obligations` is invalid. |
 
 ## Obligations
@@ -56,7 +56,7 @@ The set is closed. `additionalProperties` is false. A decision that carries an o
 | Obligation | Type | The resource service must |
 | --- | --- | --- |
 | `tenant_scope` | organization id | Keep every read and write inside that organization. |
-| `repository_allowlist` | array of at most 256 `owner/repo` keys, or `*` | Touch only those repositories. `*` means organization-wide. An empty array means none, not unrestricted. Unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit `["*"]` and sends the member (an empty one included) on every allow of an action that filters by repository; a consumer reads an absent allowlist on such an action as a deny. A list is never truncated. |
+| `repository_allowlist` | array of at most 256 repository keys (a path of 2 to 20 segments), or `*` | Touch only those repositories. `*` means organization-wide. An empty array means none, not unrestricted. Unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit `["*"]` and sends the member (an empty one included) on every allow of an action that filters by repository; a consumer reads an absent allowlist on such an action as a deny. A list is never truncated. A consumer that reads an `owner/*` scope (a grant on every repository below one owner) matches every depth below `owner/`, never `owner2/...`; this contract defines no `owner/*` key, so the decision point states each repository or `*`. |
 | `redaction` | array of `personal_identifiers`, `contact_details`, `free_text` | Remove those field classes from the response. An unknown class makes the whole decision invalid. |
 | `minimum_assurance` | `aal1`, `aal2` or `aal3` | Deny when the principal's authenticator assurance level is lower. |
 | `step_up` | boolean | Make the caller complete step-up authentication before the action proceeds. |
@@ -95,10 +95,10 @@ A decision point failure is an `error.v1` document (503). It is a different sche
 | --- | --- |
 | Wire schemas and Go parser | On `main`. |
 | `POST /v1/authorize` and `POST /v1/authorize:batch` | On `main` (CHAOS-10841). The decision document carries the `obligations` a decision holds. A decision whose obligations are outside the contract (a deny with obligations, a repeated or malformed key, more than 256 keys, an unregistered class, an unknown assurance level, a tenant scope other than the question's organization) is not served: the call answers 503. |
-| Actor chain, delegation limits and obligations in the decision point | Planned, CHAOS-10839. The wire member exists; the policy that sets `tenant_scope`, `repository_allowlist` and `redaction` on an ordinary allow is the next change of CHAOS-12656. |
+| Actor chain, delegation limits and obligations in the decision point | Rules in the core (CHAOS-10839). The route reads the delegated row, the delegating session and the actor in one transaction and sets `tenant_scope`, `minimum_assurance` and `repository_allowlist` on the allow of a delegated session (CHAOS-12438). The policy that sets `redaction`, and the obligations of an ordinary allow, is the next change of CHAOS-12656. The owner-exemption audit event is written by a follow-up change; until then the exemption is a log line. |
 | Policy enforcement points that read obligations | Planned. web: CHAOS-10846 (TypeScript server-only decision client) and CHAOS-10883 (server actions use single decisions). |
 | `step_up` and `minimum_assurance` enforcement | Planned, CHAOS-10839. No MFA factor exists. The decision sheet (`docs/contribute/architecture/auth-control-plane-decision-sheet.md`) records the decision that the vocabulary and enforcement path ship before a factor does, and that the high-risk list is denied during impersonation until step-up exists. |
 | Entitlement-derived obligation | Planned, CHAOS-10837 (entitlement adapter) and CHAOS-10862 (billing and licensing enforcement point). ADR text (`docs/contribute/architecture/auth-control-plane-adrs.md`) allows a decision to carry one. The decision schema defines no entitlement obligation, so adding one is a schema change. |
 | Tenant scope as the go-api and query-api rule | Today the organization comes from `OrgScope` and `OperationOrgGuard`. See [authentication and authorization](authn-authz.md). |
 
-Until the decision point exists, treat every obligation in this page as a contract that a future producer and consumer must meet, not as behaviour of a running service.
+Until a policy enforcement point reads them, treat every obligation in this page as a contract that a consumer must meet, not as enforced behaviour.

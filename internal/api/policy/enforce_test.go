@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
+	"net/http/httptest"
 	"slices"
 	"sort"
 	"strings"
@@ -235,16 +237,6 @@ func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	}
 }
 
-func TestAnAllowThatCarriesAnObligationIsADeny(t *testing.T) {
-	pdp := newTestPDP(t, allowAll)
-	pdp.obligations = map[string]any{"tenant_scope": ownOrg}
-	rec := recordEnforce(t)
-	got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams"))), "GET", "/api/v1/admin/teams")
-	if got.status != http.StatusForbidden || !slices.Equal(rec.snapshot(), []string{"teams/deny"}) {
-		t.Fatalf("%d %q counted %v, want 403 and [teams/deny]: go-api enforces no obligation, so an allow that carries one is a deny", got.status, got.body, rec.snapshot())
-	}
-}
-
 func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
 	t.Helper()
 	store := newStore()
@@ -375,22 +367,116 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	}
 }
 
-// Every obligation kind of an allow is a deny, not only the tenant scope.
-func TestAnAllowThatCarriesAnyObligationIsADeny(t *testing.T) {
-	for name, obligations := range map[string]map[string]any{
-		"repository allowlist": {"repository_allowlist": []any{"acme/widget"}},
-		"redaction":            {"redaction": []any{"personal_identifiers"}},
-		"minimum assurance":    {"minimum_assurance": "aal2"},
-		"step up":              {"step_up": true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			recordEnforce(t)
-			pdp := newTestPDP(t, allowAll)
-			pdp.obligations = obligations
-			got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams"))), "GET", "/api/v1/admin/teams")
-			if got.status != http.StatusForbidden {
-				t.Fatalf("%d %q, want 403: an obligation go-api cannot carry out is not met", got.status, got.body)
+// The five obligations an allow can carry. go-api carries out none of them.
+var enforceObligationKinds = map[string]map[string]any{
+	"tenant_scope":         {"tenant_scope": ownOrg},
+	"repository_allowlist": {"repository_allowlist": []any{"acme/widget"}},
+	"redaction":            {"redaction": []any{"personal_identifiers"}},
+	"minimum_assurance":    {"minimum_assurance": "aal2"},
+	"step_up":              {"step_up": true},
+}
+
+const enforceUnavailableBody = `{"detail":"Authorization service temporarily unavailable"}`
+
+// An allow that carries an obligation go-api cannot carry out is no verdict: 503 with Retry-After, counted
+// error_deny. It is neither served nor refused with the route-level 403.
+func TestAnAllowThatCarriesAnyObligationIsNoVerdictThroughTheGuard(t *testing.T) {
+	for _, kind := range slices.Sorted(maps.Keys(enforceObligationKinds)) {
+		for _, cell := range enforceCells {
+			t.Run(kind+"/"+cell.namespace, func(t *testing.T) {
+				rec := recordEnforce(t)
+				pdp := newTestPDP(t, allowAll)
+				pdp.obligations = enforceObligationKinds[kind]
+				got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor(cell.namespace))), cell.method, cell.path)
+				if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != enforceRetryAfter || got.body != enforceUnavailableBody {
+					t.Fatalf("allow with %s: %d %q retry-after %q, want 503 %q with Retry-After %s", kind, got.status, got.body, got.header.Get("Retry-After"), enforceUnavailableBody, enforceRetryAfter)
+				}
+				if !slices.Equal(rec.snapshot(), []string{cell.namespace + "/error_deny"}) {
+					t.Fatalf("allow with %s: counted %v, want [%s/error_deny]", kind, rec.snapshot(), cell.namespace)
+				}
+			})
+		}
+	}
+}
+
+// answerOf is the guard's answer to a verdict, as guard.wrap gives it; "legacy" is the legacy check's turn.
+func answerOf(verdict enforceVerdict) (int, string, http.Header) {
+	switch verdict {
+	case enforceDeny, enforceUnavailable, enforceNoDecisionPoint:
+		w := httptest.NewRecorder()
+		writeEnforceRefusal(w, Admin, verdict)
+		return w.Code, w.Body.String(), w.Header()
+	case enforceAllow:
+		return http.StatusOK, "", http.Header{}
+	}
+	return 0, "legacy", http.Header{}
+}
+
+// Every mapped go-api row, every obligation kind: the allow is no verdict. The control is the same allow with no
+// obligation, which every row serves.
+func TestAnAllowThatCarriesAnyObligationIsNoVerdictOnEveryMappedRow(t *testing.T) {
+	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("no mapped row")
+	}
+	keys := slices.Sorted(maps.Keys(rows))
+	sw := onFor(authzenforce.Namespaces()...)
+	observe := func(key string) enforceObservation {
+		return enforceObservation{pattern: key, bearer: shadowBearer, orgID: ownOrg, userAccessToken: true}
+	}
+	t.Run("control", func(t *testing.T) {
+		rec := recordEnforce(t)
+		enf, err := NewEnforcer(EnforceConfig{Decider: newTestPDP(t, allowAll).client(t), Rows: rows, Switch: sw, Timeout: time.Second, Logger: quiet()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, key := range keys {
+			if status, _, _ := answerOf(enf.decide(context.Background(), observe(key))); status != http.StatusOK {
+				t.Errorf("%s: plain allow answered %d, want 200", key, status)
 			}
+		}
+		if n := len(rec.snapshot()); n != len(keys) {
+			t.Fatalf("counted %d decisions over %d rows", n, len(keys))
+		}
+	})
+	for _, kind := range slices.Sorted(maps.Keys(enforceObligationKinds)) {
+		t.Run(kind, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			pdp.obligations = enforceObligationKinds[kind]
+			enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: sw, Timeout: time.Second, Logger: quiet()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			served, status403, status503, retryAfter, errorDeny := 0, 0, 0, 0, 0
+			for _, key := range keys {
+				before := len(rec.snapshot())
+				status, body, header := answerOf(enf.decide(context.Background(), observe(key)))
+				switch status {
+				case http.StatusOK:
+					served++
+				case http.StatusForbidden:
+					status403++
+				case http.StatusServiceUnavailable:
+					if body == enforceUnavailableBody {
+						status503++
+					}
+				}
+				if status == http.StatusServiceUnavailable && header.Get("Retry-After") == enforceRetryAfter {
+					retryAfter++
+				}
+				if got := rec.snapshot()[before:]; slices.Equal(got, []string{rows[key].Namespace + "/error_deny"}) {
+					errorDeny++
+				}
+			}
+			if n := len(keys); status503 != n || retryAfter != n || errorDeny != n {
+				t.Fatalf("obligation=%s rows=%d served=%d status403=%d status503=%d retry_after=%d error_deny=%d, want every row 503 with Retry-After and counted error_deny",
+					kind, n, served, status403, status503, retryAfter, errorDeny)
+			}
+			t.Logf("obligation=%s rows=%d status503=%d retry_after=%d error_deny=%d", kind, len(keys), status503, retryAfter, errorDeny)
 		})
 	}
 }

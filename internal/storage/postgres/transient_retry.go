@@ -24,6 +24,12 @@ type DialRetry struct {
 	// OnRetry runs before each wait. It receives no error: the error text can
 	// name the dial address.
 	OnRetry func(attempt int, elapsed, wait time.Duration)
+	// Retryable overrides IsTransientDialError as the retry classifier.
+	Retryable func(error) bool
+	// OnGiveUp runs once when the loop returns a failed attempt. exhausted is
+	// true when the failure was retryable but the budget or the context ended
+	// the loop; false for a final error. It receives no error.
+	OnGiveUp func(attempt int, elapsed time.Duration, exhausted bool)
 }
 
 // Do runs attempt until it succeeds, fails with a final error, or the budget

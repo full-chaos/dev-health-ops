@@ -123,13 +123,7 @@ func (w *drainWatch) Shutdown(ctx context.Context) error {
 
 func (w *drainWatch) Drained() <-chan struct{} {
 	w.askOnce.Do(func() { close(w.asked) })
-	source, ok := any(w.Server).(interface{ Drained() <-chan struct{} })
-	if !ok {
-		closed := make(chan struct{})
-		close(closed)
-		return closed
-	}
-	return source.Drained()
+	return w.Server.Drained()
 }
 
 // storeStartProbe records, when its shutdown begins, whether a handler is still

@@ -29,6 +29,10 @@ concurrency:
 permissions:
   contents: read
 
+# CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
+env:
+  GOPROXY: https://proxy.golang.org|direct
+
 jobs:
   preview-or-build:
     if: inputs.action == 'build'

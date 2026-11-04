@@ -16,8 +16,9 @@ import (
 )
 
 // groupDB is a fake transaction opener: it records each transaction's
-// statements and rows, can hold every Commit until released, and fails the
-// insert of a row whose request id is its bad value.
+// statements and rows, holds each Commit for one receive from hold (a
+// closed hold releases them all), and fails the insert of a row whose
+// request id is its bad value.
 type groupDB struct {
 	mu       sync.Mutex
 	begins   int
@@ -166,21 +167,32 @@ func TestGroupWriterCoalescesConcurrentCalls(t *testing.T) {
 	}
 }
 
-// TestGroupWriterAnswersOnlyAfterCommit: a call held in Commit has not
-// returned.
+// TestGroupWriterAnswersOnlyAfterCommit: no call of a group held in Commit
+// has returned, the leading call nor a waiting one.
 func TestGroupWriterAnswersOnlyAfterCommit(t *testing.T) {
 	db := &groupDB{hold: make(chan struct{})}
 	w := newTestGroupWriter(t, db, 1, 0)
-	r := appendAsync(w, context.Background(), idOf(0))
-	waitFor(t, "the commit to start", func() bool { in, _, _ := db.state(); return in == 1 })
-	select {
-	case err := <-r:
-		t.Fatalf("the call returned (%v) while its commit was held", err)
-	case <-time.After(50 * time.Millisecond):
+	first := appendAsync(w, context.Background(), idOf(0))
+	waitFor(t, "the first commit to start", func() bool { in, _, _ := db.state(); return in == 1 })
+	group := []<-chan error{appendAsync(w, context.Background(), idOf(1)), appendAsync(w, context.Background(), idOf(2))}
+	waitFor(t, "two queued calls", func() bool { return w.queued() == 2 })
+	db.hold <- struct{}{}
+	if err := <-first; err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	waitFor(t, "the group commit to start", func() bool { in, _, _ := db.state(); return in == 2 })
+	for i, r := range group {
+		select {
+		case err := <-r:
+			t.Fatalf("call %d returned (%v) while its commit was held", i+1, err)
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	close(db.hold)
-	if err := <-r; err != nil {
-		t.Fatal(err)
+	for i, r := range group {
+		if err := <-r; err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
 	}
 }
 

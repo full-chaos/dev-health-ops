@@ -629,6 +629,23 @@ func TestInternalOrgScopedRowsPlantedImpersonationAndCredentialGap(t *testing.T)
 	}
 }
 
+func TestInternalOrgScopedRowWithOtherIDFormIsStillInternal(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for id, row := range rowsByID(t, internalOrgScopedIDs) {
+		t.Run(id, func(t *testing.T) {
+			planted := cloneRow(t, row)
+			planted["id"] = "GET " + planted["route"].(string) + " [internal-listener]"
+			planted["impersonation_policy"] = "subject_to_impersonation_override"
+			dropGap(planted, "credential_binding")
+			got := adminFieldViolations(planted, scopes, root)
+			if !violationsContain(got, internalFlipMessage) || !violationsContain(got, internalGapMessage) {
+				t.Fatalf("an internal row with another id suffix escaped the internal rule: %v", got)
+			}
+		})
+	}
+}
+
 func TestInternalACRRowsNameBothCredentialPaths(t *testing.T) {
 	for id, row := range rowsByID(t, internalACRCacheIDs) {
 		cache, _ := row["current_state_cache_behavior"].(string)

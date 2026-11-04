@@ -126,21 +126,27 @@ func TestProvisioningCredentialWorkloadNeedsItsInputsByName(t *testing.T) {
 		env  map[string]string
 		name string
 	}{
-		"both subject files":  {good(map[string]string{EnvAuthWorkloadSubjectFile: subject}), EnvAuthWorkloadSubjectFile},
-		"no subject file":     {noSubject, EnvAuthWorkloadSubjectFile},
-		"no issuer":           {noIssuer, EnvAuthWorkloadIssuer},
-		"empty issuer":        {good(map[string]string{EnvAuthWorkloadIssuer: " "}), EnvAuthWorkloadIssuer},
-		"issuer not https":    {good(map[string]string{EnvAuthWorkloadIssuer: "http://auth.example.test"}), EnvAuthWorkloadIssuer},
-		"missing bootstrap":   {good(map[string]string{EnvAuthWorkloadBootstrapFile: filepath.Join(t.TempDir(), "absent")}), EnvAuthWorkloadBootstrapFile},
-		"bad selector":        {good(map[string]string{EnvAuthProvisioningCredential: "Workload"}), EnvAuthProvisioningCredential},
-		"bool selector":       {good(map[string]string{EnvAuthProvisioningCredential: "true"}), EnvAuthProvisioningCredential},
-		"session selector":    {good(map[string]string{EnvAuthProvisioningCredential: "session"}), EnvAuthProvisioningCredential},
-		"selector with space": {good(map[string]string{EnvAuthProvisioningCredential: "workload session_compat"}), EnvAuthProvisioningCredential},
+		"both subject files":   {good(map[string]string{EnvAuthWorkloadSubjectFile: subject}), EnvAuthWorkloadSubjectFile},
+		"no subject file":      {noSubject, EnvAuthWorkloadSubjectFile},
+		"no issuer":            {noIssuer, EnvAuthWorkloadIssuer},
+		"empty issuer":         {good(map[string]string{EnvAuthWorkloadIssuer: " "}), EnvAuthWorkloadIssuer},
+		"issuer not https":     {good(map[string]string{EnvAuthWorkloadIssuer: "http://auth.example.test"}), EnvAuthWorkloadIssuer},
+		"issuer with userinfo": {good(map[string]string{EnvAuthWorkloadIssuer: "https://user:secret@auth.example.test"}), EnvAuthWorkloadIssuer},
+		"issuer with query":    {good(map[string]string{EnvAuthWorkloadIssuer: "https://auth.example.test?tenant=team"}), EnvAuthWorkloadIssuer},
+		"issuer with fragment": {good(map[string]string{EnvAuthWorkloadIssuer: "https://auth.example.test#tenant"}), EnvAuthWorkloadIssuer},
+		"missing bootstrap":    {good(map[string]string{EnvAuthWorkloadBootstrapFile: filepath.Join(t.TempDir(), "absent")}), EnvAuthWorkloadBootstrapFile},
+		"bad selector":         {good(map[string]string{EnvAuthProvisioningCredential: "Workload"}), EnvAuthProvisioningCredential},
+		"bool selector":        {good(map[string]string{EnvAuthProvisioningCredential: "true"}), EnvAuthProvisioningCredential},
+		"session selector":     {good(map[string]string{EnvAuthProvisioningCredential: "session"}), EnvAuthProvisioningCredential},
+		"selector with space":  {good(map[string]string{EnvAuthProvisioningCredential: "workload session_compat"}), EnvAuthProvisioningCredential},
 	} {
 		cred, err := newProvisioningCredential(cfg, issueEnv(tc.env))
 		if err == nil || cred.workload != nil {
 			t.Errorf("%s: %v %v, want a start-up error and no client", name, cred.workload, err)
 			continue
+		}
+		if strings.Contains(err.Error(), "secret@") || strings.Contains(err.Error(), "tenant") {
+			t.Errorf("%s: error %q holds the issuer value", name, err)
 		}
 		if !strings.Contains(err.Error(), tc.name) || !strings.Contains(err.Error(), EnvAuthProxyOrgProvisioning) {
 			t.Errorf("%s: error %q must name %s and the switch", name, err, tc.name)

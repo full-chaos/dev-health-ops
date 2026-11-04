@@ -144,8 +144,8 @@ func TestNewRefusesANegativeSessionLifetime(t *testing.T) {
 		t.Fatal("a negative session lifetime was accepted")
 	}
 	store, err := New(Config{Pool: pool, Schema: schema, SuccessorKey: keyText})
-	if err != nil || store.sessionLifetime != 0 || store.refreshTTL != defaultRefreshTTL {
-		t.Fatalf("defaults = lifetime %v, refresh %v, %v; want no cap and %v", store.sessionLifetime, store.refreshTTL, err, defaultRefreshTTL)
+	if err != nil || store.sessionLifetime != 0 || store.refreshTTL != DefaultRefreshTTL {
+		t.Fatalf("defaults = lifetime %v, refresh %v, %v; want no cap and %v", store.sessionLifetime, store.refreshTTL, err, DefaultRefreshTTL)
 	}
 }
 

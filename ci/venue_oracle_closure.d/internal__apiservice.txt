@@ -74,11 +74,13 @@ internal/auth/pushevent
 internal/auth/pushlifecycle
 internal/auth/pushreconcile
 internal/auth/ratelimitvalkey
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/serviceaccount
 internal/auth/session
 internal/auth/sessionevent
 internal/auth/sessionid
+internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange

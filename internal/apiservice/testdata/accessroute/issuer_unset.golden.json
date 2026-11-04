@@ -504,10 +504,10 @@
   },
   {
     "Name": "hs256 store down",
-    "Status": 500,
+    "Status": 503,
     "Headers": {
       "Content-Length": [
-        "34"
+        "57"
       ],
       "Content-Type": [
         "application/json"
@@ -516,7 +516,7 @@
         "go"
       ]
     },
-    "Body": "{\"detail\":\"Internal Server Error\"}"
+    "Body": "{\"detail\":{\"message\":\"Database temporarily unavailable\"}}"
   },
   {
     "Name": "hs256 sub not a string",

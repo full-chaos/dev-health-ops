@@ -3,6 +3,7 @@
 package workloadinput
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -25,6 +26,8 @@ const (
 	// EnvIssuer is the issuer (auth-service's token issuer URL)
 	// every workload token must carry.
 	EnvIssuer = "AUTH_WORKLOAD_ISSUER"
+	// EnvProxyURL is the auth-service origin the workload exchange is sent to.
+	EnvProxyURL = "AUTH_PROXY_URL"
 )
 
 // CredentialWorkload is the selector value that chose the workload credential.
@@ -98,9 +101,29 @@ func NewClient(upstream *url.URL, timeout time.Duration, lookup func(string) (st
 		Transport:      Transport(),
 	})
 	if err != nil {
+		var refused *workloadtoken.ConfigFieldError
+		if errors.As(err, &refused) {
+			if variable := refusedConfigVariable(refused.Field, subjectEnv); variable != "" {
+				return fail(variable, "%s is refused by the workload token client: %v", variable, err)
+			}
+		}
 		return fail("", "workload token client: %v", err)
 	}
 	return client, nil
+}
+
+// refusedConfigVariable names the environment variable a refused workloadtoken.Config field was read from. The
+// timeout and the transport are set in code, so they name none.
+func refusedConfigVariable(field workloadtoken.ConfigField, subjectEnv string) string {
+	switch field {
+	case workloadtoken.FieldIssuer:
+		return EnvIssuer
+	case workloadtoken.FieldExchangeURL:
+		return EnvProxyURL
+	case workloadtoken.FieldSubject:
+		return subjectEnv
+	}
+	return ""
 }
 
 // Transport carries the workload exchange: the shared outbound transport, no environment proxy.

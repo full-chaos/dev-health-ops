@@ -192,6 +192,11 @@ func (v *Venue) mintGo(t *testing.T, specs map[string]map[string]any) map[string
 	if v.legacyTokenKey != "" {
 		return v.mintLegacy(t, specs, issuer, audience)
 	}
+	for name := range v.orglessSuperusers {
+		if _, ok := specs[name]; !ok {
+			t.Fatalf("frozen venue: org-less superuser %q is no seed", name)
+		}
+	}
 	if v.TokenIssuer == nil {
 		v.TokenIssuer = edtokens.New(t)
 	}
@@ -204,6 +209,12 @@ func (v *Venue) mintGo(t *testing.T, specs map[string]map[string]any) map[string
 		mint, err := claims.userToken()
 		if err != nil {
 			t.Fatalf("frozen venue: token %q: %v", name, err)
+		}
+		if v.orglessSuperusers[name] {
+			if !claims.IsSuperuser {
+				t.Fatalf("frozen venue: token %q is named an org-less superuser but is not a superuser", name)
+			}
+			mint.OrgID = ""
 		}
 		token, err := v.TokenIssuer.Mint(mint)
 		if err != nil {

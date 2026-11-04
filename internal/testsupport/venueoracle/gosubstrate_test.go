@@ -238,6 +238,36 @@ func TestLegacyVenueMintsTheRecordedHS256Token(t *testing.T) {
 	}
 }
 
+// An org-less superuser seed is minted without its org claim (as auth-service login mints a superuser with no
+// membership), keyed as the recorded caller with the claim; any other seed keeps its claim.
+func TestOrglessSuperuserSeedsDropOnlyTheirOrgClaim(t *testing.T) {
+	const u1, u2, o1 = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", "00000000-0000-4000-8000-0000000000b1"
+	v := frozenVenue()
+	v.orglessSuperusers = map[string]bool{"super": true}
+	tokens := v.mintGo(t, map[string]map[string]any{
+		"super":  {"user_id": u1, "email": "s@x", "org_id": o1, "is_superuser": true},
+		"member": {"user_id": u2, "email": "m@x", "org_id": o1},
+	})
+	verifier := v.TokenIssuer.Verifier(t)
+	super, err := verifier.Verify(tokens["super"], time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if super.OrgID != nil {
+		t.Errorf("the org-less superuser carries org claim %q", *super.OrgID)
+	}
+	if identity := bearerIdentity("Bearer " + tokens["super"]); !strings.Contains(identity, `"org_id":"`+o1+`"`) || !strings.Contains(identity, `"is_superuser":true`) {
+		t.Errorf("the org-less superuser is not keyed as the recorded caller: %s", identity)
+	}
+	member, err := verifier.Verify(tokens["member"], time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if member.OrgID == nil || *member.OrgID != o1 {
+		t.Errorf("a member seed lost its org claim: %v", member.OrgID)
+	}
+}
+
 // A seed whose user is not a UUID cannot be a user access token's principal: the venue refuses it by name.
 func TestGoMintRefusesANonUUIDUser(t *testing.T) {
 	_, err := (legacyClaims{UserID: "u-1"}).userToken()
@@ -293,5 +323,29 @@ func TestStartRefusesAVenueWithNeitherAGoldenNorGoOnly(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(output, "Options.Golden) or Options.GoOnly") || strings.Contains(output, "VENUE STARTED") {
 		t.Fatalf("Start built a venue with neither a golden nor GoOnly (err %v):\n%s", err, output)
+	}
+}
+
+// OrglessSuperusers names superuser seeds only: a named member seed, or a name that is no seed, is refused.
+func TestOrglessSuperusersRefusesANonSuperuser(t *testing.T) {
+	orglessRefusal(t, "VENUEORACLE_ORGLESS_MEMBER_CHILD", "member")
+}
+
+func TestOrglessSuperusersRefusesAnUnknownSeed(t *testing.T) {
+	orglessRefusal(t, "VENUEORACLE_ORGLESS_UNKNOWN_CHILD", "nobody")
+}
+
+func orglessRefusal(t *testing.T, env, seed string) {
+	t.Helper()
+	output, err, inChild := childRun(t, env)
+	if inChild {
+		v := frozenVenue()
+		v.orglessSuperusers = map[string]bool{seed: true}
+		v.mintGo(t, map[string]map[string]any{"member": {"user_id": "00000000-0000-4000-8000-000000000002", "email": "m@x", "org_id": "o"}})
+		t.Log("MINTED")
+		return
+	}
+	if err == nil || strings.Contains(output, "MINTED") || !strings.Contains(output, `"`+seed+`"`) {
+		t.Errorf("OrglessSuperusers %q was not refused (err %v):\n%s", seed, err, output)
 	}
 }

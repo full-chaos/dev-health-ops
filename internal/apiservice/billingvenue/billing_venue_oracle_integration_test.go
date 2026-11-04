@@ -518,6 +518,11 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 	return f
 }
 
+// billingOrglessSuperusers is the "super" seed: a superuser whose org claim (orgD) names an organization it holds
+// no membership in. auth-service login mints such a user's access token with no org claim (authapi/login.go:420-423),
+// so its user access token carries none; the recorded request stays keyed by the recorded claim.
+var billingOrglessSuperusers = []string{"super"}
+
 func (f billingFixture) tokenSpecs() map[string]map[string]any {
 	spec := func(user uuid.UUID, org, role string, extra map[string]any) map[string]any {
 		out := map[string]any{"user_id": user.String(), "email": user.String()[:8] + "@example.com", "org_id": org, "role": role}
@@ -860,7 +865,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			return seed.tokenSpecs()
@@ -1043,7 +1048,7 @@ func TestVenueOracleBillingWithoutStripeKey(t *testing.T) {
 	var seed billingFixture
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
 		Golden: golden,
-		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv,
+		Root:   venueRoot(), JWTKey: venueKey, Logger: quietLogger(), PythonEnv: pythonEnv, OrglessSuperusers: billingOrglessSuperusers,
 		Seed: func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 			seed = billingSeed(t, ctx, admin)
 			ledgerSeed(t, ctx, admin, seed)

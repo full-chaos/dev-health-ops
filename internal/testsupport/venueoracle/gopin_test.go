@@ -117,3 +117,28 @@ func TestAGoPinWithAnUnrecordedDigestNeverOpens(t *testing.T) {
 		t.Fatal("a missing pin file opened")
 	}
 }
+
+// Retire wins over Retirements, the first matching Retirement wins after it, and a request no rule names is
+// compared (no pin).
+func TestDiffRetiringPinPicksTheRulingThatNamesTheRequest(t *testing.T) {
+	first, second, third := &GoPin{spec: GoPinSpec{Ruling: "first"}}, &GoPin{spec: GoPinSpec{Ruling: "second"}}, &GoPin{spec: GoPinSpec{Ruling: "third"}}
+	named := func(names ...string) func(Request) bool {
+		return func(r Request) bool {
+			for _, name := range names {
+				if r.Name == name {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	options := DiffOptions{Retire: named("a"), Pin: first, Retirements: []Retirement{{Match: named("a", "b"), Pin: second}, {Match: named("b", "c"), Pin: third}}}
+	for name, want := range map[string]*GoPin{"a": first, "b": second, "c": third, "d": nil} {
+		if got := options.retiringPin(Request{Name: name}); got != want {
+			t.Errorf("%s: pin %v, want %v", name, got, want)
+		}
+	}
+	if got := (DiffOptions{Retirements: []Retirement{{Match: named("x"), Pin: second}}}).retiringPin(Request{Name: "x"}); got != second {
+		t.Errorf("a Retirement without Retire: pin %v, want the second", got)
+	}
+}

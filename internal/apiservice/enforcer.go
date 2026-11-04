@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -13,6 +14,9 @@ import (
 )
 
 const enforceMeterName = "github.com/full-chaos/dev-health-ops/internal/apiservice"
+
+// recordEnforceConfigInvalid sets the config-invalid gauge; tests replace it.
+var recordEnforceConfigInvalid = func(context.Context, bool) {}
 
 // buildEnforcer builds the guard's Enforcer from the go-api switch variable. No cell on is no Enforcer: a bad value is
 // off (one ERROR line and the ignored-items gauge, never a start error). A cell that is on asks dp for the decision

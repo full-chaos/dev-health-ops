@@ -7,14 +7,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 func enforceEnv(extra map[string]string) map[string]string {
@@ -25,14 +29,28 @@ func enforceEnv(extra map[string]string) map[string]string {
 	return env
 }
 
+func recordConfigInvalid(t *testing.T) *[]bool {
+	t.Helper()
+	var got []bool
+	previous := recordEnforceConfigInvalid
+	recordEnforceConfigInvalid = func(_ context.Context, invalid bool) { got = append(got, invalid) }
+	t.Cleanup(func() { recordEnforceConfigInvalid = previous })
+	return &got
+}
+
 func TestNoCellOnBuildsNoEnforcer(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"unset": {},
 		"blank": {authzenforce.GoAPI.Env(): "  "},
 	} {
-		enf, err := buildEnforcer(lookupFrom(env), quietLogger(), newDecisionPoint(AuthProxyConfig{}, lookupFrom(env), nil))
+		gauge := recordConfigInvalid(t)
+		var logs bytes.Buffer
+		enf, err := buildEnforcer(lookupFrom(env), slog.New(slog.NewTextHandler(&logs, nil)), newDecisionPoint(AuthProxyConfig{}, lookupFrom(env), nil))
 		if enf != nil || err != nil {
 			t.Errorf("%s: enforcer %v err %v, want neither", name, enf, err)
+		}
+		if logs.Len() != 0 || !slices.Equal(*gauge, []bool{false}) {
+			t.Errorf("%s: log %q gauge %v, want no log and the config-invalid gauge at 0", name, logs.String(), *gauge)
 		}
 	}
 }
@@ -49,30 +67,63 @@ func TestABadEnforceValueIsOffNeverAStartError(t *testing.T) {
 	}
 }
 
-func TestACellOnNeedsTheAuthServiceUpstream(t *testing.T) {
-	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), newDecisionPoint(AuthProxyConfig{}, lookupFrom(enforceEnv(nil)), nil))
-	if err == nil || !strings.Contains(err.Error(), "GO_API_AUTHZ_ENFORCE") || !strings.Contains(err.Error(), EnvAuthProxyURL) {
-		t.Fatalf("err = %v, want one naming GO_API_AUTHZ_ENFORCE and %s", err, EnvAuthProxyURL)
+// A cell on with no way to ask is not a start error: go-api starts, logs one ERROR naming the missing variable, sets
+// the gauge, and its Enforcer refuses every request of the switched-on namespaces.
+func assertStartsFailClosed(t *testing.T, proxy AuthProxyConfig, variable string) {
+	t.Helper()
+	gauge := recordConfigInvalid(t)
+	var logs bytes.Buffer
+	env := lookupFrom(enforceEnv(nil))
+	enf, err := buildEnforcer(env, slog.New(slog.NewTextHandler(&logs, nil)), newDecisionPoint(proxy, env, nil))
+	if err != nil || enf == nil {
+		t.Fatalf("enforcer %v err %v, want a fail-closed enforcer and no start error", enf, err)
 	}
-	if strings.Contains(err.Error(), "billing") {
-		t.Fatalf("the error quotes the value: %v", err)
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 1 || !strings.Contains(logs.String(), "variable="+variable) || !strings.Contains(logs.String(), "GO_API_AUTHZ_ENFORCE") {
+		t.Fatalf("log %q: want one ERROR line naming GO_API_AUTHZ_ENFORCE and variable=%s", logs.String(), variable)
+	}
+	if strings.Contains(logs.String(), "billing") {
+		t.Fatalf("the log quotes the value: %q", logs.String())
+	}
+	if !slices.Equal(*gauge, []bool{true}) {
+		t.Fatalf("config-invalid gauge %v, want [true]", *gauge)
 	}
 }
 
-func TestACellOnNeedsAWorkloadCredential(t *testing.T) {
-	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
-	_, err := buildEnforcer(lookupFrom(enforceEnv(nil)), quietLogger(), newDecisionPoint(proxy, lookupFrom(enforceEnv(nil)), nil))
-	if err == nil || !strings.Contains(err.Error(), "GO_API_AUTHZ_ENFORCE") || !strings.Contains(err.Error(), EnvAuthWorkloadSubjectFile) {
-		t.Fatalf("err = %v, want one naming GO_API_AUTHZ_ENFORCE and %s", err, EnvAuthWorkloadSubjectFile)
+func TestACellOnWithoutTheAuthServiceUpstreamStartsFailClosed(t *testing.T) {
+	assertStartsFailClosed(t, AuthProxyConfig{}, EnvAuthProxyURL)
+}
+
+func TestACellOnWithoutAWorkloadCredentialStartsFailClosed(t *testing.T) {
+	assertStartsFailClosed(t, mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"}), EnvAuthWorkloadSubjectFile+","+EnvAuthWorkloadBootstrapFile)
+}
+
+// The start is not refused: the switch with no decision point inputs leaves the rest of go-api serving.
+func TestConfigureACellOnWithoutDecisionPointInputsStillStarts(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	for _, key := range []string{EnvAuthProxyURL, EnvAuthWorkloadIssuer, EnvAuthWorkloadBootstrapFile, EnvAuthWorkloadSubjectFile, policy.EnvShadowPDP} {
+		t.Setenv(key, "")
+		os.Unsetenv(key)
+	}
+	t.Setenv(authzenforce.GoAPI.Env(), "teams")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	components, err := configureWith(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second), quietLogger(), nil)
+	closeComponents(components)
+	if err != nil {
+		t.Fatalf("start with a cell on and no decision point inputs: %v, want a start", err)
 	}
 }
 
 func TestACellOnBuildsTheEnforcerFromTheWorkloadInputs(t *testing.T) {
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
 	env := enforceEnv(map[string]string{EnvAuthWorkloadSubjectFile: subjectFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer})
+	gauge := recordConfigInvalid(t)
 	enf, err := buildEnforcer(lookupFrom(env), quietLogger(), newDecisionPoint(proxy, lookupFrom(env), nil))
 	if err != nil || enf == nil {
 		t.Fatalf("enforcer %v err %v, want an enforcer", enf, err)
+	}
+	if !slices.Equal(*gauge, []bool{false}) {
+		t.Fatalf("config-invalid gauge %v, want [false]", *gauge)
 	}
 }
 

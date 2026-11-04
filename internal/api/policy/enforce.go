@@ -35,7 +35,10 @@ type EnforceConfig struct {
 	Switch authzenforce.Switch
 	// Timeout bounds one call. Zero is 2s.
 	Timeout time.Duration
-	Logger  *slog.Logger
+	// Unconfigured is an Enforcer with no decision point client: go-api could not build one. It asks nothing and
+	// refuses every request of a namespace switched on with a 503 and a reason code; Decider is nil.
+	Unconfigured bool
+	Logger       *slog.Logger
 }
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a

@@ -185,6 +185,46 @@ func TestEnforcementDeniesOnAnyPDPFailure(t *testing.T) {
 	}
 }
 
+const enforceNoDecisionPointBody = `{"detail":{"message":"Authorization service temporarily unavailable","reason_code":"authz_enforce_no_decision_point"}}`
+
+func newUnconfiguredEnforcerFor(t *testing.T, sw authzenforce.Switch) *Enforcer {
+	t.Helper()
+	enf, err := NewEnforcer(EnforceConfig{Unconfigured: true, Rows: shadowTestRows, Switch: sw, Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enf
+}
+
+// No decision point client: every request of a switched-on namespace is refused fail-closed, with a reason code.
+func TestAnEnforcerWithNoDecisionPointRefusesEveryRequestOfItsNamespacesWithA503(t *testing.T) {
+	for _, cell := range enforceCells {
+		t.Run(cell.namespace, func(t *testing.T) {
+			rec := recordEnforce(t)
+			got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newUnconfiguredEnforcerFor(t, onFor(cell.namespace))), cell.method, cell.path)
+			if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
+				t.Fatalf("no decision point, legacy allow: %d %q, want 503 %q", got.status, got.body, enforceNoDecisionPointBody)
+			}
+			if !slices.Equal(rec.snapshot(), []string{cell.namespace + "/error_deny"}) {
+				t.Fatalf("counted %v, want [%s/error_deny]", rec.snapshot(), cell.namespace)
+			}
+		})
+	}
+	got := serve(hs256Handler(t, newUnconfiguredEnforcerFor(t, onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	if got.status != http.StatusServiceUnavailable || got.body != enforceNoDecisionPointBody {
+		t.Fatalf("no decision point, legacy HS256 caller: %d %q, want the 503: fail-closed refuses every request", got.status, got.body)
+	}
+}
+
+func TestAnEnforcerWithNoDecisionPointKeepsTheLegacyAnswerOffItsNamespaces(t *testing.T) {
+	rec := recordEnforce(t)
+	base := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), nil), "GET", "/api/v1/billing/invoices")
+	got := enforceRequest(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newUnconfiguredEnforcerFor(t, onFor("teams"))), "GET", "/api/v1/billing/invoices")
+	if got.status != base.status || got.body != base.body || len(rec.snapshot()) != 0 {
+		t.Fatalf("billing off, teams on with no decision point: %d %q counted %v, want the legacy %d %q and nothing counted", got.status, got.body, rec.snapshot(), base.status, base.body)
+	}
+}
+
 func TestADeadPDPIsA503NotALegacyAllow(t *testing.T) {
 	pdp := newTestPDP(t, allowAll)
 	client := pdp.client(t)

@@ -100,3 +100,70 @@ func TestWorkerStartFinalErrorIsUnchanged(t *testing.T) {
 		t.Fatalf("final error changed: err=%v line=%s", err, line)
 	}
 }
+
+type shutdownFailingPresence struct {
+	startErr, shutdownErr error
+}
+
+func (p shutdownFailingPresence) Start(context.Context) error    { return p.startErr }
+func (shutdownFailingPresence) BeginDrain(context.Context) error { return nil }
+func (p shutdownFailingPresence) Shutdown(context.Context) error { return p.shutdownErr }
+func (shutdownFailingPresence) Errors() <-chan error             { return nil }
+
+type shutdownFailingChild struct{ shutdownErr error }
+
+func (shutdownFailingChild) Name() string                         { return "started-child" }
+func (shutdownFailingChild) Start(context.Context) error          { return nil }
+func (child shutdownFailingChild) Shutdown(context.Context) error { return child.shutdownErr }
+
+func rollbackDialError() error {
+	return fmt.Errorf("rollback dial host=192.0.2.9:5544 user=rollback: %w", syscall.ECONNREFUSED)
+}
+
+func assertRollbackMasked(t *testing.T, err error, line string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Run() = nil, want the start error")
+	}
+	for _, leak := range []string{"192.0.2.9", "5544", "user=rollback", "10.1.2.3", "6432"} {
+		if strings.Contains(line, leak) {
+			t.Fatalf("exit log line holds %q: %s", leak, line)
+		}
+	}
+	if !strings.Contains(line, startMaskSentinel) || !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("sentinel or cause lost: err=%v line=%s", err, line)
+	}
+}
+
+func TestWorkerStartRollbackPresenceShutdownErrorIsMasked(t *testing.T) {
+	t.Parallel()
+	component := workerProcessComponent{
+		presence:   shutdownFailingPresence{shutdownErr: rollbackDialError()},
+		components: []lifecycle.Component{failingChild{err: dialErrorNamingAddress()}},
+	}
+	err, line := runAndLog(t, component)
+	assertRollbackMasked(t, err, line)
+}
+
+func TestWorkerStartRollbackChildShutdownErrorIsMasked(t *testing.T) {
+	t.Parallel()
+	component := workerProcessComponent{components: []lifecycle.Component{
+		shutdownFailingChild{shutdownErr: rollbackDialError()},
+		failingChild{err: dialErrorNamingAddress()},
+	}}
+	err, line := runAndLog(t, component)
+	assertRollbackMasked(t, err, line)
+}
+
+func TestWorkerStartRollbackFinalShutdownErrorIsUnchanged(t *testing.T) {
+	t.Parallel()
+	final := errors.New("close pool: still draining")
+	component := workerProcessComponent{components: []lifecycle.Component{
+		shutdownFailingChild{shutdownErr: final},
+		failingChild{err: dialErrorNamingAddress()},
+	}}
+	err, line := runAndLog(t, component)
+	if !errors.Is(err, final) || !strings.Contains(line, "still draining") || !strings.Contains(line, startMaskSentinel) {
+		t.Fatalf("final rollback error changed: err=%v line=%s", err, line)
+	}
+}

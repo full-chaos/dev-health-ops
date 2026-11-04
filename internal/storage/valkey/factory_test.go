@@ -58,3 +58,18 @@ func TestOpenReturnsSanitizedUnavailableError(t *testing.T) {
 		t.Fatalf("Open() exposed Valkey connection material: %v", err)
 	}
 }
+
+func TestClientOptionsForceTheSingleNodeClient(t *testing.T) {
+	t.Parallel()
+
+	options, err := clientOptions(DefaultConfig("redis://valkey.internal:6379/1"))
+	if err != nil {
+		t.Fatalf("clientOptions() error = %v", err)
+	}
+	if !options.ForceSingleClient {
+		t.Fatal("clientOptions().ForceSingleClient = false, want true: the driver would probe CLUSTER SHARDS at connect")
+	}
+	if options.Sentinel.MasterSet != "" || len(options.Standalone.ReplicaAddress) != 0 {
+		t.Fatalf("clientOptions() selected a Sentinel or replica client: %+v", options.Standalone)
+	}
+}

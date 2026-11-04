@@ -27,7 +27,7 @@ const organizationsSlugKey = "organizations_slug_key"
 
 // errOrganizationProjectedConcurrently ends a first projection that a
 // concurrent call already inserted; it is success.
-var errOrganizationProjectedConcurrently = errors.New("identity: organization projected concurrently")
+var errOrganizationProjectedConcurrently error = &concurrentProjection{"identity: organization projected concurrently"}
 
 type orgState struct {
 	slug   string
@@ -122,6 +122,8 @@ func (s *Store) insertOrganization(ctx context.Context, orgID uuid.UUID, src org
 		},
 		Audit:  organizationAudit("auth.organization.projected", "organization_created", org),
 		Events: []audit.OutboxEvent{s.organizationEvent(ctx, org, "organization.created", src, true)},
+		// Only the lost race: a slug held by another organization stays ERROR.
+		Refusals: []error{errOrganizationProjectedConcurrently},
 	})
 	switch {
 	case err == nil:

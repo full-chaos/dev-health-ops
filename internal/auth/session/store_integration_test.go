@@ -724,8 +724,8 @@ func TestDefaultSessionHasNoAbsoluteCapAndRolls(t *testing.T) {
 	if !issued.Session.ExpiresAt.Equal(issued.ExpiresAt) {
 		t.Fatalf("session expiry %v, its only credential expires %v", issued.Session.ExpiresAt, issued.ExpiresAt)
 	}
-	if got := issued.ExpiresAt.Sub(issued.Session.CreatedAt); got < defaultRefreshTTL-time.Minute || got > defaultRefreshTTL+time.Minute {
-		t.Fatalf("first credential lives %v, want about %v", got, defaultRefreshTTL)
+	if got := issued.ExpiresAt.Sub(issued.Session.CreatedAt); got < DefaultRefreshTTL-time.Minute || got > DefaultRefreshTTL+time.Minute {
+		t.Fatalf("first credential lives %v, want about %v", got, DefaultRefreshTTL)
 	}
 	time.Sleep(10 * time.Millisecond)
 	child := e.exchange(t, ctx, e.store, issued.Credential)

@@ -148,7 +148,7 @@ func credentialRoutes(
 		return authapi.NotOwnedCredentialRoutes(), nil, nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger,
+		Pool: pool, Schema: schema, Logger: logger, RefreshTTL: sessionRefreshTTL(),
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {

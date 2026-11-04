@@ -170,9 +170,19 @@ type fakeLoginUsers struct {
 	byEmail   map[string]*local.User
 	projected []uuid.UUID
 	err       error
+	// beforeErr runs first (a cell cancels the request here); hold blocks a
+	// lookup until a cell lets it go.
+	beforeErr func()
+	hold      func()
 }
 
 func (f *fakeLoginUsers) ByEmail(_ context.Context, email string) (*local.User, error) {
+	if f.beforeErr != nil {
+		f.beforeErr()
+	}
+	if f.hold != nil {
+		f.hold()
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -188,6 +198,9 @@ func (f *fakeLoginUsers) Project(_ context.Context, id uuid.UUID) error {
 // it counts failures per lockout identifier instead and locks an identifier
 // at threshold failures, as auth.login_attempts does.
 type fakeAttempts struct {
+	mu        sync.Mutex
+	checkErr  error
+	recordErr error
 	locked    bool
 	remaining time.Duration
 	failures  int
@@ -196,6 +209,11 @@ type fakeAttempts struct {
 }
 
 func (f *fakeAttempts) Check(_ context.Context, id []byte) (bool, time.Duration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checkErr != nil {
+		return false, 0, f.checkErr
+	}
 	if f.threshold > 0 {
 		return f.perID[string(id)] >= f.threshold, f.remaining, nil
 	}
@@ -203,6 +221,11 @@ func (f *fakeAttempts) Check(_ context.Context, id []byte) (bool, time.Duration,
 }
 
 func (f *fakeAttempts) RecordFailure(_ context.Context, id []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.recordErr != nil {
+		return f.recordErr
+	}
 	f.failures++
 	if f.threshold > 0 {
 		if f.perID == nil {
@@ -264,6 +287,7 @@ type compatFixture struct {
 	attempts   *fakeAttempts
 	projector  *fakeProjector
 	appended   []audit.AuditEvent
+	appendMu   sync.Mutex
 	appendErr  error
 	social     SocialExchange
 	creds      *fakeServiceCredentials
@@ -328,6 +352,8 @@ func (f *compatFixture) buildCompat() {
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				return err
 			}
+			f.appendMu.Lock()
+			defer f.appendMu.Unlock()
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
@@ -967,7 +993,7 @@ func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T)
 				t.Fatalf("status %d, want %d: %s", response.Code, c.status, response.Body)
 			}
 			if c.name == "email of another provider" {
-				if want := `{"detail":{"message":"` + social.AccountExistsMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
+				if want := `{"detail":{"message":"` + social.ConflictMessage + `"}}`; strings.TrimSpace(response.Body.String()) != want {
 					t.Fatalf("body %s, want %s", response.Body, want)
 				}
 			}

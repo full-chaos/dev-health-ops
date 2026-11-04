@@ -19,7 +19,7 @@ const ACLUser = "auth-service-ratelimit"
 // (docs/reference/auth/configuration.md), the chart's ACL file format
 // (deploy/helm/dev-health/values.yaml valkey.acl) and the hosted ACL
 // integration test carry exactly this text after the password.
-const ACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)"
+const ACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +decr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)"
 
 // ACLDefaultUserLine keeps the default user as it is without the file: no
 // password, every key, every command. The in-chart Valkey's probes and the other

@@ -53,9 +53,9 @@ not hand-run a REVOKE.
    ```bash
    (
      set -o pipefail
-     ctx="$(kubectl config current-context)" || { echo "STOP: kubectl config current-context failed (rc $?)"; exit 1; }
+     ctx="$(kubectl config current-context)"
      echo "kube context: ${ctx}"
-     [ -n "${ctx}" ] && [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
+     [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
      rs="$(kubectl get rs -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,pod-template-hash=<owned hash> \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }
@@ -88,9 +88,9 @@ not hand-run a REVOKE.
    ```bash
    (
      set -o pipefail
-     ctx="$(kubectl config current-context)" || { echo "STOP: kubectl config current-context failed (rc $?)"; exit 1; }
+     ctx="$(kubectl config current-context)"
      echo "kube context: ${ctx}"
-     [ -n "${ctx}" ] && [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
+     [ "${ctx}" = "<prod context>" ] || { echo "STOP: the kube context is '${ctx}', not '<prod context>'"; exit 1; }
      rs="$(kubectl get rs -n <namespace> \
        -l app.kubernetes.io/instance=<release>,app.kubernetes.io/component=auth-service,dev-health.io/auth-users-owned=true \
        -o go-template='{{len .items}}')" || { echo "STOP: kubectl failed (rc $?)"; exit 1; }

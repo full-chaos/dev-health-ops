@@ -221,7 +221,14 @@ SQL
 }
 
 # post PATH BODYFILE OUT : POST a JSON body from a file; prints the status. The body never reaches argv.
-post() { curl -s -o "$3" -w '%{http_code}' --max-time 20 -H 'Content-Type: application/json' --data-binary @"$2" "http://127.0.0.1:$LOCAL_PORT$1"; }
+# peer_ok : the port-forward process is alive (not gone, not a zombie). A credential goes out only while it is.
+peer_ok() {
+  local st
+  [ -n "${PF_PID:-}" ] && st="$(awk '{print $3}' "/proc/$PF_PID/stat" 2>/dev/null)" && [ -n "$st" ] && [ "$st" != Z ] && return 0
+  echo "ABORT: port-forward process is not alive; no credential sent" >&2
+  return 1
+}
+post() { peer_ok || return 1; curl -s -o "$3" -w '%{http_code}' --max-time 20 -H 'Content-Type: application/json' --data-binary @"$2" "http://127.0.0.1:$LOCAL_PORT$1"; }
 login() { # NAME -> tokens/NAME.login.json
   jq -n --arg e "$EMAIL" --rawfile p "$sec/user-pw" '{email:$e,password:$p}' >"$tok/login.body"
   post /api/v1/auth/login "$tok/login.body" "$tok/$1.login.json"
@@ -240,6 +247,7 @@ safe_err() { # FILE -> one line
 }
 detail() { jq -r '(.detail | if type == "object" then .message else . end) // .reason_code // "-" | if type == "string" and length <= 80 then gsub("[^A-Za-z0-9 _.:,-]"; "?") else "-" end' "$1" 2>/dev/null || echo "-"; }
 current() { # ACCESS_FILE OUT -> status
+  peer_ok || return 1
   curl -s -o "$2" -w '%{http_code}' --max-time 20 -H @<(printf 'Authorization: Bearer %s\n' "$(cat "$1")") "http://127.0.0.1:$LOCAL_PORT/v1/sessions/current"
 }
 sid_of() { # the sid claim of a JWT file (claims only; the token is not printed)
@@ -262,13 +270,22 @@ want() { # NAME GOT WANT
 cells() {
   mkdir -p "$tok"
   k port-forward "deploy/$SVC" "$LOCAL_PORT:8095" >"$DRILL_DIR/port-forward.log" 2>&1 &
-  local pf=$!
-  trap 'kill "$pf" 2>/dev/null || true' RETURN
-  local _ s
+  PF_PID=$!
+  trap 'kill "$PF_PID" 2>/dev/null || true' RETURN
+  # Ready = the port-forward process is alive AND it printed its Forwarding line for this port. A reply on the port
+  # proves nothing: another process may hold it. No credential is sent before this.
+  local _ ready=0
   for _ in $(seq 1 30); do
-    curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$LOCAL_PORT/" && break
+    peer_ok 2>/dev/null || break
+    if grep -qF "Forwarding from 127.0.0.1:$LOCAL_PORT -> " "$DRILL_DIR/port-forward.log" 2>/dev/null; then ready=1; break; fi
     sleep 1
   done
+  if [ "$ready" != 1 ] || ! peer_ok 2>/dev/null; then
+    echo "ABORT: port-forward on 127.0.0.1:$LOCAL_PORT is not proven (process gone or no Forwarding line); no credential sent"
+    echo "DRILL FAILED"
+    return 1
+  fi
+  local s
   local bad=0
   echo "== sign in twice: S1 (attacked) and S2 (control)"
   s="$(login s2)"; want "login S2" "$s" 200 || bad=1

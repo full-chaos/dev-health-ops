@@ -38,6 +38,13 @@ case "${a[0]} ${a[1]:-}" in
     # delfail: the delete answers an error (the namespace is gone anyway): the teardown must pass the rc on.
     [ "${FAKE_SCEN:-}" = delfail ] && exit 1
     exit 0 ;;
+  "port-forward "*)
+    # FAKE_PF=fail: the forward cannot listen and exits 1 (a foreign process may hold the port). Otherwise it prints its
+    # Forwarding line for the port it was given and stays alive until $FAKE_STATE/pf-die exists.
+    if [ "${FAKE_PF:-}" = fail ]; then echo 'error: unable to listen on port' >&2; exit 1; fi
+    echo "Forwarding from 127.0.0.1:${a[2]%%:*} -> 8095"
+    while [ ! -e "$st/pf-die" ]; do sleep 0.2; done
+    exit 0 ;;
   "rollout status")
     # swap: the create was ours, then the namespace was replaced by one that carries another run's label.
     [ "${FAKE_SCEN:-}" = swap ] && printf 'drill-run: "someone-elses-run"\n' >"$st/ns"
@@ -54,6 +61,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ "$out" = /dev/null ] && exit 0
+echo "$out" >>"$FAKE_STATE/cred-requests"
 n=$(($(cat "$FAKE_STATE/curl-n" 2>/dev/null || echo 0) + 1))
 echo "$n" >"$FAKE_STATE/curl-n"
 tokens='"refresh_token":"REFRESH_SECRET_MARKER","access_token":"ACCESS_SECRET_MARKER"'
@@ -62,6 +70,9 @@ case "$FAKE_CURL:$n" in
   a:2) printf '{%s,"error":"failed"}' "$tokens" >"$out"; printf 500 ;;
   b:1) printf '{%s,"error":"s2 failed"}' "$tokens" >"$out"; printf 500 ;;
   b:2) printf '{%s}' "$tokens" >"$out"; printf 200 ;;
+  # die: the forward process ends right after the second login answered 200 (it ends before this curl returns)
+  die:*) printf '{%s}' "$tokens" >"$out"; printf 200
+    if [ "$n" = 2 ]; then : >"$FAKE_STATE/pf-die"; sleep 1.5; fi ;;
 esac
 FAKE
 chmod 755 "$root/bin/kubectl" "$root/bin/curl"
@@ -150,6 +161,22 @@ for scen in a b; do
 done
 grep -q 'login refused: s1 failed' "$root/login-a.out" && r=ok || r=bad
 check "login failure case a prints the whitelisted error text" "$r"
+
+# 2b. the port-forward must prove its peer before any credential leaves (default port and an override).
+for port in default 19991; do
+  if [ "$port" = default ]; then pe=(); want_port=18230; else pe=(LOCAL_PORT="$port"); want_port="$port"; fi
+  run_drill cells "pf-fail-$port" FAKE_CURL=a FAKE_PF=fail "${pe[@]}"
+  if [ -s "$root/pf-fail-$port.state/cred-requests" ]; then r=bad; else r=ok; fi
+  check "dead port-forward ($port): no credential request is sent to a foreign responder" "$r"
+  grep -q "ABORT: port-forward on 127.0.0.1:$want_port is not proven" "$root/pf-fail-$port.out" && [[ "$(cat "$root/pf-fail-$port.rc")" != 0 ]] && r=ok || r=bad
+  check "dead port-forward ($port): abort with a named reason, non-zero rc" "$r"
+done
+run_drill cells pf-live FAKE_CURL=a LOCAL_PORT=19991
+grep -q 'Forwarding' "$root/pf-live.dir/port-forward.log" && [[ "$(wc -l <"$root/pf-live.state/cred-requests")" -ge 2 ]] && ! grep -q 'ABORT' "$root/pf-live.out" && r=ok || r=bad
+check "live port-forward (control): the cells proceed and send credentials" "$r"
+run_drill cells pf-die FAKE_CURL=die
+grep -q 'ABORT: port-forward process is not alive; no credential sent' "$root/pf-die.out" && [[ "$(wc -l <"$root/pf-die.state/cred-requests")" == 2 ]] && r=ok || r=bad
+check "port-forward dies between cells: the next credential cell aborts, no third request" "$r"
 
 # 3. the error-text helpers print no token or other key of a body, and no line of the script prints a response file
 # except through them.

@@ -666,3 +666,51 @@ func TestAnInheritedGOARCHDoesNotChangeTheScan(t *testing.T) {
 		t.Fatal("arch-named files were accepted")
 	}
 }
+
+func TestACleanPackageWhoseOnlyTestIsArchOnlyIsAcceptedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		tag := "//go:build " + arch + "\n\n"
+		for name, files := range map[string]map[string]string{
+			"suffix internal test": {"a/x_" + arch + "_test.go": cleanTest},
+			"suffix external test": {"a/x_" + arch + "_test.go": "package a_test\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"},
+			"tag internal test":    {"a/xt_test.go": tag + cleanTest},
+			"tag external test":    {"a/xt_test.go": tag + "package a_test\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"},
+		} {
+			files["a/a.go"] = cleanPkg
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: refused:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAPackageThatExistsOnOneArchOnlyIsAcceptedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		tag := "//go:build " + arch + "\n\n"
+		for name, files := range map[string]map[string]string{
+			"suffix": {"a/a_" + arch + ".go": cleanPkg, "a/a_" + arch + "_test.go": cleanTest},
+			"tag":    {"a/a.go": tag + cleanPkg, "a/a_test.go": tag + cleanTest},
+		} {
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: refused:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAPackageWithNoTestOnAnyArchIsStillRefused(t *testing.T) {
+	t.Parallel()
+	for name, files := range map[string]map[string]string{
+		"plain":     {"a/a.go": cleanPkg},
+		"arch-only": {"a/a_amd64.go": cleanPkg},
+	} {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "has no test") {
+			t.Errorf("%s: want has no test, got:\n%s", name, got)
+		}
+	}
+	if got := problemsOf(t, map[string]string{"b/b.go": "package b\n"}, rowA); !strings.Contains(got, "no such package") {
+		t.Errorf("want no such package, got:\n%s", got)
+	}
+}

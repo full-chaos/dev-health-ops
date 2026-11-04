@@ -436,8 +436,19 @@ func Check(root string, rows []Row) ([]string, error) {
 		}
 		loads = append(loads, l)
 	}
+	presence := map[string]rowPresence{}
 	for _, l := range loads {
-		got := judge(l, rows, typedAnywhere)
+		for _, r := range rows {
+			if p := l.pkgs[l.modpath+"/"+r.Package]; p != nil {
+				pr := presence[r.Package]
+				pr.exists = true
+				pr.hasTest = pr.hasTest || len(p.TestGoFiles)+len(p.XTestGoFiles) > 0
+				presence[r.Package] = pr
+			}
+		}
+	}
+	for _, l := range loads {
+		got := judge(l, rows, typedAnywhere, presence)
 		for _, p := range got {
 			if !seen[p] {
 				seen[p] = true
@@ -448,6 +459,9 @@ func Check(root string, rows []Row) ([]string, error) {
 	sort.Strings(problems)
 	return problems, nil
 }
+
+// rowPresence is what the union of the CI arch loads shows of a row's package.
+type rowPresence struct{ exists, hasTest bool }
 
 type archLoad struct {
 	modpath  string
@@ -482,8 +496,8 @@ func loadArch(root, goarch string, rows []Row) (*archLoad, error) {
 	return &archLoad{modpath, pkgs, ts, loadErrs}, nil
 }
 
-// judge: a file that some CI arch type-checked is judged by that arch alone, so the arch that ignores it does not report it untyped.
-func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool) []string {
+// judge: a package or test that some CI arch has counts for every arch (presence is the union); a file that some CI arch type-checked is judged by that arch alone, so the arch that ignores it does not report it untyped.
+func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool, presence map[string]rowPresence) []string {
 	modpath, pkgs, ts, loadErrs := l.modpath, l.pkgs, l.ts, l.loadErrs
 	var problems []string
 	for _, r := range rows {
@@ -494,9 +508,11 @@ func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool) []string {
 			problems = append(problems, r.Package+": runs as test-name slices in every race leg and cannot be excluded")
 			continue
 		case p == nil:
-			problems = append(problems, r.Package+": no such package")
+			if !presence[r.Package].exists {
+				problems = append(problems, r.Package+": no such package")
+			}
 			continue
-		case len(p.TestGoFiles)+len(p.XTestGoFiles) == 0:
+		case len(p.TestGoFiles)+len(p.XTestGoFiles) == 0 && !presence[r.Package].hasTest:
 			problems = append(problems, r.Package+": has no test, so no race run to retire")
 			continue
 		}

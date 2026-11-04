@@ -123,6 +123,7 @@ goApi:
   enabled: true
   replicas: 1
   image: {repository: "${IMG_DHO}", pullPolicy: IfNotPresent}
+  sessionIssue: {secretName: session-issue}
   extraArgs: ["--health-check-timeout=10s"]
   readinessProbe: {timeoutSeconds: 10}
   livenessProbe: {timeoutSeconds: 10}
@@ -164,11 +165,11 @@ migrations:
     routeActivate: {enabled: false, image: "${IMG_DHO}", pullPolicy: IfNotPresent}
 EOF
 }
-write_secret_values() { # FILE API_PASSWORD JWT_KEY ISSUE_TOKEN  (the file is mode 0600)
+write_secret_values() { # FILE API_PASSWORD JWT_KEY  (the file is mode 0600; the session issue token lives in its own Secret)
   (
     umask 077
-    printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n    AUTH_SESSION_ISSUE_TOKEN: "%s"\n' \
-      "$2" "${FULL}" "$3" "$4" >"$1"
+    printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n' \
+      "$2" "${FULL}" "$3" >"$1"
   )
 }
 
@@ -237,7 +238,7 @@ print_plan() {
   VALUES_BASE="${work}/base.yaml"
   VALUES_SECRET="${work}/secrets.yaml"
   write_base_values "${VALUES_BASE}"
-  write_secret_values "${VALUES_SECRET}" plan-pw plan-key plan-issue-token
+  write_secret_values "${VALUES_SECRET}" plan-pw plan-key
   ACK="0123456789abcdef"
 
   expect_env P3 go-api-deployment.yaml AUTH_PROXY_LOCAL_LOGIN true "phase 3"
@@ -387,7 +388,7 @@ ISSUE_TOKEN="svc_authsess_$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n'
 VALUES_BASE="${WORK}/base.yaml"
 VALUES_SECRET="${WORK}/secrets.yaml"
 write_base_values "${VALUES_BASE}"
-write_secret_values "${VALUES_SECRET}" "${API_PASSWORD}" "${JWT_KEY}" "${ISSUE_TOKEN}"
+write_secret_values "${VALUES_SECRET}" "${API_PASSWORD}" "${JWT_KEY}"
 
 helm_cluster P3 --no-hooks >/dev/null
 K rollout status statefulset/"${FULL}-postgresql" --timeout=240s >/dev/null
@@ -395,6 +396,7 @@ K rollout status statefulset/"${FULL}-clickhouse" --timeout=240s >/dev/null
 K rollout status deploy/"${FULL}-valkey" --timeout=240s >/dev/null
 printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_query_api NOLOGIN;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
   "${API_PASSWORD}" "${AUTH_PASSWORD}" | pgq >/dev/null
+put_secret session-issue AUTH_SESSION_ISSUE_TOKEN "${ISSUE_TOKEN}"
 put_secret auth-db AUTH_DATABASE_URI "$(dsn devhealth_auth "${AUTH_PASSWORD}")"
 put_secret auth-migrate-db AUTH_MIGRATION_DATABASE_URI "$(dsn devhealth devhealth)"
 openssl genpkey -algorithm ed25519 2>/dev/null | K create secret generic auth-key --from-file=signing-key.pem=/dev/stdin >/dev/null
@@ -472,7 +474,17 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
 }
 oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin
 oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}"
-pass "S1 admin user and organization created by the admin verbs"
+# go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
+ISSUE_TOKEN="$(printf '\n' | K run fb-issue-cred --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic \
+  --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret "${FULL}-secrets" '{spec: {containers: [{name: "fb-issue-cred", image: $image,
+    env: [{name: "API_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "API_DATABASE_URI"}}}]}]}}')" -- \
+  service-credentials create --service auth-session-issuer --scope sessions:issue)"
+ISSUE_TOKEN="${ISSUE_TOKEN//[$'\r\n ']/}"
+[[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "S1: the session issue credential was not minted"
+put_secret session-issue AUTH_SESSION_ISSUE_TOKEN "${ISSUE_TOKEN}"
+K rollout restart deploy/"${FULL}-go-api" >/dev/null
+K rollout status deploy/"${FULL}-go-api" --timeout=300s >/dev/null
+pass "S1 admin user and organization created by the admin verbs; go-api holds a minted session issue credential"
 
 # ---- S2 the SAML provider row: one INSERT, as the integration tests seed it (internal/api/sso seedProvider) -------------------------------------
 pf_all

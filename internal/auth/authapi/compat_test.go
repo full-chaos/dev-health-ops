@@ -410,6 +410,30 @@ func TestCompatRefreshOfAGoneOrDisabledUserRevokesTheSession(t *testing.T) {
 	}
 }
 
+// The store refuses an auth-service credential whose public user is inactive or
+// gone under the session lock (D6651) and names the locked session: go-api's
+// answer and row come from the route's own read of the user, and the session
+// is revoked, as for a user the store served.
+func TestCompatRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
+	for golden, mutate := range map[string]func(*fixture){
+		"refresh: live jti, subject no user": func(f *fixture) { delete(f.users.users, f.principal) },
+		"refresh: judy deactivated": func(f *fixture) {
+			user := f.users.users[f.principal]
+			user.IsActive = false
+			f.users.users[f.principal] = user
+		},
+	} {
+		f := newCompatFixture(t)
+		mutate(f.fixture)
+		f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+		expectGolden(t, response, response.Body.Bytes(), golden)
+		if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+			t.Fatalf("%s: revoked %v, want the session", golden, f.sessions.revoked)
+		}
+	}
+}
+
 func TestCompatRefreshAnswersGoAPIsBodyWithTheRotatedCredential(t *testing.T) {
 	f := newCompatFixture(t)
 	rotated := "dhr1_" + strings.Repeat("r", 43)

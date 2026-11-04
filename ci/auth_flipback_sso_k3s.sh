@@ -474,10 +474,10 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
 }
 oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin
 oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}"
-# go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
+# the verb reads MIGRATION_DATABASE_URI (the owner DSN); go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
 ISSUE_TOKEN="$(printf '\n' | K run fb-issue-cred --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic \
-  --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret "${FULL}-secrets" '{spec: {containers: [{name: "fb-issue-cred", image: $image,
-    env: [{name: "API_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "API_DATABASE_URI"}}}]}]}}')" -- \
+  --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret auth-migrate-db '{spec: {containers: [{name: "fb-issue-cred", image: $image,
+    env: [{name: "MIGRATION_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "AUTH_MIGRATION_DATABASE_URI"}}}]}]}}')" -- \
   service-credentials create --service auth-session-issuer --scope sessions:issue)"
 ISSUE_TOKEN="${ISSUE_TOKEN//[$'\r\n ']/}"
 [[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "S1: the session issue credential was not minted"

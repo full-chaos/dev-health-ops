@@ -337,6 +337,7 @@ func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 	for _, want := range []string{
 		// go-api's session issue token needs an auth-session-issuer row of internal_service_credentials, held in its own Secret
 		"service-credentials create --service auth-session-issuer --scope sessions:issue",
+		`K wait --for=jsonpath='{.status.phase}'=Succeeded pod/fb-issue-cred`,
 		"secretName: session-issue",
 		"put_secret session-issue AUTH_SESSION_ISSUE_TOKEN",
 		// the verb reads the owner DSN, not the API login

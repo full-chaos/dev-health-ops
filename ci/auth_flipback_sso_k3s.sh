@@ -497,10 +497,14 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
 oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin || die "S1: the admin user verb failed"
 oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}" || die "S1: the admin organization verb failed"
 # the verb reads MIGRATION_DATABASE_URI (the owner DSN); go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
-ISSUE_TOKEN="$(printf '\n' | K run fb-issue-cred --restart=Never -i --rm --quiet --image="${IMG_DHO}" --override-type=strategic \
+# no attach: a fast pod can end before kubectl attaches (the token is then lost); wait for the pod to succeed, read its log, delete it
+K run fb-issue-cred --restart=Never --image="${IMG_DHO}" --override-type=strategic \
   --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret auth-migrate-db '{spec: {containers: [{name: "fb-issue-cred", image: $image,
     env: [{name: "MIGRATION_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "AUTH_MIGRATION_DATABASE_URI"}}}]}]}}')" -- \
-  service-credentials create --service auth-session-issuer --scope sessions:issue)"
+  service-credentials create --service auth-session-issuer --scope sessions:issue >/dev/null || die "S1: the session issue credential pod did not start"
+K wait --for=jsonpath='{.status.phase}'=Succeeded pod/fb-issue-cred --timeout=120s >/dev/null || die "S1: the session issue credential pod did not succeed"
+ISSUE_TOKEN="$(K logs pod/fb-issue-cred 2>/dev/null)"
+K delete pod fb-issue-cred --wait=true >/dev/null || die "S1: the session issue credential pod was not removed"
 ISSUE_TOKEN="${ISSUE_TOKEN//[$'\r\n ']/}"
 [[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "S1: the session issue credential was not minted"
 put_secret session-issue AUTH_SESSION_ISSUE_TOKEN "${ISSUE_TOKEN}"

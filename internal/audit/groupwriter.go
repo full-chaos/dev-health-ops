@@ -184,11 +184,11 @@ func (w *GroupWriter) abandon(c *groupCall) {
 // write commits the group in one transaction. When that fails, each call is
 // written alone, so one call's refused row fails only that call.
 func (w *GroupWriter) write(ctx context.Context, group []*groupCall) {
-	var events []AuditEvent
-	for _, c := range group {
-		events = append(events, c.events...)
+	calls := make([]callRows, len(group))
+	for i, c := range group {
+		calls[i] = callRows{ctx: c.ctx, events: c.events}
 	}
-	err := appendTx(ctx, w.begin, w.schema, events)
+	err := appendTx(ctx, w.begin, w.schema, calls...)
 	if err == nil || len(group) == 1 {
 		for _, c := range group {
 			c.done <- err
@@ -196,7 +196,7 @@ func (w *GroupWriter) write(ctx context.Context, group []*groupCall) {
 		return
 	}
 	for _, c := range group {
-		c.done <- appendTx(ctx, w.begin, w.schema, c.events)
+		c.done <- appendTx(ctx, w.begin, w.schema, callRows{ctx: c.ctx, events: c.events})
 	}
 }
 

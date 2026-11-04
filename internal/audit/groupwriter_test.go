@@ -434,6 +434,39 @@ func TestGroupWriterKeepsEachCallsRequestMetadata(t *testing.T) {
 	}
 }
 
+// TestGroupWriterKeepsRequestMetadataOnTheRetry: when a shared transaction
+// fails, the call-by-call retry writes each row with its own call's client
+// address and user agent.
+func TestGroupWriterKeepsRequestMetadataOnTheRetry(t *testing.T) {
+	db := &groupDB{hold: make(chan struct{}), bad: idOf(11)}
+	w := newTestGroupWriter(t, db, 1, 0)
+	request := func(n int) context.Context {
+		ctx := clientaddr.With(context.Background(), netip.MustParseAddr(fmt.Sprintf("198.51.100.%d", n)))
+		return clientaddr.WithUserAgent(ctx, fmt.Sprintf("client-%d", n))
+	}
+	first := appendAsync(w, request(10), idOf(10))
+	waitFor(t, "the first commit to start", func() bool { in, _, _ := db.state(); return in == 1 })
+	bad := appendAsync(w, request(11), idOf(11))
+	waitFor(t, "one queued call", func() bool { return w.queued() == 1 })
+	good := appendAsync(w, request(12), idOf(12))
+	waitFor(t, "two queued calls", func() bool { return w.queued() == 2 })
+	close(db.hold)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-bad; !errors.Is(err, ErrMutationFailed) {
+		t.Fatalf("bad: %v, want ErrMutationFailed", err)
+	}
+	if err := <-good; err != nil {
+		t.Fatal(err)
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if got, want := db.meta[idOf(12)], "198.51.100.12|client-12"; got != want {
+		t.Fatalf("retried row: client_ip|user_agent = %q, want %q", got, want)
+	}
+}
+
 // TestGroupWriterRefusesBeforeItQueues: a refused set opens no transaction.
 func TestGroupWriterRefusesBeforeItQueues(t *testing.T) {
 	db := &groupDB{}

@@ -36,7 +36,7 @@ func AppendAll(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 	if pool == nil {
 		return fmt.Errorf("%w: no connection pool", ErrMutationFailed)
 	}
-	return appendTx(ctx, pool.Begin, schema, events)
+	return appendTx(ctx, pool.Begin, schema, callRows{ctx: ctx, events: events})
 }
 
 // validateAppendOnly refuses an empty set, a row Append would refuse and a
@@ -56,10 +56,27 @@ func validateAppendOnly(events []AuditEvent) error {
 	return nil
 }
 
-// appendTx writes events in one armed transaction opened by begin: all rows
-// or none.
+// callRows are the rows of one call and the call's own context, whose request
+// values (client address, user agent) its rows record.
+type callRows struct {
+	ctx    context.Context
+	events []AuditEvent
+}
+
+// rowContext has the shared transaction's deadline and cancellation and one
+// call's request values.
+type rowContext struct {
+	context.Context
+	values context.Context
+}
+
+func (c rowContext) Value(key any) any { return c.values.Value(key) }
+
+// appendTx writes the rows of calls in one armed transaction opened by begin:
+// all rows or none. ctx bounds the transaction; each row records its own
+// call's request values.
 func appendTx(ctx context.Context, begin func(context.Context) (pgx.Tx, error), schema authschema.ValidatedIdentifier,
-	events []AuditEvent) error {
+	calls ...callRows) error {
 	tx, err := begin(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: beginning the transaction", ErrMutationFailed)
@@ -68,9 +85,12 @@ func appendTx(ctx context.Context, begin func(context.Context) (pgx.Tx, error), 
 	if err := armTx(ctx, tx); err != nil {
 		return err
 	}
-	for _, event := range events {
-		if err := insertAuditEvent(ctx, tx, schema, event); err != nil {
-			return err
+	for _, call := range calls {
+		rctx := rowContext{Context: ctx, values: call.ctx}
+		for _, event := range call.events {
+			if err := insertAuditEvent(rctx, tx, schema, event); err != nil {
+				return err
+			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

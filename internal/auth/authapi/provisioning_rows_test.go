@@ -373,3 +373,72 @@ func TestTheRowsGateRefusalNamesTheRouteAndClasses(t *testing.T) {
 		})
 	}
 }
+
+// fullClassSet is the credential class set a provisioning route's endpoint-profile row must list, exactly.
+func fullClassSet(op string) []string {
+	if workloadOperations[op] {
+		return []string{serviceSessionIssuerClass, workloadTokenClass}
+	}
+	return []string{serviceSessionIssuerClass}
+}
+
+// The startup gate covers all 25 routes, the org state read and the rename among them: the embedded document passes in
+// both builds, and a document without one route's row is refused naming the route.
+func TestRowsGateCoversStateAndRename(t *testing.T) {
+	for _, workload := range []bool{true, false} {
+		if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles, workload); err != nil {
+			t.Fatalf("the embedded document, workload=%v: %v", workload, err)
+		}
+	}
+	for _, pattern := range []string{PatternOrgState, PatternOrgRename} {
+		for _, workload := range []bool{true, false} {
+			err := provisioningRowsPresent(embeddedDocWithoutRow(t, pattern), workload)
+			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+				t.Errorf("%s without its row, workload=%v: %v, want a refusal naming the route", pattern, workload, err)
+			}
+		}
+		routes, err := ProvisioningRoutes(provisioningDepsOver(t, embeddedDocWithoutRow(t, pattern), nil))
+		if !errors.Is(err, errProvisioningRows) || routes != nil {
+			t.Errorf("%s without its row: %d routes, %v; want none and a start-up refusal", pattern, len(routes), err)
+		}
+	}
+}
+
+// A row lists exactly the classes its route admits: one extra class, on any of the 25 routes, is refused naming the
+// route, whatever the build's workload path.
+func TestRowsGateRefusesAnExtraClass(t *testing.T) {
+	for op, pattern := range provisioningRouteOps {
+		raw := plantClasses(t, pattern, append(fullClassSet(op), "extra_class")...)
+		for _, workload := range []bool{true, false} {
+			err := provisioningRowsPresent(raw, workload)
+			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+				t.Errorf("%s with an extra class, workload=%v: %v, want a refusal naming the route", op, workload, err)
+			}
+		}
+		if _, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) {
+			t.Errorf("%s with an extra class: ProvisioningRoutes %v, want a start-up refusal", op, err)
+		}
+	}
+}
+
+// A route that takes no workload token is refused on a row that lists the workload class; a workload route is refused
+// on an issuer-only row in a build without the workload path: the set is the document's, not the build's.
+func TestRowsGateWantsTheDocumentsFullSet(t *testing.T) {
+	for op, pattern := range provisioningRouteOps {
+		other := []string{serviceSessionIssuerClass, workloadTokenClass}
+		if workloadOperations[op] {
+			other = []string{serviceSessionIssuerClass}
+		}
+		err := provisioningRowsPresent(plantClasses(t, pattern, other...), false)
+		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+			t.Errorf("%s on the set %v: %v, want a refusal naming the route", op, other, err)
+		}
+	}
+}
+
+func provisioningDepsOver(t *testing.T, rows []byte, workload *SessionIssueWorkload) ProvisioningDeps {
+	t.Helper()
+	f := newProvFixture(t)
+	return ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs, Memberships: f.members,
+		Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Workload: workload, ProfileRows: rows}
+}

@@ -162,6 +162,7 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			relaxDropLimits(&cfg, raceEnabled)
 			tally := &pdpTally{allowed: map[string]int{}, denied: map[string]int{}, reasons: map[string]map[string]int{}}
 			srv := httptest.NewServer(pdpRecorder(t, h, tally))
 			t.Cleanup(srv.Close)
@@ -205,4 +206,61 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// relaxDropLimits clears each target's max_error_rate when race is true. The harness counts a job it had to drop (its
+// queue was full because the handler answered slowly) as an error, so under -race on a shared runner the limit fails on a
+// slow answer and not on a wrong one. The cell still fails on a failed request (Errors), a 5xx, a forbidden status and an
+// unexpected status; the latency and drop SLO stays with the k3s run (ci/pdp_load_k3s.sh).
+func relaxDropLimits(cfg *loadharness.Config, race bool) {
+	if !race {
+		return
+	}
+	for i := range cfg.Targets {
+		cfg.Targets[i].MaxErrorRate = nil
+	}
+}
+
+func TestPDPLoadRaceRelaxesOnlyTheDropLimit(t *testing.T) {
+	run := func(t *testing.T, status int, race bool) loadharness.Report {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(30 * time.Millisecond)
+			w.WriteHeader(status)
+		}))
+		t.Cleanup(srv.Close)
+		raw := `{"base_url":"` + srv.URL + `","targets":[{"name":"slow","method":"GET","path":"/x","weight":1,` +
+			`"expect_status":[200],"forbid_5xx":true,"max_error_rate":0}]}`
+		cfg, err := loadharness.ParseConfig([]byte(raw), func(string) string { return "" })
+		if err != nil {
+			t.Fatal(err)
+		}
+		relaxDropLimits(&cfg, race)
+		rep, err := loadharness.Run(context.Background(), cfg, loadharness.Options{
+			Profile: loadharness.Profile{Name: "slow", Rate: 200, Duration: time.Second, Concurrency: 1},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	t.Run("race-slow-answers-pass", func(t *testing.T) {
+		rep := run(t, http.StatusOK, true)
+		if p := rep.Paths[0]; p.Dropped == 0 || p.Errors != 0 {
+			t.Fatalf("precondition: dropped %d errors %d, want drops and no errors", p.Dropped, p.Errors)
+		}
+		if !rep.AssertOK {
+			t.Fatalf("race build: assertions failed on drops: %+v", rep.Assertions)
+		}
+	})
+	t.Run("race-5xx-still-fails", func(t *testing.T) {
+		if rep := run(t, http.StatusInternalServerError, true); rep.AssertOK {
+			t.Fatalf("race build: a 5xx answer passed: %+v", rep.Assertions)
+		}
+	})
+	t.Run("norace-drops-fail", func(t *testing.T) {
+		if rep := run(t, http.StatusOK, false); rep.AssertOK {
+			t.Fatalf("non-race build: drops passed the limit: %+v", rep.Assertions)
+		}
+	})
 }

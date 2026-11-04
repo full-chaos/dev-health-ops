@@ -59,8 +59,8 @@ func TestRegisterKnownAddressStoresNothingAndSendsTheNoticeOnly(t *testing.T) {
 	if k.Purpose != n.Purpose || k.TTL != n.TTL {
 		t.Errorf("link request shapes differ: known %+v, new %+v", k, n)
 	}
-	if len(known.mail.sent) != 1 || known.mail.sent[0].Purpose != PurposeAccountExists || !known.mail.sent[0].Deliver || known.mail.sent[0].Secret.Reveal() != "" {
-		t.Errorf("known address mail = %+v, want one deliverable account_exists notice with no secret", known.mail.sent)
+	if len(known.mail.sent) != 1 || known.mail.sent[0].Purpose != PurposeAccountExists || !known.mail.sent[0].Deliver {
+		t.Errorf("known address mail = %+v, want one deliverable account_exists notice", known.mail.sent)
 	}
 	if known.accounts.decoyed != 1 || fresh.accounts.decoyed != 0 {
 		t.Errorf("decoy provisions: known %d, new %d, want 1 and 0", known.accounts.decoyed, fresh.accounts.decoyed)

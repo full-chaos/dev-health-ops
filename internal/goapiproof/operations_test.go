@@ -725,3 +725,24 @@ func TestWorkUnitTeamAttributionsRequestsMatchTheView(t *testing.T) {
 		t.Fatalf("TEAM_OWNS_UNITS echo %+v", echo)
 	}
 }
+
+// CHAOS-13017: teamWorkItemBreakdown's proof request is on the work-item basis, not the investment basis the
+// investmentBreakdown spec sends (WORK_TYPE, useInvestment true).
+func TestTeamWorkItemBreakdownSpecAsksForTheWorkItemBasis(t *testing.T) {
+	spec, ok := operationSpecs["teamWorkItemBreakdown"]
+	if !ok {
+		t.Fatal("teamWorkItemBreakdown has no spec")
+	}
+	vars := spec.Variables("org", Window{SinceDate: "2026-08-06", UntilDate: "2026-11-04"})
+	batch := vars["batch"].(map[string]any)
+	breakdown := batch["breakdowns"].([]any)[0].(map[string]any)
+	if breakdown["dimension"] != "TEAM" || breakdown["measure"] != "CYCLE_TIME_HOURS" {
+		t.Fatalf("breakdown = %v, want TEAM x CYCLE_TIME_HOURS", breakdown)
+	}
+	if use, present := batch["useInvestment"]; !present || use != false {
+		t.Fatalf("batch.useInvestment = %v (present %v), want false: the investment path would be measured", use, present)
+	}
+	if _, vacuous := spec.Parity.FloatTierB["data.analytics.evidenceQualityStats.mean"]; vacuous {
+		t.Fatal("a vacuous evidence-quality declaration: that selection exists only on the investment path")
+	}
+}

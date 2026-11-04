@@ -342,3 +342,10 @@ func limitWith(limiter *KeyedLimiter, keyFunc KeyFunc, write ErrorWriter, depend
 		})
 	}
 }
+
+// DeclareRejections makes the rejection series of an in-process limiter exist at zero. Such a limiter has no
+// counter store, so it has no store-error series.
+func DeclareRejections(id string) { RateLimitRejections.declare(id) }
+
+// CountRejection counts one hit an in-process limiter refused.
+func CountRejection(id string) { RateLimitRejections.inc(id) }

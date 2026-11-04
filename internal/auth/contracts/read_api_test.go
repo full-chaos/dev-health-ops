@@ -38,6 +38,7 @@ var readAPIKeywordTokens = map[string]string{
 	"const":                "const:",
 	"enum":                 "enum:",
 	"maxItems":             "maxItems:",
+	"maxLength":            "maxLength:",
 	"maximum":              "maximum:",
 	"minLength":            "minLength:",
 	"minimum":              "minimum:",

@@ -165,3 +165,69 @@ func TestBoundaryRedactsEveryConnectionFormThroughEveryOpener(t *testing.T) {
 		t.Error("no form left a credential with a DSN-only boundary: the grid no longer reproduces the defect")
 	}
 }
+
+const (
+	unparsableLogin    = "unparsable_login_q7x"
+	unparsablePassword = "unparsable_password_q7x"
+)
+
+// unparsableDSNs are connection strings pgx rejects whose parse error carries the login.
+var unparsableDSNs = map[string]string{
+	"uri":       "postgres://" + unparsableLogin + ":" + unparsablePassword + "@[::1",
+	"key=value": "user=" + unparsableLogin + " password=" + unparsablePassword + " host=[::1 sslmode=bogus",
+}
+
+func TestBoundaryUnparsableDSNGivesTheFixedPlaceholder(t *testing.T) {
+	t.Setenv("PGUSER", "")
+	t.Setenv("PGPASSWORD", "")
+	t.Setenv("PGSERVICEFILE", "")
+	for name, dsn := range unparsableDSNs {
+		t.Run(name, func(t *testing.T) {
+			_, parseErr := pgxpool.ParseConfig(dsn)
+			if parseErr == nil || !strings.Contains(parseErr.Error(), unparsableLogin) {
+				t.Fatalf("pgx does not reject the DSN with the login in its text (the repro is void): %v", parseErr)
+			}
+			for label, err := range map[string]error{"parse error": parseErr, "wrapped": fmt.Errorf("open: %w", parseErr)} {
+				got := Boundary(dsn).Redact(err)
+				if got == nil || got.Error() != secrets.UnparsableMarker {
+					t.Errorf("%s: Redact = %v, want exactly %q", label, got, secrets.UnparsableMarker)
+				}
+				if errors.Unwrap(got) != nil {
+					t.Errorf("%s: the redacted error unwraps to the driver error", label)
+				}
+			}
+			if Boundary(dsn).Redact(nil) != nil {
+				t.Error("Redact(nil) is not nil")
+			}
+		})
+	}
+}
+
+func TestBoundaryUnparsableDSNKeepsContextErrors(t *testing.T) {
+	dsn := unparsableDSNs["uri"]
+	for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
+		got := Boundary(dsn).Redact(fmt.Errorf("dial %s: %w", dsn, want))
+		if !errors.Is(got, want) || strings.Contains(got.Error(), unparsableLogin) {
+			t.Errorf("Redact = %v, want %v with no login", got, want)
+		}
+	}
+}
+
+// A DSN pgx parses keeps today's output for one known error, byte for byte.
+func TestBoundaryParsableDSNKeepsTodaysOutput(t *testing.T) {
+	t.Setenv("PGUSER", "")
+	t.Setenv("PGPASSWORD", "")
+	t.Setenv("PGSERVICEFILE", "")
+	for name, dsn := range map[string]string{
+		"uri":       "postgres://parse_login_a1:parse_password_b2@db.example:5432/appdb?sslmode=disable",
+		"key=value": "host=db.example port=5432 dbname=appdb user=parse_login_a1 password=parse_password_b2 sslmode=disable",
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := errors.New("failed SASL auth (parse_login_a1 / parse_password_b2) at db.example:5432 using " + dsn)
+			want := "failed SASL auth ([REDACTED] / [REDACTED]) at db.example:5432 using [REDACTED]"
+			if got := Boundary(dsn).Redact(err).Error(); got != want {
+				t.Errorf("Redact = %q, want %q", got, want)
+			}
+		})
+	}
+}

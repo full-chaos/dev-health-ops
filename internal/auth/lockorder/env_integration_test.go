@@ -43,7 +43,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -80,7 +79,7 @@ type env struct {
 	issueOne      *sessionissue.Client
 	// issuePlane is go-api's workload principal and its token key: the session
 	// issue route takes only the go-api workload token.
-	issuePlane *issueworkload.Plane
+	issuePlane *issuePlane
 	signer     *edgetoken.Signer
 	linkSecret string
 	inviteKey  string

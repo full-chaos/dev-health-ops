@@ -4,17 +4,23 @@ package lockorder
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-go/workloadtoken"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -23,7 +29,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 func randomText(n int) (string, error) {
@@ -38,7 +44,7 @@ func randomText(n int) (string, error) {
 // the session issue route) as auth-service wires them (authruntime
 // compatRoutes), over the auth stores on the runtime role.
 func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) error {
-	plane, err := issueworkload.New("https://auth.lockorder.example.test")
+	plane, err := newIssuePlane("https://auth.lockorder.example.test")
 	if err != nil {
 		return err
 	}
@@ -84,9 +90,7 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 		return nil, fmt.Errorf("limits: %w", err)
 	}
 	runtime := pool
-	workload, err := authapi.NewSessionIssueWorkload(authapi.SessionIssueWorkloadConfig{
-		IssuerURL: e.issuePlane.Issuer, Keys: e.issuePlane, Subject: e.issuePlane.Subject,
-	})
+	workload, err := e.issuePlane.workload()
 	if err != nil {
 		return nil, fmt.Errorf("session issue workload: %w", err)
 	}
@@ -118,7 +122,7 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 // seedIssueClient stores go-api's workload principal and returns go-api's
 // issue client for authServer, which presents the go-api workload token.
 func (e *env) seedIssueClient(ctx context.Context) (*sessionissue.Client, error) {
-	if err := e.issuePlane.Seed(ctx, e.admin); err != nil {
+	if err := e.issuePlane.seed(ctx, e.admin); err != nil {
 		return nil, err
 	}
 	dir, err := os.MkdirTemp("", "lockorder-issue-")
@@ -126,7 +130,7 @@ func (e *env) seedIssueClient(ctx context.Context) (*sessionissue.Client, error)
 		return nil, err
 	}
 	closers = append(closers, func() { _ = os.RemoveAll(dir) })
-	workload, stop, err := e.issuePlane.Client(dir)
+	workload, stop, err := e.issuePlane.client(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -143,4 +147,94 @@ func (e *env) seedIssueClient(ctx context.Context) (*sessionissue.Client, error)
 		return nil, err
 	}
 	return sessionissue.NewWorkload(base, workload, 5*time.Second)
+}
+
+// issuePlane is go-api's workload principal and one in-memory Ed25519 key: auth-service's key set and subject for
+// the session issue route, and go-api's workload token client whose exchange answers a token that key signed.
+// Kept local (no shared test API); it folds into internal/testsupport/workloadclient once CHAOS-12782 lands.
+type issuePlane struct {
+	issuer    string
+	principal uuid.UUID
+	subject   string
+	private   ed25519.PrivateKey
+	set       token.KeySet
+}
+
+const issuePlaneKeyID = "issue-workload-test"
+
+func newIssuePlane(issuer string) (*issuePlane, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	set, err := token.NewKeySet([]token.Key{{KeyID: issuePlaneKeyID, State: token.StateActive, Algorithm: token.Algorithm, PublicKey: public}})
+	if err != nil {
+		return nil, err
+	}
+	principal := uuid.New()
+	return &issuePlane{issuer: issuer, principal: principal, subject: session.WirePrincipalID(principal), private: private, set: set}, nil
+}
+
+// KeySet is the published key set (an authapi.KeySetSource).
+func (p *issuePlane) KeySet(context.Context) (token.KeySet, error) { return p.set, nil }
+
+// workload is the session issue route's workload path over the plane's key and subject.
+func (p *issuePlane) workload() (*authapi.SessionIssueWorkload, error) {
+	return authapi.NewSessionIssueWorkload(authapi.SessionIssueWorkloadConfig{IssuerURL: p.issuer, Keys: p, Subject: p.subject})
+}
+
+// mint is a fresh go-api workload token for auth-service, valid 300 s.
+func (p *issuePlane) mint() (string, error) {
+	now := time.Now()
+	claims, err := json.Marshal(contracts.WorkloadTokenClaims{
+		Iss: p.issuer, Aud: "auth-service", Sub: p.subject, PrincipalType: "workload", Jti: uuid.NewString(),
+		Iat: now.Unix(), Nbf: now.Unix(), Exp: now.Unix() + 300,
+	})
+	if err != nil {
+		return "", err
+	}
+	header, err := json.Marshal(map[string]string{"alg": token.Algorithm, "kid": issuePlaneKeyID, "typ": contracts.WorkloadTokenTyp})
+	if err != nil {
+		return "", err
+	}
+	enc := base64.RawURLEncoding
+	input := enc.EncodeToString(header) + "." + enc.EncodeToString(claims)
+	return input + "." + enc.EncodeToString(ed25519.Sign(p.private, []byte(input))), nil
+}
+
+// seed writes the workload principal to auth.principals: the audit rows name it as their actor.
+func (p *issuePlane) seed(ctx context.Context, db *pgxpool.Pool) error {
+	_, err := db.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'workload', 'go-api-test')`, p.principal.String())
+	return err
+}
+
+// client is go-api's workload token client over a bootstrap file in dir; its exchange (a local server, stopped by
+// stop) answers a fresh mint on every exchange.
+func (p *issuePlane) client(dir string) (client *workloadtoken.Client, stop func(), err error) {
+	exchange := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		minted, err := p.mint()
+		if err != nil {
+			http.Error(w, "mint", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": minted, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
+	}))
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	path := filepath.Join(dir, "bootstrap")
+	if err := os.WriteFile(path, []byte(workloadtoken.BootstrapPrefix+base64.RawURLEncoding.EncodeToString(random)), 0o600); err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	client, err = workloadtoken.New(workloadtoken.Config{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: p.issuer,
+		Subject: workloadtoken.BootstrapCredentialFile(path), Transport: &http.Transport{}})
+	if err != nil {
+		exchange.Close()
+		return nil, nil, err
+	}
+	return client, exchange.Close, nil
 }

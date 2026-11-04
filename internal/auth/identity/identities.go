@@ -621,6 +621,9 @@ func identityEvent(eventType string, key ExternalKey, target, subject string) au
 }
 
 func (s *Store) countLink(ctx context.Context, action string, err error) {
+	if audit.Rehearsing(ctx) {
+		return
+	}
 	outcome := "ok"
 	switch {
 	case err == nil:

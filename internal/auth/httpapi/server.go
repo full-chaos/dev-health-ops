@@ -282,6 +282,9 @@ type Server struct {
 	// active counts requests being served, so Shutdown can wait for handlers to
 	// end after it closes their connections.
 	active atomic.Int64
+	// answers holds the requests in a route chain that have not answered, so
+	// Shutdown can answer them 503 when the drain budget runs out.
+	answers *shutdownAnswers
 
 	mu       sync.RWMutex
 	listener net.Listener
@@ -304,7 +307,8 @@ func NewServer(options ServerOptions) (*Server, error) {
 		logger = slog.New(slog.NewJSONHandler(discard{}, nil))
 	}
 
-	handler, err := buildHandler(options, logger)
+	answers := newShutdownAnswers()
+	handler, err := buildHandler(options, logger, answers)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +325,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if maxHeaderBytes <= 0 {
 		maxHeaderBytes = 1 << 16
 	}
-	server := &Server{name: name, logger: logger, errors: make(chan error, 1)}
+	server := &Server{name: name, logger: logger, errors: make(chan error, 1), answers: answers}
 	server.server = &http.Server{
 		Addr: options.Address,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +365,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 // on the method pattern, a wrong method on a known path falls to that path's
 // 405, and an unknown path falls to the catch-all -- all three rendered by
 // this package's envelope rather than by net/http's plain-text defaults.
-func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, error) {
+func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownAnswers) (http.Handler, error) {
 	write := options.ErrorWriter
 	if write == nil {
 		write = WriteError
@@ -436,7 +440,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 		if route.PublicClass {
 			routeInFlight = publicInFlight
 		}
-		handler := routeChain(route, options, logger, write, routeInFlight)
+		handler := routeChain(route, options, logger, write, routeInFlight, answers)
 		// A GET pattern also matches HEAD in net/http's mux; a path with
 		// its own HEAD route sends HEAD there instead (the more specific
 		// pattern). With ExplicitHead the GET route itself refuses HEAD as
@@ -543,8 +547,9 @@ func buildHandler(options ServerOptions, logger *slog.Logger) (http.Handler, err
 // the cheapest rejection and runs first, then the body bound (which can reject
 // on Content-Length without reading anything), then the deadline, then the
 // route's own panic recovery closest to the handler so the log line names the
-// real pattern.
-func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
+// real pattern. The shutdown guard (answers; nil is none) wraps them all, so a
+// request still in the chain when the drain budget runs out is answered 503.
+func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}, answers *shutdownAnswers) http.Handler {
 	if route.ErrorWriter != nil {
 		write = route.ErrorWriter
 	}
@@ -577,7 +582,7 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	// Outermost, so a request the route's own rate limit or body bound
 	// refuses is still counted against the route it addressed.
 	pattern := route.Pattern
-	inner := handler
+	inner := answers.guard(handler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recordRoute(r, pattern)
 		inner.ServeHTTP(w, r)
@@ -680,8 +685,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if err == nil {
 		return nil
 	}
-	// The drain budget ran out with requests still in flight: close their
-	// connections, which cancels their request contexts, and wait for the handlers.
+	// The drain budget ran out with requests still in flight. First answer every
+	// one that has not answered 503 (Retry-After: 1), so no client is left with a
+	// dropped connection; then close the connections, which cancels the request
+	// contexts, and wait for the handlers.
+	s.answers.answerAll()
 	_ = s.server.Close()
 	for s.active.Load() > 0 {
 		select {

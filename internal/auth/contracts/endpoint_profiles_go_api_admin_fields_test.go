@@ -149,18 +149,20 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	}
 	policy, _ := row["impersonation_policy"].(string)
 	tenancy, _ := row["tenant_requirement"].(string)
+	rowRoute, _ := row["route"].(string)
+	internalRoute := strings.HasPrefix(rowRoute, "/api/v1/internal/")
 	switch {
 	case policy == "" || policy == "unknown":
 		bad("impersonation_policy is missing or unknown")
 	case impersonationRoutes[id] != "" && policy != impersonationRoutes[id]:
 		bad("an impersonation route has impersonation_policy %q, want %q", policy, impersonationRoutes[id])
 	case impersonationRoutes[id] != "":
-	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "subject_to_impersonation_override":
+	case tenancy == "org_scoped" && internalRoute && policy == "subject_to_impersonation_override":
 		bad("an internal-listener org-scoped route claims subject_to_impersonation_override (the internal listener runs no impersonation middleware)")
 		if !gapNames(row, "credential_binding") {
 			bad("an internal-listener org-scoped route has no credential_binding gap")
 		}
-	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "not_applicable_non_main_app":
+	case tenancy == "org_scoped" && internalRoute && policy == "not_applicable_non_main_app":
 		if !gapNames(row, "impersonation_policy") {
 			bad("an internal-listener org-scoped route is not_applicable_non_main_app without a gaps entry naming impersonation_policy")
 		}

@@ -66,6 +66,10 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
+	peerRole, err := containers.RoleName("sweep_peer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
 	writerRole, err := containers.RoleName("sweep_writer", instance)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +78,7 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	for _, statement := range []string{
 		fmt.Sprintf("CREATE ROLE %q", runtimeRole),
 		fmt.Sprintf("CREATE ROLE %q LOGIN PASSWORD '%s'", sweeperRole, password),
+		fmt.Sprintf("CREATE ROLE %q NOLOGIN", peerRole),
 		fmt.Sprintf("CREATE ROLE %q NOLOGIN", writerRole),
 	} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
@@ -82,12 +87,13 @@ func newSweepEnv(t *testing.T, ctx context.Context) *sweepEnv {
 	}
 	t.Cleanup(func() {
 		containers.DropRole(admin, writerRole, t.Logf)
+		containers.DropRole(admin, peerRole, t.Logf)
 		containers.DropRole(admin, sweeperRole, t.Logf)
 		containers.DropRole(admin, runtimeRole, t.Logf)
 	})
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{
 		Schema: "auth", RuntimeRole: runtimeRole, SessionReaderRoles: []string{sweeperRole},
-		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{sweeperRole},
+		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{sweeperRole, peerRole},
 	}); err != nil {
 		t.Fatalf("auth schema: %v", err)
 	}
@@ -428,8 +434,9 @@ func TestSweepIntegration(t *testing.T) {
 	t.Run("more tokens than a page with one expires_at are all swept", func(t *testing.T) {
 		const n = BatchLimit + 30
 		ids := make([]uuid.UUID, 0, n)
+		shared := fmt.Sprintf("timestamptz '%s'", time.Now().UTC().Add(-48*time.Hour).Truncate(time.Second).Format("2006-01-02 15:04:05+00"))
 		for i := 0; i < n; i++ {
-			ids = append(ids, env.token(t, ctx, "timestamptz '2026-01-01 00:00:00+00'", false, i%2 == 0))
+			ids = append(ids, env.token(t, ctx, shared, false, i%2 == 0))
 		}
 		if err := env.sweep(t, ctx, true); err != nil {
 			t.Fatal(err)
@@ -438,6 +445,40 @@ func TestSweepIntegration(t *testing.T) {
 			if rows := env.outbox(t, ctx, id); types(rows) != "created/1,expired/2" {
 				t.Fatalf("%s: rows = %s", id, types(rows))
 			}
+		}
+	})
+
+	t.Run("a token expired outside the window is not swept, one inside is", func(t *testing.T) {
+		old := env.token(t, ctx, "now() - interval '31 days'", false, false)
+		recent := env.token(t, ctx, "now() - interval '29 days'", false, false)
+		if err := env.sweep(t, ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		if rows := env.outbox(t, ctx, old); len(rows) != 0 {
+			t.Fatalf("a token outside the window was swept: %s", types(rows))
+		}
+		if rows := env.outbox(t, ctx, recent); types(rows) != "created/1,expired/2" {
+			t.Fatalf("a token inside the window: rows = %s", types(rows))
+		}
+	})
+
+	t.Run("a second run on one handler skips an ended token and a new handler re-submits it as a no-op", func(t *testing.T) {
+		id := env.token(t, ctx, "now() - interval '1 hour'", false, false)
+		var logs strings.Builder
+		handler, err := NewHandler(env.store(), true, slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for run := 0; run < 2; run++ {
+			if err := handler.Work(ctx, execution(due)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := env.sweep(t, ctx, true); err != nil { // a new handler: restart
+			t.Fatal(err)
+		}
+		if rows := env.outbox(t, ctx, id); types(rows) != "created/1,expired/2" {
+			t.Fatalf("rows = %s", types(rows))
 		}
 	})
 

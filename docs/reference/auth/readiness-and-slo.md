@@ -98,7 +98,7 @@ Each row names its target, window, source and status. A target comes from a tick
 | JWKS `GET /.well-known/jwks.json` | p95 latency | target not set | - | no ticket or page states one | Measured baseline: p95 under 2 ms up to 1600 requests/s per pod. No alert. |
 | Exchange `POST /internal/v1/token/exchange` | latency, outcome | target not set | - | no ticket or page states one | No measurement: the load harness covers issue, refresh and JWKS. No alert. |
 | Audit outbox | Age of the oldest pending event (`devhealth_auth_outbox_oldest_pending_age_seconds`) | under 5 minutes | 5 minutes | this page, before CHAOS-11220 | Metric exists; not measured under load. Alert: `AuthOutboxOldestPendingHigh` (above 300 seconds). |
-| Revocation propagation | Seconds until a revocation takes effect | target not set | - | no ticket or page states one | No metric on main; follow-up CHAOS-12917. No alert. |
+| Revocation propagation | Seconds from the revoke request received to the revocation row written: `auth.session.revocation_lag` (Prometheus `auth_session_revocation_lag_seconds`, histogram, label `reason` only; CHAOS-12917, not yet on main) | target not set | - | no ticket or page states one | The SLI is named; the metric is not on main yet. No alert. |
 | Readiness | Fraction of time `dev_health_runtime_ready == 1` for a deployed replica | 99.9% | 30 days | this page, kept | Proposed, not measured in production. |
 | Readiness | Time to ready after a start | under 60 s | per start | this page, kept | Proposed. Read from `dev_health_runtime_uptime_seconds` at first ready. |
 

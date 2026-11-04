@@ -260,6 +260,12 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 		t.Fatalf("no verb %v", args)
 	}
 	env := map[string]string{"MIGRATION_DATABASE_URI": db.uri}
+	var served *fakeCalls
+	if needsProvisioning(args) {
+		env["AUTH_PROXY_URL"], served = startFakeAuthService(t, db.uri)
+		env["AUTH_SESSION_ISSUE_TOKEN"] = fakeToken
+		args = append(append([]string(nil), args...), "--actor", fakeActor)
+	}
 	for key, value := range extra {
 		env[key] = value
 	}
@@ -268,6 +274,18 @@ func goVerbRun(t *testing.T, db *database, extra map[string]string, args []strin
 	code := run(context.Background(), cli.Env{Args: args[2:], Stdin: strings.NewReader(stdin), Lookup: lookup, Stdout: &stdout, Stderr: &stderr})
 	if strings.Contains(stdout.String()+stderr.String(), "postgres://") {
 		t.Fatal("the output carries the DSN")
+	}
+	if served != nil && code == 0 && args[0] == "orgs" {
+		if paths := served.served(); len(paths) != 1 || paths[0] != "/internal/v1/organizations/deprovision" {
+			t.Fatalf("%v: auth-service calls %v, want the one deprovision", args, paths)
+		}
+	}
+	if served != nil && args[0] == "users" {
+		for _, path := range served.served() {
+			if !strings.HasPrefix(path, "/internal/v1/memberships/") {
+				t.Fatalf("%v: membership verb called %s", args, path)
+			}
+		}
 	}
 	return code, stdout.String()
 }
@@ -374,10 +392,10 @@ func TestUsersMatchTheFrozenPythonOutput(t *testing.T) {
 }
 
 // usersPasswordRuling names the ruling behind testdata/golden/users.go-pin.json.
-const usersPasswordRuling = "CHAOS-10943 D6129: operator users create/update apply the shared password policy (stricter than Python's 8 characters)"
+const usersPasswordRuling = "CHAOS-10943 D6129: operator users create/update apply the shared password policy (stricter than Python's 8 characters); CHAOS-11799: one membership change per update (step 63 added and removed in one call)"
 
 // usersGoPinDigest is the digest of testdata/golden/users.go-pin.json.
-const usersGoPinDigest = "10c2b527eb537d01c2fb22a295277332d6317a3816a8a5e77458a0ad62df2113"
+const usersGoPinDigest = "fcbb201ec41a2fbe8bd335a9aea3e51466d21bbef8a52c7f3f6b3ac529bad7e9"
 
 // A refused password prints the policy's violation and never the password, on
 // the argv form and the stdin form.

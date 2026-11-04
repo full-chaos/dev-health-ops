@@ -173,7 +173,7 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 `team_memberships`) → `linked_issue` inheritance → `author_membership` → `manual_fallback`.
 9 total precedence tiers; `docs/contribute/architecture/team-attribution.md` §0.1/§0.2 is authoritative.
 
-## `dho workers` on Kubernetes: the one-off operator Pod (Trap #169, amended 2026-11-03) {#workerctl-on-kubernetes-trap-169-amended}
+## `dho workers` on Kubernetes: the one-off operator Pod (Trap #169, amended 2026-11-03)
 
 `dho workers` needs `COORDINATOR_DATABASE_URI`. The chart gives that DSN only to the
 coordinator groups, `reconciler` and `scheduler` (`deploy/helm/dev-health/templates/go-workers.yaml:4`,

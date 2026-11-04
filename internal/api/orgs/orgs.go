@@ -24,8 +24,8 @@ import (
 // Routes returns the area's routes. The Python router registers GET before
 // PATCH on /api/v1/orgs/me, so a 405 there says "Allow: GET" (Starlette
 // reports the first matching route's methods).
-func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger, renamer Renamer) []httpapi.Route {
-	h := handlers{pool: pool, logger: logger, now: time.Now, renamer: renamer}
+func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger) []httpapi.Route {
+	h := handlers{pool: pool, logger: logger, now: time.Now}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: "/api/v1/orgs/me", Allow: http.MethodGet,
 			Handler: guard.Wrap(policy.Authenticated, http.HandlerFunc(h.getOwnOrg))},
@@ -37,10 +37,9 @@ func Routes(pool *pgxpool.Pool, guard *policy.Guard, logger *slog.Logger, rename
 }
 
 type handlers struct {
-	pool    *pgxpool.Pool
-	logger  *slog.Logger
-	now     func() time.Time
-	renamer Renamer
+	pool   *pgxpool.Pool
+	logger *slog.Logger
+	now    func() time.Time
 }
 
 // internal logs err with the route's fields and writes the generic 500.
@@ -141,7 +140,7 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 	var name, description string
 	var hasName, hasDescription bool
 	if object, ok := problems.Object(body); ok {
-		name, hasName = problems.OptionalString(object, "name", 1, h.nameMax())
+		name, hasName = problems.OptionalString(object, "name", 1, 255)
 		description, hasDescription = problems.OptionalString(object, "description", 0, 0)
 	}
 	if len(problems) > 0 {
@@ -171,9 +170,9 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.beginAfterRename(w, r, orgID, user.ID, name, hasName)
+	tx, err := h.pool.Begin(r.Context())
 	if err != nil {
-		h.failBegin(w, r, err)
+		h.internal(w, r, "begin", err)
 		return
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(r.Context())) }()
@@ -186,14 +185,14 @@ func (h handlers) updateOwnOrg(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Organization not found", nil)
 		return
 	}
-	if hasName && !h.orgsOwned() {
+	if hasName {
 		profile.name = name
 	}
 	if hasDescription {
 		profile.description = &description
 	}
 	if _, err := tx.Exec(r.Context(),
-		h.ownUpdateSQL(),
+		`UPDATE organizations SET name = $2, description = $3, updated_at = $4 WHERE id = $1`,
 		orgID, profile.name, profile.description, h.now().UTC()); err != nil {
 		h.internal(w, r, "update organization", err)
 		return

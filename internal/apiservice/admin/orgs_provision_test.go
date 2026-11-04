@@ -608,6 +608,28 @@ func TestProvisionClientRefusalsAre4xx(t *testing.T) {
 	})
 }
 
+// The wire reason auth-service sends for a deactivated actor is
+// principal_deactivated (internal/auth/authapi/wire.go): the four member routes
+// and the invite route answer 403, organization creation keeps its 503.
+func TestProvisionPrincipalDeactivatedIs403OnMemberAndInviteRoutes(t *testing.T) {
+	for _, route := range provisionRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			db := &provisionDB{rows: provisionRowsFor()}
+			code, body := callRoute(newProvisionHandlers(db, &fakeProvisioner{db: db, err: refusedWith(403, "principal_deactivated")}), route)
+			if code != 403 || body != provDetail("Account is deactivated") {
+				t.Errorf("%s: %d %s, want 403 Account is deactivated", route.name, code, body)
+			}
+		})
+	}
+	t.Run("create_organization_keeps_503", func(t *testing.T) {
+		db := newOrgCreateDB()
+		auth := &orgCreateProvisioner{fakeProvisioner: fakeProvisioner{db: db.provisionDB, err: refusedWith(403, "principal_deactivated")}}
+		if code, body, _ := callCreateOrg(db, auth, orgCreateWithOwner); code != http.StatusServiceUnavailable || body != unavailableBody() {
+			t.Errorf("create org: %d %s, want the 503", code, body)
+		}
+	})
+}
+
 // CHAOS-11800 (pm 2026-11-03): the strict role rule stays. With the proxy on, an
 // empty or non-catalog role is a 400 and auth-service is never called; the
 // legacy row orgs_crud.json "add member empty role" (201, proxy OFF) is an

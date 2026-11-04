@@ -22,7 +22,7 @@ const refusalBase = "https://sp.example.test/api/v1/auth"
 
 const (
 	detailNotMember = `{"message":"A membership in this organization is required","reason":"membership_required"}`
-	detailAmbiguous = "More than one account carries this sign-in. Contact your organization administrator."
+	detailAmbiguous = `{"message":"This sign-in could not be completed. Contact your administrator if this continues."}`
 )
 
 type staticProvider struct{ p saml.Provider }

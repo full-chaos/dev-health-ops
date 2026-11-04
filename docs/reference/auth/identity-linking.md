@@ -36,7 +36,7 @@ the person. The email address never selects an account.
 | Situation | Outcome |
 | --- | --- |
 | The key is bound to an account | Signed in to that account. The email is not read. |
-| The key is new, and an account already holds the email | Refused with a conflict. Nothing is written or linked. For a social sign-in the answer names the existing sign-in method, so the user can sign in that way and then link. |
+| The key is new, and an account already holds the email | Refused with a conflict. Nothing is written or linked. The answer is one generic message on every route (social, OAuth, OIDC, SAML): it does not say whether an account exists or which sign-in method it uses. The reason is in the audit row and the log. The user recovers through an administrator or support. |
 | The key is new, no account holds the email, and creation is allowed | An account is created (see below). |
 | The key is new and creation is not allowed | Refused. Nothing is written. |
 | The key is new and the provider cannot show a verified email (social, OAuth) | Refused. No account is created or linked. A social key that is already bound signs in without this check; an SSO OAuth sign-in is checked every time. |
@@ -128,8 +128,9 @@ SAML providers the identity provider's response is the source of the email.
 ## What an administrator sees
 
 **go-api (SSO and social sign-in in use).** A refusal answers with an HTTP
-status and a message. `identity_conflict`, `membership_required` and
-`oauth_domain_not_allowed` are also carried as response codes. The message of an
+status and a message. `membership_required` and
+`oauth_domain_not_allowed` are also carried as response codes; an identity
+conflict is not (it is in the audit row and the log only). The message of an
 OIDC or SAML domain refusal names the email domain. Each SSO sign-in attempt
 writes an `SSO_LOGIN` audit row, with status success or failure.
 

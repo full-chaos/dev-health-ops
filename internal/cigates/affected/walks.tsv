@@ -42,6 +42,7 @@ internal/auth/acrmint	census_test.go	.	tree	*.go
 internal/auth/authapi	acr_events_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/authapi	acr_events_test.go	internal/auth/outboxprojection	dir	*
 internal/auth/authapi	authorize_loadprofile_test.go	internal/loadharness/testdata/pdp	dir	*
+internal/auth/authapi	provisioning_read_test.go	contracts/auth/v1/golden/read-api/vectors	dir	*
 internal/auth/authapi	register_test.go	unexpressed	-	-
 internal/auth/authorization	evaluate_test.go	internal/auth/authorization	dir	*
 internal/auth/authruntime	audit_request_id_scan_test.go	unexpressed	-	-
@@ -49,6 +50,7 @@ internal/auth/authruntime	fixed_credential_scan_test.go	internal/auth/authruntim
 internal/auth/authruntime	keystate_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	kidwiring_callers_test.go	internal/auth/authruntime	dir	*
 internal/auth/authruntime	pgusers_census_test.go	internal/auth/authruntime	dir	*
+internal/auth/authruntime	refresh_ttl_source_test.go	internal/auth/authruntime	dir	*
 internal/auth/contracts	access_token_goldens_test.go	contracts/auth/v1/examples/access-token	dir	*
 internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
@@ -118,15 +120,19 @@ internal/auth/platformrole	superuser_writes_census_test.go	internal	tree	*
 internal/auth/platformrole	superuser_writes_census_test.go	unexpressed	-	-
 internal/auth/pushlifecycle	acr_test.go	contracts/auth/v1/examples/acr-credential-lifecycle-event	dir	*
 internal/auth/pushprojection	import_guard_test.go	unexpressed	-	-
+internal/auth/pushreconcile	import_guard_test.go	internal/auth/pushreconcile	dir	*
 internal/auth/restorefence	consumers_reader_test.go	internal	tree	*.go
 internal/auth/restorefence	consumers_test.go	internal	tree	*.go
 internal/auth/restorefence	inventory_completeness_test.go	.	tree	*.go
 internal/auth/restorefence	platform_roles_test.go	internal/auth/restorefence	dir	*
 internal/auth/restorefence	specs_test.go	internal/pgmigrate/sql	dir	*
+internal/auth/session	liveness_census_test.go	cmd	tree	*
+internal/auth/session	liveness_census_test.go	internal	tree	*
 internal/auth/writerinventory	credential_registry_reader_census_test.go	internal	tree	*.go
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
+internal/authzenforce	census_test.go	.	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*
 internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*
@@ -149,7 +155,6 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
-internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed	-	*.go
 internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
 internal/cigates/checkgo	support_test.go	unexpressed	-	-
 internal/cigates/checkgoshards	race_excluded_receipts_test.go	unexpressed	-	-
@@ -353,6 +358,7 @@ internal/platform/dialclass	dialclass_import_test.go	internal/platform/dialclass
 internal/platform/dialclass	dialclass_import_test.go	unexpressed	-	-
 internal/platform/fernet	fernet_test.go	.	tree	*.go
 internal/platform/otlpmetrics	labelcensus_test.go	.	tree	*.go
+internal/platform/removedenv	census_test.go	unexpressed	-	*.go
 internal/platform/secrets	declared_fields_test.go	internal	tree	*.go
 internal/platform/secrets	envreads_test.go	.	tree	*.go
 internal/platform/timeoutclass	timeoutclass_test.go	internal/platform/timeoutclass	dir	*
@@ -412,6 +418,7 @@ internal/queryapi/rowview	census_test.go	internal	tree	*.go
 internal/queryapi/server	build_routes_integration_test.go	unexpressed	-	-
 internal/queryapi/server	direct_env_reads_test.go	unexpressed	-	*.go
 internal/queryapi/server	edge_users_test.go	unexpressed	-	-
+internal/queryapi/server	endpoint_profile_action_fields_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_rows_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_same_line_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go

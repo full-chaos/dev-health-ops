@@ -33,7 +33,7 @@ action a `risk_class` and a `cache_class` (a high-risk action is never cached), 
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
 `vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
-`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys and the decision point never emits `*` in it; a read of every repository of the organization is `obligations.repository_scope: organization` (closed value, never together with an allowlist; a consumer that finds neither on an action that filters by repository denies), and a principal over the bound is denied with `repository_allowlist_too_large` (CHAOS-12852).
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
@@ -44,7 +44,7 @@ here; the operations arrive with the routes that serve them. Rules:
 The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
 has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
 `organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
-(an organization's principals, each with its membership), `organization-list.v1`
+(an organization's principals; a user item carries its membership, a service account or workload item carries none), `organization-list.v1`
 (a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
 `*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
 (`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no

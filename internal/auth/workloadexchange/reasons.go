@@ -25,7 +25,9 @@ const (
 const (
 	subjectKubernetes = "kubernetes"
 	subjectBootstrap  = "bootstrap"
-	subjectNone       = "none"
+	// subjectServiceAccountKey is the service account key subject.
+	subjectServiceAccountKey = "service_account_key"
+	subjectNone              = "none"
 )
 
 // The closed reason set. Only the log line and the counter carry a reason;
@@ -43,6 +45,7 @@ const (
 
 	reasonTokenReviewUnavailable = "tokenreview_unavailable"
 	reasonSaturated              = "saturated"
+	reasonStoreError             = "store_error"
 	reasonSignerUnavailable      = "signer_unavailable"
 	reasonAuditUnavailable       = "audit_unavailable"
 	selfCheckPrefix              = "selfcheck_"
@@ -62,6 +65,25 @@ var bootstrapResolveReasons = []string{"unknown", "revoked", "expired", "disable
 
 var bootstrapRefusedReasons = append(append([]string{reasonMalformed}, bootstrapResolveReasons...),
 	reasonResolveRefused, reasonAudienceRefused, reasonScopeRefused, reasonLifetimeTooShort)
+
+// keyResolveReasons are the reasons the key registry names for a refused
+// ServiceAccountKey resolve (serviceaccount.ResolveKey's closed set). A reason
+// outside the set counts as resolve_refused.
+var keyResolveReasons = []string{
+	"unknown", "wrong_class", "not_platform", "wrong_kind", "revoked", "expired", "account_disabled", "principal_disabled", "org_suspended",
+}
+
+var keyRefusedReasons = append(append([]string{reasonMalformed}, keyResolveReasons...),
+	reasonResolveRefused, reasonAudienceRefused, reasonScopeRefused, reasonLifetimeTooShort)
+
+func keyResolveReason(named string) string {
+	for _, r := range keyResolveReasons {
+		if r == named {
+			return r
+		}
+	}
+	return reasonResolveRefused
+}
 
 // selfCheckReasons are authverify's workload refusal reasons.
 var selfCheckReasons = []authverify.Reason{
@@ -178,11 +200,18 @@ func (r recorder) declare() {
 		for _, reason := range mintUnavailableReasons() {
 			r.add(ctx, 0, subjectBootstrap, outcomeUnavailable, reason, audience)
 		}
+		for _, reason := range keyRefusedReasons {
+			r.add(ctx, 0, subjectServiceAccountKey, outcomeRefused, reason, audience)
+		}
+		for _, reason := range append([]string{reasonStoreError}, mintUnavailableReasons()...) {
+			r.add(ctx, 0, subjectServiceAccountKey, outcomeUnavailable, reason, audience)
+		}
 	}
 	for _, audience := range workloadAudiences {
 		r.add(ctx, 0, subjectKubernetes, outcomeIssued, reasonIssued, audience)
 		r.add(ctx, 0, subjectBootstrap, outcomeIssued, reasonIssued, audience)
 	}
+	r.add(ctx, 0, subjectServiceAccountKey, outcomeIssued, reasonIssued, "dev-health-api")
 	r.add(ctx, 0, subjectNone, outcomeInvalid, reasonInvalidRequest, audienceNone)
 }
 

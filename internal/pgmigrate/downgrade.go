@@ -316,6 +316,16 @@ func Downgrade(ctx context.Context, conn *pgx.Conn, baseline Baseline, chain []C
 			if _, err := tx.Exec(ctx, sqlOf[step.Revision]); err != nil {
 				return fmt.Errorf("down %s: %w", step.Revision, err)
 			}
+			// The reverted revision leaves the ledger with it; the ledger revision's own down file drops the table.
+			var hasLedger bool
+			if err := tx.QueryRow(ctx, "SELECT to_regclass('public."+LedgerTable+"') IS NOT NULL").Scan(&hasLedger); err != nil {
+				return fmt.Errorf("down %s: look for %s: %w", step.Revision, LedgerTable, err)
+			}
+			if hasLedger {
+				if _, err := tx.Exec(ctx, "DELETE FROM public."+LedgerTable+" WHERE revision = $1", step.Revision); err != nil {
+					return fmt.Errorf("down %s: remove it from %s: %w", step.Revision, LedgerTable, err)
+				}
+			}
 		}
 		return nil
 	})

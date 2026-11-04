@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -32,6 +33,8 @@ type reconEnv struct {
 	runtime *pgxpool.Pool
 	store   *identity.Store
 	schema  authschema.ValidatedIdentifier
+	// blank lists the tables that hold no rows once the schema is applied.
+	blank []string
 }
 
 var (
@@ -55,7 +58,59 @@ func getReconEnv(t *testing.T) *reconEnv {
 	if reconErr != nil {
 		t.Fatal(reconErr)
 	}
+	reconShared.reset(t)
 	return reconShared
+}
+
+// reset puts every table that was empty after the schema was applied back to
+// empty, so a test starts from the same database whatever ran before it (the
+// package is run under -shuffle). The auth security tables refuse writes
+// outside audit.Commit; replica mode (the test owner) lifts that and the
+// foreign-key checks for this reset only.
+func (e *reconEnv) reset(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	tx, err := e.admin.Begin(ctx)
+	if err != nil {
+		t.Fatalf("reset begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("reset role: %v", err)
+	}
+	for _, name := range e.blank {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+name); err != nil {
+			t.Fatalf("reset %s: %v", name, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("reset commit: %v", err)
+	}
+}
+
+// blankTables names the base tables of public and auth that hold no rows.
+func blankTables(ctx context.Context, admin *pgxpool.Pool) ([]string, error) {
+	rows, err := admin.Query(ctx, `SELECT format('%I.%I', table_schema, table_name) FROM information_schema.tables
+WHERE table_schema IN ('public', 'auth') AND table_type = 'BASE TABLE' ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, err
+	}
+	var blank []string
+	for _, name := range names {
+		var has bool
+		if err := admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM `+name+`)`).Scan(&has); err != nil {
+			return nil, err
+		}
+		if !has {
+			blank = append(blank, name)
+		}
+	}
+	return blank, nil
 }
 
 func newReconEnv(t *testing.T) (*reconEnv, error) {
@@ -115,7 +170,11 @@ func newReconEnv(t *testing.T) (*reconEnv, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &reconEnv{admin: admin, runtime: runtime, store: store, schema: schema}, nil
+	blank, err := blankTables(ctx, admin)
+	if err != nil {
+		return nil, err
+	}
+	return &reconEnv{admin: admin, runtime: runtime, store: store, schema: schema, blank: blank}, nil
 }
 
 func (e *reconEnv) seed(t *testing.T, ctx context.Context, email string, active, verified bool) uuid.UUID {

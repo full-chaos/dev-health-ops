@@ -190,6 +190,11 @@ func TestUpgradeSurvivesAnotherMigratorApplyingTheStepFirst(t *testing.T) {
 				_ = tx.Rollback(ctx)
 				return err
 			}
+			// As dho does: the step's ledger row in the same transaction.
+			if _, err := tx.Exec(ctx, "INSERT INTO public."+pgmigrate.LedgerTable+" (revision, sha256, source) VALUES ($1, $2, 'apply')", chain[first].Revision, pgmigrate.FileSHA256(chain[first])); err != nil {
+				_ = tx.Rollback(ctx)
+				return err
+			}
 			return tx.Commit(ctx)
 		}()
 	}()

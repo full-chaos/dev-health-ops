@@ -24,6 +24,7 @@ internal/auth/contracts/tokencorpus
 internal/auth/copyproject
 internal/auth/decisioncache
 internal/auth/delegationend
+internal/auth/delegationinput
 internal/auth/edgetoken
 internal/auth/emaildomain
 internal/auth/grant
@@ -49,6 +50,7 @@ internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/pushlifecycle
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/restorefence
 internal/auth/serviceaccount

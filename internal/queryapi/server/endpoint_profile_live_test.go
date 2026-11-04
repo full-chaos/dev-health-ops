@@ -394,12 +394,12 @@ func driveREST(t *testing.T, row liveRow) *liveObs {
 		o.unknownIsDeclared("disclosure_behavior")
 	}
 
-	for _, field := range []string{"action", "current_state_cache_behavior", "impersonation_policy"} {
+	for _, field := range []string{"current_state_cache_behavior", "impersonation_policy"} {
 		if row.str(field) != "unknown" {
 			o.fail("%s is %q: no live cell observes a REST row's %s", field, row.str(field), field)
 		}
 	}
-	o.unknownIsDeclared("action", "current_state_cache_behavior", "impersonation_policy")
+	o.unknownIsDeclared("current_state_cache_behavior", "impersonation_policy")
 	return o
 }
 
@@ -459,7 +459,7 @@ func driveInternal(t *testing.T, row liveRow) *liveObs {
 	}
 	o.textHas("resource_resolver", "organization_from_credential")
 	o.impersonationPolicy(true)
-	o.unknownIsDeclared("action", "current_state_cache_behavior")
+	o.unknownIsDeclared("current_state_cache_behavior")
 	o.statusText()
 	return o
 }
@@ -523,7 +523,7 @@ func driveBuildInfo(t *testing.T, row liveRow) *liveObs {
 	}
 	o.textHas("resource_resolver", "none:")
 	o.impersonationPolicy(false)
-	o.unknownIsDeclared("action", "current_state_cache_behavior")
+	o.unknownIsDeclared("current_state_cache_behavior")
 	o.statusText()
 	return o
 }
@@ -598,7 +598,7 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 	}
 	o.textHas("resource_resolver", "organization_from_header_or_credential", "X-Org-Id")
 	o.impersonationPolicy(true)
-	o.unknownIsDeclared("action", "current_state_cache_behavior")
+	o.unknownIsDeclared("current_state_cache_behavior")
 	o.statusText()
 	return o
 }
@@ -637,7 +637,7 @@ func driveMCP(t *testing.T, row liveRow) *liveObs {
 	sw[mcpRoutingOperationPrefix+"hotspots"] = false
 	cell("a root field the class row has off", post(fresh(sw), validMCPHeaders(), body), http.StatusNotFound)
 	o.textHas("resource_resolver", "internal identity headers", "a bearer token is refused")
-	o.unknownIsDeclared("action", "current_state_cache_behavior", "impersonation_policy")
+	o.unknownIsDeclared("current_state_cache_behavior", "impersonation_policy")
 	if got := row.str("impersonation_policy"); got != "unknown" {
 		o.fail("impersonation_policy is %q: no live cell observes an MCP row's impersonation effect (a claim of it is refused 403)", got)
 	}

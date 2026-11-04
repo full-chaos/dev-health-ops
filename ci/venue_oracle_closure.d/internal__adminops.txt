@@ -48,6 +48,7 @@ internal/cli
 internal/edgetokenmint
 internal/egressguard
 internal/entitlements
+internal/envelopemint
 internal/httpguard
 internal/jobcontract
 internal/joboutbox

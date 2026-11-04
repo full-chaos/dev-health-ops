@@ -14,9 +14,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/platformroleseam"
 )
 
-// AMENDMENT 1: public is_superuser is always checked; the auth platform role
-// only while owned. A principal that is a superuser in either is refused.
-func TestEdgeMintChecksBothStoresOnlyWhileOwned(t *testing.T) {
+// Off, public is_superuser decides; while owned, the auth platform role alone
+// decides (CHAOS-10993 Q5): a frozen public true with no assignment is not a
+// superuser, an assignment with a public false is.
+func TestEdgeMintReadsTheRuleOnlyWhileOwned(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	for _, c := range []struct {
@@ -26,7 +27,8 @@ func TestEdgeMintChecksBothStoresOnlyWhileOwned(t *testing.T) {
 	}{
 		{"neither", false, false, nil, nil},
 		{"auth assignment only", false, true, edgetokenmint.ErrPrincipalSuperuser, nil},
-		{"public superuser only", true, false, edgetokenmint.ErrPrincipalSuperuser, edgetokenmint.ErrPrincipalSuperuser},
+		{"public superuser only", true, false, nil, edgetokenmint.ErrPrincipalSuperuser},
+		{"both", true, true, edgetokenmint.ErrPrincipalSuperuser, edgetokenmint.ErrPrincipalSuperuser},
 	} {
 		env := platformroleseam.Start(ctx, t, true)
 		env.Project(ctx, t, uuid.MustParse(edgetokenmint.ProvePrincipalID), c.publicSuperuser, c.assigned)

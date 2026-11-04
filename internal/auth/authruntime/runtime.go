@@ -51,6 +51,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/platform/version"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -103,7 +104,7 @@ func sessionRoutes(
 		return authapi.SessionsNotEnabledRoutes(), nil
 	}
 	sessions, err := session.New(session.Config{
-		Pool: pool, Schema: schema, Logger: logger, UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
+		Pool: pool, Schema: schema, Logger: logger, RefreshTTL: sessionRefreshTTL(), UsersOwned: cfg.UsersOwned, PlatformRolesOwned: cfg.PlatformRolesOwned,
 		SuccessorKey: contracts.NewSecretString(cfg.Session.SuccessorKey.Reveal()),
 	})
 	if err != nil {
@@ -305,6 +306,11 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 			"guidance", "pass these as flags in the deployed command so the configuration is visible where it is deployed",
 		)
 	}
+
+	if _, err := apimetrics.Install(); err != nil {
+		logger.Warn("install the OTel meter provider", "error", err)
+	}
+	removedenv.ObserveOrgsOwned(parent, lookup, logger)
 
 	ctx, stop := lifecycle.SignalContext(parent)
 	defer stop()

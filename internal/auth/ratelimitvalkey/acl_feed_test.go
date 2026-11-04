@@ -10,7 +10,7 @@ import (
 // The revision feed (CHAOS-10983) runs under the same login: the one script reads and writes one hash under the existing
 // auth_svc_ key prefix and publishes on one channel under auth_svc_, and the subscriber subscribes to it. The rule is
 // pinned as a whole so a change is a reviewed contract change (acp PLAN GO 10983 ruling 7).
-const feedACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)"
+const feedACLRules = "resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +decr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)"
 
 func TestTheAclRuleIsTheReviewedLineWithTheFeedChannelAndCommands(t *testing.T) {
 	if ACLRules != feedACLRules {

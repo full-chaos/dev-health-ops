@@ -50,6 +50,7 @@ dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcount
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+dev_health_auth_orgs_owned_ignored		code: internal/platform/removedenv/removedenv.go
 devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
 devhealth_auth_credential_projection_total	domain,outcome	code: internal/auth/outboxprojection/project.go

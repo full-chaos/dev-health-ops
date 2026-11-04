@@ -850,3 +850,36 @@ VALUES ($1, $2, 'workload_bootstrap_credential', $3, 'sha256', encode($4::bytea,
 		t.Fatalf("a credential of another class: %v", err)
 	}
 }
+
+// The read-only resolver answers exactly as the store's ResolveKey does, for a
+// live key and for every refusal, and it needs no row locker.
+func TestSAKeyResolverReadsLikeTheStore(t *testing.T) {
+	e := getEnv(t)
+	resolver, err := NewKeyResolver(KeyResolverConfig{Pool: e.runtime, Schema: e.schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, id := e.account(t)
+	k := e.issue(t, id)
+	want, reason := e.resolve(t, k)
+	if reason != "" {
+		t.Fatalf("a fresh key is refused: %s", reason)
+	}
+	got, err := resolver.ResolveKey(ctxT(t), KeyDigest(k.Secret.Reveal()), time.Now())
+	if err != nil || got.CredentialID != want.CredentialID || got.Principal != want.Principal || got.OrgID != want.OrgID ||
+		!got.ExpiresAt.Equal(want.ExpiresAt) || got.Revision != want.Revision {
+		t.Fatalf("resolver %+v %v, store %+v", got, err, want)
+	}
+	if err := e.sa.RevokeKey(ctxT(t), k.Key.ID, KeyReasonOwnerRequest, okActor()); err != nil {
+		t.Fatal(err)
+	}
+	_, err = resolver.ResolveKey(ctxT(t), KeyDigest(k.Secret.Reveal()), time.Now())
+	var refusal *KeyRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != "revoked" {
+		t.Fatalf("a revoked key: %v", err)
+	}
+	_, err = resolver.ResolveKey(ctxT(t), KeyDigest("fcsak_unknown"), time.Now())
+	if !errors.As(err, &refusal) || refusal.Reason != "unknown" {
+		t.Fatalf("an unknown key: %v", err)
+	}
+}

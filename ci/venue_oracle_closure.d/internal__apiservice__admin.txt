@@ -63,7 +63,10 @@ internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/pushevent
+internal/auth/pushlifecycle
+internal/auth/pushreconcile
 internal/auth/ratelimitvalkey
+internal/auth/repokey
 internal/auth/requestid
 internal/auth/session
 internal/auth/sessionevent
@@ -112,6 +115,7 @@ internal/platform/logging
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol
+internal/platform/removedenv
 internal/platform/secrets
 internal/platform/shell
 internal/platform/timeoutclass

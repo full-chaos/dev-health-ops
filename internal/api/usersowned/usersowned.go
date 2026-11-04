@@ -57,17 +57,6 @@ func On() bool {
 	return err != nil || on
 }
 
-// OrgsEnv is the orgs-owned switch, with the meaning auth-service gives it.
-const OrgsEnv = "AUTH_ORGS_OWNED"
-
-// OrgsOn reads OrgsEnv on every call, by the rule of On: a value that cannot be
-// read counts as on, so go-api holds back from a table auth may own. No start
-// check reads it; the chart holds the order of the switches.
-func OrgsOn() bool {
-	on, err := readSwitch(OrgsEnv, secrets.ProcessLookup)
-	return err != nil || on
-}
-
 // RefuseWhileUsersOwned is the guard of a writer that returns an error: nil
 // while the switch is off.
 func RefuseWhileUsersOwned(on bool) error {

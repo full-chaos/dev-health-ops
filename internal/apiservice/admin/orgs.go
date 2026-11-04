@@ -26,16 +26,16 @@ func (h *handlers) orgRoutes() []httpapi.Route {
 		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.bodyFirstPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.updateOrganization))},
 		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}", Handler: h.guard.WrapPlatform(policy.ActionAdminOrgs, http.HandlerFunc(h.deleteOrganization))},
 		{Method: http.MethodGet, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.listMembers))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.addMember))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/members", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.addMember)))},
 		// create_org_invite: authentication, then body validation, then the
 		// rate limit, then the endpoint -- the order FastAPI and slowapi
 		// run them in (see validateInviteBody).
 		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/invites",
-			Handler: h.bodyFirst(policy.Admin,
-				httpapi.ValidateThenLimitDependency(validateInviteBody, h.inviteLimiter, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite)))},
-		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.updateMemberRole))},
-		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, http.HandlerFunc(h.removeMember))},
-		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, http.HandlerFunc(h.transferOwnership))},
+			Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(
+				httpapi.ValidateThenLimitDependency(validateInviteBody, h.inviteLimiter, adminUserKey, h.write)(http.HandlerFunc(h.createOrgInvite))))},
+		{Method: http.MethodPatch, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.updateMemberRole)))},
+		{Method: http.MethodDelete, Pattern: orgsPrefix + "/orgs/{org_id}/members/{user_id}", Handler: h.guard.Wrap(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.removeMember)))},
+		{Method: http.MethodPost, Pattern: orgsPrefix + "/orgs/{org_id}/transfer-ownership", Handler: h.bodyFirst(policy.Admin, h.guard.RefuseImpersonation(http.HandlerFunc(h.transferOwnership)))},
 	}
 }
 
@@ -339,7 +339,7 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	object, ok := errs.Object(body)
 	patch := orgUpdate{}
 	if ok {
-		if v, present := h.optionalName(&errs, object); present {
+		if v, present := errs.OptionalString(object, "name", 0, 0); present {
 			patch.Name = &v
 		}
 		if v, present := errs.OptionalString(object, "description", 0, 0); present {
@@ -365,12 +365,6 @@ func (h *handlers) updateOrganization(w http.ResponseWriter, r *http.Request) {
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
-	}
-	patch.authOwned = h.orgsOwned()
-	if h.renamesInAuth(patch) {
-		if !h.renamePrecheck(w, r, *patch.Name) || !h.renameInAuth(w, r, orgID, *patch.Name) {
-			return
-		}
 	}
 	var authActive orgAuthStateFunc
 	if patch.IsActive != nil {

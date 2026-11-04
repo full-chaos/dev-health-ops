@@ -339,3 +339,20 @@ func TestStopWithoutDelegatorIsGoAPIsOwnStop(t *testing.T) {
 		t.Errorf("stop transaction:\n%s", joined)
 	}
 }
+
+// A caller with no auth-service session (a go-api token) cannot stop a delegated session either: 409, the row stays open and
+// auth-service is not asked. With no open row the answer stays 400.
+func TestDelegatedStopWithoutSessionTokenIsRefusedAndEndsNothing(t *testing.T) {
+	c := newDelegatedCase(true)
+	open := uuid.New()
+	c.db.open = &open
+	rec := c.do(c.h.impersonateStop(), c.target, false)
+	if rec.Code != http.StatusConflict || len(c.delegator.ended) != 0 {
+		t.Fatalf("status %d, ends %d: %s", rec.Code, len(c.delegator.ended), rec.Body.String())
+	}
+	none := newDelegatedCase(true)
+	rec = none.do(none.h.impersonateStop(), none.target, false)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "No active impersonation session") {
+		t.Fatalf("no open row: status %d: %s", rec.Code, rec.Body.String())
+	}
+}

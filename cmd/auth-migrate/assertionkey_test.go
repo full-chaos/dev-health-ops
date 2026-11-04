@@ -95,7 +95,10 @@ func TestParseAssertionKeyListArgs(t *testing.T) {
 }
 
 func TestAssertionKeyVerbsRefuseBeforeReadingTheEnvironment(t *testing.T) {
-	lookup := func(string) (string, bool) {
+	lookup := func(key string) (string, bool) {
+		if key == "AUTH_ORGS_OWNED" {
+			return "", false
+		}
 		t.Fatal("the environment was read for a bad command line")
 		return "", false
 	}

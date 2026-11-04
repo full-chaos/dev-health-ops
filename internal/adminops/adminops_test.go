@@ -54,6 +54,7 @@ func TestUsersVerbsRefuseBadArgumentsBeforeConnecting(t *testing.T) {
 		{"create refuses --password with --password-stdin", runUsersCreate, []string{"--email", "a@example.com", "--password", fixturePassword1, "--password-stdin"}},
 		{"create --password-stdin needs a password line", runUsersCreate, []string{"--email", "a@example.com", "--password-stdin"}},
 		{"orgs create needs --name", runOrgsCreate, nil},
+		{"update refuses --org with --remove-from-org", runUsersUpdate, []string{"--email", "a@example.com", "--org", "x", "--remove-from-org", "y", "--actor", "b@example.com"}},
 		{"update refuses an unknown role", runUsersUpdate, []string{"--email", "a@example.com", "--org", "x", "--role", "root"}},
 		{"list refuses a positional", runUsersList, []string{"x"}},
 		{"orgs list refuses a non-number limit", runOrgsList, []string{"--limit", "many"}},

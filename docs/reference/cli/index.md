@@ -584,6 +584,9 @@ dho admin users update \
 | `--org` | Org slug or ID: add the user or update their role |
 | `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` |
 | `--remove-from-org` | Org slug or ID: remove the user's membership |
+| `--actor` | Id or email of the user that acts for `--org` or `--remove-from-org` (required with them): an active owner or admin of the org, or a superuser |
+
+A membership change (`--org`, `--role`, `--remove-from-org`) is sent to the authentication service's membership routes, which write `public.memberships` and the auth copy and record the audit event in one commit. It needs `AUTH_PROXY_URL` and `AUTH_SESSION_ISSUE_TOKEN` (the admin API's own service credential; run the verb in a workload that holds it, such as the go-api pod). It does this whether or not `AUTH_PROXY_ORG_PROVISIONING` is on; the CLI writes no membership row itself. Without those variables or without `--actor` it refuses and writes nothing. One call makes one membership change (`--org` with `--remove-from-org` is a usage error, exit 2). The membership change is sent first; a refusal leaves the profile and password changes of the call unrun. If one of those then fails, the membership change stays.
 
 ### `admin users delete`
 
@@ -629,6 +632,9 @@ dho admin orgs delete --org-id <uuid>
 | `--org-id` | Organization ID (required) |
 | `--dry-run` | Return the deletion plan without deleting data |
 | `--analytics-db` | ClickHouse URI (default: `CLICKHOUSE_URI`) |
+| `--actor` | Id or email of an active superuser that acts for the delete (required without `--dry-run`) |
+
+A real delete first denies the organization in the authentication service (the deprovision route, as the API route does), so it needs `AUTH_PROXY_URL` and `AUTH_SESSION_ISSUE_TOKEN`, and refuses without them or without `--actor`; `--dry-run` needs neither.
 
 The deletion needs ClickHouse, also for `--dry-run`. Before anything is counted, revoked or deleted, the ClickHouse login must connect and hold `SELECT` and `ALTER DELETE` on its whole database (its own grants or its roles'), and the database must have tables with an `org_id` column. If not, the verb prints `Error: ClickHouse is not configured, not reachable or not permitted to purge; organization deletion refused. Nothing was deleted.` and exits 1. If the ClickHouse purge fails after the PostgreSQL rows are deleted, it prints `Error: Organization Postgres data was deleted, but the ClickHouse purge did not complete. Run the delete again.` and exits 1; running it again purges the organization's ClickHouse rows by id. If a pending PagerDuty revocation of the organization is being sent by the revocation worker at that moment, nothing is purged: the verb prints `Error: A PagerDuty revocation of this organization is being sent; run the delete again. Nothing was deleted.` and exits 1, and running it again completes the delete (the revocation is sent once). The API route `DELETE /api/v1/admin/orgs/{org_id}` answers 503 and 500 for the first two cases and 503 for the third. The verb logs `admin: org deletion refused` (with a `reason`), `admin: org deletion clickhouse purge incomplete` or `admin: org deletion done` on stderr. At start, go-api runs the same ClickHouse check once without failing its start and logs one line: `orgdelete_clickhouse_preflight=ok`, or `orgdelete_clickhouse_preflight=refused` with the `reason`.
 

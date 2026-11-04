@@ -16,7 +16,7 @@ import (
 // purge). A missing organization in both schemas is ErrOrganizationNotFound.
 func (s *Store) EnsureOrganization(ctx context.Context, orgID uuid.UUID) error {
 	var exists bool
-	err := s.orgDB.QueryRow(ctx, fmt.Sprintf(ownedOrgExistsSQL, s.q), orgID).Scan(&exists)
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(orgExistsSQL, s.q), orgID).Scan(&exists)
 	switch {
 	case err == nil:
 		return nil

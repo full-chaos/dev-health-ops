@@ -1177,6 +1177,33 @@ schema Job and the grants Job.
 {{- end }}
 
 {{/*
+The External Push lifecycle writer settings (CHAOS-10895, CHAOS-12828) of both auth-migrate Jobs, checked before either renders.
+writerRole and callerRoles go together: the grant pass runs only with a writer role, so callers without one were dropped
+silently and the function stayed unexecutable. The writer must differ from the runtime login and from every caller, a caller must
+differ from the runtime login, and no caller repeats. Renders nothing.
+*/}}
+{{- define "dev-health.authPushLifecycle" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $writer := trim (toString (default "" $m.pushLifecycle.writerRole)) -}}
+{{- $callers := default (list) $m.pushLifecycle.callerRoles -}}
+{{- if and (not $writer) $callers }}{{- fail "authService.migrate.pushLifecycle.callerRoles is set while writerRole is empty: the grant pass runs only with a writer role, so no caller would get EXECUTE; set pushLifecycle.writerRole too" }}{{- end -}}
+{{- if $writer }}
+{{- if not $callers }}{{- fail "authService.migrate.pushLifecycle.writerRole is set while callerRoles is empty: auth-migrate refuses a writer role with no caller; list the logins that may execute the function" }}{{- end -}}
+{{- if eq $writer (trim (toString $m.runtimeRole)) }}{{- fail "authService.migrate.pushLifecycle.writerRole must differ from authService.migrate.runtimeRole" }}{{- end -}}
+{{- if ne (len $callers) 2 }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles must list exactly two logins (go-api's API database role and the worker domain login), got %d" (len $callers)) }}{{- end -}}
+{{- $seen := dict -}}
+{{- range $callers }}
+{{- $raw := toString . -}}
+{{- $c := trim $raw -}}
+{{- if not $c }}{{- fail "authService.migrate.pushLifecycle.callerRoles has a blank entry; list two non-blank logins" }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
+{{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (hasKey $seen $c) }}{{- fail (printf "authService.migrate.pushLifecycle.callerRoles entry %q must differ from the writer role, the runtime role and every other caller" $c) }}{{- end -}}
+{{- $_ := set $seen $c true -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
 Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
 push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).

@@ -49,7 +49,7 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "graphql_edge_route.go", decl: "authenticateGraphQLEdge", needles: []string{"case edgeUnavailable:", "policy.WriteInternal(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "Scope.Impersonation", needles: []string{"session lookup failed; refusing the request", "WriteInternal(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"WriteInternal(w)"}, anyOf: []string{}},
-			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"errors.Is(err, ErrKeySourceUnavailable)", "WriteAuthFailure(w, \"\", ErrUnavailable)"}, anyOf: []string{}},
+			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"errors.Is(err, ErrUnavailable)", "WriteAuthFailure(w, \"\", ErrUnavailable)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "Scope.OrgScope", needles: []string{"writeOrgDenied(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "writeOrgDenied", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "graphql_edge_route.go", decl: "refuseIDE", needles: []string{"plainRefusal(http.StatusNotFound, \"Not Found\")"}, anyOf: []string{}},

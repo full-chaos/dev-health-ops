@@ -18,6 +18,7 @@ var ownedParseCallers = []string{
 	"cmd/auth-migrate/main.go",
 	"cmd/auth-migrate/restorefence.go",
 	"internal/adminops/users.go",
+	"internal/apiservice/api_posture.go",
 	"internal/apiservice/service.go",
 	"internal/auth/authconfig/config.go",
 	"internal/auth/platformrole/platformrole.go",
@@ -25,6 +26,7 @@ var ownedParseCallers = []string{
 	"internal/auth/usersbackfill/platformrole_command.go",
 	"internal/mintcli/edgetoken/main.go",
 	"internal/queryapi/server/query_route.go",
+	"internal/rivermigrate/api_posture.go",
 	"internal/rivermigrate/rivermigrate.go",
 }
 

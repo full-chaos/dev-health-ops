@@ -234,3 +234,17 @@ func TestPublicAnchorPrivilegeIsOutsideTheSetAndCoversEveryTable(t *testing.T) {
 		}
 	}
 }
+
+// The migrator's public set gives no write of public.users.is_superuser: the grants pass no longer grants one, so the
+// owner move hands out no GRANT OPTION on it (CHAOS-10993).
+func TestPublicPrivilegeSetGivesNoSuperuserWrite(t *testing.T) {
+	set := keysOfPrivilegeSet(PublicPrivilegeSet())
+	for _, privilege := range []string{"INSERT", "UPDATE"} {
+		if set["users|"+privilege+"|is_superuser"] || set["users|"+privilege+"|"] {
+			t.Errorf("PublicPrivilegeSet gives %s on public.users.is_superuser", privilege)
+		}
+	}
+	if !set["users|INSERT|email"] || !set["users|SELECT|is_superuser"] {
+		t.Error("the users entries are missing: the check reads nothing")
+	}
+}

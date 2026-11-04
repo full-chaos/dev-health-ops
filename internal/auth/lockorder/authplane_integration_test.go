@@ -5,17 +5,15 @@ package lockorder
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
@@ -23,9 +21,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
 )
 
 func randomText(n int) (string, error) {
@@ -40,6 +38,11 @@ func randomText(n int) (string, error) {
 // the session issue route) as auth-service wires them (authruntime
 // compatRoutes), over the auth stores on the runtime role.
 func (e *env) startAuthPlane(ctx context.Context, schema authschema.ValidatedIdentifier, logger *slog.Logger, jwtKey string) error {
+	plane, err := issueworkload.New("https://auth.lockorder.example.test")
+	if err != nil {
+		return err
+	}
+	e.issuePlane = plane
 	server, err := e.authPlaneOn(e.runtime, schema, logger, jwtKey)
 	if err != nil {
 		return err
@@ -81,9 +84,15 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 		return nil, fmt.Errorf("limits: %w", err)
 	}
 	runtime := pool
+	workload, err := authapi.NewSessionIssueWorkload(authapi.SessionIssueWorkloadConfig{
+		IssuerURL: e.issuePlane.Issuer, Keys: e.issuePlane, Subject: e.issuePlane.Subject,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session issue workload: %w", err)
+	}
 	routes, err := authapi.CompatRoutes(authapi.CompatDeps{
 		Sessions: sessions, Users: authapi.PGUsers{Pool: runtime}, Issuer: issuer, Logger: logger,
-		Projector: e.identity, ServiceCredentials: servicecred.PG{Pool: runtime},
+		Projector: e.identity, IssueWorkload: workload,
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, runtime, schema, event)
 		},
@@ -106,21 +115,22 @@ func (e *env) authPlaneOn(pool *pgxpool.Pool, schema authschema.ValidatedIdentif
 	return server, nil
 }
 
-// seedIssueClient stores one session issue credential (go-api's
-// svc_authsess_ token) and returns go-api's issue client for authServer.
+// seedIssueClient stores go-api's workload principal and returns go-api's
+// issue client for authServer, which presents the go-api workload token.
 func (e *env) seedIssueClient(ctx context.Context) (*sessionissue.Client, error) {
-	secret, err := randomText(32)
+	if err := e.issuePlane.Seed(ctx, e.admin); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "lockorder-issue-")
 	if err != nil {
 		return nil, err
 	}
-	token := "svc_authsess_" + secret
-	sum := sha256.Sum256([]byte(token))
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.internal_service_credentials
-	(id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessionIssuer, hex.EncodeToString(sum[:]),
-		token[:len("svc_authsess_")+4], `["`+servicecred.ScopeSessionsIssue+`"]`); err != nil {
-		return nil, fmt.Errorf("seed the issue credential: %w", err)
+	closers = append(closers, func() { _ = os.RemoveAll(dir) })
+	workload, stop, err := e.issuePlane.Client(dir)
+	if err != nil {
+		return nil, err
 	}
+	closers = append(closers, stop)
 	base, err := url.Parse(e.authServer.URL)
 	if err != nil {
 		return nil, err
@@ -129,8 +139,8 @@ VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessio
 	if err != nil {
 		return nil, err
 	}
-	if e.issueOne, err = sessionissue.New(one, token, 5*time.Second); err != nil {
+	if e.issueOne, err = sessionissue.NewWorkload(one, workload, 5*time.Second); err != nil {
 		return nil, err
 	}
-	return sessionissue.New(base, token, 5*time.Second)
+	return sessionissue.NewWorkload(base, workload, 5*time.Second)
 }

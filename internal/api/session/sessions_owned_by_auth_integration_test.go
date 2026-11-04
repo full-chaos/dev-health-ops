@@ -4,8 +4,6 @@ package session_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net"
@@ -21,6 +19,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sessionscenario"
 )
@@ -55,22 +54,22 @@ func newcomer(t *testing.T, ctx context.Context, st stack) string {
 	return changeToken(t, st, id.String(), email, "", "member", 0)
 }
 
-func issueCredential(t *testing.T) string {
-	t.Helper()
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
-	}
-	return "svc_authsess_" + base64.RawURLEncoding.EncodeToString(random)
-}
-
 func issueClient(t *testing.T, base string) *sessionissue.Client {
 	t.Helper()
 	parsed, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := sessionissue.New(parsed, issueCredential(t), 2*time.Second)
+	plane, err := issueworkload.New("https://auth.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload, stop, err := plane.Client(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	client, err := sessionissue.NewWorkload(parsed, workload, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

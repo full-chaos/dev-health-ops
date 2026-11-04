@@ -5,9 +5,7 @@ package acr
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +15,6 @@ import (
 	"net/url"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +28,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
-	"github.com/full-chaos/dev-health-ops/internal/auth/servicecred"
 	"github.com/full-chaos/dev-health-ops/internal/projectinventory"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -40,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
@@ -47,10 +44,10 @@ import (
 
 // authServiceStates is auth-service's session state route as auth-service
 // serves it: authapi.CompatRoutes, which mounts the route from the embedded
-// endpoint-profile document, with the real service credential check, over the
-// rig's session store (the runtime role). It returns go-api's real
-// sessionissue client, presenting a seeded session issuer credential, so the
-// access read decides on auth-service's own answer, read over HTTP.
+// endpoint-profile document, with the real go-api workload token check, over
+// the rig's session store (the runtime role). It returns go-api's real
+// sessionissue client, presenting the go-api workload token, so the access
+// read decides on auth-service's own answer, read over HTTP.
 func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, rig *pinrig.PinRig) *sessionissue.Client {
 	t.Helper()
 	random := func() string {
@@ -77,9 +74,17 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 	if err != nil {
 		t.Fatal(err)
 	}
+	plane, err := issueworkload.New("https://auth.access.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload, err := authapi.NewSessionIssueWorkload(authapi.SessionIssueWorkloadConfig{IssuerURL: plane.Issuer, Keys: plane, Subject: plane.Subject})
+	if err != nil {
+		t.Fatal(err)
+	}
 	routes, err := authapi.CompatRoutes(authapi.CompatDeps{
 		Sessions: rig.Sessions(), Users: authapi.PGUsers{Pool: admin}, Issuer: issuer, Logger: logger,
-		Projector: projector, ServiceCredentials: servicecred.PG{Pool: admin},
+		Projector: projector, IssueWorkload: workload,
 		AppendAudit: func(ctx context.Context, event audit.AuditEvent) error {
 			return audit.Append(ctx, admin, schema, event)
 		},
@@ -99,23 +104,23 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	token := "svc_authsess_" + random()
-	sum := sha256.Sum256([]byte(token))
-	if _, err := admin.Exec(ctx, `INSERT INTO public.internal_service_credentials
-	(id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES ($1, $2, $3, $4, $5::json, now())`, uuid.New(), servicecred.ServiceSessionIssuer, hex.EncodeToString(sum[:]),
-		token[:len("svc_authsess_")+4], `["`+servicecred.ScopeSessionsIssue+`"]`); err != nil {
-		t.Fatalf("seed the session issuer credential: %v", err)
+	if err := plane.Seed(ctx, admin); err != nil {
+		t.Fatal(err)
 	}
+	client, stop, err := plane.Client(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
 	base, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := sessionissue.New(base, token, 5*time.Second)
+	states, err := sessionissue.NewWorkload(base, client, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return client
+	return states
 }
 
 type staticInventory []string
@@ -441,7 +446,16 @@ func TestPrincipalAccessSessionIsBoundToTheOrgAndItsExpiry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		client, err := sessionissue.New(base, "svc_authsess_"+strings.Repeat("A", 43), time.Second)
+		plane, err := issueworkload.New("https://auth.access.example.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		workload, stop, err := plane.Client(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(stop)
+		client, err := sessionissue.NewWorkload(base, workload, time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}

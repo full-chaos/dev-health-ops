@@ -67,8 +67,10 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if issuer != "" {
 		env[authconfig.EnvTokenIssuerURL] = issuer
 		// The workload-token exchange needs the token issuer: the probe turns it
-		// on whenever an issuer is set.
+		// on whenever an issuer is set, and the go-api workload subject, which
+		// mounts the session issue routes, with it.
 		exchangeEnvironment(t, env)
+		workloadIssueEnvironment(env)
 	}
 	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: lookupFrom(provisioningEnvironment(ssoEnvironment(compatEnvironment(env))))})
 	if err != nil {
@@ -110,7 +112,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t))
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, probeSigner(cfg), mustLimits(t))
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
@@ -548,8 +550,11 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange needs the issuer too, so its row is stale as well.
-	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api"}
+	// The workload-token exchange needs the issuer too, so its row is stale as well, and so do the session issue
+	// routes, which take only the go-api workload token.
+	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api",
+		"POST /internal/v1/sessions/delegated/end@api", "POST /internal/v1/sessions/delegated@api", "POST /internal/v1/sessions/state@api",
+		"POST /internal/v1/sessions@api", "POST /internal/v1/token/exchange@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
 	}

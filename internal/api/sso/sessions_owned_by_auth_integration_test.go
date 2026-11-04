@@ -4,8 +4,6 @@ package sso_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,19 +17,25 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/issueworkload"
 )
 
 func ssoIssueClient(t *testing.T, base string) *sessionissue.Client {
 	t.Helper()
-	random := make([]byte, 32)
-	if _, err := rand.Read(random); err != nil {
-		t.Fatal(err)
-	}
 	parsed, err := url.Parse(base)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := sessionissue.New(parsed, "svc_authsess_"+base64.RawURLEncoding.EncodeToString(random), 2*time.Second)
+	plane, err := issueworkload.New("https://auth.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workload, stop, err := plane.Client(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stop)
+	client, err := sessionissue.NewWorkload(parsed, workload, 2*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

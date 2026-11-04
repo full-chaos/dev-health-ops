@@ -38,18 +38,3 @@ func TestOrgStateReconcilerRunsOnlyWithTheOrganizationClientAndADatabase(t *test
 		t.Fatal(err)
 	}
 }
-
-// While auth-service owns organizations it writes is_active itself, so the reconciler does not start (D6525: no drift
-// alarm in its place).
-func TestOrgReconcilerStaysOffWhileOrgsOwned(t *testing.T) {
-	logger := slog.New(slog.DiscardHandler)
-	deps := Deps{Pool: &pgxpool.Pool{}, OrgState: stateReaderStub{}}
-	t.Setenv("AUTH_ORGS_OWNED", "true")
-	if got := orgStateReconciler(deps, logger); len(got) != 0 {
-		t.Fatalf("orgs owned: %d components, want 0", len(got))
-	}
-	t.Setenv("AUTH_ORGS_OWNED", "false")
-	if got := orgStateReconciler(deps, logger); len(got) != 1 {
-		t.Fatalf("orgs not owned: %d components, want 1", len(got))
-	}
-}

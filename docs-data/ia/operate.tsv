@@ -38,6 +38,7 @@ op-metrics	op-observe	/operate/observe/metrics-and-traces/	Metrics and traces	re
 op-alerts	op-observe	/operate/observe/dashboards-and-alerts/	Dashboards and alerts	task-guide	true	public	planned	false	
 op-security	operate	/operate/security/	Security operations	landing	true	public	planned	false	
 op-hardening	op-security	/operate/security/hardening/	Production hardening	task-guide	true	public	planned	false	
+op-external-push-credentials	op-security	/operate/security/external-push-credentials/	Manage External Push credentials	task-guide	true	public	active	false	
 op-credential-inc	op-security	/operate/security/credential-incidents/	Credential and access incidents	runbook	true	public	planned	false	
 op-security-inc	op-security	/operate/security/incident-response/	Security incident response	runbook	true	public	planned	false	
 op-runbooks	operate	/operate/runbooks/	Runbooks	troubleshooting-index	true	public	planned	false	
@@ -60,10 +61,12 @@ op-rb-auth-signing-key-emergency-rotation	op-runbooks	/operate/runbooks/auth-sig
 op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false
 op-rb-auth-platform-roles-flip	op-runbooks	/operate/runbooks/auth-platform-roles-flip-and-rollback/	Auth platform roles flip and rollback	runbook	true	public	active	false
 op-rb-auth-service-scrape-alerts	op-runbooks	/operate/runbooks/auth-service-scrape-and-alerts/	Auth-service scrape check and alert import	runbook	true	public	active	false
+op-rb-auth-push-projection-drift-alerts	op-runbooks	/operate/runbooks/auth-push-projection-drift-alerts/	Push projection drift alerts	runbook	true	public	active	false
 op-rb-auth-users-flip-back-grants	op-runbooks	/operate/runbooks/auth-users-flip-back-grants/	Auth users flip-back grants	runbook	true	public	active	false
 op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-workload-bootstrap-credential/	Workload bootstrap credential	runbook	true	public	active	false
 op-rb-auth-service-accounts	op-runbooks	/operate/runbooks/auth-service-accounts/	Service accounts	runbook	true	public	active	false
 op-rb-auth-workload-kubernetes-federation	op-runbooks	/operate/runbooks/auth-workload-kubernetes-federation/	Kubernetes workload federation	runbook	true	public	active	false
 op-rb-auth-legacy-compat	op-runbooks	/operate/runbooks/auth-legacy-compat-and-rollback/	Auth legacy compatibility and rollback	runbook	true	public	active	false	
+op-rb-external-push-lifecycle	op-runbooks	/operate/runbooks/external-push-lifecycle/	External Push lifecycle events	runbook	true	public	active	false	
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	
 op-rb-legacy-ingest-retired	op-runbooks	/operate/runbooks/legacy-ingest-retirement/	Legacy ingest retirement	runbook	true	public	active	false

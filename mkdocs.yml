@@ -249,6 +249,9 @@ nav:
       - Auth service readiness and SLO: reference/auth/readiness-and-slo.md
       - Auth access-token claims and validation: reference/auth/access-token-claims.md
       - Auth JWKS and discovery: reference/auth/jwks-and-discovery.md
+      - Auth decision clients: reference/auth/decision-clients.md
+      - Auth reason codes: reference/auth/reason-codes.md
+      - Auth entitlement boundary: reference/auth/entitlement-boundary.md
       - GraphQL:
           - reference/graphql/index.md
           - Schema and fields: reference/graphql/schema.md

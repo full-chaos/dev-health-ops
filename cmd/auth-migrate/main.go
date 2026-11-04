@@ -64,7 +64,7 @@ const (
 	envProjectionReaders = "AUTH_PROJECTION_READER_ROLES"
 	// envPushWriter is the NOLOGIN role that owns the External Push lifecycle
 	// append function, and envPushCallers the logins that may execute it
-	// (go-api's). Both empty leaves the function unexecutable.
+	// (go-api's and the worker domain login's). Both empty leaves the function unexecutable.
 	envPushWriter  = "AUTH_PUSH_LIFECYCLE_WRITER_ROLE"
 	envPushCallers = "AUTH_PUSH_LIFECYCLE_CALLER_ROLES"
 )

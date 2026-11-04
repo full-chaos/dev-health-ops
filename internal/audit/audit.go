@@ -566,6 +566,9 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 			return err
 		}
 	}
+	if Rehearsing(ctx) {
+		return nil
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
 	}

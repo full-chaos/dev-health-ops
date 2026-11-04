@@ -129,9 +129,34 @@ func scanEnvReaders(sources map[string]string) map[string][]string {
 	return scanEnvUnits(checkSources(sources))
 }
 
+// scanEnvUnits scans each build variant (the units of one load, which share a FileSet) with the wrappers of that variant
+// only, and joins the readers: a package path can declare a wrapper under one build tag set and a same-named
+// non-wrapper under the other.
 func scanEnvUnits(units []envUnit) map[string][]string {
-	wrappers := envWrappers(units)
+	var order []*token.FileSet
+	variants := map[*token.FileSet][]envUnit{}
+	for _, unit := range units {
+		if _, seen := variants[unit.fset]; !seen {
+			order = append(order, unit.fset)
+		}
+		variants[unit.fset] = append(variants[unit.fset], unit)
+	}
 	found := map[string]map[string]bool{}
+	for _, fset := range order {
+		scanEnvVariant(variants[fset], found)
+	}
+	readers := map[string][]string{}
+	for name, paths := range found {
+		for path := range paths {
+			readers[name] = append(readers[name], path)
+		}
+		sort.Strings(readers[name])
+	}
+	return readers
+}
+
+func scanEnvVariant(units []envUnit, found map[string]map[string]bool) {
+	wrappers := envWrappers(units)
 	for _, unit := range units {
 		for path, file := range unit.files {
 			if strings.HasSuffix(path, "_test.go") {
@@ -163,14 +188,6 @@ func scanEnvUnits(units []envUnit) map[string][]string {
 			}
 		}
 	}
-	readers := map[string][]string{}
-	for name, paths := range found {
-		for path := range paths {
-			readers[name] = append(readers[name], path)
-		}
-		sort.Strings(readers[name])
-	}
-	return readers
 }
 
 // isEnvLookupCall reports whether a call's callee is an environment lookup by its object. wrappers holds the functions
@@ -245,7 +262,7 @@ func envWrappers(units []envUnit) *envWrapperSet {
 		if sig.Params != nil {
 			for _, field := range sig.Params.List {
 				for _, name := range field.Names {
-					if param, ok := unit.info.Defs[name].(*types.Var); ok && types.Identical(param.Type().Underlying(), types.Typ[types.String]) {
+					if param, ok := unit.info.Defs[name].(*types.Var); ok && isStringName(param.Type()) {
 						params[param] = true
 					}
 				}
@@ -261,7 +278,7 @@ func envWrappers(units []envUnit) *envWrapperSet {
 				return !found
 			}
 			for _, arg := range call.Args {
-				if id, ok := ast.Unparen(arg).(*ast.Ident); ok && params[unit.info.Uses[id]] {
+				if id, ok := unconvert(unit.info, arg).(*ast.Ident); ok && params[unit.info.Uses[id]] {
 					found = true
 				}
 			}
@@ -327,6 +344,70 @@ func envWrappers(units []envUnit) *envWrapperSet {
 		}
 	}
 	return set
+}
+
+// isStringName reports whether a parameter of type t can carry a key name: its underlying type is string (string or a
+// named string type), or it is a type parameter whose every type term is such a type (T ~string, T key | ~string).
+func isStringName(t types.Type) bool {
+	if param, ok := types.Unalias(t).(*types.TypeParam); ok {
+		iface, ok := param.Constraint().Underlying().(*types.Interface)
+		return ok && stringTerms(iface)
+	}
+	return types.Identical(t.Underlying(), types.Typ[types.String])
+}
+
+// stringTerms reports whether a constraint has at least one type term and every term is a string type.
+func stringTerms(iface *types.Interface) bool {
+	terms := false
+	for i := 0; i < iface.NumEmbeddeds(); i++ {
+		switch embedded := types.Unalias(iface.EmbeddedType(i)).(type) {
+		case *types.Union:
+			for j := 0; j < embedded.Len(); j++ {
+				if !types.Identical(embedded.Term(j).Type().Underlying(), types.Typ[types.String]) {
+					return false
+				}
+			}
+			terms = true
+		default:
+			if inner, ok := embedded.Underlying().(*types.Interface); ok {
+				if inner.IsMethodSet() {
+					continue
+				}
+				if !stringTerms(inner) {
+					return false
+				}
+				terms = true
+				continue
+			}
+			if !isStringName(embedded) {
+				return false
+			}
+			terms = true
+		}
+	}
+	return terms
+}
+
+// unconvert strips parentheses and type conversions from an expression: string(name), key(name), pkg.Key((name)).
+func unconvert(info *types.Info, expr ast.Expr) ast.Expr {
+	for {
+		expr = ast.Unparen(expr)
+		call, ok := expr.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 || call.Ellipsis.IsValid() {
+			return expr
+		}
+		var target types.Object
+		switch fun := ast.Unparen(call.Fun).(type) {
+		case *ast.Ident:
+			target = info.Uses[fun]
+		case *ast.SelectorExpr:
+			target = info.Uses[fun.Sel]
+		}
+		if _, isType := target.(*types.TypeName); !isType {
+			return expr
+		}
+		expr = call.Args[0]
+	}
 }
 
 // varKey names a variable by its package path and name when it is package-level (the same from source and from export
@@ -463,8 +544,11 @@ func unifiedTypeArgs(instance types.Type, tparams *types.TypeParamList, iface *t
 	return args
 }
 
-// unify matches x, which may use the type parameters own, against y, binding each parameter at most one type.
+// unify matches x, which may use the type parameters own, against y, binding each parameter at most one type. It looks
+// through aliases (a generic alias instance is its right-hand side) and into every composite type form that can hold a
+// parameter: pointer, slice, array, map, channel, signature, struct, method-set interface and generic named instance.
 func unify(x, y types.Type, own map[*types.TypeParam]bool, bound map[*types.TypeParam]types.Type) bool {
+	x, y = types.Unalias(x), types.Unalias(y)
 	if param, ok := x.(*types.TypeParam); ok && own[param] {
 		if arg, ok := bound[param]; ok {
 			return types.Identical(arg, y)
@@ -491,6 +575,30 @@ func unify(x, y types.Type, own map[*types.TypeParam]bool, bound map[*types.Type
 	case *types.Signature:
 		y, ok := y.(*types.Signature)
 		return ok && x.Variadic() == y.Variadic() && unifyTuple(x.Params(), y.Params(), own, bound) && unifyTuple(x.Results(), y.Results(), own, bound)
+	case *types.Struct:
+		y, ok := y.(*types.Struct)
+		if !ok || x.NumFields() != y.NumFields() {
+			return false
+		}
+		for i := 0; i < x.NumFields(); i++ {
+			fx, fy := x.Field(i), y.Field(i)
+			if fx.Id() != fy.Id() || fx.Embedded() != fy.Embedded() || x.Tag(i) != y.Tag(i) || !unify(fx.Type(), fy.Type(), own, bound) {
+				return false
+			}
+		}
+		return true
+	case *types.Interface:
+		y, ok := y.(*types.Interface)
+		if !ok || !x.IsMethodSet() || !y.IsMethodSet() || x.NumMethods() != y.NumMethods() {
+			return ok && types.Identical(x, y)
+		}
+		for i := 0; i < x.NumMethods(); i++ {
+			mx, my := x.Method(i), y.Method(i)
+			if mx.Id() != my.Id() || !unify(mx.Signature(), my.Signature(), own, bound) {
+				return false
+			}
+		}
+		return true
 	case *types.Named:
 		y, ok := y.(*types.Named)
 		if !ok || x.TypeArgs().Len() == 0 || x.TypeArgs().Len() != y.TypeArgs().Len() || x.Origin().Obj() != y.Origin().Obj() {
@@ -1026,6 +1134,81 @@ func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
 			"internal/x/x_test.go": "package x\nimport \"os\"\n" + literalEnv("var read = "),
 			"internal/x/use.go":    "package x\nfunc f() string { return read(\"SOME_KEY\", \"d\") }\n",
 		}, "internal/x/use.go", false},
+		// A generic wrapper whose result holds its type parameter in any type form matches an interface by unification.
+		{"V51-generic-wrapper-result-anonymous-struct", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "struct{ Value T }", "struct{ Value T }{}"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) struct{ Value string } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V52-generic-wrapper-result-anonymous-interface", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "interface{ Value() T }", "nil"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) interface{ Value() string } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V53-generic-wrapper-result-generic-alias", map[string]string{
+			"internal/x/env.go": genericResultEnv("type Result[T any] = []T\n", "Result[T]", "nil"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) Result[string] }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V54-generic-wrapper-result-generic-named-type", map[string]string{
+			"internal/x/env.go": genericResultEnv("type Box[T any] struct{ Value T }\n", "Box[T]", "Box[T]{}"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) Box[string] }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V55-generic-wrapper-result-anonymous-struct-through-constraint", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "struct{ Value T }", "struct{ Value T }{}"),
+			"internal/x/use.go": "package x\nfunc f[G interface{ Lookup(string) struct{ Value string } }](g G) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V56-generic-wrapper-result-map-of-anonymous-struct", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "map[string]struct{ Value []T }", "nil"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) map[string]struct{ Value []string } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V57-generic-wrapper-result-struct-of-another-field-name", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "struct{ Value T }", "struct{ Value T }{}"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) struct{ Other string } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		{"V58-generic-wrapper-result-interface-of-another-method", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "interface{ Value() T }", "nil"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) interface{ Other() string } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		{"V59-generic-wrapper-result-struct-bound-twice-differently", map[string]string{
+			"internal/x/env.go": genericResultEnv("", "struct{ A T; B T }", "struct{ A T; B T }{}"),
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) struct{ A string; B int } }\nfunc f(g Getter) { _ = g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		// A wrapper whose name parameter is a named string type or a string-constrained type parameter, passed bare or
+		// through a conversion.
+		{"V60-named-string-parameter-converted", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype key string\nfunc Read(name key) string { return os.Getenv(string(name)) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V61-type-parameter-of-a-generic-function-converted", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\nfunc Read[T ~string](name T) string { return os.Getenv(string(name)) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V62-type-parameter-of-a-generic-method-converted", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env[T ~string] struct{}\nfunc (Env[T]) Lookup(name T) string { return os.Getenv(string(name)) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Env[string]{}.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V63-type-parameter-passed-bare-to-a-generic-wrapper", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\nfunc inner[T ~string](name T) string { return os.Getenv(string(name)) }\nfunc Read[T ~string](name T) string { return inner(name) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V64-string-parameter-converted-to-string", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\nfunc Read(name string) string { return os.Getenv(string(name)) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V65-type-parameter-method-through-interface", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env[T ~string] struct{}\nfunc (Env[T]) Lookup(name T) string { return os.Getenv(string(name)) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V66-named-string-parameter-of-another-package", map[string]string{
+			"internal/envutil/envutil.go": "package envutil\nimport \"os\"\ntype Key string\nfunc Read(name Key) string { return os.Getenv(string(name)) }\n",
+			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/envutil\"\nfunc f() string { return envutil.Read(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", true},
+		{"V67-conversion-of-a-fixed-name-is-no-wrapper", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype key string\nconst fixed key = \"FIXED\"\nfunc Read(name key) string { return os.Getenv(string(fixed)) + string(name) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		{"V68-type-parameter-of-a-non-string-constraint-is-no-name", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\nfunc Read[T ~int](n T) string { return os.Getenv(string(rune(n))) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { _ = \"SOME_KEY\"\nreturn Read(1) }\n",
+		}, "internal/x/use.go", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1041,9 +1224,64 @@ func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
 	}
 }
 
+// The tree is loaded once per build variant (no tags, -tags=integration), and the same package path can declare a
+// wrapper in one variant and a same-named non-wrapper in the other. Wrappers belong to their own variant; the readers
+// of both variants are joined.
+func TestWorkerSecretKeyReaderScanBuildVariants(t *testing.T) {
+	iface := "type Getter interface{ Lookup(string) string }\n"
+	cases := []struct {
+		name                string
+		wrapper, nonWrapper map[string]string
+		wantFile            string
+		want                bool
+	}{
+		{"B01-func-literal-holder-of-the-other-variant",
+			map[string]string{"internal/x/wrapper.go": "package x\nimport \"os\"\nvar read = func(name, fallback string) string { return os.Getenv(name) }\n"},
+			map[string]string{"internal/x/use.go": "package x\nvar read = func(name, fallback string) string { return fallback }\nfunc f() string { return read(\"SOME_KEY\", \"d\") }\n"},
+			"", false},
+		{"B02-function-of-the-other-variant",
+			map[string]string{"internal/x/env.go": "package x\nimport \"os\"\nfunc Read(name string) string { return os.Getenv(name) }\n"},
+			map[string]string{"internal/x/env.go": "package x\nfunc Read(name string) string { return name }\nfunc f() string { return Read(\"SOME_KEY\") }\n"},
+			"", false},
+		{"B03-method-of-the-other-variant-through-an-interface",
+			map[string]string{"internal/x/env.go": "package x\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n"},
+			map[string]string{
+				"internal/x/env.go": "package x\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return name }\n",
+				"internal/x/use.go": "package x\n" + iface + "func f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+			},
+			"", false},
+		{"B04-reader-of-its-own-variant-is-kept",
+			map[string]string{
+				"internal/x/wrapper.go":         "package x\nimport \"os\"\nvar read = func(name, fallback string) string { return os.Getenv(name) }\n",
+				"internal/x/use_integration.go": "package x\nfunc g() string { return read(\"SOME_KEY\", \"d\") }\n",
+			},
+			map[string]string{"internal/x/use.go": "package x\nvar read = func(name, fallback string) string { return fallback }\nfunc f() string { return read(\"SOME_KEY\", \"d\") }\n"},
+			"internal/x/use_integration.go", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			readers := scanEnvUnits(append(checkSources(c.wrapper), checkSources(c.nonWrapper)...))["SOME_KEY"]
+			got := len(readers) > 0
+			if c.wantFile != "" {
+				got = slices.Contains(readers, c.wantFile) && !slices.Contains(readers, "internal/x/use.go")
+			}
+			if got != c.want {
+				t.Errorf("%s: SOME_KEY readers %v, want read by %q = %v", c.name, readers, c.wantFile, c.want)
+			}
+		})
+	}
+}
+
 // genericEnv is a package with a generic type Env whose Lookup method, on the receiver recv, reads the environment.
 func genericEnv(pkg, recv string) string {
 	return "package " + pkg + "\nimport \"os\"\ntype Env[T any] struct{}\nfunc (" + recv + ") Lookup(name string) string { return os.Getenv(name) }\n"
+}
+
+// genericResultEnv is package x with a generic type Env whose Lookup method reads the environment and returns result
+// (which may use T), after the declarations in prefix.
+func genericResultEnv(prefix, result, zero string) string {
+	return "package x\nimport \"os\"\n" + prefix + "type Env[T any] struct{}\nfunc (Env[T]) Lookup(name string) " + result +
+		" {\n_ = os.Getenv(name)\nreturn " + zero + "\n}\n"
 }
 
 // literalEnv is a func(name, fallback string) string literal that reads the environment, after the given holder text.

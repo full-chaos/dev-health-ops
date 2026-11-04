@@ -41,6 +41,20 @@ type account struct {
 	profileOf string
 	// rawID, when set, is the raw JSON text of the id member the user endpoint serves; "-" omits the member.
 	rawID string
+	// name is the profile name the user endpoint serves: nil serves "Test User", absentName omits the member, any other value is served as given.
+	name any
+}
+
+const absentName = "__absent_name__"
+
+func (a account) setName(body map[string]any) {
+	switch a.name {
+	case nil:
+		body["name"] = "Test User"
+	case absentName:
+	default:
+		body["name"] = a.name
+	}
 }
 
 // rawIDMarker stands in for the id value of a user endpoint body until replyUser swaps in the raw JSON text.
@@ -172,7 +186,8 @@ func (f *fakeProviders) githubUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "{}", http.StatusUnauthorized)
 		return
 	}
-	body := map[string]any{"id": a.id, "login": "user" + url.PathEscape(a.email), "name": "Test User", "email": nil}
+	body := map[string]any{"id": a.id, "login": "user" + url.PathEscape(a.email), "email": nil}
+	a.setName(body)
 	if a.public {
 		body["email"] = a.email
 	}
@@ -207,7 +222,9 @@ func (f *fakeProviders) gitlabUser(w http.ResponseWriter, r *http.Request) {
 	if a.verified {
 		confirmed = "2026-01-01T00:00:00Z"
 	}
-	a.replyUser(f.t, w, map[string]any{"id": a.id, "username": "u", "name": "Test User", "email": a.email, "confirmed_at": confirmed})
+	body := map[string]any{"id": a.id, "username": "u", "email": a.email, "confirmed_at": confirmed}
+	a.setName(body)
+	a.replyUser(f.t, w, body)
 }
 
 func (f *fakeProviders) googleInfo(w http.ResponseWriter, r *http.Request) {
@@ -234,5 +251,7 @@ func (f *fakeProviders) googleUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"id":"` + a.googleID + `","email":"` + a.rawEmail + `","verified_email":true,"name":"Test User"}`))
 		return
 	}
-	a.replyUser(f.t, w, map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified, "name": "Test User"})
+	body := map[string]any{"id": a.googleID, "email": a.email, "verified_email": a.verified}
+	a.setName(body)
+	a.replyUser(f.t, w, body)
 }

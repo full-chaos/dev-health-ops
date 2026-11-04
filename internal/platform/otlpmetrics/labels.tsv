@@ -10,6 +10,7 @@ auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/servic
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
 auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
+auth.publicread.unknown_role		code: internal/auth/publicread/publicread.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.local.reset_request_skipped	reason	code: internal/auth/identity/local/linkaudit.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go

@@ -155,7 +155,6 @@ internal/cigates/bigboyrender	parity_test.go	internal/cigates/bigboyrender/testd
 internal/cigates/bigboyrender	parity_test.go	unexpressed	-	-
 internal/cigates/cachepoison	cachepoison_test.go	.github/workflows	dir	*
 internal/cigates/chartgates	helpers_test.go	unexpressed	-	-
-internal/cigates/chartgates	worker_secret_env_scan_test.go	unexpressed	-	*.go
 internal/cigates/chconstructor	chconstructor_test.go	.	tree	*.go
 internal/cigates/checkgo	support_test.go	unexpressed	-	-
 internal/cigates/checkgoshards	race_excluded_receipts_test.go	unexpressed	-	-

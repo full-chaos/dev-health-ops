@@ -27,7 +27,7 @@ const (
 	cellSSOCreate     = "internal/api/sso/usersowned_test.go|TestUsersOwnedRefusesTheSSOAccountCreate"
 	cellSSOJoin       = "internal/api/sso/usersowned_join_integration_test.go|TestSSOJoinRefusedWhileUsersOwned"
 	cellMemberRoutes  = "internal/apiservice/admin/orgs_provision_test.go|TestProvisionSwitchOnCallsAuthOnceAndWritesNothing"
-	cellOperatorCLI   = "internal/apiservice/admin/operator_provision_test.go|TestOperatorRefusesMembershipChangesAndDeletesWithTheSwitchOn"
+	cellOperatorCLI   = "internal/apiservice/admin/operator_provision_test.go|TestOperatorMembershipChangeGoesThroughTheRouteWhateverTheSwitchSays"
 	cellOrgCreateHTTP = "internal/apiservice/admin/orgcreate_provision_test.go|TestAdminCreateGoesToAuthWithTheSwitchOn"
 	cellOrgCreateCLI  = "internal/apiservice/admin/orgcreate_provision_test.go|TestOperatorCreateOrgRefusedWithTheSwitchOn"
 	cellUserCreate    = "internal/apiservice/admin/usersowned_test.go|TestUsersOwnedAdminRoutesRefuseBeforeAnyDatabaseWork"

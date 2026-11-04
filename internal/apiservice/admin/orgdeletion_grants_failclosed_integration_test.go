@@ -128,8 +128,8 @@ func TestOrgDeletionRefusesEveryUnprovenGrant(t *testing.T) {
 		})
 		t.Run(tc.name+", cli", func(t *testing.T) {
 			pg := &touchRecorder{}
-			operator := Operator{db: pg, readGrants: tc.readGrants}
-			_, err := operator.DeleteOrg(ctx, uuid.NewString(), false, DeleteOrgConfig{ClickHouseDSN: tc.dsn})
+			operator := Operator{db: pg, readGrants: tc.readGrants, Provisioner: &fakeProvisioner{db: &provisionDB{}}}
+			_, err := operator.DeleteOrg(ctx, uuid.NewString(), false, DeleteOrgConfig{ClickHouseDSN: tc.dsn, Actor: operatorActorFlag})
 			var refusal *OperatorError
 			if !errors.As(err, &refusal) || refusal.Message != wantOrgDeletionRefusedDetail {
 				t.Errorf("err = %v, want the refusal (the verb prints it and exits 1)", err)

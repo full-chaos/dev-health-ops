@@ -71,6 +71,9 @@ func (c *credFakes) ProvisionLocal(_ context.Context, req local.ProvisionLocalRe
 	c.provisioned = append(c.provisioned, req)
 	return uuid.New(), nil
 }
+func (c *credFakes) ProvisionLocalDecoy(context.Context, local.ProvisionLocalRequest) error {
+	return nil
+}
 func (c *credFakes) PeekVerificationLink(_ context.Context, hash [32]byte) (uuid.UUID, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

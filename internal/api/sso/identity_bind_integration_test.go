@@ -46,20 +46,20 @@ VALUES ($1, $2, 'local', true, true, false, 0, now(), now())`, uuid.New(), email
 func assertIdentityConflict(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID, body map[string]any) {
 	t.Helper()
 	detail, _ := body["detail"].(map[string]any)
-	if detail["reason"] != "identity_conflict" || body["access_token"] != nil {
-		t.Fatalf("body=%v, want reason identity_conflict and no token", body)
+	if detail["message"] != "This sign-in could not be completed. Contact your administrator if this continues." || len(detail) != 1 || body["access_token"] != nil {
+		t.Fatalf("body=%v, want the one generic message, no reason and no token", body)
 	}
 	var providerStatus string
 	var audits int
 	if err := st.pool.QueryRow(ctx, `SELECT status FROM sso_providers WHERE id = $1`, providerID).Scan(&providerStatus); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure'`,
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE resource_id = $1 AND action = 'sso_login' AND status = 'failure' AND error_message = 'identity conflict'`,
 		providerID.String()).Scan(&audits); err != nil {
 		t.Fatal(err)
 	}
 	if providerStatus != "active" || audits != 1 {
-		t.Fatalf("provider status=%q failure audits=%d, want active and 1", providerStatus, audits)
+		t.Fatalf("provider status=%q failure audits=%d, want active and 1 audit row naming the identity conflict", providerStatus, audits)
 	}
 }
 
@@ -77,6 +77,9 @@ func seedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email, a
 	if _, err := pool.Exec(ctx, `INSERT INTO users (id, email, auth_provider, auth_provider_id, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, uuid.New(), email, authProvider, subject); err != nil {
 		t.Fatalf("seed account: %v", err)
+	}
+	if authProvider == "gitlab" {
+		bindSelfHostedGitLabAccounts(t, ctx, pool)
 	}
 }
 
@@ -124,7 +127,7 @@ func seedBoundAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pro
 func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, email, authProvider, subject string) {
 	t.Helper()
 	seedAccount(t, ctx, pool, email, authProvider, subject)
-	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1`,
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1 AND $3 IN ('oidc', 'saml')`,
 		email, orgID, authProvider); err != nil {
 		t.Fatalf("bind member: %v", err)
 	}

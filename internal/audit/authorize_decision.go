@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -29,6 +30,18 @@ func AppendAll(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 				"audit_rows", len(events), logging.ErrorAttr(err))
 		}
 	}()
+	if err := validateAppendOnly(events); err != nil {
+		return err
+	}
+	if pool == nil {
+		return fmt.Errorf("%w: no connection pool", ErrMutationFailed)
+	}
+	return appendTx(ctx, pool.Begin, schema, events)
+}
+
+// validateAppendOnly refuses an empty set, a row Append would refuse and a
+// type that is not append-only, before anything is written.
+func validateAppendOnly(events []AuditEvent) error {
 	if len(events) == 0 {
 		return fmt.Errorf("%w: no audit rows", ErrMutationFailed)
 	}
@@ -40,10 +53,14 @@ func AppendAll(ctx context.Context, pool *pgxpool.Pool, schema authschema.Valida
 			return ErrNotAppendOnly
 		}
 	}
-	if pool == nil {
-		return fmt.Errorf("%w: no connection pool", ErrMutationFailed)
-	}
-	tx, err := pool.Begin(ctx)
+	return nil
+}
+
+// appendTx writes events in one armed transaction opened by begin: all rows
+// or none.
+func appendTx(ctx context.Context, begin func(context.Context) (pgx.Tx, error), schema authschema.ValidatedIdentifier,
+	events []AuditEvent) error {
+	tx, err := begin(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: beginning the transaction", ErrMutationFailed)
 	}

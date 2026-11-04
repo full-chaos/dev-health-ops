@@ -30,6 +30,7 @@ internal/auth/authapi/compat.go	refreshUserInfo	1	response key
 internal/auth/authapi/login.go	userInfo	1	response key
 internal/auth/authapi/users.go	PGUsers.stateSQL	1	read: the off column of the switched statement
 internal/auth/authconfig/options.go	-	1	help text
+internal/auth/decisionstate/decisionstate.go	stateQuery	1	read: the state version digests the public users row (is_active, is_superuser); it decides nothing
 internal/auth/edgetoken/signer.go	Signer.AccessUntil	1	claim key
 internal/auth/restorefence/specs.go	-	4	restore fence of the public legacy column (a narrowing; it decides no platform power)
 internal/auth/usersbackfill/platformrole_command.go	platformRoleOwnedGate	1	message text

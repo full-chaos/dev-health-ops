@@ -24,7 +24,7 @@
     },
     {
       "name": "query-api",
-      "audiences": [],
+      "audiences": ["auth-service"],
       "allowed_actions": []
     }
   ]

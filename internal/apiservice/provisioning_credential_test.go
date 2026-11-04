@@ -533,4 +533,3 @@ func TestWorkloadExchangeNeverFollowsARedirectToAnotherOrigin(t *testing.T) {
 	}
 	probe.Assert(t)
 }
-

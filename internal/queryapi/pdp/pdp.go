@@ -115,8 +115,23 @@ type Gate struct {
 // FromSettings builds the gate from lookup. Off reads nothing but EnvMode. It never fails: a bad value or a missing
 // input is a gate that refuses every PDP-gated request, after one ERROR naming the variable.
 func FromSettings(lookup func(string) (string, bool), logger *slog.Logger) *Gate {
-	_ = newDecider
-	return build(Config{Mode: ModeOff, Logger: logger})
+	if logger == nil {
+		logger = slog.Default()
+	}
+	raw, _ := lookup(EnvMode)
+	mode := strings.TrimSpace(raw)
+	switch mode {
+	case "", ModeOff:
+		return build(Config{Mode: ModeOff, Logger: logger})
+	case ModeShadow, ModeEnforce:
+	default:
+		return invalid(Config{Logger: logger}, EnvMode)
+	}
+	decider, variable := newDecider(lookup)
+	if decider == nil {
+		return invalid(Config{Logger: logger}, variable)
+	}
+	return New(Config{Mode: mode, Decider: decider, Logger: logger})
 }
 
 // newDecider builds the PEP client in go-api's form (#5605): the workload client over the origin of AUTH_PROXY_URL,
@@ -226,7 +241,39 @@ func (g *Gate) Mode() string {
 // ("METHOD /route") in the verified organization orgID. It returns a *DenyError only in enforce mode, or when the gate
 // is misconfigured; off and shadow return nil. Shadow asks in the background and never changes the answer.
 func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) error {
-	return nil
+	if g == nil || g.mode == ModeOff {
+		return nil
+	}
+	action, known := g.actions[profile]
+	label := action
+	if !known {
+		label = unknownAction
+	}
+	if g.mode == modeInvalid {
+		g.count(ctx, modeInvalid, ResultNotConfigured, label)
+		return &DenyError{Reason: pep.ReasonNotConfigured, Local: true}
+	}
+	org := strings.ToLower(orgID)
+	request := pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopeOrganization, ResourceKey: org, OrganizationID: org}
+	if g.mode == ModeShadow {
+		g.shadow(ctx, request, known, label)
+		return nil
+	}
+	if !known {
+		g.count(ctx, ModeEnforce, ResultUnavailable, label)
+		return &DenyError{Reason: pep.ReasonInvalidRequest, Local: true}
+	}
+	decision := g.decider.Decide(ctx, request)
+	switch {
+	case decision.Allowed():
+		g.count(ctx, ModeEnforce, ResultAllow, label)
+		return nil
+	case decision.Local():
+		g.count(ctx, ModeEnforce, ResultUnavailable, label)
+		return &DenyError{Reason: decision.Reason(), Local: true}
+	}
+	g.count(ctx, ModeEnforce, ResultDeny, label)
+	return &DenyError{Reason: decision.Reason()}
 }
 
 // shadow compares the PDP's answer with the legacy one, which has already allowed this caller.
@@ -286,7 +333,14 @@ func (g *Gate) Wait() {
 // CountExempt counts one accepted caller of the row profile whose class is on the exempt list, in every mode. A class
 // off the list counts nothing.
 func (g *Gate) CountExempt(ctx context.Context, class, profile string) {
-
+	if g == nil || g.exempt == nil || !slices.Contains(ExemptClasses, class) {
+		return
+	}
+	action, ok := g.actions[profile]
+	if !ok {
+		action = unknownAction
+	}
+	g.exempt.Add(ctx, 1, metric.WithAttributes(attribute.String("class", class), attribute.String("action", action)))
 }
 
 func (g *Gate) count(ctx context.Context, mode, result, action string) {

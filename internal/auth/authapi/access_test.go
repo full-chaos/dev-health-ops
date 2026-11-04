@@ -164,8 +164,14 @@ func TestEveryAuthServiceBearerRowAcceptsTheUserTokenAndKeepsTheLegacyOptIn(t *t
 	want := []string{
 		"GET " + PatternCurrent, "POST " + PatternRevoke, "POST " + PatternRevokeAll,
 		"POST " + PatternSocialLink, "DELETE " + PatternSocialUnlink, "POST " + PatternChangePassword, "POST " + PatternCompatSwitchOrg,
-		"POST " + PatternOAuthAuthorize,
 	}
+	// The OAuth consent decision takes the user access token only (acp addendum
+	// 9943be06 on CHAOS-12251 condition 6): no legacy opt-in.
+	userOnly := "POST " + PatternOAuthAuthorize
+	if row, ok := byProfile[userOnly]; !ok || !row.AcceptsUser || row.LegacyHS256 {
+		t.Errorf("row %q = %+v (found %v), want accepts_user and no legacy_hs256", userOnly, row, ok)
+	}
+	delete(byProfile, userOnly)
 	if len(byProfile) != len(want) {
 		t.Fatalf("%d access rows, want %d: %v", len(byProfile), len(want), byProfile)
 	}
@@ -388,6 +394,9 @@ func TestAnApiAudienceEdDSATokenIsRefusedOnASessionRowWhileTheLegacyTokenPasses(
 		t.Fatal(err)
 	}
 	for _, row := range rows {
+		if row.Profile == "POST "+PatternOAuthAuthorize {
+			continue // the user access token only, pinned by TestDecideTakesTheUserAccessTokenOnly
+		}
 		if !row.AcceptsUser || !row.LegacyHS256 {
 			t.Fatalf("row %s: accepts_user=%v legacy_hs256=%v", row.Profile, row.AcceptsUser, row.LegacyHS256)
 		}

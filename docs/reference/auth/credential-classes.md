@@ -96,7 +96,7 @@ Design docs (read the guardrails at minimum):
 | `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
 | `service_account_token` | **unconsumed** | service_account | contract only; nothing mints or verifies it yet |
 | `oauth_authorization_code` | **unconsumed** | human | minted at consent; the token endpoint that redeems it is not built |
-| `oauth_consent_csrf_token` | optional_feature | human | the OAuth routes mount only with an issuer, and stay unreachable behind go-api's AUTH_PROXY_OAUTH |
+| `oauth_consent_csrf_token` | active | human | minted at describe, checked at approve and deny |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -278,9 +278,9 @@ redirect, the RFC 8707 resource and the S256 challenge. auth-service keeps the
 SHA-256 of each on `auth.oauth_authorization_requests`, never the value; no
 audit row holds either. Neither is a bearer, and no route takes either as
 one. The code is `unconsumed` until the token endpoint (O4)
-redeems it. The routes mount only with `AUTH_TOKEN_ISSUER_URL` set, and stay
-unreachable from outside while go-api's `AUTH_PROXY_OAUTH` is off, so the
-anti-CSRF token is `optional_feature`.
+redeems it. The anti-CSRF token is `active`: describe mints it and
+approve and deny check it. The routes mount with `AUTH_TOKEN_ISSUER_URL` set;
+no ingress or go-api proxy path reaches them from outside.
 
 **`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
 first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as

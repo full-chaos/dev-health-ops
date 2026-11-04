@@ -12,8 +12,10 @@
 -- pre-flight count is needed. A test compares the list with principal.v1's enum
 -- in both directions.
 --
--- The ALTER takes ACCESS EXCLUSIVE on credential_registry for as long as the
--- table scan to re-validate the CHECK takes.
+-- The CHECK is added NOT VALID and then validated in the same migration.
+-- The runner applies a migration in one transaction, so the ACCESS EXCLUSIVE lock
+-- the DROP and ADD take is held until commit, through the VALIDATE scan too; the
+-- runner's lock_timeout bounds the wait for it.
 ALTER TABLE credential_registry
     DROP CONSTRAINT credential_registry_credential_class_closed,
     ADD CONSTRAINT credential_registry_credential_class_closed
@@ -60,4 +62,6 @@ ALTER TABLE credential_registry
         'worker_operational_bridge_token',
         'workload_bootstrap_credential',
         'workload_token'
-    ));
+    )) NOT VALID;
+
+ALTER TABLE credential_registry VALIDATE CONSTRAINT credential_registry_credential_class_closed;

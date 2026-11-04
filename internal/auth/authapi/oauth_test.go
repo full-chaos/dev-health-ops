@@ -454,30 +454,47 @@ func TestDecideActsAsTheBearer(t *testing.T) {
 	}
 }
 
-// The POST route reads both token classes: the EdDSA user access token and, where
-// the row opts in, the HS256 token (acp's condition 6).
-func TestDecideReadsBothTokenClasses(t *testing.T) {
+// The POST route takes the EdDSA user access token only: its row lists
+// user_access_token with legacy_hs256 false (acp addendum 9943be06 on condition 6),
+// so an HS256 token is refused before any session or store read.
+func TestDecideTakesTheUserAccessTokenOnly(t *testing.T) {
+	rows, err := AuthServiceAccessRows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(rows, func(r accessverify.Row) bool {
+		return r.Service == AccessService && r.Profile == oauthDecideScope && r.AcceptsUser && !r.LegacyHS256
+	}) {
+		t.Fatalf("the embedded document has no %s row accepting the user access token alone", oauthDecideScope)
+	}
 	body := url.Values{"action": {"describe"}, "request_id": {uuid.NewString()}}.Encode()
-	t.Run("hs256", func(t *testing.T) {
-		o := newPlainOAuthFixture(t)
-		if r := o.post(body, o.bearer(o.grant())); r.Code != http.StatusOK {
-			t.Fatalf("%d %s", r.Code, r.Body)
-		}
-	})
 	t.Run("user_access_token", func(t *testing.T) {
-		rows, err := AuthServiceAccessRows()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !slices.ContainsFunc(rows, func(r accessverify.Row) bool {
-			return r.Service == AccessService && r.Profile == oauthDecideScope && r.AcceptsUser && r.LegacyHS256
-		}) {
-			t.Fatalf("the embedded document has no %s row accepting the user access token and the HS256 token", oauthDecideScope)
-		}
-		a := newAccessFixtureWith(t, rows, nil)
+		a := newAccessFixtureWith(t, nil, nil)
 		o := newOAuthFixture(t, a.fixture, nil)
 		if r := o.post(body, a.signClaims(a.claims())); r.Code != http.StatusOK {
 			t.Fatalf("%d %s", r.Code, r.Body)
+		}
+	})
+	t.Run("hs256", func(t *testing.T) {
+		a := newAccessFixtureWith(t, nil, nil)
+		o := newOAuthFixture(t, a.fixture, nil)
+		hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+		if err != nil {
+			t.Fatal(err)
+		}
+		compact, err := hs.Access(a.grant())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r := o.post(body, map[string]string{"Authorization": "Bearer " + compact}); r.Code != http.StatusUnauthorized ||
+			!strings.Contains(r.Body.String(), `"reason_code":"malformed"`) {
+			t.Fatalf("an HS256 bearer: %d %s, want 401 malformed", r.Code, r.Body)
+		}
+		if got := a.counter(accessverify.RefusedMetric, map[string]string{"profile": oauthDecideScope, "reason": accessverify.ReasonAlgNotAllowed}); got != 1 {
+			t.Errorf("refused alg_not_allowed = %d, want 1", got)
+		}
+		if len(o.store.described) != 0 {
+			t.Fatal("an HS256 bearer reached the store")
 		}
 	})
 }

@@ -14,9 +14,10 @@ const (
 	oauthClassesPrincipal     = "00000000-0000-4000-8000-000000124001"
 )
 
-// TestMigrationAdmitsTheOAuthAuthorizationClasses: after the migration a registry
-// row of class oauth_authorization_code and one of oauth_consent_csrf_token
-// insert, a class nobody defined is still refused, the CHECK is validated, and it
+// TestMigrationAdmitsTheOAuthAuthorizationClasses: a row stored before the
+// migration stays, after it a registry row of class oauth_authorization_code and
+// one of oauth_consent_csrf_token insert, a class nobody defined is still refused,
+// the CHECK is validated (it is added NOT VALID, then validated), and it
 // is the prior list plus exactly those two values, compared as sets. The migration
 // is found by name: its ordinal is the next free one at the merge.
 func TestMigrationAdmitsTheOAuthAuthorizationClasses(t *testing.T) {
@@ -40,6 +41,10 @@ func TestMigrationAdmitsTheOAuthAuthorizationClasses(t *testing.T) {
 			for _, class := range oauthClasses {
 				m10Fail(t, domainOwnedExec(t, ctx, env, oauthClassCredential(class, "a")), "a "+class+" row before the migration")
 			}
+			// A stored row of a class the prior list admits: the re-validated CHECK must keep it.
+			if err := domainOwnedExec(t, ctx, env, oauthClassCredential("service_account_token", "f")); err != nil {
+				t.Fatalf("seed a row of an admitted class: %v", err)
+			}
 		}
 		if err := applyOne(ctx, env.conn, env.options, m); err != nil {
 			t.Fatalf("apply %04d: %v", m.Version, err)
@@ -58,6 +63,11 @@ func TestMigrationAdmitsTheOAuthAuthorizationClasses(t *testing.T) {
 		}
 	}
 	m10Fail(t, domainOwnedExec(t, ctx, env, oauthClassCredential("nobody_defined_class", "e")), "a row of a class nobody defined")
+	var kept int
+	if err := env.conn.QueryRow(ctx, `SELECT count(*) FROM auth.credential_registry
+		WHERE principal_id = '`+oauthClassesPrincipal+`' AND credential_class = 'service_account_token'`).Scan(&kept); err != nil || kept != 1 {
+		t.Fatalf("the stored row of an admitted class: %d rows (%v), want 1", kept, err)
+	}
 	var validated bool
 	if err := env.conn.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
 		WHERE conname = 'credential_registry_credential_class_closed' AND conrelid = 'auth.credential_registry'::regclass`).Scan(&validated); err != nil || !validated {

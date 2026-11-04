@@ -2417,15 +2417,10 @@
     },
     {
       "accepted_credential_classes": [
-        "ops_access_token_hs256",
         "user_access_token"
       ],
       "access_token_validation": {
-        "legacy_hs256": true
-      },
-      "class_disambiguator": {
-        "kind": "jwt_header_alg",
-        "name": "EdDSA"
+        "legacy_hs256": false
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the session row and the users row are read live on every request, and a decision reads the request row under its lock.",
@@ -2471,7 +2466,7 @@
           "note": "func (h handlers) authenticateWith",
           "path": "internal/auth/authapi/routes.go"
         },
-        "description": "authenticateWith, the session routes' check: bearer HS256 access token with a sid claim (legacy_hs256 true, ADR-13 keeps web on hs256_compat while the issuer is set); the session must be live and belong to sub, the users row active, and tv equal to users.token_version. An EdDSA user_access_token (JWT header alg EdDSA) is checked by the profile-routed validator with audience auth-service (scope auth:session): sid is required, and the session's token_version pin must equal users.token_version. A delegated session's bearer is refused. The decision then needs the request bound to that same session and principal and, for approve and deny, its anti-CSRF token."
+        "description": "authenticateWith, the session routes' check, through the profile-routed validator: only an EdDSA user_access_token with audience auth-service (scope auth:session) passes; sid is required, the session must be live and belong to sub, the users row active, and the session's token_version pin must equal users.token_version. The HS256 access token is refused (legacy_hs256 false: prod runs the eddsa class, and web holds the auth-service-audience session access token). A delegated session's bearer is refused. The decision then needs the request bound to that same session and principal and, for approve and deny, its anti-CSRF token."
       },
       "public_rationale": null,
       "route": "/oauth/authorize",
@@ -2483,10 +2478,10 @@
       "surface_kind": "rest",
       "tenant_requirement": "none",
       "token_shape": {
-        "algorithm": "HS256 (hs256_compat class) or EdDSA (eddsa class)",
-        "audience": "AUTH_JWT_AUDIENCE (default dev-health-api, go-api's JWT_AUDIENCE); under the eddsa class dev-health-api or auth-service",
-        "issuer": "AUTH_JWT_ISSUER (default dev-health-ops, go-api's JWT_ISSUER); under the eddsa class AUTH_TOKEN_ISSUER_URL",
-        "token_type": "HS256 JWT, type=access, with sid; under the eddsa class the access-token.v1 JWS"
+        "algorithm": "EdDSA",
+        "audience": "auth-service",
+        "issuer": "AUTH_TOKEN_ISSUER_URL",
+        "token_type": "the access-token.v1 JWS (typ at+jwt), with sid"
       }
     },
     {

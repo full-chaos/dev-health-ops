@@ -107,6 +107,21 @@ type changeMember struct {
 
 var wireTimestampPattern = `^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$`
 
+// resourceKeyPattern is the looser form of the repository key: "*", or 2-20
+// segments of 1-100 key characters. The segment grammar and the 255-byte bound
+// are the grant store's (internal/auth/repokey). The group repeat is unrolled
+// because RE2 refuses a bounded repeat nested in a repeat past 1000 copies.
+var resourceKeyPattern = looseKeyPattern()
+
+func looseKeyPattern() string {
+	const segment = `[a-z0-9._-]{1,100}`
+	nest := ""
+	for i := 0; i < 18; i++ {
+		nest = "(?:/" + segment + nest + ")?"
+	}
+	return `^(?:\*|` + segment + nest + `/` + segment + `)$`
+}
+
 var provisioningChangeMembers = map[string]changeMember{
 	"status":             {enum: []string{"active", "disabled", "suspended", "pending", "removed", "revoked", "expired", "accepted"}},
 	"slug":               {pattern: `^[a-z0-9][a-z0-9-]{1,62}$`},
@@ -117,7 +132,7 @@ var provisioningChangeMembers = map[string]changeMember{
 	"provider":           {pattern: `^[a-z][a-z0-9_-]{1,31}$`},
 	"audiences":          {array: true, minItems: 1, maxItems: 16, pattern: `^[a-z][a-z0-9._:-]{0,63}$`},
 	"resource_type":      {enum: []string{"organization", "repository"}},
-	"resource_key":       {pattern: `^(\*|[a-z0-9._-]{1,100}/[a-z0-9._-]{1,100})$`},
+	"resource_key":       {pattern: resourceKeyPattern},
 	"action_set":         {array: true, minItems: 1, maxItems: 64, pattern: `^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$`},
 	"effect":             {enum: []string{"allow", "deny"}},
 	"expires_at":         {pattern: wireTimestampPattern},

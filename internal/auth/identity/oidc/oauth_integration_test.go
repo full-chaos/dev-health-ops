@@ -207,19 +207,22 @@ func TestOAuthSubjectIsScopedByProviderRow(t *testing.T) {
 	wantUnchanged(t, h, before)
 }
 
-func TestOAuthSelfHostedGitLabIssuerIsTheBaseURL(t *testing.T) {
+// A self-hosted instance's issuer is the scheme and host of the row's base_url, without its path; its legacy account
+// is the one bound to a GitLab row of that instance.
+func TestOAuthSelfHostedGitLabIssuerIsTheInstanceHost(t *testing.T) {
 	h := newHarness(t, harnessOpts{signup: false})
 	base := h.idp.server.URL + "/gitlab/selfhosted"
+	issuer := strings.ToLower(h.idp.server.URL)
 	provider, client := h.seedOAuthProvider(t, h.orgID, "oauth_gitlab", map[string]any{"base_url": base})
 	s := h.startOAuth(t, provider)
 	account := fakeAccountWith(uniqueEmail("self"), true)
-	h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account)
+	h.bindSSO(t, h.seedOAuthMember(t, h.orgID, "oauth_gitlab", account), provider)
 	login, failure := h.finishOAuth(t, provider, client, s, account, true)
 	if failure != nil {
 		t.Fatalf("callback: %v", failure)
 	}
 	if n := h.count(t, `SELECT count(*) FROM auth.external_identities WHERE principal_id = $1 AND issuer = $2 AND provider = $3 AND subject = $4`,
-		login.PrincipalID, base, provider.String(), account.ID); n != 1 {
+		login.PrincipalID, issuer, provider.String(), account.ID); n != 1 {
 		t.Fatalf("identity rows with the self-hosted issuer = %d", n)
 	}
 }

@@ -92,10 +92,15 @@ func Parse(path string) ([]Row, error) {
 	return rows, nil
 }
 
-// goEnv is the environment of the child go tool: ten named variables the go command needs, read one by one, plus the three this scan
-// pins. The rest of the process environment (tokens, keys, DSNs) is never read and never forwarded.
-func goEnv() []string {
-	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1"}
+// ciArches are the GOARCH values the scan runs for, GOOS linux. CI runs Go on arm64 (oci-arc-runners) and on amd64 (ubuntu-latest), and
+// go list ignores a file named for the other arch, so a scan of the host arch alone gave a different answer per host. The scan runs
+// once per arch and the problems are united: the result is the same on every host and never accepts what one CI arch refuses.
+var ciArches = []string{"amd64", "arm64"}
+
+// goEnv is the environment of the child go tool: ten named variables the go command needs, read one by one, plus the five this scan
+// pins (GOOS and GOARCH come from the caller, never from the process environment). The rest of the process environment (tokens, keys, DSNs) is never read and never forwarded.
+func goEnv(goarch string) []string {
+	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=1", "GOOS=linux", "GOARCH=" + goarch}
 	add := func(name, value string) {
 		if value != "" {
 			env = append(env, name+"="+value)
@@ -115,19 +120,17 @@ func goEnv() []string {
 	add("GOSUMDB", os.Getenv("GOSUMDB"))
 	add("GONOSUMDB", os.Getenv("GONOSUMDB"))
 	add("GOPRIVATE", os.Getenv("GOPRIVATE"))
-	add("GOOS", os.Getenv("GOOS"))
-	add("GOARCH", os.Getenv("GOARCH"))
 	add("GOEXPERIMENT", os.Getenv("GOEXPERIMENT"))
 	add("CC", os.Getenv("CC"))
 	add("CXX", os.Getenv("CXX"))
 	return env
 }
 
-func goList(root string) (modpath string, pkgs map[string]*goPackage, err error) {
+func goList(root, goarch string) (modpath string, pkgs map[string]*goPackage, err error) {
 	run := func(args ...string) ([]byte, error) {
 		cmd := exec.Command("go", args...)
 		cmd.Dir = root
-		cmd.Env = goEnv()
+		cmd.Env = goEnv(goarch)
 		return cmd.Output()
 	}
 	out, err := run("list", "-m")
@@ -329,13 +332,13 @@ func calleeKey(c *ast.CallExpr, info *types.Info) string {
 
 // loadTypes parses and type-checks the packages (with their tests) once; a package that does not type-check is a problem, because the
 // scan then cannot tell a function value from anything else.
-func loadTypes(root string, importPaths []string) (typeStore, map[string][]string, error) {
+func loadTypes(root, goarch string, importPaths []string) (typeStore, map[string][]string, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedTypes |
 			packages.NeedTypesInfo | packages.NeedSyntax,
 		Dir:   root,
 		Tests: true,
-		Env:   goEnv(),
+		Env:   goEnv(goarch),
 		ParseFile: func(fset *token.FileSet, filename string, src []byte) (*ast.File, error) {
 			return parser.ParseFile(fset, filename, src, parser.ParseComments)
 		},
@@ -378,7 +381,7 @@ func goFilesOf(p *goPackage, tests bool) []string {
 	return files
 }
 
-func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string) []string {
+func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErrs map[string][]string, typedAnywhere map[string]bool) []string {
 	var out []string
 	if p.Error != nil {
 		out = append(out, "go list reports an error for the package: "+strings.TrimSpace(p.Error.Err))
@@ -403,19 +406,75 @@ func scanPackage(p *goPackage, tests bool, modpath string, ts typeStore, loadErr
 			out = append(out, "imports out-of-module package "+imp+" (code outside the standard library and this module can run user code on goroutines of its own)")
 		}
 	}
+	ignored := map[string]bool{}
+	for _, f := range p.IgnoredGoFiles {
+		ignored[f] = true
+	}
 	for _, f := range goFilesOf(p, tests) {
-		out = append(out, scanFile(filepath.Join(p.Dir, f), ts)...)
+		path := filepath.Join(p.Dir, f)
+		if ignored[f] && typedAnywhere[path] {
+			continue
+		}
+		out = append(out, scanFile(path, ts)...)
 	}
 	return out
 }
 
-// Check returns every problem of rows against the module at root; the shipped call has root = the repository.
+// Check returns every problem of rows against the module at root, united over ciArches; the shipped call has root = the repository.
 func Check(root string, rows []Row) ([]string, error) {
-	modpath, pkgs, err := goList(root)
+	seen := map[string]bool{}
+	var problems []string
+	var loads []*archLoad
+	typedAnywhere := map[string]bool{}
+	for _, goarch := range ciArches {
+		l, err := loadArch(root, goarch, rows)
+		if err != nil {
+			return nil, fmt.Errorf("GOARCH=%s: %w", goarch, err)
+		}
+		for name := range l.ts {
+			typedAnywhere[name] = true
+		}
+		loads = append(loads, l)
+	}
+	presence := map[string]rowPresence{}
+	for _, l := range loads {
+		for _, r := range rows {
+			if p := l.pkgs[l.modpath+"/"+r.Package]; p != nil {
+				pr := presence[r.Package]
+				pr.exists = true
+				pr.hasTest = pr.hasTest || len(p.TestGoFiles)+len(p.XTestGoFiles) > 0
+				presence[r.Package] = pr
+			}
+		}
+	}
+	for _, l := range loads {
+		got := judge(l, rows, typedAnywhere, presence)
+		for _, p := range got {
+			if !seen[p] {
+				seen[p] = true
+				problems = append(problems, p)
+			}
+		}
+	}
+	sort.Strings(problems)
+	return problems, nil
+}
+
+// rowPresence is what the union of the CI arch loads shows of a row's package.
+type rowPresence struct{ exists, hasTest bool }
+
+type archLoad struct {
+	modpath  string
+	pkgs     map[string]*goPackage
+	ts       typeStore
+	loadErrs map[string][]string
+}
+
+func loadArch(root, goarch string, rows []Row) (*archLoad, error) {
+	modpath, pkgs, err := goList(root, goarch)
 	if err != nil {
 		return nil, err
 	}
-	var problems []string
 	need := map[string]bool{}
 	for _, r := range rows {
 		if p := pkgs[modpath+"/"+r.Package]; p != nil {
@@ -430,10 +489,17 @@ func Check(root string, rows []Row) ([]string, error) {
 	var ts typeStore
 	loadErrs := map[string][]string{}
 	if len(patterns) > 0 {
-		if ts, loadErrs, err = loadTypes(root, patterns); err != nil {
+		if ts, loadErrs, err = loadTypes(root, goarch, patterns); err != nil {
 			return nil, err
 		}
 	}
+	return &archLoad{modpath, pkgs, ts, loadErrs}, nil
+}
+
+// judge: a package or test that some CI arch has counts for every arch (presence is the union); a file that some CI arch type-checked is judged by that arch alone, so the arch that ignores it does not report it untyped.
+func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool, presence map[string]rowPresence) []string {
+	modpath, pkgs, ts, loadErrs := l.modpath, l.pkgs, l.ts, l.loadErrs
+	var problems []string
 	for _, r := range rows {
 		full := modpath + "/" + r.Package
 		p := pkgs[full]
@@ -442,21 +508,23 @@ func Check(root string, rows []Row) ([]string, error) {
 			problems = append(problems, r.Package+": runs as test-name slices in every race leg and cannot be excluded")
 			continue
 		case p == nil:
-			problems = append(problems, r.Package+": no such package")
+			if !presence[r.Package].exists {
+				problems = append(problems, r.Package+": no such package")
+			}
 			continue
-		case len(p.TestGoFiles)+len(p.XTestGoFiles) == 0:
+		case len(p.TestGoFiles)+len(p.XTestGoFiles) == 0 && !presence[r.Package].hasTest:
 			problems = append(problems, r.Package+": has no test, so no race run to retire")
 			continue
 		}
 		if r.Class != "none" || r.Witness != "-" {
 			problems = append(problems, r.Package+": only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
 		}
-		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs) {
+		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs, typedAnywhere) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
 		}
 	}
 	sort.Strings(problems)
-	return problems, nil
+	return problems
 }
 
 // stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,

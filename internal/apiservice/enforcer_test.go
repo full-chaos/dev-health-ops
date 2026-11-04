@@ -2,8 +2,10 @@ package apiservice
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -122,5 +124,29 @@ func TestStartupInstallsTheEnforcerOnTheGuard(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("service.go does not contain %q", want)
 		}
+	}
+}
+
+// go-api asks the decision point through one client: the shadow and the Enforcer share the one this package builds.
+func TestGoAPIBuildsOneDecisionPointClient(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builders []string
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(raw), "pep.New("); n > 0 {
+			builders = append(builders, fmt.Sprintf("%s x%d", name, n))
+		}
+	}
+	if len(builders) != 1 || !strings.HasSuffix(builders[0], " x1") {
+		t.Fatalf("pep.New calls: %v, want one call in one file", builders)
 	}
 }

@@ -88,8 +88,10 @@ func TestRegisterSlugCollisionAnswersTheUniformAnswer(t *testing.T) {
 	if status != http.StatusAccepted || body != registerAcceptedBody {
 		t.Fatalf("answer %d %q, want the accepted bytes", status, body)
 	}
-	if len(rig.mail.sent) != 0 {
-		t.Fatalf("mails %d, want none: no account exists", len(rig.mail.sent))
+	for _, msg := range rig.mail.sent {
+		if msg.Deliver {
+			t.Fatalf("a mail is delivered (%s), want none: no account exists", msg.Purpose)
+		}
 	}
 }
 

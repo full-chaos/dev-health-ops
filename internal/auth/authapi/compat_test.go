@@ -1212,6 +1212,71 @@ func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
 	}
 }
 
+// A local sign-in's transport refusal charges the login IP bucket before its
+// audit row, and a refused charge writes no row; a social sign-in's refusal,
+// like any code that is not audited, charges nothing.
+func TestASignInTransportRefusalChargesTheLoginIPBeforeItsAuditRow(t *testing.T) {
+	build := func() (*compatFixture, *recordingStore, map[string]httpapi.ErrorWriter, *[]int) {
+		f, _ := newSocialFixture(t)
+		store := newRecording()
+		f.counters = store
+		var hitsAtAudit []int
+		routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+			AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+				f.appended = append(f.appended, event)
+				hitsAtAudit = append(hitsAtAudit, len(store.hits))
+				return nil
+			},
+			Login:  &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)},
+			Social: f.social, Limits: mustLimits(f.t, f.counters)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writers := map[string]httpapi.ErrorWriter{}
+		for _, route := range routes {
+			writers[route.Pattern] = route.ErrorWriter
+		}
+		return f, store, writers, &hitsAtAudit
+	}
+	refuse := func(write httpapi.ErrorWriter, pattern string, code httpapi.Code) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		write(response, httptest.NewRequest(http.MethodPost, pattern, nil), code)
+		return response
+	}
+
+	f, store, writers, atAudit := build()
+	refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodePayloadTooLarge)
+	if len(store.hits) != 1 || store.hits[0].Limit.ID != loginIPLimit.ID {
+		t.Fatalf("a local transport refusal made hits %+v, want one on %s", store.hits, loginIPLimit.ID)
+	}
+	if len(f.appended) != 1 || len(*atAudit) != 1 || (*atAudit)[0] != 1 {
+		t.Fatalf("%d audit rows, hits seen at the row %v: the charge must come first", len(f.appended), *atAudit)
+	}
+	for _, code := range []httpapi.Code{httpapi.CodeRateLimited, httpapi.CodeInternal} {
+		refuse(writers[PatternCompatLogin], PatternCompatLogin, code)
+	}
+	if len(store.hits) != 1 {
+		t.Fatalf("a refusal that is not audited charged the bucket: %d hits", len(store.hits))
+	}
+
+	for i := 1; i < int(loginIPLimit.Count); i++ {
+		refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodeInvalidRequest)
+	}
+	rows := len(f.appended)
+	response := refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodeInvalidRequest)
+	if response.Code != http.StatusTooManyRequests || len(f.appended) != rows {
+		t.Fatalf("a refused charge answered %d and wrote %d new audit rows, want 429 and none", response.Code, len(f.appended)-rows)
+	}
+
+	f, store, writers, _ = build()
+	for _, code := range []httpapi.Code{httpapi.CodePayloadTooLarge, httpapi.CodeInvalidRequest, httpapi.CodeRateLimited, httpapi.CodeInternal} {
+		refuse(writers[PatternCompatSocialLogin], PatternCompatSocialLogin, code)
+	}
+	if len(store.hits) != 0 || len(f.appended) != 2 {
+		t.Fatalf("social refusals made %d hits and %d audit rows, want none and two", len(store.hits), len(f.appended))
+	}
+}
+
 // The two 429s of a sign-in: the route bucket's is a transport answer and
 // writes no audit row; the account lockout's is a sign-in decision and
 // writes one.

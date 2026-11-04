@@ -27,14 +27,17 @@ case "${a[0]} ${a[1]:-}" in
     case "${a[*]}" in *jsonpath*) sed -n 's/^ *drill-run: "\(.*\)"$/\1/p' "$st/ns" ;; esac
     exit 0 ;;
   "create -f")
-    if [ "${FAKE_SCEN:-}" = race ]; then
-      printf 'drill-run: "someone-elses-run"\n' >"$st/ns"
+    if [ "${FAKE_SCEN:-}" = race ] || [ "${FAKE_SCEN:-}" = race-unlabelled ]; then
+      if [ "$FAKE_SCEN" = race ]; then printf 'drill-run: "someone-elses-run"\n' >"$st/ns"; else : >"$st/ns"; fi
       echo 'Error from server (AlreadyExists): namespaces "x" already exists' >&2
       exit 1
     fi
     cat >"$st/ns"; exit 0 ;;
   "delete ns") rm -f "$st/ns"; exit 0 ;;
-  "rollout status") exit 1 ;;
+  "rollout status")
+    # swap: the create was ours, then the namespace was replaced by one that carries another run's label.
+    [ "${FAKE_SCEN:-}" = swap ] && printf 'drill-run: "someone-elses-run"\n' >"$st/ns"
+    exit 1 ;;
 esac
 exit 0
 FAKE
@@ -85,6 +88,17 @@ if grep -q '^delete ns' "$root/race.log"; then r=bad; else r=ok; fi
 check "run does not delete a namespace it did not create" "$r"
 grep -q 'REFUSED' "$root/race.out" && [[ "$(cat "$root/race.rc")" != 0 ]] && r=ok || r=bad
 check "the refusal is printed and the run exits non-zero" "$r"
+
+run_drill run racebare FAKE_SCEN=race-unlabelled
+if grep -q '^delete ns' "$root/racebare.log"; then r=bad; else r=ok; fi
+check "run does not delete an unlabelled namespace it did not create" "$r"
+
+# 1c. the namespace was ours at create time, but now carries another run's label: it stays.
+run_drill run swap FAKE_SCEN=swap
+if grep -q '^delete ns' "$root/swap.log"; then r=bad; else r=ok; fi
+check "run does not delete a namespace whose run label is not its own" "$r"
+grep -q 'REFUSED' "$root/swap.out" && r=ok || r=bad
+check "the label mismatch prints a refusal" "$r"
 
 # 1b. a namespace this run created is deleted when setup fails later.
 run_drill run own

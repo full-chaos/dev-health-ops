@@ -261,7 +261,7 @@ func TestShadowConfigRefusedOutsideTheIssuerNamesTheVariableItCameFrom(t *testin
 		}
 		tc.mutate(&cfg)
 		var logs bytes.Buffer
-		if s := newShadow(cfg, rec.lookup, nil, slog.New(slog.NewTextHandler(&logs, nil))); s != nil {
+		if s := newShadow(newDecisionPoint(cfg, rec.lookup, nil), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil))); s != nil {
 			t.Errorf("%s: a shadow was built", name)
 		}
 		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), tc.want) {

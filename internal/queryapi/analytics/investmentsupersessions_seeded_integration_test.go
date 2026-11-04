@@ -78,7 +78,7 @@ func TestSupersededWorkUnitsAreExcludedFromInvestmentQuality(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL) {
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededQualityIssueSizeDDL) {
 		if err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}

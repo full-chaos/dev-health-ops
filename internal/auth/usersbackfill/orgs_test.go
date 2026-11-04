@@ -438,22 +438,14 @@ func failIfConnected(t *testing.T) {
 
 func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
 	failIfConnected(t)
-	const users, orgs = "AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"
+	const users = "AUTH_USERS_OWNED"
 	cases := []struct {
 		name     string
 		usersVal string
-		orgsVal  string
 		want     int
-		names    []string
 	}{
-		{"orgs on", "", "true", cli.ExitRefused, []string{orgs}},
-		{"users on", "true", "", cli.ExitRefused, []string{users}},
-		{"both on", "true", "true", cli.ExitRefused, []string{users, orgs}},
-		{"orgs malformed", "", "maybe", cli.ExitFailure, []string{orgs}},
-		{"users malformed", "maybe", "", cli.ExitFailure, []string{users}},
-		{"users true, orgs malformed", "true", "maybe", cli.ExitFailure, []string{orgs}},
-		{"orgs true, users malformed", "maybe", "true", cli.ExitFailure, []string{users}},
-		{"both malformed", "maybe", "yes please", cli.ExitFailure, []string{users, orgs}},
+		{"users on", "true", cli.ExitRefused},
+		{"users malformed", "maybe", cli.ExitFailure},
 	}
 	for _, c := range cases {
 		for _, args := range [][]string{nil, {"-dry-run"}} {
@@ -461,9 +453,7 @@ func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
 				lookup := func(k string) (string, bool) {
 					switch k {
 					case users:
-						return c.usersVal, c.usersVal != ""
-					case orgs:
-						return c.orgsVal, c.orgsVal != ""
+						return c.usersVal, true
 					case "AUTH_DATABASE_URI":
 						return "postgres://secret-user:secret-pass@db/x", true
 					}
@@ -475,19 +465,10 @@ func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
 				if code != c.want || stdout.Len() != 0 {
 					t.Fatalf("exit %d, want %d; stdout %q stderr %q", code, c.want, stdout.String(), out)
 				}
-				for _, name := range []string{users, orgs} {
-					want := false
-					for _, n := range c.names {
-						want = want || n == name
-					}
-					if strings.Contains(out, name) != want {
-						t.Fatalf("stderr %q: naming %s = %v, want %v", out, name, !want, want)
-					}
+				if !strings.Contains(out, users) {
+					t.Fatalf("stderr %q does not name %s", out, users)
 				}
-				if i, j := strings.Index(out, users), strings.Index(out, orgs); i >= 0 && j >= 0 && i > j {
-					t.Fatalf("stderr %q: %s must come before %s", out, users, orgs)
-				}
-				for _, raw := range []string{"secret-pass", "maybe", "yes please"} {
+				for _, raw := range []string{"secret-pass", "maybe"} {
 					if strings.Contains(out, raw) {
 						t.Fatalf("stderr %q holds the raw input %q", out, raw)
 					}
@@ -500,18 +481,16 @@ func TestOrgsVerbOwnershipGateRefusesBeforeConnect(t *testing.T) {
 func TestOrgsVerbNeverEchoesARawSwitchValue(t *testing.T) {
 	failIfConnected(t)
 	for _, raw := range []string{"maybe", "yes please", "TRUE\x00x"} {
-		for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
-			lookup := func(k string) (string, bool) { return raw, k == name }
-			var stderr bytes.Buffer
-			code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
-			if code != cli.ExitFailure || strings.Contains(stderr.String(), raw) || !strings.Contains(stderr.String(), name) {
-				t.Fatalf("%s=%q: exit %d, stderr %q", name, raw, code, stderr.String())
-			}
+		lookup := func(k string) (string, bool) { return raw, k == "AUTH_USERS_OWNED" }
+		var stderr bytes.Buffer
+		code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &stderr})
+		if code != cli.ExitFailure || strings.Contains(stderr.String(), raw) || !strings.Contains(stderr.String(), "AUTH_USERS_OWNED") {
+			t.Fatalf("AUTH_USERS_OWNED=%q: exit %d, stderr %q", raw, code, stderr.String())
 		}
 	}
 }
 
-func TestOrgsVerbPassesTheGateWhenNeitherSwitchIsOn(t *testing.T) {
+func TestOrgsVerbPassesTheGateWhenUsersAreNotOwned(t *testing.T) {
 	orig := connectFn
 	reached := false
 	connectFn = func(context.Context, cli.Env, string) (*pgxpool.Pool, authschema.ValidatedIdentifier, int) {
@@ -521,7 +500,7 @@ func TestOrgsVerbPassesTheGateWhenNeitherSwitchIsOn(t *testing.T) {
 	t.Cleanup(func() { connectFn = orig })
 	for _, v := range []string{"", "false"} {
 		reached = false
-		lookup := func(k string) (string, bool) { return v, k == "AUTH_ORGS_OWNED" || k == "AUTH_USERS_OWNED" }
+		lookup := func(k string) (string, bool) { return v, k == "AUTH_USERS_OWNED" }
 		if code := orgsVerbWith(t).Run(context.Background(), cli.Env{Lookup: lookup, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}); code != cli.ExitFailure || !reached {
 			t.Fatalf("value %q: exit %d reached=%v; want the gate passed", v, code, reached)
 		}

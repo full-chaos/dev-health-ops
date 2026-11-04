@@ -80,22 +80,14 @@ them; it never infers the contextual decision from `ask_dev`.
 feature registry, seeded by Alembic revision `0073`). Every tier stays denied
 until an organization or license override grants it, and the row is preserved on
 rollback because those overrides may reference it. With the decision off, a run
-behaves exactly as it did before Wave 3.1: the preflight is not constructed, and
-neither is the question-understanding shadow seam, regardless of its own
-environment variable. Evaluating the decision fails closed — a storage error
+behaves exactly as it did before Wave 3.1. Evaluating the decision fails closed — a storage error
 leaves it off rather than admitting an unreviewed path.
 
 Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is
 a deferred commercial possibility and requires a new accepted product decision,
 registry/migration change, and verification matrix before implementation.
 
-The current Wave 1 backend exposes authorized scope search and the bounded
-eight-metric catalog/query API through this canonical feature decision, plus
-dark additive conversation storage. It does not add Ask Dev orchestration or
-the web experience. Operators should keep the entitlement disabled until the
-documented launch gates pass. Disabling it later must hide or deny new Ask Dev
-work without changing categorization BYO LLM behavior or ACR/MCP access;
-expiry, deletion, and purge continue for content already stored.
+Ask Dev is built in the web app and in the Ask Dev service (ACR). It is not turned on in production. Keep the entitlement off until you intend to enable it for an organization; see [Turn on Ask Dev](../../admin/ask-dev/index.md). Turning it off hides the launcher and does not change categorization BYO LLM behavior or ACR/MCP access. Stored content is removed only where the operator runs the retention cleanup.
 
 ## Go worker migration routes
 

@@ -33,3 +33,4 @@ admin-auth	admin-troubleshooting	/admin/troubleshooting/authentication-and-roles
 admin-provider-fail	admin-troubleshooting	/admin/troubleshooting/provider-connections/	Provider connection failures	troubleshooting	true	public	planned	false	
 admin-sync-fail	admin-troubleshooting	/admin/troubleshooting/sync-and-coverage/	Sync and coverage problems	troubleshooting	true	public	planned	false	
 admin-identity-fail	admin-troubleshooting	/admin/troubleshooting/identity-and-membership/	Identity and membership problems	troubleshooting	true	public	planned	false	
+admin-ask-dev	admin	/admin/ask-dev/	Turn on Ask Dev	task-guide	true	public	active	false	The flags, model settings, limits and refusals that decide whether users get Ask Dev.

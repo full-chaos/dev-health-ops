@@ -340,3 +340,16 @@ Recorded with Python 3.14.7 and PyYAML 6.0.3 (pure-Python SafeLoader) from `scri
 The loader is a port of the PyYAML 6.0.3 SafeLoader (`dc_pub_yaml_*.go`): the standard YAML 1.1 tags, anchors, merge keys and implicit types as `safe_load`; other tags are refused.
 Stricter than Python (named): compose nesting deeper than 400 (RecursionError; Python stops near 485); a lone surrogate escape in a double-quoted scalar; a scalar that matches an implicit type only through `$` before a final newline; a non-ASCII decimal digit in an explicit `!!int` or `!!float`; `str()` of a set with two or more members (hash order); a bracketed netloc in a link; a page file name that is not UTF-8.
 Different on purpose: a YAML exception prints as one line (kind plus the first line of `str(exc)`); the `sorted()` TypeError text is exact below 64 IA rows and may differ from 64 up (the exit code does not).
+
+# Recorded again: no two paths that differ only in case
+
+Four cases held two input files whose paths differed only in letter case, and a case-insensitive checkout (macOS) keeps one
+file of each pair. One file of each pair has a new name that keeps the case's intent (an upper-case name sorts before the
+lower-case names in byte order; the page extension is still upper or mixed case):
+`a11y-fail-sort-order` (`site/B.html`, `site/a/B.html` -> `C.html`), `links-path-sort-order` (`site/B.html` -> `C.html`),
+`check-investment-drift-nested-docs-order` (`docs/B.md` -> `C.md`), `pub-page-uppercase-md-extension` (`docs/UP.MD` -> `UPPER.MD`).
+Each was recorded again with the recipe of its part: `check_docs_candidate_accessibility.py.frozen` and `check_built_site_links.py`
+at `a64af6106a44` with Python 3.14.7, `check_investment_docs_drift.py` at `28adf8cd` with Python 3.12.3 and the taxonomy stub,
+`validate_docs_v2_publication.py.frozen` with Python 3.14.7 and PyYAML 6.0.3. Before the renames the same recipe gave the stored
+bytes of all four cases again. Only the renamed names changed in the output; the order is the same.
+`internal/cigates/scripts` `TestNoTwoTrackedPathsDifferOnlyInCase` keeps it so.

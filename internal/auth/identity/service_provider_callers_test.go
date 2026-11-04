@@ -27,8 +27,8 @@ func TestEveryCallerOfIdentityBySubjectReadsTheServiceProviderField(t *testing.T
 		}
 		if call.Match(body) {
 			callers = append(callers, path)
-			if !strings.Contains(string(body), "ServiceProvider") {
-				t.Errorf("%s calls IdentityBySubject and never reads ServiceProvider", path)
+			for _, gap := range callSiteGaps(path, string(body)) {
+				t.Error(gap)
 			}
 		}
 		return nil

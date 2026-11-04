@@ -306,6 +306,84 @@ func TestGroupWriterDropsACancelledCall(t *testing.T) {
 	}
 }
 
+// TestGroupWriterNeverWritesACancelledQueuedCall: a call whose context has
+// ended while it is queued commits no row and gets the context error, one-row
+// and multi-row calls alike: when the call itself holds the flusher slot (an
+// idle writer hands it the slot at once, so its lead and its context are ready
+// together), and when another call leads the transaction it would join.
+func TestGroupWriterNeverWritesACancelledQueuedCall(t *testing.T) {
+	events := func(rows int) []AuditEvent {
+		out := make([]AuditEvent, rows)
+		for r := range out {
+			out[r] = groupEvent(idOf(100 + r))
+		}
+		return out
+	}
+	cancelledRows := func(db *groupDB, rows int) int {
+		got, committed := db.committedRows(), 0
+		for r := range rows {
+			committed += got[idOf(100+r)]
+		}
+		return committed
+	}
+	for _, rows := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d rows, handed the slot", rows), func(t *testing.T) {
+			committed := 0
+			for i := range 50 {
+				db := &groupDB{}
+				w := newTestGroupWriter(t, db, 1, 0)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				if err := w.Append(ctx, events(rows)...); !errors.Is(err, context.Canceled) {
+					t.Fatalf("iteration %d: %v, want context.Canceled", i, err)
+				}
+				committed += cancelledRows(db, rows)
+				if err := w.Append(context.Background(), groupEvent(idOf(1))); err != nil {
+					t.Fatalf("iteration %d: a later call: %v", i, err)
+				}
+			}
+			if committed != 0 {
+				t.Fatalf("cancelled queued calls committed %d rows over 50 runs, want 0", committed)
+			}
+		})
+		t.Run(fmt.Sprintf("%d rows, another call leads", rows), func(t *testing.T) {
+			committed := 0
+			for i := range 50 {
+				db := &groupDB{hold: make(chan struct{})}
+				w := newTestGroupWriter(t, db, 1, 0)
+				first := appendAsync(w, context.Background(), idOf(0))
+				waitFor(t, "the first commit to start", func() bool { in, _, _ := db.state(); return in == 1 })
+				live := appendAsync(w, context.Background(), idOf(1))
+				waitFor(t, "the live call queued", func() bool { return w.queued() == 1 })
+				ctx, cancel := context.WithCancel(context.Background())
+				cancelled := make(chan error, 1)
+				go func() { cancelled <- w.Append(ctx, events(rows)...) }()
+				waitFor(t, "the call queued behind the live call", func() bool { return w.queued() == 2 })
+				// The leader's release races the cancelled call's own exit:
+				// the live call then leads a transaction the cancelled call
+				// is still queued for.
+				cancel()
+				close(db.hold)
+				for _, r := range []<-chan error{first, live} {
+					if err := <-r; err != nil {
+						t.Fatalf("iteration %d: %v", i, err)
+					}
+				}
+				if err := <-cancelled; !errors.Is(err, context.Canceled) {
+					t.Fatalf("iteration %d: cancelled call: %v, want context.Canceled", i, err)
+				}
+				committed += cancelledRows(db, rows)
+				if got := db.committedRows()[idOf(1)]; got != 1 {
+					t.Fatalf("iteration %d: the live call's row committed %d times, want 1", i, got)
+				}
+			}
+			if committed != 0 {
+				t.Fatalf("cancelled queued calls committed %d rows over 50 runs, want 0", committed)
+			}
+		})
+	}
+}
+
 // TestGroupWriterRefusesBeforeItQueues: a refused set opens no transaction.
 func TestGroupWriterRefusesBeforeItQueues(t *testing.T) {
 	db := &groupDB{}

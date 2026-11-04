@@ -18,7 +18,7 @@ import (
 )
 
 // keyPrefix namespaces every key this store writes; the api's Valkey login
-// needs EVAL, INCR and PEXPIRE on "dho:rl:*".
+// needs EVAL, INCR, DECR (the refund script) and PEXPIRE on "dho:rl:*".
 const keyPrefix = "dho:rl:"
 
 // digest is the part of a key that identifies a caller or a request path,
@@ -63,10 +63,26 @@ end
 return n
 `
 
+// refundScript gives one hit back, one atomic step.
+//
+//	KEYS[1] the (limit, key, path) counter
+//
+// A counter that is gone (its window ended) is left alone: DECR on a missing
+// key would create one with no TTL. A counter at 0 is never lowered. It
+// returns the counter after the step.
+const refundScript = `
+local n = redis.call('GET', KEYS[1])
+if n and tonumber(n) > 0 then
+  return redis.call('DECR', KEYS[1])
+end
+return 0
+`
+
 // Store is the Valkey CounterStore.
 type Store struct {
 	client valkeygo.Client
 	script *valkeygo.Lua
+	refund *valkeygo.Lua
 }
 
 var _ httpapi.CounterStore = (*Store)(nil)
@@ -77,7 +93,7 @@ func New(client valkeygo.Client) (*Store, error) {
 	if client == nil {
 		return nil, errors.New("ratelimitvalkey: nil Valkey client")
 	}
-	return &Store{client: client, script: valkeygo.NewLuaScriptNoSha(hitScript)}, nil
+	return &Store{client: client, script: valkeygo.NewLuaScriptNoSha(hitScript), refund: valkeygo.NewLuaScriptNoSha(refundScript)}, nil
 }
 
 // Backend implements httpapi.CounterStore: Python reports "redis" for the same
@@ -96,6 +112,17 @@ func (s *Store) Increment(ctx context.Context, hit httpapi.Hit) (int64, error) {
 	}
 	return count, nil
 }
+
+// Refund implements httpapi.Refunder.
+func (s *Store) Refund(ctx context.Context, hit httpapi.Hit) error {
+	result := s.refund.Exec(ctx, s.client, []string{CounterKey(hit.Limit, hit.Key, hit.Path)}, nil)
+	if _, err := result.AsInt64(); err != nil {
+		return fmt.Errorf("rate limit refund for %q: %w", hit.Limit.ID, err)
+	}
+	return nil
+}
+
+var _ httpapi.Refunder = (*Store)(nil)
 
 // Peek implements httpapi.CounterStore: the counter's value, 0 when it has no
 // live counter (an expired or never-hit key does not exist).

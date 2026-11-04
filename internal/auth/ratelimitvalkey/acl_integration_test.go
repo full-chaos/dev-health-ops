@@ -61,7 +61,17 @@ func TestTheAuthServiceLoginCountsUnderItsPrefixAndNowhereElse(t *testing.T) {
 	if _, err := store.Peek(ctx, httpapi.Hit{Limit: own, Key: "k", Path: "/p"}); err != nil {
 		t.Fatalf("peek under the prefix: %v", err)
 	}
+	// The refund script runs DECR inside EVAL: the line grants it.
+	if err := httpapi.NewKeyedLimiter(store, own).Refund(ctx, "k", "/p"); err != nil {
+		t.Fatalf("the ACL line does not let the refund script run: %v", err)
+	}
+	if n, err := store.Peek(ctx, httpapi.Hit{Limit: own, Key: "k", Path: "/p"}); err != nil || n != 2 {
+		t.Fatalf("count after one refund of three = %d (%v), want 2", n, err)
+	}
 	foreign := httpapi.Limit{ID: "auth_login_ip", Count: 20, Window: time.Hour}
+	if err := httpapi.NewKeyedLimiter(store, foreign).Refund(ctx, "k", "/p"); err == nil {
+		t.Fatal("the auth-service login refunded under go-api's prefix")
+	}
 	if _, err := httpapi.NewKeyedLimiter(store, foreign).Allow(ctx, "k", "/p"); err == nil {
 		t.Fatal("the auth-service login counted under go-api's prefix")
 	}

@@ -23,7 +23,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
 	"github.com/full-chaos/dev-health-ops/internal/auth/decisioncache"
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -55,6 +57,7 @@ type Reader struct {
 	pool    *pgxpool.Pool
 	schema  authschema.ValidatedIdentifier
 	users   authapi.PGUsers
+	roles   *platformrole.Store
 	collect bool
 }
 
@@ -66,7 +69,11 @@ func New(cfg Config) (*Reader, error) {
 	if cfg.Schema == (authschema.ValidatedIdentifier{}) {
 		return nil, errors.New("decisionstate: a validated auth schema is required")
 	}
-	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users, collect: cfg.CollectDependencies}, nil
+	roles, err := platformrole.New(platformrole.Config{Pool: cfg.Pool, Schema: cfg.Schema})
+	if err != nil {
+		return nil, err
+	}
+	return &Reader{pool: cfg.Pool, schema: cfg.Schema, users: cfg.Users, roles: roles, collect: cfg.CollectDependencies}, nil
 }
 
 func storeErr(what string, err error) error { return fmt.Errorf("%w: %s: %w", ErrStore, what, err) }
@@ -94,20 +101,66 @@ type txReader struct {
 func (t *txReader) table(name string) string { return authschema.Quote(t.r.schema) + "." + name }
 
 // Session reads the session row: live when not revoked and not expired at the
-// transaction's clock, and whether it names an actor or a delegating session.
+// transaction's clock, the delegation columns, and whether the delegating
+// session is live by the same rule.
 func (t *txReader) Session(ctx context.Context, sessionID uuid.UUID) (authapi.DecisionSession, error) {
-	var s authapi.DecisionSession
-	err := t.tx.QueryRow(ctx, `SELECT principal_id, revoked_at IS NULL AND expires_at > now(),
-actor_principal_id IS NOT NULL, delegated_from_session_id IS NOT NULL FROM `+t.table("sessions")+` WHERE id = $1`,
-		sessionID).Scan(&s.PrincipalID, &s.Live, &s.HasActor, &s.HasDelegatedFrom)
+	var (
+		s            authapi.DecisionSession
+		actor, orgID *string
+	)
+	err := t.tx.QueryRow(ctx, `SELECT s.principal_id, s.revoked_at IS NULL AND s.expires_at > now(),
+s.actor_principal_id::text, s.delegated_from_session_id IS NOT NULL, s.organization_id::text, s.amr, s.delegation_permitted_actions,
+COALESCE((SELECT b.revoked_at IS NULL AND b.expires_at > now() FROM `+t.table("sessions")+` b WHERE b.id = s.delegated_from_session_id), false)
+FROM `+t.table("sessions")+` s WHERE s.id = $1`,
+		sessionID).Scan(&s.PrincipalID, &s.Live, &actor, &s.HasDelegatedFrom, &orgID, &s.AMR, &s.PermittedActions, &s.BaseLive)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return authapi.DecisionSession{}, nil
 	case err != nil:
 		return authapi.DecisionSession{}, storeErr("session", err)
 	}
+	if actor != nil {
+		id, err := uuid.Parse(*actor)
+		if err != nil {
+			return authapi.DecisionSession{}, storeErr("session", err)
+		}
+		s.HasActor, s.ActorPrincipalID = true, id
+	}
+	if orgID != nil {
+		id, err := uuid.Parse(*orgID)
+		if err != nil {
+			return authapi.DecisionSession{}, storeErr("session", err)
+		}
+		s.OrganizationID = &id
+	}
 	s.Found = true
 	return s, nil
+}
+
+// Actor reads the real actor of a delegated session now, in the decision
+// transaction: an active user principal whose public.users row is active, and
+// the platform roles it holds. A principal that is no user is the zero state.
+func (t *txReader) Actor(ctx context.Context, actor uuid.UUID) (authapi.ActorState, error) {
+	kind, enabled, found, err := t.principalRow(ctx, actor)
+	if err != nil || !found || kind != principalKindUser {
+		return authapi.ActorState{}, err
+	}
+	user, found, err := t.r.users.StateOn(ctx, t.tx, actor)
+	if err != nil {
+		return authapi.ActorState{}, storeErr("user", err)
+	}
+	if !found {
+		return authapi.ActorState{}, nil
+	}
+	held, err := t.r.roles.ResolveOn(ctx, t.tx, actor)
+	if err != nil {
+		return authapi.ActorState{}, storeErr("platform role", err)
+	}
+	return authapi.ActorState{
+		Active:         enabled && user.IsActive,
+		CanImpersonate: held.Allows(session.ImpersonateAction),
+		Owner:          held.IsOwner(),
+	}, nil
 }
 
 // Snapshot reads the principal's state for orgID ("" for a platform
@@ -314,19 +367,24 @@ func snapshotOut(s *snapshot, collect bool) authorization.GrantSnapshot {
 	return s
 }
 
+// principalRow reads the principal's kind and whether it is not disabled.
+func (t *txReader) principalRow(ctx context.Context, principal uuid.UUID) (kind string, enabled, found bool, err error) {
+	err = t.tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+t.table("principals")+` WHERE id = $1`, principal).Scan(&kind, &enabled)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", false, false, nil
+	case err != nil:
+		return "", false, false, storeErr("principal", err)
+	}
+	return kind, enabled, true, nil
+}
+
 // principal reads the principal's kind and disable mark, then, for a user,
 // go-api's users row. A user is active only when both say so.
 func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapshot) error {
-	var (
-		kind    string
-		enabled bool
-	)
-	err := t.tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+t.table("principals")+` WHERE id = $1`, principal).Scan(&kind, &enabled)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return nil
-	case err != nil:
-		return storeErr("principal", err)
+	kind, enabled, found, err := t.principalRow(ctx, principal)
+	if err != nil || !found {
+		return err
 	}
 	if t.r.collect {
 		s.deps = append(s.deps, principalDependencies(principal)...)

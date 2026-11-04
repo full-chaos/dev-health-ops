@@ -29,6 +29,7 @@ internal/api/telemetry	platform_action_test.go	internal/api/telemetry	dir	*
 internal/api/webhookintake	pagerduty_refusal_test.go	internal/api/webhookintake	dir	*
 internal/api/webhookintake	removed_providers_test.go	.	tree	*.go
 internal/apiservice	endpoint_profile_scan_test.go	unexpressed	-	*.go
+internal/apiservice	enforcer_test.go	internal/apiservice	dir	*
 internal/apiservice/admin	operator_password_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	internal/apiservice/admin	dir	*
 internal/apiservice/admin	routeguard_test.go	unexpressed	-	-
@@ -128,7 +129,6 @@ internal/auth/writerinventory	credential_registry_reader_census_test.go	internal
 internal/auth/writerinventory	scan_test.go	.	tree	*.go
 internal/auth/writerinventory	scan_test.go	internal/storage/postgres/authschema/migrations	dir	*
 internal/auth/writerinventory	session_revoke_census_test.go	internal	tree	*.go
-internal/authzenforce	census_test.go	.	tree	*.go
 internal/bigboycompose	billing_edge_override_test.go	unexpressed	-	-
 internal/chmigrate	archive_test.go	internal/chmigrate	dir	*
 internal/chmigrate	archive_test.go	internal/chmigrate/archive/sql	dir	*

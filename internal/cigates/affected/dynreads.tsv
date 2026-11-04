@@ -137,6 +137,7 @@ internal/auth/writerinventory	organization_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
+internal/authzenforce	census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go

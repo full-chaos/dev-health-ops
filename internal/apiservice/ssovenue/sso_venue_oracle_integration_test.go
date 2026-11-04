@@ -235,8 +235,12 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	}
 	python := golden.Python(t, venue, requests)
 	var orglessRefused []string
+	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID).
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim.go-pin.json", SHA256: ssoOrgClaimPinSHA256, Ruling: ssoOrgClaimRuling})
+	claimRetired := map[string]bool{"activate: token of the other org": true, "activate: org claim not a uuid": true}
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
-		Golden: golden,
+		Golden:      golden,
+		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
 		// D6145: the token without an org is refused 403 where Python answered 500 (activate).
 		OrglessTokens: map[string]bool{venue.Tokens["noorg"]: true}, MaxOrglessRefusals: 1,
 		OnOrglessRefused: func(request venueoracle.Request) { orglessRefused = append(orglessRefused, request.Name) },
@@ -244,6 +248,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},
 	})
+	claimPin.Finish(t)
 	if len(orglessRefused) != 1 {
 		t.Errorf("org-less refusals declared: %v, want exactly 1", orglessRefused)
 	}
@@ -292,6 +297,13 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
+
+// ssoOrgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
+// holds no live membership in.
+const ssoOrgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:85-99); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+
+// ssoOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
+const ssoOrgClaimPinSHA256 = ""
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {

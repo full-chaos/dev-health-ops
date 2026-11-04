@@ -312,13 +312,16 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 	timestamp := regexp.MustCompile(`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,6})?Z`)
 	newID := regexp.MustCompile(`"id":"[0-9a-f-]{36}"`)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/pagerduty/bindings.go-pin.json", SHA256: "9919c96e6408b00f033515ce05c55204b123ce5ea131d827b673e3a282626b70", Ruling: bindingsOrgScopeRuling})
+	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/pagerduty_bindings.go-pin.json", pagerDutyBindingsOrgClaimPinSHA256,
+		"create bad org claim is the gate's 403", "get bad org claim is a 400", "revoke: bad org claim is a 400")
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Retire: func(request venueoracle.Request) bool {
 			return request.Name == "rotate: another organisation's active binding" ||
 				request.Name == "rotate: active binding of another organisation on this source"
 		},
-		Pin: pin,
+		Pin:         pin,
+		Retirements: []venueoracle.Retirement{claimRetirement},
 		NormalizePython: func(_ venueoracle.Request, text string) string {
 			return strings.ReplaceAll(text, "PagerDuty binding graph is not active and same-org", "PagerDuty binding graph was not found")
 		},
@@ -334,6 +337,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 		},
 	})
 	pin.Finish(t)
+	claimPin.Finish(t)
 	t.Log(receipt)
 
 	compare := func(name, query string) {

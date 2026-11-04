@@ -419,3 +419,19 @@ func splitRows(joined string) []string {
 	}
 	return strings.Split(joined, venueoracle.JSONRowSeparator)
 }
+
+// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
+// holds no live membership in, as written (not a member, not a UUID, not canonical, no such organization).
+const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:85-99); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+
+// orgClaimRetirement pins Go's answer to each named request under orgClaimRuling in the pin at path (relative to
+// this package). The caller finishes the pin.
+func orgClaimRetirement(t *testing.T, path, digest string, names ...string) (venueoracle.Retirement, *venueoracle.GoPin) {
+	t.Helper()
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: path, SHA256: digest, Ruling: orgClaimRuling})
+	named := map[string]bool{}
+	for _, name := range names {
+		named[name] = true
+	}
+	return venueoracle.Retirement{Match: func(request venueoracle.Request) bool { return named[request.Name] }, Pin: pin}, pin
+}

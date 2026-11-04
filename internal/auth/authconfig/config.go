@@ -444,13 +444,10 @@ func Load(spec Spec) (Config, error) {
 	if cfg.OperatorAddress, err = address(lookup, EnvOperatorAddress, defaultOperatorAddress); err != nil {
 		return Config{}, err
 	}
-	// Two listeners in one process must not be pointed at one address: the
-	// second bind fails at Start with a errno the operator then has to
-	// decode. Reject the identical spelling here, where the message can name
-	// both settings. Different spellings of the same endpoint (":8095" vs
-	// "0.0.0.0:8095") still collide at bind time -- this check is a cheap,
-	// exact-match guard, not a claim to resolve every alias.
-	if cfg.APIAddress == cfg.OperatorAddress {
+	// Two listeners in one process must not bind one socket: the second bind
+	// fails at Start with an errno. Port 0 is exempt, since each such bind gets
+	// its own port.
+	if netaddr.ListenAddressesOverlap(cfg.APIAddress, cfg.OperatorAddress) {
 		return Config{}, fmt.Errorf(
 			"%s and %s must not be the same address", EnvAPIAddress, EnvOperatorAddress,
 		)

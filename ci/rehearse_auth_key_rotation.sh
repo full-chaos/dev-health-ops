@@ -81,6 +81,7 @@ fi
 
 : "${REHEARSAL_DIR:?set REHEARSAL_DIR to a new directory}"
 : "${REHEARSAL_IMAGES_ENV:?set REHEARSAL_IMAGES_ENV to the image digest file}"
+valid_run_id "${REHEARSAL_RUN_ID:-}" || die "REHEARSAL_RUN_ID must be digits only (the CI run id)"
 [ -f "${REHEARSAL_IMAGES_ENV}" ] || die "REHEARSAL_IMAGES_ENV names no file"
 for tool in docker curl jq openssl base64; do
   command -v "${tool}" >/dev/null 2>&1 || die "${tool} is required"

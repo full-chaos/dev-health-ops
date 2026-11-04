@@ -41,9 +41,10 @@ var legacyPasswords = []struct{ fixture, legacy string }{
 	{fixturePasswordLongUpdate, strings.Repeat("b", 73)},
 }
 
-// retiredUsersSteps are the steps whose Python answer the stricter policy
-// retires (D6129): the 7-character refusals and the 73-byte refusals.
-var retiredUsersSteps = map[int]bool{3: true, 6: true, 48: true, 50: true}
+// retiredUsersSteps are the steps whose Python answer is retired: the 7-character
+// and 73-byte password refusals (D6129) and step 63, --org with --remove-from-org
+// in one call, which the operator refuses as a usage error (CHAOS-11799).
+var retiredUsersSteps = map[int]bool{3: true, 6: true, 48: true, 50: true, 63: true}
 
 // legacyArgs is args as the Python session ran them.
 func legacyArgs(args []string) []string {

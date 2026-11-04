@@ -174,11 +174,19 @@ func scanEnvUnits(units []envUnit) map[string][]string {
 }
 
 // isEnvLookupCall reports whether a call's callee is an environment lookup by its object. wrappers holds the functions
-// and methods that pass one of their string parameters straight to a lookup.
+// and methods that pass one of their string parameters straight to a lookup. An explicit instance of a generic function
+// (Read[int], pkg.Read[K, V]) is its generic declaration.
 func isEnvLookupCall(unit envUnit, call *ast.CallExpr, wrappers *envWrapperSet) bool {
 	info := unit.info
 	var obj types.Object
-	switch fun := ast.Unparen(call.Fun).(type) {
+	callee := ast.Unparen(call.Fun)
+	switch index := callee.(type) {
+	case *ast.IndexExpr:
+		callee = ast.Unparen(index.X)
+	case *ast.IndexListExpr:
+		callee = ast.Unparen(index.X)
+	}
+	switch fun := callee.(type) {
 	case *ast.Ident:
 		obj = info.Uses[fun]
 	case *ast.SelectorExpr:
@@ -366,7 +374,7 @@ func (w *envWrapperSet) calls(caller *types.Package, fn *types.Func) bool {
 		if method.Name() != fn.Name() {
 			continue
 		}
-		for _, concrete := range w.concreteTypes(caller, method) {
+		for _, concrete := range w.concreteTypes(caller, method, iface) {
 			if types.Implements(concrete, iface) || types.Satisfies(concrete, iface) {
 				return true
 			}
@@ -377,9 +385,11 @@ func (w *envWrapperSet) calls(caller *types.Package, fn *types.Func) bool {
 
 // concreteTypes is the receiver type of a wrapper method and its pointer, from the caller's own type universe when the
 // caller's import graph holds the method's package (the same objects the interface was checked against), and from the
-// method's own universe. A generic receiver type is instantiated with its own type parameters, so a method whose
-// signature does not use them matches an interface as every instance does.
-func (w *envWrapperSet) concreteTypes(caller *types.Package, method *types.Func) []types.Type {
+// method's own universe. A generic receiver type is instantiated with its own type parameters (a method whose signature
+// does not use them matches an interface as every instance does), and with the type arguments that unify its methods
+// with the interface's methods (Lookup(string) T against Lookup(string) string gives T = string), checked against the
+// type's constraints.
+func (w *envWrapperSet) concreteTypes(caller *types.Package, method *types.Func, iface *types.Interface) []types.Type {
 	recv := method.Signature().Recv().Type()
 	if ptr, ok := recv.(*types.Pointer); ok {
 		recv = ptr.Elem()
@@ -390,18 +400,26 @@ func (w *envWrapperSet) concreteTypes(caller *types.Package, method *types.Func)
 	}
 	var out []types.Type
 	add := func(t types.Type) {
-		if generic, ok := t.(*types.Named); ok && generic.TypeParams().Len() > 0 {
-			args := make([]types.Type, generic.TypeParams().Len())
-			for i := range args {
-				args[i] = generic.TypeParams().At(i)
-			}
-			instance, err := types.Instantiate(nil, generic.Origin(), args, false)
-			if err != nil {
-				return
-			}
-			t = instance
+		generic, ok := t.(*types.Named)
+		if !ok || generic.TypeParams().Len() == 0 {
+			out = append(out, t, types.NewPointer(t))
+			return
 		}
-		out = append(out, t, types.NewPointer(t))
+		origin := generic.Origin()
+		own := make([]types.Type, origin.TypeParams().Len())
+		for i := range own {
+			own[i] = origin.TypeParams().At(i)
+		}
+		instance, err := types.Instantiate(nil, origin, own, false)
+		if err != nil {
+			return
+		}
+		out = append(out, instance, types.NewPointer(instance))
+		if args := unifiedTypeArgs(instance, origin.TypeParams(), iface); args != nil {
+			if bound, err := types.Instantiate(nil, origin, args, true); err == nil {
+				out = append(out, bound, types.NewPointer(bound))
+			}
+		}
 	}
 	add(named)
 	if pkg := w.reachable(caller)[named.Obj().Pkg().Path()]; pkg != nil && pkg != named.Obj().Pkg() {
@@ -410,6 +428,94 @@ func (w *envWrapperSet) concreteTypes(caller *types.Package, method *types.Func)
 		}
 	}
 	return out
+}
+
+// unifiedTypeArgs binds the type parameters of a generic type, instantiated with its own parameters, by unifying each
+// interface method with the type's method of the same name. It is nil when no parameter is bound or a method does not
+// unify; an unbound parameter stays itself.
+func unifiedTypeArgs(instance types.Type, tparams *types.TypeParamList, iface *types.Interface) []types.Type {
+	own := map[*types.TypeParam]bool{}
+	for i := 0; i < tparams.Len(); i++ {
+		own[tparams.At(i)] = true
+	}
+	bound := map[*types.TypeParam]types.Type{}
+	for i := 0; i < iface.NumMethods(); i++ {
+		want := iface.Method(i)
+		obj, _, _ := types.LookupFieldOrMethod(instance, true, want.Pkg(), want.Name())
+		have, ok := obj.(*types.Func)
+		if !ok {
+			return nil
+		}
+		if !unify(have.Signature(), want.Signature(), own, bound) {
+			return nil
+		}
+	}
+	if len(bound) == 0 {
+		return nil
+	}
+	args := make([]types.Type, tparams.Len())
+	for i := range args {
+		args[i] = tparams.At(i)
+		if arg, ok := bound[tparams.At(i)]; ok {
+			args[i] = arg
+		}
+	}
+	return args
+}
+
+// unify matches x, which may use the type parameters own, against y, binding each parameter at most one type.
+func unify(x, y types.Type, own map[*types.TypeParam]bool, bound map[*types.TypeParam]types.Type) bool {
+	if param, ok := x.(*types.TypeParam); ok && own[param] {
+		if arg, ok := bound[param]; ok {
+			return types.Identical(arg, y)
+		}
+		bound[param] = y
+		return true
+	}
+	switch x := x.(type) {
+	case *types.Pointer:
+		y, ok := y.(*types.Pointer)
+		return ok && unify(x.Elem(), y.Elem(), own, bound)
+	case *types.Slice:
+		y, ok := y.(*types.Slice)
+		return ok && unify(x.Elem(), y.Elem(), own, bound)
+	case *types.Array:
+		y, ok := y.(*types.Array)
+		return ok && x.Len() == y.Len() && unify(x.Elem(), y.Elem(), own, bound)
+	case *types.Map:
+		y, ok := y.(*types.Map)
+		return ok && unify(x.Key(), y.Key(), own, bound) && unify(x.Elem(), y.Elem(), own, bound)
+	case *types.Chan:
+		y, ok := y.(*types.Chan)
+		return ok && x.Dir() == y.Dir() && unify(x.Elem(), y.Elem(), own, bound)
+	case *types.Signature:
+		y, ok := y.(*types.Signature)
+		return ok && x.Variadic() == y.Variadic() && unifyTuple(x.Params(), y.Params(), own, bound) && unifyTuple(x.Results(), y.Results(), own, bound)
+	case *types.Named:
+		y, ok := y.(*types.Named)
+		if !ok || x.TypeArgs().Len() == 0 || x.TypeArgs().Len() != y.TypeArgs().Len() || x.Origin().Obj() != y.Origin().Obj() {
+			return types.Identical(x, y)
+		}
+		for i := 0; i < x.TypeArgs().Len(); i++ {
+			if !unify(x.TypeArgs().At(i), y.TypeArgs().At(i), own, bound) {
+				return false
+			}
+		}
+		return true
+	}
+	return types.Identical(x, y)
+}
+
+func unifyTuple(x, y *types.Tuple, own map[*types.TypeParam]bool, bound map[*types.TypeParam]types.Type) bool {
+	if x.Len() != y.Len() {
+		return false
+	}
+	for i := 0; i < x.Len(); i++ {
+		if !unify(x.At(i).Type(), y.At(i).Type(), own, bound) {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *envWrapperSet) reachable(caller *types.Package) map[string]*types.Package {
@@ -867,6 +973,26 @@ func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
 			"internal/x/reg.go": "package x\ntype Registry[T any] struct{}\nfunc (Registry[T]) Lookup(kind string) string { return kind }\n",
 			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
 		}, "internal/x/use.go", false},
+		{"V36-generic-wrapper-result-of-its-type-parameter-through-interface", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env[T ~string] struct{}\nfunc (Env[T]) Lookup(name string) T { return T(os.Getenv(name)) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V37-generic-wrapper-result-of-its-type-parameter-through-constraint", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env[T ~string] struct{}\nfunc (Env[T]) Lookup(name string) T { return T(os.Getenv(name)) }\n",
+			"internal/x/use.go": "package x\nfunc f[G interface{ Lookup(string) string }](g G) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V38-generic-wrapper-whose-constraint-excludes-the-interface", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env[T ~string] struct{}\nfunc (Env[T]) Lookup(name string) T { return T(os.Getenv(name)) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) int }\nfunc f(g Getter) int { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		{"V39-explicit-instance-of-a-generic-wrapper-function", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\nfunc Read[T any](name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go": "package x\nfunc f() string { return Read[int](\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V50-explicit-two-argument-instance-of-another-package", map[string]string{
+			"internal/envutil/envutil.go": "package envutil\nimport \"os\"\nfunc Read[K comparable, V any](name string) string { return os.Getenv(name) }\n",
+			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/envutil\"\nfunc f() string { return (envutil.Read[int, bool])(\"SOME_KEY\") }\n",
+		}, "internal/x/x.go", true},
 		// A function literal held by a variable that passes a string parameter to a lookup is a wrapper too.
 		{"V40-package-var-func-literal-wrapper", map[string]string{
 			"internal/x/env.go": "package x\nimport \"os\"\n" + literalEnv("var read = "),

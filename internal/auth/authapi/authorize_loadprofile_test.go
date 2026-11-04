@@ -169,7 +169,7 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			t.Cleanup(srv.Close)
 			cfg.BaseURL = srv.URL
 			rep, err := loadharness.Run(context.Background(), cfg, loadharness.Options{
-				Profile: loadharness.Profile{Name: name, Rate: rate, Duration: 2 * time.Second, Concurrency: 4},
+				Profile: loadharness.Profile{Name: name, Rate: rate, Duration: pdpDuration, Concurrency: pdpConcurrency(rate, raceEnabled)},
 				Getenv:  getenv,
 			})
 			if err != nil {
@@ -201,6 +201,18 @@ func TestPDPLoadProfilesAgainstRealHandlers(t *testing.T) {
 			}
 		})
 	}
+}
+
+const pdpDuration = 2 * time.Second
+
+// pdpConcurrency is 4 workers. Under the race detector a request is slow and the weight wheel sends each target in a
+// block, so a full queue drops whole targets (authorize-mix lost every authorize-deny call). Under race the workers
+// grow until the queue (4 per worker) holds every scheduled request: nothing drops and every target answers.
+func pdpConcurrency(rate float64, race bool) int {
+	if !race {
+		return 4
+	}
+	return max(4, int(rate*pdpDuration.Seconds())/4+1)
 }
 
 // pdpReportFailure judges one load report. Under the race detector a request takes about a second, so the harness drops
@@ -316,5 +328,64 @@ func TestPDPRaceConstMatchesBinary(t *testing.T) {
 	}
 	if got != raceEnabled {
 		t.Fatalf("raceEnabled %v, binary built with -race %v", raceEnabled, got)
+	}
+}
+
+func TestPDPRaceConcurrencyQueuesEveryScheduledRequest(t *testing.T) {
+	for _, rate := range []float64{2, 8, 40, 80} {
+		total := int(rate * pdpDuration.Seconds())
+		if got := pdpConcurrency(rate, true); max(got*4, 64) < total {
+			t.Fatalf("rate %v: %d workers queue %d of %d requests under race", rate, got, max(got*4, 64), total)
+		}
+		if got := pdpConcurrency(rate, false); got != 4 {
+			t.Fatalf("rate %v: %d workers without race, want 4", rate, got)
+		}
+	}
+}
+
+// A slow handler stands in for the race detector in either build: with the race-mode workers no request drops and
+// every target of the weight wheel answers, so the per-path checks see each one.
+func TestPDPRaceConcurrencyKeepsEveryMixTargetUnderASlowHandler(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "loadharness", "testdata", "pdp", "authorize-mix.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newAuthorizeHandlerFixture(t)
+	env := map[string]string{
+		"AUTH_LOADTEST_WORKLOAD_TOKEN":      h.workloadToken(nil),
+		"AUTH_LOADTEST_PRINCIPAL_REFERENCE": h.reference,
+		"AUTH_LOADTEST_ORG_ID":              h.org,
+	}
+	getenv := func(k string) string { return env[k] }
+	cfg, err := loadharness.ParseConfig(raw, getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tally := &pdpTally{allowed: map[string]int{}, denied: map[string]int{}, reasons: map[string]map[string]int{}}
+	inner := pdpRecorder(t, h, tally)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	cfg.BaseURL = srv.URL
+	const rate = 80
+	rep, err := loadharness.Run(context.Background(), cfg, loadharness.Options{
+		Profile: loadharness.Profile{Name: "authorize-mix", Rate: rate, Duration: pdpDuration, Concurrency: pdpConcurrency(rate, true)},
+		Getenv:  getenv,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Paths) != len(cfg.Targets) {
+		t.Fatalf("%d paths reported for %d targets", len(rep.Paths), len(cfg.Targets))
+	}
+	for _, p := range rep.Paths {
+		if p.Dropped != 0 || p.Count == 0 {
+			t.Fatalf("%s: count %d dropped %d under a slow handler, want every request answered", p.Name, p.Count, p.Dropped)
+		}
+	}
+	if _, failure := pdpReportFailure(rep, false); failure != "" {
+		t.Fatal(failure)
 	}
 }

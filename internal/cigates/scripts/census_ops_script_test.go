@@ -16,6 +16,12 @@ import (
 
 const censusOpsWant = "go test -count=1 -timeout 20m ./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/..."
 
+// censusOpsLine: check_go.sh prints its module list before any verb runs; the verb line is the last one.
+func censusOpsLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	return lines[len(lines)-1]
+}
+
 func censusOps(t *testing.T, checkGo string, args ...string) cmdResult {
 	t.Helper()
 	env := inheritedEnv(nil, "DEV_HEALTH_GO_CACHE="+t.TempDir(), "GIT_CONFIG_GLOBAL="+os.DevNull)
@@ -25,7 +31,7 @@ func censusOps(t *testing.T, checkGo string, args ...string) cmdResult {
 func TestCensusOpsPrintsTheCensusCommandWithTheCigatesTimeout(t *testing.T) {
 	t.Parallel()
 	res := censusOps(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), "--print-cmd")
-	if res.code != 0 || strings.TrimSpace(res.stdout) != censusOpsWant {
+	if res.code != 0 || censusOpsLine(res.stdout) != censusOpsWant {
 		t.Fatalf("census-ops --print-cmd: rc=%d stdout=%q stderr=%q, want rc 0 and %q", res.code, res.stdout, res.stderr, censusOpsWant)
 	}
 }
@@ -36,7 +42,7 @@ func TestCensusOpsTakesTheTimeoutFromTheCigatesFunction(t *testing.T) {
 		"github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '20m\\n'; return 0 ;;",
 		"github.com/full-chaos/dev-health-ops/internal/cigates/?*) printf '7m\\n'; return 0 ;;")
 	res := censusOps(t, planted, "--print-cmd")
-	if want := strings.Replace(censusOpsWant, "-timeout 20m", "-timeout 7m", 1); res.code != 0 || strings.TrimSpace(res.stdout) != want {
+	if want := strings.Replace(censusOpsWant, "-timeout 20m", "-timeout 7m", 1); res.code != 0 || censusOpsLine(res.stdout) != want {
 		t.Fatalf("census-ops follows cigates_go_test_timeout: rc=%d stdout=%q stderr=%q, want %q", res.code, res.stdout, res.stderr, want)
 	}
 }

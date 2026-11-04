@@ -41,7 +41,7 @@ type ReadStore interface {
 	Membership(ctx context.Context, org, principal uuid.UUID) (publicread.Membership, error)
 	Memberships(ctx context.Context, org uuid.UUID, after *uuid.UUID, limit int) ([]publicread.Membership, bool, error)
 	Principal(ctx context.Context, id uuid.UUID) (publicread.Principal, error)
-	Principals(ctx context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]publicread.Principal, bool, error)
+	Principals(ctx context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]publicread.PrincipalOf, bool, error)
 }
 
 // GrantReads is the read side of the resource grant aggregate (*grant.Store).
@@ -399,6 +399,12 @@ func (h readHandlers) principalsGet(w http.ResponseWriter, r *http.Request, op c
 	h.answered(w, r, op, principalWire(found))
 }
 
+// principalItemWire: a user item holds its membership; a service account or workload item holds none, and the key is absent.
+type principalItemWire struct {
+	Principal  principalReadWire   `json:"principal"`
+	Membership *membershipReadWire `json:"membership,omitempty"`
+}
+
 func (h readHandlers) principalsList(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation) {
 	body, ok := h.readAdmit(w, r, op, "organization_id", "kind", "limit", "cursor")
 	if !ok {
@@ -416,13 +422,18 @@ func (h readHandlers) principalsList(w http.ResponseWriter, r *http.Request, op 
 		h.readFailure(w, r, op, err, publicread.ErrNotFound, reasonPrincipalNotFound)
 		return
 	}
-	items := make([]principalReadWire, 0, len(found))
+	items := make([]principalItemWire, 0, len(found))
 	for _, p := range found {
-		items = append(items, principalWire(p))
+		item := principalItemWire{Principal: principalWire(p.Principal)}
+		if p.Membership != nil {
+			m := membershipWire(*p.Membership)
+			item.Membership = &m
+		}
+		items = append(items, item)
 	}
 	var last uuid.UUID
 	if len(found) > 0 {
-		last = found[len(found)-1].ID
+		last = found[len(found)-1].Principal.ID
 	}
 	h.answered(w, r, op, listWire{"principal-list.v1", items, nextCursor(more && len(found) > 0, op.IDPrefix, last)})
 }

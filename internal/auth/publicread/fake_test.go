@@ -111,6 +111,8 @@ func assign(dest, v any) error {
 		*d = v.(uuid.UUID)
 	case *string:
 		*d = v.(string)
+	case **uuid.UUID:
+		*d = v.(*uuid.UUID)
 	case **string:
 		if s, ok := v.(*string); ok {
 			*d = s

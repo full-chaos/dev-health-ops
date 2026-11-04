@@ -72,6 +72,13 @@ type Principal struct {
 	Revision int64
 }
 
+// PrincipalOf is a listed principal with its membership of the organization asked about. A user holds one; a service account
+// and a workload hold none (their organization binding is their own row, and no membership row exists for them).
+type PrincipalOf struct {
+	Principal  Principal
+	Membership *Membership
+}
+
 // Reader reads the public tables.
 type Reader struct {
 	q        Querier
@@ -162,20 +169,22 @@ FROM {A}.principals p ` + revisionJoin("rp", "principal", "prn_", "p.id") + `
 WHERE p.id = $1 AND p.kind <> 'user'`,
 
 	"principals_list": `/* publicread.principals_list */
-SELECT x.id, x.kind, x.active, COALESCE(rp.revision, 0)
+SELECT x.id, x.kind, x.active, COALESCE(rp.revision, 0), x.mid, x.role, x.joined_at, x.created_at, x.updated_at, COALESCE(rm.revision, 0)
 FROM (
-  SELECT u.id AS id, 'user' AS kind, COALESCE(u.is_active, false) AS active
+  SELECT u.id AS id, 'user' AS kind, COALESCE(u.is_active, false) AS active,
+         m.id AS mid, m.role AS role, m.joined_at AS joined_at, m.created_at AS created_at, m.updated_at AS updated_at
   FROM public.memberships m JOIN public.users u ON u.id = m.user_id
   WHERE m.org_id = $1
   UNION ALL
-  SELECT p.id, p.kind, p.disabled_at IS NULL
+  SELECT p.id, p.kind, p.disabled_at IS NULL, NULL::uuid, NULL::text, NULL::timestamptz, NULL::timestamptz, NULL::timestamptz
   FROM {A}.service_accounts sa JOIN {A}.principals p ON p.id = sa.principal_id
   WHERE sa.organization_id = $1 AND p.kind = 'service_account'
   UNION ALL
-  SELECT p.id, p.kind, p.disabled_at IS NULL
+  SELECT p.id, p.kind, p.disabled_at IS NULL, NULL::uuid, NULL::text, NULL::timestamptz, NULL::timestamptz, NULL::timestamptz
   FROM {A}.workloads w JOIN {A}.principals p ON p.id = w.principal_id
   WHERE w.organization_id = $1 AND p.kind = 'workload'
 ) x ` + revisionJoin("rp", "principal", "prn_", "x.id") + `
+` + revisionJoin("rm", "membership", "mbr_", "x.mid") + `
 WHERE ($2::text IS NULL OR x.kind = $2) AND ($3::uuid IS NULL OR x.id > $3)
 ORDER BY x.id
 LIMIT $4`,
@@ -340,9 +349,9 @@ func (r *Reader) Principal(ctx context.Context, id uuid.UUID) (Principal, error)
 	return p, nil
 }
 
-// Principals lists the principals of an organization by id after the cursor, one page: its members from public.users, its
-// service accounts and workloads from the auth principals. kind narrows it when not empty.
-func (r *Reader) Principals(ctx context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]Principal, bool, error) {
+// Principals lists the principals of an organization by id after the cursor, one page: its members from public.users with their
+// membership, its service accounts and workloads from the auth principals without one. kind narrows it when not empty.
+func (r *Reader) Principals(ctx context.Context, org uuid.UUID, kind string, after *uuid.UUID, limit int) ([]PrincipalOf, bool, error) {
 	var kindArg *string
 	if kind != "" {
 		kindArg = &kind
@@ -352,13 +361,30 @@ func (r *Reader) Principals(ctx context.Context, org uuid.UUID, kind string, aft
 		return nil, false, storeErr("principals", err)
 	}
 	defer rows.Close()
-	var out []Principal
+	var out []PrincipalOf
 	for rows.Next() {
-		var p Principal
-		if err := rows.Scan(&p.ID, &p.Kind, &p.Active, &p.Revision); err != nil {
+		var (
+			p                       Principal
+			mid                     *uuid.UUID
+			role                    *string
+			joined, created, update *time.Time
+			memRevision             int64
+		)
+		if err := rows.Scan(&p.ID, &p.Kind, &p.Active, &p.Revision, &mid, &role, &joined, &created, &update, &memRevision); err != nil {
 			return nil, false, storeErr("principals", err)
 		}
-		out = append(out, p)
+		item := PrincipalOf{Principal: p}
+		if p.Kind == "user" {
+			if mid == nil || created == nil || update == nil {
+				return nil, false, storeErr("principals", errors.New("a user item without its membership row"))
+			}
+			m := Membership{ID: *mid, OrgID: org, PrincipalID: p.ID, JoinedAt: joined, CreatedAt: *created, UpdatedAt: *update, Revision: memRevision}
+			if m.Role, err = r.roleOf(ctx, org, role); err != nil {
+				return nil, false, err
+			}
+			item.Membership = &m
+		}
+		out = append(out, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, storeErr("principals", err)

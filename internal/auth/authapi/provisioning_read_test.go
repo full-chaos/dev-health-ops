@@ -483,6 +483,9 @@ func TestPrincipalAnswerHasOnlyItsFiveMembers(t *testing.T) {
 		}
 		if items, ok := doc["items"].([]any); ok {
 			doc = items[0].(map[string]any)
+			if pair, ok := doc["principal"].(map[string]any); ok {
+				doc = pair
+			}
 		}
 		var keys []string
 		for k := range doc {

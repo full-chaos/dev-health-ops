@@ -143,6 +143,14 @@ func TestReaderOverTheRealSchemasAsTheRuntimeRole(t *testing.T) {
 	if err != nil || more || len(list) != 3 || list[0].Principal.ID != users[0] {
 		t.Fatalf("principals = %+v more=%v err=%v", list, more, err)
 	}
+	for _, item := range list {
+		if item.Principal.Kind != "user" || item.Membership == nil || item.Membership.PrincipalID != item.Principal.ID || item.Membership.OrgID != orgA {
+			t.Fatalf("a user item holds its membership of the organization: %+v", item)
+		}
+	}
+	if list[0].Membership.ID != members[0] || list[0].Membership.Role != "owner" || list[0].Membership.JoinedAt == nil {
+		t.Fatalf("the first user's membership = %+v", list[0].Membership)
+	}
 	list, _, err = reader.Principals(ctx, orgA, "workload", nil, 10)
 	if err != nil || len(list) != 0 {
 		t.Fatalf("workload filter = %+v, %v", list, err)

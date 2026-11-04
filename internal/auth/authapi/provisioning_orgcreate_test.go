@@ -138,7 +138,7 @@ func TestOrgCreateRoutesProfileRows(t *testing.T) {
 			t.Fatalf("%s is not a provisioning route", pattern)
 		}
 	}
-	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles, true); err != nil {
+	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -54,6 +54,7 @@ internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
 internal/auth/contracts/tokencorpus
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
@@ -85,6 +86,7 @@ internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
+internal/authzenforce
 internal/chmigrate
 internal/cigates/bigboyrender
 internal/cli

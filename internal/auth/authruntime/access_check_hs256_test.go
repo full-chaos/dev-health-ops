@@ -21,7 +21,8 @@ import (
 
 // With the hs256_compat class and a token issuer URL set (the workload exchange needs the URL) the session routes
 // run the access check, not the HS256-only path. Every row of the auth-service access table must still pass a valid
-// web (HS256) session token and refuse a tampered one, on the production route sets.
+// web (HS256) session token and refuse a tampered one, on the production route sets; a row with no legacy opt-in
+// refuses the valid one too.
 func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 	cfg := classConfigWith(t, "hs256_compat", map[string]string{"AUTH_SOCIAL_LINK_ROUTES": "true"})
 	dir := t.TempDir()
@@ -83,6 +84,13 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 			body := "{}"
 			if path == authapi.PatternChangePassword {
 				body = `{"current_password":"` + strings.Repeat("a", 24) + `","new_password":"` + strings.Repeat("b", 24) + `"}`
+			}
+			if !row.LegacyHS256 {
+				// A row with no legacy opt-in (POST /oauth/authorize) refuses the HS256 token itself.
+				if status, _ := routeAnswer(t, handler, method, path, body, valid); status != http.StatusUnauthorized {
+					t.Errorf("a valid HS256 web token answers %d on a row with no legacy opt-in, want 401", status)
+				}
+				return
 			}
 			if status, reason := routeAnswer(t, handler, method, path, body, valid); status == http.StatusUnauthorized {
 				t.Errorf("a valid HS256 web token is refused: %d %q", status, reason)

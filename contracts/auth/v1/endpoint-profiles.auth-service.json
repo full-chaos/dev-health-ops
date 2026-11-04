@@ -2434,7 +2434,7 @@
           "algorithm": null,
           "anchor": {
             "line": 203,
-            "note": "func (s *Store) Describe",
+            "note": "csrf, err := newSecret(csrfPrefix)",
             "path": "internal/auth/oauthgrant/store.go"
           },
           "audience": null,

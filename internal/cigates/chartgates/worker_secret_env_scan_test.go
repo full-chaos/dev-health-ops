@@ -32,7 +32,8 @@ import (
 //     func(string) string or func(string) (string, bool), unless it is a non-env holder (nonEnvLookupHolders by package
 //     and identifier, or a redactor word of nonEnvLookupWords). Copies count by their own type, however they are made.
 //
-//   - a function or method that passes one of its string parameters straight to such a lookup (envWrappers).
+//   - a function or method that passes one of its string parameters straight to such a lookup (envWrappers), also
+//     when called through an interface method (or a constraint's) that such a concrete method implements.
 //
 // Any other method never counts, whatever its name or signature.
 // A name that appears only in a comment, or in a file that never looks anything up, is not read.
@@ -116,6 +117,7 @@ var envLookupFuncs = map[string]map[string]bool{
 type envUnit struct {
 	files map[string]*ast.File
 	info  *types.Info
+	pkg   *types.Package
 }
 
 func scanEnvReaders(sources map[string]string) map[string][]string {
@@ -135,7 +137,7 @@ func scanEnvUnits(units []envUnit) map[string][]string {
 			ast.Inspect(file, func(node ast.Node) bool {
 				switch typed := node.(type) {
 				case *ast.CallExpr:
-					lookups = lookups || isEnvLookupCall(unit.info, typed, wrappers)
+					lookups = lookups || isEnvLookupCall(unit, typed, wrappers)
 				case *ast.BasicLit:
 					if typed.Kind == token.STRING {
 						if value, err := strconv.Unquote(typed.Value); err == nil {
@@ -167,8 +169,9 @@ func scanEnvUnits(units []envUnit) map[string][]string {
 }
 
 // isEnvLookupCall reports whether a call's callee is an environment lookup by its object. wrappers holds the functions
-// and methods (by types.Func.FullName) that pass one of their string parameters straight to a lookup.
-func isEnvLookupCall(info *types.Info, call *ast.CallExpr, wrappers map[string]bool) bool {
+// and methods that pass one of their string parameters straight to a lookup.
+func isEnvLookupCall(unit envUnit, call *ast.CallExpr, wrappers *envWrapperSet) bool {
+	info := unit.info
 	var obj types.Object
 	switch fun := ast.Unparen(call.Fun).(type) {
 	case *ast.Ident:
@@ -177,7 +180,7 @@ func isEnvLookupCall(info *types.Info, call *ast.CallExpr, wrappers map[string]b
 		if selection, ok := info.Selections[fun]; ok {
 			if selection.Kind() != types.FieldVal {
 				method, isFunc := selection.Obj().(*types.Func)
-				return isFunc && wrappers[method.FullName()]
+				return isFunc && wrappers.calls(unit.pkg, method)
 			}
 			obj = selection.Obj()
 		} else {
@@ -189,7 +192,7 @@ func isEnvLookupCall(info *types.Info, call *ast.CallExpr, wrappers map[string]b
 		if typed.Pkg() == nil {
 			return false
 		}
-		if wrappers[typed.FullName()] {
+		if wrappers.calls(unit.pkg, typed) {
 			return true
 		}
 		if typed.Signature().Recv() != nil {
@@ -206,12 +209,18 @@ func isEnvLookupCall(info *types.Info, call *ast.CallExpr, wrappers map[string]b
 // to an environment lookup (or to another wrapper): loader.getenv(name) { return loader.Getenv(name) }. A call of a
 // wrapper is a lookup wherever it is, so a file that reads its names through a wrapper method or a helper of another
 // package is a reader. Keys are types.Func.FullName, the same for a package loaded from source and from export data.
-func envWrappers(units []envUnit) map[string]bool {
-	wrappers := map[string]bool{}
+// Only non-test files define wrappers: a test fake that implements a product interface must not make every call
+// through that interface a read.
+func envWrappers(units []envUnit) *envWrapperSet {
+	set := &envWrapperSet{keys: map[string]bool{}, reach: map[*types.Package]map[string]*types.Package{}}
+	wrappers := set.keys
 	for changed := true; changed; {
 		changed = false
 		for _, unit := range units {
-			for _, file := range unit.files {
+			for path, file := range unit.files {
+				if strings.HasSuffix(path, "_test.go") {
+					continue
+				}
 				for _, decl := range file.Decls {
 					fn, ok := decl.(*ast.FuncDecl)
 					if !ok || fn.Body == nil {
@@ -232,12 +241,15 @@ func envWrappers(units []envUnit) map[string]bool {
 					}
 					ast.Inspect(fn.Body, func(node ast.Node) bool {
 						call, ok := node.(*ast.CallExpr)
-						if !ok || wrappers[obj.FullName()] || !isEnvLookupCall(unit.info, call, wrappers) {
+						if !ok || wrappers[obj.FullName()] || !isEnvLookupCall(unit, call, set) {
 							return true
 						}
 						for _, arg := range call.Args {
-							if id, ok := ast.Unparen(arg).(*ast.Ident); ok && params[unit.info.Uses[id]] {
+							if id, ok := ast.Unparen(arg).(*ast.Ident); ok && params[unit.info.Uses[id]] && !wrappers[obj.FullName()] {
 								wrappers[obj.FullName()], changed = true, true
+								if obj.Signature().Recv() != nil {
+									set.methods = append(set.methods, obj)
+								}
 							}
 						}
 						return true
@@ -246,7 +258,84 @@ func envWrappers(units []envUnit) map[string]bool {
 			}
 		}
 	}
-	return wrappers
+	return set
+}
+
+// envWrapperSet holds the wrappers by types.Func.FullName and the concrete wrapper methods, so a call through an
+// interface method (a named or literal interface, an embedded one, a type parameter's constraint) that a concrete
+// wrapper method implements counts too.
+type envWrapperSet struct {
+	keys    map[string]bool
+	methods []*types.Func
+	reach   map[*types.Package]map[string]*types.Package
+}
+
+func (w *envWrapperSet) calls(caller *types.Package, fn *types.Func) bool {
+	if w.keys[fn.FullName()] {
+		return true
+	}
+	recv := fn.Signature().Recv()
+	if recv == nil {
+		return false
+	}
+	iface, ok := recv.Type().Underlying().(*types.Interface)
+	if !ok {
+		return false
+	}
+	for _, method := range w.methods {
+		if method.Name() != fn.Name() {
+			continue
+		}
+		for _, concrete := range w.concreteTypes(caller, method) {
+			if types.Implements(concrete, iface) || types.Satisfies(concrete, iface) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// concreteTypes is the receiver type of a wrapper method and its pointer, from the caller's own type universe when the
+// caller's import graph holds the method's package (the same objects the interface was checked against), and from the
+// method's own universe.
+func (w *envWrapperSet) concreteTypes(caller *types.Package, method *types.Func) []types.Type {
+	recv := method.Signature().Recv().Type()
+	if ptr, ok := recv.(*types.Pointer); ok {
+		recv = ptr.Elem()
+	}
+	named, ok := types.Unalias(recv).(*types.Named)
+	if !ok || named.TypeParams().Len() > 0 || named.Obj().Pkg() == nil {
+		return nil
+	}
+	out := []types.Type{named, types.NewPointer(named)}
+	if pkg := w.reachable(caller)[named.Obj().Pkg().Path()]; pkg != nil && pkg != named.Obj().Pkg() {
+		if obj, ok := pkg.Scope().Lookup(named.Obj().Name()).(*types.TypeName); ok {
+			out = append(out, obj.Type(), types.NewPointer(obj.Type()))
+		}
+	}
+	return out
+}
+
+func (w *envWrapperSet) reachable(caller *types.Package) map[string]*types.Package {
+	if caller == nil {
+		return nil
+	}
+	if seen, ok := w.reach[caller]; ok {
+		return seen
+	}
+	seen := map[string]*types.Package{}
+	queue := []*types.Package{caller}
+	for len(queue) > 0 {
+		pkg := queue[0]
+		queue = queue[1:]
+		if _, done := seen[pkg.Path()]; done {
+			continue
+		}
+		seen[pkg.Path()] = pkg
+		queue = append(queue, pkg.Imports()...)
+	}
+	w.reach[caller] = seen
+	return seen
 }
 
 // isStringLookup reports whether a type is, or is a named type or alias of, func(string) string or
@@ -333,7 +422,8 @@ func checkSources(sources map[string]string) []envUnit {
 		if strings.HasSuffix(key.name, "_test") {
 			path += "_test"
 		}
-		units = append(units, envUnit{files: files, info: im.check(path, files)})
+		info := im.check(path, files)
+		units = append(units, envUnit{files: files, info: info, pkg: im.done[path]})
 	}
 	return units
 }
@@ -405,7 +495,7 @@ func loadRealEnvTree(root string) {
 				}
 				files[filepath.ToSlash(rel)] = file
 			}
-			realEnvTree.units = append(realEnvTree.units, envUnit{files: files, info: pkg.TypesInfo})
+			realEnvTree.units = append(realEnvTree.units, envUnit{files: files, info: pkg.TypesInfo, pkg: pkg.Types})
 		}
 	}
 	realEnvTree.elapsed = time.Since(start)
@@ -545,6 +635,35 @@ func TestWorkerSecretKeyReaderScanPackages(t *testing.T) {
 			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/envutil\"\nfunc f() string { return envutil.Read(\"SOME_KEY\") }\n",
 			"internal/y/y.go":             "package y\nimport \"" + mod + "/internal/envutil\"\nfunc g() string { return envutil.Hash(\"OTHER_KEY\") }\n",
 		}, "internal/x/x.go", true},
+		// The r2 review of CHAOS-12688: a wrapper method called through an interface it implements.
+		{"V14-wrapper-through-an-interface-selector", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V15-wrapper-through-an-interface-method-expression", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return Getter.Lookup(g, \"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V16-wrapper-through-an-embedded-interface", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\ntype Holder struct{ Getter }\nfunc f(h Holder) string { return h.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V17-wrapper-through-a-generic-constraint", map[string]string{
+			"internal/x/env.go": "package x\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go": "package x\nfunc f[T interface{ Lookup(string) string }](t T) string { return t.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V18-wrapper-through-an-interface-of-another-package", map[string]string{
+			"internal/envimpl/env.go": "package envimpl\nimport \"os\"\ntype Env struct{}\nfunc (Env) Lookup(name string) string { return os.Getenv(name) }\n",
+			"internal/x/use.go":       "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", true},
+		{"V19-interface-implemented-only-by-a-non-wrapper", map[string]string{
+			"internal/x/reg.go": "package x\ntype Registry struct{}\nfunc (Registry) Lookup(kind string) string { return kind }\n",
+			"internal/x/use.go": "package x\ntype Getter interface{ Lookup(string) string }\nfunc f(g Getter) string { return g.Lookup(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
+		{"V20-test-fake-of-an-interface-is-no-wrapper", map[string]string{
+			"internal/x/x_test.go": "package x\ntype fakeConn struct{ lookupAnswer func(string) string }\nfunc (f fakeConn) Query(q string) string { return f.lookupAnswer(q) }\n",
+			"internal/x/use.go":    "package x\ntype Conn interface{ Query(string) string }\nfunc f(c Conn) string { return c.Query(\"SOME_KEY\") }\n",
+		}, "internal/x/use.go", false},
 		{"V11-getenv-of-a-resolved-non-env-package", map[string]string{
 			"internal/fakeenv/fakeenv.go": "package fakeenv\nfunc Getenv(name string) string { return name }\n",
 			"internal/x/x.go":             "package x\nimport \"" + mod + "/internal/fakeenv\"\nfunc f() string { return fakeenv.Getenv(\"SOME_KEY\") }\n",

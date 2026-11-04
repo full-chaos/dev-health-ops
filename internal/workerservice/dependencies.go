@@ -751,7 +751,7 @@ func (component workerProcessComponent) Errors() <-chan error {
 func (component workerProcessComponent) Start(ctx context.Context) error {
 	if component.presence != nil {
 		if err := retryPresenceStart(ctx, component, component.presence.Start); err != nil {
-			return err
+			return postgres.MaskUnreachable(err)
 		}
 	}
 	started := make([]lifecycle.Component, 0, len(component.components))
@@ -774,7 +774,7 @@ func (component workerProcessComponent) Start(ctx context.Context) error {
 					rollback = append(rollback, stopErr)
 				}
 			}
-			return errors.Join(err, errors.Join(rollback...))
+			return errors.Join(postgres.MaskUnreachable(err), errors.Join(rollback...))
 		}
 		started = append(started, child)
 	}

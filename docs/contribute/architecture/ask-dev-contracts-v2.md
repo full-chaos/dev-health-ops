@@ -8,7 +8,7 @@ source_of_truth:
   - contracts/ask-dev/v2/
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
   - Amendment PRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
-applicability: removed-surface
+applicability: current
 lifecycle: deprecated
 deprecated_by: /admin/ask-dev/
 ---

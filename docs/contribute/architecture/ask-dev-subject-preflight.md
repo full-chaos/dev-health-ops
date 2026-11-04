@@ -5,7 +5,7 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
-applicability: removed-surface
+applicability: current
 lifecycle: deprecated
 deprecated_by: /admin/ask-dev/
 ---

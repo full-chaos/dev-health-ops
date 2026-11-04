@@ -8,7 +8,7 @@ source_of_truth:
   - internal/apiservice/admin/llmreadinessprobe.go
   - internal/apiservice/admin/settings.go
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
-applicability: removed-surface
+applicability: current
 lifecycle: deprecated
 deprecated_by: /admin/ask-dev/
 ---

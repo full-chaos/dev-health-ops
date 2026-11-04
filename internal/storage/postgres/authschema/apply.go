@@ -89,10 +89,6 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
-	// OrgsOwned is the organizations-owned switch (AUTH_ORGS_OWNED): the runtime
-	// role holds OrganizationWriteGrants on public.organizations. Off, it holds
-	// no UPDATE there, and the grants pass revokes any it held.
-	OrgsOwned bool
 	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.
@@ -114,7 +110,8 @@ type Options struct {
 	// thing ALTER FUNCTION OWNER needs); see applyPushLifecycleWriter.
 	PushLifecycleWriterRole string
 	// PushLifecycleCallerRoles are the logins that may execute that function:
-	// go-api's, and no other. Required when PushLifecycleWriterRole is set.
+	// go-api's login and the worker domain login that runs the expiry sweeper
+	// (CHAOS-12828), and no other. Required when PushLifecycleWriterRole is set.
 	PushLifecycleCallerRoles []string
 	// LockTimeout bounds how long one migration's transaction waits for a
 	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.

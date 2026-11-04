@@ -189,15 +189,15 @@ func TestReadinessProbeUnboundedParamStaysInvalidRequest(t *testing.T) {
 	}
 }
 
-func TestReadinessProbeSecondBadRequestAfterRetryFails(t *testing.T) {
+func TestReadinessProbeUnboundedRefusalAfterADropFails(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{
-		"temperature":         paramRefusal("temperature", "unsupported_value"),
-		"parallel_tool_calls": paramRefusal("parallel_tool_calls", "unsupported_parameter"),
+		"temperature": paramRefusal("temperature", "unsupported_value"),
+		"tools":       paramRefusal("tools", "unsupported_parameter"),
 	})
 	outcome, code := readinessProbeOver(f, "future-model-x")
 	wantInvalidRequest(t, outcome, code)
 	if got := len(f.snapshot()); got != 2 {
-		t.Fatalf("requests = %d, want 2 (one refused, one retry, then stop)", got)
+		t.Fatalf("requests = %d, want 2 (one dropped, then a refusal that cannot be dropped)", got)
 	}
 }
 
@@ -298,9 +298,9 @@ func TestReadinessProbeLogsOneInfoLinePerFailedRoundWithoutTheKey(t *testing.T) 
 	res := detailProberOver(logger).probeDetail(context.Background(), "openai", "future-model-x", f.server.URL+"/v1", key)
 	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	lines := infoLines(buf.String())
 	if len(lines) != 1 {
-		t.Fatalf("log lines = %d, want 1:\n%s", len(lines), buf.String())
+		t.Fatalf("info log lines = %d, want 1:\n%s", len(lines), buf.String())
 	}
 	if strings.Contains(buf.String(), key) || strings.Contains(buf.String(), f.server.URL) {
 		t.Fatalf("the log line carries the key or the base URL: %s", lines[0])
@@ -318,16 +318,26 @@ func TestReadinessProbeLogsOneInfoLinePerFailedRoundWithoutTheKey(t *testing.T) 
 	}
 }
 
+func infoLines(logs string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if strings.Contains(line, `"level":"INFO"`) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 func TestReadinessProbeLogsEachRefusedAttemptWithItsRound(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{
-		"temperature":         paramRefusal("temperature", "unsupported_value"),
-		"parallel_tool_calls": paramRefusal("parallel_tool_calls", "unsupported_parameter"),
+		"temperature": paramRefusal("temperature", "unsupported_value"),
+		"tools":       paramRefusal("tools", "unsupported_parameter"),
 	})
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	res := detailProberOver(logger).probeDetail(context.Background(), "openai", "future-model-x", f.server.URL, "test-key")
 	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	lines := infoLines(buf.String())
 	if len(lines) != 2 {
 		t.Fatalf("log lines = %d, want 2 (refused attempt, refused retry):\n%s", len(lines), buf.String())
 	}
@@ -340,7 +350,7 @@ func TestReadinessProbeLogsEachRefusedAttemptWithItsRound(t *testing.T) {
 			t.Fatalf("line %d round/attempt = %v/%v", i, entry["round"], entry["attempt"])
 		}
 	}
-	if !reflect.DeepEqual(res.DroppedParams, []string{"temperature"}) && !reflect.DeepEqual(res.DroppedParams, []string{"parallel_tool_calls"}) {
+	if !reflect.DeepEqual(res.DroppedParams, []string{"temperature"}) {
 		t.Fatalf("DroppedParams = %v, want exactly the one dropped before the second refusal", res.DroppedParams)
 	}
 }

@@ -1,6 +1,11 @@
 package llmbudget
 
-import "sort"
+import (
+	"sort"
+	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 var catalogProviders = []string{"anthropic", "gemini", "openai", "qwen"}
 
@@ -33,5 +38,29 @@ func CatalogModels(provider string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// unsupportedRequestParams are the request parameters a model family refuses,
+// by provider and model-name prefix. A model with no row accepts what its
+// caller sends today.
+var unsupportedRequestParams = []struct {
+	provider, prefix string
+	params           []string
+}{
+	{"openai", "gpt-6", []string{"temperature", "reasoning_effort"}},
+}
+
+// UnsupportedRequestParams are the request parameters the model is known to
+// refuse, so a caller leaves them off its first request.
+func UnsupportedRequestParams(provider, model string) []string {
+	p := pythonparity.Lower(pythonparity.Strip(provider))
+	m := pythonparity.Lower(pythonparity.Strip(model))
+	var out []string
+	for _, row := range unsupportedRequestParams {
+		if row.provider == p && strings.HasPrefix(m, row.prefix) {
+			out = append(out, row.params...)
+		}
+	}
 	return out
 }

@@ -22,7 +22,7 @@ var (
 	fbMigrate  = "registry.example/auth-migrate@sha256:" + strings.Repeat("c", 64)
 	fbIdp      = "idpstub-fb/idpstub:run0123456789abcd"
 	fbNS       = "authfb-0a1b2c3d"
-	fbToken    = "0123456789abcdef" // gitleaks:allow
+	fbToken    = "0123456789abcdef"
 	fbPodCIDR  = "10.42.0.0/24"
 	fbGoodEnvs = []string{
 		"AUTH_FB_IMAGE_DHO=" + fbDho, "AUTH_FB_IMAGE_SERVICE=" + fbService, "AUTH_FB_IMAGE_MIGRATE=" + fbMigrate,
@@ -147,7 +147,12 @@ func TestFlipbackSSOK3sRefusesAKubeconfigThatIsNotNamespaceScopedOrNotThisRuns(t
 	if res.code == 0 || !strings.Contains(res.stderr, "does not carry this run's token") || strings.Contains(calls, "helm ") {
 		t.Errorf("another run's token: exit %d, stderr %q, calls:\n%s", res.code, res.stderr, calls)
 	}
-	res, calls = fbRun(t, append(append([]string{}, fbGoodEnvs...), "STUB_TOKEN="+fbToken, "STUB_PERMISSIVE=1")) // gitleaks:allow
+	// The next call is the one that passes every check of the script: a namespace scoped kubeconfig (can-i answers no) that carries
+	// this run's token. STUB_PERMISSIVE lets the stub kubectl answer the install steps, so the install must be reached and the
+	// script must not name the token in its refusal text. The token is a fixture, 16 hex digits, written into the stub kubeconfig
+	// only; the .gitleaksignore rows for this file name the fixture const and this call by line.
+	// Keep this call on the line its row names.
+	res, calls = fbRun(t, append(append([]string{}, fbGoodEnvs...), "STUB_TOKEN="+fbToken, "STUB_PERMISSIVE=1"))
 	if strings.Contains(res.stderr, "token") || !strings.Contains(calls, "helm upgrade --install") {
 		t.Errorf("a scoped kubeconfig with this run's token never reached the install: stderr %q, calls:\n%s", res.stderr, calls)
 	}

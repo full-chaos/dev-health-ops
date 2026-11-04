@@ -440,7 +440,7 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 		if route.PublicClass {
 			routeInFlight = publicInFlight
 		}
-		handler := routeChain(route, options, logger, write, routeInFlight, answers)
+		handler := routeChain(route, options, logger, write, routeInFlight)
 		// A GET pattern also matches HEAD in net/http's mux; a path with
 		// its own HEAD route sends HEAD there instead (the more specific
 		// pattern). With ExplicitHead the GET route itself refuses HEAD as
@@ -540,16 +540,19 @@ func buildHandler(options ServerOptions, logger *slog.Logger, answers *shutdownA
 	}
 	observer := newAccessObserver(logger, listener, options.TrustRemoteSampling, options.SeedRequestSeries)
 	observer.attrs = options.AccessAttrs
-	return RequestIDWith(accept)(observer.wrap(RecoverWith(logger, "<unrouted>", write)(handler))), nil
+	// One shutdown guard wraps everything below the request id and the access
+	// observer, so a route handler, a 404 or 405 refusal, a catch-all, a slash
+	// redirect and a middleware all read the same closed state: a request still
+	// inside, or arriving after, the drain deadline is answered 503.
+	return RequestIDWith(accept)(observer.wrap(answers.guard(RecoverWith(logger, "<unrouted>", write)(handler)))), nil
 }
 
 // routeChain wraps one route's handler. Order is deliberate: rate limiting is
 // the cheapest rejection and runs first, then the body bound (which can reject
 // on Content-Length without reading anything), then the deadline, then the
 // route's own panic recovery closest to the handler so the log line names the
-// real pattern. The shutdown guard (answers; nil is none) wraps them all, so a
-// request still in the chain when the drain budget runs out is answered 503.
-func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}, answers *shutdownAnswers) http.Handler {
+// real pattern.
+func routeChain(route Route, options ServerOptions, logger *slog.Logger, write ErrorWriter, inFlight chan struct{}) http.Handler {
 	if route.ErrorWriter != nil {
 		write = route.ErrorWriter
 	}
@@ -582,10 +585,9 @@ func routeChain(route Route, options ServerOptions, logger *slog.Logger, write E
 	// Outermost, so a request the route's own rate limit or body bound
 	// refuses is still counted against the route it addressed.
 	pattern := route.Pattern
-	inner := answers.guard(handler)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recordRoute(r, pattern)
-		inner.ServeHTTP(w, r)
+		handler.ServeHTTP(w, r)
 	})
 }
 

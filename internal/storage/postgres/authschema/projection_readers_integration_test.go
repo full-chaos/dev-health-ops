@@ -30,9 +30,9 @@ func projectionViolations(t *testing.T, ctx context.Context, env *authFixture, r
 	return found
 }
 
-// A projection reader (the worker login that runs the acr reconcile) may SELECT exactly the six columns of the
+// A projection reader (the worker login that runs the acr and External Push reconciles) may SELECT exactly the eight columns of the
 // credential projection the reader needs, column-level, and nothing else in the auth schema: it reads no other
-// table, no other column, and cannot write, truncate or create (CHAOS-11199).
+// table, no other column, and cannot write, truncate or create (CHAOS-11199, CHAOS-10897).
 func TestProjectionReaderRolesReadExactlyTheProjectionColumns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -41,13 +41,14 @@ func TestProjectionReaderRolesReadExactlyTheProjectionColumns(t *testing.T) {
 	if _, err := Apply(ctx, env.migration, projectionOptions(env, reader)); err != nil {
 		t.Fatalf("Apply with a projection reader: %v", err)
 	}
-	if err := readerStatement(ctx, pool, `SELECT domain_owner, organization_id, external_reference, revision, status, expires_at
+	if err := readerStatement(ctx, pool, `SELECT domain_owner, organization_id, external_reference, revision, status, expires_at, scopes, source_id
 		FROM auth.credential_projection WHERE domain_owner = 'acr' ORDER BY external_reference`); err != nil {
 		t.Fatalf("the reader cannot read its columns: %v", err)
 	}
 	for _, refused := range []string{
 		`SELECT fingerprint FROM auth.credential_projection`,
-		`SELECT scopes FROM auth.credential_projection`,
+		`SELECT terminal_at FROM auth.credential_projection`,
+		`SELECT principal_id FROM auth.credential_projection`,
 		`SELECT owner_subject FROM auth.credential_projection`,
 		`SELECT * FROM auth.credential_projection`,
 		`SELECT id FROM auth.sessions`,
@@ -88,7 +89,8 @@ func TestProjectionReaderRolesReadExactlyTheProjectionColumns(t *testing.T) {
 	}
 	rows.Close()
 	want := "credential_projection.domain_owner:SELECT,credential_projection.expires_at:SELECT,credential_projection.external_reference:SELECT," +
-		"credential_projection.organization_id:SELECT,credential_projection.revision:SELECT,credential_projection.status:SELECT"
+		"credential_projection.organization_id:SELECT,credential_projection.revision:SELECT,credential_projection.scopes:SELECT," +
+		"credential_projection.source_id:SELECT,credential_projection.status:SELECT"
 	if strings.Join(columns, ",") != want {
 		t.Errorf("the reader's column grants = %v, want %s", columns, want)
 	}

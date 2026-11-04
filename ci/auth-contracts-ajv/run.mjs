@@ -140,6 +140,7 @@ const PINNED_INVENTORY = {
 const APPROVED_REVOKED = [
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
 ];
 const APPROVED_AUDIT = [

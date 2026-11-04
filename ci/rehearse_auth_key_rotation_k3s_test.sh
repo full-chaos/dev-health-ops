@@ -15,21 +15,34 @@ echo "kubectl $*" >> "${FAKE_LOG}"
 case "$*" in
   *"version -o json"*) printf '{"serverVersion":{"gitVersion":"%s"}}\n' "${FAKE_VERSION:-v1.30.2+k3s1}" ;;
   *"auth can-i --list"*) [ -z "${FAKE_CAN_I_EMPTY:-}" ] || exit 0
+EOS
+# shellcheck disable=SC2129
+cat >>"${T}/bin/kubectl" <<'EOS'
     printf '%s\n' "${FAKE_CAN_I_HEADER:-Resources                                       Non-Resource URLs   Resource Names   Verbs}" \
     'selfsubjectreviews.authentication.k8s.io        []                  []               [create]' \
     'selfsubjectaccessreviews.authorization.k8s.io   []                  []               [create]' \
+EOS
+# shellcheck disable=SC2129
+cat >>"${T}/bin/kubectl" <<'EOS'
     'selfsubjectrulesreviews.authorization.k8s.io    []                  []               [create]' \
     '                                                [/api/*]            []               [get]' \
     '                                                [/healthz]          []               [get]' \
+EOS
+# shellcheck disable=SC2129
+cat >>"${T}/bin/kubectl" <<'EOS'
     "namespaces                                      []                  [${REHEARSAL_NAMESPACE:-authrot-test}]   [get]"
     [ -z "${FAKE_CAN_I_EXTRA:-}" ] || printf '%s\n' "${FAKE_CAN_I_EXTRA}" ;;
   *"auth can-i list nodes"*) echo "${FAKE_CAN_I_NODES:-no}" ;;
 EOS
+# shellcheck disable=SC2129
 cat >>"${T}/bin/kubectl" <<'EOS'
   *"auth can-i create clusterroles"*) echo "${FAKE_CAN_I_CLUSTERROLES:-no}" ;;
   *"config view"*) printf '%s' "${FAKE_SERVER:-https://127.0.0.1:6443}" ;;
   *"--ignore-not-found -o name"*) printf '%s' "${FAKE_EXISTING:-}" ;;
   *"get configmap rehearsal-owner"*) printf '%s' "${FAKE_OWNER_TOKEN-0123456789abcdef0123}" ;;
+EOS
+# shellcheck disable=SC2129
+cat >>"${T}/bin/kubectl" <<'EOS'
   *"get namespace "*) if [ -n "${FAKE_NS_DENIED:-}" ]; then echo 'Error from server (Forbidden): namespaces is forbidden' >&2; exit 1; fi; printf '%s' "${FAKE_NS_LABEL-0123456789abcdef0123}" ;;
   *) exit 98 ;;
 esac

@@ -42,12 +42,14 @@ func TestPushLifecycleWriterProvisioningWithANonSuperuserMigrator(t *testing.T) 
 	runtimeRole, _ := containers.RoleName("pw_runtime", instance)
 	writerRole, _ := containers.RoleName("pw_writer", instance)
 	callerRole, _ := containers.RoleName("pw_caller", instance)
+	peerRole, _ := containers.RoleName("pw_peer", instance)
 	database, _ := containers.DatabaseName(instance.URI)
 	const password = "writer-test-not-a-real-credential"
 	for _, s := range []string{
 		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
 		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
 		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(callerRole)), password),
+		fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(mustValidatedIdentifier(peerRole))),
 		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
 		fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s, %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(runtimeRole)), Quote(mustValidatedIdentifier(callerRole))),
 	} {
@@ -56,7 +58,7 @@ func TestPushLifecycleWriterProvisioningWithANonSuperuserMigrator(t *testing.T) 
 		}
 	}
 	t.Cleanup(func() {
-		for _, role := range []string{writerRole, callerRole, runtimeRole, migrationRole} {
+		for _, role := range []string{writerRole, callerRole, peerRole, runtimeRole, migrationRole} {
 			containers.DropRole(admin, role, t.Logf)
 		}
 	})
@@ -66,7 +68,7 @@ func TestPushLifecycleWriterProvisioningWithANonSuperuserMigrator(t *testing.T) 
 	}
 	t.Cleanup(mig.Close)
 	options := Options{Schema: "auth", RuntimeRole: runtimeRole, SessionReaderRoles: []string{callerRole},
-		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{callerRole}}
+		PushLifecycleWriterRole: writerRole, PushLifecycleCallerRoles: []string{callerRole, peerRole}}
 
 	t.Run("a missing writer role stops the run and names the step", func(t *testing.T) {
 		_, err := Apply(ctx, mig, options)

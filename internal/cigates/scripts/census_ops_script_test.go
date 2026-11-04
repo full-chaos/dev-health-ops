@@ -1,5 +1,3 @@
-//go:build !race
-
 package scripts_test
 
 import (
@@ -14,7 +12,7 @@ import (
 // the -timeout from cigates_go_test_timeout, the same function the hosted legs use, so a caller never relies on the default.
 // --print-cmd prints the go test argv and runs nothing; the cells read that line, never a clock.
 
-const censusOpsWant = "go test -count=1 -timeout 20m ./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/..."
+const censusOpsWant = "go test -mod=readonly -trimpath -count=1 -timeout 20m ./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/..."
 
 // censusOpsLine: check_go.sh prints its module list before any verb runs; the verb line is the last one.
 func censusOpsLine(s string) string {

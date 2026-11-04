@@ -194,7 +194,7 @@ var attributeVocabulary = map[string][]string{
 	"decision_reason_code": {
 		"allowed_by_membership_default", "allowed_by_repository_grant", "allowed_by_role", "delegation_invalid", "grant_absent",
 		"grant_expired", "grant_revoked", "impersonation_denied", "invalid_request", "membership_inactive", "no_membership",
-		"org_mismatch", "organization_inactive", "platform_role_absent", "principal_inactive", "repository_not_granted",
+		"org_mismatch", "organization_inactive", "platform_role_absent", "principal_inactive", "repository_allowlist_too_large", "repository_not_granted",
 		"resource_mismatch", "role_lacks_action", "role_scope_mismatch", "role_unknown", "service_account_inactive",
 		"unknown_action", "workload_action_denied", "workload_audience_denied",
 	},

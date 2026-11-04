@@ -6,5 +6,7 @@
   "step 48 exit": "1",
   "step 48 stdout": "Error: Password validation failed: Password must be at least 12 characters long\n",
   "step 50 exit": "1",
-  "step 50 stdout": "Error: Password validation failed: Password must be no more than 72 bytes long\n"
+  "step 50 stdout": "Error: Password validation failed: Password must be no more than 72 bytes long\n",
+  "step 63 exit": "2",
+  "step 63 stdout": ""
 }

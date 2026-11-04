@@ -601,8 +601,6 @@ These four blocks are derived from `alerts/rules.yml` and are not yet imported. 
   }
 }
 ```
-||||||| parent of c16d9c0c3e (feat(signoz): add the auth service SLO dashboard and its guard)
-
 
 ## Auth service SLO dashboard
 

@@ -5,8 +5,9 @@ content_type: architecture
 owner: engineering
 source_of_truth:
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
-applicability: current
-lifecycle: active
+applicability: removed-surface
+lifecycle: deprecated
+deprecated_by: /admin/ask-dev/
 ---
 
 # Ask Dev subject preflight
@@ -17,7 +18,9 @@ subject that the catalog cannot confirm stops the run: no status, change,
 metric, or evidence tool executes without an exact, committed subject.
 {: .fc-page-lede }
 
-> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+!!! warning "Deprecated: records a removed surface"
+    **Status:** Deprecated. This page records the design of the Python Ask Dev surface (`/api/v1/dev`), which the Go api does not serve. Ask Dev now runs in the Ask Dev service and is called by the browser, and it is not turned on in production today.
+    **Replacement:** [Turn on Ask Dev](../../admin/ask-dev/index.md) and [Ask a question and read the answer](../../use/ask-dev/index.md).
 
 This page describes the runtime behavior CHAOS-3292 introduced. The wire
 contracts it produces are described in

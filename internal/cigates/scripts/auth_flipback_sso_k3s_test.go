@@ -326,3 +326,24 @@ func TestFlipbackSSOK3sPortForwardIsADirectKubectlWithoutTheSlotFd(t *testing.T)
 		t.Errorf("pf_stop does not wait for the killed port-forward")
 	}
 }
+
+func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), fbScript))
+	for _, want := range []string{
+		// go-api's session issue token needs an auth-session-issuer row of internal_service_credentials, held in its own Secret
+		"service-credentials create --service auth-session-issuer --scope sessions:issue",
+		"secretName: session-issue",
+		"put_secret session-issue AUTH_SESSION_ISSUE_TOKEN",
+		// the verb reads the owner DSN, not the API login
+		`name: "MIGRATION_DATABASE_URI"`,
+		// RELEASE is readonly: the barrier gets it through env, after the superseded pods are gone
+		"barrier() { no_terminating_pods; env RELEASE=",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the script lacks %q", want)
+		}
+	}
+	if strings.Contains(text, "AUTH_SESSION_ISSUE_TOKEN: \"%s\"") {
+		t.Errorf("the secrets values still carry a random AUTH_SESSION_ISSUE_TOKEN go-api cannot present")
+	}
+}

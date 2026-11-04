@@ -134,13 +134,13 @@ var (
 	rbExprHead      = regexp.MustCompile(`^(\w+)(?: by \(([\w, ]+)\))? ?\(`)
 	rbExprThreshold = regexp.MustCompile(`(>|==) (\d+)$`)
 	rbExprMatcher   = regexp.MustCompile(`(\w+)(=~|=)"([^"]*)"`)
-	rbExprMetric    = regexp.MustCompile(`dev_health_\w+`)
+	rbExprMetric    = regexp.MustCompile(`dev_?health_\w+`)
 	rbBlockHead     = regexp.MustCompile("(?s)```json\n(.*?)\n```")
 )
 
 // rbMatcherKeys maps a label of the rule text to its builder filter key (the
 // scrape's service label is the resource attribute service.name).
-var rbMatcherKeys = map[string]string{"limit": "limit", "check": "check", "service": "service.name"}
+var rbMatcherKeys = map[string]string{"limit": "limit", "check": "check", "service": "service.name", "class": "class", "outcome": "outcome"}
 
 // rbRequiredKeys are the keys whose zero value is legal JSON, so a decode into
 // the struct cannot tell a missing key from a written zero.
@@ -210,18 +210,24 @@ func rbDuration(g *guard, name, field, got, want string) {
 }
 
 func runbookBuilderRulesMatchRules(g *guard) {
-	text := g.read(valkeyRunbook)
+	runbookBuilderRulesMatch(g, valkeyRunbook, rbWants)
+}
+
+// runbookBuilderRulesMatch pins every import block of one runbook page against
+// alerts/rules.yml and the builder table of that page.
+func runbookBuilderRulesMatch(g *guard, runbook string, wants []rbWant) {
+	text := g.read(runbook)
 	imports := map[string]rbRule{}
 	for _, m := range rbBlockHead.FindAllStringSubmatch(text, -1) {
 		var r rbRule
 		dec := json.NewDecoder(bytes.NewReader([]byte(m[1])))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&r); err != nil {
-			g.failf("an import JSON block in %s does not parse (no unknown field is allowed): %v", valkeyRunbook, err)
+			g.failf("an import JSON block in %s does not parse (no unknown field is allowed): %v", runbook, err)
 			continue
 		}
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
-			g.failf("the import JSON block of %s in %s has text after its JSON value", r.Alert, valkeyRunbook)
+			g.failf("the import JSON block of %s in %s has text after its JSON value", r.Alert, runbook)
 			continue
 		}
 		for _, missing := range rbMissingKeys(m[1]) {
@@ -232,8 +238,8 @@ func runbookBuilderRulesMatchRules(g *guard) {
 		}
 		imports[r.Alert] = r
 	}
-	g.expect(len(imports) == len(rbWants), "the runbook imports %d rules, want %d", len(imports), len(rbWants))
-	for _, want := range rbWants {
+	g.expect(len(imports) == len(wants), "the runbook imports %d rules, want %d", len(imports), len(wants))
+	for _, want := range wants {
 		name, imp := want.alert, imports[want.alert]
 		if imp.Alert == "" {
 			g.failf("the runbook has no import JSON for %s", name)
@@ -272,6 +278,8 @@ func runbookBuilderRulesMatchRules(g *guard) {
 			timeAgg = "increase"
 		case strings.Contains(expr, "rate("):
 			timeAgg = "rate"
+		case outer == "min_over_time":
+			timeAgg, outer = "min", "min"
 		}
 		metric := ""
 		if m := exprMetricName.FindStringSubmatch(expr); m != nil {

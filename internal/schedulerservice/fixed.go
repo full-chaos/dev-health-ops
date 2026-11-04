@@ -115,6 +115,7 @@ func buildFixedScheduleProducers(
 		schedulerfixed.NewDimensionFoldProducer(),
 		schedulerfixed.NewLLMBudgetStaleProducer(),
 		schedulerfixed.NewProviderRevocationsProducer(),
+		schedulerfixed.NewPushExpirySweepProducer(),
 		retention,
 		remainingFanout,
 		scheduledReports,

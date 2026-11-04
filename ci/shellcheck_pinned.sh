@@ -152,6 +152,8 @@ FILES=(
   "${ROOT}/ci/auth_rotation_probe_test.sh"
   "${ROOT}/ci/rehearse_auth_key_rotation.sh"
   "${ROOT}/ci/rehearse_auth_key_rotation_test.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_k3s.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_k3s_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"

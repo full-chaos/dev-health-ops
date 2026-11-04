@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 // Surface is the wire contract this vocabulary mirrors
@@ -100,27 +102,13 @@ var provisioningAggregates = map[string]Aggregate{
 type changeMember struct {
 	enum     []string
 	pattern  string
+	maxBytes int
 	array    bool
 	minItems int
 	maxItems int
 }
 
 var wireTimestampPattern = `^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$`
-
-// resourceKeyPattern is the looser form of the repository key: "*", or 2-20
-// segments of 1-100 key characters. The segment grammar and the 255-byte bound
-// are the grant store's (internal/auth/repokey). The group repeat is unrolled
-// because RE2 refuses a bounded repeat nested in a repeat past 1000 copies.
-var resourceKeyPattern = looseKeyPattern()
-
-func looseKeyPattern() string {
-	const segment = `[a-z0-9._-]{1,100}`
-	nest := ""
-	for i := 0; i < 18; i++ {
-		nest = "(?:/" + segment + nest + ")?"
-	}
-	return `^(?:\*|` + segment + nest + `/` + segment + `)$`
-}
 
 var provisioningChangeMembers = map[string]changeMember{
 	"status":             {enum: []string{"active", "disabled", "suspended", "pending", "removed", "revoked", "expired", "accepted"}},
@@ -132,7 +120,7 @@ var provisioningChangeMembers = map[string]changeMember{
 	"provider":           {pattern: `^[a-z][a-z0-9_-]{1,31}$`},
 	"audiences":          {array: true, minItems: 1, maxItems: 16, pattern: `^[a-z][a-z0-9._:-]{0,63}$`},
 	"resource_type":      {enum: []string{"organization", "repository"}},
-	"resource_key":       {pattern: resourceKeyPattern},
+	"resource_key":       {pattern: repokey.SchemaPattern, maxBytes: repokey.MaxBytes},
 	"action_set":         {array: true, minItems: 1, maxItems: 64, pattern: `^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)+$`},
 	"effect":             {enum: []string{"allow", "deny"}},
 	"expires_at":         {pattern: wireTimestampPattern},
@@ -292,6 +280,9 @@ func checkChangeMember(name string, value any) error {
 	}
 	if !memberPattern[name].MatchString(text) {
 		return fmt.Errorf("%q is outside the pattern", text)
+	}
+	if rule.maxBytes > 0 && len(text) > rule.maxBytes {
+		return fmt.Errorf("is %d bytes; at most %d", len(text), rule.maxBytes)
 	}
 	if name == "expires_at" || name == "revoked_before" {
 		if _, err := time.Parse(time.RFC3339Nano, text); err != nil {

@@ -805,6 +805,8 @@ var operationSpecs = map[string]OperationSpec{
 	// declarations, so each takes investmentBreakdown's spec unchanged.
 	"investmentBreakdownTeam":       investmentBreakdownSpec(),
 	"investmentBreakdownRepository": investmentBreakdownSpec(),
+	// CHAOS-13017: acr's work-item team breakdown, the same body under its own name.
+	"teamWorkItemBreakdown": investmentBreakdownSpec(),
 	// CHAOS-8104's dedicated browser document selects only the persisted
 	// quality means grouped by the supplied investment dimension. Keep its
 	// input distinct from investmentBreakdown: the operation would otherwise

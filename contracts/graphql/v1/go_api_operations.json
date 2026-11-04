@@ -390,6 +390,10 @@
     "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0"
   },
   {
+    "operation": "teamWorkItemBreakdown",
+    "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8"
+  },
+  {
     "operation": "testOpsCoverage",
     "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09"
   },

@@ -213,7 +213,7 @@ says nothing about whether a new binary is the one that was measured: re-run `dh
 <!-- BEGIN GENERATED GO API OPERATIONS -->
 _Rendered against main merge-base `28adf8cd326b3f7bf99adc3e6568ac7ada46c006`; SDL digest pin `sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c`; fleet read 2026-10-15T21:07:21Z via docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
 
-_query-api serves all **66** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
+_query-api serves all **67** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
 
 ### Per REST endpoint

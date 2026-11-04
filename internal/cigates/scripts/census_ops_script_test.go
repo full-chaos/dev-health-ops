@@ -2,6 +2,7 @@ package scripts_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,8 +23,40 @@ func censusOpsLine(s string) string {
 
 func censusOps(t *testing.T, checkGo string, args ...string) cmdResult {
 	t.Helper()
-	env := inheritedEnv(nil, "DEV_HEALTH_GO_CACHE="+t.TempDir(), "GIT_CONFIG_GLOBAL="+os.DevNull)
+	return censusOpsEnv(t, checkGo, nil, args...)
+}
+
+func censusOpsEnv(t *testing.T, checkGo string, extra []string, args ...string) cmdResult {
+	t.Helper()
+	env := inheritedEnv(nil, append([]string{"DEV_HEALTH_GO_CACHE=" + t.TempDir(), "GIT_CONFIG_GLOBAL=" + os.DevNull}, extra...)...)
 	return freeSpec{dir: rootOf(t), env: env}.run("bash", append([]string{checkGo, "census-ops"}, args...)...)
+}
+
+// censusFakeGo puts a go on PATH that records every `test` and `list` call with its GOENV and GOFLAGS and answers `test` with
+// success; every other subcommand goes to the real go. It returns the PATH entry and the call log, so no cell runs the census.
+func censusFakeGo(t *testing.T) (pathEnv, logFile string) {
+	t.Helper()
+	real, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, logDir := t.TempDir(), t.TempDir()
+	logFile = filepath.Join(logDir, "calls")
+	script := "#!/bin/bash\ncase \"$1\" in test|list) printf '%s GOENV=%s GOFLAGS=%s argv=%s\\n' \"$1\" \"${GOENV-unset}\" \"${GOFLAGS-unset}\" \"$*\" >>" + logFile + " ;; esac\n" +
+		"if [ \"$1\" = test ]; then exit 0; fi\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + dir + string(os.PathListSeparator) + os.Getenv("PATH"), logFile
+}
+
+func censusGoCalls(t *testing.T, logFile string) string {
+	t.Helper()
+	b, err := os.ReadFile(logFile)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func TestCensusOpsPrintsTheCensusCommandWithTheCigatesTimeout(t *testing.T) {
@@ -47,9 +80,38 @@ func TestCensusOpsTakesTheTimeoutFromTheCigatesFunction(t *testing.T) {
 
 func TestCensusOpsRefusesAnythingButPrintCmd(t *testing.T) {
 	t.Parallel()
-	res := censusOps(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), "--bogus")
-	if res.code == 0 || !strings.Contains(res.stderr, "census-ops accepts only an optional --print-cmd") {
-		t.Fatalf("census-ops --bogus: rc=%d stderr=%q, want a refusal naming --print-cmd", res.code, res.stderr)
+	pathEnv, logFile := censusFakeGo(t)
+	for _, args := range [][]string{{"--bogus"}, {"--print-cmd", "extra"}} {
+		res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv}, args...)
+		if res.code == 0 || !strings.Contains(res.stderr, "census-ops accepts only an optional --print-cmd") {
+			t.Fatalf("census-ops %v: rc=%d stderr=%q, want a refusal naming --print-cmd", args, res.code, res.stderr)
+		}
+		if calls := censusGoCalls(t, logFile); calls != "" {
+			t.Fatalf("census-ops %v refused but ran go: %q", args, calls)
+		}
+	}
+}
+
+func TestCensusOpsPrintCmdRunsNoGoTestOrList(t *testing.T) {
+	t.Parallel()
+	pathEnv, logFile := censusFakeGo(t)
+	res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv}, "--print-cmd")
+	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != "" || censusOpsLine(res.stdout) != censusOpsWant {
+		t.Fatalf("census-ops --print-cmd: rc=%d stdout=%q stderr=%q go test/list calls=%q, want rc 0, %q and no call", res.code, res.stdout, res.stderr, calls, censusOpsWant)
+	}
+}
+
+func TestCensusOpsRunsGoTestWithGoenvOff(t *testing.T) {
+	t.Parallel()
+	pathEnv, logFile := censusFakeGo(t)
+	goenv := filepath.Join(t.TempDir(), "goenv")
+	if err := os.WriteFile(goenv, []byte("GOFLAGS=-run=^$\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := censusOpsEnv(t, filepath.Join(rootOf(t), "ci", "check_go.sh"), []string{pathEnv, "GOENV=" + goenv})
+	want := "test GOENV=off GOFLAGS=unset argv=" + strings.TrimPrefix(censusOpsWant, "go ") + "\n"
+	if calls := censusGoCalls(t, logFile); res.code != 0 || calls != want {
+		t.Fatalf("census-ops with a GOENV file: rc=%d stderr=%q go calls=%q, want exactly %q", res.code, res.stderr, calls, want)
 	}
 }
 

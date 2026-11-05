@@ -33,7 +33,7 @@ func TestTypeSafeIsSavableOnlyAsTheCategorizeOverrideWithAListedModelAndNoBaseUR
 		"investigate override":   {"typesafe", llmorgsettings.PurposeInvestigate, true, "jev-1.13.0", nil, "provider_not_for_purpose"},
 		"explain override":       {"typesafe", llmorgsettings.PurposeExplain, true, "jev-1.13.0", nil, "provider_not_for_purpose"},
 		"categorize ok":          {"typesafe", cat, true, "jev-1.13.0", nil, ""},
-		"categorize empty url":   {"typesafe", cat, true, "jev-1.13.0", url(""), ""},
+		"categorize empty url":   {"typesafe", cat, true, "jev-1.13.0", url(""), "invalid_base_url"},
 		"categorize spelled":     {" TYPESAFE ", cat, true, "jev-1.13.0", nil, ""},
 		"categorize latest":      {"typesafe", cat, true, "jev-latest", nil, llmorgsettings.CodeCategorizeBYOModelUnsupported},
 		"categorize preview":     {"typesafe", cat, true, "jev-preview", nil, llmorgsettings.CodeCategorizeBYOModelUnsupported},

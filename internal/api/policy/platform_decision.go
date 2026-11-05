@@ -21,13 +21,22 @@ const platformNamespace = "admin"
 // ErrPlatformDecisionUnavailable is HoldsPlatform's error when the decision point gave no verdict.
 var ErrPlatformDecisionUnavailable = errors.New("policy: platform decision unavailable")
 
+// ErrPlatformLegacyCredential is HoldsPlatform's error for a caller the decision point cannot judge (a legacy HS256
+// token) while the admin cell is on: its platform actions are never judged locally under enforcement.
+var ErrPlatformLegacyCredential = errors.New("policy: platform action refused for a legacy credential under enforcement")
+
+const (
+	legacyCredentialReason = "legacy_credential"
+	legacyCredentialDetail = "Platform actions need a user access token while authorization is enforced"
+)
+
 // platformDecisions answers the platform questions of one request from the decision point. The guard installs it
 // when the admin cell is on; each action is asked at most once per request.
 type platformDecisions struct {
 	enforcer *Enforcer
 	bearer   string
-	// judged is false for a caller the decision point cannot judge (a legacy HS256 token): it keeps the local set,
-	// as its route keeps the legacy answer.
+	// judged is false for a caller the decision point cannot judge (a legacy HS256 token): its platform questions
+	// are refused (ErrPlatformLegacyCredential), never answered from go-api's own set.
 	judged bool
 	mu     sync.Mutex
 	held   map[string]bool
@@ -46,6 +55,10 @@ func (d *platformDecisions) holds(ctx context.Context, action string) (bool, err
 	if !rule.PlatformOf(action).Has(action) {
 		return false, nil
 	}
+	if !d.judged {
+		d.enforcer.logger.WarnContext(ctx, "api enforcement: a platform question of a legacy credential is refused", slog.String("action", action))
+		return false, ErrPlatformLegacyCredential
+	}
 	d.mu.Lock()
 	held, known := d.held[action]
 	d.mu.Unlock()
@@ -61,23 +74,23 @@ func (d *platformDecisions) holds(ctx context.Context, action string) (bool, err
 }
 
 // HoldsPlatform reports whether the caller holds the platform action now. With the admin enforcement cell on it is
-// the decision point's answer for this request, so a cross-org read or write is decided by the platform action only;
-// with the cell off, or for a caller the decision point cannot judge, it is user.Holds. On an error the handler
-// refuses with WritePlatformDecisionUnavailable.
+// the decision point's answer for this request, so a cross-org read or write is decided by the platform action only,
+// and a caller the decision point cannot judge is refused (ErrPlatformLegacyCredential). With the cell off it is
+// user.Holds. On an error the handler refuses with WritePlatformDecisionRefusal.
 func HoldsPlatform(ctx context.Context, user *User, action string) (bool, error) {
 	d, _ := ctx.Value(platformDecisionsKey).(*platformDecisions)
-	if d == nil || !d.judged {
+	if d == nil {
 		return user.Holds(action), nil
 	}
 	return d.holds(ctx, action)
 }
 
 // PlatformBypassesOrg reports whether a platform action stands in for organization power (a caller who is no admin
-// of the organization acts as one). With the admin enforcement cell on it never does for a caller the decision point
-// judges: cross-org organization access stays refused until the open question on superuser access without a
-// membership is answered. With the cell off it is user.Holds.
+// of the organization acts as one). With the admin enforcement cell on it never does: cross-org organization access
+// stays refused until the open question on superuser access without a membership is answered. With the cell off it
+// is user.Holds.
 func PlatformBypassesOrg(ctx context.Context, user *User, action string) bool {
-	if d, _ := ctx.Value(platformDecisionsKey).(*platformDecisions); d != nil && d.judged {
+	if d, _ := ctx.Value(platformDecisionsKey).(*platformDecisions); d != nil {
 		return false
 	}
 	return user.Holds(action)
@@ -90,9 +103,16 @@ func WithPlatformDecider(ctx context.Context, decider pep.Decider, bearer string
 		enforcer: &Enforcer{decider: decider, timeout: enforceDefaultTimeout, logger: slog.Default()}, bearer: bearer, judged: true})
 }
 
-// WritePlatformDecisionUnavailable answers a request whose platform decision could not be had: a 503 with a retry
-// hint, as an enforced route that gets no verdict.
-func WritePlatformDecisionUnavailable(w http.ResponseWriter) {
+// WritePlatformDecisionRefusal answers a request whose platform question HoldsPlatform refused: a legacy credential
+// under enforcement is a 403 with reason_code legacy_credential; no verdict is a 503 with a retry hint, as an
+// enforced route that gets none.
+func WritePlatformDecisionRefusal(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrPlatformLegacyCredential) {
+		detail := ErrorDetail(legacyCredentialDetail)
+		detail.Set("reason_code", legacyCredentialReason)
+		WriteDetail(w, http.StatusForbidden, detail, nil)
+		return
+	}
 	WriteDetail(w, http.StatusServiceUnavailable, enforceUnavailableDetail, http.Header{"Retry-After": []string{enforceRetryAfter}})
 }
 

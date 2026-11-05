@@ -36,7 +36,7 @@ func (h handlers) requirePlatformRole(next http.Handler) http.Handler {
 		if policy.ImpersonationFrom(r.Context()) == nil {
 			var err error
 			if held, err = policy.HoldsPlatform(r.Context(), user, policy.ActionAdminTelemetry); err != nil {
-				policy.WritePlatformDecisionUnavailable(w)
+				policy.WritePlatformDecisionRefusal(w, err)
 				return
 			}
 		}

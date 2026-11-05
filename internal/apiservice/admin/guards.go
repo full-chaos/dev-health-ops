@@ -19,7 +19,7 @@ import (
 func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID, targetUserID uuid.UUID) bool {
 	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminUsers)
 	if err != nil {
-		policy.WritePlatformDecisionUnavailable(w)
+		policy.WritePlatformDecisionRefusal(w, err)
 		return false
 	}
 	if held {
@@ -67,7 +67,7 @@ func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWrit
 func orgIDForNonSuperuser(ctx context.Context, w http.ResponseWriter, user *policy.User) (string, bool) {
 	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminUsers)
 	if err != nil {
-		policy.WritePlatformDecisionUnavailable(w)
+		policy.WritePlatformDecisionRefusal(w, err)
 		return "", false
 	}
 	if held {

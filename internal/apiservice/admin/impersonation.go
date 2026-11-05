@@ -320,7 +320,7 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	held, err := policy.HoldsPlatform(r.Context(), user, policy.ActionAdminImpersonate)
 	if err != nil {
-		policy.WritePlatformDecisionUnavailable(w)
+		policy.WritePlatformDecisionRefusal(w, err)
 		return
 	}
 	if !held {

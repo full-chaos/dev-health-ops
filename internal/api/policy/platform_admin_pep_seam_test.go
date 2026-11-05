@@ -91,7 +91,7 @@ func seamEcho(action string) http.Handler {
 		user := UserFrom(r.Context())
 		first, err := HoldsPlatform(r.Context(), user, action)
 		if err != nil {
-			WritePlatformDecisionUnavailable(w)
+			WritePlatformDecisionRefusal(w, err)
 			return
 		}
 		second, err := HoldsPlatform(r.Context(), user, action)
@@ -271,20 +271,35 @@ func TestHoldsPlatformKeepsTheLocalSetWithTheAdminCellOff(t *testing.T) {
 	}
 }
 
-// A caller the decision point cannot judge (a legacy HS256 token) keeps go-api's own answers, as its route keeps
-// the legacy answer.
-func TestHoldsPlatformKeepsTheLocalSetForAnHS256Caller(t *testing.T) {
-	decider := &countingDecider{inner: pepfake.New()}
-	store := newStore()
-	store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-	guard := NewGuard(authenticator(t, store), quiet())
-	guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), "admin"))
-	got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, superClaims))
-	if got.status != 200 || got.body != "platform=true bypass=true" {
-		t.Fatalf("%d %q, want 200 platform=true bypass=true", got.status, got.body)
-	}
-	if singles, batches := decider.counts(); singles+batches != 0 {
-		t.Fatalf("%d questions, want none", singles+batches)
+const legacyCredentialBody = `{"detail":{"message":"` + legacyCredentialDetail + `","reason_code":"legacy_credential"}}`
+
+// With the admin cell on, a caller the decision point cannot judge (a legacy HS256 token) is refused its platform
+// questions with a 403 legacy_credential, never answered from go-api's own set; with the cell off its answers are the
+// local set.
+func TestHoldsPlatformRefusesAnHS256CallerWithTheAdminCellOn(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		cell   []string
+		status int
+		body   string
+	}{
+		{"admin cell on", []string{"admin"}, http.StatusForbidden, legacyCredentialBody},
+		{"admin cell off", []string{"teams"}, http.StatusOK, "platform=true bypass=true"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminTelemetry))}
+			store := newStore()
+			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
+			guard := NewGuard(authenticator(t, store), quiet())
+			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell...))
+			got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, superClaims))
+			if got.status != c.status || got.body != c.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			}
+			if singles, batches := decider.counts(); singles+batches != 0 {
+				t.Fatalf("%d questions, want none", singles+batches)
+			}
+		})
 	}
 }
 

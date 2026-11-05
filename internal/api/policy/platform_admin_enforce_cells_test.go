@@ -359,20 +359,21 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerWithTheCellOff(t *testing.T) {
 	}
 }
 
-// A legacy HS256 bearer is a caller the decision point cannot judge: the legacy answer stands and the request is
-// counted unjudged by route (answers-10852-2). Enforce turn-on waits for this count to reach 0 (F2).
-func TestPlatformAdminRowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
+// A legacy HS256 bearer is a caller the decision point cannot judge: the route is counted unjudged by route
+// (answers-10852-2) and keeps the legacy route checks, but with the admin cell on the platform wrap's own question is
+// refused (403 legacy_credential), never answered from go-api's superuser flag.
+func TestPlatformAdminRowsRefuseAnHS256CallerWithTheAdminCellOn(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
-			pdp := newTestPDP(t, denyWith("platform_role_absent"))
+			pdp := newTestPDP(t, allowAll)
 			store := newStore()
 			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
 			guard := NewGuard(authenticator(t, store), quiet())
 			guard.SetEnforcer(productionEnforcer(t, pdp, "admin"))
 			got := serveCell(platformAdminMux(guard), pattern, bearer(t, superClaims))
-			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("HS256 superuser: %d %q, %d PDP calls, counted %v; want the legacy 200, 0, none", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			if got.status != http.StatusForbidden || got.body != legacyCredentialBody || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
+				t.Fatalf("HS256 superuser: %d %q, %d PDP calls, counted %v; want 403 %q, 0, none", got.status, got.body, len(pdp.calls()), rec.snapshot(), legacyCredentialBody)
 			}
 			if !slices.Equal(rec.unjudgedSnapshot(), []string{pattern + "/" + enforceUnjudgedHS256}) {
 				t.Fatalf("unjudged %v, want [%s/%s]", rec.unjudgedSnapshot(), pattern, enforceUnjudgedHS256)

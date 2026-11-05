@@ -149,3 +149,24 @@ func TestPDPAction_ImpersonationStatusIsTheDecisionPointsAdminImpersonate(t *tes
 		t.Errorf("pdp allows, flag off: %d %q, want the lookup's 400", w.Code, w.Body.String())
 	}
 }
+
+// Where 6.10 meets the selection-only org rule: with the admin cell on, an admin of the token's org A who holds
+// members.manage there, asking about the members of another org B named in the path, is refused, whatever go-api's
+// own superuser flag says: no platform action stands in for an admin membership in B.
+func TestPDPAction_TokenOrgAdminIsRefusedAnotherPathOrg(t *testing.T) {
+	tokenOrg, pathOrg := uuid.New(), uuid.New()
+	decider := pepfake.New(pepfake.Rule{PrincipalReference: pdpBearer, Action: "members.manage", ResourceType: "organization",
+		ResourceKey: tokenOrg.String(), OrganizationID: tokenOrg.String(), TenantScope: tokenOrg.String()})
+	for _, superuser := range []bool{false, true} {
+		h, reads := newPlatformHandlers()
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/orgs/"+pathOrg.String()+"/members", nil)
+		r.SetPathValue("org_id", pathOrg.String())
+		user := &policy.User{ID: uuid.New(), UserID: uuid.NewString(), OrgID: tokenOrg.String(), Role: "admin", IsSuperuser: superuser}
+		ctx := policy.WithUser(policy.WithPlatformDecider(context.Background(), decider, pdpBearer), user)
+		h.listMembers(w, r.WithContext(ctx))
+		if w.Code != http.StatusForbidden || *reads != 0 {
+			t.Errorf("superuser %v: %d %q, store reached %d times; want 403 and no list read", superuser, w.Code, w.Body.String(), *reads)
+		}
+	}
+}

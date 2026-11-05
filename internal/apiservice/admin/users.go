@@ -158,7 +158,7 @@ func (h *handlers) listUsers(w http.ResponseWriter, r *http.Request) {
 	if xOrgID == "" {
 		held, decisionErr := policy.HoldsPlatform(ctx, user, policy.ActionAdminUsers)
 		if decisionErr != nil {
-			policy.WritePlatformDecisionUnavailable(w)
+			policy.WritePlatformDecisionRefusal(w, decisionErr)
 			return
 		}
 		holdsAdminUsers = held
@@ -382,7 +382,7 @@ func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *
 	if raw == "" {
 		held, err := policy.HoldsPlatform(ctx, caller, policy.ActionAdminUsers)
 		if err != nil {
-			policy.WritePlatformDecisionUnavailable(w)
+			policy.WritePlatformDecisionRefusal(w, err)
 			return uuid.Nil, false
 		}
 		if held {

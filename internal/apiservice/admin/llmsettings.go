@@ -386,6 +386,16 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apiKey == nil || *apiKey == "" {
+			changed, err := h.purposeProviderChangeNeedsKey(ctx, orgID, purpose, *provider)
+			if err != nil {
+				h.internalError(ctx, w, "check llm purpose key", err)
+				return
+			}
+			if changed {
+				writeValidation(w, pybody.Errors{pydanticValueError([]pyjson.Value{"body", "api_key"}, nil,
+					"api_key is required when the provider changes: the stored key belongs to the other provider")})
+				return
+			}
 			need, err := h.purposeNeedsKey(ctx, orgID, purpose, *provider)
 			if err != nil {
 				h.internalError(ctx, w, "check llm purpose key", err)
@@ -478,7 +488,7 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // transaction that a refusal or a failed response rolls back. The route and the
 // operator verb both run it.
 func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := clefRefusal(in.provider, "", false, "", nil); refusal != nil {
+	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""

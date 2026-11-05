@@ -181,6 +181,19 @@ The generic `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL` overrides do not apply
 to this client. Give `TYPESAFE_API_KEY` only to the worker group that runs
 `investment.materialize`.
 
+An organization that opts in to categorization on its own model can also choose
+TypeSafe with its own key: the categorize override of the LLM settings with
+provider `typesafe`, a model from the closed list (`jev-1.13.0`; `jev-latest`,
+`jev-preview` and other ids are refused) and the org's TypeSafe key. That
+backend does not read the `TYPESAFE_*` variables. It takes no base URL, because
+the endpoint `https://api.typesafe.ai/v1/systemone` is fixed in code, and a
+saved base URL is refused. Only the categorize override can name `typesafe`.
+The default row and the investigate and explain overrides refuse it. A change
+of the override's provider needs a new key. The org's calls are priced at USD
+0.042 per million input tokens (output is not billed). The rows carry the
+provider `byo-typesafe` and the credential source `org`. A refused or failed
+call is never served by the platform model.
+
 How to give it to that group only:
 
 - **Helm:** every worker group loads the shared ConfigMap and the shared

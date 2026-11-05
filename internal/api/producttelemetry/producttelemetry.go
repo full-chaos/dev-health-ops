@@ -29,7 +29,7 @@ import (
 // eventNames is TelemetryEventName, in declaration order.
 var eventNames = []string{
 	"page_viewed", "feature_viewed", "filter_changed", "chart_interacted", "navigation_interacted",
-	"guide_opened", "session_started", "session_ended", "client_error",
+	"guide_opened", "session_started", "session_ended", "client_error", "ask_dev_interacted",
 }
 
 const (

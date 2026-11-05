@@ -1,0 +1,12 @@
+{
+  "contract_version": 1,
+  "correlation_id": "fixed-schedule:external_push_expiry_sweep:2026-11-03T12:00:00Z",
+  "idempotency_key": "external-push-expiry-sweep:2026-11-03T12:00:00Z",
+  "domain": {
+    "type": "schedule_occurrence",
+    "id": "7b1e4c2a-3d5f-5a6b-9c8d-0e1f2a3b4c5d"
+  },
+  "payload": {
+    "scheduled_for": "2026-11-03T12:00:00Z"
+  }
+}

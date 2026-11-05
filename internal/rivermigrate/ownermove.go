@@ -42,7 +42,7 @@ func parseOwnerMoveArgs(args []string, stderr io.Writer) (ownermove.Options, err
 	planOnly := flags.Bool("plan", false, "read the catalog only and print the counts line: no ALTER and no lock")
 	apply := flags.Bool("apply", false, "make the changes; without -apply or -plan the run alters inside a transaction and rolls it back")
 	restore := flags.Bool("restore", false, "the rollback: -to may be any role")
-	if err := flags.Parse(args); err != nil {
+	if err := cli.ParseFlagsError(flags, stderr, args); err != nil {
 		return ownermove.Options{}, err
 	}
 	if flags.NArg() != 0 {

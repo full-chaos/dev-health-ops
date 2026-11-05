@@ -152,6 +152,8 @@ FILES=(
   "${ROOT}/ci/auth_rotation_probe_test.sh"
   "${ROOT}/ci/rehearse_auth_key_rotation.sh"
   "${ROOT}/ci/rehearse_auth_key_rotation_test.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_k3s.sh"
+  "${ROOT}/ci/rehearse_auth_key_rotation_k3s_test.sh"
   # tracked scripts CI never linted, added because they are already clean
   # under the pin -- verified, not assumed
   "${ROOT}/ci/aggregate_gate_results.sh"
@@ -160,6 +162,8 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   # CHAOS-11670: the shared set (roots, tested package) both corpus scripts source.
   "${ROOT}/ci/auth_corpus_set.sh"
+  # go-api's workload session issue credential, sourced by the corpus and the rotation rehearsal.
+  "${ROOT}/ci/lib/auth_workload_session_issue.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
   # CHAOS-12702: the auth side of the web live e2e (auth-service as a bare process).

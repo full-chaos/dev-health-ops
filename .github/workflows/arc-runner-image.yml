@@ -53,6 +53,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || ((github.ref == 'refs/heads/main' || github.event_name == 'merge_group') && github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
 
+# CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
+env:
+  GOPROXY: https://proxy.golang.org|direct
+
 permissions:
   contents: read
 
@@ -298,6 +302,19 @@ jobs:
             shellcheck --version > "${RUNNER_TEMP}/shellcheck-version.txt"
           cat "${RUNNER_TEMP}/shellcheck-version.txt"
           grep -qx 'version: 0.11.0' "${RUNNER_TEMP}/shellcheck-version.txt"
+
+      # CHAOS-12962: the race legs run cigates/scripts tests that need helm. A build
+      # that lost helm fails here; the version is compared with the Dockerfile pin.
+      - name: Check helm inside the built image
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 \
+            ghcr.io/full-chaos/arc-runner:check \
+            helm version --short > "${RUNNER_TEMP}/helm-version.txt"
+          cat "${RUNNER_TEMP}/helm-version.txt"
+          want="$(sed -n 's/^ARG HELM_VERSION=//p' docker/arc-runner/Dockerfile)"
+          test -n "${want}"
+          grep -q "^${want}+g" "${RUNNER_TEMP}/helm-version.txt"
 
       - name: Determine whether this build is main's current head
         # CHAOS-5166: this job now routes to the ARC pool (self-hosted leg

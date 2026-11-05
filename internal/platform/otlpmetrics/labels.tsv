@@ -1,5 +1,6 @@
 instrument	labels	reason
 auth.acr.access_mints	audience,outcome	code: internal/auth/acrmint/acrmint.go
+auth.client_addr.proofs	outcome,route	code: internal/auth/clientaddr/proof.go
 auth.api.session_route_outcomes	operation,reason_code,result	code: internal/auth/authapi/wire.go
 auth.entitlement.outcomes	outcome	code: internal/auth/entitlement/entitlement.go
 auth.identity.external_links	action,outcome	code: internal/auth/identity/store.go
@@ -10,6 +11,7 @@ auth.oidc.outcomes	outcome,reason,route	code: internal/auth/identity/oidc/servic
 auth.org.mutations	outcome,verb	code: internal/auth/org/store.go
 auth.org.deprovisions	outcome	code: internal/auth/orgdeprovision/deprovision.go
 auth.provisioning.compat_credential_uses	operation	code: internal/auth/authapi/provisioning.go
+auth.publicread.unknown_role		code: internal/auth/publicread/publicread.go
 auth.invite.mutations	outcome,verb	code: internal/auth/invite/store.go
 auth.local.reset_request_skipped	reason	code: internal/auth/identity/local/linkaudit.go
 auth.membership.mutations	outcome,verb	code: internal/auth/membership/store.go
@@ -20,6 +22,7 @@ auth.session.refresh_exchanges	reason_code	code: internal/auth/session/store.go
 auth.serviceaccount.key_resolves	outcome	code: internal/auth/serviceaccount/keys.go
 auth.serviceaccount.mutations	outcome,verb	code: internal/auth/serviceaccount/store.go
 auth.session.revocations	reason	code: internal/auth/session/store.go
+auth.session.revocation_to_refusal_seconds		code: internal/auth/authapi/revocation_lag.go
 auth.social.outcomes	operation,provider,reason_code	code: internal/auth/identity/social/service.go
 auth.workload.exchanges	audience,outcome,reason,subject	code: internal/auth/workloadexchange/reasons.go
 auth.workload.mutations	outcome,verb	code: internal/auth/workload/store.go
@@ -34,11 +37,13 @@ devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/ll
 devhealth_acr_svc_acr_compat_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_accepted_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/workloadauth.go
+devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
+dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
@@ -50,6 +55,7 @@ dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcount
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
+dev_health_auth_orgs_owned_ignored		code: internal/platform/removedenv/removedenv.go
 devhealth_api_session_mail_sends_total	outcome,purpose	code: internal/api/session/sendqueue.go
 devhealth_auth_linkmail_sends_total	outcome,purpose	code: internal/auth/linkmail/linkmail.go
 devhealth_auth_credential_projection_total	domain,outcome	code: internal/auth/outboxprojection/project.go
@@ -66,6 +72,8 @@ devhealth_auth_decision_cache_lookups_total	result	code: internal/auth/authapi/a
 devhealth_auth_decision_cache_puts_total	result	code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_decision_cache_entries		code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
+devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go
@@ -173,6 +181,11 @@ workgraph_issue_pr_fallback_pull_request_issue_side_rows_total		code: internal/j
 dev_health_ai_impact_linkage_unavailable_total		code: internal/jobs/metrics/aiimpact/metrics.go
 dev_health_api_rate_limit_rejections_total	limit	code: internal/auth/httpapi/hitstore.go
 dev_health_api_rate_limit_store_errors_total	limit	code: internal/auth/httpapi/hitstore.go
+dev_health_authz_enforcement_decisions_total	namespace,outcome,service	code: internal/api/policy/enforcecounters.go
+dev_health_authz_enforcement_unjudged_total	reason,route	code: internal/api/policy/enforcecounters.go
+dev_health_authz_enforcement_config_invalid	service	code: internal/apiservice/enforcer.go
+dev_health_authz_enforcement_enabled	namespace,service	code: internal/authzenforce/authzenforce.go
+dev_health_authz_enforcement_ignored_items	service	code: internal/authzenforce/authzenforce.go
 dev_health_benchmarking_nonfinite_percentile_inputs_total		code: internal/jobs/metrics/daily/benchmarking/nonfinite.go
 dev_health_benchmarking_rows_written_total	org_scoped	code: internal/jobs/metrics/daily/benchmarking/metrics.go
 dev_health_cicd_duplicate_natural_key_total	dataset,provider,table	code: internal/providerfoundation/budget.go
@@ -298,6 +311,7 @@ devhealth_scheduler_zero_planned_occurrences_total		code: internal/scheduler/syn
 devhealth_sync_coverage_cache_invalidations_consumed_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_coverage_cache_invalidations_emitted_total	provider	code: internal/jobruntime/telemetry.go
 devhealth_sync_run_zero_unit_finalizations_total	provider,reason	code: internal/jobruntime/telemetry.go
+external_push_expiry_sweep_tokens_total	outcome	code: internal/jobs/pushexpiry/handler.go
 fixed_scheduler_cold_starts_total	schedule	code: internal/scheduler/fixed/loop.go
 fixed_scheduler_consecutive_failures		code: internal/scheduler/fixed/loop.go
 fixed_scheduler_failures_total		code: internal/scheduler/fixed/loop.go

@@ -10,11 +10,11 @@ func (e Entry) Key() string {
 }
 
 var Allowlist = []Entry{
-	// go-api organization writers, pre-existing. auth-service writes only new rows (the births below) and, with AUTH_ORGS_OWNED, name and is_active.
+	// go-api organization writers, pre-existing. auth-service writes only new rows (the births below).
 	{File: "internal/api/billing/subscription.go", Func: "handlers.syncOrgLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/subscriptionhooks.go", Func: "handlers.revokeLicense", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/billing/webhook.go", Func: "handlers.persistLicense", Table: "public.organizations", Verb: "UPDATE"},
-	{File: "internal/api/orgs/orgs_owned.go", Func: "handlers.ownUpdateSQL", Table: "public.organizations", Verb: "UPDATE"},
+	{File: "internal/api/orgs/orgs.go", Func: "handlers.updateOwnOrg", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/api/session/changepassword.go", Func: "handlers.changePassword", Table: "public.users", Verb: "UPDATE"},
 	{File: "internal/api/session/invites.go", Func: "handlers.acceptInvite", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/api/session/linktokens.go", Func: "deleteLinkTokens", Table: "public.email_verification_tokens", Verb: "DELETE"},
@@ -135,8 +135,13 @@ var Allowlist = []Entry{
 	{File: "internal/auth/session/end_org.go", Func: "Store.EndOrganizationInTx", Table: "public.refresh_tokens", Verb: "UPDATE"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Begin", Table: "auth.sso_flow_states", Verb: "INSERT"},
 	{File: "internal/auth/identity/oidc/flowstore.go", Func: "PGFlowStore.Consume", Table: "auth.sso_flow_states", Verb: "UPDATE"},
-	{File: "internal/auth/identity/organization.go", Func: "Store.insertOrganization", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/identity/organization.go", Func: "Store.updateOrganization", Table: "auth.organizations", Verb: "UPDATE"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureOrganizationIn", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "EnsureUserIn", Table: "auth.users", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertOrganizationSQL", Table: "auth.organizations", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertPrincipalSQL", Table: "auth.principals", Verb: "INSERT"},
+	{File: "internal/auth/copyproject/copyproject.go", Func: "InsertUserSQL", Table: "auth.users", Verb: "INSERT"},
 	// acp ruling, CHAOS-12032 (D6515): go-api's provider failure record (recordSSOFailure) by the OAuth and SAML sign-ins: last_error, last_error_at and updated_at, never the status, one transaction with the audit row.
 	{File: "internal/auth/identity/ssoaudit/ssoaudit.go", Func: "PGProviderFailure.Failed", Table: "public.sso_providers", Verb: "UPDATE"},
 	// D6534 (ticket 12118): go-api's success record (finishSSOLogin) by the OIDC, OAuth and SAML sign-ins: last_login_at and updated_at, one transaction with the audit row.
@@ -181,8 +186,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "auth.invites", Verb: "UPDATE"},
 	{File: "internal/auth/invite/orgrevocation.go", Func: "Store.ApplyRevokeAll", Table: "public.org_invites", Verb: "UPDATE"},
 	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "auth.organizations", Verb: "UPDATE"},
-	// AUTH_ORGS_OWNED (CHAOS-12275, answers-10992-plan-v2): auth-service keeps go-api's name and is_active equal in the verb's commit.
-	{File: "internal/auth/org/deprovision.go", Func: "Store.ApplySuspend", Table: "public.organizations", Verb: "UPDATE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.bootstrapApply", Table: "auth.platform_role_assignments", Verb: "INSERT"},
 	{File: "internal/auth/platformrole/store.go", Func: "Store.Grant", Table: "auth.platform_role_assignments", Verb: "INSERT"},
@@ -192,8 +195,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/platformrole/owner.go", Func: "Store.RevokeOwner", Table: "auth.platform_role_assignments", Verb: "DELETE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.principals", Verb: "UPDATE"},
 	{File: "internal/auth/identity/store.go", Func: "Store.applyProjectionChange", Table: "auth.users", Verb: "UPDATE"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.principals", Verb: "INSERT"},
-	{File: "internal/auth/identity/store.go", Func: "Store.insertProjection", Table: "auth.users", Verb: "INSERT"},
 	// The signing-key rotation operator (auth-migrate keys, migration role): key states, and the sessions a compromise revokes.
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.refresh_credentials", Verb: "UPDATE"},
 	{File: "internal/auth/keyrotation/store.go", Func: "Operator.revokeSessions", Table: "auth.sessions", Verb: "UPDATE"},
@@ -224,6 +225,9 @@ var Allowlist = []Entry{
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.revokeKeyOnce", Table: "auth.credential_registry", Verb: "UPDATE"},
+	// CHAOS-12680 (pm answers-12680-1 Q1 (b)): an organization deprovision revokes the organization's service-account keys
+	// in its own audit.Commit.
+	{File: "internal/auth/orgdeprovision/keys.go", Func: "keyPlan.apply", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.principals", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.Create", Table: "auth.service_accounts", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/store.go", Func: "Store.disableOnce", Table: "auth.principals", Verb: "UPDATE"},
@@ -254,7 +258,6 @@ var Allowlist = []Entry{
 	{File: "internal/auth/workload/bootstrap_lifecycle.go", Func: "Store.RotateBootstrap", Table: "auth.credential_registry", Verb: "UPDATE"},
 	{File: "internal/auth/org/store.go", Func: "Store.Create", Table: "auth.organizations", Verb: "INSERT"},
 	{File: "internal/auth/org/store.go", Func: "Store.mutateOnce", Table: "auth.organizations", Verb: "UPDATE"},
-	{File: "internal/auth/org/store.go", Func: "Store.writePublic", Table: "public.organizations", Verb: "UPDATE"},
 	// TEMPORARY: the one-time legacy refresh exchange revokes go-api's refresh tokens (authschema.LegacyRefreshTokenGrant). CHAOS-10408 removes both rows with the grant.
 	// acp ruling 2026-10-26 (CHAOS-11506): the legacy link-token purge, run only where users are owned; DELETE of go-api's public link-token rows, counted and audited.
 	{File: "internal/auth/usersbackfill/linkpurge.go", Func: "PurgeLegacyLinks", Table: "public.email_verification_tokens", Verb: "DELETE"},

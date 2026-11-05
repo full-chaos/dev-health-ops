@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -35,7 +36,7 @@ func routesNamed(routes []httpapi.Route, pattern string) []httpapi.Route {
 }
 
 func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutValidateSwitchOrgStubs(t *testing.T) {
-	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
+	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,5 +135,22 @@ func TestAPIRoutesLogSaysMountedOnlyForRealRoutes(t *testing.T) {
 	}
 	if got := logged(loginConfig(t, true), real); !strings.Contains(got, "api_routes_mounted=true") || !strings.Contains(got, "sessions_stub=false") {
 		t.Fatalf("keyed pod logged %q; want api_routes_mounted=true sessions_stub=false", got)
+	}
+}
+
+// The auth-service logger redacts keys by name; the stub flag is a bool and must stay readable through it.
+func TestAPIRoutesLogKeepsSessionsStubVisibleThroughRedactor(t *testing.T) {
+	stubs := loginSessionRoutes(t, authconfig.Config{}, nil)
+	real := loginSessionRoutes(t, loginConfig(t, true), mustLimits(t))
+	logged := func(cfg authconfig.Config, routes []httpapi.Route) string {
+		var buf bytes.Buffer
+		logAPIRoutes(context.Background(), logging.NewJSON(&buf, slog.LevelInfo), cfg, routes, 0)
+		return buf.String()
+	}
+	if got := logged(authconfig.Config{}, stubs); !strings.Contains(got, `"sessions_stub":true`) {
+		t.Fatalf("stub-only pod logged %q; want sessions_stub true", got)
+	}
+	if got := logged(loginConfig(t, true), real); !strings.Contains(got, `"sessions_stub":false`) {
+		t.Fatalf("keyed pod logged %q; want sessions_stub false", got)
 	}
 }

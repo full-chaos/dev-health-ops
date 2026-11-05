@@ -85,24 +85,9 @@ For every secret, record:
 
 A configuration rollout is complete only after all required processes use the same intended revision and the relevant health, permission, and bounded-work checks pass.
 
-## Ask Dev model credentials
+## Platform LLM provider variables
 
-Ask Dev reuses the existing source-bound LLM credential bundles: workspace BYO
-key and base URL stay together, and platform key and base URL stay together.
-Treat the source label separately from the provider family label. A connection
-may be `platform` or `byo` regardless of whether the endpoint family is
-OpenAI-compatible, local, Ollama, LM Studio, or another supported server.
-
-Never combine a platform key with a workspace endpoint or a workspace key with a
-platform endpoint. OpenAI-compatible BYO base URLs pass the existing
-public-HTTPS and SSRF validation before they can be certified.
-
-Enabling Ask Dev is not sufficient to admit model traffic. Admission also
-requires a current readiness result for the exact provider/model fingerprint.
-The platform connection may use an OpenAI-compatible endpoint, including a local
-one, but Ask Dev only admits that connection after readiness succeeds for that
-exact fingerprint. Global LLM disable, the Ask Dev emergency disable, and
-provider/model deny rules must remain available during rollout.
+These variables configure the platform LLM provider that the investment categorization and explanation jobs use. They are not Ask Dev settings: Ask Dev runs in the ACR service, which reads none of them. For which model Ask Dev uses, see [Turn on Ask Dev](../../admin/ask-dev/index.md).
 
 Supported platform OpenAI-compatible bundles include:
 
@@ -111,11 +96,6 @@ Supported platform OpenAI-compatible bundles include:
 LLM_PROVIDER=local
 LOCAL_LLM_BASE_URL=http://host.docker.internal:1234/v1
 LOCAL_LLM_MODEL=your-model-id
-
-# LM Studio provider aliases
-LLM_PROVIDER=lmstudio
-LMSTUDIO_BASE_URL=http://host.docker.internal:1234/v1
-LMSTUDIO_MODEL=your-model-id
 
 # Local Ollama or authenticated Ollama Cloud-compatible endpoint
 LLM_PROVIDER=ollama
@@ -310,8 +290,7 @@ phase stops and says so.
 
 Investment categorization always runs on the platform provider. An
 organization's own provider configuration (BYO LLM) never applies to it, even
-when the provider is `auto`. `ORG_LLM_CONFIG_URL` and `ORG_LLM_CONFIG_TOKEN` are
-no longer read; remove them from the `heavy` worker group.
+when the provider is `auto`.
 
 ### Investment provider batch mode
 
@@ -341,39 +320,3 @@ worker restart: the next run sends its own batch. The log line
 created (look it up there to cancel a batch a stopped worker left running), and
 `investment llm batch complete` ends each batch: a warning unless the outcome is
 `completed`. A timeout counts as `batch_timeout` in the run's failure counts.
-
-Workspace-to-platform fallback defaults to platform after a configured org BYO
-is evaluated; an explicit organization fail_closed choice opts out of that
-fallback. Source-tagged accounting keeps platform-managed usage and BYO usage
-separate.
-
-Organization policy is stored through the dedicated Ask Dev administrator API,
-not environment variables or the generic settings endpoint. A malformed stored
-emergency-disable value fails closed. Global feature disable and explicit
-entitlement denial continue to take precedence over every organization setting.
-
-The API owns two non-secret maxima for platform-managed Ask Dev usage:
-
-| Setting | Default | Hard range | Purpose |
-| --- | ---: | ---: | --- |
-| `ASK_DEV_PLATFORM_MONTHLY_REQUEST_MAX` | `1000` | `100`–`5000` | Maximum accepted platform runs per organization and UTC calendar month |
-| `ASK_DEV_PLATFORM_MONTHLY_COST_MAX_MICROUSD` | `100000000` ($100) | `10000000`–`500000000` ($10–$500) | Maximum estimated platform provider cost per organization and UTC calendar month |
-
-Organization administrators may lower their provisioned values through the Ask
-Dev controls, but cannot raise them above these operator maxima. Raising an
-operator maximum above the default does not silently raise an unconfigured
-organization's default. Limits reset at 00:00 UTC on the first day of each
-month and do not roll over.
-
-Readiness failures expose only these stable classes to users and durable state:
-disabled, provider not configured, model not supported, provider unavailable,
-invalid response, timeout, or cancelled. Inspect provider logs through the
-approved secret-redacting path; do not copy raw provider bodies into settings or
-support records.
-
-The readiness provider-call timeout is 30 seconds, matching the Ask Dev runtime
-contract. The synthetic exchange accepts either an OpenAI-native `tool_calls`
-decision or the normalized JSON decision envelope, then verifies tool-result
-continuation and a strict final response. A timeout, authentication failure,
-temporarily unavailable endpoint, and invalid agent response remain distinct
-safe administrative outcomes.

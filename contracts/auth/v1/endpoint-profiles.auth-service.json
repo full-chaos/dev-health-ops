@@ -1,6 +1,14 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-29T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/auth/session/signin.go",
+      "line": 73,
+      "now": "func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,",
+      "was": "func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -30,7 +38,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +53,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -305,7 +313,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -329,14 +337,17 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_refresh_token",
         "refresh_credential"
       ],
+      "class_disambiguator": {
+        "kind": "body_field",
+        "name": "refresh_token"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
-      "gaps": [
-        "ops_refresh_token (a go-api refresh JWT in the same JSON body field refresh_token) is also accepted and exchanged once for a new session by session.Store.ExchangeLegacy, but this row lists refresh_credential only: both classes are body-carried, so no head selector (scheme, prefix, header or JWT header) can tell them apart and the selector gate would refuse a two-class row. The gap ends with the legacy refresh window (CHAOS-10408); the body-carried selector kind that would let the row list both is CHAOS-10583."
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
       "issued_credential": [
@@ -357,7 +368,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -372,7 +383,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -400,7 +411,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 138,
+          "line": 144,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -436,7 +447,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 123,
+          "line": 129,
           "note": "func newValidateAuth",
           "path": "internal/auth/authapi/compat_validate.go"
         },
@@ -509,7 +520,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 69,
+            "line": 73,
             "note": "func (s *Store) insertSession",
             "path": "internal/auth/session/signin.go"
           },
@@ -574,7 +585,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -637,7 +648,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -1657,7 +1668,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: a svc_authsess_ credential row is read live by token hash on every call; a workload token reads only the signer's published key set; the actor's public.users row and organization role are read live before the write and again under the organization row lock.",
-      "disclosure_behavior": "The body is organization_id, actor_principal_id, name and an optional if_revision. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a malformed body is 400 malformed and a name outside 1 to 100 characters after the strip is 422 name_invalid, both before any row is read; an actor that is not an active superuser or an owner or admin of the organization gets 403 (principal_deactivated or admin_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to an actor the rule allows; a suspended organization is 409 organization_suspended; an if_revision that is not the organization's current revision is 409 state_changed; a rename to the current name answers 200 with renamed false and writes nothing; an actor with no auth.principals row, or any store fault, is the fail-closed 503 store_unavailable; a key set that cannot be read is a 503. The answer is organization_id, the stored name and renamed. With AUTH_ORGS_OWNED the commit also writes go-api's public.organizations name.",
+      "disclosure_behavior": "The body is organization_id, actor_principal_id, name and an optional if_revision. Every bearer refusal, for every credential class and reason, is the same 401 error.v1 invalid_credentials; a malformed body is 400 malformed and a name outside 1 to 100 characters after the strip is 422 name_invalid, both before any row is read; an actor that is not an active superuser or an owner or admin of the organization gets 403 (principal_deactivated or admin_required) before any row of the request is read, and the same rule runs again after the organization row lock, so a missing organization is named only to an actor the rule allows; a suspended organization is 409 organization_suspended; an if_revision that is not the organization's current revision is 409 state_changed; a rename to the current name answers 200 with renamed false and writes nothing; an actor with no auth.principals row, or any store fault, is the fail-closed 503 store_unavailable; a key set that cannot be read is a 503. The answer is organization_id, the stored name and renamed.",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /internal/v1/organizations/rename [dev-health-auth-service @api]",
@@ -1748,11 +1759,11 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 274,
+          "line": 275,
           "note": "subject, err := h.Validator.Validate(reviewCtx, subjectToken)",
           "path": "internal/auth/workloadexchange/exchange.go"
         },
-        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
+        "description": "handler.review: the Kubernetes TokenReview API authenticates the subject_token for the audience dev-health-workload-exchange; it is authenticated only by TokenReview: after a successful review its exp claim is read unverified, only to cap the issued token's lifetime, and it is never stored; the workload registry then resolves the reviewed ServiceAccount and narrows the audience and actions. With subject_token_type urn:dev-health:params:oauth:token-type:workload-bootstrap the request is the Compose bootstrap subject instead and never reaches TokenReview: handler.serveBootstrap (internal/auth/workloadexchange/exchange_bootstrap.go:88) refuses a value outside the fcwlb_ shape before any store read, and workload.Store.ResolveBootstrap resolves the SHA-256 digest of the value (class, platform owner, workload kind, revocation, expiry, workload and principal state, and an audience both the workload and the credential hold)."
       },
       "route": "/internal/v1/token/exchange",
       "service": "dev-health-auth-service",
@@ -1791,7 +1802,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 25
+        "line": 27
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -1824,7 +1835,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/authorize.go",
-        "line": 26
+        "line": 28
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -2146,7 +2157,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2228,7 +2239,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2310,7 +2321,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },

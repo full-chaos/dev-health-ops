@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
@@ -240,9 +241,9 @@ func (h Handlers) providerID(w http.ResponseWriter, r *http.Request) (uuid.UUID,
 	return id, true
 }
 
-// AccountExistsMessage is the 409 for an e-mail another account holds; it names
-// no sign-in method.
-const AccountExistsMessage = "An account with this email already exists. Please sign in with your existing sign-in method."
+// ConflictMessage is the one 409 answer for an assertion that finds an account already holding the e-mail or the
+// NameID; it says nothing about which. The reason stays in the log and the audit row.
+const ConflictMessage = "This sign-in could not be completed. Contact your administrator if this continues."
 
 // writeError maps a domain error to the go-api status and detail. Every
 // verification failure has the same detail.
@@ -261,7 +262,7 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrProviderInactive):
 		writeDetail(w, http.StatusBadRequest, "SSO provider is not active")
 	case errors.As(err, &conflict):
-		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": AccountExistsMessage}})
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": ConflictMessage}})
 	case errors.Is(err, ErrSignupNotAvailable):
 		writeDetail(w, http.StatusForbidden, "Sign-up through SSO is not available")
 	case errors.Is(err, ErrAutoProvisionDisabled), errors.Is(err, ErrInvalidEmailAddress):
@@ -278,9 +279,10 @@ func (h Handlers) writeError(w http.ResponseWriter, r *http.Request, err error) 
 	case errors.Is(err, ErrAccountDisabled):
 		writeDetail(w, http.StatusForbidden, "Account is disabled")
 	case errors.Is(err, ErrNotOrgMember):
-		writeDetail(w, http.StatusForbidden, "This account is not a member of the provider's organization.")
+		writeJSON(w, http.StatusForbidden, map[string]any{"detail": map[string]string{
+			"message": identity.MembershipRequiredMessage, "reason": "membership_required"}})
 	case errors.Is(err, ErrIdentityAmbiguous):
-		writeDetail(w, http.StatusConflict, "More than one account carries this sign-in. Contact your organization administrator.")
+		writeJSON(w, http.StatusConflict, map[string]any{"detail": map[string]string{"message": ConflictMessage}})
 	case errors.Is(err, ErrSessionUnavailable):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"detail": map[string]string{"message": UnavailableText}})
 	case errors.Is(err, ErrUnsolicited), errors.Is(err, ErrFlowNotFound), errors.Is(err, ErrFlowConsumed), errors.Is(err, ErrAssertionReplayed):

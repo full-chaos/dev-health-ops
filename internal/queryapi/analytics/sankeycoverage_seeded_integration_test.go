@@ -453,8 +453,8 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_SplitPartitionsExactly(t *te
 		{workUnitID: "wu-norepo", effortValue: 25, repoID: "", issueRef: "linear:ALPHA-1"},
 	})
 
-	// wu-team-3repos mirrors what allocateTeamOwnership actually writes
-	// (internal/jobs/investment/teamownership.go): one row per owned repo,
+	// wu-team-3repos mirrors what the removed team-ownership fallback wrote
+	// (allocateTeamOwnership, CHAOS-12949; older generations still hold such rows): one row per owned repo,
 	// equal 1/N shares, repo_source "team:" + the sorted contributing team
 	// ids joined by comma. Three repos would need three distinct repo
 	// UUIDs, but this fixture only declares two in `repos`; the third is

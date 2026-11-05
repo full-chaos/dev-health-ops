@@ -93,7 +93,7 @@ func (r routedAccess) Validate(ctx context.Context, service, profile, bearer str
 		}
 	case result.Class == accessverify.ClassUser && result.Claims != nil:
 		claims := result.Claims
-		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}
 	return nil, errUnexpectedAccessResult
 }
@@ -166,6 +166,16 @@ func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) 
 	user, err := v.auth.Authenticate(policy.WithRouteProfile(ctx, profile), token)
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge: %w", err)
+	}
+	if edge {
+		if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+			reason := ReasonUserRefused
+			if !policy.IsRefusal(err) {
+				reason = ReasonUserLookupFailed
+			}
+			v.reject(ctx, reason, nil, requestMetaFrom(ctx))
+			return nil, fmt.Errorf("principal: edge: %w", err)
+		}
 	}
 	if user.OrgID == "" && !user.IsSuperuser {
 		if edge {

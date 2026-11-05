@@ -2,7 +2,6 @@ package usersbackfill
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +13,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -76,11 +77,8 @@ func run(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "users read per page")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -134,11 +132,8 @@ func run(ctx context.Context, env cli.Env) int {
 func runOAuthSSOCount(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth oauth-sso-count", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -206,11 +201,8 @@ func runReconcile(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", 500, "rows read per page")
 	platformGate := flags.Bool("platform-roles-gate", false, "gate no_active_platform_admin (exit 1 when no principal holds platform_admin)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -253,41 +245,21 @@ func runOrgs(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "rows read per page")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
 		return cli.ExitUsage
 	}
-	var owned, malformed []string
-	for _, gate := range []struct {
-		name string
-		read func(secrets.LookupEnv) (bool, error)
-	}{
-		{authconfig.EnvUsersOwned, authconfig.UsersOwnedFromLookup},
-		{authconfig.EnvOrgsOwned, authconfig.OrgsOwnedFromLookup},
-	} {
-		on, err := gate.read(env.Lookup)
-		if err != nil {
-			malformed = append(malformed, gate.name)
-		} else if on {
-			owned = append(owned, gate.name)
-		}
-	}
-	for _, name := range malformed {
-		fmt.Fprintf(env.Stderr, "orgs-backfill: %s must be true or false\n", name)
-	}
-	if len(malformed) > 0 {
+	removedenv.ObserveOrgsOwned(ctx, env.Lookup, logging.NewJSON(env.Stderr, slog.LevelInfo))
+	on, err := authconfig.UsersOwnedFromLookup(env.Lookup)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "orgs-backfill: %s must be true or false\n", authconfig.EnvUsersOwned)
 		return cli.ExitFailure
 	}
-	for _, name := range owned {
-		fmt.Fprintf(env.Stderr, "orgs-backfill: refused: %s is true, the auth schema is the authority and this command copies from public tables\n", name)
-	}
-	if len(owned) > 0 {
+	if on {
+		fmt.Fprintf(env.Stderr, "orgs-backfill: refused: %s is true, the auth schema is the authority and this command copies from public tables\n", authconfig.EnvUsersOwned)
 		return cli.ExitRefused
 	}
 	pool, schema, code := connectFn(ctx, env, "orgs-backfill")
@@ -341,11 +313,8 @@ func runLegacyLinkPurge(ctx context.Context, env cli.Env) int {
 	// The auth-backfill Job passes -batch to every verb; the purge has no pages.
 	batch := flags.Int("batch", 500, "accepted for the backfill Job; unused")
 	runID := flags.String("run-id", "", "names this run in its audit row (lowercase letters, digits, . _ -; at most 63)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	runIDSet := false
 	flags.Visit(func(f *flag.Flag) { runIDSet = runIDSet || f.Name == "run-id" })
@@ -386,11 +355,8 @@ func runOrgsReconcile(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "  -exact:       the cutover gate: exit 1 on EVERY class, role differences, public-only memberships and duplicate sources included.")
 	}
 	exact := flags.Bool("exact", false, "gate every diff class (the cutover gate); the default gates organization diffs, auth-only memberships and inactive-in-public")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

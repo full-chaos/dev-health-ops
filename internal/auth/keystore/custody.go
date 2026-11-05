@@ -208,6 +208,13 @@ type latch struct {
 	publics map[string]bool
 }
 
+// has reports whether kid or public was ever latched compromised.
+func (l *latch) has(kid string, public ed25519.PublicKey) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.kids[kid] || (len(public) > 0 && l.publics[string(public)])
+}
+
 // latchPublic records one compromised public key.
 func (l *latch) latchPublic(public ed25519.PublicKey) {
 	l.mu.Lock()
@@ -256,6 +263,12 @@ type manifestEntry struct {
 
 type manifest struct {
 	Keys []manifestEntry `json:"keys"`
+}
+
+// Compromised reports, from memory only, whether this custody has seen kid or
+// public compromised.
+func (c *FileCustody) Compromised(kid string, public ed25519.PublicKey) bool {
+	return c.compromised.has(kid, public)
 }
 
 // Keys returns the manifest's keys with their public halves.

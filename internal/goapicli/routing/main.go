@@ -300,6 +300,9 @@ func run(argv []string) error {
 		// that convention with exit 2. Routed through refuse() rather than
 		// fmt.Errorf so the split this command already implements applies
 		// to it.
+		if strings.HasPrefix(verb, "-") {
+			return refuse("unknown verb: a flag was typed where the verb belongs\n\n%s", usage)
+		}
 		return refuse("unknown verb %q\n\n%s", verb, usage)
 	}
 }
@@ -599,7 +602,7 @@ func newVerbFlagSet(name string) *flag.FlagSet {
 // Named in full, because "unexpected argument" without the word tells an
 // operator nothing about which word broke their command.
 func parseVerbFlags(set *flag.FlagSet, argv []string) error {
-	if err := set.Parse(argv); err != nil {
+	if err := cli.ParseFlagsError(set, verbFlagOutput, argv); err != nil {
 		// `-h`/`-help` on any of the four verbs must never
 		// fall through to the refuse() below like any other malformed flag
 		// -- falling through there would print the usage text (via

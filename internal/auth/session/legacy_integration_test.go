@@ -22,9 +22,8 @@ func (e *env) goUser(t *testing.T, ctx context.Context, tv int) uuid.UUID {
 	t.Helper()
 	id := e.principal(t, ctx)
 	tag := id.String()[:8]
-	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, password_hash, auth_provider,
-		is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-		VALUES ($1, $2, $3, 'Legacy User', NULL, 'local', true, true, false, $4, now(), now())`,
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET email = $2, username = $3, full_name = 'Legacy User', password_hash = NULL,
+		auth_provider = 'local', is_active = true, is_verified = true, is_superuser = false, token_version = $4 WHERE id = $1`,
 		id, "legacy-"+tag+"@example.test", "legacy-"+tag, tv); err != nil {
 		t.Fatalf("seed go-api user: %v", err)
 	}
@@ -233,7 +232,7 @@ func TestExchangeLegacyReplayForADeactivatedPrincipalRevokesTheFamily(t *testing
 	if err != nil || first.Reason != ReasonAccepted {
 		t.Fatalf("first exchange = %s, %v", first.Reason, err)
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.deactivate(t, ctx, user)
 	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-off"))
 	if err != nil || result.Reason != ReasonPrincipalDeactivated || result.Credential.Reveal() != "" {
 		t.Fatalf("replay for a deactivated principal = %s, %v; want principal_deactivated and no credential", result.Reason, err)
@@ -353,7 +352,7 @@ func TestExchangeLegacyRefusesWithoutChangingAnything(t *testing.T) {
 			t.Fatalf("%s: a refused exchange revoked the go-api token", name)
 		}
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.deactivate(t, ctx, user)
 	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-mine"))
 	if err != nil || result.Reason != ReasonPrincipalDeactivated {
 		t.Fatalf("disabled principal: %s, %v; want principal_deactivated", result.Reason, err)
@@ -450,7 +449,7 @@ func TestExchangeLegacyFirstExchangeForADisabledPrincipalRevokesTheFamily(t *tes
 	e.goRefresh(t, ctx, user, family, "jti-first-sibling", time.Hour)
 	other := uuid.New()
 	e.goRefresh(t, ctx, user, other, "jti-other-family", time.Hour)
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.deactivate(t, ctx, user)
 	e.requireDeactivated(t, ctx, user, "jti-first")
 	for _, jti := range []string{"jti-first", "jti-first-sibling"} {
 		if e.goRevokedAt(t, ctx, jti) == nil {
@@ -483,7 +482,7 @@ func TestExchangeLegacyFirstExchangeForADisabledPrincipalRevokesExchangedSession
 	if err != nil || first.Reason != ReasonAccepted {
 		t.Fatalf("first exchange = %s, %v", first.Reason, err)
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
+	e.deactivate(t, ctx, user)
 	e.requireDeactivated(t, ctx, user, "jti-b")
 	if e.goRevokedAt(t, ctx, "jti-b") == nil {
 		t.Fatal("jti-b is still live")
@@ -497,7 +496,9 @@ func TestExchangeLegacyFirstExchangeForADisabledPrincipalRevokesExchangedSession
 	}
 }
 
-func TestExchangeLegacyFirstExchangeForAMissingPrincipalRevokesTheFamily(t *testing.T) {
+// D6651: an active public.users row with no auth copy is a user the exchange
+// serves; the copy is projected in the exchange's transaction.
+func TestExchangeLegacyFirstExchangeForAPublicUserWithNoCopyProjectsIt(t *testing.T) {
 	ctx := testContext(t)
 	e := newEnv(t, ctx)
 	user := uuid.New()
@@ -508,12 +509,13 @@ func TestExchangeLegacyFirstExchangeForAMissingPrincipalRevokesTheFamily(t *test
 		user, "ghost-"+tag+"@example.test", "ghost-"+tag); err != nil {
 		t.Fatalf("seed go-api user without a principal: %v", err)
 	}
-	family := uuid.New()
-	e.goRefresh(t, ctx, user, family, "jti-ghost", time.Hour)
-	e.goRefresh(t, ctx, user, family, "jti-ghost-sibling", time.Hour)
-	e.requireDeactivated(t, ctx, user, "jti-ghost")
-	if e.goRevokedAt(t, ctx, "jti-ghost-sibling") == nil {
-		t.Fatal("the family is still live for a missing principal")
+	e.goRefresh(t, ctx, user, uuid.New(), "jti-ghost", time.Hour)
+	result, err := e.store.ExchangeLegacy(ctx, legacy(user, "jti-ghost"))
+	if err != nil || result.Reason != ReasonAccepted {
+		t.Fatalf("exchange for a public user with no copy = %s, %v; want accepted", result.Reason, err)
+	}
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.principals WHERE id = $1 AND kind = 'user' AND disabled_at IS NULL`, user.String()); n != 1 {
+		t.Fatalf("%d projected principals, want 1", n)
 	}
 }
 
@@ -528,8 +530,8 @@ func TestExchangeLegacyRefusalsForADisabledPrincipalRevokeNothing(t *testing.T) 
 	e.goRefresh(t, ctx, user, uuid.New(), "jti-mine", time.Hour)
 	e.goRefresh(t, ctx, user, uuid.New(), "jti-expired", -time.Minute)
 	org := uuid.New()
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, user.String())
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, stranger.String())
+	e.deactivate(t, ctx, user)
+	e.deactivate(t, ctx, stranger)
 	for name, tc := range map[string]struct {
 		legacy LegacyRefresh
 		want   Reason

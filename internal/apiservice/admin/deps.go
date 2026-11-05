@@ -24,6 +24,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -99,9 +100,9 @@ type Deps struct {
 	OrgSuspender orgreactivate.Suspender
 	// OrgState reads the organization's state in auth-service; set with the two verbs above, nil with them.
 	OrgState orgreactivate.StateReader
-	// OrgRenamer is the client of auth-service's organization rename route, from the same switch. While
-	// AUTH_ORGS_OWNED is on, a PATCH name goes to it first; nil then refuses the name with a 503.
-	OrgRenamer orgreactivate.Renamer
+	// Delegator starts and ends the admin impersonation session at auth-service (AUTH_PROXY_IMPERSONATION). Nil leaves
+	// go-api the writer of the session.
+	Delegator sessionissue.Delegator
 }
 
 // Routes is the admin area's route set.
@@ -145,7 +146,7 @@ func Routes(deps Deps) []httpapi.Route {
 		orgProvision:    deps.OrgProvisioner,
 		orgSuspender:    deps.OrgSuspender,
 		orgState:        deps.OrgState,
-		orgRenamer:      deps.OrgRenamer,
+		delegator:       deps.Delegator,
 	}
 	if deps.ClickHouse != nil {
 		area.spend = clickhouseSpend{conn: deps.ClickHouse}
@@ -213,8 +214,8 @@ type handlers struct {
 	orgSuspender orgreactivate.Suspender
 	// orgState is Deps.OrgState: the read whose revision the is_active call sends.
 	orgState orgreactivate.StateReader
-	// orgRenamer is Deps.OrgRenamer: the PATCH name while AUTH_ORGS_OWNED is on.
-	orgRenamer orgreactivate.Renamer
+	// delegator is Deps.Delegator; non-nil routes the impersonation start and stop through auth-service.
+	delegator sessionissue.Delegator
 }
 
 // passwordLimit is users.py's `@limiter.limit(ADMIN_PASSWORD_LIMIT =

@@ -584,6 +584,9 @@ dho admin users update \
 | `--org` | Org slug or ID: add the user or update their role |
 | `--role` | Membership role with `--org`: `owner`, `admin`, `member`, `viewer` |
 | `--remove-from-org` | Org slug or ID: remove the user's membership |
+| `--actor` | Id or email of the user that acts for `--org` or `--remove-from-org` (required with them): an active owner or admin of the org, or a superuser |
+
+A membership change (`--org`, `--role`, `--remove-from-org`) is sent to the authentication service's membership routes, which write `public.memberships` and the auth copy and record the audit event in one commit. It needs `AUTH_PROXY_URL` and `AUTH_SESSION_ISSUE_TOKEN` (the admin API's own service credential; run the verb in a workload that holds it, such as the go-api pod). It does this whether or not `AUTH_PROXY_ORG_PROVISIONING` is on; the CLI writes no membership row itself. Without those variables or without `--actor` it refuses and writes nothing. One call makes one membership change (`--org` with `--remove-from-org` is a usage error, exit 2). The membership change is sent first; a refusal leaves the profile and password changes of the call unrun. If one of those then fails, the membership change stays.
 
 ### `admin users delete`
 
@@ -629,6 +632,9 @@ dho admin orgs delete --org-id <uuid>
 | `--org-id` | Organization ID (required) |
 | `--dry-run` | Return the deletion plan without deleting data |
 | `--analytics-db` | ClickHouse URI (default: `CLICKHOUSE_URI`) |
+| `--actor` | Id or email of an active superuser that acts for the delete (required without `--dry-run`) |
+
+A real delete first denies the organization in the authentication service (the deprovision route, as the API route does), so it needs `AUTH_PROXY_URL` and `AUTH_SESSION_ISSUE_TOKEN`, and refuses without them or without `--actor`; `--dry-run` needs neither.
 
 The deletion needs ClickHouse, also for `--dry-run`. Before anything is counted, revoked or deleted, the ClickHouse login must connect and hold `SELECT` and `ALTER DELETE` on its whole database (its own grants or its roles'), and the database must have tables with an `org_id` column. If not, the verb prints `Error: ClickHouse is not configured, not reachable or not permitted to purge; organization deletion refused. Nothing was deleted.` and exits 1. If the ClickHouse purge fails after the PostgreSQL rows are deleted, it prints `Error: Organization Postgres data was deleted, but the ClickHouse purge did not complete. Run the delete again.` and exits 1; running it again purges the organization's ClickHouse rows by id. If a pending PagerDuty revocation of the organization is being sent by the revocation worker at that moment, nothing is purged: the verb prints `Error: A PagerDuty revocation of this organization is being sent; run the delete again. Nothing was deleted.` and exits 1, and running it again completes the delete (the revocation is sent once). The API route `DELETE /api/v1/admin/orgs/{org_id}` answers 503 and 500 for the first two cases and 503 for the third. The verb logs `admin: org deletion refused` (with a `reason`), `admin: org deletion clickhouse purge incomplete` or `admin: org deletion done` on stderr. At start, go-api runs the same ClickHouse check once without failing its start and logs one line: `orgdelete_clickhouse_preflight=ok`, or `orgdelete_clickhouse_preflight=refused` with the `reason`.
 
@@ -2169,41 +2175,16 @@ attribution` log record scoped by `org_id` and `run_id`. The `own_signal`,
 are log fields, not Prometheus counters or a successful-run completion signal.
 See [Investment repository inheritance](../data-models/investment.md#repository-inheritance)
 for the allocation precedence and persisted evidence. These counts describe the
-hierarchy stage, before the final team ownership fallback.
+hierarchy stage; a unit with no repository evidence is unattributed (there is no team ownership fallback, CHAOS-12949).
 
-The `investment team repository fallback` log record reports what the final
-equal-share fallback did with every component in the run. `allocated`,
-`own_repo`, `stronger_allocation`, `direct_repo_evidence`, `no_eligible_owner`
-and `window_skipped` partition the `components` count: they always sum to it.
-`repo_shares` counts the repository rows the fallback wrote, and `donor_rows`
-and `donor_issues` report the read side -- how much eligible ownership evidence
-the run loaded: the donor team rows of the issues plus the ownership rows of
-those donor teams that began at or before the run. `ownership_as_of` names the bound
-of that read, which is the run's own `computed_at`, never wall-clock time. Each
-unit's intervals are evaluated at the end of the unit's own span, never later
-than that bound; `ownership_as_of_first_unit` and `ownership_as_of_last_unit`
-name the earliest and the latest such time of the run, and are empty when no
-unit reached the fallback.
-
-**Every one of these fields is emitted on every run, including when its value is
-zero.** A field that disappears at zero cannot be told apart from a field that
-was never computed, so a zero is always written out. This matters for reading
-the record: a zero `allocated` on its own is ambiguous. With a high `own_repo`
-or `direct_repo_evidence` it means stronger evidence already resolved the units,
-which is the healthy case. With a high `no_eligible_owner` AND `donor_rows=0` it
-means no eligible ownership reached the run at all, which points at the team and
-repository-ownership sync, not at this allocator. A failed donor read is neither
-case -- it fails the run before anything is written.
-
-The run statistics expose the same counts as `repo_ownership_fallback`,
-`repo_ownership_own_repo`, `repo_ownership_stronger_allocation`,
-`repo_ownership_direct_repo_evidence`, `repo_ownership_no_eligible_owner`,
-`repo_ownership_window_skipped`, `repo_ownership_repo_shares`,
-`repo_ownership_donor_rows` and `repo_ownership_donor_issues`. No new CLI option
-is required. Inspect persisted `work_unit_repo_effort` rows from the latest
-generation to distinguish `team_ownership` from direct churn and
-`hierarchy_cascade`. See
-[Team ownership fallback](../data-models/investment.md#team-ownership-fallback).
+The run no longer emits an `investment team repository fallback` record, and
+the run statistics no longer carry the `repo_ownership_*` fields (CHAOS-12949):
+the team-ownership fallback was removed. Inspect persisted
+`work_unit_repo_effort` rows from the latest generation to distinguish direct
+churn, `hierarchy_cascade` and the unattributed `empty` and
+`active_hours_unassigned` rows; rows of an older generation with
+`allocation_source=team_ownership` disappear as their units are recomputed. See
+[Units without repository evidence](../data-models/investment.md#units-without-repository-evidence).
 
 ---
 

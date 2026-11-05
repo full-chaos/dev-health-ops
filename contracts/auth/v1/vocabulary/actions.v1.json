@@ -1,7 +1,7 @@
 {
   "schema_version": "actions.v1",
-  "catalog_version": 11,
-  "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'. Each action carries a risk_class (low or high) and a cache_class (none, decision_bound, resource_revision_bound; the TRD section 14 allow-cache classes). A high-risk action is never cached: its cache_class is none. Each action carries impersonation (denied or allowed): whether a delegated session may exercise it (G-51, ACP-ADR-10). denied is the safe value; every action names one, so an action added later cannot default open.",
+  "catalog_version": 13,
+  "description": "The closed action vocabulary. An action absent from this list is refused everywhere (ACP-ADR-05 decision 1). Names are dotted and namespaced; a bare single segment is not an action. No action means 'all actions'. Each action carries a risk_class (low or high) and a cache_class (none, decision_bound, resource_revision_bound; the TRD section 14 allow-cache classes). A high-risk action is never cached: its cache_class is none. Each action carries impersonation (denied or allowed): whether a delegated session may exercise it (G-51, ACP-ADR-10). denied is the safe value; every action names one, so an action added later cannot default open. Each action that reads or exports data, and each repository-kind action, carries repository_scope (filtered or none): filtered means an allow carries the repositories the principal may read as an obligation; an action without the member is none.",
   "actions": [
     {
       "action": "analytics.read",
@@ -9,7 +9,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "analytics.export",
@@ -17,7 +18,8 @@
       "resource_kind": "organization",
       "risk_class": "high",
       "cache_class": "none",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "metrics.read",
@@ -25,7 +27,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "metrics.compute",
@@ -41,7 +44,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "work_items.sync",
@@ -57,7 +61,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "resource_revision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "git.sync",
@@ -73,7 +78,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "teams.write",
@@ -89,10 +95,19 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "settings.write",
+      "scope": "organization",
+      "resource_kind": "organization",
+      "risk_class": "high",
+      "cache_class": "none",
+      "impersonation": "denied"
+    },
+    {
+      "action": "reports.write",
       "scope": "organization",
       "resource_kind": "organization",
       "risk_class": "high",
@@ -105,7 +120,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "integrations.write",
@@ -121,7 +137,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "members.invite",
@@ -153,7 +170,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "org.write",
@@ -177,7 +195,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "billing.manage",
@@ -193,7 +212,8 @@
       "resource_kind": "organization",
       "risk_class": "low",
       "cache_class": "decision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "none"
     },
     {
       "action": "acr.context.read",
@@ -201,7 +221,8 @@
       "resource_kind": "repository",
       "risk_class": "low",
       "cache_class": "resource_revision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "acr.evidence.read",
@@ -209,7 +230,8 @@
       "resource_kind": "repository",
       "risk_class": "low",
       "cache_class": "resource_revision_bound",
-      "impersonation": "allowed"
+      "impersonation": "allowed",
+      "repository_scope": "filtered"
     },
     {
       "action": "acr.credential.issue",

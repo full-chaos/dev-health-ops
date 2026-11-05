@@ -559,6 +559,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 		KindDimensionFold:                {"scheduled_for"},
 		KindLLMBudgetStaleReservations:   {"scheduled_for"},
 		KindProviderOAuthRevocations:     {"scheduled_for"},
+		KindExternalPushExpirySweep:      {"scheduled_for"},
 		KindSyncCoverageRefresh:          {"scheduled_for", "limit"},
 		KindRetentionCleanup:             {"batch_size", "delete_before", "retention_policy"},
 		KindSyncProviderUnit:             {"unit_id"},
@@ -566,7 +567,7 @@ func validatePayloadSchema(kind string, version int, data []byte) error {
 	if expectedFields == nil || !equalStringSet(stringSet(schema["required"]), expectedFields) || !equalStringSet(keySet(properties), expectedFields) {
 		return errors.New("schema fields drift from compiled payload type")
 	}
-	if kind == KindHeartbeat || kind == KindDimensionFold || kind == KindLLMBudgetStaleReservations || kind == KindProviderOAuthRevocations {
+	if kind == KindHeartbeat || kind == KindDimensionFold || kind == KindLLMBudgetStaleReservations || kind == KindProviderOAuthRevocations || kind == KindExternalPushExpirySweep {
 		return validateTimestampProperty(properties["scheduled_for"])
 	}
 	if kind == KindSyncCoverageRefresh {

@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ import (
 // selects the go-api pods stays ClusterIP without nodePort/externalIPs, and the pods expose no hostPort. (The former
 // allow-list cover of /api/v1/internal, which existed because the public listener used to serve those routes, is retired.)
 func TestInternalACRRoutesStayOffThePublicIngress(t *testing.T) {
-	output, err := exec.Command("helm", "template", "b", ".",
+	output, err := helmCommand("template", "b", ".",
 		"--set", "goApi.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "ingress.enabled=true",
 		// A values file that routes a path to every Service the Ingress
@@ -181,12 +180,12 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 		if allow != "" {
 			args = append(args, "--set-json", "ingress.pythonAllowList="+allow)
 		}
-		out, err := exec.Command("helm", args...).CombinedOutput()
+		out, err := helmCommand(args...).CombinedOutput()
 		return string(out), err
 	}
 	// rewrite/regex/snippet-class annotations with a go-api route.
 	for _, ann := range []string{"use-regex", "rewrite-target", "app-root", "configuration-snippet", "server-snippet", "permanent-redirect", "temporal-redirect"} {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-string", `ingress.annotations.nginx\.ingress\.kubernetes\.io/`+ann+`=/$1`,
 			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "ingress.annotations "+ann+" on an Ingress that routes to go-api") {
@@ -200,7 +199,7 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 	} {
 		full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true", "--set-json",
 			`ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, args...)
-		out, err := exec.Command("helm", full...).CombinedOutput()
+		out, err := helmCommand(full...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "enabled is false") {
 			t.Errorf("%s: a route to a disabled Service must fail the render: err=%v\n%s", name, err, out)
 		}
@@ -229,7 +228,7 @@ func TestGoCatchAllRenderGuards(t *testing.T) {
 // shared ingress.pythonAllowList; every guard runs on the EFFECTIVE list.
 func TestPerHostPythonAllowList(t *testing.T) {
 	render := func(hosts string) (string, error) {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		return string(out), err
 	}
@@ -282,7 +281,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 		}
 	}
 	// A values file that lists a shared path still gets it on the Python api for a `true` host.
-	listed, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
+	listed, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 		"--set-json", `ingress.pythonAllowList=[{"path":"/graphql$","pathType":"ImplementationSpecific","service":"query-api"}]`,
 		"--set-json", `ingress.hosts=[{"host":"shared.test","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`).CombinedOutput()
 	if err != nil {
@@ -334,7 +333,7 @@ func TestPerHostPythonAllowList(t *testing.T) {
 func TestAnchoredAllowListEntries(t *testing.T) {
 	render := func(hosts string, extra ...string) (string, error) {
 		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts=" + hosts}, extra...)
-		out, err := exec.Command("helm", args...).CombinedOutput()
+		out, err := helmCommand(args...).CombinedOutput()
 		return string(out), err
 	}
 	host := func(list string) string {
@@ -424,7 +423,7 @@ func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
 	literalHost := `{"host":"literal.test","pythonAllowList":[{"path":"/graphql","pathType":"Exact","service":"query-api"},{"path":"/api/v1/internal","pathType":"Prefix","service":"query-api"}],"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}`
 	plainHost := `{"host":"plain.test","paths":[{"path":"/","pathType":"Prefix","service":"web"}]}`
 	render := func(hosts string) []string {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts="+hosts).CombinedOutput()
+		out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true", "--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		if err != nil {
 			t.Fatalf("render failed: %v\n%s", err, out)
 		}
@@ -472,7 +471,7 @@ func TestAnchoredHostsGetTheirOwnIngress(t *testing.T) {
 // routing anything to the go-api INTERNAL Service stays refused.
 func TestAllowListNeedsNoInternalCover(t *testing.T) {
 	render := func(hosts string) (string, error) {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
+		out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", "ingress.hosts="+hosts).CombinedOutput()
 		return string(out), err
 	}
@@ -504,7 +503,7 @@ func TestDefaultAllowListNeedsNoPythonAPI(t *testing.T) {
 	render := func(extra ...string) (string, error) {
 		args := append([]string{"template", "b", ".", "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "ingress.enabled=true",
 			"--set-json", `ingress.hosts=[{"host":"h","pythonAllowList":true,"paths":[{"path":"/","pathType":"Prefix","service":"go-api"}]}]`}, extra...)
-		out, err := exec.Command("helm", args...).CombinedOutput()
+		out, err := helmCommand(args...).CombinedOutput()
 		return string(out), err
 	}
 	out, err := render()

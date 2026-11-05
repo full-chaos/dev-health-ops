@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 
@@ -128,6 +129,7 @@ type validateFixture struct {
 	server    http.Handler
 	goAPI     http.Handler
 	bodyLimit int64
+	meter     metric.Meter
 }
 
 func newValidateFixture(t *testing.T, eddsa bool) *validateFixture {
@@ -181,6 +183,7 @@ func (f *validateFixture) deps() CompatDeps {
 		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
 		Limits:      mustLimits(f.t, f.counters),
 		Validate:    config,
+		Meter:       f.meter,
 	}
 }
 

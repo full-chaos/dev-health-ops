@@ -84,13 +84,13 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 	query := fmt.Sprintf(`
 SELECT
 %s
-FROM %s AS work_unit_investments
+FROM %s
 WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
 %s
-`, analytics.InvestmentQualityStatsColumns, analytics.LatestWorkUnitInvestmentsSource(), analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.InvestmentQualityStatsColumns, analytics.InvestmentQualityStatsSource(), analytics.InvestmentWindowClause(true), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_date", Value: dateBindingValue(filters.StartTS)},
@@ -113,9 +113,9 @@ WHERE %s
 		return QualityStatsRow{}, false, nil
 	}
 
-	var total, known, high, moderate, low, veryLow, unknown, uncategorized uint64
+	var total, known, high, moderate, low, veryLow, unknown, uncategorized, sized uint64
 	var mean, stddev float64
-	if err := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized); err != nil {
+	if err := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized, &sized); err != nil {
 		return QualityStatsRow{}, false, fmt.Errorf("scan investment quality stats row: %w", err)
 	}
 	if err := rows.Err(); err != nil {

@@ -89,6 +89,7 @@ internal/auth/contracts	jwks_document_goldens_test.go
 internal/auth/contracts	llm_api_keys_anchor_test.go
 internal/auth/contracts	openapi_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
+internal/auth/contracts	principal_wire_form_surface_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
@@ -138,6 +139,7 @@ internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
+internal/authzenforce	census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -273,6 +275,7 @@ internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
+internal/cigates/scripts	census_ops_script_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go

@@ -40,7 +40,7 @@ func admitRequest(payload string, chunked bool) (*http.Request, *admitCountingBo
 
 func admitChain(route Route, limit int64, burst int) http.Handler {
 	options := ServerOptions{MaxBodyBytes: limit, RateLimit: 0.001, RateLimitBurst: burst, RequestTimeout: time.Second}
-	return routeChain(route, options, slog.New(slog.DiscardHandler), WriteError, make(chan struct{}, 4), nil)
+	return routeChain(route, options, slog.New(slog.DiscardHandler), WriteError, make(chan struct{}, 4))
 }
 
 func TestAdmitRefusalAnswersBeforeAnyBodyByteIsRead(t *testing.T) {

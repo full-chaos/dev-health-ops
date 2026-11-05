@@ -95,7 +95,7 @@ func TestRefusedRefreshesWriteNoEventAndNoCommitFailureLine(t *testing.T) {
 	e.guarded(t, ctx, `UPDATE auth.sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, expiredSession.Session.ID.String())
 	disabledPrincipal := e.principal(t, ctx)
 	disabled := e.create(t, ctx, disabledPrincipal)
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabledPrincipal.String())
+	e.deactivate(t, ctx, disabledPrincipal)
 	revoked := e.create(t, ctx, e.principal(t, ctx))
 	if ok, err := e.store.Revoke(ctx, revoked.Session.ID, Actor{}); !ok || err != nil {
 		t.Fatalf("Revoke: %v %v", ok, err)

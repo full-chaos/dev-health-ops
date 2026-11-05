@@ -1170,7 +1170,7 @@ address, so its own NetworkPolicy, admitting the listed peer workloads only, is 
 {{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.internal.port must be a whole number from 1 to 65535" }}{{- end -}}
 {{- if has (int $port) (list (int .Values.authService.port) (int .Values.authService.operatorPort)) }}{{- fail "authService.internal.port must differ from authService.port and authService.operatorPort" }}{{- end -}}
 {{- if not (kindIs "slice" $in.peers) }}{{- fail "authService.internal.peers must be a list of workload names (web, query-api, go-api)" }}{{- end -}}
-{{- if not $in.peers }}{{- fail "authService.internal.peers must name at least one workload (web, query-api, go-api): the internal port admits only the listed peers" }}{{- end -}}
+{{- if not (or $in.peers .Values.authService.networkPolicy.workloadClients) }}{{- fail "authService.internal.peers or authService.networkPolicy.workloadClients must be non-empty while authService.internal.enabled: the internal port admits only the listed peers and clients, so with neither it would admit nobody (and an empty from would admit every source)" }}{{- end -}}
 {{- $seen := dict -}}
 {{- range $in.peers }}
 {{- if not (and (kindIs "string" .) (has . (list "web" "query-api" "go-api"))) }}{{- fail (printf "authService.internal.peers: %v is not one of web, query-api, go-api" .) }}{{- end -}}

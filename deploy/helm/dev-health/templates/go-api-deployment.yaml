@@ -282,6 +282,11 @@ spec:
             - name: AUTH_PROXY_ORG_PROVISIONING
               value: "true"
             {{- end }}
+            {{- /* CHAOS-12914: rendered only when on; the render refuses it below phase 2. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).impersonation) true }}
+            - name: AUTH_PROXY_IMPERSONATION
+              value: "true"
+            {{- end }}
             {{- if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on

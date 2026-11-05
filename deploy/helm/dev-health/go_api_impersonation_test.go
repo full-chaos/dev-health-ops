@@ -100,7 +100,7 @@ func TestImpersonationRefusals(t *testing.T) {
 		"a number": {impersonationArgs("2", "--set", "goApi.authProxy.impersonation=1"),
 			"goApi.authProxy.impersonation must be true or false"},
 		"null": {impersonationArgs("2", "--set", "goApi.authProxy.impersonation=null", "--set", "goApi.authProxy.orgProvisioning=false"),
-			""},
+			"goApi.authProxy.impersonation must be true or false"},
 		"another key beside it": {impersonationArgs("2", "--set", "goApi.authProxy.impersonation=true", "--set", "goApi.authProxy.sessions=true"),
 			"goApi.authProxy is replaced by authService.phase"},
 		"a near-miss key": {impersonationArgs("2", "--set", "goApi.authProxy.Impersonation=true"),
@@ -110,12 +110,6 @@ func TestImpersonationRefusals(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, out, err := renderAuth(t, tc.args...)
-			if tc.want == "" {
-				if err != nil || strings.Contains(out, impersonationEnv) {
-					t.Fatalf("a null key must render as off: err=%v, mentions the switch=%v\n%.400s", err, strings.Contains(out, impersonationEnv), out)
-				}
-				return
-			}
 			if err == nil {
 				t.Fatal("the render succeeded; it must refuse")
 			}

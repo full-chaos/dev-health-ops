@@ -762,11 +762,12 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858, CHAOS-10988): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- /* goApi.authProxy keeps two keys: orgProvisioning (CHAOS-11858, CHAOS-10988), the go-api switch AUTH_PROXY_ORG_PROVISIONING, and impersonation (CHAOS-12914), the go-api switch AUTH_PROXY_IMPERSONATION. Every other key is a routing flag authService.phase owns. */ -}}
 {{- if hasKey $v.goApi "authProxy" }}
 {{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
-{{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if not (has $key (list "orgProvisioning" "impersonation")) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
 {{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "impersonation") (not (kindIs "bool" $v.goApi.authProxy.impersonation)) }}{{- fail "goApi.authProxy.impersonation must be true or false" }}{{- end }}
 {{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
@@ -775,6 +776,8 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 4, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
+{{- /* CHAOS-12914: go-api only logs the switch without sessions (one ERROR line, devhealth_api_auth_proxy_impersonation_config_invalid=1, every start 503; D6465 no fail-start), so the render refuses it. */ -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.impersonation needs authService.phase 2 or higher: go-api starts the admin impersonation session at auth-service only while auth-service owns sessions (AUTH_PROXY_SESSIONS); without it every impersonation start answers 503" }}{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}

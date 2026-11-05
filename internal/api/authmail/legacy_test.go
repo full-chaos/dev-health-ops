@@ -125,7 +125,7 @@ func TestValidAgreesWithValidAnyOverAcceptSecrets(t *testing.T) {
 	}
 	id := uuid.New()
 	var tokens []string
-	for _, secret := range []string{"a", "l", "p", "x", signedtoken.DevFallbackSecret} {
+	for _, secret := range []string{"a", "l", "p", "x", "", signedtoken.DevFallbackSecret} {
 		token, _ := signedtoken.Build(id, secret)
 		tokens = append(tokens, token)
 	}

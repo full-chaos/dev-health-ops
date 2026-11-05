@@ -826,13 +826,15 @@ func TestCredentialsAreNotAcceptedAsFlags(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want a rejected argument", code)
 	}
-	// The refusal names the flag, never the value behind it: a rejected
+	// The refusal names neither the flag nor the value behind it: a rejected
 	// credential must not be copied into the process log by the rejection.
-	if strings.Contains(stderr.String()+stdout.String(), "hunter2-pw") {
-		t.Error("the rejection must not echo the credential it refused")
+	for _, typed := range []string{"hunter2-pw", "postgres-uri", "operator"} {
+		if strings.Contains(stderr.String()+stdout.String(), typed) {
+			t.Errorf("the rejection must not echo %q: %q", typed, stderr.String())
+		}
 	}
-	if !strings.Contains(stderr.String(), "postgres-uri") {
-		t.Errorf("the rejection must name the offending flag, got %q", stderr.String())
+	if !strings.Contains(stderr.String(), "unknown flag") {
+		t.Errorf("the rejection must say the flag is unknown, got %q", stderr.String())
 	}
 }
 

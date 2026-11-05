@@ -309,6 +309,15 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 		{"a forged segment in the args does not hide a changed image", func(w *bworld) {
 			regrant(w, "ch-m5-grant17c", "registry.example/evil:1"+zeroDigest, "x<<c>>|grant@@"+grantImage+"@@y | z")
 		}, "job ch-m5-grant17c: malformed row"},
+		{"an allowlisted image with the segment separator appended", func(w *bworld) {
+			regrant(w, "ch-m5-grant17", grantImage+"@@x", grantQuery)
+		}, "job ch-m5-grant17: malformed row"},
+		{"a pod of an allowlisted Job labelled go-api", func(w *bworld) {
+			grantPodAt(w, "ch-m5-grant17")["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/component": "go-api"}
+		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		{"a pod of an allowlisted Job labelled auth-service", func(w *bworld) {
+			grantPodAt(w, "ch-m5-grant17")["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/component": "auth-service"}
+		}, "pod ch-m5-grant17-6fnbg: malformed row"},
 		{"a new item", func(w *bworld) {
 			w.otherRS = append(w.otherRS, rsOwnedBy("other-5d9f", "other"))
 			w.otherPods = append(w.otherPods, bwOwned(bwPodAt("x1", "other", "", map[string]any{"containers": []any{

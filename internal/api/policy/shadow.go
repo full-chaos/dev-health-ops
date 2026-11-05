@@ -19,9 +19,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
+// catalogNamespaces is the sorted set of action namespaces of the embedded catalog.
+func catalogNamespaces() []string {
+	seen := map[string]bool{}
+	for _, action := range policycatalog.Default().Actions() {
+		seen[strings.SplitN(action.ID, ".", 2)[0]] = true
+	}
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // Closed label value sets of the shadow counters.
 var (
-	shadowNamespaces = []string{"admin", "billing", "integrations", "license", "members", "settings", "teams"}
+	shadowNamespaces = catalogNamespaces()
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
 	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped"}
@@ -389,7 +403,26 @@ func (s *Shadow) logAllowed(gate int) bool {
 }
 
 // ShadowRowFor returns the catalog row of an action, the form every service's row map holds.
-func ShadowRowFor(actionID string) (ShadowRow, error) { return ShadowRow{}, errors.New("stub") }
+// An unknown action, or one outside the shadow's resource kinds, is an error.
+func ShadowRowFor(actionID string) (ShadowRow, error) {
+	action, err := policycatalog.Default().Action(actionID)
+	if err != nil {
+		return ShadowRow{}, fmt.Errorf("shadow row: %w", err)
+	}
+	row := shadowRowOf(action)
+	if !row.valid() {
+		return ShadowRow{}, fmt.Errorf("shadow row: action %s is outside the shadow's resource kinds", actionID)
+	}
+	return row, nil
+}
 
 // ShadowCaller is the closed caller kind of a caller's admin.orgs holding and role.
-func ShadowCaller(holdsAdminOrgs bool, role string) string { return "" }
+func ShadowCaller(holdsAdminOrgs bool, role string) string {
+	switch {
+	case holdsAdminOrgs:
+		return ShadowCallerSuperuser
+	case role == "owner" || role == "admin":
+		return ShadowCallerAdmin
+	}
+	return ShadowCallerMember
+}

@@ -13,7 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
-func catalogNamespaces() []string {
+func wantCatalogNamespaces() []string {
 	seen := map[string]bool{}
 	for _, action := range policycatalog.Default().Actions() {
 		seen[strings.SplitN(action.ID, ".", 2)[0]] = true
@@ -30,7 +30,7 @@ var queryAPIActions = []string{"analytics.read", "git.read", "metrics.read", "wo
 
 // 1g: the closed namespace set is the catalog's, sorted. A catalog namespace missing from it is red.
 func TestShadowNamespaceSetIsTheCatalogsNamespaces(t *testing.T) {
-	want := catalogNamespaces()
+	want := wantCatalogNamespaces()
 	if !slices.Equal(shadowNamespaces, want) {
 		t.Fatalf("closed namespace set %v, catalog namespaces %v", shadowNamespaces, want)
 	}

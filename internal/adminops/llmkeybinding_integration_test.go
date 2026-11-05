@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
 // TestLLMSettingsSetRefusesAProviderChangeWithoutAKey is CHAOS-13096 on the
@@ -57,4 +59,5 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 	if keys != 0 {
 		t.Fatal("a switch to a keyless provider kept the old vendor's key row")
 	}
+	venueoracle.WriteGoOnlyProof(t, "CHAOS-13096 operator llm-settings set: a provider or base_url change needs a new key; Python kept the old one")
 }

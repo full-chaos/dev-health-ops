@@ -195,6 +195,7 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"allowed_by_repository_grant", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-allow-with-obligations.json"},
 	{"grant_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-deny.json"},
 	{"repository_not_granted", "deny", "contracts/auth/v1/examples/authorization_batch_response/batch-response-valid-items-disagree.json"},
+	{"repository_unresolved", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-repository-unresolved.json"},
 	{"platform_role_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-platform-decision-null-org.json"},
 	{"allowed_by_role", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-role.json"},
 	{"invalid_request", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-invalid-request.json"},

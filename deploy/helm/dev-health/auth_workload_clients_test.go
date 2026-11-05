@@ -170,11 +170,20 @@ func insertInternalFrom(t *testing.T, render, lines string) string {
 			continue
 		}
 		found++
-		const ports = "      ports:\n        - protocol: TCP\n          port: 8097\n"
-		if strings.Count(doc, ports) != 1 {
-			t.Fatalf("the internal policy has %d port blocks on 8097, want 1:\n%s", strings.Count(doc, ports), doc)
+		// helm 3 ends the last document without a newline, helm 4 with one.
+		body, last := doc, !strings.HasSuffix(doc, "\n")
+		if last {
+			body += "\n"
 		}
-		docs[i] = strings.Replace(doc, ports, lines+ports, 1)
+		const ports = "      ports:\n        - protocol: TCP\n          port: 8097\n"
+		if strings.Count(body, ports) != 1 {
+			t.Fatalf("the internal policy has %d port blocks on 8097, want 1:\n%s", strings.Count(body, ports), doc)
+		}
+		body = strings.Replace(body, ports, lines+ports, 1)
+		if last {
+			body = strings.TrimSuffix(body, "\n")
+		}
+		docs[i] = body
 	}
 	if found != 1 {
 		t.Fatalf("the render has %d internal policies, want 1", found)

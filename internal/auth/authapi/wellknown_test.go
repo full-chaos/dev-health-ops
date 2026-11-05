@@ -79,7 +79,7 @@ func twoKeySet(t *testing.T) (token.KeySet, map[string]ed25519.PublicKey) {
 
 func TestJWKSServesTheActiveAndOverlapKeysAsAValidDocument(t *testing.T) {
 	set, publics := twoKeySet(t)
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })}
+	deps := WellKnownDeps{JWKS: documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil }))}
 	rec := serve(t, deps, http.MethodGet, PatternJWKS, nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d", rec.Code)
@@ -112,7 +112,7 @@ func TestJWKSNeverPublishesRetiredOrCompromisedKeys(t *testing.T) {
 	set, _ := keysOf(t,
 		[2]string{"auth-old", "retired"}, [2]string{"auth-bad", "compromised"},
 		[2]string{"auth-next", "pending"}, [2]string{"auth-now", "active"}, [2]string{"auth-prev", "retiring"})
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })}
+	deps := WellKnownDeps{JWKS: documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil }))}
 	body := serve(t, deps, http.MethodGet, PatternJWKS, nil).Body.String()
 	for _, kid := range []string{"auth-old", "auth-bad"} {
 		if strings.Contains(body, kid) {
@@ -130,9 +130,11 @@ func TestJWKSFollowsRotationWithoutARestart(t *testing.T) {
 	first, _ := keysOf(t, [2]string{"auth-a", "active"})
 	second, _ := keysOf(t, [2]string{"auth-a", "retiring"}, [2]string{"auth-b", "active"})
 	current := first
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return current, nil })}
+	document := documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return current, nil }))
+	deps := WellKnownDeps{JWKS: document}
 	before := serve(t, deps, http.MethodGet, PatternJWKS, nil)
 	current = second
+	document.refresh(context.Background())
 	after := serve(t, deps, http.MethodGet, PatternJWKS, nil)
 	if before.Body.String() == after.Body.String() || !strings.Contains(after.Body.String(), "auth-b") || !strings.Contains(after.Body.String(), "auth-a") {
 		t.Fatalf("rotation not served: %s -> %s", before.Body.String(), after.Body.String())
@@ -144,7 +146,7 @@ func TestJWKSFollowsRotationWithoutARestart(t *testing.T) {
 
 func TestJWKSAnswers304ForAMatchingETagAndHEADHasNoBody(t *testing.T) {
 	set, _ := twoKeySet(t)
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })}
+	deps := WellKnownDeps{JWKS: documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil }))}
 	etag := serve(t, deps, http.MethodGet, PatternJWKS, nil).Header().Get("ETag")
 	for name, header := range map[string]string{"exact": etag, "list": `"other", ` + etag, "star": "*", "weak": "W/" + etag, "weak in a list": `W/"other", W/` + etag} {
 		rec := serve(t, deps, http.MethodGet, PatternJWKS, http.Header{"If-None-Match": {header}})
@@ -167,9 +169,9 @@ func TestJWKSAnswers304ForAMatchingETagAndHEADHasNoBody(t *testing.T) {
 }
 
 func TestJWKSCustodyFailureIs503WithoutKeyMaterialAndIsNotCached(t *testing.T) {
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) {
+	deps := WellKnownDeps{JWKS: documentOf(keySetFunc(func(context.Context) (token.KeySet, error) {
 		return token.KeySet{}, errors.New("/secret/path/key.pem unreadable")
-	})}
+	}))}
 	rec := serve(t, deps, http.MethodGet, PatternJWKS, nil)
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("status %d headers %v", rec.Code, rec.Header())
@@ -184,7 +186,7 @@ func TestJWKSCustodyFailureIs503WithoutKeyMaterialAndIsNotCached(t *testing.T) {
 
 func TestJWKSNeverCarriesPrivateOrSymmetricMembers(t *testing.T) {
 	set, _ := twoKeySet(t)
-	deps := WellKnownDeps{Keys: keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })}
+	deps := WellKnownDeps{JWKS: documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil }))}
 	var doc struct{ Keys []map[string]any }
 	if err := json.Unmarshal(serve(t, deps, http.MethodGet, PatternJWKS, nil).Body.Bytes(), &doc); err != nil {
 		t.Fatal(err)
@@ -201,16 +203,16 @@ func TestJWKSNeverCarriesPrivateOrSymmetricMembers(t *testing.T) {
 
 func TestDiscoveryIsServedOnlyWithAnIssuerAndMatchesTheContract(t *testing.T) {
 	set, _ := twoKeySet(t)
-	keys := keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil })
+	keys := documentOf(keySetFunc(func(context.Context) (token.KeySet, error) { return set, nil }))
 
-	if rec := serve(t, WellKnownDeps{Keys: keys}, http.MethodGet, PatternDiscovery, nil); rec.Code != http.StatusNotFound {
+	if rec := serve(t, WellKnownDeps{JWKS: keys}, http.MethodGet, PatternDiscovery, nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("no issuer: status %d, want 404", rec.Code)
 	}
-	if rec := serve(t, WellKnownDeps{Keys: keys}, http.MethodGet, PatternJWKS, nil); rec.Code != http.StatusOK {
+	if rec := serve(t, WellKnownDeps{JWKS: keys}, http.MethodGet, PatternJWKS, nil); rec.Code != http.StatusOK {
 		t.Fatalf("no issuer: JWKS status %d, want 200", rec.Code)
 	}
 
-	deps := WellKnownDeps{Keys: keys, IssuerURL: wellKnownIssuer}
+	deps := WellKnownDeps{JWKS: keys, IssuerURL: wellKnownIssuer}
 	rec := serve(t, deps, http.MethodGet, PatternDiscovery, nil)
 	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "public, max-age=300" {
 		t.Fatalf("status %d headers %v", rec.Code, rec.Header())

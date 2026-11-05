@@ -13,6 +13,8 @@ type Grant struct {
 	Role         string
 	ResourceKind string
 	ResourceKey  string
+	// RepoID is the stable repository id ("<provider>:<number>") the row was made for; "" is a legacy row that matches on ResourceKey.
+	RepoID string
 	// ExpiresAtUnixNano is the expiry in Unix nanoseconds; 0 is no expiry.
 	// A grant is expired at its expiry instant and after it.
 	ExpiresAtUnixNano int64

@@ -120,6 +120,8 @@ type authorizeGoldenPDPVector struct {
 	Expect struct {
 		Reason         string          `json:"reason"`
 		WireReasonCode json.RawMessage `json:"wire_reason_code"`
+		// Obligations is checked by the decision core runner and the router replay; this test only reads past it.
+		Obligations json.RawMessage `json:"obligations"`
 	} `json:"expect"`
 }
 

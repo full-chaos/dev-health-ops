@@ -478,7 +478,7 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 			return err
 		}
 	}
-	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
+	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, coalesce(resource_repo_id, ''), expires_at, revoked_at IS NOT NULL
 FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id = $2`, principal, org)
 	if err != nil {
 		return storeErr("grants", err)
@@ -491,7 +491,7 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 			g       authorization.Grant
 			expires *time.Time
 		)
-		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &expires, &g.Revoked); err != nil {
+		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &g.RepoID, &expires, &g.Revoked); err != nil {
 			return storeErr("grants", err)
 		}
 		grantIDs = append(grantIDs, id)
@@ -506,6 +506,38 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 	}
 	if t.r.collect {
 		s.deps = append(s.deps, organizationDependencies(org, grantIDs)...)
+	}
+	for _, g := range s.grants {
+		if g.RepoID != "" {
+			return t.repositoryIdentities(ctx, org, s)
+		}
+	}
+	return nil
+}
+
+// repositoryIdentities reads the organization's path to id map, only for a pair that holds a grant with a repository id.
+// A path with more than one row maps to no id: a new repository took a path before the sync moved the old row.
+func (t *txReader) repositoryIdentities(ctx context.Context, org uuid.UUID, s *snapshot) error {
+	rows, err := t.tx.Query(ctx, `SELECT provider || ':' || provider_repo_id, current_path FROM `+t.table("repository_identities")+
+		` WHERE organization_id = $1`, org)
+	if err != nil {
+		return storeErr("repository identities", err)
+	}
+	defer rows.Close()
+	s.repoIDs = map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return storeErr("repository identities", err)
+		}
+		if _, dup := s.repoIDs[path]; dup {
+			s.repoIDs[path] = ""
+			continue
+		}
+		s.repoIDs[path] = id
+	}
+	if err := rows.Err(); err != nil {
+		return storeErr("repository identities", err)
 	}
 	return nil
 }
@@ -531,6 +563,8 @@ type snapshot struct {
 	orgStatus    authorization.Status
 	membership   *authorization.Membership
 	grants       []authorization.Grant
+	// repoIDs maps a live repository path of the organization to its id; nil unless a grant holds an id.
+	repoIDs map[string]string
 	// account is the service-account row of a service-account principal.
 	account *authorization.ServiceAccount
 	now     int64
@@ -562,6 +596,14 @@ func (s *snapshot) Grants(orgID string) ([]authorization.Grant, error) {
 		return nil, nil
 	}
 	return s.grants, nil
+}
+
+func (s *snapshot) RepositoryID(orgID, path string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	id := s.repoIDs[path]
+	return id, id != ""
 }
 
 func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {

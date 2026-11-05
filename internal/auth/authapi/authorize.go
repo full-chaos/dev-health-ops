@@ -122,6 +122,13 @@ type delegatedSnapshot struct {
 	del authorization.Delegation
 }
 
+func (d delegatedSnapshot) RepositoryID(orgID, path string) (string, bool) {
+	if ri, ok := d.GrantSnapshot.(authorization.RepositoryIdentities); ok {
+		return ri.RepositoryID(orgID, path)
+	}
+	return "", false
+}
+
 func (d delegatedSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
 
 // DecisionTx reads decision state inside one read-only transaction. Every

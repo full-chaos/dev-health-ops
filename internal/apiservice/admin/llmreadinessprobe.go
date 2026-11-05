@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -667,18 +668,15 @@ func refusedBoundedParam(failure *providerFailure, req chatCompletionRequest) st
 // provider's code/param/type, the first 200 characters of its message with the
 // saved key removed, and the round. The base URL is never logged.
 func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, round, attempt int, failure *providerFailure) {
-	message := failure.detail.message
-	if runes := []rune(message); len(runes) > providerMessageMaxLogRunes {
-		message = string(runes[:providerMessageMaxLogRunes])
-	}
+	message := plainProviderText(failure.detail.message)
 	p.log().InfoContext(ctx, "admin: llm readiness probe round failed",
 		"round", round,
 		"attempt", attempt,
 		"status", failure.detail.status,
 		"safe_error_code", failure.code,
-		"error_code", failure.detail.code,
-		"error_param", failure.detail.param,
-		"error_type", failure.detail.errType,
+		"error_code", stripControlRunes(failure.detail.code),
+		"error_param", stripControlRunes(failure.detail.param),
+		"error_type", stripControlRunes(failure.detail.errType),
 		"error_message", message,
 		"trace_id", traceIDOf(ctx),
 	)
@@ -693,13 +691,19 @@ func traceIDOf(ctx context.Context) string {
 }
 
 // plainProviderText cuts redacted provider text to the log limit and turns
-// control characters into spaces; it reaches the logs, the record and the UI.
+// every Unicode control character (C0, DEL, C1) into a space; it reaches the
+// logs, the record and the UI.
 func plainProviderText(s string) string {
 	if runes := []rune(s); len(runes) > providerMessageMaxLogRunes {
 		s = string(runes[:providerMessageMaxLogRunes])
 	}
+	return stripControlRunes(s)
+}
+
+// stripControlRunes turns every Unicode control character into a space.
+func stripControlRunes(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r

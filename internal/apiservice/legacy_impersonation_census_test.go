@@ -71,7 +71,9 @@ var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api
 // let through in its session on status and stop only. Every other route
 // either refuses it in the scope (403, no impersonation headers, its handler
 // never runs) or never applies the session (a route that skips the scope or
-// whose row takes no access token: the caller is anonymous there).
+// whose row takes no access token: the caller is anonymous there). The
+// scope's refusal is told from the route's by the impersonation headers,
+// which the scope stamps only when it lets the session through.
 func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
 	key := strings.Repeat("fixture-key-", 3)
 	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
@@ -143,16 +145,23 @@ func TestLegacyImpersonationCallerCensusUnderTheProxySwitch(t *testing.T) {
 		store.mu.Lock()
 		reads := store.sessionReads
 		store.mu.Unlock()
-		impersonating := recorder.Header().Get("X-Impersonating") == "true"
+		scopeRefused := recorder.Code == http.StatusForbidden && recorder.Body.String() == `{"detail":"Not allowed in an impersonation session"}` &&
+			recorder.Header().Get("X-Impersonating") == ""
 		switch {
-		case impersonating:
-			admitted = append(admitted, profile)
-		case reads > 0 && recorder.Code == http.StatusForbidden && recorder.Body.String() == `{"detail":"Not allowed in an impersonation session"}`:
-			refused = append(refused, profile)
 		case reads == 0:
 			sessionless = append(sessionless, profile)
+		case scopeRefused:
+			refused = append(refused, profile)
 		default:
-			t.Errorf("%s: the session was read and neither applied nor refused: %d %s", profile, recorder.Code, recorder.Body.String())
+			admitted = append(admitted, profile)
+		}
+	}
+	exempt := proxy.ScopeExemptRoutes()
+	for _, profile := range sessionless {
+		method, pattern, _ := strings.Cut(profile, " ")
+		row, _ := rows(profile)
+		if _, signatureOnly := signatureOnlyRoutes[profile]; !signatureOnly && !exempt[profile] && row.AccessToken {
+			t.Errorf("%s: the scope read no session for an access-token route it does not skip (%s %s)", profile, method, pattern)
 		}
 	}
 	slices.Sort(admitted)

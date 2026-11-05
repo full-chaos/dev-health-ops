@@ -97,6 +97,26 @@ func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
 // RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
 func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
 
+// legacySessionRoutes are the route templates where a refused legacy caller
+// is still served in its session: the admin's own bearer reads and ends it.
+var legacySessionRoutes = map[string]bool{
+	"GET /api/v1/admin/impersonate/status": true,
+	"POST /api/v1/admin/impersonate/stop":  true,
+}
+
+// refusesLegacyCaller reports whether the legacy caller is refused on r: the
+// option is on and r is not one of legacySessionRoutes. The route is the
+// template RouteProfiles recorded, whose method must be the request's own (a
+// GET template also matches HEAD); a request no route matches is refused.
+func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
+	if !s.refuseLegacy {
+		return false
+	}
+	profile := RouteProfileFrom(r.Context())
+	method, _, _ := strings.Cut(profile, " ")
+	return method != r.Method || !legacySessionRoutes[profile]
+}
+
 // NewScope builds the middlewares over auth.
 func NewScope(auth *Authenticator, logger *slog.Logger) *Scope {
 	if logger == nil {
@@ -228,7 +248,9 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 // org the request's org, sets the impersonation context, and stamps
 // X-Impersonating / X-Impersonated-User-Id on the response. A session
 // lookup failure refuses the request with the generic 500, like the other
-// authorization lookups (fail closed, logged).
+// authorization lookups (fail closed, logged). With RefuseLegacyImpersonation
+// on, a caller with an active session is refused with 403 before the route
+// runs, but on legacySessionRoutes.
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -263,6 +285,12 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		}
 		if session == nil {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if s.refusesLegacyCaller(r) {
+			s.logger.WarnContext(r.Context(), "api impersonation: legacy session caller refused; impersonation goes through a delegated session",
+				slog.String("route", RouteProfileFrom(r.Context())), slog.String("admin_user_id", user.UserID))
+			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
 			return
 		}
 		ctx := context.WithValue(r.Context(), orgIDKey, session.TargetOrgID.String())

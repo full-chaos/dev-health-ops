@@ -734,6 +734,10 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	}
 	scope := policy.NewScope(auth, logger)
 	scope.DeclaredRows(rows)
+	// With impersonation through auth-service, the delegated bearer is the
+	// impersonation; auth-service still writes go-api's session row, so the
+	// admin's own bearer beside it is refused but on status and stop.
+	scope.RefuseLegacyImpersonation(proxy.ImpersonationOn())
 	return protection{auth: auth, scope: scope, guard: policy.NewGuard(auth, logger), authSchema: authSchema,
 		verifier: verifier, signer: signer}, nil
 }

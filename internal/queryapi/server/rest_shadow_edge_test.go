@@ -36,6 +36,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 		status    answer
 		want      string
 	}
+	envelopeOrgless := answer{http.StatusOK, `{"org":""}`}
 	var cells []cell
 	for _, routed := range []bool{true, false} {
 		path := map[bool]string{true: "routed", false: "unrouted"}[routed]
@@ -44,11 +45,14 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			cell{path + " hs256 orgless delegated", routed, "hs256", false, true, forbidden, refused},
 			cell{path + " hs256 orgless not delegated", routed, "hs256", false, false, forbidden, skippedHS},
 			cell{path + " envelope org delegated", routed, "envelope", true, true, served, refused},
+			cell{path + " envelope orgless delegated", routed, "envelope", false, true, envelopeOrgless, refused},
 		)
 	}
 	cells = append(cells,
 		cell{"routed user token org delegated", true, "user", true, true, served, refused},
 		cell{"routed user token orgless delegated", true, "user", false, true, forbidden, refused},
+		cell{"unrouted user token org delegated", false, "user", true, true, answer{http.StatusUnauthorized, restRefusal}, ""},
+		cell{"unrouted user token orgless delegated", false, "user", false, true, answer{http.StatusUnauthorized, restRefusal}, ""},
 	)
 	for _, tc := range cells {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,7 +85,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 				token = m.mint(ecUser, extra, nil)
 			case "envelope":
 				by := delegate
-				token = iaEnvelope(t, f.priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin", ImpersonatedBy: &by})
+				token = iaEnvelope(t, f.priv, principal.Claims{OrgID: org, Role: "admin", ImpersonatedBy: &by})
 			}
 			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewManualReader()))
 			t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -97,6 +101,15 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 				t.Fatalf("answer %+v, want %+v", got, tc.status)
 			}
 			want := map[string]int64{tc.want: 1}
+			if tc.want == "" {
+				want = map[string]int64{}
+			}
+			if tc.want == "" {
+				if d := settleQuiet(t, before); len(d) != 0 {
+					t.Fatalf("5.12 counters %v, want none", d)
+				}
+				return
+			}
 			if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 				t.Fatalf("5.12 counters %v, want %v", d, want)
 			}

@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
+	"github.com/full-chaos/dev-health-ops/internal/platform/fernet"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 const ssoPeers = `authService.networkPolicy.egress.sso.to=[{"podSelector":{"matchLabels":{"app":"idp-egress"}}}]`
@@ -261,6 +264,14 @@ func TestSSOChartRequiredSetMatchesTheLoader(t *testing.T) {
 			if !enabled(load("")) {
 				t.Fatalf("%s routes are not mounted by the rendered settings", mode)
 			}
+			// The salt reference is optional by design (values.prod.yaml:781 and :1216): the loader needs no salt to mount the
+			// routes, and an unset salt stays empty for the cipher, which then uses fernet.DefaultSalt.
+			if _, set := containerLookup(t, service, "auth-service")(authconfig.EnvSettingsEncryptionSalt); set {
+				t.Fatal("the lookup carries a salt: the cell would not show the unset case")
+			}
+			if salt := load("").EncryptionSalt; salt != "" {
+				t.Errorf("auth-service reads salt %q with the reference unset; want empty (the default salt)", salt)
+			}
 			env := ssoEnv(t, docs)
 			for _, name := range needs {
 				if len(envNamed(env, name)) != 1 {
@@ -331,4 +342,56 @@ func TestSSOGoldens(t *testing.T) {
 			t.Fatalf("refusal differs from %s: got %q want %q (%v)", path, line, golden, err)
 		}
 	})
+}
+
+// A value the other plane (go-api and the workers, which read SETTINGS_ENCRYPTION_KEY today) encrypts with the default salt
+// decrypts in auth-service with the salt reference unset; a different salt does not, so the cell is not vacuous.
+func TestSSOUnsetSaltDecryptsWhatTheOtherPlaneEncrypted(t *testing.T) {
+	docs, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{"oidc"})...)...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.300s", err, out)
+	}
+	service := authDoc(docs, "Deployment", "a-dev-health-auth-service")
+	lookup := containerLookup(t, service, "auth-service")
+	if _, set := lookup(authconfig.EnvSettingsEncryptionSalt); set {
+		t.Fatal("the lookup carries a salt: the cell would not show the unset case")
+	}
+	cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: lookup})
+	if err != nil {
+		t.Fatalf("auth-service refuses the rendered settings: %v", err)
+	}
+	key := cfg.SSO.EncryptionKey.Reveal()
+	if key == "" {
+		t.Fatal("auth-service reads no encryption key")
+	}
+	plaintext := []byte("idp-client-secret")
+
+	otherPlane, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(key), "")
+	if err != nil {
+		t.Fatalf("the other plane refuses the key: %v", err)
+	}
+	sealed, err := otherPlane.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("the other plane cannot encrypt: %v", err)
+	}
+	cipher, err := fernet.New(key, cfg.SSO.EncryptionSalt)
+	if err != nil {
+		t.Fatalf("auth-service cipher: %v", err)
+	}
+	got, err := cipher.Open(sealed.Reveal())
+	if err != nil || string(got) != string(plaintext) {
+		t.Fatalf("auth-service with the salt unset cannot open a value the other plane sealed: %q, %v", got, err)
+	}
+
+	withSalt, err := providerfoundation.NewFernetDecryptor(secrets.NewValue(key), "another-salt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := withSalt.Encrypt(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cipher.Open(other.Reveal()); err == nil {
+		t.Error("a value sealed with another salt opened with the default salt: the cell does not show the salt matters")
+	}
 }

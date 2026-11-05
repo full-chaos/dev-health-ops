@@ -2,7 +2,6 @@ package authmail
 
 import (
 	"context"
-	"slices"
 	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -68,7 +67,9 @@ func (c Config) Valid(ctx context.Context, purpose, token string) (bool, error) 
 	if err != nil || ok {
 		return ok, err
 	}
-	if c.TokenSecret == "" || slices.Contains(current, c.TokenSecret) {
+	// A legacy key equal to a current one refused the token above, so only a
+	// key that is not current can accept it here.
+	if c.TokenSecret == "" {
 		return false, nil
 	}
 	ok, err = signedtoken.Valid(token, c.TokenSecret)

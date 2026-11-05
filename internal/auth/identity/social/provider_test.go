@@ -46,6 +46,8 @@ func TestParseProviderAcceptsOnlyTheThree(t *testing.T) {
 	}
 }
 
+func ptr(s string) *string { return &s }
+
 func TestProfileFetchFollowsEachProvider(t *testing.T) {
 	ctx := context.Background()
 	f := newFakeProviders(t)
@@ -55,13 +57,14 @@ func TestProfileFetchFollowsEachProvider(t *testing.T) {
 		acct         account
 		wantSubject  string
 		wantVerified bool
+		wantName     *string
 	}{
-		{"github public email", account{provider: GitHub, id: 42, email: "a@example.com", public: true}, "42", true},
-		{"github primary verified", account{provider: GitHub, id: 43, email: "b@example.com", verified: true}, "43", true},
-		{"gitlab confirmed", account{provider: GitLab, id: 45, email: "d@example.com", verified: true}, "45", true},
-		{"gitlab unconfirmed", account{provider: GitLab, id: 46, email: "e@example.com"}, "46", false},
-		{"google verified", account{provider: Google, googleID: "108", email: "f@example.com", verified: true}, "108", true},
-		{"google unverified", account{provider: Google, googleID: "109", email: "g@example.com"}, "109", false},
+		{"github public email", account{provider: GitHub, id: 42, email: "a@example.com", public: true}, "42", true, ptr("Test User")},
+		{"github primary verified", account{provider: GitHub, id: 43, email: "b@example.com", verified: true, name: absentName}, "43", true, nil},
+		{"gitlab confirmed", account{provider: GitLab, id: 45, email: "d@example.com", verified: true}, "45", true, ptr("Test User")},
+		{"gitlab unconfirmed", account{provider: GitLab, id: 46, email: "e@example.com", name: float64(7)}, "46", false, nil},
+		{"google verified", account{provider: Google, googleID: "108", email: "f@example.com", verified: true}, "108", true, ptr("Test User")},
+		{"google unverified", account{provider: Google, googleID: "109", email: "g@example.com", name: absentName}, "109", false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +74,9 @@ func TestProfileFetchFollowsEachProvider(t *testing.T) {
 			}
 			if p.Subject != tc.wantSubject || p.EmailVerified != tc.wantVerified || p.Issuer != SocialIssuer(tc.acct.provider) {
 				t.Fatalf("profile %+v", p)
+			}
+			if (p.FullName == nil) != (tc.wantName == nil) || (tc.wantName != nil && *p.FullName != *tc.wantName) {
+				t.Fatalf("full name %v, want %v", p.FullName, tc.wantName)
 			}
 			if !tc.wantVerified && tc.acct.provider == GitHub && p.Email != "" {
 				t.Fatalf("an unverified GitHub address was returned: %q", p.Email)

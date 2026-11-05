@@ -289,3 +289,21 @@ func TestRunCarriesNoPasswordHashForAServiceProviderRow(t *testing.T) {
 		t.Error("the backfill must still carry a local row's password hash")
 	}
 }
+
+func TestMapSelfHostedGitLabCarriesNoGitLabComSocialKey(t *testing.T) {
+	provider, subject := "gitlab", "123"
+	for _, c := range []struct {
+		name       string
+		selfHosted bool
+		wantKey    bool
+	}{{"gitlab.com account", false, true}, {"self-hosted account", true, false}} {
+		target, class, notCarried := Map(Row{ID: uuid.New(), Email: "a@b.example", AuthProvider: &provider, AuthProviderID: &subject, SelfHostedGitLab: c.selfHosted})
+		if class != "" || (target.Identity != nil) != c.wantKey || notCarried != !c.wantKey {
+			t.Fatalf("%s: key=%v class=%q notCarried=%v", c.name, target.Identity, class, notCarried)
+		}
+	}
+	github := "github"
+	if target, _, _ := Map(Row{ID: uuid.New(), Email: "a@b.example", AuthProvider: &github, AuthProviderID: &subject, SelfHostedGitLab: true}); target.Identity == nil {
+		t.Fatal("the self-hosted flag dropped a github social key")
+	}
+}

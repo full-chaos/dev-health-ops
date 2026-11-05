@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 func goAPIDeployment(t *testing.T, sets ...string) map[string]any {
 	t.Helper()
 	args := append([]string{"template", "go-api-env", ".", "--set", "goApi.enabled=true"}, sets...)
-	output, err := exec.Command("helm", args...).CombinedOutput()
+	output, err := helmCommand(args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
 	}
@@ -82,7 +81,7 @@ func TestGoAPIReadsTheRouteSettingsThePythonAPIReads(t *testing.T) {
 			t.Errorf("the go-api container carries %s %d times, want once", key, found)
 		}
 	}
-	configMap, err := exec.Command("helm", "template", "go-api-env", ".", "--show-only", "templates/configmap.yaml").CombinedOutput()
+	configMap, err := helmCommand("template", "go-api-env", ".", "--show-only", "templates/configmap.yaml").CombinedOutput()
 	if err != nil {
 		t.Fatalf("configmap render failed: %v\n%s", err, configMap)
 	}

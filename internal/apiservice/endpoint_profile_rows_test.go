@@ -2,11 +2,15 @@ package apiservice
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -373,8 +377,27 @@ func TestTheScopeMiddlewaresAreWrappedAroundTheAPIListener(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	if !strings.Contains(text, "protected.scope.OrgScope, protected.scope.Impersonation}") {
-		t.Fatal("the api listener no longer installs OrgScope and Impersonation: the rows' reachable validators are stale")
+	file, err := parser.ParseFile(token.NewFileSet(), "service.go", raw, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lists [][]string
+	ast.Inspect(file, func(node ast.Node) bool {
+		if lit, ok := node.(*ast.CompositeLit); ok {
+			var names []string
+			for _, elt := range lit.Elts {
+				if sel, ok := elt.(*ast.SelectorExpr); ok {
+					names = append(names, sel.Sel.Name)
+				}
+			}
+			if slices.Contains(names, "OrgScope") {
+				lists = append(lists, names)
+			}
+		}
+		return true
+	})
+	if len(lists) != 1 || !slices.Equal(lists[0], []string{"ReadOnce", "Principal", "OrgScope", "Impersonation"}) {
+		t.Fatalf("api listener scope lists %v, want one [ReadOnce Principal OrgScope Impersonation]: the rows' reachable validators are stale", lists)
 	}
 	if !strings.Contains(text, "newServer(cfg, logger, Routes(deps, logger), gate, deps.AuthProxy.ScopeExemptRoutes(), scope...)") {
 		t.Fatal("the api listener is no longer built with the scope middlewares")

@@ -27,7 +27,7 @@ const (
 	invalidRequestID = "invalid"
 )
 
-var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
+var durationBuckets = []float64{0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
 // knownMethods bounds the method label: a client can send any token as the
 // method, and each distinct one would otherwise be a new series.

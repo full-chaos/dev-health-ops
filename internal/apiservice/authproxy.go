@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/textproto"
 	"net/url"
 	"regexp"
@@ -21,11 +22,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/clientip"
 	"github.com/full-chaos/dev-health-ops/internal/api/orgreactivate"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 )
 
@@ -54,6 +58,11 @@ const EnvAuthProxyURL = "AUTH_PROXY_URL"
 // is off by default.
 const EnvAuthProxyOrgProvisioning = "AUTH_PROXY_ORG_PROVISIONING"
 
+// EnvAuthProxyImpersonation is the switch that sends the admin impersonation start and stop to auth-service's
+// delegated session routes (CHAOS-12908). It is no aggregate: it moves no /api/v1/auth route, and it is off by
+// default. It needs AUTH_PROXY_SESSIONS: the base session of a delegated session is an auth-service session.
+const EnvAuthProxyImpersonation = "AUTH_PROXY_IMPERSONATION"
+
 // AuthProxyFlagEnv is the routing flag of an aggregate, AUTH_PROXY_<NAME>.
 func AuthProxyFlagEnv(a AuthAggregate) string { return "AUTH_PROXY_" + strings.ToUpper(string(a)) }
 
@@ -73,6 +82,11 @@ type AuthProxyConfig struct {
 	Timeout time.Duration
 	// OrgProvisioning is AUTH_PROXY_ORG_PROVISIONING.
 	OrgProvisioning bool
+	// Impersonation is AUTH_PROXY_IMPERSONATION.
+	Impersonation bool
+	// ClientAddrKey is AUTH_CLIENT_ADDR_SIGNING_KEY: with it every forward and every session issue carries a proof of
+	// the X-Forwarded-For value (internal/auth/clientaddr, CHAOS-11645). nil sends no proof.
+	ClientAddrKey *clientaddr.ProofKey
 }
 
 // Enabled reports whether a's routes go to auth-service.
@@ -82,6 +96,9 @@ func (c AuthProxyConfig) Enabled(a AuthAggregate) bool { return c.Upstream != ni
 // auth-service.
 func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && c.OrgProvisioning }
 
+// ImpersonationOn reports whether go-api starts and ends the admin impersonation session through auth-service.
+func (c AuthProxyConfig) ImpersonationOn() bool { return c.Upstream != nil && c.Impersonation }
+
 // ParseAuthProxyConfig reads AUTH_PROXY_URL and the AUTH_PROXY_<aggregate>
 // flags. Every flag defaults off. It refuses a flag without a URL, a URL
 // that is not a bare http(s) origin, and any aggregate that mints refresh
@@ -89,6 +106,12 @@ func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && 
 // owner able to rotate it.
 func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, error) {
 	cfg := AuthProxyConfig{On: map[AuthAggregate]bool{}}
+	rawKey, _ := lookup(clientaddr.EnvSigningKey)
+	key, err := clientaddr.ParseSigningKey(rawKey)
+	if err != nil {
+		return AuthProxyConfig{}, err
+	}
+	cfg.ClientAddrKey = key
 	anyOn := false
 	for _, aggregate := range AuthAggregates {
 		name := AuthProxyFlagEnv(aggregate)
@@ -109,6 +132,14 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyOrgProvisioning)
 		}
 		cfg.OrgProvisioning = on
+		anyOn = anyOn || on
+	}
+	if raw, ok := lookup(EnvAuthProxyImpersonation); ok && strings.TrimSpace(raw) != "" {
+		on, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyImpersonation)
+		}
+		cfg.Impersonation = on
 		anyOn = anyOn || on
 	}
 	raw, _ := lookup(EnvAuthProxyURL)
@@ -156,7 +187,49 @@ func sessionIssuer(cfg AuthProxyConfig, lookup func(string) (string, bool), cred
 	if err != nil {
 		return nil, fmt.Errorf("%s is on: %w", AuthProxyFlagEnv(AuthSessions), err)
 	}
+	client.SetClientAddrProof(cfg.ClientAddrKey)
 	return client, nil
+}
+
+var (
+	impersonationConfigInvalid = func() metric.Int64Gauge {
+		gauge, err := authProxyMeter.Int64Gauge("devhealth_api_auth_proxy_impersonation_config_invalid",
+			metric.WithDescription("1 when AUTH_PROXY_IMPERSONATION is on without AUTH_PROXY_SESSIONS, so every impersonation start answers 503; else 0."))
+		if err != nil {
+			gauge, _ = otel.GetMeterProvider().Meter("noop").Int64Gauge("devhealth_api_auth_proxy_impersonation_config_invalid")
+		}
+		return gauge
+	}()
+)
+
+// unavailableDelegator is the Delegator of AUTH_PROXY_IMPERSONATION on without AUTH_PROXY_SESSIONS: it starts and ends
+// nothing, so the impersonation routes answer 503 and never fall back to a go-api session.
+type unavailableDelegator struct{}
+
+func (unavailableDelegator) StartDelegated(context.Context, *http.Request, sessionissue.DelegatedRequest) (sessionissue.DelegatedSession, error) {
+	return sessionissue.DelegatedSession{}, fmt.Errorf("%w: %s needs %s", sessionissue.ErrUnavailable, EnvAuthProxyImpersonation, AuthProxyFlagEnv(AuthSessions))
+}
+
+func (unavailableDelegator) EndDelegated(context.Context, *http.Request, uuid.UUID) error {
+	return fmt.Errorf("%w: %s needs %s", sessionissue.ErrUnavailable, EnvAuthProxyImpersonation, AuthProxyFlagEnv(AuthSessions))
+}
+
+// impersonationDelegator is the Delegator of the admin impersonation routes when AUTH_PROXY_IMPERSONATION is on: the
+// session issue client (the same credential), or, without AUTH_PROXY_SESSIONS, one that refuses every call. That
+// combination logs one ERROR line and sets the config gauge; it does not stop the start-up (D6465). Nil when off.
+func impersonationDelegator(ctx context.Context, cfg AuthProxyConfig, issuer sessionissue.Issuer, logger *slog.Logger) sessionissue.Delegator {
+	if !cfg.ImpersonationOn() {
+		impersonationConfigInvalid.Record(ctx, 0)
+		return nil
+	}
+	if client, ok := issuer.(*sessionissue.Client); ok && cfg.Enabled(AuthSessions) {
+		impersonationConfigInvalid.Record(ctx, 0)
+		return client
+	}
+	impersonationConfigInvalid.Record(ctx, 1)
+	logger.ErrorContext(ctx, "AUTH_PROXY_IMPERSONATION is on without AUTH_PROXY_SESSIONS: every impersonation start and stop answers 503",
+		slog.String("flag", EnvAuthProxyImpersonation), slog.String("needs", AuthProxyFlagEnv(AuthSessions)))
+	return unavailableDelegator{}
 }
 
 // orgLifecycleClient is the client of auth-service's organization reactivate and
@@ -213,7 +286,7 @@ func logAuthProxyRouting(ctx context.Context, logger *slog.Logger, cfg AuthProxy
 	for _, aggregate := range AuthAggregates {
 		attrs = append(attrs, slog.Bool(string(aggregate), cfg.Enabled(aggregate)))
 	}
-	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()))
+	attrs = append(attrs, slog.Bool("org_provisioning", cfg.OrgProvisioningOn()), slog.Bool("client_addr_proof", cfg.ClientAddrKey != nil))
 	logger.LogAttrs(ctx, slog.LevelInfo, "auth proxy routing", attrs...)
 }
 
@@ -521,11 +594,15 @@ func (p *authProxy) forward(w http.ResponseWriter, r *http.Request, aggregate Au
 		return
 	}
 	out.Header = outboundHeader(r.Header)
-	if address := clientip.FromRequest(r); address != "" {
-		out.Header.Set("X-Forwarded-For", address)
-	}
 	if requestID != "" {
 		out.Header.Set(httpapi.RequestIDHeader, requestID)
+	}
+	if address := clientip.FromRequest(r); address != "" {
+		out.Header.Set("X-Forwarded-For", address)
+		// The proof covers the request id set above: it is the last header written.
+		if addr, parseErr := netip.ParseAddr(address); parseErr == nil {
+			clientaddr.SetProof(out, p.cfg.ClientAddrKey, time.Now(), addr)
+		}
 	}
 	start := time.Now()
 	response, err := p.transport.RoundTrip(out)

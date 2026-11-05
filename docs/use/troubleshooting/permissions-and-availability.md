@@ -20,7 +20,7 @@ AI Attribution, several report subroutes, and some other product routes are curr
 ## Blank or unavailable metrics
 
 A blank or unavailable metric is not automatically zero. Preserve the selected
-scope, dates, metric name, and displayed state when asking an administrator for
-help. `NO_MATCH`, `INSUFFICIENT_EVIDENCE`, `PARTIAL`, `STALE`, `UNCONFIGURED`,
-and `UNAVAILABLE` each identify a different next check; only `ZERO` represents
-matching measured rows whose value is zero.
+scope, dates, metric name, and the message the page shows when asking an
+administrator for help. [Understand loading, empty, stale, and partial data](../navigate/data-states.md)
+explains how a measured value differs from an unavailable, incomplete, stale, or
+unsupported one.

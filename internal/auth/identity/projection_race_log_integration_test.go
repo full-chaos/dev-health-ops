@@ -112,8 +112,8 @@ func requireOneRefusal(t *testing.T, lines []map[string]any, eventType string) {
 	}
 	rec := got[0]
 	if rec["level"] != "WARN" || rec["msg"] != "audit: Commit refused; its own transaction rolled back" ||
-		rec["audit_event_type"] != eventType || rec["refusal"] != "identity.concurrentProjection" {
-		t.Fatalf("logged %v, want one WARN refusal of %s with refusal identity.concurrentProjection", rec, eventType)
+		rec["audit_event_type"] != eventType || rec["refusal"] != "*identity.concurrentProjection" {
+		t.Fatalf("logged %v, want one WARN refusal of %s with refusal *identity.concurrentProjection", rec, eventType)
 	}
 	for _, line := range lines {
 		if line["level"] == "ERROR" {
@@ -219,7 +219,7 @@ func TestRaceLostIdentityProjectionLogsAWarnRefusal(t *testing.T) {
 		e.loseTheRace(t, ctx, "external_identities",
 			`INSERT INTO auth.external_identities (id, principal_id, issuer, provider, subject) VALUES ($1, $2, $3, $4, $5)`,
 			[]any{uuid.New(), user, key.Issuer, string(key.Provider), key.Subject}, func() {
-				err = e.store.projectIdentity(ctx, key, user)
+				err = e.store.projectIdentity(ctx, key, user, string(key.Provider))
 			})
 	})
 	if err != nil {

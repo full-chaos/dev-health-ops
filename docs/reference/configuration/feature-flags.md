@@ -53,7 +53,7 @@ Ask Dev has five independent feature decisions:
 | --- | --- | --- |
 | `ask_dev` | The in-app Ask Dev interaction layer for Context Fabric | Disabled until explicitly enabled for an organization or license |
 | `ask_dev_contextual_entrypoints` | Typed, review-before-submit handoffs from approved product surfaces into Ask Dev | Disabled until explicitly enabled for an organization or license |
-| `ask_dev_wave_3_1` | Server-owned question interpretation and the named-subject preflight | Disabled until explicitly enabled for an organization or license |
+| `ask_dev_wave_3_1` | Registered for server-owned question interpretation and the named-subject preflight; no Ask Dev runtime reader for it was found on main | Disabled until explicitly enabled for an organization or license |
 | `byo_llm` | Organization-managed LLM provider configuration | Existing tier and override behavior, unchanged |
 | `agent_context_runtime` | Hosted ACR/MCP context capability (retiring into `ask_dev`) | An organization with `ask_dev` has hosted ACR/MCP. An existing `agent_context_runtime` grant still turns it on until the grant is retired |
 | `acr_service_model` | Turns ACR AI features (MCP investigations) on for the organization; when it is off they stop for every organization, BYO included. It does not grant the platform LLM by itself: an organization with a saved BYO LLM runs on it, and one without runs on the platform LLM only when it also holds `platform_model_fallback`. Published in the acr entitlement response (`acr_entitlement.v1`, beside `agent_context_runtime`) as its effective value: the organization's explicit override, else on for an organization with a saved BYO LLM (auto-enrolment), else the plan or license decision | Disabled until explicitly enabled for an organization or license, or auto-enrolled by a saved BYO LLM; a globally disabled flag reads `false` for every organization; reads `false` when the feature row is not registered yet and no BYO LLM is saved (`dho admin features seed` registers it) |
@@ -80,22 +80,14 @@ them; it never infers the contextual decision from `ask_dev`.
 feature registry, seeded by Alembic revision `0073`). Every tier stays denied
 until an organization or license override grants it, and the row is preserved on
 rollback because those overrides may reference it. With the decision off, a run
-behaves exactly as it did before Wave 3.1: the preflight is not constructed, and
-neither is the question-understanding shadow seam, regardless of its own
-environment variable. Evaluating the decision fails closed — a storage error
+behaves exactly as it did before Wave 3.1. Evaluating the decision fails closed — a storage error
 leaves it off rather than admitting an unreviewed path.
 
 Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is
 a deferred commercial possibility and requires a new accepted product decision,
 registry/migration change, and verification matrix before implementation.
 
-The current Wave 1 backend exposes authorized scope search and the bounded
-eight-metric catalog/query API through this canonical feature decision, plus
-dark additive conversation storage. It does not add Ask Dev orchestration or
-the web experience. Operators should keep the entitlement disabled until the
-documented launch gates pass. Disabling it later must hide or deny new Ask Dev
-work without changing categorization BYO LLM behavior or ACR/MCP access;
-expiry, deletion, and purge continue for content already stored.
+Ask Dev is built in the web app and in the Ask Dev service (ACR). It is not turned on in production. Keep the entitlement off until you intend to enable it for an organization; see [Turn on Ask Dev](../../admin/ask-dev/index.md). Turning it off hides the launcher and does not change categorization BYO LLM behavior or ACR/MCP access. Stored content is removed only where the operator runs the retention cleanup.
 
 ## Go worker migration routes
 

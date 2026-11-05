@@ -138,13 +138,13 @@ func (g *guard) helm(env []string, args ...string) render {
 // tpl runs `helm template <release> <chart> <args>` with the placeholder web BACKEND_URL the suite always
 // gave it (web.env.BACKEND_URL is required while web.enabled, the chart default).
 func (g *guard) tpl(release string, args ...string) render {
-	full := []string{"template", "--set", "web.env.BACKEND_URL=" + backendURL, "--set", "web.authSecret.secretName=web-auth-placeholder", release, g.path(chartRel)}
+	full := []string{"template", "--namespace", "default", "--set", "web.env.BACKEND_URL=" + backendURL, "--set", "web.authSecret.secretName=web-auth-placeholder", release, g.path(chartRel)}
 	return g.helm(nil, append(full, args...)...)
 }
 
 // tplRaw renders with no placeholder and HELM_SHIM_OFF semantics: the chart sees exactly the given args.
 func (g *guard) tplRaw(release string, args ...string) render {
-	full := []string{"template", release, g.path(chartRel)}
+	full := []string{"template", "--namespace", "default", release, g.path(chartRel)}
 	return g.helm(nil, append(full, args...)...)
 }
 

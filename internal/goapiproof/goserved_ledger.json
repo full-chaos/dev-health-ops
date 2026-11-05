@@ -543,6 +543,16 @@
       ]
     },
     {
+      "operation": "teamWorkItemBreakdown",
+      "unproven_reason": "Go-only from its first day (CHAOS-13017): the investmentBreakdown registered body under acr's work-item team operation name; no Python resolver ever existed and no go-edge proof is recorded for this name yet",
+      "born_in_go": true,
+      "guards": [
+        {"file": "internal/queryapi/server/investment_breakdown_documents_test.go", "test": "TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName"},
+        {"file": "internal/queryapi/server/investment_breakdown_documents_test.go", "test": "TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDigest"},
+        {"file": "internal/queryapi/analytics/resolve_test.go", "test": "TestResolve_Investment_ResolvesEndToEnd"}
+      ]
+    },
+    {
       "operation": "sourceHealth",
       "unproven_reason": "Go-only from its first day (CHAOS-8906), no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
       "born_in_go": true,

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,7 +136,7 @@ func runNewShadow(t *testing.T, env map[string]string, shared *workloadtoken.Cli
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	s := newShadow(cfg, rec.lookup, shared, slog.New(slog.NewTextHandler(&logs, nil)))
+	s := newShadow(newDecisionPoint(cfg, rec.lookup, shared), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil)))
 	return s, logs.String(), rec
 }
 
@@ -210,6 +211,64 @@ func TestShadowBadOrMissingInputIsOffWithAnErrorAndNoSecret(t *testing.T) {
 			if strings.Contains(logs, secret) {
 				t.Errorf("%s: log holds %q: %s", name, secret, logs)
 			}
+		}
+	}
+}
+
+// An issuer that passes the https and host checks but that workloadtoken.New refuses turns the shadow off with an
+// ERROR that names AUTH_WORKLOAD_ISSUER, so the operator knows which variable to fix, and never logs its value.
+func TestShadowIssuerRefusedByTheWorkloadClientNamesTheIssuerVariable(t *testing.T) {
+	proxy := "http://auth-service:8095"
+	for name, tc := range map[string]struct{ issuer, secret string }{
+		"userinfo":        {"https://user:secret@issuer.example.test", "secret"},
+		"query":           {"https://issuer.example.test?tenant=team-query-value", "team-query-value"},
+		"fragment":        {"https://issuer.example.test#tenant-fragment-value", "tenant-fragment-value"},
+		"upper case host": {"https://Issuer-Upper.example.test", "Issuer-Upper"},
+	} {
+		s, logs, _ := runNewShadow(t, shadowEnvOn(t, proxy, map[string]string{EnvAuthWorkloadIssuer: tc.issuer}), nil)
+		if s != nil {
+			t.Errorf("%s: a shadow was built", name)
+		}
+		if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, "variable="+EnvAuthWorkloadIssuer) {
+			t.Errorf("%s: want an ERROR naming variable=%s, got %q", name, EnvAuthWorkloadIssuer, logs)
+		}
+		if strings.Contains(logs, "variable=decider") {
+			t.Errorf("%s: the ERROR still names variable=decider: %s", name, logs)
+		}
+		if strings.Contains(logs, tc.secret) {
+			t.Errorf("%s: log holds the issuer value %q: %s", name, tc.secret, logs)
+		}
+	}
+}
+
+// A Config field the environment does not set maps to no variable: a timeout out of bounds keeps the generic
+// decider name, and the exchange URL names AUTH_PROXY_URL.
+func TestShadowConfigRefusedOutsideTheIssuerNamesTheVariableItCameFrom(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*AuthProxyConfig)
+		want   string
+	}{
+		"timeout too long":  {func(c *AuthProxyConfig) { c.Timeout = workloadtoken.MaxTimeout + time.Second }, "variable=decider"},
+		"timeout too short": {func(c *AuthProxyConfig) { c.Timeout = time.Millisecond }, "variable=decider"},
+		"exchange URL with a path": {func(c *AuthProxyConfig) {
+			c.Upstream = &url.URL{Scheme: "http", Host: "auth-service:8095", Path: "/internal"}
+		}, "variable=" + EnvAuthProxyURL},
+	} {
+		rec := &recordingLookup{values: shadowEnvOn(t, "http://auth-service:8095", nil)}
+		cfg, err := ParseAuthProxyConfig(rec.lookup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tc.mutate(&cfg)
+		var logs bytes.Buffer
+		if s := newShadow(newDecisionPoint(cfg, rec.lookup, nil), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil))); s != nil {
+			t.Errorf("%s: a shadow was built", name)
+		}
+		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), tc.want) {
+			t.Errorf("%s: want an ERROR with %s, got %q", name, tc.want, logs.String())
+		}
+		if tc.want == "variable=decider" && strings.Contains(logs.String(), "variable=AUTH_") {
+			t.Errorf("%s: a timeout names an environment variable: %s", name, logs.String())
 		}
 	}
 }

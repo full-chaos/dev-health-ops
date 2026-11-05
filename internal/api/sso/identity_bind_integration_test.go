@@ -78,6 +78,9 @@ func seedAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email, a
 VALUES ($1, $2, $3, $4, true, true, false, 0, now(), now())`, uuid.New(), email, authProvider, subject); err != nil {
 		t.Fatalf("seed account: %v", err)
 	}
+	if authProvider == "gitlab" {
+		bindSelfHostedGitLabAccounts(t, ctx, pool)
+	}
 }
 
 func assertMembershipRequired(t *testing.T, ctx context.Context, st stack, providerID uuid.UUID, status int, body map[string]any) {
@@ -124,7 +127,7 @@ func seedBoundAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pro
 func seedMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, orgID uuid.UUID, email, authProvider, subject string) {
 	t.Helper()
 	seedAccount(t, ctx, pool, email, authProvider, subject)
-	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1`,
+	if _, err := pool.Exec(ctx, `UPDATE users SET sso_provider_id = (SELECT id FROM sso_providers WHERE org_id = $2 AND protocol = $3 ORDER BY id LIMIT 1) WHERE email = $1 AND $3 IN ('oidc', 'saml')`,
 		email, orgID, authProvider); err != nil {
 		t.Fatalf("bind member: %v", err)
 	}

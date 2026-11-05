@@ -42,6 +42,11 @@ var edgeGoOnlyFromBirth = map[string]edgeGoOnlyDocument{
 		document: registeredInvestmentBreakdownRepositoryDocument,
 		root:     "analytics",
 	},
+	// CHAOS-13017: acr's work-item team breakdown, the same body under its own name.
+	"teamWorkItemBreakdown": {
+		document: registeredTeamWorkItemBreakdownDocument,
+		root:     "analytics",
+	},
 	// CHAOS-8104 is a dedicated operation over the existing analytics root.
 	// The operation key is deliberately not the selected field name.
 	"investmentEvidenceQuality": {

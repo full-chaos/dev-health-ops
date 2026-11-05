@@ -3,7 +3,6 @@ package devhealth_test
 import (
 	"fmt"
 	"net"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -159,7 +158,7 @@ func renderPolicySet(t *testing.T, args ...string) ([]netpolDoc, []egressDoc, st
 	full := append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
 		"--set", "goApi.enabled=true", "--set", "goApi.internal.enabled=true", "--set", "queryApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := exec.Command("helm", full...).CombinedOutput()
+	out, err := helmCommand(full...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -247,7 +246,7 @@ func TestQueryAPIWithoutTrustedListenersStaysInTheReleaseWidePolicy(t *testing.T
 }
 
 func TestQueryAPIPublicPortStaysOpenWithTheReleasePolicyOff(t *testing.T) {
-	out, err := exec.Command("helm", "template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
+	out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "queryApi.enabled=true",
 		"--set", "queryApi.mcp.enabled=true", "--set", "queryApi.internal.enabled=true").CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
@@ -396,7 +395,7 @@ func TestExtraEgressRefusals(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			out, err := exec.Command("helm", "template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
+			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true",
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", "networkPolicy.extraEgress="+c.value).CombinedOutput()
 			if err == nil || !strings.Contains(string(out), c.want) {
 				t.Errorf("extraEgress %s must fail the render with %q: err=%v\n%.600s", c.value, c.want, err, out)
@@ -440,7 +439,7 @@ func TestDNSEgressAllowsUDPAndTCP(t *testing.T) {
 func TestQueryAPIInternalAllowedFromRefusesEmptySelectors(t *testing.T) {
 	for _, np := range []string{"true", "false"} {
 		for _, value := range []string{`[{}]`, `[{"matchLabels":{}}]`, `[{"matchExpressions":[]}]`, `[{"matchLabels":{"app":"tools"}},{}]`, `["tools"]`} {
-			out, err := exec.Command("helm", "template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
+			out, err := helmCommand("template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled="+np,
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set", "queryApi.enabled=true",
 				"--set", "queryApi.internal.enabled=true", "--set-json", "queryApi.internal.allowedFrom="+value).CombinedOutput()
 			if err == nil || !strings.Contains(string(out), "queryApi.internal.allowedFrom entries must select pods by non-empty matchLabels or matchExpressions") {

@@ -4,8 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 12,
-    "reason": "membership_inactive",
-    "wire_reason_code": "membership_inactive"
+    "reason": "no_membership",
+    "wire_reason_code": "no_membership"
   },
   "id": "membership-active-uppercase",
   "layer": "pdp",
@@ -36,5 +36,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "a membership in status ACTIVE is not active."
+  "why": "a membership in status ACTIVE (uppercase) is not the active status, so the evaluator treats it as no membership."
 }

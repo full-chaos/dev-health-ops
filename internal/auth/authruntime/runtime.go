@@ -696,6 +696,15 @@ func (a announcedListener) Shutdown(ctx context.Context) error { return a.listen
 
 func (a announcedListener) Errors() <-chan error { return a.listener.Errors() }
 
+func (a announcedListener) Drained() <-chan struct{} {
+	if source, ok := a.listener.(lifecycle.ShutdownDrainSource); ok {
+		return source.Drained()
+	}
+	drained := make(chan struct{})
+	close(drained)
+	return drained
+}
+
 // reasonOf renders a bounded reason code for a dependency-construction
 // failure. It never falls back to err.Error(): those errors can carry a DSN.
 func reasonOf(err error) string {

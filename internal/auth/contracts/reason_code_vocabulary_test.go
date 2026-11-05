@@ -204,7 +204,6 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"organization_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-organization-inactive.json"},
 	{"no_membership", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-no-membership.json"},
 	{"org_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-org-mismatch.json"},
-	{"membership_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-membership-inactive.json"},
 	{"role_unknown", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-unknown.json"},
 	{"role_scope_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-scope-mismatch.json"},
 	{"role_lacks_action", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-lacks-action.json"},

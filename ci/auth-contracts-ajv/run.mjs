@@ -224,7 +224,6 @@ const APPROVED_DECISION = [
   "grant_revoked",
   "impersonation_denied",
   "invalid_request",
-  "membership_inactive",
   "no_membership",
   "org_mismatch",
   "organization_inactive",

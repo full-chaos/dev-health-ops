@@ -8,8 +8,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 )
 
-// PatternOrgState is the organization state read route, mounted only when the embedded endpoint-profile document holds
-// its row: without the row it answers 404 and the service starts.
+// PatternOrgState is the organization state read route. Its endpoint-profile row is on the startup gate: a document
+// without it, or with a class beside the ones the route admits, refuses the service start.
 const PatternOrgState = "/internal/v1/organizations/state"
 
 const opOrgState = "organization_state"
@@ -20,13 +20,8 @@ type stateAnswer struct {
 	Revision       int64  `json:"revision"`
 }
 
-// withStateRoute mounts the state route when the profile document holds a row listing every class the route admits,
-// else logs one line naming the route.
-func (h provisioningHandlers) withStateRoute(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if rowsAcceptFor(rows, []string{PatternOrgState}, admittedClasses(PatternOrgState, h.Workload != nil)) != nil {
-		h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgState)
-		return routes
-	}
+// withStateRoute mounts the state route; its endpoint-profile row is on the startup gate (provisioningPatterns).
+func (h provisioningHandlers) withStateRoute(routes []httpapi.Route) []httpapi.Route {
 	return append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgState, Handler: http.HandlerFunc(h.orgState)})
 }
 

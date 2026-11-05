@@ -802,6 +802,8 @@ type EvidenceQualityStats struct {
 	BandCounts graphqljson.JSON `json:"bandCounts"`
 	// Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit.
 	UncategorizedCount *int `json:"uncategorizedCount,omitempty"`
+	// Categorized units of the window (not under the evidence gate) that carry a positive issue size; the rest count as one unit each in ISSUE_SIZE. Null when the window has no unit.
+	SizedUnitCount *int `json:"sizedUnitCount,omitempty"`
 }
 
 type EvidenceRef struct {

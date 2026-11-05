@@ -114,7 +114,7 @@ func ReadRoutes(deps ReadDeps) ([]httpapi.Route, error) {
 	return h.withReadRoutes(nil, rows), nil
 }
 
-// withReadRoutes mounts each read route whose store is wired and whose endpoint-profile row lists the session issuer credential
+// withReadRoutes mounts each read route whose store is wired and whose endpoint-profile row lists exactly the session issuer credential
 // class and the go-api workload token class, else logs one line naming the route.
 func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
 	for _, rr := range readRoutes {
@@ -125,7 +125,7 @@ func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []http
 		if !stored {
 			continue
 		}
-		if rowsAcceptFor(rows, []string{rr.pattern}, []string{serviceSessionIssuerClass, workloadTokenClass}) != nil {
+		if rowsExactFor(rows, []string{rr.pattern}, []string{serviceSessionIssuerClass, workloadTokenClass}) != nil {
 			h.Logger.Info("auth read route left dark: no endpoint-profile row", "route", rr.pattern)
 			continue
 		}

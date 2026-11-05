@@ -18,7 +18,7 @@ const (
 
 type shadowMismatchAdder func(ctx context.Context, namespace, caller, class string)
 
-type shadowResultAdder func(ctx context.Context, result string)
+type shadowResultAdder func(ctx context.Context, result, reason string)
 
 // Tests replace both. Every label value is one of the closed sets in shadow.go: no
 // request, user or organization value is ever a label.
@@ -41,12 +41,12 @@ func newShadowMismatchAdder(meter metric.Meter) shadowMismatchAdder {
 
 func newShadowResultAdder(meter metric.Meter) shadowResultAdder {
 	resultCounter, err := meter.Int64Counter(shadowResultMetric,
-		metric.WithDescription("Shadow PDP calls by result: match, mismatch, error, dropped, skipped"))
+		metric.WithDescription("Shadow PDP calls by result (match, mismatch, error, dropped, skipped) and skip reason (none, hs256, envelope)"))
 	if err != nil {
-		return func(context.Context, string) {}
+		return func(context.Context, string, string) {}
 	}
-	return func(ctx context.Context, result string) {
-		resultCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
+	return func(ctx context.Context, result, reason string) {
+		resultCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result), attribute.String("reason", reason)))
 	}
 }
 
@@ -58,9 +58,9 @@ func countShadowMismatch(ctx context.Context, namespace, caller, class string) {
 	}
 }
 
-func countShadowResult(ctx context.Context, result string) {
+func countShadowResult(ctx context.Context, result, reason string) {
 	defer func() { _ = recover() }()
 	if shadowResultAdd != nil {
-		shadowResultAdd(ctx, result)
+		shadowResultAdd(ctx, result, reason)
 	}
 }

@@ -473,7 +473,7 @@ func TestShadowCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test")
 	newShadowMismatchAdder(meter)(context.Background(), "teams", "admin", "unresolved")
-	newShadowResultAdder(meter)(context.Background(), "match")
+	newShadowResultAdder(meter)(context.Background(), "match", "none")
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &collected); err != nil {
 		t.Fatal(err)

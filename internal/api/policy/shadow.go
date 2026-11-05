@@ -39,7 +39,26 @@ var (
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
 	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped"}
+	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope}
 )
+
+// The closed values of the reason label on the results counter. "none" is every result that has no skip reason,
+// every go-api skip included; a service names a credential class it never asks the PDP about with one of the others.
+const (
+	ShadowReasonNone     = "none"
+	ShadowReasonHS256    = "hs256"
+	ShadowReasonEnvelope = "envelope"
+)
+
+// ShadowReasons is the one closed list of reason label values.
+func ShadowReasons() []string { return slices.Clone(shadowReasons) }
+
+func shadowReasonOf(reason string) string {
+	if slices.Contains(shadowReasons, reason) {
+		return reason
+	}
+	return ShadowReasonNone
+}
 
 const (
 	classUnresolved = "unresolved"
@@ -282,6 +301,8 @@ type ShadowObservation struct {
 	UserAccessToken bool
 	// Impersonating is true while a delegated session is in force: the PDP cannot decide it yet.
 	Impersonating bool
+	// SkipReason names why the credential class never asks the PDP: one of ShadowReasons, else "none".
+	SkipReason string
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
 }
@@ -312,12 +333,12 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		return
 	}
 	if row.HighRisk && !s.highRisk {
-		countShadowResult(ctx, resultSkipped)
+		countShadowResult(ctx, resultSkipped, shadowReasonOf(o.SkipReason))
 		return
 	}
 	org := strings.ToLower(o.OrgID)
 	if o.Bearer == "" || !o.UserAccessToken || o.Impersonating || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
-		countShadowResult(ctx, resultSkipped)
+		countShadowResult(ctx, resultSkipped, shadowReasonOf(o.SkipReason))
 		return
 	}
 	request := pep.Request{PrincipalReference: o.Bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
@@ -327,7 +348,7 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	select {
 	case s.slots <- struct{}{}:
 	default:
-		countShadowResult(ctx, resultDropped)
+		countShadowResult(ctx, resultDropped, ShadowReasonNone)
 		return
 	}
 	caller := o.Caller
@@ -351,14 +372,14 @@ func (s *Shadow) run(call shadowCall) {
 	defer func() { <-s.slots }()
 	defer func() {
 		if recover() != nil {
-			countShadowResult(call.ctx, resultError)
+			countShadowResult(call.ctx, resultError, ShadowReasonNone)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(call.ctx, s.timeout)
 	defer cancel()
 	decision := s.decider.Decide(ctx, call.request)
 	if decision.Local() {
-		countShadowResult(call.ctx, resultError)
+		countShadowResult(call.ctx, resultError, ShadowReasonNone)
 		if s.logAllowed(len(shadowClasses)) {
 			s.logger.WarnContext(call.ctx, "api shadow pdp: no verdict", slog.String("namespace", call.row.Namespace),
 				slog.String("caller", call.caller), slog.String("reason", string(decision.Reason())))
@@ -366,11 +387,11 @@ func (s *Shadow) run(call shadowCall) {
 		return
 	}
 	if decision.Allowed() == call.legacyAllowed {
-		countShadowResult(call.ctx, resultMatch)
+		countShadowResult(call.ctx, resultMatch, ShadowReasonNone)
 		return
 	}
 	class := s.classify(call.legacyAllowed, decision, call.row.Namespace)
-	countShadowResult(call.ctx, resultMismatch)
+	countShadowResult(call.ctx, resultMismatch, ShadowReasonNone)
 	countShadowMismatch(call.ctx, call.row.Namespace, call.caller, class)
 	if s.logAllowed(slices.Index(shadowClasses, class)) {
 		s.logger.WarnContext(call.ctx, "api shadow pdp: mismatch with the legacy guard",

@@ -670,7 +670,9 @@ func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t 
 		body, _ := io.ReadAll(rec.Result().Body)
 		client.mu.Lock()
 		defer client.mu.Unlock()
-		return answer{rec.Code, strings.TrimSpace(string(body))}, slices.Clone(client.statements)
+		statements := slices.Clone(client.statements)
+		slices.Sort(statements)
+		return answer{rec.Code, strings.TrimSpace(string(body))}, statements
 	}
 	quietStdLog(t)
 	baseAnswer, baseSQL := serve(t, nil)

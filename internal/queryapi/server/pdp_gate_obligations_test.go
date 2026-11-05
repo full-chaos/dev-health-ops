@@ -70,3 +70,29 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 		t.Fatalf("%d statements reached ClickHouse, want 0:\n%s", len(client.statements), strings.Join(client.statements, "\n"))
 	}
 }
+
+// The WARN line of a PDP refusal is one line: a request id with CR or LF never puts a line break in it (CodeQL
+// go/log-injection, alert 3601). The id is also filtered by acceptableCorrelationID; the header map is written
+// directly so a value the HTTP parser would reject reaches the handler.
+func TestPDPRefusalLogLineHasNoLineBreakFromTheRequestID(t *testing.T) {
+	for name, id := range map[string]string{
+		"lf":         "abc\ndef",
+		"cr":         "abc\rdef",
+		"crlf forge": "abc\r\nlevel=ERROR msg=forged",
+		"clean":      "req-123",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var logs strings.Builder
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/home", nil)
+			r.Header["X-Request-Id"] = []string{id}
+			writePDPDenied(httptest.NewRecorder(), r, "rest", &pdp.DenyError{Reason: "role_lacks_action"})
+			out := strings.TrimSuffix(logs.String(), "\n")
+			if out == "" || strings.ContainsAny(out, "\r\n") {
+				t.Fatalf("log output %q is not exactly one line", out)
+			}
+		})
+	}
+}

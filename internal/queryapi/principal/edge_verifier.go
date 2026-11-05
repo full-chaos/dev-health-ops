@@ -27,7 +27,11 @@ const (
 
 // OrgRequiredError is Verify's refusal of a valid token that names no
 // organization when the live users row is not a superuser's.
-type OrgRequiredError struct{}
+type OrgRequiredError struct {
+	// Caller and Delegated are the refused token's shadow caller kind and delegation state, for the PDP shadow only.
+	Caller    string
+	Delegated bool
+}
 
 func (*OrgRequiredError) Error() string { return "principal: edge: organization context required" }
 
@@ -38,6 +42,10 @@ func (*OrgRequiredError) Error() string { return "principal: edge: organization 
 // Python dataclass does.
 type EdgeClaims struct {
 	OrgID string
+	// Caller is the shadow's closed caller kind and Delegated is true under a delegated session; VerifyRouted sets
+	// both for the PDP shadow, which only observes them.
+	Caller    string
+	Delegated bool
 }
 
 // EdgeVerifier verifies the edge access token -- the HS256-signed JWT
@@ -125,10 +133,10 @@ func (v *EdgeVerifier) Verify(ctx context.Context, tokenString string) (*EdgeCla
 	orgID, _ := claims["org_id"].(string)
 	if orgID == "" && !user.IsSuperuser {
 		v.reject(ctx, ReasonOrgMissing, claims, meta)
-		return nil, &OrgRequiredError{}
+		return nil, &OrgRequiredError{Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}
 	}
 	recordEdgeVerifyOutcome("verified")
-	return &EdgeClaims{OrgID: orgID}, nil
+	return &EdgeClaims{OrgID: orgID, Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}, nil
 }
 
 // reject is Verify's one call site for every rejection branch: it logs

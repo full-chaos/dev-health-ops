@@ -32,6 +32,15 @@ var keyReaders = []struct{ reader, dir, function, via string }{
 	{"GET purpose (masked)", "internal/apiservice/admin", "llmPurposeObject", "llmSettingValue"},
 }
 
+// forChecksUsers are the only functions that take the stored key whatever its
+// binding (ScopeKey.ForChecks): the masked display, the base_url leak checks.
+// Every other reader takes ScopeKey.Served.
+var forChecksUsers = map[string]bool{
+	"internal/apiservice/admin.llmSettingValue":     true,
+	"internal/apiservice/admin.storedPurposeAPIKey": true,
+	"internal/apiservice/admin.bindDefaultKey":      true,
+}
+
 // settingReads are the functions that read one settings row by name.
 var settingReads = map[string]bool{"settingByKeyOn": true, "settingText": true}
 
@@ -152,6 +161,13 @@ func TestEveryBYOKeyReadGoesThroughTheAccessor(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
+			owner := filepath.ToSlash(filepath.Dir(f.path)) + "." + fn.Name.Name
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "ForChecks" && !forChecksUsers[owner] {
+					t.Errorf("%s takes the stored key whatever its binding (ForChecks); a reader takes Served", owner)
+				}
+				return true
+			})
 			for _, r := range keyReaders {
 				if fn.Name.Name != r.function || filepath.ToSlash(filepath.Dir(f.path)) != r.dir {
 					continue

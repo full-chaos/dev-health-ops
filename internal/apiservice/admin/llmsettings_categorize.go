@@ -189,7 +189,8 @@ func clefRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose boo
 // typeSafeRefusal is the PUT rule of the typesafe provider (an org's own
 // TypeSafe jev key). Like clef it is a SystemOne decision model, so only the
 // categorize override may name it. The model must be on the closed list and
-// the request may carry no base_url: the endpoint is fixed in code.
+// the request may carry no base_url field at all, not even an empty one: the
+// endpoint is fixed in code.
 func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURL *string) *llmRefusal {
 	if llmorgsettings.NormalizeProvider(provider) != llmorgsettings.ProviderTypeSafe {
 		return nil
@@ -202,7 +203,7 @@ func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose
 		return newLLMRefusal(http.StatusBadRequest, "error", llmorgsettings.CodeCategorizeBYOModelUnsupported, "feature", byoLLMFeature,
 			"message", "model must be jev-1.13.0")
 	}
-	if baseURL != nil && *baseURL != "" {
+	if baseURL != nil {
 		return newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature,
 			"message", "TypeSafe takes no base_url: its endpoint is fixed")
 	}

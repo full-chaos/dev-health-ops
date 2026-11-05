@@ -91,9 +91,8 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 			t.Errorf("compose.yml has no service %s", name)
 			continue
 		}
-		// CHAOS-13107: the auth services are part of the default stack, as go-api's sessions are auth-service's.
-		if len(svc.Profiles) != 0 {
-			t.Errorf("%s profiles = %v, want none: it starts with the default stack, as auth-service does", name, svc.Profiles)
+		if !reflect.DeepEqual(svc.Profiles, []string{"auth"}) {
+			t.Errorf("%s profiles = %v, want [auth]: it must not start with the default stack", name, svc.Profiles)
 		}
 		if !svc.ReadOnly || !reflect.DeepEqual(svc.CapDrop, []string{"ALL"}) || !reflect.DeepEqual(svc.SecurityOpt, []string{"no-new-privileges:true"}) {
 			t.Errorf("%s is not hardened (read_only %v, cap_drop %v, security_opt %v)", name, svc.ReadOnly, svc.CapDrop, svc.SecurityOpt)

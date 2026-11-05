@@ -643,7 +643,7 @@ const composeFile = "compose.yml"
 var composeOneShots = []string{"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap"}
 
 // workloadComposeGuard pins the Compose one-shot text of the bootstrap runbook to compose.yml: the three service names,
-// no profile (CHAOS-13107), the seed and create commands, the volume and its mount path, and the read-only mount of go-api.
+// the profile, the seed and create commands, the volume and its mount path, and the read-only mount of go-api.
 func workloadComposeGuard(d docTree) []string {
 	var out []string
 	page, ok := readOrNote(&out, d, workloadBootstrapPage)
@@ -672,9 +672,9 @@ func workloadComposeGuard(d docTree) []string {
 		if !inTable {
 			out = append(out, "Compose one-shots: no table row for the service "+name)
 		}
-		// CHAOS-13107: the auth services left the `auth` profile and start with the default stack.
-		if profiles := asList(svc["profiles"]); len(profiles) != 0 {
-			out = append(out, composeFile+": "+name+" is in a profile; it starts with the default stack")
+		profiles := asList(svc["profiles"])
+		if len(profiles) != 1 || asString(profiles[0]) != "auth" {
+			out = append(out, composeFile+": "+name+" is not in the profile auth alone")
 		}
 	}
 	for _, name := range []string{"auth-workload-seed", "auth-workload-bootstrap"} {

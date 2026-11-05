@@ -218,7 +218,7 @@ volumes:
   # auth-keys-init. Separate from envelope_keys on purpose.
   auth_signing_keys:
     driver: local
-  # The workload bootstrap credential file, written once by
+  # The workload bootstrap credential file (profile `auth`), written once by
   # auth-workload-bootstrap and mounted read-only into go-api only.
   workload_bootstrap:
     driver: local
@@ -1200,7 +1200,7 @@ services:
       GO_API_ENVELOPE_ISSUER: ${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
       GO_API_ENVELOPE_AUDIENCE: ${GO_API_ENVELOPE_AUDIENCE:-query-api}
       # The workload bootstrap credential, as a read-only file (written by
-      # auth-workload-bootstrap). go-api reads it only when
+      # auth-workload-bootstrap, profile `auth`). go-api reads it only when
       # AUTH_SESSION_ISSUE_CREDENTIAL or AUTH_PROVISIONING_CREDENTIAL selects
       # `workload`; both are unset by default. The issuer must equal
       # auth-service's AUTH_TOKEN_ISSUER_URL: a token carries the issuer it was
@@ -1592,7 +1592,7 @@ services:
       auth-grants:
         condition: service_completed_successfully
 
-  # The workload bootstrap credential, in three one-shots, never a dependency of a running service:
+  # The workload bootstrap credential (profile `auth`), in three one-shots, never a dependency of a running service:
   # a later `up` would run bootstrap-create again, and it refuses a workload with a live credential. Run
   # `run --rm auth-workload-bootstrap`: compose starts the other two before it, and each is safe to run again.
   # auth-workload-volume: a new named volume is root-owned, the writer runs as uid 65532; it changes the directory
@@ -1602,6 +1602,7 @@ services:
   # mount; auth-service never mounts it. `down -v` deletes the volume.
   auth-workload-volume:
     image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    profiles: [auth]
     network_mode: none
     restart: "no"
     read_only: true
@@ -1617,6 +1618,7 @@ services:
   auth-workload-seed:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     command: ["workloads", "seed", "-apply"]
+    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true
@@ -1636,6 +1638,7 @@ services:
   auth-workload-bootstrap:
     image: ${DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE:-ghcr.io/full-chaos/dev-health-go-auth-migrate:local}
     command: ["workloads", "bootstrap-create", "-workload", "api", "-out", "/run/workload/api.bootstrap", "-apply"]
+    profiles: [auth]
     networks: [auth_plane]
     restart: "no"
     read_only: true

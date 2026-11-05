@@ -64,11 +64,9 @@ the new credential. Keep the id: you need it to revoke.
 
 ## Compose one-shots
 
-The Compose stack (`compose.yml`) creates the first credential of the `api` workload with three one-shot
-services. Since CHAOS-13107 they are in the default stack, with no profile. No running service depends on them:
-`bootstrap-create` refuses a workload with a live credential, so after the first `up` a later `up` starts
-`auth-workload-bootstrap` again and it exits non-zero. That exit stops nothing. The local go-api asks for
-sessions with the `session_compat` credential and does not read this file.
+The Compose stack (`compose.yml`, profile `auth`) creates the first credential of the `api` workload with three
+one-shot services. No running service depends on them, because a later `up` would run `bootstrap-create` again
+and it refuses a workload with a live credential.
 
 | Service | What it does | Audit event |
 | --- | --- | --- |

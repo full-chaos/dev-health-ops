@@ -16,8 +16,8 @@ import (
 // issuer front with its TLS step.
 var eddsaComposeAuthServices = []string{
 	"auth-keys-init", "auth-provision", "auth-owner-grants", "auth-migrate", "auth-grants", "auth-fence-init",
-	"auth-workload-volume", "auth-workload-seed", "auth-workload-bootstrap", "auth-service",
-	"auth-issuer", "auth-issuer-tls-init",
+	// Not auth-workload-volume/-seed/-bootstrap (profile auth): unused under session_compat; a 2nd `up` gives errOutExists.
+	"auth-service", "auth-issuer", "auth-issuer-tls-init",
 }
 
 // runsWherever reports whether a service with profiles dep starts in every profile set that starts a service with

@@ -47,3 +47,14 @@ func TestAProviderChangeOfTheCategorizeOverrideNeedsANewKey(t *testing.T) {
 		}
 	}
 }
+
+// A typesafe override needs a key of its own: a write with none, and none to
+// inherit, is refused (purposeNeedsKey reads this rule).
+func TestATypeSafeOverrideNeedsAKey(t *testing.T) {
+	if CredentialsComplete(ProviderTypeSafe, "") {
+		t.Fatal("typesafe is complete with no key")
+	}
+	if !CredentialsComplete(ProviderTypeSafe, testTypeSafeKey) {
+		t.Fatal("typesafe is incomplete with a key")
+	}
+}

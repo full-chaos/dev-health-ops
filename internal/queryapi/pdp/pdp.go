@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -306,8 +307,8 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	namespace, _, _ := strings.Cut(action, ".")
 	enforced := known && g.cells.On(namespace)
 	switch {
-	case !known && g.anyCellOn():
-		// A row the gate cannot place under a cell is refused while any cell is on.
+	case !known && (g.anyCellOn() || g.mode == ModeEnforce):
+		// A row the gate cannot place under a cell is refused while any cell is on, or in enforce mode.
 		g.count(ctx, ModeEnforce, ResultUnavailable, label)
 		return pepgate.Scope{}, &DenyError{Reason: pep.ReasonInvalidRequest, Local: true}
 	case g.mode == modeInvalid:
@@ -317,6 +318,10 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 		}
 		g.count(ctx, modeInvalid, ResultNotConfigured, label)
 		return pepgate.Scope{}, &DenyError{Reason: reason, Local: true}
+	case !enforced && g.mode == ModeEnforce:
+		// A mode named enforce never acts as shadow: with the cell off it refuses.
+		g.count(ctx, ModeEnforce, ResultNotConfigured, label)
+		return pepgate.Scope{}, &DenyError{Reason: ReasonEnforceCellOff, Local: true}
 	case !enforced:
 		if g.mode != ModeOff {
 			g.shadow(ctx, g.request(action, bearer, orgID), known, label)
@@ -350,20 +355,21 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 }
 
 // scopeOf is the scope of an allow, or the closed reason it is not carried out. Fail-closed order: the decision and
-// its tenant_scope must both name the request's organization, in the lowercase form a read binds; redaction,
+// its tenant_scope must both name the request's organization, compared as UUIDs (the scope carries the canonical
+// form); redaction,
 // minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
 // every repository; any other allowlist is a ceiling only on a route the cut-over registry lists; neither repository
 // member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
 func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason) {
-	org := strings.ToLower(orgID)
-	if org == "" || orgID != org {
+	org, ok := canonicalUUID(orgID)
+	if !ok {
 		return pepgate.Scope{}, ReasonTenantMismatch
 	}
-	if decided, ok := d.OrganizationID(); !ok || decided != org {
+	if decided, ok := d.OrganizationID(); !ok || !sameUUID(decided, org) {
 		return pepgate.Scope{}, ReasonTenantMismatch
 	}
 	o := d.Obligations()
-	if tenant, ok := o.TenantScope(); !ok || tenant != org {
+	if tenant, ok := o.TenantScope(); !ok || !sameUUID(tenant, org) {
 		return pepgate.Scope{}, ReasonTenantMismatch
 	}
 	if _, ok := o.MinimumAssurance(); ok || len(o.Redaction()) != 0 || o.StepUpRequired() {
@@ -523,3 +529,21 @@ func FromContext(ctx context.Context) *Gate {
 }
 
 type gateKey struct{}
+
+// canonicalUUID is the canonical (lowercase) form of an RFC 9562 UUID in its 36-character text form, any case. Any
+// other spelling (braces, urn:uuid:, no hyphens) or a value that does not parse is not an organization.
+func canonicalUUID(s string) (string, bool) {
+	if len(s) != 36 {
+		return "", false
+	}
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return "", false
+	}
+	return u.String(), true
+}
+
+func sameUUID(s, canonical string) bool {
+	c, ok := canonicalUUID(s)
+	return ok && c == canonical
+}

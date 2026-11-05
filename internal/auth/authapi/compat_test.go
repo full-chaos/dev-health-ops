@@ -593,7 +593,6 @@ func TestCompatLogoutAlwaysAnswersGoAPIs200(t *testing.T) {
 }
 
 func TestCompatLoginRefusalsAnswerGoAPIsWireAndAreAudited(t *testing.T) {
-	t.Parallel()
 	disabled, noPassword := uuid.New(), uuid.New()
 	cases := []struct {
 		golden   string

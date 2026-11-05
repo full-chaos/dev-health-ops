@@ -1,0 +1,3 @@
+{
+  "state: alice, admin role": "200 {\"needs_onboarding\":true,\"org_created\":true,\"org_id\":\"a0000000-0000-4000-8000-00000000000a\",\"org_name\":\"Org A\",\"first_integration_connected\":false,\"integration_skipped\":false,\"recommended_provider\":\"github\",\"next_step\":\"integration\",\"blocker\":null}"
+}

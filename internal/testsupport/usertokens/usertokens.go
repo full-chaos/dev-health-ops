@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/tokencorpus"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
@@ -59,32 +59,30 @@ func All(t testing.TB) []Token {
 	return append(out, corpusAccepts(t)...)
 }
 
+// hs256Access is the retired HS256 access token's shape (the go-api edge token), signed with Secret.
 func hs256Access(t testing.TB) string {
 	t.Helper()
-	signer, err := edgetoken.NewSigner(Secret, LegacyIssuer, Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionID := uuid.NewString()
-	compact, err := signer.Access(edgetoken.AccessClaims{
-		UserID: uuid.NewString(), Email: "ada@example.com", OrgID: uuid.NewString(), Role: "admin", TokenVersion: 1,
-		SessionID: &sessionID,
-	}, time.Now().UTC(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compact
+	now := time.Now().UTC()
+	return hs256(t, jwt.MapClaims{
+		"sub": uuid.NewString(), "email": "ada@example.com", "org_id": uuid.NewString(), "role": "admin",
+		"is_superuser": false, "tv": 1, "sid": uuid.NewString(), "type": "access", "iss": LegacyIssuer, "aud": Audience,
+		"iat": now.Unix(), "exp": now.Add(time.Hour).Unix(), "jti": uuid.NewString(),
+	})
 }
 
+// legacyRefresh is the retired HS256 refresh token's shape, signed with Secret.
 func legacyRefresh(t testing.TB) string {
 	t.Helper()
-	signer, err := edgetoken.NewSigner(Secret, LegacyIssuer, Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	compact, err := signer.Refresh(edgetoken.RefreshClaims{
-		UserID: uuid.NewString(), OrgID: uuid.NewString(), FamilyID: uuid.NewString(),
-	}, time.Now().UTC(), uuid.NewString())
+	now := time.Now().UTC()
+	return hs256(t, jwt.MapClaims{
+		"sub": uuid.NewString(), "org_id": uuid.NewString(), "family_id": uuid.NewString(), "type": "refresh",
+		"iss": LegacyIssuer, "aud": Audience, "iat": now.Unix(), "exp": now.Add(7 * 24 * time.Hour).Unix(), "jti": uuid.NewString(),
+	})
+}
+
+func hs256(t testing.TB, claims jwt.MapClaims) string {
+	t.Helper()
+	compact, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(Secret))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
@@ -41,7 +40,7 @@ func goAPIArgs(t *testing.T, spec map[string]any) []string {
 func renderGoAPIFails(t *testing.T, sets ...string) string {
 	t.Helper()
 	args := append([]string{"template", "go-api-drain", ".", "--set", "goApi.enabled=true"}, sets...)
-	out, err := exec.Command("helm", args...).CombinedOutput()
+	out, err := helmCommand(args...).CombinedOutput()
 	if err == nil {
 		t.Fatalf("render passed, want a refusal (%v)", sets)
 	}
@@ -120,7 +119,7 @@ func TestGoAPIShutdownTimeoutHasOneOwner(t *testing.T) {
 
 // Only the go-api pod drains: no other workload of the chart gets a preStop hook from this value.
 func TestGoAPIDrainDoesNotTouchOtherWorkloads(t *testing.T) {
-	out, err := exec.Command("helm", "template", "drain-others", ".", "--set", "goApi.enabled=true", "--set", "authService.phase=0").CombinedOutput()
+	out, err := helmCommand("template", "drain-others", ".", "--set", "goApi.enabled=true", "--set", "authService.phase=0").CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}

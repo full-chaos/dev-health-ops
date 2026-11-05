@@ -91,9 +91,7 @@ func fullInternalEnv(t *testing.T, caller string) map[string]string {
 	if caller != "" {
 		env[authconfig.EnvAuthorizeCallerSubjects] = caller
 	}
-	exchangeEnvironment(t, env)
-	// The go-api workload subject mounts the session issue routes on the API listener, as servedAuthRoutes does.
-	workloadIssueEnvironment(env)
+	exchangeEnvironment(t, workloadIssueEnvironment(env))
 	return provisioningEnvironment(ssoEnvironment(compatEnvironment(env)))
 }
 

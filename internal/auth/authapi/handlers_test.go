@@ -51,6 +51,7 @@ type fakeSessions struct {
 	result     session.Result
 	err        error
 	records    map[uuid.UUID]session.Record
+	classes    map[uuid.UUID]string
 	currentErr error
 	revoked    []uuid.UUID
 	revokedAll []uuid.UUID
@@ -187,6 +188,16 @@ func (f *fakeSessions) ExchangeGuarded(ctx context.Context, credential contracts
 		}
 	}
 	return f.Exchange(ctx, credential)
+}
+
+func (f *fakeSessions) CurrentWithClientClass(ctx context.Context, id uuid.UUID) (session.Record, string, error) {
+	record, err := f.Current(ctx, id)
+	if err != nil {
+		return session.Record{}, "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return record, f.classes[id], nil
 }
 
 func (f *fakeSessions) Current(_ context.Context, id uuid.UUID) (session.Record, error) {

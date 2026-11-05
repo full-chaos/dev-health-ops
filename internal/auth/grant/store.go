@@ -283,8 +283,10 @@ AND (expires_at IS NULL OR expires_at > $6)`,
 					by = *in.Actor.PrincipalID
 				}
 				_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.resource_grants
-(id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by, expires_at, origin, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`, id, in.PrincipalID, in.OrgID, in.Role, KindRepository, in.Key, by, expires, string(in.Origin), now)
+(id, principal_id, organization_id, role_key, resource_kind, resource_id, granted_by, expires_at, origin, created_at, updated_at, resource_repo_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10,
+(SELECT CASE WHEN count(*) = 1 THEN min(provider || ':' || provider_repo_id) END FROM `+s.q+`.repository_identities
+WHERE organization_id = $3 AND current_path = $6::text AND $6::text <> '*'))`, id, in.PrincipalID, in.OrgID, in.Role, KindRepository, in.Key, by, expires, string(in.Origin), now)
 				return err
 			},
 			Audit: auditRow("auth.resource_grant.created", "grant_created", in.OrgID, in.PrincipalID, id, in.Actor, []string{"role_key", "status"},

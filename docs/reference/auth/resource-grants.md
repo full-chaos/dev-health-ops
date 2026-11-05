@@ -75,8 +75,25 @@ One grant row of any state, for any repository, ends the membership default for 
 then on the member holds only the live grants. The first grant a member receives therefore narrows the member to the
 keys it names. A service account never uses the default: with no live grant it is denied with `grant_absent`.
 
+## Repository id
+
+A provider rename or transfer changes the path of a repository and keeps its id. A repository grant therefore holds the
+stable id (`resource_repo_id`, `<provider>:<number>`, for example `github:42`) beside the path.
+
+- A grant with an id matches on the id only. The path is display. The decision turns the live path of the request into an
+  id with `auth.repository_identities` (organization, provider, provider id, current path), so a renamed repository keeps its
+  grant, and a new repository that reuses an old path does not inherit one.
+- A grant with no id (a legacy row, or a path that no identity resolved when it was made) matches on the path, as before.
+  The wildcard `*` never holds an id.
+- A grant that holds an id and a request path with no single identity row is denied with `repository_unresolved`. The next
+  run of the sync resolves it. A path with two identity rows is also unresolved.
+- A grant create stores the id when exactly one identity row of the organization has the path.
+- `auth.repository_identities` is a copy. ClickHouse `repos` (`provider_repo_id`) stays the source. The operator verb
+  `dho auth repo-identities-sync` copies it and gives every live grant that has no id the id of its path. It is idempotent,
+  runs after `auth-migrate`, and prints counts and the ids of the grants still without an id, never a key.
+
 The decision gives one of these reasons when it denies: `grant_expired`, `grant_revoked`, `repository_not_granted`,
-`grant_absent` or `grant_read_failed`. An allow is bound to 30 seconds. The other decision reasons are in the
+`repository_unresolved`, `grant_absent` or `grant_read_failed`. An allow is bound to 30 seconds. The other decision reasons are in the
 [policy catalog](policy-catalog.md).
 
 ## Write routes

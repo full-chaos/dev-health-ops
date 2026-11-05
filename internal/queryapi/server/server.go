@@ -474,7 +474,8 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// caller either way.
 	mux.HandleFunc("/api/v1/", apiV1CatchAllNotFound)
 
-	handler := markResponseModelRoutes(mux)
+	handler, gate := gatedPlaneHandler(lookup, mux)
+	cleanups = append(cleanups, gate.Wait)
 	// CHAOS-7096: internalMux already carries /query/proof-write (mounted
 	// above, in the same scope as handlers.ProofWrite) when that route is
 	// configured. This fallthrough registration makes every OTHER path

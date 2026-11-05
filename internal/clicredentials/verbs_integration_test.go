@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/adminops"
 	"github.com/full-chaos/dev-health-ops/internal/aicli"
+	"github.com/full-chaos/dev-health-ops/internal/auth/usersbackfill"
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/fixturescli"
@@ -73,6 +74,9 @@ func verbs() []verb {
 			args: func(string) []string { return []string{"--org", "org-1"} }, env: dsnEnv},
 		{family: "backfill operational", root: operationalbackfill.Command(), path: []string{"operational"},
 			args: func(string) []string { return []string{"--org", "c0ffee00-dead-4bee-8bad-f00dfeedface"} }, env: dsnEnv},
+		// The repository read comes before any Postgres connect, so no Postgres DSN is needed.
+		{family: "auth repo-identities-sync", root: usersbackfill.Command(), path: []string{"repo-identities-sync"},
+			args: func(string) []string { return nil }, env: dsnEnv},
 		// The org deletion's ClickHouse preflight runs before any Postgres call,
 		// so a Postgres DSN that names a closed port is never dialed.
 		{family: "admin orgs delete", noGrantsSignature: "the ClickHouse login cannot purge database",

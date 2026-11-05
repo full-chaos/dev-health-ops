@@ -180,7 +180,7 @@ query-api can ask the policy decision point (`POST /v1/authorize` on auth-servic
 
 | Environment | Rule |
 | --- | --- |
-| `QUERY_API_PDP_MODE` | `off`, `shadow` or `enforce`; unset or empty is `off`. `off` reads no other input and asks nothing. `shadow` asks in the background, counts and compares, and never changes a response. `enforce` answers a PDP deny with 403 `{"detail":"Not authorized"}`, and no verdict (the PDP is down, a timeout, a 429, a bad answer) with 503 `{"detail":"Authorization unavailable"}`; the route's handler is not reached. |
+| `QUERY_API_PDP_MODE` | `off`, `shadow` or `enforce`; unset or empty is `off`. `off` reads no other input and asks nothing. `shadow` asks in the background, counts and compares, and never changes a response. `enforce` answers a PDP deny with 403 `{"detail":"Not authorized"}`, and no verdict (the PDP is down, a timeout, a 429, a bad answer) with 503 `{"detail":"Authorization unavailable"}`; the route's handler is not reached. An allow serves only with a `minimum_assurance` of at most `aal1`; a higher or unknown level is no verdict (503). A delegated (impersonation) session's bearer is judged by the PDP as its target user; in `enforce`, on a row whose action is not a read (an organization action of risk class `low`), it gets 403 before any PDP call. |
 | `AUTH_PROXY_URL` | auth-service's base URL (go-api's setting): an http(s) origin with no path, query or credentials. Read only while the mode is `shadow` or `enforce`. |
 | `AUTH_WORKLOAD_SUBJECT_FILE`, `AUTH_WORKLOAD_BOOTSTRAP_FILE`, `AUTH_WORKLOAD_ISSUER` | query-api's workload credential, with go-api's rules (exactly one file, readable; an https issuer). Read only while the mode is `shadow` or `enforce`. |
 

@@ -53,6 +53,11 @@ type Action struct {
 	RepositoryScope string
 }
 
+// ReadOnly reports whether the action only reads organization data: an
+// organization action of risk class low. A delegated (impersonation) bearer is
+// judged as its target on these actions only (D6714).
+func (a Action) ReadOnly() bool { return a.Scope == ScopeOrganization && a.RiskClass == RiskLow }
+
 type Role struct {
 	ID      string
 	Scope   string

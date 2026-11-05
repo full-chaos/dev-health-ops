@@ -38,6 +38,8 @@ func (*OrgRequiredError) Error() string { return "principal: edge: organization 
 // Python dataclass does.
 type EdgeClaims struct {
 	OrgID string
+	// Delegated is true for a delegated session's bearer (policy.User.ImpersonatedBy).
+	Delegated bool
 }
 
 // EdgeVerifier verifies the edge access token -- the HS256-signed JWT

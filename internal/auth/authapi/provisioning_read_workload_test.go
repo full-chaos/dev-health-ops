@@ -4,9 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 )
 
 type readWorkloadFixture struct {
@@ -123,4 +127,53 @@ func plantReadClasses(t *testing.T, route string, classes ...string) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func TestReadRoutesRefuseOtherKeyClassesOnTheWorkloadPath(t *testing.T) {
+	for _, typ := range []string{"at+jwt", "jwt", contracts.ServiceAccountTokenTyp, "workload+jwt-x"} {
+		for _, c := range readCases() {
+			f := newReadWorkloadFixture(t, nil)
+			header, _ := f.w.mint(typ, nil)
+			expectRefusal(t, f.post(c.path, c.body(f.provFixture), header), http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.reads.calls+f.grantReads.calls != 0 {
+				t.Errorf("%s, typ %s: a refused token reached a store", c.op, typ)
+			}
+		}
+	}
+}
+
+func TestReadRoutesRefuseEveryWorkloadTokenWithoutAConfiguredSubject(t *testing.T) {
+	for _, c := range readCases() {
+		w := newWorkloadIssueFixture(t)
+		unset := &SessionIssueWorkload{verifier: w.workload.verifier, now: w.workload.now}
+		rows := docWithRows(t, append(readPatterns(), PatternOrgSuspend, PatternOrgRename)...)
+		f := newProvFixtureFor(t, rows, unset)
+		seedReads(f)
+		for _, mutate := range []func(*contracts.WorkloadTokenClaims){nil, func(cl *contracts.WorkloadTokenClaims) { cl.Sub = "" }} {
+			header, _ := w.mint(contracts.WorkloadTokenTyp, mutate)
+			expectRefusal(t, f.post(c.path, c.body(f), header), http.StatusUnauthorized, reasonInvalidCredentials)
+		}
+		if f.reads.calls+f.grantReads.calls != 0 {
+			t.Errorf("%s: a token reached a store with no subject configured", c.op)
+		}
+	}
+}
+
+func TestReadRoutesRefuseTheSubjectAnotherRouteAllows(t *testing.T) {
+	for _, c := range readCases() {
+		f := newReadWorkloadFixture(t, nil)
+		otherSubject := session.WirePrincipalID(uuid.New())
+		otherRoute, err := NewSessionIssueWorkload(SessionIssueWorkloadConfig{IssuerURL: goldenIssuer, Keys: f.w.keys, Subject: otherSubject})
+		if err != nil {
+			t.Fatal(err)
+		}
+		header, _ := f.w.mint(contracts.WorkloadTokenTyp, func(cl *contracts.WorkloadTokenClaims) { cl.Sub = otherSubject })
+		if _, why, err := otherRoute.authorize(strings.TrimPrefix(header["Authorization"], "Bearer ")); why != "" || err != nil {
+			t.Fatalf("the other route must allow its subject: %q %v", why, err)
+		}
+		expectRefusal(t, f.post(c.path, c.body(f.provFixture), header), http.StatusUnauthorized, reasonInvalidCredentials)
+		if f.reads.calls+f.grantReads.calls != 0 {
+			t.Errorf("%s: a token for another route's subject reached a store", c.op)
+		}
+	}
 }

@@ -6,6 +6,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
@@ -259,5 +262,55 @@ func TestGraphQLShadowSubjectOfAUserAccessToken(t *testing.T) {
 	}
 	if got := graphQLShadowSubject("not-a-jwt"); got.UserAccessToken || got.SkipReason != policy.ShadowReasonEnvelope {
 		t.Fatalf("other token subject %+v", got)
+	}
+}
+
+// C14: a panic inside the shadow never changes the GraphQL answer (its bytes) nor the org guard's verdict; the shadow
+// recovers, counts the failure, and the request has no 500. The same ops run on /graphql and on the MCP server.
+func TestGraphQLShadowPanicNeverChangesTheAnswerOrTheGuard(t *testing.T) {
+	m := newAccessMinter(t)
+	subject := graphQLShadowSubject(m.mint(ecUser, nil, nil))
+	panicking := funcDecider{func(context.Context, pep.Request) pep.Decision { panic("pdp client bug") }}
+	gate := pdp.New(pdp.Config{Mode: pdp.ModeShadow, Decider: panicking, ExtraShadowRows: graphQLShadowRows(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	ops := map[string]string{
+		"guard admits":  `query Q { sourceHealth(orgId: "org-1") { provider } }`,
+		"guard refuses": `query Q { sourceHealth(orgId: "org-2") { provider } }`,
+	}
+	servers := map[string]func() http.Handler{
+		"graphql": func() http.Handler {
+			return newGraphQLServerWithLimits(&graph.Resolver{}, 1000, 10)
+		},
+		"mcp": func() http.Handler {
+			return newMCPGraphQLServer(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{}}), mcpDefaultLimits())
+		},
+	}
+	serve := func(h http.Handler, query string, g *pdp.Gate) (int, string) {
+		req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":`+jsonQuote(t, query)+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		ctx := authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"})
+		ctx = graph.WithShadowSubject(ctx, subject)
+		if g != nil {
+			ctx = pdp.WithGate(ctx, g)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req.WithContext(ctx))
+		return rec.Code, rec.Body.String()
+	}
+	for name, build := range servers {
+		for opName, query := range ops {
+			t.Run(name+"/"+opName, func(t *testing.T) {
+				baseCode, baseBody := serve(build(), query, nil)
+				before := shadowCounters(t)
+				code, body := serve(build(), query, gate)
+				gate.Wait()
+				if code >= 500 || code != baseCode || body != baseBody {
+					t.Fatalf("with a panicking shadow: %d %q, want %d %q", code, body, baseCode, baseBody)
+				}
+				got := shadowDelta(before, shadowCounters(t))
+				if name == "graphql" && got[shadowResultsMetric+"|reason=none,result=error"] != 1 {
+					t.Fatalf("5.12 counters %v, want the failure counted once as result=error", got)
+				}
+			})
+		}
 	}
 }

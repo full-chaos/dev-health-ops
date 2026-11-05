@@ -13,10 +13,40 @@ type Grant struct {
 	Role         string
 	ResourceKind string
 	ResourceKey  string
+	// RepoID is the stable repository id ("<provider>:<number>") the row was made for; "" is a legacy row that matches on ResourceKey.
+	RepoID string
 	// ExpiresAtUnixNano is the expiry in Unix nanoseconds; 0 is no expiry.
 	// A grant is expired at its expiry instant and after it.
 	ExpiresAtUnixNano int64
 	Revoked           bool
+}
+
+// RepositoryIdentities is the optional read side of a GrantSnapshot that maps a
+// live repository path of an organization to its stable id. A snapshot without it
+// resolves no path, so a grant that holds an id never matches.
+type RepositoryIdentities interface {
+	RepositoryID(orgID, path string) (id string, found bool)
+	// PathForID is the one live path of an id; false when the id has no identity row or its path is shared by
+	// two identity rows.
+	PathForID(orgID, id string) (path string, found bool)
+}
+
+func requestRepoID(s Snapshot, r Request) (string, bool) {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return "", false
+	}
+	id, found := ri.RepositoryID(r.OrganizationID, r.ResourceKey)
+	return id, found && id != ""
+}
+
+func idPath(s Snapshot, orgID, id string) (string, bool) {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return "", false
+	}
+	path, found := ri.PathForID(orgID, id)
+	return path, found && path != ""
 }
 
 // ServiceAccount is a service-account principal's row in one organization.
@@ -209,13 +239,26 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		return e.withRepositoryObligations(repositoryAllow(ReasonAllowedByMembershipDefault, act, rev, now), r, memberRole)
 	}
 
-	var sawRevoked, sawExpired bool
+	var sawRevoked, sawExpired, sawUnresolved bool
 	for _, g := range rows {
 		if g.ResourceKind != resourceRepository {
 			continue
 		}
-		if g.ResourceKey != r.ResourceKey && g.ResourceKey != wildcardKey {
-			continue
+		if g.ResourceKey != wildcardKey {
+			if g.RepoID == "" {
+				if g.ResourceKey != r.ResourceKey {
+					continue
+				}
+			} else {
+				id, found := requestRepoID(s, r)
+				if !found {
+					sawUnresolved = true
+					continue
+				}
+				if id != g.RepoID {
+					continue
+				}
+			}
 		}
 		if !e.roleHolds(g.Role, act) {
 			continue
@@ -235,6 +278,8 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		return deny(ReasonGrantExpired)
 	case sawRevoked:
 		return deny(ReasonGrantRevoked)
+	case sawUnresolved:
+		return deny(ReasonRepositoryUnresolved)
 	}
 	return deny(ReasonRepositoryNotGranted)
 }

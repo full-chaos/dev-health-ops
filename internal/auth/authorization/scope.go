@@ -17,7 +17,7 @@ import (
 // ever emitted. Otherwise keys
 // is the sorted, unique list, empty for none. why is ReasonRepositoryAllowlistTooLarge when the list would pass
 // MaxRepositoryAllowlist: it is never truncated.
-func (e *Evaluator) repositoryScope(role string, act policycatalog.Action, rows []Grant, now int64) (keys []string, unrestricted bool, why Reason) {
+func (e *Evaluator) repositoryScope(s Snapshot, orgID, role string, act policycatalog.Action, rows []Grant, now int64) (keys []string, unrestricted bool, why Reason) {
 	if len(rows) == 0 {
 		return nil, e.membershipDefaultDenial(role, act) == "", ""
 	}
@@ -30,7 +30,15 @@ func (e *Evaluator) repositoryScope(role string, act policycatalog.Action, rows 
 		if g.ResourceKey == wildcardKey {
 			return nil, true, ""
 		}
-		seen[g.ResourceKey] = true
+		if g.RepoID == "" {
+			seen[g.ResourceKey] = true
+			continue
+		}
+		// An id-bearing grant lists the live path of its id, never its stored path: after a rename the stored path
+		// is stale, and a new repository may hold it. An id with no single live path lists nothing.
+		if path, ok := idPath(s, orgID, g.RepoID); ok {
+			seen[path] = true
+		}
 	}
 	if len(seen) > MaxRepositoryAllowlist {
 		return nil, false, ReasonRepositoryAllowlistTooLarge
@@ -69,7 +77,7 @@ func (e *Evaluator) organizationAllow(r Request, act policycatalog.Action, s Sna
 				rows = append(rows, g)
 			}
 		}
-		keys, unrestricted, why := e.repositoryScope(role, act, rows, now)
+		keys, unrestricted, why := e.repositoryScope(s, r.OrganizationID, role, act, rows, now)
 		if why != "" {
 			return deny(why)
 		}

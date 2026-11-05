@@ -83,13 +83,19 @@ func TestWebSSOByValueFromFailsClosed(t *testing.T) {
 }
 
 func TestWebSSOOnWithEddsaRenders(t *testing.T) {
-	for _, class := range []string{"eddsa", " EdDSA "} {
-		got := webEnvDump(t, ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", class)))
-		for _, s := range []string{`"AUTH_SSO_ENABLED"`, `"AUTH_ACCESS_TOKEN_CLASS"`} {
-			if !strings.Contains(got, s) {
-				t.Errorf("class %q: env lacks %s: %s", class, s, got)
-			}
+	got := webEnvDump(t, ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", "eddsa")))
+	for _, s := range []string{`"AUTH_SSO_ENABLED"`, `"AUTH_ACCESS_TOKEN_CLASS"`} {
+		if !strings.Contains(got, s) {
+			t.Errorf("env lacks %s: %s", s, got)
 		}
+	}
+}
+
+// web reads the class with an exact match (resolveTokenClass), so the chart does not trim or fold case.
+func TestWebSSOClassIsTheExactLiteral(t *testing.T) {
+	for _, class := range []string{"EdDSA", "EDDSA", " eddsa ", " EdDSA ", "eddsa\n"} {
+		wantSSORefusal(t, fmt.Sprintf("sso on, class %q", class), ssoEnvArgs(t, ssoVal("AUTH_SSO_ENABLED", "true"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", class)))
+		wantSSORefusal(t, fmt.Sprintf("sso ref, class %q", class), ssoEnvArgs(t, ssoRef("AUTH_SSO_ENABLED"), ssoVal("AUTH_ACCESS_TOKEN_CLASS", class)))
 	}
 }
 

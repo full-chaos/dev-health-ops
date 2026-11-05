@@ -139,6 +139,8 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// served: the organization a path or query parameter names for the handler to serve.
+	served servedOrg
 }
 
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
@@ -165,6 +167,12 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		e.logger.DebugContext(ctx, "api enforcement: caller not judged, the legacy answer stands",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace), slog.String("reason", reason))
 		return enforceLegacy
+	}
+	if o.served.against(org) == servedOrgOther {
+		countEnforce(ctx, row.Namespace, enforceOutcomeDeny)
+		e.logger.WarnContext(ctx, "api enforcement: the request names an organization that is not the judged one, the route is refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceDeny
 	}
 	request := pep.Request{PrincipalReference: o.bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
 	if row.ResourceType == policycatalog.ScopeOrganization {
@@ -204,12 +212,13 @@ func (e *Enforcer) ask(ctx context.Context, request pep.Request) (decision pep.D
 }
 
 // unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
-// access token comes first: nothing else can be said of it.
+// access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
+// its handler refuses it.
 func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	switch {
 	case o.bearer == "" || !o.userAccessToken:
 		return enforceUnjudgedHS256
-	case row.ResourceType == policycatalog.ScopeOrganization && org == "":
+	case row.ResourceType == policycatalog.ScopeOrganization && org == "", o.served.against(org) == servedOrgUnparsed:
 		return enforceUnjudgedNoOrg
 	}
 	return ""
@@ -249,7 +258,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enfor
 	}
 	ctx := r.Context()
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil})
+		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, served: servedOrgOf(r)})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {

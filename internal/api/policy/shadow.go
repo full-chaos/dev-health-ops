@@ -42,7 +42,8 @@ var (
 )
 
 const (
-	classUnresolved = "unresolved"
+	classUnresolved  = "unresolved"
+	classIntentional = "intentional"
 
 	resultMatch    = "match"
 	resultMismatch = "mismatch"
@@ -287,6 +288,8 @@ type ShadowObservation struct {
 	Impersonating bool
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
+	// served: the organization a go-api path or query parameter names for the handler to serve.
+	served servedOrg
 }
 
 // shadowCall is everything the goroutine needs: values only, no request.
@@ -327,6 +330,14 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
+	switch o.served.against(org) {
+	case servedOrgUnparsed:
+		countShadowResult(ctx, resultSkipped)
+		return
+	case servedOrgOther:
+		s.observeServedOrgOther(ctx, o, row)
+		return
+	}
 	request := pep.Request{PrincipalReference: o.Bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
 	if row.ResourceType == policycatalog.ScopeOrganization {
 		request.ResourceKey, request.OrganizationID = org, org
@@ -344,6 +355,28 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed}
 	s.wg.Add(1)
 	go s.run(call)
+}
+
+// observeServedOrgOther records what enforcement would answer when the request names an organization that is not
+// the judged one: a refusal with no decision point call. Against a legacy allow that is a mismatch of class
+// intentional; against a legacy deny, a match.
+func (s *Shadow) observeServedOrgOther(ctx context.Context, o ShadowObservation, row ShadowRow) {
+	if !o.LegacyAllowed {
+		countShadowResult(ctx, resultMatch)
+		return
+	}
+	caller := o.Caller
+	if !slices.Contains(shadowCallers, caller) {
+		caller = ShadowCallerMember
+	}
+	countShadowResult(ctx, resultMismatch)
+	countShadowMismatch(ctx, row.Namespace, caller, classIntentional)
+	if s.logAllowed(slices.Index(shadowClasses, classIntentional)) {
+		s.logger.WarnContext(ctx, "api shadow pdp: the request names an organization that is not the judged one",
+			slog.String("namespace", row.Namespace), slog.String("caller", caller), slog.String("class", classIntentional),
+			slog.String("action", row.Action), slog.String("route", o.Pattern), slog.String("legacy", "allow"), slog.String("shadow", "deny"),
+			slog.String("reason", "served_org_not_judged_org"))
+	}
 }
 
 func (s *Shadow) run(call shadowCall) {

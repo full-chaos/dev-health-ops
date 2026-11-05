@@ -411,3 +411,20 @@ func TestServedOrgARowOutsideTheCensusIsNotCompared(t *testing.T) {
 		t.Fatalf("%d %q, PDP saw %+v, want 200 and one question on A", got.status, got.body, calls)
 	}
 }
+
+// The seam's row table is the census, row for row and source for source.
+func TestServedOrgSeamTableIsTheCensus(t *testing.T) {
+	if len(goAPIServedOrgRows) != len(servedOrgCensus) {
+		t.Fatalf("%d seam rows, want the census's %d", len(goAPIServedOrgRows), len(servedOrgCensus))
+	}
+	for _, row := range servedOrgCensus {
+		param, ok := goAPIServedOrgRows[row.pattern]
+		want := servedOrgParam{path: "org_id"}
+		if row.query {
+			want = servedOrgParam{query: "org_id"}
+		}
+		if !ok || param != want {
+			t.Errorf("%s: seam row %+v (present %v), want %+v", row.pattern, param, ok, want)
+		}
+	}
+}

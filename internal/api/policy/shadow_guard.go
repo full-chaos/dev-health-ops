@@ -15,6 +15,7 @@ func (g *Guard) observeShadow(r *http.Request, user *User, bearer string, legacy
 	g.pdp.shadow.Observe(ctx, ShadowObservation{
 		Pattern: r.Pattern, Bearer: bearer, OrgID: user.OrgID, Caller: shadowCallerKind(user),
 		UserAccessToken: user.accessToken, Impersonating: ImpersonationFrom(ctx) != nil, LegacyAllowed: legacyAllowed,
+		served: servedOrgOf(r),
 	})
 }
 

@@ -200,6 +200,11 @@ func (h *handlers) orgLLMActive(ctx context.Context, orgID string) (bool, error)
 	if err != nil {
 		return false, err
 	}
+	if bound, err := defaultKeyBound(ctx, h.store.Pool, orgID); err != nil {
+		return false, err
+	} else if !bound {
+		apiKey = nil
+	}
 	baseURL, err := h.settingText(ctx, orgID, llmCategory, "base_url")
 	if err != nil {
 		return false, err

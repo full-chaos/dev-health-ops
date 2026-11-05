@@ -183,15 +183,27 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, llmorgsettings.PurposeKey(in.purpose, field), value, encrypt, &description)
 		return err
 	}
+	keyStep, err := keyStepFor(ctx, tx, orgID, in.purpose, in.provider, in.apiKey != nil)
+	if err != nil {
+		return nil, nil, &llmStepError{"read llm key binding", err}
+	}
+	if keyStep == keyStepRefuse {
+		return nil, providerChangeRefusal(), nil
+	}
 	provider := pythonparity.Lower(pythonparity.Strip(in.provider))
 	model := in.model
 	steps := []func() error{
 		func() error { return set("provider", &provider, false, "BYO LLM provider override for one purpose") },
 		func() error { return set("model", &model, false, "BYO LLM model override for one purpose") },
 	}
-	if in.apiKey != nil {
+	switch keyStep {
+	case keyStepWrite:
 		steps = append(steps, func() error {
 			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key override for one purpose")
+		})
+	case keyStepDelete:
+		steps = append(steps, func() error {
+			return deleteSettingRow(ctx, tx, orgID, llmorgsettings.PurposeKey(in.purpose, "api_key"))
 		})
 	}
 	steps = append(steps, func() error {

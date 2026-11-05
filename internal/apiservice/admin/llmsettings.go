@@ -529,6 +529,13 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
 	}
+	keyStep, err := keyStepFor(ctx, tx, orgID, "", in.provider, in.apiKey != nil)
+	if err != nil {
+		return nil, nil, &llmStepError{"read llm key binding", err}
+	}
+	if keyStep == keyStepRefuse {
+		return nil, providerChangeRefusal(), nil
+	}
 	normalized := pythonparity.Lower(pythonparity.Strip(in.provider))
 	steps := []struct {
 		run func() error
@@ -536,9 +543,14 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		{func() error { return set("provider", &normalized, false, "BYO LLM provider for this organization") }},
 		{func() error { return set("model", in.model, false, "BYO LLM model for this organization") }},
 	}
-	if in.apiKey != nil {
+	switch keyStep {
+	case keyStepWrite:
 		steps = append(steps, struct{ run func() error }{func() error {
 			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
+		}})
+	case keyStepDelete:
+		steps = append(steps, struct{ run func() error }{func() error {
+			return deleteSettingRow(ctx, tx, orgID, "api_key")
 		}})
 	}
 	steps = append(steps, struct{ run func() error }{func() error {

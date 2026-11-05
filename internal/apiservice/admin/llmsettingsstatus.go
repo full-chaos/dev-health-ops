@@ -115,6 +115,11 @@ func (h *handlers) evaluateOrgLLMStatus(ctx context.Context, orgID string) (orgL
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err
 	}
+	if bound, err := defaultKeyBound(ctx, h.store.Pool, orgID); err != nil {
+		return orgLLMStatusEvaluation{}, err
+	} else if !bound {
+		apiKeyValue = nil
+	}
 	baseURLRow, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, "base_url")
 	if err != nil {
 		return orgLLMStatusEvaluation{}, err

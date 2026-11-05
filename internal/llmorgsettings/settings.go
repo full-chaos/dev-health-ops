@@ -82,16 +82,19 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 	defer rows.Close()
 
 	settings := map[string]string{}
+	updatedAt := map[string]time.Time{}
 	for rows.Next() {
 		var key string
 		var value *string
 		var isEncrypted bool
-		if err := rows.Scan(&key, &value, &isEncrypted); err != nil {
+		var updated time.Time
+		if err := rows.Scan(&key, &value, &isEncrypted, &updated); err != nil {
 			return nil, fmt.Errorf("scan org llm setting: %w", err)
 		}
 		if value == nil || *value == "" {
 			continue
 		}
+		updatedAt[key] = updated
 		resolved := *value
 		if isEncrypted {
 			plain, err := s.Decryptor.Decrypt(secrets.NewValue(resolved))
@@ -113,12 +116,13 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate org llm settings: %w", err)
 	}
+	markUnboundKeys(settings, updatedAt)
 	return settings, nil
 }
 
 func rawSettingsSQL(relation SettingsRelation) string {
 	return `
-SELECT key, value, is_encrypted FROM ` + relation.From() + `
+SELECT key, value, is_encrypted, updated_at FROM ` + relation.From() + `
 WHERE org_id = $1 AND category = $2`
 }
 

@@ -156,6 +156,9 @@ func (s Store) OrgConfig(ctx context.Context, orgID string) (OrgConfig, bool, er
 		if raw[key] != "" {
 			byo[key] = raw[key]
 		}
+		if mark := unboundMarkPrefix + key; raw[mark] != "" {
+			byo[mark] = raw[mark]
+		}
 	}
 	settings, err := s.applyGate(ctx, orgID, byo)
 	if err != nil {

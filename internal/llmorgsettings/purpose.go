@@ -80,24 +80,42 @@ func sourceKeys(stored func(key string) bool, value func(key string) string, pur
 }
 
 // project maps the effective source of purpose onto the default key names, so
-// every reader below it is unchanged.
+// every reader below it is unchanged. A key written for another provider than
+// its scope's (servedKey) is not projected.
 func project(settings orgSettings, purpose Purpose) orgSettings {
-	if purpose == "" {
-		return settings
-	}
 	stored := func(key string) bool { return settings[key] != "" }
 	value := func(key string) string { return settings[key] }
-	if !overrideStored(stored, purpose) {
-		return settings
+	if purpose == "" || !overrideStored(stored, purpose) {
+		return withServedDefaultKey(settings)
 	}
 	out := orgSettings{}
 	for _, field := range Fields {
-		if v := settings[PurposeKey(purpose, field)]; v != "" {
+		v := settings[PurposeKey(purpose, field)]
+		if field == keyAPIKey {
+			v = servedKey(settings, PurposeKey(purpose, field))
+		}
+		if v != "" {
 			out[field] = v
 		}
 	}
 	if inheritsDefaultKey(stored, value, purpose) {
-		out[keyAPIKey] = settings[keyAPIKey]
+		if v := servedKey(settings, keyAPIKey); v != "" {
+			out[keyAPIKey] = v
+		}
 	}
+	return out
+}
+
+// withServedDefaultKey is settings without the default row's key when that key
+// is not bound to the default provider; settings itself otherwise.
+func withServedDefaultKey(settings orgSettings) orgSettings {
+	if servedKey(settings, keyAPIKey) == settings[keyAPIKey] {
+		return settings
+	}
+	out := make(orgSettings, len(settings))
+	for key, v := range settings {
+		out[key] = v
+	}
+	delete(out, keyAPIKey)
 	return out
 }

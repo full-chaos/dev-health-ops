@@ -1,4 +1,4 @@
--- 0054 credential_registry.credential_class admits oauth_authorization_code and
+-- 0055 credential_registry.credential_class admits oauth_authorization_code and
 -- oauth_consent_csrf_token.
 -- NOT ADDITIVE in one place, on purpose (additiveExemptions): it REDEFINES the
 -- class CHECK and only WIDENS it (nothing is removed from the 0050 list).

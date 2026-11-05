@@ -1,4 +1,4 @@
-package customerpush
+package pagereader
 
 import (
 	"context"
@@ -44,7 +44,7 @@ func scanReconcileToken(rows pgx.Rows) (tokenRow, error) {
 func readTokens(ctx context.Context, q projectionreader.Querier, sql string, args ...any) ([]pushreconcile.Token, []uuid.UUID, error) {
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("customerpush: read tokens for the reconcile: %w", err)
+		return nil, nil, fmt.Errorf("pagereader: read tokens for the reconcile: %w", err)
 	}
 	defer rows.Close()
 	var (
@@ -54,20 +54,20 @@ func readTokens(ctx context.Context, q projectionreader.Querier, sql string, arg
 	for rows.Next() {
 		t, err := scanReconcileToken(rows)
 		if err != nil {
-			return nil, nil, fmt.Errorf("customerpush: scan token for the reconcile: %w", err)
+			return nil, nil, fmt.Errorf("pagereader: scan token for the reconcile: %w", err)
 		}
 		tokens = append(tokens, ExpectedState(t))
 		ids = append(ids, t.ID)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("customerpush: read tokens for the reconcile: %w", err)
+		return nil, nil, fmt.Errorf("pagereader: read tokens for the reconcile: %w", err)
 	}
 	return tokens, ids, nil
 }
 
 func checkBatch(batch int) error {
 	if batch < 1 || batch > projectionreader.MaxPageSize {
-		return fmt.Errorf("customerpush: reconcile batch %d is outside 1..%d", batch, projectionreader.MaxPageSize)
+		return fmt.Errorf("pagereader: reconcile batch %d is outside 1..%d", batch, projectionreader.MaxPageSize)
 	}
 	return nil
 }
@@ -77,14 +77,14 @@ func checkBatch(batch int) error {
 func snapshot(ctx context.Context, db TxBeginner, fn func(pgx.Tx) error) error {
 	tx, err := db.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return fmt.Errorf("customerpush: begin reconcile snapshot: %w", err)
+		return fmt.Errorf("pagereader: begin reconcile snapshot: %w", err)
 	}
 	if err := fn(tx); err != nil {
 		_ = tx.Rollback(ctx)
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("customerpush: end reconcile snapshot: %w", err)
+		return fmt.Errorf("pagereader: end reconcile snapshot: %w", err)
 	}
 	return nil
 }

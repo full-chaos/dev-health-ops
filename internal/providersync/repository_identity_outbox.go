@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
@@ -44,6 +46,28 @@ func ParseRepositoryIdentityOutbox(lookup func(string) (string, bool)) (bool, er
 // the events. A PostgresRepository without one appends nothing.
 type RepositoryIdentityOutbox struct {
 	Schema authschema.ValidatedIdentifier
+}
+
+// ErrRepositoryIdentityOutboxNotExecutable: the login cannot execute the
+// append function (absent, or no EXECUTE), so every `repos` commit would fail.
+var ErrRepositoryIdentityOutboxNotExecutable = errors.New("repository identity append function is not executable by this login")
+
+// Check reads the catalog only: the append function exists in the schema and
+// the pool's login may execute it.
+func (outbox *RepositoryIdentityOutbox) Check(ctx context.Context, pool *pgxpool.Pool) error {
+	procedure := authschema.Quote(outbox.Schema) + "." + authschema.RepoIdentityFunction + authschema.RepoIdentityFunctionSignature
+	var exists, executable bool
+	if err := pool.QueryRow(ctx, `SELECT to_regprocedure($1) IS NOT NULL,
+		COALESCE(has_function_privilege(to_regprocedure($1), 'EXECUTE'), false)`, procedure).Scan(&exists, &executable); err != nil {
+		return fmt.Errorf("%w: %w", ErrRepositoryIdentityOutboxNotExecutable, err)
+	}
+	switch {
+	case !exists:
+		return fmt.Errorf("%w: %s does not exist", ErrRepositoryIdentityOutboxNotExecutable, procedure)
+	case !executable:
+		return fmt.Errorf("%w: no EXECUTE on %s", ErrRepositoryIdentityOutboxNotExecutable, procedure)
+	}
+	return nil
 }
 
 func (outbox *RepositoryIdentityOutbox) append(ctx context.Context, tx pgx.Tx, events []audit.RepositoryIdentityEvent) error {

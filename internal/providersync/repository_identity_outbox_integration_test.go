@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 type identityOutboxFixture struct {
 	admin    *pgxpool.Pool
+	goAPI    *pgxpool.Pool
 	repo     *PostgresRepository
 	now      time.Time
 	unitSeed int
@@ -87,18 +89,22 @@ func newIdentityOutboxFixture(t *testing.T, ctx context.Context) *identityOutbox
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed.User = url.UserPassword(names["rio_worker"], password)
-	worker, err := pgxpool.New(ctx, parsed.String())
-	if err != nil {
-		t.Fatal(err)
+	login := func(role string) *pgxpool.Pool {
+		parsed.User = url.UserPassword(role, password)
+		pool, err := pgxpool.New(ctx, parsed.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		return pool
 	}
-	t.Cleanup(worker.Close)
+	worker := login(names["rio_worker"])
 	repo, err := NewPostgresRepository(worker)
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo.RepositoryIdentities = &RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth")}
-	f := &identityOutboxFixture{admin: admin, repo: repo, now: time.Date(2026, 11, 5, 7, 30, 0, 0, time.UTC)}
+	f := &identityOutboxFixture{admin: admin, goAPI: login(names["rio_goapi"]), repo: repo, now: time.Date(2026, 11, 5, 7, 30, 0, 0, time.UTC)}
 	f.seedRun(t, ctx)
 	return f
 }
@@ -402,4 +408,24 @@ func TestRepositoryIdentityEventsCommitWithTheReposEffect(t *testing.T) {
 			t.Fatalf("flag off appended: %d -> %d", before, f.allEvents(t, ctx))
 		}
 	})
+}
+
+// TestRepositoryIdentityOutboxStartupCheck: the worker's start-up check passes for the caller login and names the
+// cause for a login without EXECUTE and for a schema without the function, before any unit runs.
+func TestRepositoryIdentityOutboxStartupCheck(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	f := newIdentityOutboxFixture(t, ctx)
+	if err := f.repo.RepositoryIdentities.Check(ctx, f.repo.Pool); err != nil {
+		t.Fatalf("caller login: %v", err)
+	}
+	if err := f.repo.RepositoryIdentities.Check(ctx, f.goAPI); !errors.Is(err, ErrRepositoryIdentityOutboxNotExecutable) ||
+		!strings.Contains(err.Error(), "no EXECUTE") {
+		t.Fatalf("login without EXECUTE: err=%v", err)
+	}
+	absent := &RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth_absent")}
+	if err := absent.Check(ctx, f.repo.Pool); !errors.Is(err, ErrRepositoryIdentityOutboxNotExecutable) ||
+		!strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("schema without the function: err=%v", err)
+	}
 }

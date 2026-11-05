@@ -580,6 +580,17 @@ func constructProviderSyncWorkerWithDependencies(
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
 	repository.RepositoryIdentities = identities
+	if identities != nil {
+		// Loud, not fatal: with the flag on before the auth migration, the
+		// repo-metadata units fail closed; the other routes keep running.
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if err := identities.Check(checkCtx, postgresDatabase.pools.Domain); err != nil {
+			logger.Error("repository_identity_outbox_not_ready",
+				"setting", providersync.EnvRepositoryIdentityOutbox, "error", err.Error(),
+				"effect", "github and gitlab repo-metadata units fail until the auth migration grants EXECUTE")
+		}
+		cancel()
+	}
 	decryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
 		repository.Close()

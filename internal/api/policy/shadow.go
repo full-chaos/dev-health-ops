@@ -24,7 +24,7 @@ var (
 	shadowNamespaces = []string{"admin", "billing", "integrations", "license", "members", "settings", "teams"}
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
-	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped"}
+	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
 )
 
 const (
@@ -35,6 +35,8 @@ const (
 	resultError    = "error"
 	resultDropped  = "dropped"
 	resultSkipped  = "skipped"
+	// resultImpersonationRefused: a caller with a live go-api impersonation row, which enforcement refuses unasked.
+	resultImpersonationRefused = "impersonation_refused"
 
 	shadowDefaultInFlight = 32
 	shadowDefaultTimeout  = 2 * time.Second
@@ -266,7 +268,8 @@ type ShadowObservation struct {
 	Caller string
 	// UserAccessToken is true when Bearer is a user access token the PDP can resolve.
 	UserAccessToken bool
-	// Impersonating is true while a delegated session is in force: the PDP cannot decide it yet.
+	// Impersonating is true while a live go-api impersonation row is in force for the caller's own bearer. The PDP
+	// would judge that bearer as the admin, not the delegation, so such a call is never asked (stop route aside).
 	Impersonating bool
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
@@ -297,12 +300,16 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	if s.percent < 100 && s.seen.Add(1)%100 >= s.percent {
 		return
 	}
+	if o.Impersonating && o.Pattern != stopImpersonationPattern {
+		countShadowResult(ctx, resultImpersonationRefused)
+		return
+	}
 	if row.HighRisk && !s.highRisk {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
 	org := strings.ToLower(o.OrgID)
-	if o.Bearer == "" || !o.UserAccessToken || o.Impersonating || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
+	if o.Bearer == "" || !o.UserAccessToken || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}

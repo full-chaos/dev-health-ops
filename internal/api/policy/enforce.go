@@ -20,6 +20,8 @@ const (
 	enforceOutcomeAllow     = "allow"
 	enforceOutcomeDeny      = "deny"
 	enforceOutcomeErrorDeny = "error_deny"
+	// enforceOutcomeImpersonationRefused: a caller with a live go-api impersonation row, refused before any call.
+	enforceOutcomeImpersonationRefused = "impersonation_refused"
 
 	enforceDefaultTimeout = 2 * time.Second
 	enforceRetryAfter     = "5"
@@ -51,11 +53,16 @@ type EnforceConfig struct {
 // route not listed has one.
 var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 
+// enforceOutcomes is the closed outcome set of the decision counter.
+var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceOutcomeErrorDeny, enforceOutcomeImpersonationRefused}
+
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,
 // because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow with an
-// obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. The one
-// exception is a caller the decision point cannot judge (a legacy HS256 token, a delegated session, an
+// obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. A caller with a live go-api
+// impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
+// delegation: it is refused before any call, except on the stop route. A delegated session's own bearer is decided
+// like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
 type Enforcer struct {
@@ -119,6 +126,8 @@ const (
 	enforceUnavailable
 	// enforceNoDecisionPoint: go-api has no decision point client. The route is refused with a 503 and a reason code.
 	enforceNoDecisionPoint
+	// enforceImpersonationRefused: the caller has a live go-api impersonation row. The route is refused with a 403.
+	enforceImpersonationRefused
 )
 
 // enforceObservation is what the guard tells the Enforcer about one authenticated request. It holds values only.
@@ -127,7 +136,8 @@ type enforceObservation struct {
 	bearer          string
 	orgID           string
 	userAccessToken bool
-	impersonating   bool
+	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
+	impersonating bool
 }
 
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
@@ -141,6 +151,12 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 	if e.unconfigured {
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 		return enforceNoDecisionPoint
+	}
+	if o.impersonating && o.pattern != stopImpersonationPattern {
+		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
+		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceImpersonationRefused
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {
@@ -192,10 +208,6 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	switch {
 	case o.bearer == "" || !o.userAccessToken:
 		return enforceUnjudgedHS256
-	case o.impersonating:
-		// Temporary: the decision point decides a delegated session, but go-api does not yet pass the delegation
-		// context it needs. Remove this case when it does.
-		return enforceUnjudgedDelegated
 	case row.ResourceType == policycatalog.ScopeOrganization && org == "":
 		return enforceUnjudgedNoOrg
 	}
@@ -249,6 +261,9 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		detail := ErrorDetail(enforceUnavailableDetail)
 		detail.Set("reason_code", enforceNoDecisionPointReason)
 		WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
+		return
+	case enforceImpersonationRefused:
+		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 		return
 	}
 	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)

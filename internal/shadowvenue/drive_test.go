@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -64,6 +65,21 @@ func TestReadPasswordReadsAnOwnerOnlyFileAndNeverEchoesIt(t *testing.T) {
 	}
 	if _, err := ReadPassword(link); err == nil {
 		t.Fatal("a symlink accepted")
+	}
+	// An owner-only FIFO passes every mode check but the regular-file one; reading it would block the driver.
+	fifo := filepath.Join(dir, "f.pw")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := ReadPassword(fifo); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO accepted")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadPassword blocked on a FIFO")
 	}
 }
 

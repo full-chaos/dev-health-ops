@@ -205,10 +205,16 @@ func TestJudgeMismatchFailsUnlessIntentionalOrRuled(t *testing.T) {
 	if report := judge(t, slots, lines, ruling); !rowVerdict(t, report, "58").Pass || report.Slots[6].Verdict != VerdictMismatchRuled {
 		t.Fatalf("a ruled mismatch: %s", report.Slots[6].Verdict)
 	}
-	other := ruling
-	other.Reason = "no_membership"
-	if report := judge(t, slots, lines, other); rowVerdict(t, report, "58").Pass {
-		t.Fatal("a ruling of another reason passed the tuple")
+	for name, mutate := range map[string]func(*Ruling){
+		"reason": func(r *Ruling) { r.Reason = "no_membership" },
+		"route":  func(r *Ruling) { r.Route = "GET /api/v1/admin/teams/{team_id}" },
+		"caller": func(r *Ruling) { r.Caller = "admin" },
+	} {
+		other := ruling
+		mutate(&other)
+		if report := judge(t, slots, lines, other); rowVerdict(t, report, "58").Pass {
+			t.Fatalf("a ruling of another %s passed the tuple", name)
+		}
 	}
 	slots, lines = build("intentional")
 	if report := judge(t, slots, lines); !rowVerdict(t, report, "58").Pass || report.Slots[6].Verdict != VerdictMismatchIntentional {
@@ -227,6 +233,18 @@ func TestJudgeMismatchWithoutItsWarnLineFails(t *testing.T) {
 	report := judge(t, slots, lines)
 	if report.Slots[6].Verdict != VerdictMismatchNoTuple || rowVerdict(t, report, "58").Pass {
 		t.Fatalf("%s", report.Slots[6].Verdict)
+	}
+	// Two WARN lines for one decision: the tuple is ambiguous, so no ruling can apply.
+	slots, lines = controlsOK()
+	cell = cellOf(7, "58", "member")
+	for i, slot := range cell {
+		decision := "dec_TWICE" + strings.Repeat(string(rune('A'+i)), 21)
+		lines = append(lines, result(slot, 300*time.Millisecond, "mismatch", decision), mismatchWarn(slot, 300*time.Millisecond, "unresolved", decision),
+			mismatchWarn(slot, 400*time.Millisecond, "intentional", decision))
+	}
+	report = judge(t, append(slots, cell...), lines)
+	if report.Slots[6].Verdict != VerdictMismatchNoTuple {
+		t.Fatalf("two WARN lines for one decision: %s", report.Slots[6].Verdict)
 	}
 }
 
@@ -262,6 +280,16 @@ func TestJudgeVoidsTheRunWhenAControlDoesNotMismatch(t *testing.T) {
 	}
 	if report := judge(t, slots[:3], lines[:6]); !report.Void || !strings.Contains(strings.Join(report.Reasons, "\n"), "control") {
 		t.Fatalf("one control cell only: void %v %v", report.Void, report.Reasons)
+	}
+	var table strings.Builder
+	if err := judge(t, slots, matched).WriteTable(&table); err != nil || !strings.Contains(table.String(), "C1\tGET /api/v1/admin/teams") || !strings.Contains(table.String(), "CONTROL_BROKEN") {
+		t.Fatalf("the table does not show the broken control: %v\n%s", err, table.String())
+	}
+	// An intentional mismatch is a control's mismatch too (the served-org control is one).
+	intentional := append([]string{}, lines...)
+	intentional[1] = mismatchWarn(slots[0], 500*time.Millisecond, "intentional", "dec_CTRL"+strings.Repeat("B", 22))
+	if report := judge(t, slots, intentional); report.Void {
+		t.Fatalf("an intentional control mismatch voided the run: %v", report.Reasons)
 	}
 }
 

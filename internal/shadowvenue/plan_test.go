@@ -56,6 +56,7 @@ func TestPlanRefusesADestructiveRowOutsideTheThrowawayOrg(t *testing.T) {
 		"row org A":         "13\tDELETE\t/api/v1/admin/orgs/{org_id}\tA\tyes\t-\t-\tmatch\t/api/v1/admin/orgs/{org}\t-\n",
 		"path names org A":  "13\tDELETE\t/api/v1/admin/orgs/{org_id}\tC\tyes\t-\t-\tmatch\t/api/v1/admin/orgs/{org:A}\t-\n",
 		"body names A user": "9\tPOST\t/api/v1/admin/impersonate\tC\tyes\t-\t-\tmatch\t/api/v1/admin/impersonate\t{\"user_id\":\"{user:member-A}\"}\n",
+		"path names a seed": "13\tDELETE\t/api/v1/admin/orgs/{org_id}\tC\tyes\t-\t-\tmatch\t/api/v1/admin/orgs/{uuid:team}\t-\n",
 	}
 	for name, row := range cases {
 		if _, err := planOf(t, row); err == nil || !strings.Contains(err.Error(), "throwaway") {
@@ -68,7 +69,8 @@ func TestPlanRefusesADestructiveRowOutsideTheThrowawayOrg(t *testing.T) {
 		t.Fatalf("org C destructive rows refused: %v", err)
 	}
 	venue, _ := testPrincipals(t)
-	if _, err := MakePlan(mustRows(t, testRowsHeader+ok), venue, PlanOptions{Throwaway: "Z", K: 3, Destructive: true}); err == nil {
+	plain := mustRows(t, testRowsHeader+"58\tGET\t/api/v1/admin/teams\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams\t-\n")
+	if _, err := MakePlan(plain, venue, PlanOptions{Throwaway: "Z", K: 3, Destructive: true}); err == nil {
 		t.Fatal("an unknown throwaway org label accepted")
 	}
 }
@@ -143,7 +145,7 @@ func TestPlanResolvesEveryPlaceholderAndRefusesAnUnknownOne(t *testing.T) {
 		"unknown name":      "61\tGET\t/api/v1/admin/teams/{team_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams/{x}\t-\n",
 		"path shape":        "61\tGET\t/api/v1/admin/teams/{team_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/teams/{uuid:team}/extra\t-\n",
 		"literal differs":   "61\tGET\t/api/v1/admin/teams/{team_id}\tA\tno\t-\t-\tmatch\t/api/v1/admin/team/{uuid:team}\t-\n",
-		"body not json":     "3\tPOST\t/api/v1/admin/orgs/{org_id}/members\tA\tno\t-\t-\tmatch\t/api/v1/admin/orgs/{org}/members\t{user_id}\n",
+		"body not json":     "3\tPOST\t/api/v1/admin/orgs/{org_id}/members\tA\tno\t-\t-\tmatch\t/api/v1/admin/orgs/{org}/members\t[1,\n",
 	}
 	for name, row := range bad {
 		if _, err := planOf(t, row); err == nil {

@@ -18,7 +18,8 @@ const (
 	MsgServedOther = "api shadow pdp: the request names an organization that is not the token organization"
 )
 
-// Slot verdicts. Only MATCH, MATCH_SERVED_OTHER on a cross-org cell, MISMATCH_INTENTIONAL and MISMATCH_RULED pass.
+// Slot verdicts. Only MATCH, MATCH_SERVED_OTHER (given to a cross-org cell only), MISMATCH_INTENTIONAL and MISMATCH_RULED
+// pass.
 const (
 	VerdictMatch                = "MATCH"
 	VerdictMatchServedOther     = "MATCH_SERVED_OTHER"
@@ -174,10 +175,8 @@ type SlotVerdict struct {
 // Pass reports whether the slot's evidence passes it.
 func (s SlotVerdict) Pass() bool {
 	switch s.Verdict {
-	case VerdictMatch, VerdictMismatchIntentional, VerdictMismatchRuled:
+	case VerdictMatch, VerdictMatchServedOther, VerdictMismatchIntentional, VerdictMismatchRuled:
 		return true
-	case VerdictMatchServedOther:
-		return s.CrossOrg
 	}
 	return false
 }

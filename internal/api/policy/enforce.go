@@ -58,6 +58,7 @@ var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 // exception is a caller the decision point cannot judge (a legacy HS256 token, a delegated session, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
+// Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
 	rows    map[string]ShadowRow

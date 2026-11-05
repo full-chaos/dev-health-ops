@@ -23,5 +23,8 @@ func shadowCallerKind(user *User) string {
 	return ShadowCaller(user.Holds(ActionAdminOrgs), user.Role)
 }
 
+// ShadowCaller is the closed caller kind of a verified user, the same rule the guard's shadow hook uses.
+func (u *User) ShadowCaller() string { return shadowCallerKind(u) }
+
 // ShadowEnabled reports whether a shadow is installed beside the guard.
 func (g *Guard) ShadowEnabled() bool { return g.pdp.shadow != nil }

@@ -240,9 +240,6 @@ func TestOperationShadow_ParityGuardVsTable(t *testing.T) {
 	for who, claims := range parityClaims {
 		for _, key := range tableKeys() {
 			for _, org := range []string{shOwn, shOther, ""} {
-				if org == "" && strings.HasPrefix(key, "Mutation.") {
-					continue
-				}
 				document, variables := rootDoc(key, org)
 				claims := claims
 				sink := &fakeSink{}

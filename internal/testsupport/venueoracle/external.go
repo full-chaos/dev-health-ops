@@ -129,6 +129,8 @@ func startExternal(t *testing.T, ctx context.Context, options Options, v *Venue)
 		specs = options.Seed(t, ctx, admin, v)
 	}
 	if len(specs) > 0 {
+		// An external target holds no key of the venue's own issuer: it verifies HS256 tokens under its JWT key.
+		v.legacyTokenKey = options.JWTKey
 		v.Tokens = v.mintGo(t, specs)
 	}
 	return v

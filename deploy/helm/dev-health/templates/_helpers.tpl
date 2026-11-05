@@ -762,11 +762,12 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 */}}
 {{- define "dev-health.authPhase" -}}
 {{- $v := .Values -}}
-{{- /* goApi.authProxy keeps one key, orgProvisioning (CHAOS-11858, CHAOS-10988): the go-api switch AUTH_PROXY_ORG_PROVISIONING. Every other key is a routing flag authService.phase owns. */ -}}
+{{- /* goApi.authProxy keeps two keys: orgProvisioning (CHAOS-11858, CHAOS-10988), the go-api switch AUTH_PROXY_ORG_PROVISIONING, and impersonation (CHAOS-12914), the go-api switch AUTH_PROXY_IMPERSONATION. Every other key is a routing flag authService.phase owns. */ -}}
 {{- if hasKey $v.goApi "authProxy" }}
 {{- if or (not (kindIs "map" $v.goApi.authProxy)) (eq (len $v.goApi.authProxy) 0) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}
-{{- range $key, $_ := $v.goApi.authProxy }}{{- if ne $key "orgProvisioning" }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
+{{- range $key, $_ := $v.goApi.authProxy }}{{- if not (has $key (list "orgProvisioning" "impersonation")) }}{{- fail "goApi.authProxy is replaced by authService.phase (0 go-api only, 1 auth-service dark, 2 sessions, 3 login and social sign-in, 4 users owned, 5 orgs owned): remove goApi.authProxy and set authService.phase" }}{{- end }}{{- end }}
 {{- if and (hasKey $v.goApi.authProxy "orgProvisioning") (not (kindIs "bool" $v.goApi.authProxy.orgProvisioning)) }}{{- fail "goApi.authProxy.orgProvisioning must be true or false" }}{{- end }}
+{{- if and (hasKey $v.goApi.authProxy "impersonation") (not (kindIs "bool" $v.goApi.authProxy.impersonation)) }}{{- fail "goApi.authProxy.impersonation must be true or false" }}{{- end }}
 {{- end -}}
 {{- if hasKey $v.authService "enabled" }}{{- fail "authService.enabled is replaced by authService.phase: enabled=true is phase 1 and enabled=false is phase 0; remove authService.enabled and set authService.phase" }}{{- end -}}
 {{- if hasKey $v.authService "usersOwned" }}{{- fail "authService.usersOwned is replaced by authService.phase: users owned is phase 4; remove authService.usersOwned" }}{{- end -}}
@@ -775,6 +776,9 @@ public.memberships stay the authority), refuses AUTH_ORGS_OWNED in every extraEn
 {{- $p := $v.authService.phase -}}
 {{- if not (and (has (kindOf $p) (list "int" "int64" "float64")) (eq (float64 $p) (floor (float64 $p))) (ge (float64 $p) 0.0) (le (float64 $p) 5.0)) }}{{- fail (printf "authService.phase must be a whole number from 0 to 4, got %s %v" (kindOf $p) $p) }}{{- end -}}
 {{- if and (eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true) (lt (int $p) 4) }}{{- fail "goApi.authProxy.orgProvisioning needs authService.phase 4: the switch sends member, invite and organization delete changes to auth-service, whose provisioning routes refuse until it owns users (phase 4)" }}{{- end -}}
+{{- /* CHAOS-12914: go-api only logs the switch without sessions (one ERROR line, devhealth_api_auth_proxy_impersonation_config_invalid=1, every start 503; D6465 no fail-start), so the render refuses it. */ -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (not $v.goApi.enabled) }}{{- fail "goApi.authProxy.impersonation needs goApi.enabled: the switch is an env entry of the go-api Deployment, and without go-api it would be accepted and absent" }}{{- end -}}
+{{- if and (eq (default false (default dict $v.goApi.authProxy).impersonation) true) (lt (int $p) 2) }}{{- fail "goApi.authProxy.impersonation needs authService.phase 2 or higher: go-api starts the admin impersonation session at auth-service only while auth-service owns sessions (AUTH_PROXY_SESSIONS); without it every impersonation start answers 503" }}{{- end -}}
 {{- if eq (default false (default dict $v.goApi.authProxy).orgProvisioning) true }}
 {{- $routes := false }}{{- range ($v.authService.extraEnv | default list) }}{{- if eq (toString .name) "AUTH_MEMBERSHIP_ROUTES" }}{{- $routes = eq (toString .value) "true" }}{{- end }}{{- end }}
 {{- if not $routes }}{{- fail "goApi.authProxy.orgProvisioning needs authService.extraEnv AUTH_MEMBERSHIP_ROUTES=true (the exact name; the last entry with that name must be \"true\"): go-api calls auth-service's provisioning routes, which auth-service mounts only with that setting" }}{{- end }}
@@ -957,14 +961,24 @@ true
 {{- end -}}
 
 {{/*
-OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
-render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
-Call with (dict "flag" "oidc"|"saml" "context" $).
+OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". Call with (dict "flag" "oidc"|"saml" "context" $).
+true needs go-api to reach auth-service (phase >= 2), authService.sso.secretName and a Secret key name for every setting
+auth-service's loader reads for the protocol (internal/auth/authconfig/sso.go): APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and
+SETTINGS_ENCRYPTION_SALT, and AUTH_SSO_STATE_KEY for oidc only. A missing one fails the render and names the key; the settings
+reach the pod by secretKeyRef (templates/auth-service.yaml), never a value.
 */}}
 {{- define "dev-health.authSSOOn" -}}
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
-{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" -}}
+{{- if ne (include "dev-health.authProxyOn" .context) "true" }}{{- fail (printf "%s=true needs go-api to reach auth-service: authService.phase >= 2 and goApi.enabled" $key) }}{{- end -}}
+{{- if not (trim (toString $sso.secretName)) }}{{- fail (printf "%s=true needs authService.sso.secretName: the Secret holding the SSO settings of auth-service (it must carry go-api's SETTINGS_ENCRYPTION_KEY)" $key) }}{{- end -}}
+{{- $keys := default dict $sso.keys -}}
+{{- range $name := ternary (list "stateKey" "appBaseURL" "encryptionKey" "encryptionSalt") (list "appBaseURL" "encryptionKey" "encryptionSalt") (eq $.flag "oidc") }}
+{{- if not (include "dev-health.validSecretKey" (index $keys $name)) }}{{- fail (printf "%s=true needs authService.sso.keys.%s (%s): the key name in authService.sso.secretName is empty or not a valid Secret key" $key $name (get (dict "stateKey" "AUTH_SSO_STATE_KEY" "appBaseURL" "APP_BASE_URL" "encryptionKey" "SETTINGS_ENCRYPTION_KEY" "encryptionSalt" "SETTINGS_ENCRYPTION_SALT") $name)) }}{{- end -}}
+{{- end -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{/*

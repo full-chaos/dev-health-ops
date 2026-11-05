@@ -107,6 +107,7 @@ func spTable() []spCell {
 	cells = append(cells, spCells("field of the result written", credit+"p.ServiceProvider = false", true, true)...)
 	cells = append(cells, spCells("shadowed by an inner variable", "p, _, _ := LOOKUP\n{\np := Q{}\n_ = p.ServiceProvider\n}\n_ = p.ID", true, true)...)
 	cells = append(cells, spCells("captured by a func literal", credit+"func() { _ = p.ID }()", true, true)...)
+	cells = append(cells, spCells("check by a local func named signInTo", "signInTo := func(Q) error { return nil }\np, _, _ := LOOKUP\n_ = signInTo(p)", true, true)...)
 	cells = append(cells, spCells("discarded with the blank identifier", "_, _, _ = LOOKUP", true, true)...)
 	cells = append(cells, spCells("discarded in a short declaration", "_, found, _ := LOOKUP\n_ = found", true, true)...)
 	cells = append(cells, spCells("discarded as a statement", "LOOKUP", true, true)...)

@@ -39,6 +39,9 @@ func (e RepositoryIdentityEvent) AggregateID() string {
 	return e.OrganizationID.String() + "/" + e.Provider + "/" + e.ProviderRepoID
 }
 
+// Validate reports whether AppendRepositoryIdentity accepts the event, so a producer can skip a row it would refuse.
+func (e RepositoryIdentityEvent) Validate() error { return e.validate() }
+
 func (e RepositoryIdentityEvent) validate() error {
 	switch {
 	case e.OrganizationID == uuid.Nil:

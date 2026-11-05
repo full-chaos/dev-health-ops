@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
@@ -568,12 +569,17 @@ func constructProviderSyncWorkerWithDependencies(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	identities, err := repositoryIdentityOutbox(envsecrets.ProcessLookup)
+	if err != nil {
+		return workerFamily{}, err
+	}
 	repository, err := providersync.NewPostgresRepository(
 		postgresDatabase.pools.Domain,
 	)
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
+	repository.RepositoryIdentities = identities
 	decryptor, err := newWorkerCredentialCipher(cfg)
 	if err != nil {
 		repository.Close()

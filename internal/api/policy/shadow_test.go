@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -366,12 +367,6 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 	}{
 		{"high-risk row with the second switch off", func() *accessStore { return personaStore(personaAdmin) }, userClaims(nil), "POST", "/api/v1/admin/teams",
 			func(c *ShadowConfig) { c.HighRisk = false }, nil, []string{"skipped"}},
-		{"impersonation in force", func() *accessStore { return personaStore(personaAdmin) }, userClaims(nil), "GET", "/api/v1/admin/teams", nil,
-			func(next http.Handler) http.Handler {
-				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					next.ServeHTTP(w, r.WithContext(WithImpersonation(r.Context(), &Impersonation{TargetOrgID: uuid.MustParse(memberOrg)})))
-				})
-			}, []string{"skipped"}},
 		{"caller with no organization on an org row", func() *accessStore { return personaStore(personaSuperuser) },
 			userClaims(func(c *AccessTokenClaims) { c.OrgID = nil }), "GET", "/api/v1/billing/invoices", nil, nil, []string{"skipped"}},
 		{"route with no action row", func() *accessStore { return personaStore(personaAdmin) }, userClaims(nil), "GET", "/api/v1/admin/other", nil, nil, nil},
@@ -390,6 +385,116 @@ func TestShadowSkipsAreCountedAndAskNothing(t *testing.T) {
 				t.Fatalf("%d PDP calls, want 0", n)
 			}
 		})
+	}
+}
+
+// The shadow mirrors enforcement for a caller with a live go-api impersonation row: never asked, counted
+// impersonation_refused, also on a high-risk row with its switch off.
+func TestShadowAnImpersonatingAdminIsCountedRefusedAndAskedNothing(t *testing.T) {
+	for _, cell := range []struct {
+		name, method, path string
+		who                persona
+		mutate             func(*ShadowConfig)
+	}{
+		{"organization row", "GET", "/api/v1/admin/teams", personaAdmin, nil},
+		{"platform row", "GET", "/api/v1/admin/orgs", personaSuperuser, nil},
+		{"high-risk row with the second switch off", "POST", "/api/v1/admin/teams", personaAdmin, func(c *ShadowConfig) { c.HighRisk = false }},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			rec := recordShadow(t)
+			pdp := newTestPDP(t, allowAll)
+			sh, _ := newShadowFor(t, pdp.client(t), cell.mutate)
+			shadowRequest(shadowHandler(t, personaStore(cell.who), userClaims(nil), sh, impersonating), cell.method, cell.path)
+			sh.wg.Wait()
+			if _, results := rec.snapshot(); !slices.Equal(results, []string{"impersonation_refused"}) {
+				t.Errorf("results %v, want [impersonation_refused]", results)
+			}
+			if n := len(pdp.calls()); n != 0 {
+				t.Errorf("%d PDP calls, want 0", n)
+			}
+		})
+	}
+}
+
+// The stop route of an impersonating admin is asked, as enforcement asks it.
+func TestShadowTheStopRouteOfAnImpersonatingAdminIsAsked(t *testing.T) {
+	rec := recordShadow(t)
+	pdp := newTestPDP(t, allowAll)
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.Rows = rows })
+	guard := NewGuard(routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)}), quiet())
+	guard.SetShadow(sh)
+	mux := http.NewServeMux()
+	mux.Handle(stopImpersonationPattern, guard.WrapPlatform(ActionAdminImpersonate, echo))
+	got := shadowRequest(impersonating(mux), http.MethodPost, stopImpersonationRoute)
+	sh.wg.Wait()
+	if _, results := rec.snapshot(); got.status != http.StatusOK || !slices.Equal(results, []string{"match"}) {
+		t.Fatalf("stop route: %d, results %v, want 200 and [match]", got.status, results)
+	}
+	if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminImpersonate {
+		t.Fatalf("PDP saw %+v, want one admin.impersonate question", calls)
+	}
+}
+
+// The shadow's stop exemption is the exact template only: every other template counts impersonation_refused unasked.
+func TestShadowTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	for _, v := range stopPatternVariants {
+		rows[v] = stopRouteRow(t)
+	}
+	for _, pattern := range append([]string{stopImpersonationPattern}, stopPatternVariants...) {
+		t.Run(pattern, func(t *testing.T) {
+			rec := recordShadow(t)
+			pdp := newTestPDP(t, allowAll)
+			sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.Rows = rows })
+			sh.Observe(context.Background(), ShadowObservation{Pattern: pattern, Bearer: shadowBearer, Caller: ShadowCallerSuperuser,
+				UserAccessToken: true, Impersonating: true, LegacyAllowed: true})
+			sh.wg.Wait()
+			want, wantCalls := []string{"impersonation_refused"}, 0
+			if pattern == stopImpersonationPattern {
+				want, wantCalls = []string{"match"}, 1
+			}
+			if _, results := rec.snapshot(); !slices.Equal(results, want) || len(pdp.calls()) != wantCalls {
+				t.Errorf("template %q: results %v, %d PDP calls; want %v, %d", pattern, results, len(pdp.calls()), want, wantCalls)
+			}
+		})
+	}
+}
+
+// A delegated session's bearer (an act claim) is asked with its own bearer.
+func TestShadowADelegatedBearerIsAsked(t *testing.T) {
+	rec := recordShadow(t)
+	pdp := newTestPDP(t, allowAll)
+	sh, _ := newShadowFor(t, pdp.client(t), nil)
+	auth := routed(t, personaStore(personaAdmin), &fakeValidator{result: userClaims(func(c *AccessTokenClaims) { c.Actor = &delegatedActorWire })})
+	auth.DelegatedRows(func(string) bool { return true })
+	guard := NewGuard(auth, quiet())
+	guard.SetShadow(sh)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+	shadowRequest(mux, http.MethodGet, "/api/v1/admin/teams")
+	sh.wg.Wait()
+	if _, results := rec.snapshot(); !slices.Equal(results, []string{"match"}) {
+		t.Fatalf("results %v, want [match]", results)
+	}
+	if calls := pdp.calls(); len(calls) != 1 || calls[0].Principal != shadowBearer || calls[0].Org != ownOrg {
+		t.Fatalf("PDP saw %+v, want one question with the delegated bearer on its organization", calls)
+	}
+}
+
+// The result set is closed and the counter's description names exactly it.
+func TestShadowResultSetIsClosed(t *testing.T) {
+	want := []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
+	if !slices.Equal(shadowResults, want) {
+		t.Errorf("shadow results %v, want %v", shadowResults, want)
+	}
+	reader := sdkmetric.NewManualReader()
+	newShadowResultAdder(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("shadow-test"))(context.Background(), resultMatch, ShadowReasonNone)
+	description, _ := collectSum(t, reader, shadowResultMetric, "result")
+	if suffix := "by result: " + strings.Join(want, ", "); !strings.HasSuffix(description, suffix) {
+		t.Errorf("results description %q, want it to end %q", description, suffix)
 	}
 }
 

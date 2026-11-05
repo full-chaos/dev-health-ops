@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -41,7 +42,7 @@ func newShadowMismatchAdder(meter metric.Meter) shadowMismatchAdder {
 
 func newShadowResultAdder(meter metric.Meter) shadowResultAdder {
 	resultCounter, err := meter.Int64Counter(shadowResultMetric,
-		metric.WithDescription("Shadow PDP calls by result (match, mismatch, error, dropped, skipped) and skip reason (none, hs256, envelope)"))
+		metric.WithDescription("Shadow PDP calls by skip reason ("+strings.Join(shadowReasons, ", ")+") and by result: "+strings.Join(shadowResults, ", ")))
 	if err != nil {
 		return func(context.Context, string, string) {}
 	}

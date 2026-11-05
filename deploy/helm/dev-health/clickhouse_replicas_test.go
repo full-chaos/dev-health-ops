@@ -14,7 +14,7 @@ func renderClickHouseSts(t *testing.T, args ...string) map[string]interface{} {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	out, err := exec.Command("helm", append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, args...)...).CombinedOutput()
+	out, err := helmCommand(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template: %v: %.500s", err, out)
 	}
@@ -84,7 +84,7 @@ func TestClickHouseReplicasRefusesAnythingButANonnegativeWholeNumber(t *testing.
 		{"--set-json", "clickhouse.replicas=1.5"},
 		{"--set-json", "clickhouse.replicas=true"},
 	} {
-		out, err := exec.Command("helm", append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, c...)...).CombinedOutput()
+		out, err := helmCommand(append([]string{"template", "t", ".", "--show-only", "templates/clickhouse.yaml"}, c...)...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "clickhouse.replicas") {
 			t.Fatalf("%v: want a render refusal naming clickhouse.replicas, got err=%v out=%.300s", c, err, out)
 		}

@@ -463,11 +463,14 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
-		sharedWorkload := provisioningCred.workload
-		if sharedWorkload == nil {
-			sharedWorkload = sessionCred.workload
+		decisionPoint := newDecisionPoint(authProxy, envsecrets.ProcessLookup, sharedWorkloadClient(provisioningCred, sessionCred))
+		enforcer, err := buildEnforcer(envsecrets.ProcessLookup, logger, decisionPoint)
+		if err != nil {
+			closeComponents(depComponents)
+			return nil, dependencyFailure(ctx, logger, "api_authz_enforce", "api_authz_enforce_config_invalid", err)
 		}
-		protected.guard.SetShadow(newShadow(authProxy, envsecrets.ProcessLookup, sharedWorkload, logger))
+		protected.guard.SetEnforcer(enforcer)
+		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
@@ -479,7 +482,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)

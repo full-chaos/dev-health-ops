@@ -51,6 +51,7 @@ internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
+internal/auth/copyproject
 internal/auth/delegationend
 internal/auth/edgetoken
 internal/auth/emaildomain
@@ -74,6 +75,7 @@ internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/sessionrule
 internal/auth/signedtoken
+internal/authzenforce
 internal/chmigrate
 internal/cli
 internal/edgetokenmint

@@ -84,7 +84,7 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 	if chart == "" {
 		chart = "."
 	}
-	out, err := exec.Command("helm", "template", "t", chart,
+	out, err := helmCommand("template", "t", chart,
 		"--show-only", "templates/clickhouse.yaml",
 		"--set-string", `clickhouse.configd.system-logs\.xml=`+startedTestConfigd,
 		"--set-string", `clickhouse.usersd.acr_ro\.xml=`+startedTestUsersd,

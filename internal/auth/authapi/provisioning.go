@@ -174,7 +174,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 	if rows == nil {
 		rows = authv1.AuthServiceEndpointProfiles
 	}
-	if err := provisioningRowsPresent(rows, deps.Workload != nil); err != nil {
+	if err := provisioningRowsPresent(rows); err != nil {
 		return nil, err
 	}
 	if deps.Logger == nil {
@@ -222,7 +222,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
 		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
-	routes = h.withOrgRenameRoute(h.withStateRoute(routes, rows), rows)
+	routes = h.withOrgRenameRoute(h.withStateRoute(routes))
 	return routes, nil
 }
 

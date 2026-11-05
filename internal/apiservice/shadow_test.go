@@ -136,7 +136,7 @@ func runNewShadow(t *testing.T, env map[string]string, shared *workloadtoken.Cli
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	s := newShadow(cfg, rec.lookup, shared, slog.New(slog.NewTextHandler(&logs, nil)))
+	s := newShadow(newDecisionPoint(cfg, rec.lookup, shared), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil)))
 	return s, logs.String(), rec
 }
 
@@ -261,7 +261,7 @@ func TestShadowConfigRefusedOutsideTheIssuerNamesTheVariableItCameFrom(t *testin
 		}
 		tc.mutate(&cfg)
 		var logs bytes.Buffer
-		if s := newShadow(cfg, rec.lookup, nil, slog.New(slog.NewTextHandler(&logs, nil))); s != nil {
+		if s := newShadow(newDecisionPoint(cfg, rec.lookup, nil), rec.lookup, slog.New(slog.NewTextHandler(&logs, nil))); s != nil {
 			t.Errorf("%s: a shadow was built", name)
 		}
 		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), tc.want) {

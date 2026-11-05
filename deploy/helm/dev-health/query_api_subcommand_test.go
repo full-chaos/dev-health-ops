@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
@@ -10,7 +9,7 @@ import (
 // dho image with the verb as the only argument, and keeps the listener port
 // and probes it had before the fold.
 func TestQueryAPIRunsTheDhoVerb(t *testing.T) {
-	output, err := exec.Command("helm", "template", "qa-test", ".", "--set", "queryApi.enabled=true").CombinedOutput()
+	output, err := helmCommand("template", "qa-test", ".", "--set", "queryApi.enabled=true").CombinedOutput()
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, output)
 	}
@@ -44,7 +43,7 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 		"another project image": {"ghcr.io/full-chaos/dev-hops-api", "is not a dho image"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			output, err := exec.Command("helm", "template", "qa-test", ".",
+			output, err := helmCommand("template", "qa-test", ".",
 				"--set", "queryApi.enabled=true", "--set", "queryApi.image.repository="+testCase.repository).CombinedOutput()
 			if err == nil {
 				t.Fatalf("rendered:\n%s", output)
@@ -54,7 +53,7 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 			}
 		})
 	}
-	output, err := exec.Command("helm", "template", "qa-test", ".", "--set", "queryApi.enabled=true",
+	output, err := helmCommand("template", "qa-test", ".", "--set", "queryApi.enabled=true",
 		"--set", "queryApi.image.repository=ghcr.io/full-chaos/dev-health-go-operator@sha256:"+digest).CombinedOutput()
 	if err != nil {
 		t.Fatalf("an operator-image digest did not render: %v\n%s", err, output)
@@ -70,7 +69,7 @@ func TestQueryAPIRefusesImagesThatCannotRunTheVerb(t *testing.T) {
 func TestQueryAPICORSAllowedOrigins(t *testing.T) {
 	render := func(extra ...string) (string, error) {
 		args := append([]string{"template", "qa-test", ".", "--set", "queryApi.enabled=true"}, extra...)
-		out, err := exec.Command("helm", args...).CombinedOutput()
+		out, err := helmCommand(args...).CombinedOutput()
 		return string(out), err
 	}
 	out, err := render()

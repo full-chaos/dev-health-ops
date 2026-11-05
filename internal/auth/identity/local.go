@@ -52,7 +52,7 @@ func (s *Store) ProvisionLocal(ctx context.Context, req LocalProvisionRequest) (
 	if !s.ownsUsers {
 		return uuid.Nil, ErrSignupNotAvailable
 	}
-	email, err := NormalizeLocalRegisterEmail(req.Email)
+	email, err := provisionEmail(ctx, req.Email)
 	if err != nil {
 		return uuid.Nil, err
 	}

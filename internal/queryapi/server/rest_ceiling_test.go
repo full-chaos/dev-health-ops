@@ -259,6 +259,10 @@ func TestCeiling_HiddenOnlyPersonAnswersAsAnUnknownPerson(t *testing.T) {
 			if hidden.status != unknown.status || hidden.body != unknown.body {
 				t.Fatalf("hidden-only person: %d %q; unknown person: %d %q", hidden.status, hidden.body, unknown.status, unknown.body)
 			}
+			// R2 (acp): the one answer is a 404 with a body; a known person with no allowed activity is not told apart.
+			if hidden.status != http.StatusNotFound || hidden.body == "" {
+				t.Fatalf("known person without allowed activity: %d %q, want the unknown person's 404", hidden.status, hidden.body)
+			}
 		})
 	}
 }

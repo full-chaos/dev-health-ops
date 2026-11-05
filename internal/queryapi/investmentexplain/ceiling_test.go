@@ -324,3 +324,47 @@ func TestCache_Allowlist_NoOrgWideDataVersionRead(t *testing.T) {
 		t.Fatalf("an allowlist caller read the org-wide data version")
 	}
 }
+
+// R1 (acp): under a ceiling the structural evidence of a unit that touches ANY repository outside it is OMITTED (the
+// field is absent, not an empty list that reads as "no evidence"); a unit inside the ceiling keeps it; no ceiling
+// serves every unit's, as before. The omission holds with and without quote text.
+func TestWorkUnits_MixedUnit_StructuralEvidenceOmitted(t *testing.T) {
+	for _, includeText := range []bool{true, false} {
+		client := &recordingClient{mixed: []string{"unit-1"}}
+		reader, _ := NewReader(client)
+		opts := ceilingUnitOpts(restrictedCeiling(t, ceilingRepo))
+		opts.IncludeText = includeText
+		got, err := reader.BuildWorkUnitInvestments(context.Background(), opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		served := map[string]WorkUnitInvestment{}
+		for _, unit := range got {
+			served[unit.WorkUnitID] = unit
+		}
+		mixed, inside := served["unit-1"], served["unit-2"]
+		if mixed.WorkUnitID == "" || inside.WorkUnitID == "" {
+			t.Fatalf("includeText=%t: units served: %d", includeText, len(got))
+		}
+		if !mixed.Evidence.StructuralOmitted || len(mixed.Evidence.Structural) != 0 || len(mixed.Evidence.StructuralOrdered) != 0 {
+			t.Fatalf("includeText=%t: the structural evidence of a mixed unit is served: %+v", includeText, mixed.Evidence)
+		}
+		if inside.Evidence.StructuralOmitted || len(inside.Evidence.Structural) != 1 || len(inside.Evidence.StructuralOrdered) != 1 {
+			t.Fatalf("includeText=%t: a unit inside the ceiling lost its structural evidence: %+v", includeText, inside.Evidence)
+		}
+	}
+}
+
+func TestWorkUnits_NoCeiling_StructuralEvidenceServedForEveryUnit(t *testing.T) {
+	client := &recordingClient{mixed: []string{"unit-1"}}
+	reader, _ := NewReader(client)
+	got, err := reader.BuildWorkUnitInvestments(context.Background(), ceilingUnitOpts(teamscope.NoCeiling()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, unit := range got {
+		if unit.Evidence.StructuralOmitted || len(unit.Evidence.Structural) != 1 {
+			t.Fatalf("%s: unrestricted read changed the structural evidence: %+v", unit.WorkUnitID, unit.Evidence)
+		}
+	}
+}

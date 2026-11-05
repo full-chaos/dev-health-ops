@@ -67,6 +67,8 @@ type WorkUnitEvidenceOutput struct {
 	// StructuralOrdered is Structural as the route writes it: each entry
 	// in the key order work_units.py builds it. A Go map loses that order.
 	StructuralOrdered []*pyjson.Object
+	// StructuralOmitted marks a unit whose structural evidence is not served: the field is absent, not empty.
+	StructuralOmitted bool
 }
 
 // InvestmentBreakdownOutput ports api/models/schemas.py's

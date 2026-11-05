@@ -80,6 +80,8 @@ func TestAuthWorkloadClientsAddOneFromEntryOnTheInternalPortOnly(t *testing.T) {
 			if with != want {
 				t.Errorf("the render is not the plain one plus the client's lines:\n%s", lineDiff(want, with))
 			}
+			assertAPIPortUnchanged(t, renderPhase(t, phase, internalOn(`["web"]`, workloadClients("["+acrClient+"]")...)...),
+				renderPhase(t, phase, internalOn(`["web"]`)...))
 		})
 	}
 }
@@ -104,6 +106,57 @@ func TestAuthWorkloadClientsRenderInOrderWithoutANamespaceSelector(t *testing.T)
 	rules, _ := at(authDoc(docs, "NetworkPolicy", internalListenerDoc), "spec", "ingress").([]any)
 	if len(rules) != 1 || !reflect.DeepEqual(at(rules[0], "ports"), []any{map[string]any{"protocol": "TCP", "port": 8097}}) {
 		t.Errorf("internal policy ingress = %v, want one rule on 8097 alone", rules)
+	}
+}
+
+// assertAPIPortUnchanged: the API port's policy (the <fullname>-auth-service NetworkPolicy, port 8095) and Service are
+// the same with and without workload clients. A client is never admitted on the API port.
+func assertAPIPortUnchanged(t *testing.T, with, without []map[string]any) {
+	t.Helper()
+	for _, kind := range []string{"NetworkPolicy", "Service"} {
+		got, want := authDoc(with, kind, "a-dev-health-auth-service"), authDoc(without, kind, "a-dev-health-auth-service")
+		if want == nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("the API %s changes with workload clients:\n got %v\nwant %v", kind, got, want)
+		}
+	}
+	for _, rule := range toAnySlice(at(authDoc(with, "NetworkPolicy", "a-dev-health-auth-service"), "spec", "ingress")) {
+		if strings.Contains(fmt.Sprint(at(rule, "from")), "acr") {
+			t.Errorf("an API port rule admits the acr client: %v", rule)
+		}
+	}
+}
+
+func toAnySlice(v any) []any {
+	s, _ := v.([]any)
+	return s
+}
+
+// Clients alone (internal.enabled, peers []) render: the internal policy's one rule admits exactly the client on the
+// internal port, with no peer entry and never an empty `from` (which would admit every source); the API port is as
+// it is with the internal listener off.
+func TestAuthWorkloadClientsAloneOnTheInternalPort(t *testing.T) {
+	for _, phase := range []int{2, 3, 4} {
+		t.Run(fmt.Sprintf("phase %d", phase), func(t *testing.T) {
+			docs := renderPhase(t, phase, internalOn(`[]`, workloadClients("["+acrClient+"]")...)...)
+			policy := authDoc(docs, "NetworkPolicy", internalListenerDoc)
+			if policy == nil {
+				t.Fatal("no internal listener NetworkPolicy")
+			}
+			wantIngress := []any{map[string]any{
+				"from": []any{map[string]any{
+					"podSelector":       map[string]any{"matchLabels": map[string]any{"app.kubernetes.io/name": "acr", "app.kubernetes.io/component": "api"}},
+					"namespaceSelector": map[string]any{"matchLabels": map[string]any{"kubernetes.io/metadata.name": "dev-health-acr"}},
+				}},
+				"ports": []any{map[string]any{"protocol": "TCP", "port": 8097}},
+			}}
+			if got := at(policy, "spec", "ingress"); !reflect.DeepEqual(got, wantIngress) {
+				t.Errorf("internal policy ingress = %v, want the acr client alone on 8097: %v", got, wantIngress)
+			}
+			if got := at(policy, "spec", "policyTypes"); !reflect.DeepEqual(got, []any{"Ingress"}) {
+				t.Errorf("internal policy policyTypes = %v, want [Ingress] alone", got)
+			}
+			assertAPIPortUnchanged(t, docs, renderPhase(t, phase, internalBase()...))
+		})
 	}
 }
 
@@ -150,6 +203,9 @@ func lineDiff(want, got string) string {
 func TestAuthWorkloadClientsRefusals(t *testing.T) {
 	const pods = `"podSelector":{"matchLabels":{"app":"acr"}}`
 	on := func(value string) []string { return phaseArgs(3, internalOn(`["web"]`, workloadClients(value)...)...) }
+	on2 := func(peers, value string) []string {
+		return phaseArgs(3, internalOn(peers, workloadClients(value)...)...)
+	}
 	cases := map[string]struct {
 		args []string
 		want string
@@ -171,6 +227,9 @@ func TestAuthWorkloadClientsRefusals(t *testing.T) {
 		"ports key (API port)":    {on(`[{` + pods + `,"ports":[{"protocol":"TCP","port":8095}]}]`), workloadClientsKey + `[0] takes only podSelector and namespaceSelector, not "ports"`},
 		"ipBlock key":             {on(`[{` + pods + `,"ipBlock":{"cidr":"10.0.0.0/8"}}]`), workloadClientsKey + `[0] takes only podSelector and namespaceSelector, not "ipBlock"`},
 		"internal listener off":   {phaseArgs(3, internalBase(workloadClients(`[{`+pods+`}]`)...)...), workloadClientsKey + " needs authService.internal.enabled"},
+		"no peer and no client":   {phaseArgs(3, internalOn(`[]`)...), "authService.internal.peers or " + workloadClientsKey + " must be non-empty"},
+		"no peer, clients []":     {on2(`[]`, `[]`), "authService.internal.peers or " + workloadClientsKey + " must be non-empty"},
+		"no peer, clients null":   {on2(`[]`, `null`), "authService.internal.peers or " + workloadClientsKey + " must be non-empty"},
 		"service off (phase 0)":   {phaseArgs(0, workloadClients(`[{`+pods+`}]`)...), workloadClientsKey + " needs authService.internal.enabled"},
 	}
 	for name, c := range cases {

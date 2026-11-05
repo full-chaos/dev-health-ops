@@ -33,17 +33,18 @@ type azSeeded struct {
 }
 
 // seedCorpusRow writes one row's state as the writers leave it: go-api's
-// users, organizations and memberships rows, the auth projections, an auth
-// membership row for a status go-api has no row for, and the grant rows with
-// their times moved onto the database clock. A principal the row says is
-// suspended is deactivated after its session starts.
+// users, organizations and memberships rows (the authority the decision reads,
+// D6651; a membership of an organization the state does not know is written
+// without its foreign key), the auth projections, and the grant rows with their
+// times moved onto the database clock. A principal the row says is suspended is
+// deactivated after its session starts.
 func (a *azRouterEnv) seedCorpusRow(t *testing.T, ctx context.Context, v azVector) azSeeded {
 	t.Helper()
 	s := v.State
 	out := azSeeded{orgs: map[string]string{}}
 	for _, label := range azOrgLabels(s) {
-		status, projected := s.Organizations[label]
-		org := a.azOrg(t, ctx, projected)
+		status, known := s.Organizations[label]
+		org := a.azOrg(t, ctx, known, status != "suspended")
 		if status == "suspended" {
 			a.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org)
 		}
@@ -52,13 +53,8 @@ func (a *azRouterEnv) seedCorpusRow(t *testing.T, ctx context.Context, v azVecto
 	out.user = a.azUser(t, ctx, s.PlatformRole == "platform_admin")
 	for _, label := range azSortedKeys(s.Memberships) {
 		m := s.Memberships[label]
-		if m.Status == "active" {
-			a.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, $3, now(), now())`,
-				out.user, out.orgs[label], m.Role)
-			continue
-		}
-		a.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role) VALUES ($1, $2, $3, $4)`,
-			out.orgs[label], out.user, m.Status, m.Role)
+		a.armed(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, $3, now(), now())`,
+			out.user, out.orgs[label], m.Role)
 	}
 	clock, err := time.Parse(time.RFC3339, *s.Clock)
 	if err != nil {

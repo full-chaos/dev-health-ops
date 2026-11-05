@@ -56,7 +56,6 @@ go-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 196 |
 | `user_access_token` | 196 |
 | `external_push_ingest_token` | 5 |
 | `internal_svc_acr_token` | 4 |
@@ -76,7 +75,6 @@ query-api:
 
 | Class | Rows |
 | --- | --- |
-| `ops_access_token_hs256` | 35 |
 | `user_access_token` | 35 |
 | `effective_principal_envelope` | 34 |
 
@@ -86,7 +84,6 @@ auth-service:
 | --- | --- |
 | `internal_svc_authsess_token` | 13 |
 | `workload_token` | 11 |
-| `ops_access_token_hs256` | 6 |
 | `user_access_token` | 6 |
 | `refresh_credential` | 3 |
 | `sso_oidc_exchange` | 2 |
@@ -101,7 +98,7 @@ go-api and query-api take a bearer access token. Four access-token shapes exist.
 
 | Shape | Class | Header | Used by |
 | --- | --- | --- | --- |
-| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | go-api, query-api, auth-service session routes |
+| Legacy edge token | `ops_access_token_hs256` | `alg` HS256 | none: the class is `retired`, every row refuses it (`alg_not_allowed`) |
 | User access token | `user_access_token` | `alg` EdDSA, `typ` `at+jwt`, audience `dev-health-api` | go-api (196 rows), query-api only when `AUTH_ACCESS_TOKEN_ISSUER` is set, auth-service lists the class on 6 session, identity and change-password rows, but the validator text of those rows describes an HS256 token only |
 | Workload token | `workload_token` | `typ` `workload+jwt` | go-api (4 rows), auth-service internal routes |
 | Effective principal envelope | `effective_principal_envelope` | `alg` EdDSA | query-api |
@@ -210,16 +207,16 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | Method and route | Class | Accepted credential classes | Tenant requirement |
 | --- | --- | --- | --- |
 | `POST /v1/token/refresh` | protected | `refresh_credential` | `none` |
-| `GET /v1/sessions/current` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/sessions/revoke-all` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `POST /v1/identities/social` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
-| `DELETE /v1/identities/social/{id}` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `GET /v1/sessions/current` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke` | protected | `user_access_token` | `none` |
+| `POST /v1/sessions/revoke-all` | protected | `user_access_token` | `none` |
+| `POST /v1/identities/social` | protected | `user_access_token` | `none` |
+| `DELETE /v1/identities/social/{id}` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/login` | public | none | `unset` |
 | `POST /api/v1/auth/refresh` | protected | `refresh_credential` | `none` |
 | `POST /api/v1/auth/logout` | protected | `refresh_credential` | `none` |
-| `POST /api/v1/auth/validate` | protected | `ops_access_token_hs256`, `user_access_token` (body field `token`) | `none` |
-| `POST /api/v1/auth/switch-org` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/validate` | protected | `user_access_token` (body field `token`) | `none` |
+| `POST /api/v1/auth/switch-org` | protected | `user_access_token` | `none` |
 | `POST /api/v1/auth/social-login` | protected | `social_oauth_exchange` | `none` |
 | `POST /internal/v1/sessions` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
 | `POST /internal/v1/sessions/state` | protected | `internal_svc_authsess_token`, `workload_token` | `none` |
@@ -262,7 +259,7 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /api/v1/auth/resend-verification` | public | none | `none` |
 | `POST /api/v1/auth/forgot-password` | public | none | `none` |
 | `POST /api/v1/auth/reset-password` | public | none | `none` |
-| `POST /api/v1/auth/change-password` | protected | `ops_access_token_hs256`, `user_access_token` | `none` |
+| `POST /api/v1/auth/change-password` | protected | `user_access_token` | `none` |
 | `GET /healthz` | public | none | `unset` |
 | `GET /readyz` | public | none | `unset` |
 | `GET /metrics` | public | none | `unset` |

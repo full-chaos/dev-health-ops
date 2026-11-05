@@ -139,7 +139,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 			Limits:      mustLimits(t, httpapi.NewMemoryCounters(nil)),
 			Validate: &ValidateConfig{Sessions: policy.PGStore{Pool: runtime, AuthSchema: schema.String()},
 				IssuerURL: goldenIssuer, Keys: signer},
-		}, validateRowsBoth)
+		}, validateRowsUser)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -123,9 +123,9 @@ func (validateStore) ReadsPlatformRoles() bool { return false }
 // verified by the go-api verifier this Issuer holds, then CheckClaims
 // (Authenticate). With an EdDSA configuration it is go-api's routed decision
 // (internal/apiservice accessverify.go and accessrows.go) over this route's
-// one row: the token's alg picks the HS256 path or the EdDSA user token of
-// audience dev-health-api, whose users row, session and membership go-api's
-// accessTokenUser checks.
+// one row: an HS256 token is refused alg_not_allowed (its class is retired),
+// and the EdDSA user token of audience dev-health-api is checked, its users
+// row, session and membership by go-api's accessTokenUser.
 func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
 	auth, err := policy.NewAuthenticator(deps.Issuer.verifier, validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
 	if err != nil || !deps.Validate.eddsa() {
@@ -142,7 +142,7 @@ func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
 		meter = otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify")
 	}
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:   []accessverify.Row{{Service: AccessService, Profile: validateProfile, AcceptsUser: true, LegacyHS256: true}},
+		Rows:   []accessverify.Row{{Service: AccessService, Profile: validateProfile, AcceptsUser: true}},
 		EdDSA:  verifier,
 		Legacy: validateLegacy(auth.AuthenticateLegacy),
 		Meter:  meter, Logger: deps.Logger,
@@ -200,9 +200,9 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 }
 
 // withValidateRoute mounts the validate route when rows holds its row: an
-// auth-service row that accepts the HS256 token, and the user access token
-// too when the EdDSA configuration is set. Without it it logs one line naming
-// the route and mounts nothing.
+// auth-service row that accepts the user access token (the retired HS256
+// class is on no row). Without it it logs one line naming the route and mounts
+// nothing.
 func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) ([]httpapi.Route, error) {
 	if h.Validate == nil {
 		return routes, nil
@@ -210,11 +210,7 @@ func (h compatHandlers) withValidateRoute(routes []httpapi.Route, rows []byte) (
 	if h.Validate.Sessions == nil {
 		return nil, errors.New("authapi: the validate route needs go-api's session read")
 	}
-	classes := []string{accessverify.ClassLegacy}
-	if h.Validate.eddsa() {
-		classes = append(classes, accessverify.ClassUser)
-	}
-	if rowsAcceptFor(rows, []string{PatternCompatValidate}, classes) != nil {
+	if rowsAcceptFor(rows, []string{PatternCompatValidate}, []string{accessverify.ClassUser}) != nil {
 		h.rec.logger.Info("auth validate route not mounted: no endpoint-profile row", "route", PatternCompatValidate)
 		return routes, nil
 	}

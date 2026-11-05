@@ -53,11 +53,15 @@ Design docs (read the guardrails at minimum):
   production."
 - **optional_feature** — gated behind a license entitlement or an optional
   Python import.
+- **retired** — no endpoint-profile row may accept the class. The contracts
+  gate `TestNoEndpointProfileRowAcceptsARetiredClass` refuses a row that lists
+  one. The class stays in the registry so refusal reasons and audit records
+  can still name it.
 
 | Class | Status | Principal type | Permissive-when-unconfigured |
 | --- | --- | --- | --- |
 | `auth_js_browser_session` | active | human | |
-| `ops_access_token_hs256` | active | human | |
+| `ops_access_token_hs256` | retired | human | |
 | `ops_refresh_token` | active | human | |
 | `social_oauth_exchange` | active | human | |
 | `sso_saml_exchange` | optional_feature | human | |

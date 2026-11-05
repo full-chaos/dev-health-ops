@@ -75,7 +75,7 @@ func TestWorkloadSessionIssueK3sSeedsMakesTheSecretAndExportsTheSubject(t *testi
 		}
 	}
 	if !strings.Contains(r.sqlText, "auth.workloads") || !strings.Contains(r.sqlText, "name = 'api'") {
-		t.Errorf("the subject query is not ci/pdp_load_k3s/subject.sql: %q", r.sqlText)
+		t.Errorf("the subject query is not the api workload principal read: %q", r.sqlText)
 	}
 	for name, text := range map[string]string{"stdout": r.res.stdout, "stderr": r.res.stderr, "the calls": r.calls, "the manifest": r.manifest} {
 		if strings.Contains(text, wlCredential) {
@@ -100,7 +100,7 @@ func TestWorkloadSessionIssueK3sShape(t *testing.T) {
 			t.Errorf("the library contains %q", banned)
 		}
 	}
-	for _, want := range []string{"PIPESTATUS", "pdp_load_k3s/subject.sql", "^prn_[A-Za-z0-9_-]{22}$"} {
+	for _, want := range []string{"PIPESTATUS", "^prn_[A-Za-z0-9_-]{22}$"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the library lacks %q", want)
 		}

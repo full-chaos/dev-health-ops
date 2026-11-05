@@ -18,7 +18,7 @@
 _AUTH_WORKLOAD_K3S_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 _auth_workload_k3s_pod() { # MIG_IMAGE HOLD_IMAGE
-  cat <<EOF
+  cat <<EOF1
 apiVersion: v1
 kind: Pod
 metadata: {name: fb-wl-bootstrap}
@@ -27,6 +27,8 @@ spec:
   automountServiceAccountToken: false
   securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
   volumes: [{name: work, emptyDir: {medium: Memory}}]
+EOF1
+  cat <<EOF2
   initContainers:
     - name: seed
       image: $1
@@ -34,6 +36,8 @@ spec:
       env: &migenv
         - {name: AUTH_MIGRATION_DATABASE_URI, valueFrom: {secretKeyRef: {name: auth-migrate-db, key: AUTH_MIGRATION_DATABASE_URI}}}
         - {name: AUTH_RUNTIME_DATABASE_ROLE, value: devhealth_auth}
+EOF2
+  cat <<EOF3
       securityContext: &hardened {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
     - name: bootstrap
       image: $1
@@ -41,6 +45,8 @@ spec:
       env: *migenv
       securityContext: *hardened
       volumeMounts: [{name: work, mountPath: /work}]
+EOF3
+  cat <<EOF4
   containers:
     - name: hold
       image: $2
@@ -48,7 +54,7 @@ spec:
       command: [sleep, "600"]
       securityContext: *hardened
       volumeMounts: [{name: work, mountPath: /work, readOnly: true}]
-EOF
+EOF4
 }
 
 auth_workload_session_issue_k3s() {

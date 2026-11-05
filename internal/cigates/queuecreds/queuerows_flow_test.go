@@ -216,8 +216,8 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 	// Helper results and helper parameters feed each other: a parameter a caller fills makes the helper's result carry
 	// the value, and a result that carries it taints the next call's argument. Both run to one joint fixpoint.
 	for {
-		changed := f.summarizeReturns(fset, pkg)
-		if !f.propagateParams(fset, pkg) && !changed {
+		f.summarizeReturns(fset, pkg)
+		if !f.propagateParams(fset, pkg) {
 			break
 		}
 	}
@@ -225,9 +225,8 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 }
 
 // summarizeReturns marks the helpers whose result (or a field of a returned composite) carries an open queue-row value,
-// to a fixpoint. It reports whether it marked anything new.
-func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) bool {
-	grew := false
+// to a fixpoint.
+func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) {
 	for changed := true; changed; {
 		changed = false
 		for _, sf := range pkg {
@@ -291,14 +290,14 @@ func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) bool {
 									}
 									if !f.helperFields[fn.Name.Name][field] {
 										f.helperFields[fn.Name.Name][field] = true
-										changed, grew = true, true
+										changed = true
 									}
 								}
 							}
 						}
 						if !f.helpers[fn.Name.Name] && open(result) {
 							f.helpers[fn.Name.Name] = true
-							changed, grew = true, true
+							changed = true
 						}
 					}
 					return true
@@ -306,7 +305,6 @@ func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) bool {
 			}
 		}
 	}
-	return grew
 }
 
 // paramNames lists the parameter names of a function in call order, one entry per name.

@@ -27,9 +27,8 @@ func observeRESTShadow(r *http.Request, bearer, orgID, caller string, delegated,
 	if !strings.Contains(pattern, " ") {
 		pattern = routeProfile(r)
 	}
-	// A delegated session is skipped, not impersonation_refused: query-api has no go-api impersonation row.
 	shadow.Observe(r.Context(), policy.ShadowObservation{Pattern: pattern, Bearer: bearer, OrgID: orgID, Caller: caller,
-		UserAccessToken: class == principal.AccessClassUser && !delegated, SkipReason: reason, LegacyAllowed: legacyAllowed})
+		UserAccessToken: class == principal.AccessClassUser, Impersonating: delegated, SkipReason: reason, LegacyAllowed: legacyAllowed})
 }
 
 func shadowSkipReason(class principal.AccessClass) string {

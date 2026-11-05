@@ -185,6 +185,7 @@ nav:
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
           - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
+          - Auth PDP outage and rollback: operate/runbooks/auth-pdp-outage-and-rollback.md
           - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
           - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md

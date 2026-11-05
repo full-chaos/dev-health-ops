@@ -67,9 +67,12 @@ func shadowReasonOf(reason string) string {
 	return ShadowReasonNone
 }
 
-const (
-	classUnresolved = "unresolved"
+// classUnresolved stays on its own line: the shadow alert rule guard matches this exact text.
+const classUnresolved = "unresolved"
 
+const classIntentional = "intentional"
+
+const (
 	resultMatch    = "match"
 	resultMismatch = "mismatch"
 	resultError    = "error"
@@ -90,6 +93,8 @@ type ShadowRow struct {
 	Namespace    string
 	ResourceType string
 	HighRisk     bool
+	// OrgFromPath: the profile resolver is organization_from_path; the handler serves the {org_id} path organization.
+	OrgFromPath bool
 }
 
 func (row ShadowRow) valid() bool {
@@ -99,7 +104,9 @@ func (row ShadowRow) valid() bool {
 
 func (row ShadowRow) matchesCatalog() bool {
 	action, err := policycatalog.Default().Action(row.Action)
-	return err == nil && row == shadowRowOf(action)
+	catalog := row
+	catalog.OrgFromPath = false
+	return err == nil && catalog == shadowRowOf(action)
 }
 
 func shadowRowOf(action policycatalog.Action) ShadowRow {
@@ -117,6 +124,7 @@ func ParseShadowRows(raw []byte, service string) (map[string]ShadowRow, error) {
 			Route          string `json:"route"`
 			Action         string `json:"action"`
 			Classification string `json:"classification"`
+			Resolver       string `json:"resource_resolver"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -141,6 +149,12 @@ func ParseShadowRows(raw []byte, service string) (map[string]ShadowRow, error) {
 		row := shadowRowOf(action)
 		if !row.valid() {
 			return nil, fmt.Errorf("shadow rows: %s: action %s is outside the shadow's namespaces or resource kinds", key, action.ID)
+		}
+		if strings.HasPrefix(entry.Resolver, "organization_from_path") {
+			if row.ResourceType != policycatalog.ScopeOrganization || !strings.Contains(entry.Route, "{"+pathOrgSegment+"}") {
+				return nil, fmt.Errorf("shadow rows: %s reads its organization from the path but is no organization row with an {%s} segment", key, pathOrgSegment)
+			}
+			row.OrgFromPath = true
 		}
 		rows[key] = row
 	}
@@ -315,6 +329,8 @@ type ShadowObservation struct {
 	SkipReason string
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
+	// served: the organization a go-api path or query parameter names for the handler to serve (servedOrgOf).
+	served servedOrg
 }
 
 // shadowCall is everything the goroutine needs: values only, no request.
@@ -344,6 +360,14 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	}
 	if o.Impersonating && o.Pattern != stopImpersonationPattern {
 		countShadowResult(ctx, resultImpersonationRefused, ShadowReasonNone)
+		return
+	}
+	switch o.served.against(o.OrgID) {
+	case servedOrgUnparsed:
+		countShadowResult(ctx, resultSkipped, ShadowReasonNone)
+		return
+	case servedOrgOther:
+		s.observeServedOrgOther(ctx, o, row)
 		return
 	}
 	if row.HighRisk && !s.highRisk {
@@ -386,6 +410,28 @@ func (s *Shadow) CountSkipped(ctx context.Context, reason string) {
 func (s *Shadow) Wait() {
 	if s != nil {
 		s.wg.Wait()
+	}
+}
+
+// observeServedOrgOther records what enforcement would answer when the request names an organization that is not
+// the token's: a refusal with no decision point call. Against a legacy allow that is a mismatch of class
+// intentional; against a legacy deny, a match.
+func (s *Shadow) observeServedOrgOther(ctx context.Context, o ShadowObservation, row ShadowRow) {
+	if !o.LegacyAllowed {
+		countShadowResult(ctx, resultMatch, ShadowReasonNone)
+		return
+	}
+	caller := o.Caller
+	if !slices.Contains(shadowCallers, caller) {
+		caller = ShadowCallerMember
+	}
+	countShadowResult(ctx, resultMismatch, ShadowReasonNone)
+	countShadowMismatch(ctx, row.Namespace, caller, classIntentional)
+	if s.logAllowed(slices.Index(shadowClasses, classIntentional)) {
+		s.logger.WarnContext(ctx, "api shadow pdp: the request names an organization that is not the token organization",
+			slog.String("namespace", row.Namespace), slog.String("caller", caller), slog.String("class", classIntentional),
+			slog.String("action", row.Action), slog.String("route", o.Pattern), slog.String("legacy", "allow"), slog.String("shadow", "deny"),
+			slog.String("reason", "served_org_not_judged_org"))
 	}
 }
 

@@ -961,14 +961,24 @@ true
 {{- end -}}
 
 {{/*
-OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". true is refused: the chart does not
-render auth-service's SSO settings, so go-api would forward to routes auth-service does not mount.
-Call with (dict "flag" "oidc"|"saml" "context" $).
+OIDC and SAML through auth-service (authService.sso.oidc / .saml): "true" or "". Call with (dict "flag" "oidc"|"saml" "context" $).
+true needs go-api to reach auth-service (phase >= 2), authService.sso.secretName and a Secret key name for every setting
+auth-service's loader reads for the protocol (internal/auth/authconfig/sso.go): APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and
+SETTINGS_ENCRYPTION_SALT, and AUTH_SSO_STATE_KEY for oidc only. A missing one fails the render and names the key; the settings
+reach the pod by secretKeyRef (templates/auth-service.yaml), never a value.
 */}}
 {{- define "dev-health.authSSOOn" -}}
 {{- $key := printf "authService.sso.%s" .flag -}}
 {{- $sso := default dict .context.Values.authService.sso -}}
-{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" }}{{- fail (printf "%s=true is refused: the chart does not render auth-service's SSO settings (state key, base URL, encryption key) yet, so its %s routes would not mount" $key (upper .flag)) }}{{- end -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (index $sso .flag) "key" $key)) "true" -}}
+{{- if ne (include "dev-health.authProxyOn" .context) "true" }}{{- fail (printf "%s=true needs go-api to reach auth-service: authService.phase >= 2 and goApi.enabled" $key) }}{{- end -}}
+{{- if not (trim (toString $sso.secretName)) }}{{- fail (printf "%s=true needs authService.sso.secretName: the Secret holding the SSO settings of auth-service (it must carry go-api's SETTINGS_ENCRYPTION_KEY)" $key) }}{{- end -}}
+{{- $keys := default dict $sso.keys -}}
+{{- range $name := ternary (list "stateKey" "appBaseURL" "encryptionKey" "encryptionSalt") (list "appBaseURL" "encryptionKey" "encryptionSalt") (eq $.flag "oidc") }}
+{{- if not (include "dev-health.validSecretKey" (index $keys $name)) }}{{- fail (printf "%s=true needs authService.sso.keys.%s (%s): the key name in authService.sso.secretName is empty or not a valid Secret key" $key $name (get (dict "stateKey" "AUTH_SSO_STATE_KEY" "appBaseURL" "APP_BASE_URL" "encryptionKey" "SETTINGS_ENCRYPTION_KEY" "encryptionSalt" "SETTINGS_ENCRYPTION_SALT") $name)) }}{{- end -}}
+{{- end -}}
+true
+{{- end -}}
 {{- end -}}
 
 {{/*

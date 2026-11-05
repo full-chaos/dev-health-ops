@@ -401,7 +401,12 @@
   },
   {
     "operation": "teamWorkItemBreakdown",
-    "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8"
+    "digest": "3d30092f9b8c3d6c820d6a18c8632e835e87d3b4129149982cbfbca448004a31"
+  },
+  {
+    "operation": "teamWorkItemBreakdown",
+    "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
+    "legacy": true
   },
   {
     "operation": "testOpsCoverage",

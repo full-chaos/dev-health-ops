@@ -2,6 +2,7 @@ package investmentexplain
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 
 	"context"
 	"encoding/json"
@@ -110,6 +111,7 @@ type BuildWorkUnitInvestmentsOptions struct {
 	Limit              int
 	IncludeText        bool
 	WorkUnitID         string
+	Ceiling            teamscope.Ceiling
 	ThemeFilters       []string
 	SubcategoryFilters []string
 }

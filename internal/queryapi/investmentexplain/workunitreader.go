@@ -111,6 +111,7 @@ type WorkUnitInvestmentsFilter struct {
 	TeamScopeBindings []dhclickhouse.Binding
 	Limit             int
 	WorkUnitID        string
+	Ceiling           teamscope.Ceiling
 }
 
 // FetchWorkUnitInvestments ports fetch_work_unit_investments

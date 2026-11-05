@@ -109,8 +109,12 @@ type restOrgRun struct {
 
 func (tc restOrgCase) run(t *testing.T, claims authctx.Claims) restOrgRun {
 	t.Helper()
+	return tc.runWith(t, &teamScopeReachClient{}, claims)
+}
+
+func (tc restOrgCase) runWith(t *testing.T, client *teamScopeReachClient, claims authctx.Claims) restOrgRun {
+	t.Helper()
 	quietStdLog(t)
-	client := &teamScopeReachClient{}
 	handler := tc.handler(t, client)
 	request := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
 	for name, value := range tc.pathValues {

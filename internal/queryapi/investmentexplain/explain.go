@@ -75,6 +75,10 @@ type ExplainInvestmentMixOptions struct {
 	// ReposNamed: see BreakdownFilters.ReposNamed.
 	ReposNamed        bool
 	TeamScopeBindings []dhclickhouse.Binding
+	// Ceiling is the repository ceiling of the request; BypassCache skips every cache read, write and org-wide
+	// data-version read (an allowlist caller must not read or fill an answer built over other repositories).
+	Ceiling     teamscope.Ceiling
+	BypassCache bool
 	// TeamIDs/TeamAsOf: see BreakdownFilters.TeamIDs.
 	TeamIDs  []string
 	TeamAsOf time.Time

@@ -9041,6 +9041,77 @@
         "name": "EdDSA"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the handler reads the caller's membership row live on every request (internal/api/acrcredentials/routes.go:113)",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "by-id route, behaviour today: a missing id, another organization's id, a credential that is not MCP-bound and one the caller did not approve all answer the same 404, acr's one refusal answer (internal/api/acrcredentials/routes.go:130); acr resolves the id only in the token organization the handler sends (internal/api/acrcredentials/routes.go:126); a caller with no membership row in that organization answers 403 (internal/api/acrcredentials/routes.go:118); a malformed id answers the same 404 without an acr call (internal/api/acrcredentials/routes.go:100)",
+      "gaps": [
+        "action: no catalog action is proven to equal this handler's own check (the caller's live membership row decides the acr actor type; acr decides whether the credential admits that actor); candidate for a ruling, this leaf does not extend the vocabulary"
+      ],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/acr/credentials/{credential_id}/revoke [dev-health-ops-api @api]",
+      "impersonation_policy": "subject_to_impersonation_override",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Authenticated: a valid access token for an active user."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "organization_from_session: the token's org claim of the verified session user, the admin-route rule (internal/api/acrcredentials/routes.go:104); credential_id (path) supplied by the caller and resolved by acr in that organization",
+      "route": "/api/v1/acr/credentials/{credential_id}/revoke",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/api/acrcredentials/routes.go",
+        "line": 60
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "org_scoped",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "APIJWTAudience (go-api config)",
+        "issuer": "APIJWTIssuer (go-api config)",
+        "token_type": "HS256 JWT"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "action": null,
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; once any body-first validation has run, a caller without the admin role answers 403 (internal/api/policy/guard.go:180)",

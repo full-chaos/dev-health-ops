@@ -659,8 +659,8 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	}
 }
 
-// The decision counter's outcome set is closed: allow, deny, error_deny and impersonation_refused, each reached, and
-// the description names exactly those.
+// The decision counter's outcome set is closed: allow, deny, error_deny, impersonation_refused and org_mismatch, each
+// reached, and the description names exactly those.
 func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	previous := enforceDecisionAdd
@@ -677,12 +677,14 @@ func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
 	} {
 		enforceRequest(h, http.MethodGet, "/api/v1/admin/teams")
 	}
+	members := servedOrgCensusRow{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false}
+	servedOrgServe(t, members, servedOrgSetup{who: personaAdmin, enforcer: servedOrgEnforcer(t, allow, "members")}, strangerOrg)
 	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
-	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
+	want := []string{"allow", "deny", "error_deny", "impersonation_refused", "org_mismatch"}
 	if !slices.Equal(outcomes, want) {
 		t.Errorf("outcomes %v, want %v", outcomes, want)
 	}
-	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
+	if suffix := "outcome: allow, deny, error_deny, impersonation_refused, org_mismatch"; !strings.HasSuffix(description, suffix) {
 		t.Errorf("decision description %q, want it to end %q", description, suffix)
 	}
 }

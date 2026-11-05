@@ -386,3 +386,26 @@ func TestOperationShadow_RootTableIs51(t *testing.T) {
 		}
 	}
 }
+
+// A field orgId C while the scope is B: a non-impersonating holder of admin.orgs is rebound to C and served C, and the
+// shadow judges C with the legacy answer allowed; anyone else gets "Access denied" and the shadow judges C with the
+// legacy answer refused. It never judges B while serving C.
+func TestOperationShadow_FieldOrgNotTheScopeIsJudgedAsTheFieldOrg(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		claims *authctx.Claims
+		want   bool
+	}{
+		{"holder of admin.orgs is rebound to C and served C", superuserClaims(), true},
+		{"member is refused", memberClaims(), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			document, variables := rootDoc("Mutation.triggerReport", shOther)
+			run := runShadow(t, document, variables, tc.claims, &userSubject, &fakeSink{})
+			got := run.one(t)
+			if got.OrgID != shOther || got.LegacyAllowed != tc.want {
+				t.Fatalf("observed %+v, want org %s (never the scope %s) legacy allowed %v", got, shOther, shOwn, tc.want)
+			}
+		})
+	}
+}

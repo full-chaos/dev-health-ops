@@ -2,6 +2,8 @@ package authapi
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"testing"
@@ -79,5 +81,56 @@ func TestEmbeddedProfileServesTheReadRoutesToTheirCredentials(t *testing.T) {
 		}
 		bare := newEmbeddedReadFixture(t)
 		expectRefusal(t, bare.post(c.path, c.body(bare.provFixture), map[string]string{"Authorization": "Bearer nonsense"}), http.StatusUnauthorized, reasonInvalidCredentials)
+	}
+}
+
+func readRowsWithExtraClass(t *testing.T, route string, extra ...string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(authv1.AuthServiceEndpointProfiles, &document); err != nil {
+		t.Fatal(err)
+	}
+	changed := 0
+	for _, item := range document["rows"].([]any) {
+		row := item.(map[string]any)
+		if row["service"] == AccessService && row["method"] == "POST" && row["route"] == route {
+			classes := row["accepted_credential_classes"].([]any)
+			for _, e := range extra {
+				classes = append(classes, e)
+			}
+			row["accepted_credential_classes"] = classes
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatalf("%s: %d rows changed, want 1", route, changed)
+	}
+	out, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func mountedReadPatterns(t *testing.T, rows []byte) []string {
+	t.Helper()
+	f := newProvFixtureWith(t, nil)
+	h := readHandlers{ReadDeps: ReadDeps{Reads: f.reads, GrantReads: f.grantReads, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}}
+	var patterns []string
+	for _, route := range h.withReadRoutes(nil, rows) {
+		patterns = append(patterns, route.Pattern)
+	}
+	return patterns
+}
+
+func TestReadRoutesMountOnlyOnAnExactClassRow(t *testing.T) {
+	if got := mountedReadPatterns(t, authv1.AuthServiceEndpointProfiles); len(got) != len(readCases()) {
+		t.Errorf("exact two-class rows mount %d routes, want %d", len(got), len(readCases()))
+	}
+	for _, c := range readCases() {
+		rows := readRowsWithExtraClass(t, c.path, "user_access_token")
+		if slices.Contains(mountedReadPatterns(t, rows), c.path) {
+			t.Errorf("%s: a row that also lists user_access_token still mounts the route", c.op)
+		}
 	}
 }

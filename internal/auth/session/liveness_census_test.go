@@ -48,6 +48,7 @@ var livenessAllowlist = map[string]allowed{
 	"internal/auth/session/end_org.go#EndOrganizationInTx":      {`revoked_at IS NULL | revoked_at IS NULL | s.revoked_at IS NULL`, "selects rows to revoke by own revoked_at; liveness of each row is the rule's Expiry"},
 	"internal/edgetokenmint/eddsa.go#sessionLiveSQL":            {`expires_at <= | revoked_at IS NOT NULL`, "CI-only mint pre-check that mirrors go-api policy.PGStore.SessionState plus expiry (CHAOS-12701 site); moves to sessionrule with it"},
 	"internal/auth/session/store.go#liveClientSessions":         {`revoked_at IS NULL`, "selects the live client sessions under a revoked web session to name them in session.revoked events (own revoked_at); the server read of each is the rule"},
+	"internal/auth/session/store.go#CurrentWithClientClass":     {`g.revoked_at IS NULL`, "the grant's own revoke (oauth_grants), naming the live grant's client class; the session's liveness in the same statement is the rule's"},
 	"internal/auth/session/store.go#endSessions":                {`revoked_at IS NULL | revoked_at IS NULL`, "UPDATE writer: revokes the rows it was given"},
 	"internal/auth/session/unpinned.go#CountUnpinned":           {`revoked_at IS NULL`, "operator count of unpinned rows by own revoked_at, not a liveness decision"},
 	"internal/auth/session/unpinned.go#RevokeUnpinned":          {`revoked_at IS NULL | revoked_at IS NULL | revoked_at IS NULL`, "operator revoke of unpinned rows by own revoked_at, not a liveness decision"},

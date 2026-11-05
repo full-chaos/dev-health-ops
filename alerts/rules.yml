@@ -1290,6 +1290,22 @@ groups:
             while kubelet Ready stays true. The metric reads manifest age, not
             the worker's own readiness check.
 
+      - alert: WorkerQueueOldestJobAgeHigh
+        expr: |
+          max by (service_name, queue) (worker_job_oldest_age_seconds{deployment_environment="production"}) > 900
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Oldest available River job older than 15 minutes for 15 minutes"
+          description: |
+            worker_job_oldest_age_seconds (ops internal/jobruntime/telemetry.go)
+            was above 900 s for fifteen minutes for a production worker queue:
+            jobs are available but not fetched, so a worker group is stuck or
+            starved. CHAOS-13068 baseline 7 d to 2026-11-05: 1 fire (10-29
+            15:34Z, heavy/metrics, real backlog to 2364 s).
+
   # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only

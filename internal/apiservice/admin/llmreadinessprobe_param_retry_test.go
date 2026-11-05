@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,11 @@ type paramFakeOpenAI struct {
 func newParamFakeOpenAI(t *testing.T, refuse map[string]string) *paramFakeOpenAI {
 	t.Helper()
 	f := &paramFakeOpenAI{}
+	refuseKeys := make([]string, 0, len(refuse))
+	for key := range refuse {
+		refuseKeys = append(refuseKeys, key)
+	}
+	sort.Strings(refuseKeys)
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
@@ -39,7 +45,8 @@ func newParamFakeOpenAI(t *testing.T, refuse map[string]string) *paramFakeOpenAI
 		f.mu.Lock()
 		f.calls = append(f.calls, paramFakeCall{round2: round2, body: body})
 		f.mu.Unlock()
-		for key, errBody := range refuse {
+		for _, key := range refuseKeys {
+			errBody := refuse[key]
 			if _, present := body[key]; present {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)

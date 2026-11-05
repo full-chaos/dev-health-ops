@@ -727,7 +727,9 @@ func TestWorkloadRegistryPageMatchesTheRegistryJSON(t *testing.T) {
 		}, `row "web|platform-operations|`},
 		{"audience-drift", func(t *testing.T, d docTree) docTree {
 			return d.edit(t, workloadRegistryJSON, `"name": "api",
+      "owner": "platform-operations",
       "audiences": ["auth-service"],`, `"name": "api",
+      "owner": "platform-operations",
       "audiences": ["auth-service", "dev-health-api"],`)
 		}, "workloads table"},
 		{"action-drift", func(t *testing.T, d docTree) docTree {

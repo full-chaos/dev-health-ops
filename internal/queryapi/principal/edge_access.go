@@ -167,6 +167,16 @@ func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) 
 	if err != nil {
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
+	if edge {
+		if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+			reason := ReasonUserRefused
+			if !policy.IsRefusal(err) {
+				reason = ReasonUserLookupFailed
+			}
+			v.reject(ctx, reason, nil, requestMetaFrom(ctx))
+			return nil, fmt.Errorf("principal: edge: %w", err)
+		}
+	}
 	if user.OrgID == "" && !user.IsSuperuser {
 		if edge {
 			v.reject(ctx, ReasonOrgMissing, nil, requestMetaFrom(ctx))

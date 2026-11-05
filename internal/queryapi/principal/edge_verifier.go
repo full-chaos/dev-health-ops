@@ -114,6 +114,14 @@ func (v *EdgeVerifier) Verify(ctx context.Context, tokenString string) (*EdgeCla
 		v.reject(ctx, reason, claims, meta)
 		return nil, fmt.Errorf("principal: edge: %w", err)
 	}
+	if err := v.auth.CheckTokenOrg(ctx, user); err != nil {
+		reason := ReasonUserRefused
+		if !policy.IsRefusal(err) {
+			reason = ReasonUserLookupFailed
+		}
+		v.reject(ctx, reason, claims, meta)
+		return nil, fmt.Errorf("principal: edge: %w", err)
+	}
 	orgID, _ := claims["org_id"].(string)
 	if orgID == "" && !user.IsSuperuser {
 		v.reject(ctx, ReasonOrgMissing, claims, meta)

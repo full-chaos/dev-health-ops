@@ -442,7 +442,7 @@
         "kind": "Panel",
         "spec": {
           "display": {
-            "description": "match, mismatch, error, dropped, skipped. Zero mismatches is not good while all calls are error, dropped or skipped.",
+            "description": "match, mismatch, error, dropped, skipped, impersonation_refused. Zero mismatches is not good while all calls are error, dropped, skipped or impersonation_refused.",
             "name": "Shadow results by result (coverage)"
           },
           "links": null,

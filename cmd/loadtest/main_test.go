@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,16 +66,29 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
-func TestExampleConfigParses(t *testing.T) {
-	data, err := os.ReadFile("../../internal/loadharness/testdata/example.config.json")
-	if err != nil {
-		t.Fatal(err)
+var envPlaceholder = regexp.MustCompile(`\$\{ENV:[A-Z0-9_]+\}`)
+
+const refreshPlaceholder = "${ENV:LOADTEST_REFRESH_CREDENTIAL}"
+
+func hasAuthorization(headers map[string]string, headerEnv map[string]loadharness.HeaderEnv) bool {
+	for k := range headers {
+		if strings.EqualFold(k, "Authorization") {
+			return true
+		}
 	}
+	for k := range headerEnv {
+		if strings.EqualFold(k, "Authorization") {
+			return true
+		}
+	}
+	return false
+}
+
+func checkExampleRefresh(data []byte) error {
 	cred := strings.Repeat("r", 43)
-	env := func(string) string { return cred }
-	cfg, err := loadharness.ParseConfig(data, env)
+	cfg, err := loadharness.ParseConfig(data, func(string) string { return cred })
 	if err != nil || len(cfg.Targets) != 3 {
-		t.Fatalf("%v %+v", err, cfg)
+		return fmt.Errorf("parse: %v targets=%d", err, len(cfg.Targets))
 	}
 	var refresh *loadharness.Target
 	for i := range cfg.Targets {
@@ -82,20 +97,65 @@ func TestExampleConfigParses(t *testing.T) {
 		}
 	}
 	if refresh == nil {
-		t.Fatal("example config has no refresh target")
+		return fmt.Errorf("example config has no refresh target")
 	}
-	if _, ok := refresh.HeaderEnv["Authorization"]; ok || refresh.Headers["Authorization"] != "" {
-		t.Fatal("the refresh credential must go in the refresh-request.v1 body, not an Authorization header")
+	if hasAuthorization(refresh.Headers, refresh.HeaderEnv) {
+		return fmt.Errorf("the refresh credential must go in the refresh-request.v1 body, not an Authorization header")
 	}
-	body := strings.ReplaceAll(refresh.Body, "${ENV:LOADTEST_REFRESH_CREDENTIAL}", cred)
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(refresh.Body), &doc); err != nil {
+		return fmt.Errorf("refresh body is not JSON: %v", err)
+	}
+	if doc["refresh_credential"] != refreshPlaceholder {
+		return fmt.Errorf("refresh_credential must be exactly %s, no literal", refreshPlaceholder)
+	}
+	body := envPlaceholder.ReplaceAllLiteralString(refresh.Body, cred)
 	if strings.Contains(body, "${") {
-		t.Fatalf("refresh body has an unexpanded placeholder: %s", refresh.Body)
+		return fmt.Errorf("refresh body has an unexpanded placeholder: %s", refresh.Body)
 	}
 	if _, err := contracts.ParseRefreshRequest("../..", []byte(body)); err != nil {
-		t.Fatalf("refresh body is not a refresh-request.v1 document: %v", err)
+		return fmt.Errorf("refresh body is not a refresh-request.v1 document: %v", err)
 	}
 	if _, err := contracts.ParseRefreshRequest("../..", []byte(`{"schema_version":"refresh-request.v1"}`)); err == nil {
-		t.Fatal("negative control: a request without the credential was accepted")
+		return fmt.Errorf("negative control: a request without the credential was accepted")
+	}
+	return nil
+}
+
+func TestExampleConfigParses(t *testing.T) {
+	data, err := os.ReadFile("../../internal/loadharness/testdata/example.config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkExampleRefresh(data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExampleConfigCheckRejectsPlants(t *testing.T) {
+	data, err := os.ReadFile("../../internal/loadharness/testdata/example.config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := string(data)
+	marker := `"body": "{\"schema_version`
+	if strings.Count(orig, refreshPlaceholder) != 1 || strings.Count(orig, marker) != 1 {
+		t.Fatal("example config no longer has the shape the plants edit")
+	}
+	literal := strings.Repeat("r", 43)
+	cases := map[string]string{
+		"lowercase header_env": strings.Replace(orig, marker, `"header_env": {"authorization": {"env": "LOADTEST_X"}}, `+marker, 1),
+		"mixed-case header":    strings.Replace(orig, marker, `"headers": {"aUtHoRiZaTiOn": "x"}, `+marker, 1),
+		"literal credential":   strings.Replace(orig, refreshPlaceholder, literal, 1),
+		"other env name":       strings.Replace(orig, refreshPlaceholder, "${ENV:LOADTEST_OTHER_CREDENTIAL}", 1),
+	}
+	for name, doc := range cases {
+		if doc == orig {
+			t.Fatalf("%s: plant did not change the config", name)
+		}
+		if err := checkExampleRefresh([]byte(doc)); err == nil {
+			t.Errorf("%s: plant was accepted", name)
+		}
 	}
 }
 

@@ -28,7 +28,9 @@ The shadow asks the policy decision point (PDP) the same question the legacy go-
 
 For a go-api route whose profile row names a catalog action (see the [action map](../../reference/auth/action-map.md)), the guard calls `Observe` after the legacy decision and before it answers. `Observe` returns at once. The PDP call runs in its own goroutine under a timeout (2 s) and an in-flight bound (32 by default); a call over the bound is dropped, not queued.
 
-A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), a delegated (impersonation) session is in force, the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
+A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
+
+A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer, as enforcement refuses it; the stop route is asked. A delegated session's own bearer is asked like any other caller.
 
 ## Switches
 
@@ -77,7 +79,7 @@ The `AuthShadowMismatchUnresolved` alert (`alerts/rules.yml`, group `auth_shadow
 | `intentional` | The difference is wanted and reviewed. |
 | `unresolved` | No reviewed row covers the pair. The default. |
 
-The table on `main` has one row: legacy `allow`, PDP `deny`, reason `delegation_invalid`, class `intentional` (the PDP refuses every delegated session until its delegation rules are wired). Delegated sessions are skipped before the call, so this row is a safety net.
+The table on `main` has one row: legacy `allow`, PDP `deny`, reason `delegation_invalid`, class `intentional` (the PDP refuses a delegated session whose actor lost the power or is deactivated; the legacy guard does not read the actor).
 
 ## Add a class row
 

@@ -1,0 +1,4 @@
+{
+  "activate: org claim not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "activate: token of the other org": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
+}

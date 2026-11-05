@@ -2421,7 +2421,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/oauth.go",
-        "line": 152
+        "line": 154
       },
       "surface_kind": "rest",
       "tenant_requirement": "none"
@@ -2484,7 +2484,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/oauth.go",
-        "line": 153
+        "line": 155
       },
       "surface_kind": "rest",
       "tenant_requirement": "none",
@@ -2508,7 +2508,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/oauth.go",
-        "line": 154
+        "line": 156
       },
       "surface_kind": "rest"
     },
@@ -2525,7 +2525,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/oauth.go",
-        "line": 155
+        "line": 157
       },
       "surface_kind": "rest"
     },
@@ -2542,7 +2542,7 @@
       "service": "dev-health-auth-service",
       "source": {
         "file": "internal/auth/authapi/oauth.go",
-        "line": 156
+        "line": 158
       },
       "surface_kind": "rest"
     }

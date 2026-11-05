@@ -187,7 +187,7 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 | `auth-service` | none | none |
 | `acr-api` | `auth-service`, `dev-health-api` | none |
 | `web` | none | none |
-| `query-api` | none | none |
+| `query-api` | `auth-service` | none |
 
 ## Related closed vocabularies
 

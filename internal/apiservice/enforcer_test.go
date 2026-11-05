@@ -130,7 +130,7 @@ func TestACellOnBuildsTheEnforcerFromTheWorkloadInputs(t *testing.T) {
 func TestACellOnReusesTheSharedWorkloadClient(t *testing.T) {
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
 	shared, err := newWorkloadClient(proxy, lookupFrom(map[string]string{EnvAuthWorkloadSubjectFile: subjectFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer}),
-		[]workloadAsk{{EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential}})
+		[]workloadAsk{{Flag: EnvAuthProxyOrgProvisioning, Selector: EnvAuthProvisioningCredential}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestOnlyTheEnforcementCellsOfGoAPINeedTheCredential(t *testing.T) {
 func TestTheSharedWorkloadClientIsTheProvisioningOneThenTheSessionOne(t *testing.T) {
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: "http://auth-service:8095"})
 	env := lookupFrom(map[string]string{EnvAuthWorkloadSubjectFile: subjectFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer})
-	ask := []workloadAsk{{EnvAuthProxyOrgProvisioning, EnvAuthProvisioningCredential}}
+	ask := []workloadAsk{{Flag: EnvAuthProxyOrgProvisioning, Selector: EnvAuthProvisioningCredential}}
 	one, err := newWorkloadClient(proxy, env, ask)
 	if err != nil {
 		t.Fatal(err)
@@ -217,11 +217,11 @@ func TestTheShadowAndTheEnforcerShareOneDecisionPointClient(t *testing.T) {
 	pdp := newShadowPDPServer(t)
 	proxy := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: pdp.URL})
 	dp := newDecisionPoint(proxy, lookupFrom(map[string]string{EnvAuthWorkloadBootstrapFile: bootstrapFile(t), EnvAuthWorkloadIssuer: testWorkloadIssuer}), nil)
-	enforce, err := dp.decider(workloadAsk{flag: authzenforce.GoAPI.Env() + " lists a namespace"})
+	enforce, err := dp.decider(workloadAsk{Flag: authzenforce.GoAPI.Env() + " lists a namespace"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	shadow, err := dp.decider(workloadAsk{flag: policy.EnvShadowPDP, selector: "the shadow PDP credential"})
+	shadow, err := dp.decider(workloadAsk{Flag: policy.EnvShadowPDP, Selector: "the shadow PDP credential"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestAFailedDecisionPointBuildNamesEachAsker(t *testing.T) {
 	} {
 		dp := newDecisionPoint(proxy, lookupFrom(nil), nil)
 		for _, flag := range []string{"FIRST_ASKER", "SECOND_ASKER"} {
-			_, err := dp.decider(workloadAsk{flag: flag})
+			_, err := dp.decider(workloadAsk{Flag: flag})
 			if err == nil || !strings.HasPrefix(err.Error(), flag+": ") {
 				t.Fatalf("%s: err = %v, want one that starts with %s", name, err, flag)
 			}

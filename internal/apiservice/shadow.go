@@ -15,6 +15,7 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 )
 
@@ -58,7 +59,7 @@ func (d *decisionPoint) decider(ask workloadAsk) (pep.Decider, error) {
 		return d.client, nil
 	}
 	if d.cfg.Upstream == nil {
-		return nil, &workloadInputError{variable: EnvAuthProxyURL, text: fmt.Sprintf("%s: %s is not set", ask.flag, EnvAuthProxyURL)}
+		return nil, workloadinput.NewInputError(EnvAuthProxyURL, fmt.Sprintf("%s: %s is not set", ask.Flag, EnvAuthProxyURL))
 	}
 	workload := d.shared
 	if workload == nil {
@@ -71,12 +72,12 @@ func (d *decisionPoint) decider(ask workloadAsk) (pep.Decider, error) {
 	origin := url.URL{Scheme: d.cfg.Upstream.Scheme, Host: d.cfg.Upstream.Host}
 	httpClient, err := workload.HTTPClient(httpguard.SharedTransport(), origin.String(), authprovision.WorkloadAudience)
 	if err != nil {
-		return nil, fmt.Errorf("%s: the decision point client: %w", ask.flag, err)
+		return nil, fmt.Errorf("%s: the decision point client: %w", ask.Flag, err)
 	}
 	client, err := pep.New(pep.Config{BaseURL: origin.String(), AllowPlainHTTP: strings.EqualFold(origin.Scheme, "http"), HTTPClient: httpClient,
 		ClientService: goAPIAccessService, Timeout: shadowPDPTimeout})
 	if err != nil {
-		return nil, fmt.Errorf("%s: the decision point client: %w", ask.flag, err)
+		return nil, fmt.Errorf("%s: the decision point client: %w", ask.Flag, err)
 	}
 	d.client = client
 	return client, nil
@@ -91,10 +92,10 @@ func newShadow(dp *decisionPoint, lookup func(string) (string, bool), logger *sl
 		rows = nil
 	}
 	return policy.ShadowFromEnv(lookup, policy.ShadowEnvDeps{Rows: rows, Logger: logger, NewDecider: func() (pep.Decider, error) {
-		decider, err := dp.decider(workloadAsk{flag: policy.EnvShadowPDP, selector: "the shadow PDP credential"})
-		var input *workloadInputError
-		if errors.As(err, &input) && input.variable != "" {
-			return nil, &policy.ShadowInputError{Variable: input.variable}
+		decider, err := dp.decider(workloadAsk{Flag: policy.EnvShadowPDP, Selector: "the shadow PDP credential"})
+		var input *workloadinput.InputError
+		if errors.As(err, &input) && input.Variable != "" {
+			return nil, &policy.ShadowInputError{Variable: input.Variable}
 		}
 		return decider, err
 	}})

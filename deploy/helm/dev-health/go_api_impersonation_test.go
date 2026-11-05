@@ -107,6 +107,11 @@ func TestImpersonationRefusals(t *testing.T) {
 			"goApi.authProxy is replaced by authService.phase"},
 		"extraEnv": {impersonationArgs("2", "--set", "goApi.extraEnv[0].name="+impersonationEnv, "--set", "goApi.extraEnv[0].value=true"),
 			"goApi.extraEnv must not set AUTH_PROXY_*"},
+		// r1 P2 (CHAOS-12914): without the go-api Deployment the switch would be accepted and silently absent.
+		"on with go-api off at phase 2": {impersonationArgs("2", "--set", "goApi.enabled=false", "--set", "goApi.authProxy.impersonation=true"),
+			"goApi.authProxy.impersonation needs goApi.enabled"},
+		"on with go-api off at phase 3": {impersonationArgs("3", "--set", "goApi.enabled=false", "--set", "goApi.authProxy.impersonation=true"),
+			"goApi.authProxy.impersonation needs goApi.enabled"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, out, err := renderAuth(t, tc.args...)

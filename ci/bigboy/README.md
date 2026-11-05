@@ -126,10 +126,17 @@ the venue, the TLS pair is a host test pair, the database logins have compose.ym
   acr-api (`ACR_AUTH_WORKLOAD_ISSUER`). go-api fetches the discovery document and the JWKS from it over https only; `auth-issuer` (alias
   `auth.bigboy.internal` on `dev-health`) forwards exactly those two documents to auth-service, as prod's issuer host does.
 - go-api trusts the issuer certificate through `SSL_CERT_DIR=/run/auth-issuer-ca` (the `ca/` directory of the TLS dir, read-only). Not
-  `SSL_CERT_FILE`: it would replace the image's CA file for every outbound call. All go-api user routes keep `legacy_hs256`, so the HS256
-  logins of bigboy are unchanged by the issuer.
+  `SSL_CERT_FILE`: it would replace the image's CA file for every outbound call. go-api still accepts `legacy_hs256` tokens
+  next to the eddsa class (eddsa section below).
 - Networks: auth-service and the one-shots are on `auth_plane` (postgres joins it); acr-api reaches auth-service on `acr_auth_workload`
-  (only those two); acr-api never joins `auth_plane`.
+  (only those two); acr-api never joins `auth_plane`. auth-service is also on `dev-health`, so go-api reaches it at `AUTH_PROXY_URL=http://auth-service:8095`.
+- eddsa (CHAOS-12978): auth-service mints the eddsa access token (`AUTH_ACCESS_TOKEN_CLASS=eddsa`, `AUTH_JWT_AUDIENCE=dev-health-api`), signed with the one
+  `AUTH_SIGNING_KEY_FILE` key. go-api, query-api and web verify it against the same issuer (`AUTH_ACCESS_TOKEN_ISSUER`; web also `AUTH_ACCESS_TOKEN_CLASS=eddsa`).
+  query-api trusts the issuer CA through `SSL_CERT_DIR`, web through `NODE_EXTRA_CA_CERTS=/run/auth-issuer-ca/issuer.pem`. Sessions move to auth-service:
+  `AUTH_PROXY_SESSIONS=true` on go-api and query-api, and `AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api` on auth-migrate and auth-grants.
+  The session successor key is made in the venue by `auth-session-keys-init` (0600 file, volume `auth_session_keys`, `AUTH_SESSION_SUCCESSOR_KEY_FILE`); the
+  JWT key of auth-service is go-api's `JWT_SECRET_KEY` from `ops/.env` (one source). go-api asks for sessions with its workload token
+  (`AUTH_SESSION_ISSUE_CREDENTIAL=workload`, bootstrap file `/run/workload/api.bootstrap` from `go-api-workload-bootstrap`, uid 65532, read-only mount).
 - The venue acr-api runs as uid 1001, so `acr-workload-volume` gives `/run/workload` to 1001 (mode 700) and `acr-workload-bootstrap` writes
   the 0600 credential as 1001. acr-api mounts the volume read-only.
 
@@ -141,7 +148,7 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
    `mkdir -p -m 0700 "$D/key" && mkdir -p -m 0755 "$D/ca" && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 -subj "/CN=auth.bigboy.internal" -addext "subjectAltName=DNS:auth.bigboy.internal" -keyout "$D/key/issuer.key" -out "$D/ca/issuer.pem" && chmod 0600 "$D/key/issuer.key" && chmod 0644 "$D/ca/issuer.pem"`
    (`D` = the TLS dir). Both binds have `create_host_path: false`: a missing file fails the start instead of mounting a new directory.
 3. postgres joins `auth_plane`: it is recreated, in its own step (a data store restart).
-4. `--profile auth up -d --no-deps --no-build auth-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed`
+4. `--profile auth up -d --no-deps --no-build auth-keys-init auth-session-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed`
    (one at a time, each must exit 0), then `--profile auth up -d --no-deps --no-build auth-service auth-issuer`.
 5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
    `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
@@ -150,7 +157,9 @@ Bring-up, in this order (every command names its services; `-p dev-health ... --
    `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
    and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
    not configured.
-7. Recreate go-api (`up -d --no-deps --no-build go-api`), then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
+7. Once: `--profile auth run --rm go-api-workload-bootstrap` (runs `go-api-workload-volume` first), then read the principal of the workload `api` as in step 6
+   (`WHERE name = 'api'`) and write it to `ops/.env` as `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_...`. Recreate auth-service (`--profile auth up -d --no-deps --no-build auth-service`).
+8. Recreate go-api (`up -d --no-deps --no-build go-api`; it needs the api bootstrap file from step 7 to start), query-api and web, then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
 
 ## Go-only stack (CHAOS-8361)
 

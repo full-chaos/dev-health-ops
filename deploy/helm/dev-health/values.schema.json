@@ -86,7 +86,17 @@
           "required": ["secretName", "secretKey"],
           "properties": {
             "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
-            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" },
+            "workloadBootstrap": {
+              "description": "CHAOS-13039: go-api's workload token on the session issue route, from a bootstrap credential file that a Secret mounts. Off renders nothing.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
+                "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+              }
+            }
           }
         },
         "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
@@ -147,6 +157,22 @@
           "description": "CHAOS-11606: the roll order of phase 4, goApi then owned. Required at phase 4, refused elsewhere (the templates check both).",
           "type": "string",
           "enum": ["", "goApi", "owned"]
+        },
+        "sso": {
+          "description": "OIDC and SAML sign-in through auth-service. A switch on needs phase >= 2, secretName and every key name its protocol reads.",
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "properties": {
+                "stateKey": { "type": "string" },
+                "appBaseURL": { "type": "string" },
+                "encryptionKey": { "type": "string" },
+                "encryptionSalt": { "type": "string" }
+              }
+            }
+          }
         },
         "ssoJit": {
           "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",

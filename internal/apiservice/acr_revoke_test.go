@@ -2,11 +2,16 @@ package apiservice
 
 import (
 	"bytes"
+	"context"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrrevoke"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 )
 
 func revokerFrom(t *testing.T, env map[string]string) (any, string) {
@@ -33,6 +38,9 @@ func TestTheACRRevokerIsBuiltOnlyFromAUsableSet(t *testing.T) {
 		{"all set with edge space", map[string]string{EnvACRRevokeURL: " " + base + " ", EnvACRRevokeTokenURL: token + "\n", EnvACRRevokeSubjectFile: " " + subject}, true, ""},
 		{"loopback http", map[string]string{EnvACRRevokeURL: "http://127.0.0.1:8080", EnvACRRevokeTokenURL: "http://127.0.0.1:8080/api/v1/oauth/token", EnvACRRevokeSubjectFile: subject}, true, ""},
 		{"no base", map[string]string{EnvACRRevokeTokenURL: token, EnvACRRevokeSubjectFile: subject}, false, EnvACRRevokeURL},
+		{"only the base", map[string]string{EnvACRRevokeURL: base}, false, EnvACRRevokeTokenURL},
+		{"only the token endpoint", map[string]string{EnvACRRevokeTokenURL: token}, false, EnvACRRevokeURL},
+		{"only the subject file", map[string]string{EnvACRRevokeSubjectFile: subject}, false, EnvACRRevokeURL},
 		{"plain http base", map[string]string{EnvACRRevokeURL: "http://acr.internal.test", EnvACRRevokeTokenURL: token, EnvACRRevokeSubjectFile: subject}, false, EnvACRRevokeURL},
 		{"base with a query", map[string]string{EnvACRRevokeURL: base + "?x=1", EnvACRRevokeTokenURL: token, EnvACRRevokeSubjectFile: subject}, false, EnvACRRevokeURL},
 		{"base does not parse", map[string]string{EnvACRRevokeURL: "https://acr\x7f", EnvACRRevokeTokenURL: token, EnvACRRevokeSubjectFile: subject}, false, EnvACRRevokeURL},
@@ -81,5 +89,37 @@ func TestAnUnconfiguredACRRevokerIsNilAndSaysSo(t *testing.T) {
 	got, _ = revokerFrom(t, map[string]string{EnvACRRevokeURL: " ", EnvACRRevokeTokenURL: "", EnvACRRevokeSubjectFile: "\t"})
 	if got != nil {
 		t.Fatalf("blank values built %#v", got)
+	}
+}
+
+// configure builds the revoker from the process environment: a usable set gives the route a client, an unset one
+// leaves it nil (503), and neither stops start-up.
+func TestConfigureBuildsTheACRRevokerFromTheEnvironment(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "development")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run := func(t *testing.T) (acrcredentials.Revoker, error) {
+		t.Helper()
+		var seen acrcredentials.Revoker
+		components, err := configureWith(ctx, reachableDatabase(config.Config{APIAddress: "127.0.0.1:0"}), health.NewRegistry(time.Second),
+			quietLogger(), func(deps *Deps) { seen = deps.ACRRevoker })
+		closeComponents(components)
+		return seen, err
+	}
+	for _, name := range []string{EnvACRRevokeURL, EnvACRRevokeTokenURL, EnvACRRevokeSubjectFile} {
+		t.Setenv(name, "")
+	}
+	if got, err := run(t); err != nil || got != nil {
+		t.Fatalf("unset: revoker %#v, err %v", got, err)
+	}
+	t.Setenv(EnvACRRevokeURL, "https://acr.internal.test")
+	if got, err := run(t); err != nil || got != nil {
+		t.Fatalf("a partial set: revoker %#v, err %v; want nil and no start-up error", got, err)
+	}
+	t.Setenv(EnvACRRevokeTokenURL, "https://acr.internal.test/api/v1/oauth/token")
+	t.Setenv(EnvACRRevokeSubjectFile, "/var/run/secrets/acr/token")
+	got, err := run(t)
+	if client, ok := got.(*acrrevoke.Client); err != nil || !ok || client == nil {
+		t.Fatalf("a usable set: revoker %#v, err %v", got, err)
 	}
 }

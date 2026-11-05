@@ -36,12 +36,13 @@ func newACRRevoker(lookup func(string) (string, bool), logger *slog.Logger) acrc
 		logger.Error("api: acr credential revoke configuration refused; the revoke route answers 503", slog.String("variable", variable))
 		return nil
 	}
-	baseURL, err := url.Parse(base)
-	if err != nil || !acrlisting.ValidOrigin(baseURL) || baseURL.RawQuery != "" {
+	// A value that does not parse is a nil URL, which ValidOrigin refuses.
+	baseURL, _ := url.Parse(base)
+	if !acrlisting.ValidOrigin(baseURL) || baseURL.RawQuery != "" {
 		return refuse(EnvACRRevokeURL)
 	}
-	tokenURL, err := url.Parse(token)
-	if err != nil || !acrlisting.ValidOrigin(tokenURL) {
+	tokenURL, _ := url.Parse(token)
+	if !acrlisting.ValidOrigin(tokenURL) {
 		return refuse(EnvACRRevokeTokenURL)
 	}
 	client, err := acrrevoke.New(acrrevoke.Config{BaseURL: baseURL, TokenEndpoint: tokenURL, SubjectTokenFile: subject})

@@ -369,3 +369,19 @@ func TestInternalIngestMappingConflictKeyIsStableAcrossValidFromStamping(t *test
 			mappingBatch1.rows[0][31])
 	}
 }
+
+// The web client's Ask Dev interaction event is stored by the consumer, as the intake accepts it.
+func TestProductTelemetryStoresTheAskDevInteractionEvent(t *testing.T) {
+	sink := &productSink{batch: &productBatch{}}
+	handler, err := NewProductTelemetryHandler(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = handler.Handle(context.Background(), streamrunner.Message{Fields: map[string]string{"events": `[{"name":"ask_dev_interacted","schemaVersion":"v1","eventId":"event-1","ts":"2026-07-23T12:00:00Z","sessionId":"session-1","anonymousUserId":"anon-1","payload":{"action":"terminal","surface":"panel","terminal":"limited","turnCount":3}}]`}})
+	if err != nil {
+		t.Fatalf("handle = %v", err)
+	}
+	if !sink.batch.sent || len(sink.batch.rows) != 1 {
+		t.Fatalf("durable product sink = %#v", sink.batch)
+	}
+}

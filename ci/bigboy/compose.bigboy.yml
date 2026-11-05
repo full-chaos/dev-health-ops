@@ -2561,6 +2561,7 @@ services:
         condition: service_completed_successfully
     environment:
       AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_AUTHORIZE_CALLER_SUBJECTS: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
       AUTH_DATABASE_SCHEMA: auth
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
       AUTH_JWT_AUDIENCE: dev-health-api

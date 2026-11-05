@@ -43,6 +43,7 @@ internal/api/credentials	probes.go	internal/auth/authruntime
 internal/api/credentials	probes.go	internal/auth/lockorder
 internal/api/credentials	probes.go	internal/auth/pushprojection
 internal/api/credentials	probes.go	internal/billingcli
+internal/api/credentials	probes.go	internal/cigates/workflows
 internal/api/credentials	probes.go	internal/clicredentials
 internal/api/credentials	probes.go	internal/pushlifecyclecli
 internal/apiservice	githubapp_config.go	cmd/dho
@@ -69,6 +70,7 @@ internal/apiservice	githubapp_config.go	internal/apiservice/ownershipvenue
 internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
 internal/apiservice	githubapp_config.go	internal/auth/authapi
 internal/apiservice	githubapp_config.go	internal/auth/authruntime
+internal/apiservice	githubapp_config.go	internal/cigates/workflows
 internal/auth/acrlisting	client.go	cmd/dho
 internal/auth/acrlisting	client.go	deploy/helm/dev-health
 internal/auth/acrlisting	client.go	internal/api/acrcredentials
@@ -96,6 +98,7 @@ internal/auth/acrlisting	client.go	internal/auth/acrlisting
 internal/auth/acrlisting	client.go	internal/auth/acrrevoke
 internal/auth/acrlisting	client.go	internal/auth/authapi
 internal/auth/acrlisting	client.go	internal/auth/authruntime
+internal/auth/acrlisting	client.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho
@@ -237,6 +240,7 @@ internal/auth/workloadinput	workloadinput.go	internal/apiservice/ownershipvenue
 internal/auth/workloadinput	workloadinput.go	internal/apiservice/ssovenue
 internal/auth/workloadinput	workloadinput.go	internal/auth/authapi
 internal/auth/workloadinput	workloadinput.go	internal/auth/authruntime
+internal/auth/workloadinput	workloadinput.go	internal/cigates/workflows
 internal/auth/workloadinput	workloadinput.go	internal/queryapi/pdp
 internal/auth/workloadinput	workloadinput.go	internal/queryapi/server
 internal/auth/workloadinput	workloadinput.go	internal/queryapiservice
@@ -405,6 +409,7 @@ internal/envelopemint	keygen.go	internal/auth/workloadexchange
 internal/envelopemint	keygen.go	internal/billingcli
 internal/envelopemint	keygen.go	internal/cigates/chartgates
 internal/envelopemint	keygen.go	internal/cigates/livee2e
+internal/envelopemint	keygen.go	internal/cigates/workflows
 internal/envelopemint	keygen.go	internal/clicredentials
 internal/envelopemint	keygen.go	internal/edgetokenmint
 internal/envelopemint	keygen.go	internal/envelopemint
@@ -511,6 +516,7 @@ internal/jobcontract	registry.go	internal/apiservice/ssovenue
 internal/jobcontract	registry.go	internal/auth/authapi
 internal/jobcontract	registry.go	internal/auth/authruntime
 internal/jobcontract	registry.go	internal/cigates/queuecreds
+internal/jobcontract	registry.go	internal/cigates/workflows
 internal/jobcontract	registry.go	internal/clicredentials
 internal/jobcontract	registry.go	internal/contractcheck
 internal/jobcontract	registry.go	internal/deploymentcontract
@@ -580,6 +586,7 @@ internal/mail	sender.go	internal/apiservice/ownershipvenue
 internal/mail	sender.go	internal/apiservice/ssovenue
 internal/mail	sender.go	internal/auth/authapi
 internal/mail	sender.go	internal/auth/authruntime
+internal/mail	sender.go	internal/cigates/workflows
 internal/mail	sender.go	internal/fixturescli
 internal/mail	sender.go	internal/mail
 internal/mail	sender.go	internal/platform/logging
@@ -692,6 +699,7 @@ internal/providerfoundation	clients.go	internal/auth/pushprojection
 internal/providerfoundation	clients.go	internal/backfillrun
 internal/providerfoundation	clients.go	internal/billingcli
 internal/providerfoundation	clients.go	internal/cigates/queuecreds
+internal/providerfoundation	clients.go	internal/cigates/workflows
 internal/providerfoundation	clients.go	internal/clicredentials
 internal/providerfoundation	clients.go	internal/fixturescli
 internal/providerfoundation	clients.go	internal/goapicli/restprove

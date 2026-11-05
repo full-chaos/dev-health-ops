@@ -358,4 +358,4 @@ var credentialAdminOrglessRetired = map[string]bool{"list: other org sees its ow
 	"delete: other org admin sees only its own row": true, "list: other org after its delete": true}
 
 // credentialAdminOrglessPinSHA256 is the digest of testdata/venue/credential-admin-orgless.go-pin.json.
-const credentialAdminOrglessPinSHA256 = ""
+const credentialAdminOrglessPinSHA256 = "2b60909fea1a957bc4ddfe8a4563bb614f4475ab49bf3c95e4724be7fa67fa13"

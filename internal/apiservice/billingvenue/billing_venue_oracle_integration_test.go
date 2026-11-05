@@ -1033,7 +1033,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 }
 
 // plansCheckoutOrgClaimPinSHA256 is the digest of testdata/orgclaim/billing-plans-checkout.go-pin.json.
-const plansCheckoutOrgClaimPinSHA256 = ""
+const plansCheckoutOrgClaimPinSHA256 = "f4d0d2a344ae6fd8b2434f60a419791cf6dad96bbef66430c93d07a5e03952c0"
 
 // plansCheckoutPinSHA256 is the digest of testdata/billing-plans-checkout.go-pin.json.
 const plansCheckoutPinSHA256 = "e20c8364febd8df034c2768ee4dcd2a3972db8d7867ca1448b146fce1ed805d8"

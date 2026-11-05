@@ -450,4 +450,4 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 }
 
 // credentialReposOrglessPinSHA256 is the digest of testdata/venue/credential-repos-orgless.go-pin.json.
-const credentialReposOrglessPinSHA256 = ""
+const credentialReposOrglessPinSHA256 = "1435e239da106d2cde0e1caed84078d5c24bfd55c8f9862e2bae602ef5c99421"

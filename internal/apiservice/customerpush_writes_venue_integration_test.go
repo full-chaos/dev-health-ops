@@ -469,4 +469,4 @@ func TestScrubCustomerPushTokensIsIdempotentAndHidesTheValue(t *testing.T) {
 }
 
 // customerPushWritesOrglessPinSHA256 is the digest of testdata/venue/customer-push-writes-orgless.go-pin.json.
-const customerPushWritesOrglessPinSHA256 = ""
+const customerPushWritesOrglessPinSHA256 = "5702b8e75ed33b45eb713521d5c233d0474e61e9a8e9138ed7b715bca7bea025"

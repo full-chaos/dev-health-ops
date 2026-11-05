@@ -610,7 +610,7 @@ var protectedPublicRetired = map[string]bool{"probe: GET /health stranger org": 
 var protectedOrglessRetired = map[string]bool{"me: superuser": true, "me: superuser X-Org-Id any": true, "report: superuser no org": true}
 
 const (
-	protectedOrgClaimPinSHA256 = ""
-	protectedPublicPinSHA256   = ""
-	protectedOrglessPinSHA256  = ""
+	protectedOrgClaimPinSHA256 = "ab2b2fb1dea730522b3c39382b3ed52d774a25ba183aa2bda2cc52fd1c682ba3"
+	protectedPublicPinSHA256   = "dd35f8f365cec8af4b488d59adcc511ef3dccaf1240f86f9d7464ec3c6d6f27f"
+	protectedOrglessPinSHA256  = "ecee5854d5ba63b469c3f95d6b2d96acace66130e41a2ad6ba4ef878113bb55e"
 )

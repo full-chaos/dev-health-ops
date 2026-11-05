@@ -256,6 +256,6 @@ var customerPushOrglessSuperusers = []string{"superuser"}
 var customerPushReadsOrglessRetired = map[string]bool{"superuser own org": true, "superuser x-org team": true}
 
 const (
-	customerPushReadsOrgClaimPinSHA256 = ""
-	customerPushReadsOrglessPinSHA256  = ""
+	customerPushReadsOrgClaimPinSHA256 = "e2c439fad270d63bc213c161481f124e5ccc03e57d4d50e12cd77adb88b86e70"
+	customerPushReadsOrglessPinSHA256  = "42b5efc5384476f92226dc2c4452d59daaee365a8f8bfffb97137d4364b0250c"
 )

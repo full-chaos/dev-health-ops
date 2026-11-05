@@ -443,7 +443,7 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 }
 
 // ledgerOrgClaimPinSHA256 is the digest of testdata/orgclaim/billing-ledger.go-pin.json.
-const ledgerOrgClaimPinSHA256 = ""
+const ledgerOrgClaimPinSHA256 = "23f9af1efcc6bdf474222a34b43609701e8d0a6d9ed9d250647778cff913918d"
 
 // goOnlyEntitlementKeys are decision keys added after the frozen Python build
 // (acr_service_model: CHAOS-9311, #4032; platform_model_fallback: CHAOS-10262):

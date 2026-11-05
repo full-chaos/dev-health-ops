@@ -1338,11 +1338,11 @@ func (r *runner) socialRow() {
 const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
 
 // authFlowOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
-const authFlowOrgClaimPinSHA256 = ""
+const authFlowOrgClaimPinSHA256 = "13c6ce271ed450afde122bb9d2367a4acecec3315a16ef780c39a8103364ba67"
 
 // roleClaimRuling retires the Python answer of a step whose bearer's role claim differs from the user's membership
 // role: the membership row is the authority (D6651).
 const roleClaimRuling = "EdDSA access path takes the role from the membership row (policy/accessroute_user.go:101) and ignores the token's role claim; HS256 trusted the claim"
 
 // authFlowRoleClaimPinSHA256 is the digest of testdata/roleclaim.go-pin.json.
-const authFlowRoleClaimPinSHA256 = ""
+const authFlowRoleClaimPinSHA256 = "55d19b2a46f16bf625f9122685528a36bde63558c6ed9c2a9247ab12c93602b0"

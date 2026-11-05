@@ -113,16 +113,26 @@ type drainWatch struct {
 	asked       chan struct{}
 	askOnce     sync.Once
 	shutdownErr chan error
+	// returned closes once Shutdown has returned: the runtime may ask for the drain
+	// as soon as its own attempt deadline ends, before Shutdown sees the same
+	// deadline, and asked must not end the handler before Shutdown has counted it.
+	returned chan struct{}
 }
 
 func (w *drainWatch) Shutdown(ctx context.Context) error {
 	err := w.Server.Shutdown(ctx)
 	w.shutdownErr <- err
+	close(w.returned)
 	return err
 }
 
 func (w *drainWatch) Drained() <-chan struct{} {
-	w.askOnce.Do(func() { close(w.asked) })
+	w.askOnce.Do(func() {
+		go func() {
+			<-w.returned
+			close(w.asked)
+		}()
+	})
 	return w.Server.Drained()
 }
 
@@ -154,7 +164,7 @@ func TestRuntimeStopsTheStoreOnlyAfterASlowHandlerEnds(t *testing.T) {
 	var handlerActive, activeAtStoreStop, expiredAtStoreStop atomic.Bool
 	entered := make(chan struct{})
 	storeBegan := make(chan struct{})
-	watch := &drainWatch{asked: make(chan struct{}), shutdownErr: make(chan error, 1)}
+	watch := &drainWatch{asked: make(chan struct{}), shutdownErr: make(chan error, 1), returned: make(chan struct{})}
 	options := testOptions(Route{
 		Method:  http.MethodGet,
 		Pattern: "/hold",

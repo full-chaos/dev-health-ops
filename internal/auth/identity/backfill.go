@@ -350,7 +350,7 @@ WHERE issuer = $1 AND provider = $2 AND subject = $3`, key.Issuer, string(key.Pr
 	if dryRun {
 		return true, nil
 	}
-	if err := s.projectIdentity(ctx, key, t.ID); err != nil {
+	if err := s.projectIdentity(ctx, key, t.ID, ""); err != nil {
 		return false, err
 	}
 	return true, nil

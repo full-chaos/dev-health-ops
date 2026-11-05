@@ -370,7 +370,6 @@ internal/envelopemint	keygen.go	internal/auth/outboxprojection
 internal/envelopemint	keygen.go	internal/auth/passwordpolicy
 internal/envelopemint	keygen.go	internal/auth/platformrole
 internal/envelopemint	keygen.go	internal/auth/pushprojection
-internal/envelopemint	keygen.go	internal/auth/repoidentity
 internal/envelopemint	keygen.go	internal/auth/serviceaccount
 internal/envelopemint	keygen.go	internal/auth/session
 internal/envelopemint	keygen.go	internal/auth/usersbackfill

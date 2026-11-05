@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +32,11 @@ type paramFakeOpenAI struct {
 func newParamFakeOpenAI(t *testing.T, refuse map[string]string) *paramFakeOpenAI {
 	t.Helper()
 	f := &paramFakeOpenAI{}
+	refuseKeys := make([]string, 0, len(refuse))
+	for key := range refuse {
+		refuseKeys = append(refuseKeys, key)
+	}
+	sort.Strings(refuseKeys)
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
@@ -39,7 +45,8 @@ func newParamFakeOpenAI(t *testing.T, refuse map[string]string) *paramFakeOpenAI
 		f.mu.Lock()
 		f.calls = append(f.calls, paramFakeCall{round2: round2, body: body})
 		f.mu.Unlock()
-		for key, errBody := range refuse {
+		for _, key := range refuseKeys {
+			errBody := refuse[key]
 			if _, present := body[key]; present {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
@@ -308,9 +315,9 @@ func TestReadinessProbeLogsOneInfoLinePerFailedRoundWithoutTheKey(t *testing.T) 
 	res := detailProberOver(logger).probeDetail(context.Background(), "openai", "future-model-x", f.server.URL+"/v1", key)
 	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	lines := infoLines(buf.String())
 	if len(lines) != 1 {
-		t.Fatalf("log lines = %d, want 1:\n%s", len(lines), buf.String())
+		t.Fatalf("info log lines = %d, want 1:\n%s", len(lines), buf.String())
 	}
 	if strings.Contains(buf.String(), key) || strings.Contains(buf.String(), f.server.URL) {
 		t.Fatalf("the log line carries the key or the base URL: %s", lines[0])
@@ -326,6 +333,16 @@ func TestReadinessProbeLogsOneInfoLinePerFailedRoundWithoutTheKey(t *testing.T) 
 	if msg, _ := entry["error_message"].(string); len([]rune(msg)) != 200 {
 		t.Fatalf("error_message length = %d, want 200", len([]rune(msg)))
 	}
+}
+
+func infoLines(logs string) []string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(logs), "\n") {
+		if strings.Contains(line, `"level":"INFO"`) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func TestReadinessProbeLogsEachRefusedAttemptWithItsRound(t *testing.T) {

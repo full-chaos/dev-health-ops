@@ -306,7 +306,7 @@ func TestRESTShadowDoesNotObserveA401(t *testing.T) {
 }
 
 // 2g/2i: the observe seam. A legacy deny with a PDP allow is a mismatch of class unresolved; a delegated session is
-// skipped with no call.
+// impersonation_refused with no call, as in go-api.
 func TestRESTShadowObserveSeam(t *testing.T) {
 	for name, tc := range map[string]struct {
 		legacyAllowed, delegated, pdpDeny bool
@@ -318,7 +318,7 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 			shadowResultsMetric + "|reason=none,result=mismatch":                        1,
 			shadowMismatchMetric + "|caller=admin,class=unresolved,namespace=analytics": 1}, 1},
 		"legacy allow, PDP allow": {true, false, false, "superuser", map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}, 1},
-		"delegated":               {true, true, false, "member", map[string]int64{shadowResultsMetric + "|reason=none,result=skipped": 1}, 0},
+		"delegated":               {true, true, false, "member", map[string]int64{shadowResultsMetric + "|reason=none,result=impersonation_refused": 1}, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := pdptest.New(t)
@@ -393,8 +393,8 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 	}
 }
 
-// 2i on the route: a user token that carries an actor (a delegated session) is skipped, with no PDP call.
-func TestRESTShadowDelegatedUserTokenIsSkipped(t *testing.T) {
+// 2i on the route: a user token that carries an actor (a delegated session) is impersonation_refused once, with no PDP call.
+func TestRESTShadowDelegatedUserTokenIsImpersonationRefused(t *testing.T) {
 	srv := pdptest.New(t)
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	before := shadowCounters(t)
@@ -402,7 +402,7 @@ func TestRESTShadowDelegatedUserTokenIsSkipped(t *testing.T) {
 	if got, _ := g.get(g.minter.mint(ecUser, map[string]any{"act": map[string]any{"sub": actor}}, nil)); got != gatedOK {
 		t.Fatalf("answer %+v, want %+v", got, gatedOK)
 	}
-	want := map[string]int64{shadowResultsMetric + "|reason=none,result=skipped": 1}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=impersonation_refused": 1}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 		t.Fatalf("5.12 counters %v, want %v", d, want)
 	}
@@ -536,7 +536,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 	_, _ = g.get(g.orglessUserToken())
 	time.Sleep(200 * time.Millisecond)
 	closed := map[string][]string{
-		"result":    {"match", "mismatch", "error", "dropped", "skipped"},
+		"result":    {"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"},
 		"reason":    policy.ShadowReasons(),
 		"caller":    {"member", "admin", "superuser"},
 		"class":     {"legacy_bug", "new_bug", "unresolved", "intentional"},

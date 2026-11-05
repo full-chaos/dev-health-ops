@@ -45,6 +45,7 @@ internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/health
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol

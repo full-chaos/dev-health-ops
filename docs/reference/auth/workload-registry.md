@@ -30,7 +30,7 @@ The table below is written by hand. A docs test compares it with the JSON, row b
 | `api` | `platform-operations` | `auth-service` | none |
 | `auth-service` | `platform-operations` | none | none |
 | `acr-api` | `platform-operations` | `auth-service`, `dev-health-api` | none |
-| `web` | `platform-operations` | none | none |
+| `web` | `platform-operations` | `auth-service` | none |
 | `query-api` | `platform-operations` | `auth-service` | none |
 
 - The owner is the team that runs the workload and its runbooks. It is a field of the registry contract: `workload-registry.json`

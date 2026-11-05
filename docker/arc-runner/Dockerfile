@@ -110,6 +110,7 @@ RUN apt-get install -y --no-install-recommends \
         libc6-dev \
         xz-utils \
         docker-compose-plugin \
+        gettext-base \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

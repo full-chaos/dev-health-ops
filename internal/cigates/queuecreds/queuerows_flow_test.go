@@ -1678,24 +1678,12 @@ func (s *scope) originName(name string, origins []string, seen map[string]bool) 
 	return true
 }
 
-// originCalls names the calls whose first result is a value of an origin type by construction: jobcontract.Decode
-// refuses a credential-shaped field, so what it returns is the decoded envelope the exception reasons name.
-var originCalls = map[string]string{"jobcontract.Decode": "jobcontract.Envelope"}
-
-// originRHS checks one value assigned to a name. A call to a function of the same package gives the value its declared
-// result type at that position, and that function's own return values at the position must have the origin too; any
-// other expression is checked by the values it reads.
+// originRHS checks one value assigned to a name. For a call to a function of the same package, that function's own
+// return values at the position must have the origin; any other expression is checked by the values it reads.
 func (s *scope) originRHS(rhs ast.Expr, at int, origins []string, seen map[string]bool) bool {
 	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
 	if !ok {
 		return s.originExpr(rhs, origins, seen)
-	}
-	if fun, ok := call.Fun.(*ast.SelectorExpr); ok {
-		if pkg, ok := fun.X.(*ast.Ident); ok {
-			if produced, ok := originCalls[pkg.Name+"."+fun.Sel.Name]; ok && max(at, 0) == 0 {
-				return slices.Contains(origins, produced)
-			}
-		}
 	}
 	var callee string
 	switch fun := call.Fun.(type) {
@@ -1733,12 +1721,11 @@ func resultFields(fn *ast.FuncDecl) (typesOut, names []string) {
 	return typesOut, names
 }
 
-// returnsOrigin reports whether a function's result at a position has one of the origin types and every value it
-// returns there (a named result included) comes from that origin. A function already on the stack counts as proven, so
-// recursion ends.
+// returnsOrigin reports whether every value a function returns at a position (a named result included) comes from one
+// of the origins. A function already on the stack counts as proven, so recursion ends.
 func (f *flow) returnsOrigin(fn *ast.FuncDecl, position int, origins []string) bool {
 	resultTypes, resultNames := resultFields(fn)
-	if position >= len(resultTypes) || !slices.Contains(origins, resultTypes[position]) || fn.Body == nil {
+	if position >= len(resultTypes) || fn.Body == nil {
 		return false
 	}
 	if f.returning == nil {

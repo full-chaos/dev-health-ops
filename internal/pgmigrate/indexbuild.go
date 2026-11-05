@@ -514,20 +514,14 @@ func buildIndex(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			"transaction-mode pooler the session can move to another backend; the run then exits non-zero\n"+
 			"(build_index_session_changed) with no further DDL. An unlock that answers false exits non-zero (build_index_lock_lost).\n")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	positional := flags.Args()
 	if len(positional) > 0 {
 		// The standard parser stops at the first positional argument: read the flags that follow it too.
-		if err := flags.Parse(positional[1:]); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return cli.ExitOK
-			}
-			return cli.ExitUsage
+		if code, ok := cli.ParseFlags(flags, env.Stderr, positional[1:]); !ok {
+			return code
 		}
 		positional = append(positional[:1], flags.Args()...)
 	}

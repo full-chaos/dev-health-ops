@@ -479,6 +479,7 @@ func TestATransactionThatFailsAfterTheDecisionsStoresNothing(t *testing.T) {
 // feed event is sent in these cells: the row-version digest alone makes the next call miss. One cell per reviewer case,
 // single and batch.
 func TestACommittedChangeMissesBeforeItsFeedEvent(t *testing.T) {
+	t.Parallel()
 	const repoAction = "acr.context.read"
 	for _, tc := range []struct {
 		name   string

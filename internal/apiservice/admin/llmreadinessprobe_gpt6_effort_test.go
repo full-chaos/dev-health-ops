@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The two OpenAI 400 bodies recorded for gpt-6-luna on askdev-1 (CHAOS-12116 reopened).
@@ -421,5 +423,100 @@ func TestReadinessProbeEveryRequestRefusedStopsAtBound(t *testing.T) {
 	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
 	if got := len(seq()); got != readinessRoundMaxRequests-1 {
 		t.Fatalf("requests = %d, want %d: %v", got, readinessRoundMaxRequests-1, seq())
+	}
+}
+
+// CHAOS-12116: the round cap counts physical HTTP requests, retries included.
+func TestReadinessProbeRoundCapCountsRetriedHTTPRequests(t *testing.T) {
+	terminals := []struct {
+		name   string
+		status int
+		code   string
+	}{
+		{"5xx", http.StatusInternalServerError, errCodeProviderUnavailable},
+		{"429", http.StatusTooManyRequests, errCodeRateLimited},
+		{"timeout", 0, errCodeTimeout},
+	}
+	for _, term := range terminals {
+		for prior := 0; prior <= 4; prior++ {
+			t.Run(fmt.Sprintf("%s/prior=%d", term.name, prior), func(t *testing.T) {
+				var mu sync.Mutex
+				count := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					raw, _ := io.ReadAll(r.Body)
+					var body map[string]any
+					_ = json.Unmarshal(raw, &body)
+					mu.Lock()
+					count++
+					n := count
+					mu.Unlock()
+					if n <= prior {
+						for _, k := range []string{"reasoning_effort", "parallel_tool_calls", "max_completion_tokens"} {
+							if has(body, k) {
+								w.WriteHeader(http.StatusBadRequest)
+								_, _ = w.Write([]byte(paramRefusal(k, "unsupported_value")))
+								return
+							}
+						}
+					}
+					if term.status == 0 {
+						select {
+						case <-r.Context().Done():
+						case <-time.After(2 * time.Second):
+						}
+						return
+					}
+					w.WriteHeader(term.status)
+				}))
+				t.Cleanup(server.Close)
+				prober := newOpenAICompatibleReadinessProber(&http.Client{Timeout: 100 * time.Millisecond, Transport: &http.Transport{Proxy: nil}})
+				res := prober.probeDetail(context.Background(), "openai", "gpt-6-luna", server.URL, "test-key")
+				mu.Lock()
+				got := count
+				mu.Unlock()
+				want := prior + maxProbeAttempts
+				if want > readinessRoundMaxRequests {
+					want = readinessRoundMaxRequests
+				}
+				if got > readinessRoundMaxRequests || got != want {
+					t.Fatalf("requests = %d, want %d (cap %d)", got, want, readinessRoundMaxRequests)
+				}
+				if res.Outcome != readinessOutcomeFailed || res.SafeErrorCode == nil || *res.SafeErrorCode != term.code {
+					t.Fatalf("outcome = %q code = %v, want failed/%s", res.Outcome, res.SafeErrorCode, term.code)
+				}
+			})
+		}
+	}
+}
+
+// A retryable failure followed by success still retries while the budget lasts.
+func TestReadinessProbeRetryThenSuccessStillRetries(t *testing.T) {
+	var mu sync.Mutex
+	count := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		count++
+		n := count
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if !isRound2Request(raw) {
+			writeToolCallJSON(w)
+			return
+		}
+		writeFinalAnswerJSON(w, `{"kind":"final_answer","value":{"nonce":"ready-v1"}}`)
+	}))
+	t.Cleanup(server.Close)
+	res := detailProberOver(nil).probeDetail(context.Background(), "openai", "gpt-6-luna", server.URL, "test-key")
+	if res.Outcome != readinessOutcomeReady {
+		t.Fatalf("outcome = %q, want ready", res.Outcome)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if count != 3 {
+		t.Fatalf("requests = %d, want 3 (500 retried, then round 1 and 2)", count)
 	}
 }

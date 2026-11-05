@@ -430,12 +430,16 @@ func isRetryableFailureCode(code string) bool {
 // retryable failure, with a short linear backoff between attempts
 // (bounded by the context deadline/cancellation, never Python's exact
 // jittered-exponential timing -- the finding this fixes is about retry
-// COUNT, not backoff shape).
+// COUNT, not backoff shape). Every request spends one from budget, the round's
+// physical request budget; an empty budget ends the retries.
 func (p *openAICompatibleReadinessProber) doCompletion(
-	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest,
+	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest, budget *int,
 ) (*chatCompletionResponse, *providerFailure) {
 	var lastFailure *providerFailure
 	for attempt := 0; attempt < maxProbeAttempts; attempt++ {
+		if *budget <= 0 {
+			return nil, lastFailure
+		}
 		if attempt > 0 {
 			select {
 			case <-ctx.Done():
@@ -443,6 +447,7 @@ func (p *openAICompatibleReadinessProber) doCompletion(
 			case <-time.After(time.Duration(attempt) * 200 * time.Millisecond):
 			}
 		}
+		*budget--
 		resp, failure := p.doCompletionOnce(ctx, baseURL, apiKey, req)
 		if failure == nil {
 			return resp, nil
@@ -709,8 +714,13 @@ func (p *openAICompatibleReadinessProber) runRound(
 	laddered := false
 	ladderLeft := readinessEffortLadderSteps
 	droppedHere := map[string]bool{}
+	budget := readinessRoundMaxRequests
+	var lastFailure *providerFailure
 	for attempt := 1; ; attempt++ {
-		resp, failure := p.doCompletion(ctx, baseURL, apiKey, req)
+		if budget <= 0 {
+			return nil, lastFailure
+		}
+		resp, failure := p.doCompletion(ctx, baseURL, apiKey, req, &budget)
 		if failure == nil {
 			if laddered {
 				if req.ReasoningEffort == "" {
@@ -722,6 +732,7 @@ func (p *openAICompatibleReadinessProber) runRound(
 			}
 			return resp, nil
 		}
+		lastFailure = failure
 		p.logFailedRound(ctx, round, attempt, failure)
 		if ladderLeft > 0 && reasoningEffortRefused(failure, req) {
 			// CHAOS-12116: fixed ladder current -> "none" -> omit.

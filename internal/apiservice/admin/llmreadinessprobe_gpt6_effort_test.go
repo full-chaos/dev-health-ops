@@ -70,10 +70,10 @@ func lunaFake(t *testing.T) (*httptest.Server, func() []string) {
 	return server, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), efforts...) }
 }
 
-func TestReadinessProbeGPT6LunaPassesWithReasoningEffortNone(t *testing.T) {
+func TestReadinessProbeGPT5MiniRefusedMinimalLandsOnNone(t *testing.T) {
 	server, efforts := lunaFake(t)
 	f := &paramFakeOpenAI{server: server}
-	outcome, code := readinessProbeOver(f, "gpt-6-luna")
+	outcome, code := readinessProbeOver(f, "gpt-5-mini")
 	wantReady(t, outcome, code)
 	got := efforts()
 	if len(got) != 3 {
@@ -87,6 +87,16 @@ func TestReadinessProbeGPT6LunaPassesWithReasoningEffortNone(t *testing.T) {
 		if e == "<absent>" {
 			t.Fatalf("efforts sent = %v; a refused reasoning_effort must be swapped for none, never dropped", got)
 		}
+	}
+}
+
+// The catalog starts gpt-6-luna at none: the recorded refusals are never hit.
+func TestReadinessProbeGPT6LunaStartsAtNoneAndPasses(t *testing.T) {
+	server, efforts := lunaFake(t)
+	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+	wantReady(t, outcome, code)
+	if got, want := efforts(), []string{"none", "none"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("efforts sent = %v, want %v", got, want)
 	}
 }
 
@@ -180,11 +190,11 @@ func ladderFake(t *testing.T, status int, message string, refuse func(effort str
 
 func probeWithLog(server *httptest.Server) (readinessProbeResult, []map[string]any) {
 	var buf bytes.Buffer
-	res := detailProberOver(slog.New(slog.NewJSONHandler(&buf, nil))).probeDetail(context.Background(), "openai", "gpt-6-luna", server.URL, "test-key")
+	res := detailProberOver(slog.New(slog.NewJSONHandler(&buf, nil))).probeDetail(context.Background(), "openai", "gpt-5-mini", server.URL, "test-key")
 	var lines []map[string]any
 	for _, l := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
 		var m map[string]any
-		if json.Unmarshal([]byte(l), &m) == nil {
+		if json.Unmarshal([]byte(l), &m) == nil && m["level"] == "INFO" {
 			lines = append(lines, m)
 		}
 	}
@@ -202,7 +212,7 @@ func TestReadinessProbeEffortRefusalAnyTextSendsNoneNext(t *testing.T) {
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnprocessableEntity} {
 		for _, msg := range messages {
 			server, efforts := ladderFake(t, status, msg, func(e string, _ bool) bool { return e == "minimal" })
-			outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+			outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-5-mini")
 			wantReady(t, outcome, code)
 			if got, want := efforts(), []string{"minimal", "none", "none"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("status %d msg %q: efforts = %v, want %v", status, msg, got, want)
@@ -242,7 +252,7 @@ func TestReadinessProbeRefusedNoneRoundTwoOmitsInTwoProbes(t *testing.T) {
 	server, efforts := ladderFake(t, http.StatusBadRequest, "nope", func(e string, round2 bool) bool {
 		return e == "minimal" || (round2 && e == "none")
 	})
-	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-6-luna")
+	outcome, code := readinessProbeOver(&paramFakeOpenAI{server: server}, "gpt-5-mini")
 	wantReady(t, outcome, code)
 	if got, want := efforts(), []string{"minimal", "none", "none", "<absent>"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("efforts = %v, want %v", got, want)

@@ -28,7 +28,9 @@ The shadow asks the policy decision point (PDP) the same question the legacy go-
 
 For a go-api route whose profile row names a catalog action (see the [action map](../../reference/auth/action-map.md)), the guard calls `Observe` after the legacy decision and before it answers. `Observe` returns at once. The PDP call runs in its own goroutine under a timeout (2 s) and an in-flight bound (32 by default); a call over the bound is dropped, not queued.
 
-A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), a delegated (impersonation) session is in force, the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
+A call is **skipped** (counted, never asked) when the caller cannot be judged: the token is not a user access token (a legacy HS256 token), the route is organization-scoped and the caller has no organization, or the row is high risk while `AUTH_SHADOW_PDP_HIGH_RISK` is off. Routes with no catalog action are not counted at all.
+
+A call is counted **impersonation_refused** (never asked) when a live go-api impersonation row is in force for the caller's own bearer, as enforcement refuses it; the stop route is asked. A delegated session's own bearer is asked like any other caller.
 
 ## Switches
 
@@ -52,7 +54,7 @@ A bad value never stops the service. The shadow stays off, the log has an ERROR 
 | --- | --- | --- |
 | `match` | PDP and legacy agree. | never |
 | `mismatch` | They differ. Also counted in `dev_health_api_shadow_mismatch_total{namespace,caller,class}`. | see the triage loop |
-| `error` | The PDP gave no verdict (a local deny: unreachable, timeout, refused, rate limited and so on). Nothing is compared. | a rising share: check auth-service readiness and the `POST /v1/authorize` route; the PDP outage runbook is not written yet |
+| `error` | The PDP gave no verdict (a local deny: unreachable, timeout, refused, rate limited and so on). Nothing is compared. | a rising share: check auth-service readiness and the `POST /v1/authorize` route; for the enforced side, see [Auth PDP outage and rollback](auth-pdp-outage-and-rollback.md) |
 | `dropped` | The in-flight bound was full. | a rising share: raise `AUTH_SHADOW_PDP_MAX_IN_FLIGHT` or lower `AUTH_SHADOW_PDP_SAMPLE` |
 | `skipped` | A covered request the shadow cannot ask. | only to judge coverage |
 
@@ -77,7 +79,7 @@ The `AuthShadowMismatchUnresolved` alert (`alerts/rules.yml`, group `auth_shadow
 | `intentional` | The difference is wanted and reviewed. |
 | `unresolved` | No reviewed row covers the pair. The default. |
 
-The table on `main` has one row: legacy `allow`, PDP `deny`, reason `delegation_invalid`, class `intentional` (the PDP refuses every delegated session until its delegation rules are wired). Delegated sessions are skipped before the call, so this row is a safety net.
+The table on `main` has one row: legacy `allow`, PDP `deny`, reason `delegation_invalid`, class `intentional` (the PDP refuses a delegated session whose actor lost the power or is deactivated; the legacy guard does not read the actor).
 
 ## Add a class row
 

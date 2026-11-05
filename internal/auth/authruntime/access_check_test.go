@@ -99,7 +99,7 @@ func TestProductionRoutesConstructTheAccessCheck(t *testing.T) {
 
 	for name, issuerURL := range map[string]string{"issuer set": accessCheckIssuer, "issuer unset": ""} {
 		cfg := accessCheckConfig(t, issuerURL)
-		sessionSet, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t))
+		sessionSet, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

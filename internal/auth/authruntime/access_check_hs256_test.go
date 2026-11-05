@@ -38,7 +38,7 @@ func TestHS256WebTokenPassesEveryAccessRowWithAnIssuerURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	sessionSet, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t))
+	sessionSet, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

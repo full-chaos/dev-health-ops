@@ -21,6 +21,7 @@ func renameBody(f *provFixture, actor uuid.UUID, name string) string {
 
 // A document without the rename row refuses the service start, naming the route, and builds no route.
 func TestOrgRenameNeedsItsProfileRowToStart(t *testing.T) {
+	t.Parallel()
 	routes, err := ProvisioningRoutes(provisioningDepsOver(t, docWithoutRow(t, nil, PatternOrgRename), nil))
 	var refusal *ProvisioningRowError
 	if !errors.As(err, &refusal) || refusal.Route != "POST "+PatternOrgRename || routes != nil {
@@ -30,6 +31,7 @@ func TestOrgRenameNeedsItsProfileRowToStart(t *testing.T) {
 
 // The embedded document holds the rename row: the route is served, and no startup line calls it unmounted.
 func TestOrgRenameIsServedWithTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, authv1.AuthServiceEndpointProfiles)
 	if got := f.post(PatternOrgRename, renameBody(f, f.super, "New"), nil); got.Code != http.StatusOK {
 		t.Fatalf("rename with the embedded document: %d %s, want 200", got.Code, got.Body)
@@ -57,6 +59,7 @@ func TestOrgRenameIsOnTheStartupGate(t *testing.T) {
 
 // With its row the route mounts and gives the verb the org, the normalized name, the actor and a request id.
 func TestOrgRenameMountsWithItsRow(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	revision := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String(), "name": "  Acme Two ",
 		"if_revision": 7})
@@ -85,6 +88,7 @@ func TestOrgRenameMountsWithItsRow(t *testing.T) {
 
 // go-api's two rename paths: a superuser, or an owner or admin of the organization; nobody else reaches the verb.
 func TestOrgRenameActorRule(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	for name, tc := range map[string]struct {
@@ -109,6 +113,7 @@ func TestOrgRenameActorRule(t *testing.T) {
 }
 
 func TestOrgRenameRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.admin: {IsActive: true}}}
 	expectRefusal(t, f.post(PatternOrgRename, renameBody(f, f.admin, "New"), nil), http.StatusForbidden, reasonAdminRequired)
@@ -117,6 +122,7 @@ func TestOrgRenameRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
 }
 
 func TestOrgRenameRefusalsAreNamedReasonCodes(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for name, tc := range map[string]struct {
 		err    error
@@ -142,6 +148,7 @@ func TestOrgRenameRefusalsAreNamedReasonCodes(t *testing.T) {
 
 // A name that is blank after the strip or longer than 100 characters is refused before any read.
 func TestOrgRenameRefusesABadNameBeforeTheStore(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, name := range []string{"   ", strings.Repeat("n", 101)} {
 		expectRefusal(t, f.post(PatternOrgRename, renameBody(f, f.super, name), nil), http.StatusUnprocessableEntity, reasonNameInvalid)
@@ -154,6 +161,7 @@ func TestOrgRenameRefusesABadNameBeforeTheStore(t *testing.T) {
 
 // The name is bounded after the strip, by runes: 100 four-byte runes inside surrounding spaces are a valid name.
 func TestOrgRenameBoundsTheNameAfterTheStrip(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	wide := strings.Repeat("\U0001F600", 100)
 	if got := f.post(PatternOrgRename, renameBody(f, f.super, "  "+wide+"  "), nil); got.Code != http.StatusOK {

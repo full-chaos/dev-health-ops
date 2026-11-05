@@ -109,8 +109,8 @@ func registerWriteFlags() (*flag.FlagSet, *writeFlags) {
 // already has the DSN redacted: a caller never reads a half-parsed struct.
 func parseWriteFlags(args []string) (writeFlags, error) {
 	fs, fp := registerWriteFlags()
-	if err := fs.Parse(args); err != nil {
-		return writeFlags{}, secrets.NewBoundary(fp.postgresURI).Redact(cli.WrapFlagParseError(err))
+	if err := cli.ParseFlagsError(fs, flagOutput, args); err != nil {
+		return writeFlags{}, secrets.NewBoundary(fp.postgresURI).Redact(err)
 	}
 	f := *fp
 	secrets.ResolveFlag(fs, &f.postgresURI, "postgres-uri", postgresURIEnvVar)

@@ -147,6 +147,12 @@ func TestRowsAreSortedUniqueAndWellFormed(t *testing.T) {
 			t.Errorf("%s list was accepted", name)
 		}
 	}
+	if _, err := Parse(write("a\trender-guard\tx\tr\n")); err == nil {
+		t.Error("a render-guard row with a witness was accepted")
+	}
+	if _, err := Parse(write("# c\na\trender-guard\t-\tr\nb\tnone\t-\tr\n")); err != nil {
+		t.Errorf("a render-guard row was refused: %v", err)
+	}
 	if _, err := Parse(write("# c\na\tnone\t-\tr\nb\tnone\t-\tr\n")); err != nil {
 		t.Errorf("a well-formed list was refused: %v", err)
 	}
@@ -712,5 +718,32 @@ func TestAPackageWithNoTestOnAnyArchIsStillRefused(t *testing.T) {
 	}
 	if got := problemsOf(t, map[string]string{"b/b.go": "package b\n"}, rowA); !strings.Contains(got, "no such package") {
 		t.Errorf("want no such package, got:\n%s", got)
+	}
+}
+
+// D6694: class render-guard is a closed list. A row for a package outside renderGuardPackages is refused, and so is a pinned package that has no row.
+func TestRenderGuardClassIsAClosedPinnedList(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+	if got := problemsOf(t, files, Row{"a", renderGuardClass, "-", "x"}); !strings.Contains(got, "not in racescope's renderGuardPackages") {
+		t.Errorf("a render-guard row for an unpinned package was not refused:\n%s", got)
+	}
+	if got := problemsOf(t, files, Row{"a", "none", "x", "x"}); !strings.Contains(got, "only class none or render-guard") {
+		t.Errorf("a bad witness was not refused:\n%s", got)
+	}
+	root := repoRoot(t)
+	have := map[string]bool{}
+	for _, r := range shippedRows(t, root) {
+		if r.Class == renderGuardClass {
+			have[r.Package] = true
+		}
+	}
+	for pkg := range renderGuardPackages {
+		if !have[pkg] {
+			t.Errorf("%s is pinned as render-guard and has no such row in ci/race_excluded_packages.tsv", pkg)
+		}
+	}
+	if len(have) != len(renderGuardPackages) {
+		t.Errorf("render-guard rows %v differ from the pinned list %v", have, renderGuardPackages)
 	}
 }

@@ -25,7 +25,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/webhookintake"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/joboutbox"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -101,14 +100,7 @@ func startBillingVenueAPI(t *testing.T, ctx context.Context, cfg config.Config, 
 		t.Fatalf("dho api not ready as the api role: %v %s", err, venue.DiagnoseAPIRole(t, ctx))
 	}
 	logger := slog.New(slog.NewTextHandler(venueLogs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	verifier, err := edgetoken.New(cfg.APIJWTSecret.Reveal(), cfg.APIJWTIssuer, cfg.APIJWTAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := venue.TokenIssuer.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	registry, err := webhookintake.LoadJobRegistry(filepath.Join(venueRoot(), "contracts", "jobs", "v1"))
 	if err != nil {
 		t.Fatal(err)

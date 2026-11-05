@@ -2439,6 +2439,13 @@ go_run_name_ok() {
   [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
 }
 
+# byte_len STRING: sets BYTE_LEN to the length of STRING in bytes. ${#var} counts characters under a UTF-8 locale, and the
+# -run budget is in bytes (Linux refuses one argument over 128 KiB).
+byte_len() {
+  local LC_ALL=C
+  BYTE_LEN=${#1}
+}
+
 # go_test_name_ok NAME: go_run_name_ok for a "Test" name.
 go_test_name_ok() {
   case "$1" in Test*) go_run_name_ok "$1" ;; *) return 1 ;; esac
@@ -2667,7 +2674,8 @@ run_integration_packages() {
       [ -n "${name}" ] || continue
       [ -z "${seen[${name}]+set}" ] || continue
       seen["${name}"]=1
-      names_len=$((names_len + ${#name} + 1))
+      byte_len "${name}"
+      names_len=$((names_len + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     [ $((names_len + 4)) -le "${regex_max}" ] \
       || die "${label}: the selected test names of ${key} alone exceed the ${regex_max}-byte -run budget"
@@ -2694,7 +2702,7 @@ run_integration_packages() {
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
         if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0 why="collision ${name} ${skipped_in[${group}|${name}]}"; break; fi
-        [ -n "${selected_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
+        if [ -z "${selected_in[${group}|${name}]+set}" ]; then byte_len "${name}"; size=$((size + BYTE_LEN + 1)); fi
       done <<<"${select_names[${pkg}]}"
       if [ "${fits}" -eq 1 ] && [ "${size}" -gt "${regex_max}" ]; then fits=0 why="budget ${size}"; fi
       if [ "${fits}" -eq 1 ]; then
@@ -2715,7 +2723,8 @@ run_integration_packages() {
       [ -z "${selected_in[${group}|${name}]+set}" ] || continue
       selected_in["${group}|${name}"]="${key}"
       group_regex[group]+="${group_regex[${group}]:+|}${name}"
-      group_size[group]=$((group_size[group] + ${#name} + 1))
+      byte_len "${name}"
+      group_size[group]=$((group_size[group] + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     while IFS= read -r name; do
       [ -n "${name}" ] || continue

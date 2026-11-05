@@ -216,8 +216,8 @@ authService:
   enforce:
     goApi: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. true is refused at every phase until
-  #    CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true needs users owned (authService.phase 4
+  #    with usersOwnedStage=owned): below it go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -283,6 +283,20 @@ authService:
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
   #    the API port.
   operatorPort: 8096
+  # -- The internal listener (CHAOS-12661, --internal-http-addr): the service-to-service routes alone
+  #    (POST /internal/v1/token/exchange, /v1/authorize and /v1/authorize:batch), for the policy enforcement
+  #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
+  #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
+  #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
+  #    pods of the listed peers on this port and nothing else. The API port, its Service and its policy do not
+  #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
+  internal:
+    enabled: false
+    # -- A whole number from 1 to 65535, not port or operatorPort.
+    port: 8097
+    # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
+    #    once; at least one while enabled.
+    peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
     #    pin `repository@sha256:<digest>` (immutable release artifact).

@@ -46,6 +46,7 @@ func createBody(actor uuid.UUID, extra string) string {
 }
 
 func TestOrgCreateRoutesRefusals(t *testing.T) {
+	t.Parallel()
 	failed := errors.New("database down")
 	for _, c := range []struct {
 		name, path string
@@ -87,6 +88,7 @@ func TestOrgCreateRoutesRefusals(t *testing.T) {
 }
 
 func TestOrgCreateRoutesAnswer(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.orgs.bornID = uuid.New()
 	got := f.post(PatternOrgOnboard, onboardBody(f.target), nil)
@@ -114,6 +116,7 @@ func TestOrgCreateRoutesAnswer(t *testing.T) {
 // The actor rule runs again on the verb's transaction: a demotion after the
 // precheck is refused there.
 func TestOrgCreateSuperuserRuleRunsOnTheTx(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
 	got := f.post(PatternOrgCreate, createBody(f.super, ""), nil)
@@ -123,6 +126,7 @@ func TestOrgCreateSuperuserRuleRunsOnTheTx(t *testing.T) {
 }
 
 func TestOnboardRouteRefusesTierSlugSettings(t *testing.T) {
+	t.Parallel()
 	for _, member := range []string{`"tier":"enterprise"`, `"slug":"mine"`, `"settings":{}`, `"managed_by":"manual"`, `"owner_principal_id":"` + uuid.NewString() + `"`} {
 		f := newProvFixture(t)
 		got := f.post(PatternOrgOnboard, `{"principal_id":"`+f.target.String()+`","organization_name":"Acme",`+member+`}`, nil)
@@ -133,6 +137,7 @@ func TestOnboardRouteRefusesTierSlugSettings(t *testing.T) {
 }
 
 func TestOrgCreateRoutesProfileRows(t *testing.T) {
+	t.Parallel()
 	for _, pattern := range []string{PatternOrgOnboard, PatternOrgCreate} {
 		if !slices.Contains(provisioningPatterns, pattern) {
 			t.Fatalf("%s is not a provisioning route", pattern)

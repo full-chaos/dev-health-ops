@@ -88,48 +88,27 @@ For PagerDuty V3:
 
 Unknown events and malformed authority must fail closed.
 
-## Ask Dev model readiness
+## Ask Dev model refusals
 
-Ask Dev uses a separate multi-turn model contract; a provider that works for
-categorization or explanation can still be unavailable for Ask Dev. Ask Dev
-certifies the connection by source and readiness, not by family label alone.
-The V1 certified surfaces are the platform OpenAI-compatible connection, a
-workspace BYO OpenAI-compatible connection, and the scripted OpenAI-compatible
-service used only by deterministic release acceptance. The scripted service is
-not a customer-selectable provider family and cannot be enabled through
-organization settings. A platform-managed Ask Dev connection may use a local
-OpenAI-compatible endpoint, including LM Studio, Ollama, or vLLM, when that
-endpoint is configured as the platform connection and has a passing readiness
-result for the exact provider/model fingerprint. Other provider families return
-`model_not_supported`; no model or tool work starts, and an admitted submission
-is closed as a safe failed run for audit and idempotent retry.
+Ask Dev does not use the investment provider checks on this page. It runs on the organization's saved own model, or on the platform model only when the platform grants it. When the model cannot be used, Ask Dev refuses with a 403 `feature_not_enabled` and one of these reasons:
 
-For local LM Studio, use either the `local` bundle with `LOCAL_LLM_BASE_URL` and
-`LOCAL_LLM_MODEL`, or the `lmstudio` bundle with `LMSTUDIO_BASE_URL` and
-`LMSTUDIO_MODEL`. For Ollama, use `OLLAMA_BASE_URL` and `OLLAMA_MODEL`; add
-`OLLAMA_API_KEY` for an authenticated cloud-compatible endpoint. The generic
-`LLM_API_KEY` alias remains supported. Environment-configured local and cloud
-endpoints are platform connections and do not require workspace BYO setup.
+| Reason | What it means |
+| --- | --- |
+| `service_model_not_entitled` | Investigations on the service model are not enabled for this organization. |
+| `own_model_gate_closed` | The organization's own model is saved but not enabled for its plan. |
+| `byo_no_investigate_config` | The organization's saved model keys are for other uses only; none is set for investigations. |
+| `own_model_turned_off` | An organization admin turned the organization's own model off. |
+| `ai_features_turned_off` | ACR AI features are turned off for this organization. |
 
-Re-run readiness after changing provider, model, endpoint, credentials, or the
-capability-test version. The stored result contains only a derived fingerprint,
-test version, timestamp, outcome, and safe error code. It never contains the
-synthetic exchange, credentials, provider response, or customer question.
-The organization-administrator readiness action uses a fixed synthetic nonce
-and tool contract; it never retrieves tenant evidence. A changed provider,
-model, base URL, or readiness-test version produces `stale_readiness` until the
-test is rerun.
+Dev Health's model gate also refuses a saved model that cannot serve a call, with a 403 and one of these detail codes (`internal/llmorgsettings/modelgate_unusable_test.go`). It never falls back to the platform model in these cases:
 
-Readiness permits both native OpenAI `tool_calls` and the provider-neutral JSON
-tool-decision envelope. It uses the runtime's 30-second provider-call timeout and
-then requires a strict structured final response after the synthetic tool result.
-The administrator state distinguishes rejected authentication/configuration,
-timeout, temporary endpoint unavailability, and a response that does not satisfy
-the Ask Dev agent-capability contract. Raw provider responses are never returned.
+| Detail code | What it means |
+| --- | --- |
+| `missing_credentials` | The saved provider has no key, or an empty key. |
+| `invalid_base_url` | The saved base URL is refused by the address guard. |
+| `unknown_provider` | The saved provider is not one the service supports. |
+| `unreadable_row` | The stored setting cannot be read. |
 
-Workspace BYO is evaluated first. If it is unusable, Ask Dev falls back to the
-platform connection by default for configured orgs; an explicit organization
-fail_closed choice opts out of that fallback. Global disable and provider/model
-deny rules always win. Usage created by both readiness checks and live calls is
-attributed to the `ask_dev` use case and remains source-tagged so
-platform-managed and BYO accounting stay separate.
+Whether the Ask Dev service passes each of these codes through unchanged was not traced. Fix the saved model in the workspace LLM settings.
+
+The web app shows these refusals as one generic "not entitled" message without the reason, so read the reason from the 403 body, or ask the platform owner. Organization admins control the **ACR AI features** and **Use your own model** switches in the workspace LLM settings. See [Turn on Ask Dev](../ask-dev/index.md).

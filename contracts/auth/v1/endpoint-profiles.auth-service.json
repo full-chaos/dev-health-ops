@@ -1,6 +1,14 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-29T00:00:00Z",
+  "rewritten_anchors": [
+    {
+      "file": "internal/auth/session/signin.go",
+      "line": 73,
+      "now": "func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,",
+      "was": "func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -30,7 +38,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -45,7 +53,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -305,7 +313,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -329,14 +337,17 @@
     },
     {
       "accepted_credential_classes": [
+        "ops_refresh_token",
         "refresh_credential"
       ],
+      "class_disambiguator": {
+        "kind": "body_field",
+        "name": "refresh_token"
+      },
       "classification": "protected",
       "current_state_cache_behavior": "No cache: the credential, its session and the users row are read live; rotation is single use under the session row lock.",
       "disclosure_behavior": "Every refusal of a presented credential is a 401 whose go-api shaped body is {\"detail\":{\"message\":...}} with no reason code and no credential; the reason code goes to the audit row and the log only. A store or key failure is a 5xx.",
-      "gaps": [
-        "ops_refresh_token (a go-api refresh JWT in the same JSON body field refresh_token) is also accepted and exchanged once for a new session by session.Store.ExchangeLegacy, but this row lists refresh_credential only: both classes are body-carried, so no head selector (scheme, prefix, header or JWT header) can tell them apart and the selector gate would refuse a two-class row. The gap ends with the legacy refresh window (CHAOS-10408); the body-carried selector kind that would let the row list both is CHAOS-10583."
-      ],
+      "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/auth/refresh [dev-health-auth-service @api]",
       "issued_credential": [
@@ -357,7 +368,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 578,
+            "line": 587,
             "note": "INSERT INTO `+s.q+`.refresh_credentials (",
             "path": "internal/auth/session/store.go"
           },
@@ -372,7 +383,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 447,
+          "line": 456,
           "note": "func (s *Store) Exchange",
           "path": "internal/auth/session/store.go"
         },
@@ -400,7 +411,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 138,
+          "line": 144,
           "note": "func (s *Store) RevokeByCredential",
           "path": "internal/auth/session/signin.go"
         },
@@ -436,7 +447,7 @@
       "method": "POST",
       "primary_validator": {
         "anchor": {
-          "line": 123,
+          "line": 129,
           "note": "func newValidateAuth",
           "path": "internal/auth/authapi/compat_validate.go"
         },
@@ -509,7 +520,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 69,
+            "line": 73,
             "note": "func (s *Store) insertSession",
             "path": "internal/auth/session/signin.go"
           },
@@ -574,7 +585,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -637,7 +648,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2146,7 +2157,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2228,7 +2239,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },
@@ -2310,7 +2321,7 @@
         {
           "algorithm": null,
           "anchor": {
-            "line": 23,
+            "line": 24,
             "note": "func (s *Store) CreateAudited",
             "path": "internal/auth/session/signin.go"
           },

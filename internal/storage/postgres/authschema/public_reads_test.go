@@ -75,11 +75,13 @@ func TestLegacyRefreshTokenGrantIsRevokeOnlyAndNamesItsRemoval(t *testing.T) {
 }
 
 // The switch-gated write access to public.users is the reviewed column list
-// and nothing wider: token_version (the password bump) but no email or is_active update.
+// and nothing wider: token_version (the password bump) but no email or is_active update,
+// and no is_superuser in either list (CHAOS-10993: the column defaults to false and the
+// platform roles live in auth.platform_role_assignments).
 func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 	insert, update := UsersWriteGrant()
 	wantInsert := []string{"id", "email", "username", "password_hash", "full_name", "auth_provider", "auth_provider_id",
-		"is_active", "is_verified", "is_superuser", "token_version", "created_at", "updated_at", "sso_provider_id"}
+		"is_active", "is_verified", "token_version", "created_at", "updated_at", "sso_provider_id", "saml_nameid_format", "saml_sp_name_qualifier"}
 	wantUpdate := []string{"password_hash", "is_verified", "token_version", "last_login_at", "updated_at"}
 	if !reflect.DeepEqual(insert, wantInsert) || !reflect.DeepEqual(update, wantUpdate) {
 		t.Fatalf("UsersWriteGrant = %v / %v, want %v / %v", insert, update, wantInsert, wantUpdate)
@@ -94,6 +96,11 @@ func TestUsersWriteGrantIsTheReviewedColumns(t *testing.T) {
 		have[column] = true
 		if column == "email" || column == "is_active" || column == "sso_provider_id" {
 			t.Errorf("UPDATE must not include %s", column)
+		}
+	}
+	for _, column := range append(append([]string{}, insert...), update...) {
+		if column == "is_superuser" {
+			t.Error("the runtime role must not write is_superuser")
 		}
 	}
 	if !have["token_version"] {

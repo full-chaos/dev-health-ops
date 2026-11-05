@@ -5,17 +5,25 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"go/ast"
+	"go/build"
+	"go/constant"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -417,41 +425,302 @@ func TestScopeWithoutPrincipalDecisionFailsClosed(t *testing.T) {
 // Principal step and the route guard read the Authorization header or call
 // BearerToken, and the scope files decode no token segment.
 func TestOnlyThePrincipalStepReadsAuthorization(t *testing.T) {
-	allowed := []string{"principalonce.go", "guard.go"}
-	entries, err := os.ReadDir(".")
+	for _, problem := range authorizationGuardProblems(".", []string{"principalonce.go", "guard.go"}) {
+		t.Error(problem)
+	}
+}
+
+// headerKey returns the key expression of a Header.Get, Header.Values or
+// Header[key] read.
+func headerKey(node ast.Node, info *types.Info) (ast.Expr, bool) {
+	isHeader := func(expr ast.Expr) bool {
+		typ := info.Types[expr].Type
+		if typ == nil {
+			return false
+		}
+		switch typ.String() {
+		case "net/http.Header", "net/textproto.MIMEHeader":
+			return true
+		}
+		return false
+	}
+	switch typed := node.(type) {
+	case *ast.CallExpr:
+		if sel, ok := typed.Fun.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Get" || sel.Sel.Name == "Values") && len(typed.Args) == 1 && isHeader(sel.X) {
+			return typed.Args[0], true
+		}
+	case *ast.IndexExpr:
+		if isHeader(typed.X) {
+			return typed.Index, true
+		}
+	}
+	return nil, false
+}
+
+var goRootOnce sync.Once
+
+// sourceImporter returns a source importer. A test binary built with
+// -trimpath has no GOROOT, so go/build cannot find the standard library
+// until the go command supplies it.
+func sourceImporter() types.Importer {
+	goRootOnce.Do(func() {
+		if build.Default.GOROOT != "" {
+			return
+		}
+		out, err := exec.Command("go", "env", "GOROOT").Output()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			return
+		}
+		build.Default.GOROOT = strings.TrimSpace(string(out))
+	})
+	if build.Default.GOROOT == "" {
+		panic("guard type check: GOROOT is empty and `go env GOROOT` failed")
+	}
+	return importer.ForCompiler(token.NewFileSet(), "source", nil)
+}
+
+// authorizationGuardProblems scans the production files of dir and returns
+// every read of the Authorization header outside allowed, and every reason
+// the scan cannot be trusted.
+func authorizationGuardProblems(dir string, allowed []string) []string {
+	return guardProblemsWith(dir, allowed, sourceImporter())
+}
+
+func guardProblemsWith(dir string, allowed []string, fallback types.Importer) []string {
+	var problems []string
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatal(err)
+		return []string{err.Error()}
 	}
 	fset := token.NewFileSet()
+	files := map[string]*ast.File{}
+	var parsed []*ast.File
 	for _, entry := range entries {
 		name := entry.Name()
 		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
-			t.Fatal(err)
+			return []string{err.Error()}
 		}
+		files[name] = file
+		parsed = append(parsed, file)
+	}
+	if len(parsed) == 0 {
+		return []string{"no production Go files parsed in " + dir}
+	}
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}}
+	thirdParty := newLocalImporter(fset, dir, fallback)
+	conf := types.Config{
+		Importer: thirdParty,
+		Error: func(err error) {
+			if typeErr, ok := err.(types.Error); ok && thirdParty.unresolved(typeErr.Msg) {
+				return
+			}
+			problems = append(problems, "type check: "+err.Error())
+		},
+	}
+	_, _ = conf.Check("policy", fset, parsed, info)
+	for name, file := range files {
 		if name == "scope.go" || name == "accessroute.go" {
 			for _, spec := range file.Imports {
 				if path, _ := strconv.Unquote(spec.Path.Value); path == "encoding/base64" || path == "encoding/json" {
-					t.Errorf("%s imports %s", name, path)
+					problems = append(problems, name+" imports "+path)
 				}
 			}
 		}
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch typed := node.(type) {
-			case *ast.BasicLit:
-				if typed.Kind == token.STRING && typed.Value == `"Authorization"` && !slices.Contains(allowed, name) {
-					t.Errorf("%s reads the Authorization header", fset.Position(typed.Pos()))
+			case ast.Expr:
+				if value := info.Types[typed].Value; value != nil && value.Kind() == constant.String &&
+					strings.EqualFold(constant.StringVal(value), "Authorization") && !slices.Contains(allowed, name) {
+					problems = append(problems, fset.Position(typed.Pos()).String()+" reads the Authorization header")
 				}
-			case *ast.CallExpr:
-				if ident, ok := typed.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
-					t.Errorf("%s calls BearerToken", fset.Position(typed.Pos()))
+			}
+			if !slices.Contains(allowed, name) {
+				if key, ok := headerKey(node, info); ok && info.Types[key].Value == nil {
+					problems = append(problems, fset.Position(key.Pos()).String()+" reads a header with a key that is not a constant")
+				}
+			}
+			if call, ok := node.(*ast.CallExpr); ok {
+				if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == "BearerToken" && !slices.Contains(allowed, name) {
+					problems = append(problems, fset.Position(call.Pos()).String()+" calls BearerToken")
 				}
 			}
 			return true
 		})
+	}
+	return problems
+}
+
+// localImporter resolves the imports that belong to the module that holds dir
+// from source, the standard library with the fallback, and every other import
+// as an empty complete package: the guard needs only this module's constants.
+type localImporter struct {
+	fset     *token.FileSet
+	fallback types.Importer
+	root     string
+	module   string
+	cache    map[string]*types.Package
+	outside  map[string]bool
+}
+
+func newLocalImporter(fset *token.FileSet, dir string, fallback types.Importer) *localImporter {
+	l := &localImporter{fset: fset, fallback: fallback, root: dir, cache: map[string]*types.Package{}, outside: map[string]bool{}}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return l
+	}
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if mod, err := os.ReadFile(filepath.Join(cur, "go.mod")); err == nil {
+			if fields := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0]); len(fields) == 2 && fields[0] == "module" {
+				l.module, l.root = fields[1], cur
+			}
+			break
+		}
+		if filepath.Dir(cur) == cur {
+			break
+		}
+	}
+	return l
+}
+
+// unresolved reports whether a type error only names a member of an
+// out-of-module package.
+func (l *localImporter) unresolved(msg string) bool {
+	for name := range l.outside {
+		if strings.HasPrefix(msg, "undefined: "+name+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *localImporter) Import(path string) (*types.Package, error) {
+	if l.module == "" || (path != l.module && !strings.HasPrefix(path, l.module+"/")) {
+		if !strings.Contains(strings.SplitN(path, "/", 2)[0], ".") {
+			return l.fallback.Import(path)
+		}
+		elems := strings.Split(path, "/")
+		name := elems[len(elems)-1]
+		if match, _ := regexp.MatchString(`^v[0-9]+$`, name); match && len(elems) > 1 {
+			name = elems[len(elems)-2]
+		}
+		l.outside[name] = true
+		pkg := types.NewPackage(path, name)
+		pkg.MarkComplete()
+		return pkg, nil
+	}
+	if pkg, ok := l.cache[path]; ok {
+		return pkg, nil
+	}
+	dir := filepath.Join(l.root, strings.TrimPrefix(strings.TrimPrefix(path, l.module), "/"))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []*ast.File
+	for _, entry := range entries {
+		if name := entry.Name(); strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+			file, err := parser.ParseFile(l.fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, file)
+		}
+	}
+	pkg, _ := (&types.Config{Importer: l, Error: func(error) {}}).Check(path, l.fset, files, nil)
+	l.cache[path] = pkg
+	return pkg, nil
+}
+
+// plantModule writes a throwaway module with an imported header-name package
+// and the given files, and returns its root.
+func plantModule(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	all := map[string]string{
+		"go.mod":     "module example.test/p\n\ngo 1.21\n",
+		"hdr/hdr.go": "package hdr\n\nconst Authorization = \"Authorization\"\nconst Author = \"Author\"\n",
+		"clean.go":   "package p\n\nfunc clean() int { return 1 }\n",
+	}
+	for name, body := range files {
+		all[name] = body
+	}
+	for name, body := range all {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// TestAuthorizationGuardResolvesImportedConstants plants reads the guard must
+// refuse (a key built from an imported constant, a local alias of one, an
+// imported prefix, a read inside ReadOnce) and cases it must fail closed on.
+func TestAuthorizationGuardResolvesImportedConstants(t *testing.T) {
+	allowed := []string{"principalonce.go", "guard.go"}
+	const head = "package p\n\nimport (\n\t\"net/http\"\n\n\t\"example.test/p/hdr\"\n)\n\n"
+	refused := map[string]map[string]string{
+		"imported constant direct":         {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Authorization) }\n"},
+		"local alias of imported constant": {"scope.go": head + "const key = hdr.Authorization\n\nfunc f(r *http.Request) string { return r.Header.Get(key) }\n"},
+		"imported prefix plus suffix":      {"scope.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Author + \"ization\") }\n"},
+		"read inside ReadOnce":             {"request_reads.go": head + "type A struct{}\n\nfunc (a *A) ReadOnce(next http.Handler) http.Handler {\n\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t_ = r.Header.Get(hdr.Authorization)\n\t\tnext.ServeHTTP(w, r)\n\t})\n}\n"},
+		"unresolved key in Get":            {"scope.go": head + "func f(r *http.Request, key string) string { return r.Header.Get(key) }\n"},
+		"unresolved key in Values":         {"scope.go": head + "func f(r *http.Request, key string) []string { return r.Header.Values(key) }\n"},
+		"unresolved key in index":          {"scope.go": head + "func f(r *http.Request, key string) []string { return r.Header[key] }\n"},
+		"type error":                       {"scope.go": "package p\n\nfunc f() int { return missing }\n"},
+	}
+	for name, files := range refused {
+		t.Run("refuses "+name, func(t *testing.T) {
+			t.Parallel()
+			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) == 0 {
+				t.Fatal("guard passed; want it to refuse")
+			}
+		})
+	}
+	t.Run("refuses a scan of zero files", func(t *testing.T) {
+		if problems := authorizationGuardProblems(t.TempDir(), allowed); len(problems) == 0 {
+			t.Fatal("guard passed with no files; want it to refuse")
+		}
+	})
+	accepted := map[string]map[string]string{
+		"clean module":           nil,
+		"allowed file reads it":  {"principalonce.go": head + "func f(r *http.Request) string { return r.Header.Get(hdr.Authorization) }\n"},
+		"other header, constant": {"scope.go": head + "var _ = hdr.Author\n\nfunc f(r *http.Request) string { return r.Header.Get(\"X-Org-Id\") }\n"},
+	}
+	for name, files := range accepted {
+		t.Run("accepts "+name, func(t *testing.T) {
+			t.Parallel()
+			if problems := authorizationGuardProblems(plantModule(t, files), allowed); len(problems) != 0 {
+				t.Fatalf("guard refused: %v", problems)
+			}
+		})
+	}
+}
+
+// failingThirdParty resolves the standard library and refuses every other
+// import, as a CI leg without the third-party sources does.
+type failingThirdParty struct{ std types.Importer }
+
+func (f failingThirdParty) Import(path string) (*types.Package, error) {
+	if strings.Contains(strings.SplitN(path, "/", 2)[0], ".") {
+		return nil, errors.New("no source for " + path)
+	}
+	return f.std.Import(path)
+}
+
+// TestGuardChecksTheRealPackageWithoutThirdPartyImports: the guard needs only
+// this module's constants, so it must pass when no third-party import loads.
+func TestGuardChecksTheRealPackageWithoutThirdPartyImports(t *testing.T) {
+	fallback := failingThirdParty{std: sourceImporter()}
+	for _, problem := range guardProblemsWith(".", []string{"principalonce.go", "guard.go"}, fallback) {
+		t.Error(problem)
 	}
 }
 

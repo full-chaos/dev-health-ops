@@ -27,46 +27,26 @@ const (
 	RepoAttributionSourceOwn        RepoAttributionSource = "own"
 	RepoAttributionSourceAncestor   RepoAttributionSource = "ancestor"
 	RepoAttributionSourceChildren   RepoAttributionSource = "children"
-	RepoAttributionSourceTeam       RepoAttributionSource = "team"
 	RepoAttributionSourceUnassigned RepoAttributionSource = "unassigned"
 )
 
 // RepoAttributionCounts partitions every component ONE run materialized by
 // how (or whether) its repository was resolved. Own + Ancestor + Children +
-// Team + Unassigned always sum to the run's Components.
+// Unassigned always sum to the run's Components. There is no team bucket: a
+// unit with no repository evidence is unassigned (CHAOS-12949, chris: "Drop
+// fallback"); a team's repositories are never a unit's repository.
 type RepoAttributionCounts struct {
-	Own, Ancestor, Children, Team, Unassigned int
+	Own, Ancestor, Children, Unassigned int
 }
 
-// RepoAttributionCountsFromStats derives the closed 5-way partition from a
+// RepoAttributionCountsFromStats derives the closed 4-way partition from a
 // completed run's Stats.
-//
-// # WHY "TEAM" IS ALWAYS A SUBSET OF THE CASCADE'S "UNASSIGNED" BUCKET
-//
-// allocateTeamOwnership (teamownership.go) only reaches its donor lookup --
-// the branch stats.RepoOwnershipFallback counts -- once every earlier check
-// in that function has already failed: result.Investment.RepoID is nil (no
-// own-edges signal and no hierarchy-cascade inheritance set it), no
-// repo-effort record carries a real allocation source (which rules out the
-// PR/commit-churn own signal churnRepoForComponent feeds into
-// ownRepoByComponent -- see hierarchycascade.go's doc comment on why that is
-// an "own" signal), and no component node names a repository directly.
-// RepoCascadeOwn, RepoCascadeAncestor and RepoCascadeChildren
-// (materialize.go's pre-pass, :281-328) between them cover both ways a
-// component's own-edges/churn signal or the hierarchy cascade sets
-// record.Investment.RepoID -- so any component the team fallback allocated
-// was never counted in any of those three buckets. RepoCascadeUnassigned -
-// RepoOwnershipFallback can therefore never go negative, and
-// Own+Ancestor+Children+Team+Unassigned always equals Components, the same
-// invariant Stats' own doc comments already assert for each half of this
-// split individually.
 func RepoAttributionCountsFromStats(stats Stats) RepoAttributionCounts {
 	return RepoAttributionCounts{
 		Own:        stats.RepoCascadeOwn,
 		Ancestor:   stats.RepoCascadeAncestor,
 		Children:   stats.RepoCascadeChildren,
-		Team:       stats.RepoOwnershipFallback,
-		Unassigned: stats.RepoCascadeUnassigned - stats.RepoOwnershipFallback,
+		Unassigned: stats.RepoCascadeUnassigned,
 	}
 }
 
@@ -98,7 +78,6 @@ func (observer CollectorRepoAttributionObserver) ObserveRepoAttribution(counts R
 		{jobruntime.InvestmentRepoAttributionSourceOwn, counts.Own},
 		{jobruntime.InvestmentRepoAttributionSourceAncestor, counts.Ancestor},
 		{jobruntime.InvestmentRepoAttributionSourceChildren, counts.Children},
-		{jobruntime.InvestmentRepoAttributionSourceTeam, counts.Team},
 		{jobruntime.InvestmentRepoAttributionSourceUnassigned, counts.Unassigned},
 	}
 	for _, pair := range pairs {

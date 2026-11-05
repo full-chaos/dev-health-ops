@@ -358,14 +358,23 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 		return Issued{}, ErrInvalidAMR
 	}
 	var out Issued
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
-		return err
+	subject := principalID.String()
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			var err error
+			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
+			return err
+		},
+		Audit:     createdEvent(ctx, subject),
+		OffStream: audit.OffStreamSessionLifecycle,
+		Refusals:  []error{ErrPrincipalUnavailable, ErrOrganizationUnavailable},
 	})
 	if err != nil {
 		if errors.Is(err, ErrPrincipalUnavailable) {
-			return Issued{}, err
+			return Issued{}, ErrPrincipalUnavailable
+		}
+		if errors.Is(err, ErrOrganizationUnavailable) {
+			return Issued{}, ErrOrganizationUnavailable
 		}
 		return Issued{}, fmt.Errorf("%w: creating a session: %w", ErrStore, err)
 	}
@@ -421,8 +430,8 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), p.disabled_at IS NOT NULL
-		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), pu.id IS NULL OR NOT pu.is_active
+		FROM `+s.q+`.sessions s LEFT JOIN public.users pu ON pu.id = s.principal_id
 		WHERE s.id = $1
 		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
 	l.expired = err == nil && !now.Before(l.ExpiresAt)
@@ -948,5 +957,14 @@ func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
 		s.logger.DebugContext(ctx, "refresh exchange", "reason_code", string(result.Reason), "session_id", result.Session.ID.String())
 	default:
 		s.logger.InfoContext(ctx, "refresh exchange refused", "reason_code", string(result.Reason))
+	}
+}
+
+// createdEvent is the audit row of a session Create starts (the callers that
+// bring their own sign-in event use CreateAudited).
+func createdEvent(ctx context.Context, principal string) audit.AuditEvent {
+	return audit.AuditEvent{
+		EventType: "auth.session.created", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal, RequestID: requestid.Audit(ctx),
+		Attributes: map[string]any{"reason_code": "accepted", "target_kind": "session"},
 	}
 }

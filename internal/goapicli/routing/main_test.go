@@ -539,7 +539,7 @@ func TestEnableTakesNoFlagThatAdmitsAnUnprovenOperation(t *testing.T) {
 			argv = append(argv, "x.json")
 		}
 		_, _, err := captureVerb(t, argv...)
-		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -"+gone) {
+		if err == nil || !strings.Contains(err.Error(), "unknown flag") || strings.Contains(err.Error(), gone) {
 			t.Fatalf("enable -%s = %v, want the unknown-flag refusal", gone, err)
 		}
 	}

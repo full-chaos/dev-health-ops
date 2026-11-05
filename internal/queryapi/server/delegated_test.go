@@ -81,3 +81,40 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 		t.Fatalf("delegated caller: %d %s, ran %d; want 403 and no resolver", rec.Code, rec.Body.String(), ran)
 	}
 }
+
+// A delegated superuser (admin.orgs) whose token names an org it holds no
+// membership row in: the REST read is served (the live membership read skips
+// admin.orgs holders), and the write door refuses the bearer (/query needs the
+// membership in the token's own org even for a superuser, roleInOrg).
+func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) {
+	quietStdLog(t)
+	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5, impersonatingUserID: ecActor.String()})
+	store := newAccessStore()
+	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
+	store.members = nil
+	f := newRESTFixture(t, store, nil, false)
+	if got := f.do(http.MethodGet, delegated); got.Status != http.StatusOK || got.Body != `{"org":"`+ecOrg.String()+`"}` {
+		t.Fatalf("REST read: got %+v, want 200 in the claimed org", got)
+	}
+
+	wstore := &fakeEdgeStore{
+		states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
+		found:  map[uuid.UUID]bool{ecUser: true},
+	}
+	ran := 0
+	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
+	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran++
+		w.WriteHeader(http.StatusOK)
+	}))
+	allow := func(context.Context, string) bool { return true }
+	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, ecEdgeAuth(t, wstore), wstore, digest.KindMutation, allow)
+	body, _ := json.Marshal(map[string]string{"query": proofWriteMutation})
+	req := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+delegated)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+	if rec.Code != http.StatusUnauthorized || ran != 0 {
+		t.Fatalf("write door: %d %s, ran %d; want 401 and no resolver", rec.Code, rec.Body.String(), ran)
+	}
+}

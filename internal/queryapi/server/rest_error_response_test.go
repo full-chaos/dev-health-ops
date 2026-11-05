@@ -233,7 +233,7 @@ func TestAuthenticateRESTRequestEdgeTokenAccepted(t *testing.T) {
 		t.Fatalf("principal.NewVerifier: %v", err)
 	}
 
-	token := signTestEdgeToken(t, validTestEdgeClaims("org-edge-1"))
+	token := signTestEdgeToken(t, validTestEdgeClaims("22222222-2222-2222-2222-222222222222"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -242,8 +242,8 @@ func TestAuthenticateRESTRequestEdgeTokenAccepted(t *testing.T) {
 	if !ok {
 		t.Fatalf("authenticateRESTRequest: ok = false, want true; body=%s", rec.Body.String())
 	}
-	if claims.OrgID != "org-edge-1" {
-		t.Fatalf("OrgID = %q, want %q", claims.OrgID, "org-edge-1")
+	if claims.OrgID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("OrgID = %q, want %q", claims.OrgID, "22222222-2222-2222-2222-222222222222")
 	}
 }
 
@@ -260,7 +260,7 @@ func TestAuthenticateRESTRequestEdgeTokenRejected(t *testing.T) {
 		t.Fatalf("principal.NewVerifier: %v", err)
 	}
 
-	claims := validTestEdgeClaims("org-edge-1")
+	claims := validTestEdgeClaims("22222222-2222-2222-2222-222222222222")
 	claims["exp"] = time.Now().Add(-time.Hour).Unix()
 	token := signTestEdgeToken(t, claims)
 
@@ -292,7 +292,7 @@ func TestAuthenticateRESTRequestNilEdgeVerifierUnchanged(t *testing.T) {
 		t.Fatalf("principal.NewVerifier: %v", err)
 	}
 
-	token := signTestEdgeToken(t, validTestEdgeClaims("org-edge-1"))
+	token := signTestEdgeToken(t, validTestEdgeClaims("22222222-2222-2222-2222-222222222222"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()

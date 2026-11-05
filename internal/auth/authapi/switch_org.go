@@ -251,6 +251,9 @@ func (h switchOrgHandler) compatSwitchOrg(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, session.ErrPrincipalUnavailable):
 		h.refuse(w, r, switchTokenRefusal(reasonDeactivated))
 		return
+	case errors.Is(err, session.ErrOrganizationUnavailable):
+		h.refuse(w, r, refuseNotAllowed)
+		return
 	case err != nil:
 		h.fail(w, r, opSwitchOrg, err)
 		return

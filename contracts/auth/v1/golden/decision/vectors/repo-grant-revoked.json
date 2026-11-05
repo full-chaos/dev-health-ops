@@ -3,7 +3,8 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 12,
+    "obligations": null,
+    "policy_revision": 13,
     "reason": "grant_revoked",
     "wire_reason_code": "grant_revoked"
   },

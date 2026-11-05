@@ -66,7 +66,7 @@ type PGUsers struct {
 	// AuthSchema is the validated auth schema, read while PlatformRolesOwned.
 	AuthSchema authschema.ValidatedIdentifier
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: is_superuser is read
-	// from the auth platform role assignments (rule.HoldsSQL).
+	// from the auth platform role assignments held by an active public.users row (rule.PublicHoldsSQL).
 	PlatformRolesOwned bool
 	// UsersOwned is AUTH_USERS_OWNED: the runtime role then holds UPDATE on
 	// public.memberships (authschema.MembershipWriteGrants), which a row
@@ -80,7 +80,7 @@ type PGUsers struct {
 func (p PGUsers) stateSQL() string {
 	superuser := `COALESCE(is_superuser, false)`
 	if p.PlatformRolesOwned {
-		superuser = rule.HoldsSQL(authschema.Quote(p.AuthSchema), "public.users.id", "'"+rule.PlatformAdmin+"'")
+		superuser = rule.PublicHoldsSQL(authschema.Quote(p.AuthSchema), "public.users.id", "'"+rule.PlatformAdmin+"'")
 	}
 	return `
 		SELECT email, username, full_name, COALESCE(is_active, false), ` + superuser + `,

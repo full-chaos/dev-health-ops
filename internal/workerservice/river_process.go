@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -65,21 +66,24 @@ func (process riverWorkerProcess) Start(ctx context.Context) error {
 	if startClient == nil {
 		startClient = process.client.Start
 	}
-	return startupRetryBudget(
-		ctx, process.budget, process.now, process.sleep, process.jitter,
-		startClient,
-		isRiverProducerStartTimeout,
-		func(attempt int, elapsed, wait time.Duration, err error) {
-			process.logRetry(ctx, attempt, elapsed, wait, err)
+	var last error
+	return postgres.DialRetry{
+		Budget: process.budget, Now: process.now, Sleep: process.sleep, Jitter: process.jitter,
+		Retryable: isRiverProducerStartTimeout,
+		OnRetry: func(attempt int, elapsed, wait time.Duration) {
+			process.logRetry(ctx, attempt, elapsed, wait, last)
 		},
-		func(attempt int, elapsed time.Duration, err error, budgetExhausted bool) {
+		OnGiveUp: func(attempt int, elapsed time.Duration, budgetExhausted bool) {
 			reason := "river_producer_start_failed"
 			if budgetExhausted {
 				reason = "retry_budget_exhausted"
 			}
-			process.logGiveUp(ctx, reason, attempt, elapsed, err)
+			process.logGiveUp(ctx, reason, attempt, elapsed, last)
 		},
-	)
+	}.Do(ctx, func(ctx context.Context) error {
+		last = startClient(ctx)
+		return last
+	})
 }
 
 // isRiverProducerStartTimeout reports whether err is River's own
@@ -194,7 +198,7 @@ func newRiverWorkerProcess(
 		// preclaim readiness uses rather than a second knob that could drift
 		// out of sync with it.
 		budget: cfg.PreclaimReadinessTimeout,
-		jitter: startupRetryJitter,
+		jitter: postgres.DialRetryJitter,
 	}, nil
 }
 

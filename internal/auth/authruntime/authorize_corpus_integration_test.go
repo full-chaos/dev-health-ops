@@ -4,6 +4,7 @@ package authruntime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"testing"
@@ -33,17 +34,18 @@ type azSeeded struct {
 }
 
 // seedCorpusRow writes one row's state as the writers leave it: go-api's
-// users, organizations and memberships rows, the auth projections, an auth
-// membership row for a status go-api has no row for, and the grant rows with
-// their times moved onto the database clock. A principal the row says is
-// suspended is deactivated after its session starts.
+// users, organizations and memberships rows (the authority the decision reads,
+// D6651; a membership of an organization the state does not know is written
+// without its foreign key), the auth projections, and the grant rows with their
+// times moved onto the database clock. A principal the row says is suspended is
+// deactivated after its session starts.
 func (a *azRouterEnv) seedCorpusRow(t *testing.T, ctx context.Context, v azVector) azSeeded {
 	t.Helper()
 	s := v.State
 	out := azSeeded{orgs: map[string]string{}}
 	for _, label := range azOrgLabels(s) {
-		status, projected := s.Organizations[label]
-		org := a.azOrg(t, ctx, projected)
+		status, known := s.Organizations[label]
+		org := a.azOrg(t, ctx, known, status != "suspended")
 		if status == "suspended" {
 			a.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org)
 		}
@@ -52,13 +54,8 @@ func (a *azRouterEnv) seedCorpusRow(t *testing.T, ctx context.Context, v azVecto
 	out.user = a.azUser(t, ctx, s.PlatformRole == "platform_admin")
 	for _, label := range azSortedKeys(s.Memberships) {
 		m := s.Memberships[label]
-		if m.Status == "active" {
-			a.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, $3, now(), now())`,
-				out.user, out.orgs[label], m.Role)
-			continue
-		}
-		a.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role) VALUES ($1, $2, $3, $4)`,
-			out.orgs[label], out.user, m.Status, m.Role)
+		a.armed(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at, created_at) VALUES (gen_random_uuid(), $1, $2, $3, now(), now())`,
+			out.user, out.orgs[label], m.Role)
 	}
 	clock, err := time.Parse(time.RFC3339, *s.Clock)
 	if err != nil {
@@ -96,6 +93,9 @@ func azCheck(t *testing.T, v azVector, d contracts.AuthorizationDecision, user u
 	if d.Allowed != v.Expect.Allowed || d.ReasonCode != v.Expect.wireReason() || int(d.PolicyRevision) != v.Expect.PolicyRevision {
 		t.Errorf("%s: allowed %v reason %q revision %d, want %v %q %d", v.ID, d.Allowed, d.ReasonCode, d.PolicyRevision,
 			v.Expect.Allowed, v.Expect.wireReason(), v.Expect.PolicyRevision)
+	}
+	if got, want := azObligationsWire(t, d.Obligations), azExpectedObligations(t, v, org); got != want {
+		t.Errorf("%s: obligations %s, want %s", v.ID, got, want)
 	}
 	if d.PrincipalID != session.WirePrincipalID(user) {
 		t.Errorf("%s: principal_id %q, want %q", v.ID, d.PrincipalID, session.WirePrincipalID(user))
@@ -189,4 +189,45 @@ func TestAuthorizeCorpusReplaysThroughTheProductionRouter(t *testing.T) {
 	})
 	t.Logf("%s replayed=%d decided=%d malformed=%d batch=%d excluded=%d", authorizeCorpusMarker, len(rows), len(batch), malformed,
 		len(batch), len(azCorpusExclusions))
+}
+
+// azObligationsWire is the obligations of a parsed decision as the canonical JSON the wire carried.
+func azObligationsWire(t *testing.T, o *contracts.AuthorizationObligations) string {
+	t.Helper()
+	raw, err := json.Marshal(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return azCanonical(t, raw)
+}
+
+// azExpectedObligations is the row's expect.obligations with its organization label replaced by the
+// organization id the replay seeded.
+func azExpectedObligations(t *testing.T, v azVector, org string) string {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(v.Expect.Obligations, &m); err != nil {
+		t.Fatalf("%s: expect.obligations: %v", v.ID, err)
+	}
+	if _, ok := m["tenant_scope"]; ok {
+		m["tenant_scope"] = org
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return azCanonical(t, raw)
+}
+
+func azCanonical(t *testing.T, raw []byte) string {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }

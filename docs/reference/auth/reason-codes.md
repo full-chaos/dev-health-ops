@@ -33,14 +33,13 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `allowed_by_role` | yes | An organization or platform action: the principal's role holds the action. |
 | `allowed_by_membership_default` | yes | A repository action: the principal is an active member with no grant row, and the membership role holds the action. |
 | `allowed_by_repository_grant` | yes | A repository action: a live grant of the organization, for this repository or `*`, holds the action. |
-| `invalid_request` | no | The request does not normalize, or the evaluator has no usable snapshot or catalog. |
+| `invalid_request` | no | The request does not normalize, a repository request names `*`, or the evaluator has no usable snapshot or catalog. |
 | `unknown_action` | no | The action is not in the [policy catalog](policy-catalog.md), or has an unknown scope. |
 | `resource_mismatch` | no | The request's resource type is not the resource kind of the action. |
 | `principal_inactive` | no | The principal is not active. |
 | `organization_inactive` | no | The organization is not active. |
 | `no_membership` | no | The principal has no membership in the organization. |
 | `org_mismatch` | no | The membership or service account row belongs to another organization. |
-| `membership_inactive` | no | The membership is not active. |
 | `service_account_inactive` | no | A service account row is not active. |
 | `platform_role_absent` | no | A platform action: the principal holds no platform role. |
 | `role_unknown` | no | The role is not in the catalog. |
@@ -50,6 +49,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `repository_not_granted` | no | Grant rows exist, and none covers the repository with a role that holds the action. |
 | `grant_expired` | no | A matching grant is past its expiry. |
 | `grant_revoked` | no | A matching grant is revoked. |
+| `repository_allowlist_too_large` | no | An organization action that reads repository-bound data: the principal can read more than 256 repositories by live grants, more than an allowlist holds. The list is never truncated. |
 | `workload_audience_denied` | no | A workload principal's token audience is not one its registration lists. |
 | `workload_action_denied` | no | A workload principal's registration does not list the action. |
 | `impersonation_denied` | no | A delegated session: the chain has more than one actor, the request is a platform action, the action is not in the actor's permitted actions, the action is not allowed under impersonation (unless the actor is a platform owner), or a repository request is organization-wide (`*`). |

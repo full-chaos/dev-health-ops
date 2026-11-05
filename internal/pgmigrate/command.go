@@ -113,11 +113,8 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     must be 1: the head has the River cutover (0066) applied, as production does\n"+
 			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river), as production's\n")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -171,7 +168,13 @@ func run(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env) int 
 		var foreign ForeignDatabaseError
 		var mismatch SchemaMismatchError
 		var authMismatch AuthSchemaMismatchError
+		var unapplied ChainRevisionUnappliedError
+		var shaMismatch ChainRevisionSHAMismatchError
 		switch {
+		case errors.As(err, &unapplied):
+			return writeError(env.Stderr, ReasonChainRevisionUnapplied, err.Error())
+		case errors.As(err, &shaMismatch):
+			return writeError(env.Stderr, ReasonChainRevisionSHAMismatch, err.Error())
 		case errors.As(err, &authMismatch):
 			return writeError(env.Stderr, ReasonAuthSchemaMismatch, err.Error())
 		case errors.As(err, &mismatch):
@@ -233,11 +236,8 @@ func revisions(ctx context.Context, verb string, resolve ResolveDSN, env cli.Env
 				"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n")
 		}
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

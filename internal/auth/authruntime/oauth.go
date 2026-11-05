@@ -21,10 +21,9 @@ import (
 // NetworkPolicy (CHAOS-12251, the corrected section 4).
 func oauthRoutes(
 	cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier,
-	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits, signer authapi.AccessSigner,
+	sessions *session.Store, issuer *authapi.Issuer, limits *authapi.Limits, jwks *authapi.JWKSDocument,
 ) ([]httpapi.Route, error) {
-	keys, ok := signer.(authapi.KeySetSource)
-	if cfg.TokenIssuerURL == "" || !ok || limits == nil {
+	if cfg.TokenIssuerURL == "" || jwks == nil || limits == nil {
 		return nil, nil
 	}
 	registry, err := oauthgrant.LoadRegistry()
@@ -39,7 +38,7 @@ func oauthRoutes(
 		return nil, err
 	}
 	return authapi.OAuthRoutes(authapi.OAuthDeps{
-		Store: store, Registry: registry, Limits: limits, Keys: keys,
+		Store: store, Registry: registry, Limits: limits, JWKS: jwks,
 		Session:   authapi.Deps{Sessions: sessions, Users: pgUsers(cfg, pool, schema), Issuer: issuer, Logger: logger},
 		IssuerURL: cfg.TokenIssuerURL, WebOrigin: cfg.OAuthWebOrigin,
 		ResourceACRAPI: cfg.OAuthResourceACRAPI, ResourceACRMCP: cfg.OAuthResourceACRMCP,

@@ -85,7 +85,9 @@ type OAuthDeps struct {
 	Registry oauthgrant.Registry
 	Session  Deps
 	Limits   *Limits
-	Keys     KeySetSource
+	// JWKS is the key set document the OAuth JWKS route serves (the one the
+	// well-known JWKS route serves).
+	JWKS *JWKSDocument
 	// IssuerURL is AUTH_TOKEN_ISSUER_URL. Empty mounts nothing.
 	IssuerURL string
 	// WebOrigin, ResourceACRAPI and ResourceACRMCP are their settings. An empty one
@@ -122,7 +124,7 @@ func oauthRoutesRows(deps OAuthDeps, rows []byte) ([]httpapi.Route, error) {
 		logger.Info("auth oauth routes not mounted: no endpoint-profile row", "route", missing)
 		return nil, nil
 	}
-	if deps.Store == nil || deps.Limits == nil || deps.Keys == nil {
+	if deps.Store == nil || deps.Limits == nil || deps.JWKS == nil {
 		return nil, errors.New("authapi: the OAuth routes need a store, limits and a key set")
 	}
 	if deps.Session.Sessions == nil || deps.Session.Users == nil || deps.Session.Issuer == nil {
@@ -147,7 +149,7 @@ func oauthRoutesRows(deps OAuthDeps, rows []byte) ([]httpapi.Route, error) {
 		client:    deps.Limits.limiter(oauthClientLimit), principal: deps.Limits.limiter(oauthPrincipalLimit),
 		logger: logger, requests: requests,
 	}
-	known := WellKnownDeps{Keys: deps.Keys, IssuerURL: deps.IssuerURL, Logger: logger}
+	known := WellKnownDeps{JWKS: deps.JWKS, IssuerURL: deps.IssuerURL, Logger: logger}
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: PatternOAuthAuthorize, Handler: http.HandlerFunc(h.authorize), EmptyBody: true},
 		{Method: http.MethodPost, Pattern: PatternOAuthAuthorize, Handler: http.HandlerFunc(h.decide), MaxBodyBytes: maxOAuthBody},

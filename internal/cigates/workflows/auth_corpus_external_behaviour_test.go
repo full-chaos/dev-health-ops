@@ -38,12 +38,15 @@ case "$*" in
       *--force-recreate*" go-api") printf '%s %s\n' "${AUTH_PROXY_CREDENTIALS:-}" "${AUTH_USERS_OWNED:-}" >> "` + record + `.goapi"; printf '%s\n' "${AUTH_PROXY_SOCIAL:-}" >> "` + record + `.goapisocial" ;;
     esac
     printf '%s %s %s\n' "${AUTH_SESSION_SUCCESSOR_KEY:-}" "${AUTH_LOGIN_LOCKOUT_KEY:-}" "${AUTH_JWT_SECRET_KEY:+jwt}" >> "` + record + `.keys"
+    for arg in "$@"; do last="$arg"; done
+    printf '%s bootstrap=%s subject=%s credential=%s token=%s\n' "$last" "${AUTH_WORKLOAD_BOOTSTRAP:-}" "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}" "${AUTH_SESSION_ISSUE_CREDENTIAL:-}" "${AUTH_SESSION_ISSUE_TOKEN:+set}" >> "` + record + `.workload"
     if [ -n "$FAKE_BLOCK_UP" ]; then exec sleep "$FAKE_BLOCK_UP"; fi
     if [ -n "$FAKE_FAIL_UP" ]; then exit 1; fi ;;
   *" logs "*" auth-service"*)
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" ps -q go-api"*) echo cid-go-api ;;
+  *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
     # go-api refuses AUTH_USERS_OWNED=true without AUTH_PROXY_CREDENTIALS (apiservice/usersowned.go)
     if [ -z "$FAKE_HEALTH" ] && [ -e "` + record + `.goapi" ] && [ "$(tail -n 1 "` + record + `.goapi")" = " true" ]; then echo unhealthy; else echo "${FAKE_HEALTH:-healthy}"; fi ;;
@@ -395,9 +398,11 @@ func TestAuthCorpusAcpLegForwardsOnlyWhatAuthServiceServes(t *testing.T) {
 	}
 }
 
-// Leg acp stores go-api's session issue credential and applies the sessions-owned grants before go-api first
-// restarts with the sessions flag, and no call line carries the token.
-func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(t *testing.T) {
+// Leg acp signs go-api in with its workload token, never a svc_authsess_ credential: the bootstrap credential is written
+// and the api principal read before auth-service starts, auth-service starts with the bootstrap exchange and that
+// subject, the sessions-owned grants run before go-api first restarts with the sessions flag, and that restart selects
+// the workload credential with no AUTH_SESSION_ISSUE_TOKEN in its environment.
+func TestAuthCorpusAcpLegSignsInWithTheWorkloadTokenAndGrantsBeforeTheSessionsFlag(t *testing.T) {
 	fake, out, err := runAcpLeg(t, "FAKE_SERVED=/api/v1/auth/refresh,/api/v1/auth/logout,/api/v1/auth/validate,/api/v1/auth/switch-org,/api/v1/auth/login,/api/v1/auth/social-login",
 		"FAKE_METRICS="+metric("sessions")+"\n"+metric("local_login"))
 	if err != nil {
@@ -405,20 +410,55 @@ func TestAuthCorpusAcpLegStoresTheIssueCredentialAndGrantsBeforeTheSessionsFlag(
 	}
 	calls := fake.calls(t)
 	if strings.Contains(calls, "svc_authsess_") || strings.Contains(out, "svc_authsess_") {
-		t.Fatalf("the session issue token reached a docker argument or the output:\n%s\n%s", calls, out)
+		t.Fatalf("a session issue token reached a docker argument or the output:\n%s\n%s", calls, out)
 	}
 	lines := strings.Split(calls, "\n")
-	index := func(part string) int {
+	index := func(match func(string) bool) int {
 		for i, line := range lines {
-			if strings.Contains(line, part) {
+			if match(line) {
 				return i
 			}
 		}
 		return -1
 	}
-	store, grants, flag := index("exec -T postgres psql"), index("run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate"), index("--force-recreate")
-	if store < 0 || grants < 0 || flag < 0 || !(store < flag && grants < flag) {
-		t.Fatalf("want the credential store (%d) and the grants (%d) before the first go-api recreate (%d):\n%s", store, grants, flag, calls)
+	has := func(part string) func(string) bool {
+		return func(line string) bool { return strings.Contains(line, part) }
+	}
+	bootstrap := index(has("run --build --rm auth-workload-bootstrap"))
+	subject := index(has("exec -T postgres psql"))
+	authUp := index(func(line string) bool {
+		return strings.Contains(line, " up ") && strings.HasSuffix(line, " auth-service")
+	})
+	grants := index(has("run --rm --no-deps -e AUTH_PROXY_SESSIONS=true go-river-migrate"))
+	flag := index(has("--force-recreate"))
+	if bootstrap < 0 || subject < 0 || authUp < 0 || !(bootstrap < subject && subject < authUp) {
+		t.Fatalf("want the bootstrap run (%d), then the subject read (%d), then auth-service up (%d):\n%s", bootstrap, subject, authUp, calls)
+	}
+	if grants < 0 || flag < 0 || !(grants < flag) {
+		t.Fatalf("want the grants (%d) before the first go-api recreate (%d):\n%s", grants, flag, calls)
+	}
+	raw, err := os.ReadFile(fake.record + ".workload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const subjectEnv = "subject=prn_AAAAAAAAAAAAAAAAAAAAAA"
+	var authService, goAPISessions bool
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.Contains(line, "token=set") {
+			t.Errorf("a compose up carried AUTH_SESSION_ISSUE_TOKEN: %q", line)
+		}
+		switch {
+		case strings.HasPrefix(line, "auth-service "):
+			authService = authService || (strings.Contains(line, "bootstrap=true") && strings.Contains(line, subjectEnv))
+		case strings.HasPrefix(line, "go-api "):
+			goAPISessions = goAPISessions || strings.Contains(line, "credential=workload")
+		}
+	}
+	if !authService {
+		t.Errorf("auth-service never started with AUTH_WORKLOAD_BOOTSTRAP=true and the api subject:\n%s", raw)
+	}
+	if !goAPISessions {
+		t.Errorf("go-api never started with AUTH_SESSION_ISSUE_CREDENTIAL=workload:\n%s", raw)
 	}
 }
 

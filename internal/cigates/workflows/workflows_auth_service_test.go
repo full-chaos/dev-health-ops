@@ -216,6 +216,9 @@ func authViolations(t *testing.T, root string) []string {
 		}
 	}
 
+	if fmt.Sprint(asMap(asMap(jobs["auth-race"])["env"])["CHECK_GO_JOB_CAP_MIN"]) != "30" {
+		out = append(out, "auth-race must carry CHECK_GO_JOB_CAP_MIN 30: its go test -timeout is cut from that cap")
+	}
 	if fmt.Sprint(asMap(asMap(jobs["auth-race-integration"])["env"])["CHECK_GO_JOB_CAP_MIN"]) != "30" {
 		out = append(out, "auth-race-integration must keep CHECK_GO_JOB_CAP_MIN 30: its package timeouts are cut from that cap")
 	}

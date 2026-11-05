@@ -810,7 +810,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -903,8 +903,8 @@ the auth Jobs, the grants) is on only at stage owned, so go-api rolls first and 
 {{- end -}}
 
 {{/*
-"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api and the
-auth Jobs render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
+"true" when authService.platformRolesOwned is on, else "". The one read of the switch: auth-service, go-api, query-api, the
+auth Jobs and the River step (river-migrate hook, migrate Job) render AUTH_PLATFORM_ROLES_OWNED from it. true is refused unless users are owned (authOn usersOwned): platform authority
 moves from public.users.is_superuser to auth.platform_role_assignments only after users do.
 */}}
 {{- define "dev-health.platformRolesOwned" -}}
@@ -913,6 +913,18 @@ moves from public.users.is_superuser to auth.platform_role_assignments only afte
 {{- if $v -}}
 {{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.platformRolesOwned needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md)" }}{{- end -}}
 true
+{{- end -}}
+{{- end -}}
+
+{{/*
+The go-api enforcement list as one comma list, "" when empty (authService.enforce.goApi). A non-empty list needs
+AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. Rendered as GO_API_AUTHZ_ENFORCE.
+*/}}
+{{- define "dev-health.authzEnforceGoApi" -}}
+{{- $list := default (list) (default dict .Values.authService.enforce).goApi -}}
+{{- if $list -}}
+{{- if ne (include "dev-health.authProxyOn" .) "true" }}{{- fail "authService.enforce.goApi needs go-api to reach auth-service: set authService.phase to 2 or higher" }}{{- end -}}
+{{- join "," $list -}}
 {{- end -}}
 {{- end -}}
 
@@ -931,13 +943,16 @@ true
 {{- end -}}
 
 {{/*
-"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused (CHAOS-12678).
+"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused unless users are owned
+(authOn usersOwned): go-api refuses its own sign-in join and account create while AUTH_USERS_OWNED is on (internal/api/sso/provision.go),
+and go-api has that switch from stage goApi, before auth-service owns users, so auth-service is then the only writer.
 */}}
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- fail "authService.ssoJit=true is refused at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race; phase 5 (orgs owned) is cancelled (D6651)" -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.ssoJit=true needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (below it go-api's own sign-in join still writes, and two writers would race)" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 

@@ -178,8 +178,9 @@ func unquoted(in []string) []string {
 }
 
 // Every database DSN name known to the code is in the chart list, apart from the names the chart itself renders
-// into a worker group from its own pooler Secret.
-var envNameShape = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+// into a worker group from its own pooler Secret. The census takes every valid environment name (letters, digits and
+// underscores, not starting with a digit), so no name dsnclass.Secret classifies (_DATABASE_URI, db_DATABASE_URI) is dropped.
+var envNameShape = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // testOnlyDSNNames are DSN-shaped names the Go sources look up that no deployed worker process reads: test harness inputs.
 var testOnlyDSNNames = map[string]string{
@@ -430,6 +431,21 @@ func TestWorkerSecretKeysGuardsPlantedDefects(t *testing.T) {
 			func(g *guard) {
 				chartDSNListMatchesDSNClass(g, map[string][]string{"ANALYTICS_DATABASE_URI": {"internal/analytics/store.go"}})
 			}, "ANALYTICS_DATABASE_URI is a database DSN secret"},
+		{"a-source-reads-a-dsn-name-starting-with-an-underscore", reader, nil,
+			func(g *guard) {
+				chartDSNListMatchesDSNClass(g, map[string][]string{"_DATABASE_URI": {"internal/x/x.go"}})
+			},
+			"_DATABASE_URI is a database DSN secret"},
+		{"a-source-reads-a-lower-case-dsn-name", reader, nil,
+			func(g *guard) {
+				chartDSNListMatchesDSNClass(g, map[string][]string{"db_DATABASE_URI": {"internal/x/x.go"}})
+			},
+			"db_DATABASE_URI is a database DSN secret"},
+		{"a-source-reads-a-mixed-case-dsn-name", reader, nil,
+			func(g *guard) {
+				chartDSNListMatchesDSNClass(g, map[string][]string{"Db_DATABASE_URI": {"internal/x/x.go"}})
+			},
+			"Db_DATABASE_URI is a database DSN secret"},
 		{"the-blanks-are-gone", reader,
 			mut(chartFile(workers), "            {{- range $blank := include \"dev-health.goWorkerDSNNames\" $ | fromJsonArray }}", "            {{- range $blank := list }}"),
 			workerDSNBlanksRenderLast, "no optional secret reference or no blank"},

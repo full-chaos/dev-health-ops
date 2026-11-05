@@ -33,7 +33,7 @@ action a `risk_class` and a `cache_class` (a high-risk action is never cached), 
 `authorization_decision.v1` `reason_code` is a closed enum, `decision_reason_code` in
 `vocabulary/reason-codes.json` (CHAOS-10641); `error.v1` stays shape-only. The profile gate (`ValidateEndpointAuthProfile`) also refuses a cached profile that names no catalog action and a profile that caches a high-risk catalog action; that join of two files runs in Go only, the ajv runner cannot see it.
 
-`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys; the decision point states an organization-wide allow as `["*"]` and never truncates a list.
+`vocabulary/redaction-classes.v1.json` is the closed registry of the redaction classes of `authorization_decision.v1` `obligations.redaction` (CHAOS-12656): the three class ids, equal to the schema enum, and the (role, action) rules that say who gets which class. The rules ship empty. A class is added in this order: schema enum, this file, then the dev-health-go client release (the client compiles the class list in and denies a class it does not know). `obligations.repository_allowlist` holds at most 256 keys and the decision point never emits `*` in it; a read of every repository of the organization is `obligations.repository_scope: organization` (closed value, never together with an allowlist; a consumer that finds neither on an action that filters by repository denies), and a principal over the bound is denied with `repository_allowlist_too_large` (CHAOS-12852).
 
 The provisioning resources and request bodies `organization.v1`,
 `organization-create-request.v1`, `membership.v1`, `membership-update-request.v1`,
@@ -44,7 +44,7 @@ here; the operations arrive with the routes that serve them. Rules:
 The versioned read API (CHAOS-10995, contracts only: no route and no endpoint-profile row serves it yet)
 has a request and a response for the get and the list of each aggregate: `principal-read.v1`,
 `organization-read.v1`, `membership-read.v1`, `grant-read.v1`, `principal-list.v1`
-(an organization's principals, each with its membership), `organization-list.v1`
+(an organization's principals; a user item carries its membership, a service account or workload item carries none), `organization-list.v1`
 (a principal's organizations, each with its membership), `membership-list.v1`, `grant-list.v1` and the eight
 `*-get-request.v1` and `*-list-request.v1` bodies. A list is paged by a keyset cursor on the item id
 (`k1_` and the unpadded base64url of the last id; `limit` 1 to 100, default 50; the last page has no
@@ -76,9 +76,28 @@ audiences, never resource URIs.
   the one the event vocabulary accepts. An invited membership has no role and has
   not joined (both null); an active one has both.
 - A provisioning event's `role_id` is `rol_` + the role key.
-- Ids are server-minted and fixed length (the prefix and the 22 base64url characters of a 16-byte id, the
-  encoding session ids use): `org_`, `mbr_`, `inv_` (the invite's own prefix; its
-  aggregate joins `provisioning-event.v1` with its first producer) and `prn_`.
+- Ids are server-minted. `mbr_` and `inv_` (the invite's own prefix; its aggregate joins
+  `provisioning-event.v1` with its first producer) are the prefix and the 22 base64url characters of a 16-byte
+  id, the encoding session ids use. `org_` and `prn_` have two forms, and each surface holds ONE of them.
+- The prn_ wire form per surface (CHAOS-12402). There is no join rule: no consumer compares or joins the two
+  forms, and none may.
+  - Form S, `session.WirePrincipalID`: `prn_` and the 22 base64url characters (no padding) of the 16 bytes.
+    Access and workload token `sub` and `act.sub`, session records (`principal_id`, `actor_principal_id`),
+    config subjects (`AUTH_ACR_WORKLOAD_SUBJECT`, `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` and the other subject
+    settings), authorize decisions, credential bodies (`principal_id`, `created_by`) and the principal,
+    membership and grant read API.
+  - Form U, `provisioning.WireID`: `prn_` and the canonical UUID text (36 characters).
+    Provisioning events and the audit wire: `aggregate_id`, `actor_principal_id`, `subject_principal_id`, `owner_principal_id` and the
+    `principal_id` of an external-identity change. The same as `org_` on events and the audit wire (D6624).
+    The SQL join of `aggregate_revisions.aggregate_id` builds the same text (`'prn_' || id::text`).
+  - Internal go-api and auth-service bodies and the database carry the bare UUID. A token `org_id` claim is the
+    bare UUID too.
+  - A U form is never a token `sub` or a config subject; a verifier refuses it. The chart refuses a UUID-form
+    `AUTH_ACR_WORKLOAD_SUBJECT` at render time, and go-api logs an ERROR and sets
+    `dev_health_api_acr_workload_subject_config_invalid` while still starting (D6465).
+  - If a consumer ever needs both, the one function is a pure `PrincipalWireToUUID` in
+    `contracts/provisioning` that accepts either form and returns the uuid. It is not added until a second
+    consumer exists.
 - `invite-create-request.v1` email is lowercase ASCII with a dot-atom local part and a
   dotted domain: a strict subset of the addresses the login-key normalizer keeps
   unchanged (a test holds it). The server still normalizes and refuses any value
@@ -431,7 +450,7 @@ visible in the file layout, not in a conditionally present field:
 * `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
   same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
   value of a closed vocabulary (`vocabulary/reason-codes.json`: `compromised`,
-  `domain_revoked`, `owner_request`), never the free text the database column allows; the audit
+  `domain_revoked`, `org_deprovisioned`, `owner_request`), never the free text the database column allows; the audit
   event's `attributes.reason_code` is a closed list in the same file, and a new
   value arrives with the producer that emits it and its own migration.
 * The list items, the receipt's credential and the entry are copies of one body

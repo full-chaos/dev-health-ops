@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
@@ -141,11 +144,8 @@ func flagsWithHelp(env cli.Env, name, help string) *flag.FlagSet {
 
 // parseArgs parses the verb's flags: ok false means the exit code in code.
 func parseArgs(flags *flag.FlagSet, env cli.Env) (code int, ok bool) {
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK, false
-		}
-		return cli.ExitUsage, false
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code, false
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -217,6 +217,30 @@ func orgProvisioningFromEnv(env cli.Env) (bool, error) {
 	return on, nil
 }
 
+// provisionerFromEnv builds the client of auth-service's provisioning routes
+// the way go-api does: AUTH_PROXY_URL and the AUTH_SESSION_ISSUE_TOKEN service
+// credential of the workload the CLI runs in. Either missing gives a nil client
+// (the Operator then refuses by name); a malformed one is a configuration error.
+func provisionerFromEnv(env cli.Env) (authprovision.Provisioner, int) {
+	raw, _ := env.Lookup("AUTH_PROXY_URL")
+	raw = strings.TrimSpace(raw)
+	token, _ := env.Lookup(sessionissue.EnvToken)
+	token = strings.TrimSpace(token)
+	if raw == "" || token == "" {
+		return nil, 0
+	}
+	upstream, err := url.Parse(raw)
+	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" || upstream.User != nil ||
+		(upstream.Path != "" && upstream.Path != "/") || upstream.RawQuery != "" || upstream.Fragment != "" || upstream.Opaque != "" {
+		return nil, writeError(env.Stderr, "auth_proxy_invalid", "AUTH_PROXY_URL must be an http(s) origin such as http://auth-service:8095, with no path, query or credentials")
+	}
+	client, err := authprovision.New(&url.URL{Scheme: upstream.Scheme, Host: upstream.Host}, token, 0)
+	if err != nil {
+		return nil, writeError(env.Stderr, "provisioning_credential_invalid", err.Error())
+	}
+	return client, 0
+}
+
 func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
 	owned, err := usersOwnedFromEnv(env)
 	if err != nil {
@@ -256,6 +280,10 @@ func report(env cli.Env, boundary func(error) error, err error) int {
 	if errors.Is(err, admin.ErrPlatformRolesOwned) {
 		fmt.Fprintf(env.Stderr, "refused: %s\n", usersowned.PlatformRolesMessage)
 		return cli.ExitRefused
+	}
+	if errors.Is(err, admin.ErrOneMembershipStep) {
+		fmt.Fprintf(env.Stderr, "argument error: %s\n", admin.ErrOneMembershipStep.Message)
+		return cli.ExitUsage
 	}
 	var refusal *admin.OperatorError
 	if errors.As(err, &refusal) {
@@ -427,7 +455,7 @@ func runUsersList(ctx context.Context, env cli.Env) int {
 
 func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags := newAccountFlags(env, "dho admin users update")
-	var id, email, username, newEmail, newUsername, fullName, password, org, role, removeFromOrg optString
+	var id, email, username, newEmail, newUsername, fullName, password, org, role, removeFromOrg, actor optString
 	flags.Var(&id, "id", "user id to update (identifier)")
 	flags.Var(&email, "email", "email of the user to update (identifier)")
 	flags.Var(&username, "username", "username of the user to update (identifier)")
@@ -441,6 +469,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 	flags.Var(&org, "org", "org slug or id: add the user to this org, or update their role")
 	flags.Var(&role, "role", "membership role to set with --org: owner, admin, member or viewer")
 	flags.Var(&removeFromOrg, "remove-from-org", "org slug or id: remove the user's membership from this org")
+	flags.Var(&actor, "actor", "id or email of the user that acts for --org / --remove-from-org: an active owner or admin of the org, or a superuser (required with them)")
 	passwordStdin := flags.Bool("password-stdin", false, "read the new password from the first line of standard input (instead of --password)")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
@@ -456,16 +485,27 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 			return cli.ExitUsage
 		}
 	}
+	if org.set && removeFromOrg.set {
+		fmt.Fprintf(env.Stderr, "argument error: %s\n", admin.ErrOneMembershipStep.Message)
+		return cli.ExitUsage
+	}
 	update := admin.UpdateUserInput{
 		ID: id.ptr(), Email: email.ptr(), Username: username.ptr(),
 		NewEmail: newEmail.ptr(), NewUsername: newUsername.ptr(), FullName: fullName.ptr(), Password: password.ptr(),
 		Active: active.ptr(), Verified: verified.ptr(), Superuser: superuser.ptr(),
-		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
+		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(), Actor: actor.ptr(),
 	}
 	op, closePool, code := usersWriteOperator(ctx, env, update.WritesUsers(), update.Superuser != nil)
 	defer closePool()
 	if code != 0 {
 		return code
+	}
+	if update.MembershipOrg != nil || update.RemoveFromOrg != nil {
+		provisioner, code := provisionerFromEnv(env)
+		if code != 0 {
+			return code
+		}
+		op.Provisioner = provisioner
 	}
 	result, err := op.UpdateUser(ctx, update)
 	if err != nil {

@@ -75,6 +75,8 @@ nav:
           - AI Impact: use/ai-workflows/impact.md
           - AI Review Load: use/ai-workflows/review-load.md
           - AI Governance Risk: use/ai-workflows/risk.md
+      - Ask Dev:
+          - use/ask-dev/index.md
       - Reports:
           - use/reports/index.md
           - Create or clone: use/reports/create-or-clone.md
@@ -103,6 +105,7 @@ nav:
           - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
           - Roles and access: admin/teams-and-identities/roles-and-access.md
           - Organization members: admin/teams-and-identities/manage-org-members.md
+          - Grant access to repositories: admin/teams-and-identities/grant-repository-access.md
       - Data sources:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
@@ -119,6 +122,8 @@ nav:
           - Credentials: admin/security-and-audit/credentials.md
           - Service accounts: admin/security-and-audit/service-accounts.md
           - Privacy and telemetry: admin/security-and-audit/privacy.md
+      - Ask Dev:
+          - admin/ask-dev/index.md
       - Troubleshooting:
           - admin/troubleshooting/index.md
           - Authentication and roles: admin/troubleshooting/authentication-and-roles.md
@@ -155,7 +160,7 @@ nav:
           - Job recovery lifecycle: operate/run/job-recovery-lifecycle.md
           - Ingestion and backfills: operate/run/ingestion-and-backfills.md
           - Operational controls: operate/run/operational-controls.md
-          - Ask Dev rollout: operate/run/ask-dev-rollout.md
+          - Repair stranded Ask Dev conversations: operate/run/ask-dev-rollout.md
       - Observe:
           - operate/observe/index.md
           - Health checks: operate/observe/health-checks.md
@@ -180,15 +185,19 @@ nav:
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
           - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
+          - Auth PDP outage and rollback: operate/runbooks/auth-pdp-outage-and-rollback.md
           - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
           - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
           - Auth platform roles flip and rollback: operate/runbooks/auth-platform-roles-flip-and-rollback.md
           - Auth-service scrape check and alert import: operate/runbooks/auth-service-scrape-and-alerts.md
+          - Push projection drift alerts: operate/runbooks/auth-push-projection-drift-alerts.md
           - Auth users flip-back grants: operate/runbooks/auth-users-flip-back-grants.md
           - Workload bootstrap credential: operate/runbooks/auth-workload-bootstrap-credential.md
           - Service accounts: operate/runbooks/auth-service-accounts.md
           - Kubernetes workload federation: operate/runbooks/auth-workload-kubernetes-federation.md
+          - Web assertion key rotation: operate/runbooks/auth-workload-assertion-key-rotation.md
+          - Auth client-address proof: operate/runbooks/auth-client-address-proof.md
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
@@ -243,6 +252,7 @@ nav:
       - Auth External Push authority: reference/auth/external-push-authority.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
+      - Auth resource grants: reference/auth/resource-grants.md
       - Auth organization and membership authority: reference/auth/org-membership-authority.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md

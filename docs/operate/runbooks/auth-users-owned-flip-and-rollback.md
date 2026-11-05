@@ -24,7 +24,7 @@ Phase 4 moves ownership of users from go-api to auth-service. While the roll run
 - **A low-traffic window and a status notice.** Run the stage in a low-traffic window. Before U1, publish a status notice that registration, e-mail verification and password operations fail with `503` and a retry hint until the stage ends.
 - **The roll windows.** Inside each release, while its pods hand over (the go-api rollout of U1, the auth-service rollout of U3 and the same two in D1 and D2), expect up to 60 seconds of `503` with `Retry-After: 1` on the credential routes beyond the stage outage. Those are the roll windows; the 60 seconds is not a bound on the stage.
 - **The org provisioning switch (CHAOS-10988).** With the stage `owned` and `goApi.authProxy.orgProvisioning` off, go-api still writes member removals, role changes, invites and joins to the public tables only, so `auth.memberships` drifts (CHAOS-11779). Set the switch in the same roll as the stage `owned`, and only when all of these hold: CHAOS-11885 and CHAOS-11827 are merged and in the rolled images, auth-service has `AUTH_MEMBERSHIP_ROUTES=true`, and go-api's `svc_authsess_` credential holds `memberships:write` (CHAOS-11884 is recommended first). The chart refuses the switch below phase 4. While the go-api pods hand over, old pods still write locally and new pods call auth-service; `users-reconcile` can print `info.membership_*` lines for that window (expected, not a STOP).
-- **The sign-in join stays off.** `authService.ssoJit` renders `AUTH_SSO_JIT`, and the render refuses `true` at every phase until CHAOS-12678 re-homes SSO JIT at users owned: go-api's own sign-in join still writes, and two writers would race. Do not set it in this flip.
+- **The sign-in join stays off in this flip.** `authService.ssoJit` renders `AUTH_SSO_JIT` on auth-service, and the render refuses `true` unless users are owned (phase 4, stage `owned`). Do not set it in the same roll as the stage `owned`: turn it on after the flip is checked. go-api refuses its own sign-in join and account create while `AUTH_USERS_OWNED` is on (`internal/api/sso/provision.go`), so auth-service is the only writer.
 - **Organization creates (CHAOS-10992).** With the switch on, every `POST /api/v1/admin/orgs` and every onboarding `create_org` is one auth-service commit: the organization and its owner, in both schemas. If auth-service is down or refuses, the answer is `503` or the actor's `403`, and nothing is written. `dho admin orgs create` refuses while the switch is on.
 - **SSO provider rows.** A provider row with auto-provisioning lists its domains in `allowed_domains`. With `AUTH_SSO_JIT` on, an empty list refuses every new account of that row.
 
@@ -90,6 +90,21 @@ Roll back in the opposite order. auth-service stops owning users first, so no ow
 
    Any `true` means the narrowing did not run: STOP, keep the hook Job logs, and do not hand-run a REVOKE. Then clear `narrowAfterFlipBack` and the acknowledgement in the next change.
 5. Do the rollback with `helm upgrade`, not `helm rollback`: `helm rollback` runs no auth hooks.
+
+## SSO accounts across the flip (rehearsal step)
+
+With `AUTH_SSO_JIT` off (the default), phase 4 cannot provision a new OIDC or SAML account: go-api refuses `public.users` writes while users are owned. The phase 4 check is then on accounts that already exist. `authService.ssoJit=true` renders the sign-in join on auth-service at stage `owned` only. `ci/auth_flipback_sso_k3s.sh` rehearses it on bigboy k3s, in a namespace the lead owns, in this order:
+
+1. At phase 3, in the rehearsal namespace only, insert the SAML provider row with one `INSERT` through `kubectl exec ... psql` on stdin (go-api serves no provider create route; the integration tests seed the row the same way). The organization is enterprise tier, auto-provisioning is on and `allowed_domains` is set.
+2. At phase 3, sign in with a SAML identity through go-api: go-api writes the user (the SAML user created through go-api at phase 3), with `auth_provider` and `sso_provider_id` set.
+3. U1, the `up-go-api` barrier, the users-backfill, a `users-reconcile` that reads 0, the `up-owned` barrier, U3.
+4. Sign in again with the same identity under owned. It answers 200 as the same account, and no `public.users` row changes.
+5. D1, the `down-auth` barrier, D2 (the flip back 4 to 3 of the Rollback section).
+6. Then sign in through go-api with the same identity. It answers 200 as the same account: no new account, no `identity_conflict`, and the auth schema counts equal those before the flip back.
+
+**The live phase 4 step is read-only first.** Before the 11505 roll, count the SSO providers and the SSO-linked users with `ci/auth_flipback_sso_k3s.sh --print-live-count-sql` (it prints a read-only SQL block for `psql` on stdin; it touches no cluster and no row). If both counts are 0, the SSO flip-back leg is not applicable at 11505: record the two counts and go on. If any exists, the step uses those pre-existing users and creates nothing: no provider row and no user is written on prod, and there is no hand SQL on prod.
+
+The k3s rehearsal is SAML only: go-api refuses an OIDC issuer at a private address, so the OIDC leg stays in the integration tests (the OIDC leg stays in the integration tests of `internal/api/sso`). The case of an account that auth-service provisions through its own sign-in join under owned (`authService.ssoJit=true`, stage `owned`), and then a flip back, is not a step of the run yet. The script holds its JIT values layer, and `--print-plan` checks that the layer renders `AUTH_SSO_JIT` on auth-service only. The proof of the case stays `TestFlipBackSignInFindsAnAccountProvisionedUnderOwned`.
 
 ## If a barrier fails
 

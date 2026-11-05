@@ -3,7 +3,6 @@ package pgmigrate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,6 +56,12 @@ const (
 	// ReasonSettingsMismatch: the environment the hook would run in differs from
 	// the baseline's settings, and the hook refuses before it touches the database.
 	ReasonSettingsMismatch = "settings_mismatch"
+	// ReasonChainRevisionUnapplied: a chain revision at or below the recorded head has no
+	// ledger row (public.dho_chain_applied), or the ledger table is absent.
+	ReasonChainRevisionUnapplied = "chain_revision_unapplied"
+	// ReasonChainRevisionSHAMismatch: a ledger row the migrator wrote records another
+	// file than the build's for that revision.
+	ReasonChainRevisionSHAMismatch = "chain_revision_sha_mismatch"
 )
 
 const (
@@ -142,6 +147,10 @@ func Classify(observation Observation, settings Settings, baseline Baseline, cha
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonAuthSchemaMismatch
 	case StateSchemaMismatch:
 		report.Verdict, report.Reason = VerdictNeedsManual, ReasonSchemaMismatch
+	case StateChainRevisionUnapplied:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonChainRevisionUnapplied
+	case StateChainRevisionSHAMismatch:
+		report.Verdict, report.Reason = VerdictNeedsManual, ReasonChainRevisionSHAMismatch
 	}
 	return report
 }
@@ -222,11 +231,8 @@ func preflight(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     must be 1, as the upgrade verb requires\n"+
 			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river)\n")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

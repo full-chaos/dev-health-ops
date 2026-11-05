@@ -172,6 +172,7 @@ func keyCases() []routeCase {
 }
 
 func TestKeyRouteAnswersParseByTheirSchema(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	f := newKeyFixture(t)
 	cases := keyCases()
@@ -215,6 +216,7 @@ func TestKeyRouteAnswersParseByTheirSchema(t *testing.T) {
 // The value leaves in the issue and rotate answers only. The fingerprint is 8 digest bytes by design: it is exactly 16
 // hex, the row's own, and the whole digest is in no answer and no log line.
 func TestKeyRouteSecretAndDigestReachOnlyWhereTheyShould(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	digest := serviceaccount.KeyDigest(f.sa.secret)
 	whole := []string{hex.EncodeToString(digest[:]), base64.StdEncoding.EncodeToString(digest[:]), base64.RawURLEncoding.EncodeToString(digest[:])}
@@ -252,6 +254,7 @@ func TestKeyRouteSecretAndDigestReachOnlyWhereTheyShould(t *testing.T) {
 }
 
 func TestKeyRouteExpiryDefaultAndBounds(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	for _, c := range keyCases()[:2] {
 		if response := f.post(c.path, encode(c.body(f, f.admin)), nil); response.Code != http.StatusOK {
@@ -273,6 +276,7 @@ func TestKeyRouteExpiryDefaultAndBounds(t *testing.T) {
 }
 
 func TestKeyRouteNullExpiryIsMalformed(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	for _, c := range keyCases()[:2] {
 		response := f.post(c.path, encode(merged(c.body(f, f.admin), map[string]any{"expires_in_seconds": nil})), nil)
@@ -285,6 +289,7 @@ func TestKeyRouteNullExpiryIsMalformed(t *testing.T) {
 }
 
 func TestKeyRouteOverlapIsRequiredAndBounded(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	c := keyCases()[1]
 	expectRefusal(t, f.post(c.path, encode(without(c.body(f, f.admin), "overlap_seconds")), nil), http.StatusBadRequest, reasonMalformed)
@@ -300,6 +305,7 @@ func TestKeyRouteOverlapIsRequiredAndBounded(t *testing.T) {
 }
 
 func TestKeyRouteBodiesAreStrict(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	for _, c := range keyCases() {
 		valid := c.body(f, f.super)
@@ -334,6 +340,7 @@ func TestKeyRouteBodiesAreStrict(t *testing.T) {
 }
 
 func TestKeyRouteRefusalAnswers(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	cases := keyCases()[:3]
 	for err, want := range map[error]struct {
@@ -367,6 +374,7 @@ func TestKeyRouteRefusalAnswers(t *testing.T) {
 }
 
 func TestKeyRouteActorRule(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	for _, c := range keyCases() {
@@ -394,6 +402,7 @@ func TestKeyRouteActorRule(t *testing.T) {
 }
 
 func TestKeyRouteActorRuleRunsAgainUnderTheLocks(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	f.users.inTx = &fakeProvUsers{states: f.users.states, roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "viewer"}}
 	for _, c := range keyCases()[:3] {
@@ -404,6 +413,7 @@ func TestKeyRouteActorRuleRunsAgainUnderTheLocks(t *testing.T) {
 // A non-superuser may not issue or rotate on a superuser's account, at the precheck and under the locks. Revoke has no
 // such check: the kill path stays open.
 func TestKeyRouteSuperuserOwnedAccount(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	cases := keyCases()
 	f.users.states[f.owner] = UserState{IsActive: true, IsSuperuser: true}
@@ -444,6 +454,7 @@ func TestKeyRouteSuperuserOwnedAccount(t *testing.T) {
 
 // An unknown key answers a non-superuser as a key of another organization does; only a superuser is told it is unknown.
 func TestKeyRouteUnknownKeyIsNamedOnlyToASuperuser(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	c := keyCases()[2]
@@ -474,6 +485,7 @@ func TestKeyRouteUnknownKeyIsNamedOnlyToASuperuser(t *testing.T) {
 }
 
 func TestKeyRouteRevokeAnswerReadFailureAnswers503AndTheRepeatAnswersTheEntry(t *testing.T) {
+	t.Parallel()
 	f := newKeyFixture(t)
 	c := keyCases()[2]
 	f.sa.afterErr = errors.New("read failed")
@@ -504,6 +516,7 @@ func TestKeyRouteStatusFollowsTheTimestamps(t *testing.T) {
 }
 
 func TestKeyRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
+	t.Parallel()
 	w := newWorkloadIssueFixture(t)
 	f := &provWorkloadFixture{provFixture: newProvFixtureFor(t, docWithRow(t, PatternOrgSuspend), w.workload), w: w}
 	want := uuidOfWire(t, f.w.subject)
@@ -533,6 +546,7 @@ func TestKeyRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
 // The key routes are on the startup gate: a build whose document has no row for one of them builds no route, and the
 // embedded document serves all four.
 func TestKeyRoutesAreOnTheStartupGate(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range keyCases() {
 		if !slices.Contains(provisioningPatterns, c.path) {
@@ -541,7 +555,7 @@ func TestKeyRoutesAreOnTheStartupGate(t *testing.T) {
 		if provisioningRouteOps[c.op] != c.path {
 			t.Errorf("%s is not in the route operations", c.op)
 		}
-		err := provisioningRowsPresent(embeddedDocWithoutRow(t, c.path), false)
+		err := provisioningRowsPresent(embeddedDocWithoutRow(t, c.path))
 		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+c.path+" ") {
 			t.Errorf("a document without the %s row: %v, want a refusal naming the route", c.path, err)
 		}

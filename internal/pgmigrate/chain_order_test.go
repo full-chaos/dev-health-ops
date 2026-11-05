@@ -86,7 +86,7 @@ func TestDecideTwoHeadsAtTheRealChainHead(t *testing.T) {
 		"application row first": {application, cutoverRevision},
 	} {
 		t.Run(name, func(t *testing.T) {
-			plan := Decide(Observation{HasVersionTable: true, Versions: versions, PublicTables: baseline.Tables()}, baseline, chain, known)
+			plan := Decide(Observation{HasVersionTable: true, Versions: versions, PublicTables: baseline.Tables(), HasLedger: true, Ledger: appliedLedger(chain)}, baseline, chain, known)
 			if plan.State != StateAtHead || plan.ApplicationHead != application || len(plan.Pending) != 0 {
 				t.Fatalf("state %d, application head %q, pending %v; want StateAtHead at %s", plan.State, plan.ApplicationHead, revisionsOf(plan.Pending), application)
 			}

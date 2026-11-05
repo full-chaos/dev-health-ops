@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -70,6 +71,16 @@ func (e *env) resolve(t *testing.T, k IssuedKey) (ResolvedKey, string) {
 func (e *env) suspend(t *testing.T, orgID uuid.UUID) {
 	t.Helper()
 	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = clock_timestamp() WHERE id = $1`, orgID)
+	e.publicOrgActive(t, orgID, false)
+}
+
+// publicOrgActive is go-api's own suspension: public.organizations.is_active,
+// the row that decides a key's organization (D6651).
+func (e *env) publicOrgActive(t *testing.T, orgID uuid.UUID, active bool) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctxT(t), `UPDATE public.organizations SET is_active = $2 WHERE id = $1`, orgID, active); err != nil {
+		t.Fatalf("public.organizations is_active: %v", err)
+	}
 }
 
 func deprovisionAllowed(context.Context, audit.TxOps, uuid.UUID) error { return nil }
@@ -84,6 +95,7 @@ func (e *env) deprovision(t *testing.T, orgID uuid.UUID) {
 func (e *env) reactivate(t *testing.T, orgID uuid.UUID) {
 	t.Helper()
 	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = NULL WHERE id = $1`, orgID)
+	e.publicOrgActive(t, orgID, true)
 }
 
 func TestSAKeyIssueWritesRowAuditOutboxRevision(t *testing.T) {
@@ -420,8 +432,14 @@ func TestSAKeyResolveRefusals(t *testing.T) {
 		}, "principal_disabled"},
 		{"org suspended", func(t *testing.T, orgID, _ uuid.UUID, _ IssuedKey) { e.suspend(t, orgID) }, "org_suspended"},
 		{"org deprovisioned", func(t *testing.T, orgID, _ uuid.UUID, _ IssuedKey) {
+			// go-api's public.organizations row inactive too: the deprovision's own revocation answers first.
 			e.deprovision(t, orgID)
-		}, "org_suspended"},
+			e.publicOrgActive(t, orgID, false)
+		}, "revoked"},
+		{"org deprovisioned, public row still active", func(t *testing.T, orgID, _ uuid.UUID, _ IssuedKey) {
+			// pm answers-12680-1 Q1 (b): the deprovision revokes the key in its commit, before go-api's row follows.
+			e.deprovision(t, orgID)
+		}, "revoked"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -511,7 +529,7 @@ func TestSAKeyLostOwnerKeepsTheKeyLive(t *testing.T) {
 
 func TestSAKeyNoCascadeRow(t *testing.T) {
 	e := getEnv(t)
-	orgID, _, id := e.account(t)
+	_, _, id := e.account(t)
 	k := e.issue(t, id)
 	row := func() string {
 		var s string
@@ -527,7 +545,6 @@ func TestSAKeyNoCascadeRow(t *testing.T) {
 	if err := e.sa.Enable(ctxT(t), id, okActor()); err != nil {
 		t.Fatal(err)
 	}
-	e.deprovision(t, orgID)
 	if row() != before {
 		t.Fatal("a lifecycle verb wrote the registry row")
 	}
@@ -851,6 +868,27 @@ VALUES ($1, $2, 'workload_bootstrap_credential', $3, 'sha256', encode($4::bytea,
 	}
 }
 
+// D6651: ResolveKey decides the organization on public.organizations.is_active.
+// A suspended public row refuses the key whatever the auth copy says, and a
+// suspended auth copy of an active public organization does not.
+func TestSAResolveKeyDecidesTheOrganizationOnThePublicRow(t *testing.T) {
+	e := getEnv(t)
+	orgID, _, id := e.account(t)
+	k := e.issue(t, id)
+	if _, reason := e.resolve(t, k); reason != "" {
+		t.Fatalf("live key refused: %s", reason)
+	}
+	e.publicOrgActive(t, orgID, false)
+	if _, reason := e.resolve(t, k); reason != "org_suspended" {
+		t.Fatalf("public organization suspended, auth copy active: reason %q, want org_suspended", reason)
+	}
+	e.publicOrgActive(t, orgID, true)
+	e.commitSeed(t, `UPDATE auth.organizations SET disabled_at = clock_timestamp() WHERE id = $1`, orgID)
+	if _, reason := e.resolve(t, k); reason != "" {
+		t.Fatalf("auth copy suspended, public organization active: reason %q, want the key to resolve", reason)
+	}
+}
+
 // The read-only resolver answers exactly as the store's ResolveKey does, for a
 // live key and for every refusal, and it needs no row locker.
 func TestSAKeyResolverReadsLikeTheStore(t *testing.T) {
@@ -881,5 +919,72 @@ func TestSAKeyResolverReadsLikeTheStore(t *testing.T) {
 	_, err = resolver.ResolveKey(ctxT(t), KeyDigest("fcsak_unknown"), time.Now())
 	if !errors.As(err, &refusal) || refusal.Reason != "unknown" {
 		t.Fatalf("an unknown key: %v", err)
+	}
+}
+
+// pm answers-12680-1 Q1 (b): an auth deprovision revokes every live key of the organization's service accounts in its
+// own commit, one auth.service_account.key_revoked row and one key_changed event per key, while go-api's
+// public.organizations row is still active. Another organization's key stays live.
+func TestSAKeyDeprovisionRevokesTheOrganizationsKeysInItsCommit(t *testing.T) {
+	e := getEnv(t)
+	orgID, _, id := e.account(t)
+	rotated := e.issue(t, id)
+	successor := e.rotate(t, id, time.Hour)
+	_, _, otherID := e.account(t)
+	other := e.issue(t, otherID)
+	e.deprovision(t, orgID)
+	for name, k := range map[string]IssuedKey{"rotated": rotated, "successor": successor} {
+		if _, why := e.resolve(t, k); why != "revoked" {
+			t.Fatalf("%s key after the deprovision: %q, want revoked", name, why)
+		}
+	}
+	if _, why := e.resolve(t, other); why != "" {
+		t.Fatalf("another organization's key after the deprovision: %q, want live", why)
+	}
+	if n := e.count(t, `SELECT count(*) FROM public.organizations WHERE id = $1 AND is_active`, orgID); n != 1 {
+		t.Fatal("the cell needs go-api's public row still active")
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE principal_id = $1 AND revoked_reason = 'org_deprovisioned'`, id); n != 2 {
+		t.Fatalf("%d keys revoked with org_deprovisioned, want 2", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.service_account.key_revoked'
+AND organization_id = $1 AND subject_principal_id = $2`, orgID, id); n != 2 {
+		t.Fatalf("%d key_revoked audit rows, want one per key", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.auth_outbox_events WHERE aggregate_id = $1 AND event_type = 'service_account.key_changed'
+AND payload->'change'->>'status' = 'revoked'`, wire(id)); n != 2 {
+		t.Fatalf("%d revoked key_changed events, want one per key", n)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE principal_id = $1 AND revoked_at IS NOT NULL`, otherID); n != 0 {
+		t.Fatal("the deprovision revoked another organization's key")
+	}
+}
+
+// The key revocation is in the deprovision's transaction: a deprovision that fails after it, in the suspension,
+// leaves every key live and writes no key row.
+func TestSAKeyAFailedDeprovisionLeavesTheKeysLive(t *testing.T) {
+	e := getEnv(t)
+	orgID, _, id := e.account(t)
+	k := e.issue(t, id)
+	fn := "sa_deprovision_fail_" + uuid.NewString()[:8]
+	if _, err := e.admin.Exec(ctxT(t), fmt.Sprintf(`CREATE FUNCTION public.%s() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN IF NEW.id = '%s' THEN RAISE EXCEPTION 'planted failure'; END IF; RETURN NEW; END $$`, fn, orgID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.admin.Exec(ctxT(t), fmt.Sprintf(`CREATE TRIGGER %s BEFORE UPDATE ON auth.organizations FOR EACH ROW EXECUTE FUNCTION public.%s()`, fn, fn)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = e.admin.Exec(context.Background(), fmt.Sprintf(`DROP TRIGGER %s ON auth.organizations`, fn))
+		_, _ = e.admin.Exec(context.Background(), fmt.Sprintf(`DROP FUNCTION public.%s()`, fn))
+	})
+	if _, err := e.deprov.Deprovision(ctxT(t), orgdeprovision.Input{OrgID: orgID, Authorize: deprovisionAllowed}); err == nil {
+		t.Fatal("Deprovision with a planted failure succeeded")
+	}
+	if _, why := e.resolve(t, k); why != "" {
+		t.Fatalf("key after a failed deprovision: %q, want live", why)
+	}
+	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.service_account.key_revoked' AND subject_principal_id = $1`, id); n != 0 {
+		t.Fatalf("%d key_revoked rows after a failed deprovision", n)
 	}
 }

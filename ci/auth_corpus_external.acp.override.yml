@@ -29,6 +29,12 @@ services:
       - AUTH_PROXY_SOCIAL
       - AUTH_PROXY_OIDC
       - AUTH_PROXY_SAML
+  # CHAOS-13107: go-river-migrate grants the api role the manifest of AUTH_PROXY_SESSIONS (internal/rivermigrate), and
+  # go-api's readiness checks the manifest of its own flag. compose.yml turns the flag on for both; this leg takes go-api's
+  # from the state file (above), so the grant pass takes the same one: both unset until step 1d turns sessions on.
+  go-river-migrate:
+    environment:
+      - AUTH_PROXY_SESSIONS
   # The API listener too, on an ephemeral loopback port: ci/auth_corpus_external.sh asks the running auth-service which
   # proxied routes it serves (OPTIONS: 405 served, 404 not) before it turns an aggregate's flag on.
   auth-service:

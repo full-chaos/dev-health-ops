@@ -802,6 +802,9 @@ queryApi:
   #    its own embedded SDL and an operator-supplied value can only disagree
   #    with the binary.
   extraEnv: []
+  # -- Extra pod volumes and query-api container mounts (for example a projected serviceAccountToken), added after the envelope-jwks volume and mount. Empty adds nothing.
+  extraVolumes: []
+  extraVolumeMounts: []
   # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /
   #    {secretRef: {name: ...}} entries), same shape as goWorkers.extraEnvFrom.
   #    Empty by default: this container inherits NOTHING from the platform Secret/

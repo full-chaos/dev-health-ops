@@ -10,8 +10,8 @@ import (
 )
 
 // CHAOS-13103: BARRIER_ALLOWLIST. The prod-shaped world is the ticket's executed repro (2026-11-05T14:22:51Z): 3 finished
-// ClickHouse grant Jobs whose args hold the field separator, the acr init container and the pgbouncer exporter (both
-// `sh -c`). The example file next to the script is the D6710 allowed set.
+// ClickHouse grant Jobs (the real Job runs `/bin/bash -c` with `${...}` and `||`, so the scan cannot split its row), the acr
+// init container and the pgbouncer exporter (both `sh -c`). The example file next to the script is the D6710 allowed set.
 const exampleAllowlist = "../../scripts/auth-users-owned-barrier.allowlist-d6710.txt"
 
 const (
@@ -19,7 +19,6 @@ const (
 	acrInitImage  = "docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028"
 	exporterImage = "quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1@sha256:30f31b6c2efdad3647f8182cc7c1a3a19e42bae5d17387694989f969371c230d"
 	zeroDigest    = "@sha256:0000000000000000000000000000000000000000000000000000000000000000"
-	grantQuery    = "GRANT SELECT ON m5.* TO grant17; SELECT 'a|b'"
 	acrRS         = "dev-health-acr-5784b5b46f"
 	acrInitCmd    = "install -m 0400 /in/entitlement.jwt /out/entitlement.jwt"
 	pgbRS         = "dev-health-ops-go-pgbouncer-transaction-7ffbf75b8"
@@ -31,9 +30,17 @@ var grantJobs = []struct{ job, pod string }{
 	{"ch-m5-grant17", "ch-m5-grant17-6fnbg"}, {"ch-m5-grant17b", "ch-m5-grant17b-qdj8n"}, {"ch-m5-grant17c", "ch-m5-grant17c-b94bs"},
 }
 
-func grantSpec(image, query string) map[string]any {
+// grantScript has the shape of the real grant Job's script: a shell, `${...}`, a function and `||`.
+const grantScript = `set -uo pipefail
+umask 077
+cd /work || exit 1
+yq1() { local s="${1//\'/\'\'}"; printf "'%s'" "$s"; }
+clickhouse-client --config-file /work/dst.yaml -q "GRANT SHOW COLUMNS ON system.query_log TO otel_querylog" </dev/null || { echo "GRANT FAILED"; exit 1; }
+echo "GRANT OK"`
+
+func grantSpec(image, script string) map[string]any {
 	return map[string]any{"containers": []any{map[string]any{"name": "grant", "image": image,
-		"command": bwStrs("clickhouse-client"), "args": bwStrs("--multiquery", "--query", query)}}}
+		"command": bwStrs("/bin/bash", "-c"), "args": bwStrs(script)}}}
 }
 
 // grantJob: a finished Job (succeeded 1, completionTime set) unless active > 0 or done is false.
@@ -92,8 +99,8 @@ func prodWorld(p prodParts) *bworld {
 	w := bwNewWorld()
 	if p.grants {
 		for _, g := range grantJobs {
-			w.jobs = append(w.jobs, grantJob(g.job, grantSpec(grantImage, grantQuery), 0, true))
-			w.otherPods = append(w.otherPods, grantPod(g.pod, g.job, grantSpec(grantImage, grantQuery), "Succeeded"))
+			w.jobs = append(w.jobs, grantJob(g.job, grantSpec(grantImage, grantScript), 0, true))
+			w.otherPods = append(w.otherPods, grantPod(g.pod, g.job, grantSpec(grantImage, grantScript), "Succeeded"))
 		}
 	}
 	if p.acr {
@@ -299,10 +306,10 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 			setExporter(w, "quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1", exporterCmd)
 		}, "zjwdn container exporter: runs a shell with -c"},
 		{"changed image digest of a grant Job and its pod", func(w *bworld) {
-			regrant(w, "ch-m5-grant17b", "clickhouse/clickhouse-server:26.6.8.7"+zeroDigest, grantQuery)
+			regrant(w, "ch-m5-grant17b", "clickhouse/clickhouse-server:26.6.8.7"+zeroDigest, grantScript)
 		}, "job ch-m5-grant17b: malformed row"},
 		{"a second container on another image in a grant Job", func(w *bworld) {
-			spec := grantSpec(grantImage, grantQuery)
+			spec := grantSpec(grantImage, grantScript)
 			spec["initContainers"] = []any{map[string]any{"name": "pre", "image": "registry.example/tool:1", "args": bwStrs("x")}}
 			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", spec, 0, true))
 		}, "job ch-m5-grant17: malformed row"},
@@ -310,7 +317,7 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 			regrant(w, "ch-m5-grant17c", "registry.example/evil:1"+zeroDigest, "x<<c>>|grant@@"+grantImage+"@@y | z")
 		}, "job ch-m5-grant17c: malformed row"},
 		{"an allowlisted image with the segment separator appended", func(w *bworld) {
-			regrant(w, "ch-m5-grant17", grantImage+"@@x", grantQuery)
+			regrant(w, "ch-m5-grant17", grantImage+"@@x", grantScript)
 		}, "job ch-m5-grant17: malformed row"},
 		{"a pod of an allowlisted Job labelled go-api", func(w *bworld) {
 			grantPodAt(w, "ch-m5-grant17")["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/component": "go-api"}
@@ -336,16 +343,16 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 		}, "x1 container second: runs a shell with -c"},
 		{"a running pod of an allowlisted Job", func(w *bworld) {
 			bwPhase(grantPodAt(w, "ch-m5-grant17"), "Running")
-			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", grantSpec(grantImage, grantQuery), 1, false))
+			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", grantSpec(grantImage, grantScript), 1, false))
 		}, "pod ch-m5-grant17-6fnbg: malformed row"},
 		{"a Pending pod of a finished allowlisted Job", func(w *bworld) {
 			bwPhase(grantPodAt(w, "ch-m5-grant17"), "Pending")
 		}, "pod ch-m5-grant17-6fnbg: malformed row"},
 		{"an allowlisted Job with active 1", func(w *bworld) {
-			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantQuery), 1, true))
+			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantScript), 1, true))
 		}, "job ch-m5-grant17c: malformed row"},
 		{"an allowlisted Job without completionTime", func(w *bworld) {
-			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantQuery), 0, false))
+			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantScript), 0, false))
 		}, "job ch-m5-grant17c: malformed row"},
 		{"a pod of an allowlisted Job with a second owner", func(w *bworld) {
 			pod := grantPodAt(w, "ch-m5-grant17")
@@ -510,5 +517,39 @@ func TestBarrierAllowlistReadsOnlyWithGetJSONPath(t *testing.T) {
 	none := runBarrier(t, allProd().files(), nil, "up-go-api")
 	if strings.Contains(none.argv, "{.status.phase}") || strings.Contains(none.argv, "{.status.completionTime}") {
 		t.Errorf("a run without an allowlist reads the facts: %s", none.argv)
+	}
+}
+
+// A finished Job cannot run again. A `malformed row` clear rests on Job complete (active 0, completionTime set), pods
+// Succeeded, the image and no mention of dho or of users with admin; not on the shell text the scan cannot split (D6710
+// cleared the real grant Jobs, `bash -c` with `${...}`, on these facts). The same text in a Job that runs still STOPs.
+func TestBarrierAllowlistClearsAFinishedJobWhateverItsShell(t *testing.T) {
+	scripts := map[string]string{
+		"a shell -c (the command)": "true || exit 1",
+		"a command substitution":   "echo $(id) || exit 1",
+		"a backtick":               "echo `id` || exit 1",
+		"a variable":               "echo ${X} || exit 1",
+		"eval":                     "eval x || exit 1",
+	}
+	for name, script := range scripts {
+		t.Run(name, func(t *testing.T) {
+			world := func(active int) *bworld {
+				w := bwNewWorld()
+				for _, g := range grantJobs {
+					w.jobs = append(w.jobs, grantJob(g.job, grantSpec(grantImage, script), active, active == 0))
+					w.otherPods = append(w.otherPods, grantPod(g.pod, g.job, grantSpec(grantImage, script), map[bool]string{true: "Succeeded", false: "Running"}[active == 0]))
+				}
+				return w
+			}
+			allow := allowFile(t, exampleEntries(t, "ch-m5-grant"))
+			r := runBarrier(t, world(0).files(), allow, "up-go-api")
+			if _, n := clearedKeys(r.stdout); !bwPassed(r) || n != 6 {
+				t.Fatalf("finished: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+			r = runBarrier(t, world(1).files(), allow, "up-go-api")
+			if bwPassed(r) || r.rc == 0 || !strings.Contains(r.stderr, "job ch-m5-grant17: malformed row") || !strings.Contains(r.stderr, "pod ch-m5-grant17-6fnbg: malformed row") {
+				t.Fatalf("running: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+			}
+		})
 	}
 }

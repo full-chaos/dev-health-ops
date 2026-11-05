@@ -29,7 +29,8 @@
 # BARRIER_ALLOWLIST=<file> (CHAOS-13103): a reviewed list of known non-writers the scan STOPs on; unset or empty = nothing is
 # cleared. One exact entry per line, `kind|owner|container|reason|image` (example and rules: auth-users-owned-barrier.allowlist-d6710.txt);
 # exact string compare, no pattern. Only two STOPs clear: `malformed row` of a finished Job (the Job row, or a Succeeded pod it
-# owns; Job active 0 and completionTime set; every image of the row equals the entry) and `shell -c` of one container of a
+# owns; Job active 0 and completionTime set; every image of the row equals the entry; the shell text the scan cannot split is not
+# read beyond dho and users+admin: a finished Job cannot run again, D6710) and `shell -c` of one container of a
 # Deployment's pod (owner chain pod -> ReplicaSet -> Deployment; name and full image with digest equal). Never cleared: any other
 # reason, a mention of dho or of users with admin (any case), a pod labelled go-api or auth-service, a CronJob. A clear prints
 # `cleared-by-allowlist <key> object=<name>` on stdout. A malformed file STOPs before any kubectl call; an entry that matches

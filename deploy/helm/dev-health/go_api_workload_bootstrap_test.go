@@ -105,7 +105,7 @@ func TestWorkloadBootstrapOnRendersTheCredentialFileAndTheWorkloadSelector(t *te
 }
 
 func TestWorkloadBootstrapOnChangesOnlyTheGoAPIDeployment(t *testing.T) {
-	base, out, err := renderAuth(t, goAPIWithAuth(wbSessions()...)...)
+	base, out, err := renderAuth(t, goAPIWithAuth(append(wbSessions(), "--set", "authService.accessToken.issuerURL="+wbIssuer)...)...)
 	if err != nil {
 		t.Fatalf("render failed: %v\n%.400s", err, out)
 	}

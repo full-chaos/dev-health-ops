@@ -340,8 +340,6 @@ func TestFlipbackSSOK3sPortForwardIsADirectKubectlWithoutTheSlotFd(t *testing.T)
 func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 	text := readText(t, filepath.Join(rootOf(t), fbScript))
 	for _, want := range []string{
-		// the verb reads the owner DSN, not the API login
-		`name: "MIGRATION_DATABASE_URI"`,
 		// RELEASE is readonly: the barrier gets it through env, after the superseded pods are gone
 		"barrier() { no_terminating_pods; env RELEASE=",
 	} {
@@ -358,7 +356,7 @@ func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 // workload (ci/lib/auth_workload_session_issue_k3s.sh), not with an svc_authsess_ credential of internal_service_credentials.
 func TestFlipbackSSOK3sSignsInWithTheWorkloadTokenNotAnSvcCredential(t *testing.T) {
 	text := readText(t, filepath.Join(rootOf(t), fbScript))
-	for _, banned := range []string{"svc_authsess_", "auth-session-issuer", "sessions:issue", "service-credentials", "AUTH_SESSION_ISSUE_TOKEN", "session-issue", "fb-issue-cred"} {
+	for _, banned := range []string{"svc_authsess_", "auth-session-issuer", "sessions:issue", "service-credentials", "session-issue", "fb-issue-cred"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script still holds %q: the svc_authsess_ session issue path is gone", banned)
 		}

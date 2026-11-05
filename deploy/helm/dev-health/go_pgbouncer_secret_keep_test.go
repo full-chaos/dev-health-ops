@@ -52,7 +52,7 @@ func keepHelm(t *testing.T, label string, args ...string) keepRender {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	cmd := exec.Command("helm", append([]string{"template", "a", "."}, args...)...)
+	cmd := helmCommand(append([]string{"template", "a", "."}, args...)...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

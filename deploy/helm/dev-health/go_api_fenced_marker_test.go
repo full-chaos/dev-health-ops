@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -37,7 +36,7 @@ func goAPIEnv(t *testing.T, args ...string) []envEntry {
 	t.Helper()
 	full := append([]string{"template", "marker", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := exec.Command("helm", full...).CombinedOutput()
+	out, err := helmCommand(full...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -90,7 +89,7 @@ func TestFenceMarkerAndThePolicyShareOneCondition(t *testing.T) {
 			marker := markerValues(goAPIEnv(t, c.args...))
 			full := append([]string{"template", "fence", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, c.args...)
-			out, err := exec.Command("helm", full...).CombinedOutput()
+			out, err := helmCommand(full...).CombinedOutput()
 			if err != nil {
 				t.Fatalf("render: %v\n%s", err, out)
 			}
@@ -134,7 +133,7 @@ func TestFenceMarkerCannotBeSetFromExtraEnv(t *testing.T) {
 			args := append([]string{"template", "marker", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 				"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24",
 				"--set-json", `goApi.extraEnv=[{"name":"TRUSTED_PROXIES_NETWORK_FENCED","value":"true"}]`}, extra...)
-			out, err := exec.Command("helm", args...).CombinedOutput()
+			out, err := helmCommand(args...).CombinedOutput()
 			if err == nil {
 				t.Fatal("the render accepted the marker in extraEnv")
 			}

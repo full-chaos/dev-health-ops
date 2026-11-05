@@ -13,7 +13,7 @@ import (
 )
 
 // delegatedDecidedEvent is the event type of the row of every delegated decision.
-const delegatedDecidedEvent = "auth.authorize.delegated_decided"
+const delegatedDecidedEvent = audit.EventAuthorizeDelegatedDecided
 
 // delegatedRows returns the auth.authorize.delegated_decided rows the sink saw.
 func (f *fakeAudit) delegatedRows() []audit.AuditEvent {

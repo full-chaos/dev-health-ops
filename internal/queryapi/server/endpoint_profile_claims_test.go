@@ -15,7 +15,7 @@ type rowClaim struct {
 var rowClaims = map[string]map[string]rowClaim{
 	"rest": {
 		"resource_resolver": {value: "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization", proofs: []claimProof{
-			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, true"}, anyOf: []string{}},
+			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}, anyOf: []string{}},
 		}},
 		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateRESTRequest); 403 Organization context required for a valid edge or user access token with no organization unless the caller is a superuser, who passes; 503 when the users-row store is unavailable and 500 otherwise (policy.WriteAuthFailure)", proofs: []claimProof{
 			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},

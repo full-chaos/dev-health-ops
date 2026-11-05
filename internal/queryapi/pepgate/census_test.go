@@ -18,15 +18,14 @@ const importPath = "github.com/full-chaos/dev-health-ops/internal/queryapi/pepga
 
 // constructorSites are the only production files that may build a scope, by constructor. An enforced scope
 // (Organization, Allowlist) comes from the PDP decision alone; a Legacy scope from the gate's not-enforced answer and
-// the exempt credential classes. The census checks both ways: a call outside the list fails, and an entry no call
-// matches fails.
+// legacyClaims (the exempt credential classes). The census checks both ways: a call outside the list fails, and an
+// entry no call matches fails.
 var constructorSites = map[string][]string{
 	"Organization": {"internal/queryapi/pdp/pdp.go"},
 	"Allowlist":    {"internal/queryapi/pdp/pdp.go"},
 	"Legacy": {
 		"internal/queryapi/pdp/pdp.go",
 		"internal/queryapi/server/rest_access.go",
-		"internal/queryapi/server/rest_error_response.go",
 	},
 }
 

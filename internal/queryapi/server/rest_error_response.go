@@ -37,7 +37,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/google/uuid"
 )
@@ -289,7 +288,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				return authctx.Claims{}, false
 			}
 			pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
-			return authctx.Claims{OrgID: claims.OrgID, Scope: pepgate.Legacy(claims.OrgID)}, true
+			return legacyClaims(claims.OrgID), true
 		}
 	}
 
@@ -300,7 +299,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authctx.Claims{}, false
 	}
 	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
-	return authctx.Claims{OrgID: claims.OrgID, Scope: pepgate.Legacy(claims.OrgID)}, true
+	return legacyClaims(claims.OrgID), true
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

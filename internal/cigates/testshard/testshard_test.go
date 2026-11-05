@@ -354,19 +354,50 @@ func TestTheWallTimeGuardNamesTheHeaviestByWeightWhenNothingIsMeasured(t *testin
 // The race-excluded census (ci/race_excluded_tests.tsv) is checked by the test shards through their package plans: every row is checked in exactly one shard.
 func TestTheRaceExcludedCensusIsSplitOverTheShardsExactlyOnce(t *testing.T) {
 	t.Parallel()
+	assertCensusSplitOverTheShards(t, filepath.Join(repoRoot(t), "ci", "race_excluded_tests.tsv"))
+}
+
+// The loader trims the columns of a row, so a padded row of the census is still checked in exactly one shard.
+func TestAPaddedRaceExcludedCensusRowIsSplitOverTheShardsExactlyOnce(t *testing.T) {
+	t.Parallel()
 	b, err := os.ReadFile(filepath.Join(repoRoot(t), "ci", "race_excluded_tests.tsv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	padded := false
+	for _, l := range strings.Split(string(b), "\n") {
+		if cols := strings.Split(l, "\t"); !padded && l != "" && !strings.HasPrefix(l, "#") && len(cols) == 2 {
+			l, padded = "  "+cols[0]+" \t "+cols[1]+"  ", true
+		}
+		lines = append(lines, l)
+	}
+	if !padded {
+		t.Fatal("the census holds no row to pad")
+	}
+	census := filepath.Join(t.TempDir(), "padded.tsv")
+	if err := os.WriteFile(census, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assertCensusSplitOverTheShards(t, census)
+}
+
+func assertCensusSplitOverTheShards(t *testing.T, census string) {
+	t.Helper()
+	b, err := os.ReadFile(census)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var want []string
 	for _, l := range strings.Split(string(b), "\n") {
 		if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "#") {
-			want = append(want, l)
+			cols := strings.Split(l, "\t")
+			want = append(want, strings.Trim(cols[0], " \t\r")+"\t"+strings.Trim(cols[1], " \t\r"))
 		}
 	}
 	var got []string
 	for k := 1; k <= shardCount; k++ {
-		out, errs, err := checkGo(t, nil, "race-excluded-shard-plan", fmt.Sprint(k), fmt.Sprint(shardCount))
+		out, errs, err := checkGo(t, []string{"GO_RACE_EXCLUDED_TESTS=" + census}, "race-excluded-shard-plan", fmt.Sprint(k), fmt.Sprint(shardCount))
 		if err != nil {
 			t.Fatalf("race-excluded-shard-plan %d %d: %v\n%s", k, shardCount, err, errs)
 		}

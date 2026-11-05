@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 )
@@ -17,7 +16,7 @@ func hostEntry(rest string) string {
 
 func renderIngress(args ...string) (string, error) {
 	full := append([]string{"template", "b", ".", "--set", "ingress.enabled=true"}, args...)
-	out, err := exec.Command("helm", full...).CombinedOutput()
+	out, err := helmCommand(full...).CombinedOutput()
 	return string(out), err
 }
 

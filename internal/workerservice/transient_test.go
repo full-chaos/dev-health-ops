@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"io"
 	"net"
 	"syscall"
@@ -136,18 +137,16 @@ func TestWorkerProcessPresenceStartPermanentErrorExitsAtOnce(t *testing.T) {
 func TestStartupRetryJitterBoundsAndCap(t *testing.T) {
 	t.Parallel()
 	for range 200 {
-		got := startupRetryJitter(10 * time.Second)
+		got := postgres.DialRetryJitter(10 * time.Second)
 		if got < 8*time.Second || got > 12*time.Second {
 			t.Fatalf("jitter(10s) = %v, outside +/-20%%", got)
 		}
 	}
 	clock := &preclaimFakeClock{}
-	err := startupRetryBudget(context.Background(), 5*time.Second, clock.now, clock.sleep,
-		func(d time.Duration) time.Duration { return d * 2 },
-		func(context.Context) error { return syscall.ECONNREFUSED },
-		isTransientDialError,
-		func(int, time.Duration, time.Duration, error) {},
-		func(int, time.Duration, error, bool) {})
+	err := postgres.DialRetry{
+		Budget: 5 * time.Second, Now: clock.now, Sleep: clock.sleep,
+		Jitter: func(d time.Duration) time.Duration { return d * 2 },
+	}.Do(context.Background(), func(context.Context) error { return syscall.ECONNREFUSED })
 	if err == nil {
 		t.Fatal("want budget exhausted error")
 	}
@@ -166,7 +165,7 @@ func TestStartupRetryJitterStaysInTheTwentyPercentBandAndSpreads(t *testing.T) {
 	low, high := base, base
 	seen := map[time.Duration]struct{}{}
 	for range 5000 {
-		got := startupRetryJitter(base)
+		got := postgres.DialRetryJitter(base)
 		if got < 8*time.Second || got > 12*time.Second {
 			t.Fatalf("jitter(%v) = %v, outside +/-20%%", base, got)
 		}
@@ -176,10 +175,10 @@ func TestStartupRetryJitterStaysInTheTwentyPercentBandAndSpreads(t *testing.T) {
 	if low > 8500*time.Millisecond || high < 11500*time.Millisecond || len(seen) < 1000 {
 		t.Fatalf("5000 draws span [%v, %v] with %d distinct values; want the band used and spread", low, high, len(seen))
 	}
-	if got := startupRetryJitter(4); got != 4 {
+	if got := postgres.DialRetryJitter(4); got != 4 {
 		t.Fatalf("jitter(4ns) = %v, want the wait unchanged when the spread rounds to zero", got)
 	}
-	if got := startupRetryJitter(0); got != 0 {
+	if got := postgres.DialRetryJitter(0); got != 0 {
 		t.Fatalf("jitter(0) = %v, want 0", got)
 	}
 }

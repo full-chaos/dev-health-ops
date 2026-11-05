@@ -20,9 +20,9 @@ func TestOAuthSSOKeysCarriesRowKeyInSocialNamespace(t *testing.T) {
 	row := uuid.New()
 	for provider, issuer := range map[string]string{
 		"github": "https://github.com", "gitlab": "https://gitlab.com", "google": "https://accounts.google.com"} {
-		key, selfHosted := OAuthSSOKey(cand(uuid.New(), row, provider, "42", ""))
-		if selfHosted || key == nil {
-			t.Fatalf("%s: key=%v selfHosted=%v", provider, key, selfHosted)
+		key := OAuthSSOKey(cand(uuid.New(), row, provider, "42", ""))
+		if key == nil {
+			t.Fatalf("%s: no key", provider)
 		}
 		want := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(row.String()), Subject: "42"}
 		if *key != want {
@@ -32,23 +32,28 @@ func TestOAuthSSOKeysCarriesRowKeyInSocialNamespace(t *testing.T) {
 }
 
 func TestOAuthSSOKeysGitLabComBaseURLIsSocialNamespace(t *testing.T) {
-	key, selfHosted := OAuthSSOKey(cand(uuid.New(), uuid.New(), "gitlab", "7", "https://gitlab.com/"))
-	if selfHosted || key == nil || key.Issuer != "https://gitlab.com" {
-		t.Fatalf("key=%v selfHosted=%v", key, selfHosted)
+	key := OAuthSSOKey(cand(uuid.New(), uuid.New(), "gitlab", "7", "https://gitlab.com/"))
+	if key == nil || key.Issuer != "https://gitlab.com" {
+		t.Fatalf("key=%v", key)
 	}
 }
 
-func TestOAuthSSOKeysSelfHostedGitLabNotJoinedToGitLabCom(t *testing.T) {
-	key, selfHosted := OAuthSSOKey(cand(uuid.New(), uuid.New(), "gitlab", "123", "https://git.corp.example"))
-	if key != nil || !selfHosted {
-		t.Fatalf("self-hosted row carried: key=%v selfHosted=%v", key, selfHosted)
+func TestOAuthSSOKeysSelfHostedGitLabKeyCarriesTheInstanceHost(t *testing.T) {
+	row := uuid.New()
+	for base, issuer := range map[string]string{
+		"https://git.corp.example": "https://git.corp.example", "https://Git.Corp.Example/gl/": "https://git.corp.example"} {
+		key := OAuthSSOKey(cand(uuid.New(), row, "gitlab", "123", base))
+		want := identity.ExternalKey{Issuer: issuer, Provider: identity.Provider(row.String()), Subject: "123"}
+		if key == nil || *key != want {
+			t.Fatalf("base_url %q: key=%v, want %+v", base, key, want)
+		}
 	}
 }
 
 func TestOAuthSSOKeysOtherProviderIsNotOAuthSSO(t *testing.T) {
 	for _, p := range []string{"local", "oidc", "saml", ""} {
-		if key, sh := OAuthSSOKey(cand(uuid.New(), uuid.New(), p, "1", "")); key != nil || sh {
-			t.Fatalf("%q: key=%v selfHosted=%v", p, key, sh)
+		if key := OAuthSSOKey(cand(uuid.New(), uuid.New(), p, "1", "")); key != nil {
+			t.Fatalf("%q: key=%v", p, key)
 		}
 	}
 }
@@ -98,31 +103,35 @@ func TestRunOAuthSSOTwoCandidateRowsCarryNothingAndAreCounted(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(sink.keys[one]) != 0 || len(sink.keys[two]) != 0 || len(sink.keys[ok]) != 1 ||
-			rep.Users != 3 || rep.Linked != 1 || rep.Ambiguous != 2 || rep.SelfHostedUnbindable != 0 {
+			rep.Users != 3 || rep.Linked != 1 || rep.Ambiguous != 2 {
 			t.Fatalf("batch %d: keys one=%d two=%d ok=%d report=%+v", batch, len(sink.keys[one]), len(sink.keys[two]), len(sink.keys[ok]), rep)
 		}
 	}
 }
 
-func TestRunOAuthSSOSelfHostedWritesNothingAndIsCountedOncePerUser(t *testing.T) {
-	u := uuid.New()
+func TestRunOAuthSSOSelfHostedCarriesTheInstanceHostKey(t *testing.T) {
+	u, other := uuid.New(), uuid.New()
+	row, otherRow := uuid.New(), uuid.New()
 	sink := &fakeCarry{keys: map[uuid.UUID][]identity.ExternalKey{}}
 	rep, err := RunOAuthSSO(context.Background(),
 		pagedCands{rows: []OAuthSSOCandidate{
-			cand(u, uuid.New(), "gitlab", "123", "https://git.corp.example"),
-			cand(u, uuid.New(), "gitlab", "123", "https://git.other.example")}}, sink, Options{BatchSize: 1})
+			cand(u, row, "gitlab", "123", "https://Git.Corp.Example/"),
+			cand(other, otherRow, "gitlab", "123", "")}}, sink, Options{BatchSize: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sink.keys) != 0 || rep.Linked != 0 || rep.SelfHostedUnbindable != 1 || rep.Users != 1 {
+	wantHosted := identity.ExternalKey{Issuer: "https://git.corp.example", Provider: identity.Provider(row.String()), Subject: "123"}
+	wantSocial := identity.ExternalKey{Issuer: "https://gitlab.com", Provider: identity.Provider(otherRow.String()), Subject: "123"}
+	if len(sink.keys[u]) != 1 || sink.keys[u][0] != wantHosted || len(sink.keys[other]) != 1 || sink.keys[other][0] != wantSocial ||
+		rep.Linked != 2 || rep.Users != 2 {
 		t.Fatalf("keys=%v report=%+v", sink.keys, rep)
 	}
 }
 
 func TestOAuthSSOReportLinesCountsOnly(t *testing.T) {
-	rep := OAuthSSOReport{Users: 3, Linked: 2, Ambiguous: 4, SelfHostedUnbindable: 1, Skipped: map[string]int{SkipStoreError: 1}}
+	rep := OAuthSSOReport{Users: 3, Linked: 2, Ambiguous: 4, Skipped: map[string]int{SkipStoreError: 1}}
 	got := strings.Join(rep.Lines(), "\n")
-	for _, want := range []string{"oauth_sso_users=3", "oauth_sso_keys_linked=2", "oauth_sso_ambiguous_row=4", "oauth_sso_selfhosted_unbindable=1", "skipped.store_error=1"} {
+	for _, want := range []string{"oauth_sso_users=3", "oauth_sso_keys_linked=2", "oauth_sso_ambiguous_row=4", "skipped.store_error=1"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -130,8 +139,8 @@ func TestOAuthSSOReportLinesCountsOnly(t *testing.T) {
 }
 
 func TestOAuthSSOCountLineCountsOnly(t *testing.T) {
-	line := identity.OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, Ambiguous: 2, SelfHostedUnbindable: 1}.Line()
-	if line != "oauth_sso total=5 keyed=3 missing=1 ambiguous=2 selfhosted_unbindable=1" {
+	line := identity.OAuthSSOCount{Total: 5, Keyed: 3, Missing: 1, Ambiguous: 2}.Line()
+	if line != "oauth_sso total=5 keyed=3 missing=1 ambiguous=2" {
 		t.Fatalf("line %q", line)
 	}
 	if strings.ContainsAny(line, "@-") {

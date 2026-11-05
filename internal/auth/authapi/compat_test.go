@@ -170,9 +170,19 @@ type fakeLoginUsers struct {
 	byEmail   map[string]*local.User
 	projected []uuid.UUID
 	err       error
+	// beforeErr runs first (a cell cancels the request here); hold blocks a
+	// lookup until a cell lets it go.
+	beforeErr func()
+	hold      func()
 }
 
 func (f *fakeLoginUsers) ByEmail(_ context.Context, email string) (*local.User, error) {
+	if f.beforeErr != nil {
+		f.beforeErr()
+	}
+	if f.hold != nil {
+		f.hold()
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -188,6 +198,9 @@ func (f *fakeLoginUsers) Project(_ context.Context, id uuid.UUID) error {
 // it counts failures per lockout identifier instead and locks an identifier
 // at threshold failures, as auth.login_attempts does.
 type fakeAttempts struct {
+	mu        sync.Mutex
+	checkErr  error
+	recordErr error
 	locked    bool
 	remaining time.Duration
 	failures  int
@@ -196,6 +209,11 @@ type fakeAttempts struct {
 }
 
 func (f *fakeAttempts) Check(_ context.Context, id []byte) (bool, time.Duration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checkErr != nil {
+		return false, 0, f.checkErr
+	}
 	if f.threshold > 0 {
 		return f.perID[string(id)] >= f.threshold, f.remaining, nil
 	}
@@ -203,6 +221,11 @@ func (f *fakeAttempts) Check(_ context.Context, id []byte) (bool, time.Duration,
 }
 
 func (f *fakeAttempts) RecordFailure(_ context.Context, id []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.recordErr != nil {
+		return f.recordErr
+	}
 	f.failures++
 	if f.threshold > 0 {
 		if f.perID == nil {
@@ -264,6 +287,7 @@ type compatFixture struct {
 	attempts   *fakeAttempts
 	projector  *fakeProjector
 	appended   []audit.AuditEvent
+	appendMu   sync.Mutex
 	appendErr  error
 	social     SocialExchange
 	creds      *fakeServiceCredentials
@@ -328,6 +352,8 @@ func (f *compatFixture) buildCompat() {
 			if err := audit.ValidateAttributes(event.Attributes); err != nil {
 				return err
 			}
+			f.appendMu.Lock()
+			defer f.appendMu.Unlock()
 			f.appended = append(f.appended, event)
 			return f.appendErr
 		},
@@ -407,6 +433,46 @@ func TestCompatRefreshOfAGoneOrDisabledUserRevokesTheSession(t *testing.T) {
 		if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
 			t.Fatalf("%s: revoked %v, want the session", golden, f.sessions.revoked)
 		}
+	}
+}
+
+// The store refuses an auth-service credential whose public user is inactive or
+// gone under the session lock (D6651) and names the locked session: go-api's
+// answer and row come from the route's own read of the user, and the session
+// is revoked, as for a user the store served.
+func TestCompatRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
+	for golden, mutate := range map[string]func(*fixture){
+		"refresh: live jti, subject no user": func(f *fixture) { delete(f.users.users, f.principal) },
+		"refresh: judy deactivated": func(f *fixture) {
+			user := f.users.users[f.principal]
+			user.IsActive = false
+			f.users.users[f.principal] = user
+		},
+	} {
+		f := newCompatFixture(t)
+		mutate(f.fixture)
+		f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+		expectGolden(t, response, response.Body.Bytes(), golden)
+		if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+			t.Fatalf("%s: revoked %v, want the session", golden, f.sessions.revoked)
+		}
+	}
+}
+
+// A store refusal (D6651) whose public user the route reads active (a
+// concurrent change) mints nothing, answers go-api's generic 401 and revokes the
+// locked session the store named.
+func TestCompatRefreshOfAStoreRefusedUserReadActiveRevokesTheSession(t *testing.T) {
+	f := newCompatFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
+	if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("revoked %v, want the locked session %s", f.sessions.revoked, f.record.ID)
+	}
+	if f.sessions.minted != 0 {
+		t.Fatalf("%d successors minted, want 0", f.sessions.minted)
 	}
 }
 
@@ -1183,6 +1249,71 @@ func TestTheSignInRoutesAuditTheirTransportRefusals(t *testing.T) {
 				t.Fatalf("%s %s: answer %s is not the transport envelope", route.Pattern, code, response.Body)
 			}
 		}
+	}
+}
+
+// A local sign-in's transport refusal charges the login IP bucket before its
+// audit row, and a refused charge writes no row; a social sign-in's refusal,
+// like any code that is not audited, charges nothing.
+func TestASignInTransportRefusalChargesTheLoginIPBeforeItsAuditRow(t *testing.T) {
+	build := func() (*compatFixture, *recordingStore, map[string]httpapi.ErrorWriter, *[]int) {
+		f, _ := newSocialFixture(t)
+		store := newRecording()
+		f.counters = store
+		var hitsAtAudit []int
+		routes, err := CompatRoutes(CompatDeps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Projector: f.projector,
+			AppendAudit: func(_ context.Context, event audit.AuditEvent) error {
+				f.appended = append(f.appended, event)
+				hitsAtAudit = append(hitsAtAudit, len(store.hits))
+				return nil
+			},
+			Login:  &LoginConfig{Users: f.loginUsers, Attempts: f.attempts, LockoutKey: contracts.NewSecretString(testLockoutKey)},
+			Social: f.social, Limits: mustLimits(f.t, f.counters)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writers := map[string]httpapi.ErrorWriter{}
+		for _, route := range routes {
+			writers[route.Pattern] = route.ErrorWriter
+		}
+		return f, store, writers, &hitsAtAudit
+	}
+	refuse := func(write httpapi.ErrorWriter, pattern string, code httpapi.Code) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		write(response, httptest.NewRequest(http.MethodPost, pattern, nil), code)
+		return response
+	}
+
+	f, store, writers, atAudit := build()
+	refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodePayloadTooLarge)
+	if len(store.hits) != 1 || store.hits[0].Limit.ID != loginIPLimit.ID {
+		t.Fatalf("a local transport refusal made hits %+v, want one on %s", store.hits, loginIPLimit.ID)
+	}
+	if len(f.appended) != 1 || len(*atAudit) != 1 || (*atAudit)[0] != 1 {
+		t.Fatalf("%d audit rows, hits seen at the row %v: the charge must come first", len(f.appended), *atAudit)
+	}
+	for _, code := range []httpapi.Code{httpapi.CodeRateLimited, httpapi.CodeInternal} {
+		refuse(writers[PatternCompatLogin], PatternCompatLogin, code)
+	}
+	if len(store.hits) != 1 {
+		t.Fatalf("a refusal that is not audited charged the bucket: %d hits", len(store.hits))
+	}
+
+	for i := 1; i < int(loginIPLimit.Count); i++ {
+		refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodeInvalidRequest)
+	}
+	rows := len(f.appended)
+	response := refuse(writers[PatternCompatLogin], PatternCompatLogin, httpapi.CodeInvalidRequest)
+	if response.Code != http.StatusTooManyRequests || len(f.appended) != rows {
+		t.Fatalf("a refused charge answered %d and wrote %d new audit rows, want 429 and none", response.Code, len(f.appended)-rows)
+	}
+
+	f, store, writers, _ = build()
+	for _, code := range []httpapi.Code{httpapi.CodePayloadTooLarge, httpapi.CodeInvalidRequest, httpapi.CodeRateLimited, httpapi.CodeInternal} {
+		refuse(writers[PatternCompatSocialLogin], PatternCompatSocialLogin, code)
+	}
+	if len(store.hits) != 0 || len(f.appended) != 2 {
+		t.Fatalf("social refusals made %d hits and %d audit rows, want none and two", len(store.hits), len(f.appended))
 	}
 }
 

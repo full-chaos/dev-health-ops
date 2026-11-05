@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,9 @@ func TestBaselineEqualsTheArchivedChain(t *testing.T) {
 	}
 	aCapture := capture(t, ctx, instance, aDB, window{aStarted, time.Now()})
 	aCapture.Cutover, aCapture.RiverSchema = productionSettings.Cutover, productionSettings.RiverSchema
+	// The ledger records how a database was built, not what it holds: build A walked the archived revisions too, so
+	// its ledger has their rows and build B's cannot. Every other row, and the ledger rows of the live chain, compare.
+	aCapture.Data = withoutLedgerRowsOf(aCapture.Data, archived)
 	if os.Getenv(updateEnv) == "1" {
 		if len(chain) > 0 {
 			t.Fatal("the baseline is regenerated only with no chain revision above it")
@@ -148,6 +152,7 @@ func TestBaselineEqualsTheArchivedChain(t *testing.T) {
 
 	riverAndRoles(t, ctx, instance, aURI)
 	aFull := capture(t, ctx, instance, aDB, window{aStarted, time.Now()})
+	aFull.Data = withoutLedgerRowsOf(aFull.Data, archived)
 	riverAndRoles(t, ctx, instance, bURI)
 	bFull := capture(t, ctx, instance, bDB, window{bStarted, time.Now()})
 	if diff := compare(roundTrip(t, ctx, instance, admin, aFull), roundTrip(t, ctx, instance, admin, bFull)); diff != "" {
@@ -156,4 +161,26 @@ func TestBaselineEqualsTheArchivedChain(t *testing.T) {
 	if a, b := ownerRows(t, ctx, aConn), ownerRows(t, ctx, bConn); !reflect.DeepEqual(a, b) {
 		t.Fatalf("object owners differ after River and the role grants:\nA %v\nB %v", a, b)
 	}
+}
+
+// withoutLedgerRowsOf drops the data dump's dho_chain_applied rows of the given revisions.
+func withoutLedgerRowsOf(data string, revisions []pgmigrate.ChainFile) string {
+	drop := map[string]bool{}
+	for _, file := range revisions {
+		drop["INSERT INTO public."+pgmigrate.LedgerTable+" (revision, sha256, source, applied_at) VALUES ('"+file.Revision+"', "] = true
+	}
+	var kept []string
+	for _, line := range strings.SplitAfter(data, "\n") {
+		skip := false
+		for prefix := range drop {
+			if strings.HasPrefix(line, prefix) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "")
 }

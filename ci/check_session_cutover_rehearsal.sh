@@ -145,11 +145,12 @@ KUBE_MINOR="$(sed -E 's/^v[0-9]+\.([0-9]+).*/\1/' <<<"${KUBE_SERVER}")"
 API_PASSWORD="$(openssl rand -hex 12)"
 AUTH_PASSWORD="$(openssl rand -hex 12)"
 JWT_KEY="$(openssl rand -hex 24)"
-ISSUE_TOKEN="svc_authsess_$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n' | cut -c1-43)"
 umask 077
 printf 'secrets:\n  data:\n    API_DATABASE_URI: "postgres://devhealth_api:%s@%s-postgresql:5432/devhealth?sslmode=disable"\n    JWT_SECRET_KEY: "%s"\n' \
   "${API_PASSWORD}" "${FULL}" "${JWT_KEY}" >"${WORK}/secrets-base.yaml"
-printf 'secrets:\n  data:\n    AUTH_SESSION_ISSUE_TOKEN: "%s"\n' "${ISSUE_TOKEN}" >"${WORK}/secrets-session.yaml"
+# go-api presents its workload token (AUTH_SESSION_ISSUE_CREDENTIAL=workload) and reads no AUTH_SESSION_ISSUE_TOKEN; the chart
+# still renders that key as a required secretKeyRef while sessions are on, so the shared Secret carries a placeholder that is no credential.
+printf 'secrets:\n  data:\n    AUTH_SESSION_ISSUE_TOKEN: "unused-go-api-signs-in-with-its-workload-token"\n' >"${WORK}/secrets-session.yaml"
 printf 'authService:\n  migrate:\n    sessionReaders:\n      queryApi: devhealth_query_api\n  sessionKeys:\n    successor:\n      secretName: auth-session\n' >"${WORK}/successor.yaml"
 
 CHART="${ROOT}/deploy/helm/dev-health"
@@ -163,7 +164,11 @@ fi
 # so the layer names the store Secret, the single node's pod range (kind's default, the first /24 of 10.244.0.0/16; the wide-range ack
 # and the node's own addresses excluded) and the auth-service policy peers.
 printf 'authService:\n  valkey:\n    secretName: auth-ratelimit\n  trustedProxies: ["10.244.0.0/24", "!10.244.0.0", "!10.244.0.1"]\n  trustedProxiesWideAccepted: true\n  networkPolicy:\n    enabled: true\n    egress:\n      database:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: postgresql}}}]\n      valkey:\n        to: [{podSelector: {matchLabels: {app.kubernetes.io/name: dev-health, app.kubernetes.io/instance: %s, app.kubernetes.io/component: valkey}}}]\n' "${RELEASE}" "${RELEASE}" >"${WORK}/authprereq.yaml"
-HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml" -f "${WORK}/authprereq.yaml")
+# The prod workload shape: go-api presents its projected ServiceAccount token (audience dev-health-workload-exchange) to auth-service,
+# which has the API server review it (TokenReview). kind's ServiceAccount issuer and service ClusterIP are the defaults of kind's config.
+# goApi.extraEnv replaces the release layer's list, so VALKEY_URI is repeated.
+printf 'goApi:\n  extraEnv:\n    - {name: VALKEY_URI, value: "redis://ap-dev-health-valkey:6379/1"}\n    - {name: AUTH_SESSION_ISSUE_CREDENTIAL, value: workload}\n    - {name: AUTH_WORKLOAD_SUBJECT_FILE, value: /var/run/dev-health/workload/token}\n    - {name: AUTH_WORKLOAD_ISSUER, value: "https://auth.rehearsal.example"}\n  extraVolumes:\n    - name: workload-token\n      projected: {sources: [{serviceAccountToken: {audience: dev-health-workload-exchange, expirationSeconds: 3600, path: token}}]}\n  extraVolumeMounts:\n    - {name: workload-token, mountPath: /var/run/dev-health/workload, readOnly: true}\nauthService:\n  accessToken: {issuerURL: "https://auth.rehearsal.example"}\n  workloadExchange: {enabled: true, trustDomain: rehearsal.example, clusterIssuer: "https://kubernetes.default.svc.cluster.local", kubeAPIURL: "https://kubernetes.default.svc"}\n  networkPolicy:\n    egress:\n      kubeAPI:\n        to: [{ipBlock: {cidr: 10.96.0.1/32}}]\n' >"${WORK}/workload.yaml"
+HELM_SESSION=(-f "${WORK}/secrets-session.yaml" -f "${WORK}/successor.yaml" -f "${WORK}/authprereq.yaml" -f "${WORK}/workload.yaml")
 
 # --- rev 1: objects only, no hooks, so PostgreSQL exists before the hooks need it -------------------
 printf 'step 2: helm install --no-hooks (the databases), then the roles and Secrets the chart only references\n'

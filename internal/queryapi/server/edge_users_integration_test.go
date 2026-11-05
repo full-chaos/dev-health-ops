@@ -18,6 +18,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 )
 
+const edgeUsersOrg = "22222222-2222-2222-2222-222222222222"
+
 // CHAOS-6290 through the real Build: with the /query route configured (real ClickHouse and
 // the real migrated Postgres schema) and the edge secret set, an edge access token is
 // checked against the live users row THROUGH the /query route's registry pool. An inactive
@@ -62,6 +64,19 @@ VALUES ($1, $2, 'local', $3, false, false, $4, now(), now())`,
 		return id
 	}
 	activeUser, inactiveUser, bumpedUser := addUser(true, 0), addUser(false, 0), addUser(true, 2)
+	// The token's org, active, with a membership row for each seeded user: the edge
+	// refuses a token whose org the user is not a member of (CheckTokenOrg).
+	if _, err := seed.Exec(ctx, `INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'edge-users', 'Edge users', 'community', 'stripe', true, now(), now())`, edgeUsersOrg); err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	for _, id := range []uuid.UUID{activeUser, inactiveUser, bumpedUser} {
+		if _, err := seed.Exec(ctx, `INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'viewer', now(), now(), now())`, uuid.New(), edgeUsersOrg, id); err != nil {
+			t.Fatalf("seed membership: %v", err)
+		}
+	}
+	nonMember := addUser(true, 0)
 
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -87,7 +102,7 @@ VALUES ($1, $2, 'local', $3, false, false, $4, now(), now())`,
 
 	// serve answers the status and body of GET /api/v1/people with an edge token for user.
 	serve := func(user uuid.UUID, tokenVersion int) (int, string) {
-		claims := validTestEdgeClaims("org-edge-1")
+		claims := validTestEdgeClaims(edgeUsersOrg)
 		claims["sub"] = user.String()
 		claims["tv"] = tokenVersion
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/people?q=a", nil)
@@ -117,6 +132,9 @@ VALUES ($1, $2, 'local', $3, false, false, $4, now(), now())`,
 	}
 	if got := status(bumpedUser, 0); got != http.StatusUnauthorized {
 		t.Errorf("stale token_version: status %d, want 401", got)
+	}
+	if got := status(nonMember, 0); got != http.StatusUnauthorized {
+		t.Errorf("active user with no membership in the token's org: status %d, want 401", got)
 	}
 	if ok, code, body := served(activeUser, 0); !ok {
 		t.Errorf("active user's token: status %d body %q, want it to pass the users check and reach the route", code, body)

@@ -50,7 +50,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				return signEdgeToken(t, "a-completely-different-fixture-secret!!", validEdgeClaims("org-1"))
+				return signEdgeToken(t, "a-completely-different-fixture-secret!!", validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 			},
 		},
 		{
@@ -59,7 +59,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    "some-other-service",
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				claims["aud"] = "some-other-service"
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -70,7 +70,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    "not-the-real-edge",
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				claims["iss"] = "not-the-real-edge"
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -81,7 +81,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				claims["exp"] = time.Now().Add(-time.Hour).Unix()
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -92,7 +92,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				claims["nbf"] = time.Now().Add(time.Hour).Unix()
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -112,7 +112,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				delete(claims, "sub")
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -123,7 +123,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				delete(claims, "type")
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -134,7 +134,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantIss:    edgeTestIssuer,
 			wantAud:    edgeTestAudience,
 			token: func() string {
-				claims := validEdgeClaims("org-1")
+				claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 				claims["type"] = "refresh"
 				return signEdgeToken(t, edgeTestSecret, claims)
 			},
@@ -146,7 +146,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantAud:    edgeTestAudience,
 			users:      &fakeUsers{state: policy.UserState{IsActive: false}, found: true},
 			token: func() string {
-				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-1"))
+				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 			},
 		},
 		{
@@ -167,7 +167,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 			wantAud:    edgeTestAudience,
 			users:      &fakeUsers{err: errors.New("permission denied for table users")},
 			token: func() string {
-				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-1"))
+				return signEdgeToken(t, edgeTestSecret, validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 			},
 		},
 	}
@@ -238,7 +238,7 @@ func TestEdgeVerify_RejectionsAreLoggedAndCountedByReason(t *testing.T) {
 		slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
 		defer slog.SetDefault(prevLogger)
 
-		token := signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-1"))
+		token := signEdgeToken(t, edgeTestSecret, validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 		ctx := WithRequestMeta(context.Background(), remoteAddr, requestID)
 		if _, err := v.Verify(ctx, token); err != nil {
 			t.Fatalf("Verify: unexpected error for a valid edge token: %v", err)

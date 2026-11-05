@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
@@ -55,6 +56,9 @@ func (s *Store) CreateAuditedWith(ctx context.Context, principalID uuid.UUID, or
 		if errors.Is(err, ErrPrincipalUnavailable) {
 			return Issued{}, ErrPrincipalUnavailable
 		}
+		if errors.Is(err, ErrOrganizationUnavailable) {
+			return Issued{}, ErrOrganizationUnavailable
+		}
 		return Issued{}, fmt.Errorf("%w: creating a session: %w", ErrStore, err)
 	}
 	s.logger.DebugContext(ctx, "session created", "session_id", out.Session.ID.String())
@@ -66,7 +70,7 @@ func (s *Store) CreateAuditedWith(ctx context.Context, principalID uuid.UUID, or
 // the request's client address and its user_agent the request's user agent,
 // when they are bound. legacyJTI, when set, is the go-api refresh jti the
 // first credential was exchanged for (see firstCredential).
-func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+func (s *Store) insertSession(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
 	legacyJTI contracts.SecretString) (Issued, error) {
 	return s.insertSessionAs(ctx, tx, nil, principalID, organizationID, amr, legacyJTI)
 }
@@ -74,8 +78,11 @@ func (s *Store) insertSession(ctx context.Context, tx queryRower, principalID uu
 // insertSessionAs is insertSession with the session's id chosen by the caller
 // (nil: the database's default): a legacy exchange names the session in its
 // audit row before the transaction.
-func (s *Store) insertSessionAs(ctx context.Context, tx queryRower, sessionUUID *uuid.UUID, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
+func (s *Store) insertSessionAs(ctx context.Context, tx audit.TxOps, sessionUUID *uuid.UUID, principalID uuid.UUID, organizationID *uuid.UUID, amr []string,
 	legacyJTI contracts.SecretString) (Issued, error) {
+	if err := s.projectCopies(ctx, tx, principalID, organizationID); err != nil {
+		return Issued{}, err
+	}
 	credential, credentialID, legacyDigest, err := s.firstCredential(legacyJTI)
 	if err != nil {
 		return Issued{}, err
@@ -97,12 +104,11 @@ func (s *Store) insertSessionAs(ctx context.Context, tx queryRower, sessionUUID 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO `+s.q+`.sessions (id, principal_id, organization_id, token_hash, issued_at, created_at, updated_at, expires_at, auth_time, amr, client_ip, user_agent,
 			legacy_token_version)
-		SELECT COALESCE($8::uuid, gen_random_uuid()), p.id, $2::uuid, $3, t.at, t.at, t.at,
+		SELECT COALESCE($8::uuid, gen_random_uuid()), u.id, $2::uuid, $3, t.at, t.at, t.at,
 		       CASE WHEN $4::double precision > 0 THEN t.at + make_interval(secs => $4::double precision) ELSE 'infinity' END,
 		       t.at, $5, $6::inet, $7, `+legacyTokenVersion+`
-		FROM `+s.q+`.principals p CROSS JOIN (SELECT clock_timestamp() AS at) t
-		LEFT JOIN public.users u ON u.id = p.id
-		WHERE p.id = $1 AND p.disabled_at IS NULL
+		FROM public.users u CROSS JOIN (SELECT clock_timestamp() AS at) t
+		WHERE u.id = $1 AND u.is_active
 		RETURNING id::text`,
 		principalID.String(), org, hashCredential(handle), s.sessionLifetime.Seconds(), amr, clientaddr.Text(ctx), userAgentOf(ctx), sessionUUID).Scan(&sessionID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -209,4 +215,43 @@ func userAgentOf(ctx context.Context) *string {
 		return nil
 	}
 	return &agent
+}
+
+// projectCopies makes the auth copies a new session's foreign keys point at
+// (auth.principals and auth.users for the user, auth.organizations for the
+// organization) from the public rows, inside the issuing transaction and
+// before the session INSERT. A copy is an FK target only: the decision is the
+// public.users row (D6651), read here first so that an inactive or missing
+// user projects nothing. The user comes first and the organization second,
+// always, so two issues for the same pair take the unique-index waits in one
+// order.
+func (s *Store) projectCopies(ctx context.Context, tx audit.TxOps, principalID uuid.UUID, organizationID *uuid.UUID) error {
+	var active bool
+	err := tx.QueryRow(ctx, `SELECT is_active FROM public.users WHERE id = $1`, principalID.String()).Scan(&active)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !active {
+		return ErrPrincipalUnavailable
+	}
+	if err != nil {
+		return err
+	}
+	switch err := copyproject.EnsureUserIn(ctx, tx, s.q, principalID); {
+	case errors.Is(err, copyproject.ErrUserNotFound):
+		return ErrPrincipalUnavailable
+	case errors.Is(err, copyproject.ErrEmailCollision):
+		s.logger.WarnContext(ctx, "session issue refused: the user's email belongs to another auth principal",
+			"principal_id", principalID.String(), "reason_code", "email_collision")
+		return err
+	case err != nil:
+		return err
+	}
+	if organizationID == nil {
+		return nil
+	}
+	switch err := copyproject.EnsureOrganizationIn(ctx, tx, s.q, *organizationID); {
+	case errors.Is(err, copyproject.ErrOrganizationNotFound):
+		return ErrOrganizationUnavailable
+	case err != nil:
+		return err
+	}
+	return nil
 }

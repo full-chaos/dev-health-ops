@@ -148,11 +148,11 @@ func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testi
 		"users store error that is not unavailable": {
 			func(s *accessStore) { s.errUserState = errors.New("syntax error") },
 			want{http.StatusUnauthorized, http.StatusInternalServerError},
-			want{http.StatusUnauthorized, http.StatusInternalServerError}},
+			want{http.StatusUnauthorized, http.StatusServiceUnavailable}},
 		"users store unavailable": {
 			func(s *accessStore) { s.errUserState = policy.ErrUnavailable },
-			want{http.StatusUnauthorized, http.StatusInternalServerError},
-			want{http.StatusUnauthorized, http.StatusInternalServerError}},
+			want{http.StatusUnauthorized, http.StatusServiceUnavailable},
+			want{http.StatusUnauthorized, http.StatusServiceUnavailable}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, routed := range []bool{false, true} {

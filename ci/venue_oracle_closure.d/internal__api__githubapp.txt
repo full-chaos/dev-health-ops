@@ -41,6 +41,7 @@ internal/api/telemetry
 internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice
+internal/apiservice/accessrouting
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
@@ -154,6 +155,7 @@ internal/teamid
 internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/proxycapture

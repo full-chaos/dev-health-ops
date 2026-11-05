@@ -946,8 +946,10 @@ internal/testsupport/venueoracle	gopin.go	internal/api/syncadmin
 internal/testsupport/venueoracle	gopin.go	internal/api/teamsidentity/adminstampvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/admin
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/authflowvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/billingvenue
 internal/testsupport/venueoracle	gopin.go	internal/apiservice/metricsvenue
+internal/testsupport/venueoracle	gopin.go	internal/apiservice/ssovenue
 internal/testsupport/venueoracle	gopin.go	internal/testsupport/venueoracle
 internal/testsupport/venueoracle	opened.go	internal/admincli
 internal/testsupport/venueoracle	opened.go	internal/adminops

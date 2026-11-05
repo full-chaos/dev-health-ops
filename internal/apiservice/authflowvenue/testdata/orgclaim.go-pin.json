@@ -1,0 +1,6 @@
+{
+  "skip: not a member": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "skip: org claim not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "state: alice, org claim not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "state: alice, org she is not in": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
+}

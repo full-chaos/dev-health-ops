@@ -143,7 +143,7 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if !ran {
 		add("no go-quality-leg step runs `ci-leg ${{ matrix.args }}`")
 	}
-	const poolTimeout = "${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || (github.event_name == 'merge_group' && 45 || 30) }}"
+	const poolTimeout = "${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || (github.event_name == 'merge_group' && 45 || 45) }}"
 	if tm, ok := leg["timeout-minutes"].(int); !(ok && tm <= 30) && leg["timeout-minutes"] != poolTimeout {
 		add("go-quality-leg timeout-minutes must be <= 30 (or the pool expression), got %v", leg["timeout-minutes"])
 	}

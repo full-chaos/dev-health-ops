@@ -347,31 +347,155 @@ func stopRouteHandler(t *testing.T, decider pep.Decider) http.Handler {
 }
 
 // The stop route is the one way out of an impersonation, as in the legacy guard: the admin acts on their own session,
-// so the decision point judges the admin's own bearer there.
+// so the decision point judges the admin's own bearer there. Its answer stands: a deny is the route level's 403 and no
+// verdict is a 503, never the legacy allow the admin would get.
 func TestTheStopRouteOfAnImpersonatingAdminIsDecidedByThePDP(t *testing.T) {
 	for _, cell := range []struct {
-		name    string
-		verdict func(string) (bool, string)
-		status  int
-		counted string
+		name        string
+		verdict     func(string) (bool, string)
+		obligations map[string]any
+		dead        bool
+		status      int
+		body        string
+		counted     string
 	}{
-		{"allow", allowAll, http.StatusOK, "admin/allow"},
-		{"deny", denyWith("platform_role_absent"), http.StatusForbidden, "admin/deny"},
+		{"allow", allowAll, nil, false, http.StatusOK, "", "admin/allow"},
+		{"deny", denyWith("platform_role_absent"), nil, false, http.StatusForbidden, enforceDenyBodies["admin"], "admin/deny"},
+		{"allow with an obligation go-api does not carry out", allowAll, map[string]any{"step_up": true}, false, http.StatusServiceUnavailable, "", "admin/error_deny"},
+		{"no decision point answer", allowAll, nil, true, http.StatusServiceUnavailable, "", "admin/error_deny"},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, cell.verdict)
-			got := enforceRequest(stopRouteHandler(t, pdp.client(t)), http.MethodPost, stopImpersonationRoute)
-			if got.status != cell.status {
-				t.Errorf("stop route: %d %q, want %d", got.status, got.body, cell.status)
+			pdp.obligations = cell.obligations
+			client := pdp.client(t)
+			if cell.dead {
+				pdp.srv.Close()
 			}
-			if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminImpersonate || calls[0].Principal != shadowBearer {
-				t.Errorf("PDP saw %+v, want one admin.impersonate question with the admin's bearer", calls)
+			got := enforceRequest(stopRouteHandler(t, client), http.MethodPost, stopImpersonationRoute)
+			if got.status != cell.status || (cell.body != "" && got.body != cell.body) {
+				t.Errorf("stop route: %d %q, want %d %q", got.status, got.body, cell.status, cell.body)
+			}
+			if !cell.dead {
+				if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminImpersonate || calls[0].Principal != shadowBearer {
+					t.Errorf("PDP saw %+v, want one admin.impersonate question with the admin's bearer", calls)
+				}
 			}
 			if d := rec.snapshot(); !slices.Equal(d, []string{cell.counted}) {
 				t.Errorf("decisions %v, want [%s]", d, cell.counted)
 			}
 		})
+	}
+}
+
+// stopPatternVariants are route templates that are not the stop route's: a prefix, a suffix, a trailing slash,
+// percent-encoded and dot segments, another case, a wildcard or subtree that would also match its path, and other
+// methods. Only the exact template is exempt.
+var stopPatternVariants = []string{
+	"POST /api/v1/admin/impersonate/stop/",
+	"POST /api/v1/admin/impersonate/stopx",
+	"POST /api/v1/admin/impersonate/sto",
+	"POST /api/v1/admin/impersonate/stop%2F",
+	"POST /api/v1/admin/impersonate%2Fstop",
+	"POST /api/v1/admin/impersonate/%73top",
+	"POST /api/v1/admin/impersonate/./stop",
+	"POST /api/v1/admin/impersonate/x/../stop",
+	"POST /api/v1/admin//impersonate/stop",
+	"POST /API/v1/admin/impersonate/stop",
+	"post /api/v1/admin/impersonate/stop",
+	"POST  /api/v1/admin/impersonate/stop",
+	"POST /api/v1/admin/impersonate/stop ",
+	" POST /api/v1/admin/impersonate/stop",
+	"/api/v1/admin/impersonate/stop",
+	"POST /api/v1/admin/impersonate/{action}",
+	"POST /api/v1/admin/impersonate/",
+	"POST /api/v1/admin/impersonate",
+	"GET /api/v1/admin/impersonate/stop",
+	"PUT /api/v1/admin/impersonate/stop",
+	"PATCH /api/v1/admin/impersonate/stop",
+	"DELETE /api/v1/admin/impersonate/stop",
+}
+
+// An enforced row whose template is not exactly the stop route's refuses an impersonating caller unasked.
+func TestTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	for _, v := range stopPatternVariants {
+		rows[v] = stopRouteRow(t)
+	}
+	for _, pattern := range append([]string{stopImpersonationPattern}, stopPatternVariants...) {
+		t.Run(pattern, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: onFor("admin"), Timeout: time.Second, Logger: quiet()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := enf.decide(context.Background(), enforceObservation{pattern: pattern, bearer: shadowBearer, userAccessToken: true, impersonating: true})
+			want, wantCalls, wantCounted := enforceImpersonationRefused, 0, "admin/impersonation_refused"
+			if pattern == stopImpersonationPattern {
+				want, wantCalls, wantCounted = enforceAllow, 1, "admin/allow"
+			}
+			if got != want || len(pdp.calls()) != wantCalls || !slices.Equal(rec.snapshot(), []string{wantCounted}) {
+				t.Errorf("template %q: verdict %d, %d PDP calls, counted %v; want %d, %d, [%s]", pattern, got, len(pdp.calls()), rec.snapshot(), want, wantCalls, wantCounted)
+			}
+		})
+	}
+}
+
+// Through the mux: a request whose path or method is not the stop route's either reaches another enforced row and is
+// refused unasked, or reaches no handler at all. Only the exact stop request is served.
+func TestTheStopExemptionThroughTheMux(t *testing.T) {
+	const subtree = "POST /api/v1/admin/impersonate/"
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	rows[subtree] = stopRouteRow(t)
+	for _, cell := range []struct {
+		method, path string
+		refused      bool
+	}{
+		{http.MethodPost, "/api/v1/admin/impersonate/stop/", true},
+		{http.MethodPost, "/api/v1/admin/impersonate/stopx", true},
+		{http.MethodPost, "/api/v1/admin/impersonate/stop%2F", true},
+		{http.MethodPost, "/api/v1/admin/impersonate/stop/x", true},
+		{http.MethodPost, "/api/v1/admin/impersonate/x/../stop", false},
+		{http.MethodPost, "/api/v1/admin/impersonate/./stop", false},
+		{http.MethodPost, "/api/v1/admin//impersonate/stop", false},
+		{http.MethodGet, "/api/v1/admin/impersonate/stop", false},
+		{http.MethodPut, "/api/v1/admin/impersonate/stop", false},
+		{http.MethodDelete, "/api/v1/admin/impersonate/stop", false},
+	} {
+		t.Run(cell.method+" "+cell.path, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: onFor("admin"), Timeout: time.Second, Logger: quiet()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			guard := NewGuard(routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)}), quiet())
+			guard.SetEnforcer(enf)
+			mux := http.NewServeMux()
+			mux.Handle(stopImpersonationPattern, guard.WrapPlatform(ActionAdminImpersonate, echo))
+			mux.Handle(subtree, guard.WrapPlatform(ActionAdminImpersonate, echo))
+			got := enforceRequest(impersonating(mux), cell.method, cell.path)
+			t.Logf("%s %s -> %d", cell.method, cell.path, got.status)
+			if n := len(pdp.calls()); n != 0 || strings.Contains(got.body, "user=") {
+				t.Errorf("%d PDP calls, served %q; want 0 and not served", n, got.body)
+			}
+			if cell.refused {
+				if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || !slices.Equal(rec.snapshot(), []string{"admin/impersonation_refused"}) {
+					t.Errorf("%d %q counted %v, want 403 %q and [admin/impersonation_refused]", got.status, got.body, rec.snapshot(), impersonationRefusalBody)
+				}
+			} else if got.status == http.StatusOK || len(rec.snapshot()) != 0 {
+				t.Errorf("%d %q counted %v, want no handler and nothing counted", got.status, got.body, rec.snapshot())
+			}
+		})
+	}
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	got := enforceRequest(stopRouteHandler(t, pdp.client(t)), http.MethodPost, stopImpersonationRoute)
+	if got.status != http.StatusOK || len(pdp.calls()) != 1 || !slices.Equal(rec.snapshot(), []string{"admin/allow"}) {
+		t.Errorf("exact stop request: %d, %d PDP calls, counted %v; want 200, 1, [admin/allow]", got.status, len(pdp.calls()), rec.snapshot())
 	}
 }
 

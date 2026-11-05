@@ -429,6 +429,32 @@ func TestShadowTheStopRouteOfAnImpersonatingAdminIsAsked(t *testing.T) {
 	}
 }
 
+// The shadow's stop exemption is the exact template only: every other template counts impersonation_refused unasked.
+func TestShadowTheStopExemptionIsTheExactTemplateOnly(t *testing.T) {
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	for _, v := range stopPatternVariants {
+		rows[v] = stopRouteRow(t)
+	}
+	for _, pattern := range append([]string{stopImpersonationPattern}, stopPatternVariants...) {
+		t.Run(pattern, func(t *testing.T) {
+			rec := recordShadow(t)
+			pdp := newTestPDP(t, allowAll)
+			sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.Rows = rows })
+			sh.Observe(context.Background(), ShadowObservation{Pattern: pattern, Bearer: shadowBearer, Caller: ShadowCallerSuperuser,
+				UserAccessToken: true, Impersonating: true, LegacyAllowed: true})
+			sh.wg.Wait()
+			want, wantCalls := []string{"impersonation_refused"}, 0
+			if pattern == stopImpersonationPattern {
+				want, wantCalls = []string{"match"}, 1
+			}
+			if _, results := rec.snapshot(); !slices.Equal(results, want) || len(pdp.calls()) != wantCalls {
+				t.Errorf("template %q: results %v, %d PDP calls; want %v, %d", pattern, results, len(pdp.calls()), want, wantCalls)
+			}
+		})
+	}
+}
+
 // A delegated session's bearer (an act claim) is asked with its own bearer.
 func TestShadowADelegatedBearerIsAsked(t *testing.T) {
 	rec := recordShadow(t)

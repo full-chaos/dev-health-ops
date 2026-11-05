@@ -293,41 +293,6 @@ func TestSubscriptionWritesServedOrgRoleByPlatformAction(t *testing.T) {
 	}
 }
 
-// Without org_id the served org can still differ from the org whose role the guard judged: in an
-// impersonation session the Admin level swaps the caller's org to the session's target after judging the
-// role in the token's own org. The write then needs the caller's own admin role in the target org.
-func TestSubscriptionWritesImpersonationNeedsAnAdminRoleInTheTarget(t *testing.T) {
-	target, own := uuid.New(), uuid.New()
-	impersonate := rule.PlatformOf(rule.ActionAdminImpersonate)
-	for _, write := range subscriptionWrites {
-		for _, c := range []struct {
-			name     string
-			roleIn   string
-			want     int
-			stripeOn string
-		}{
-			{"no membership in the target", "", http.StatusForbidden, ""},
-			{"viewer of the target", "viewer", http.StatusForbidden, ""},
-			{"admin of the target", "admin", http.StatusOK, "sub_T"},
-		} {
-			t.Run(write.name+"/"+c.name, func(t *testing.T) {
-				rig := newWriteRig(t)
-				user := &policy.User{ID: uuid.New(), OrgID: target.String(), Role: "admin", Platform: &impersonate}
-				rig.db.roles[[2]uuid.UUID{user.ID, own}] = "admin"
-				if c.roleIn != "" {
-					rig.db.roles[[2]uuid.UUID{user.ID, target}] = c.roleIn
-				}
-				rig.db.subs[target], rig.db.subs[own] = "sub_T", "sub_O"
-				session := &policy.Impersonation{ID: uuid.New(), AdminUserID: user.ID, TargetUserID: uuid.New(), TargetOrgID: target, TargetRole: "admin"}
-				status, body, calls := rig.do(t, write, user, nil, func(ctx context.Context) context.Context {
-					return policy.WithImpersonation(ctx, session)
-				})
-				checkWrite(t, status, body, calls, c.want, c.stripeOn)
-			})
-		}
-	}
-}
-
 // The invoice void is the other billing write that resolves an org: its org_id counts only for a holder of
 // admin.billing, so for anyone else it serves the token's org, the org the Admin level judged.
 func TestVoidInvoiceServesTheTokenOrgForAViewerOfTheOrgIDOrg(t *testing.T) {

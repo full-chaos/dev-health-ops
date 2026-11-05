@@ -181,6 +181,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 var approvedRevokedReasons = []string{
 	"compromised",
 	"domain_revoked",
+	"org_deprovisioned",
 	"owner_request",
 }
 
@@ -240,6 +241,7 @@ var approvedAuditReasonCodes = []string{
 	"internal_error",
 	"compromised",
 	"domain_revoked",
+	"org_deprovisioned",
 	"owner_request",
 	"role_granted",
 	"role_revoked",

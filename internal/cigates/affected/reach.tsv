@@ -165,6 +165,7 @@ internal/auth/contracts	contracts.go	internal/auth/pushprojection
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/projectionreader
 internal/auth/contracts	contracts.go	internal/auth/repoidentity
+internal/auth/contracts	contracts.go	internal/auth/repoidentityprojection
 internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
@@ -380,6 +381,7 @@ internal/envelopemint	keygen.go	internal/auth/outboxprojection
 internal/envelopemint	keygen.go	internal/auth/passwordpolicy
 internal/envelopemint	keygen.go	internal/auth/platformrole
 internal/envelopemint	keygen.go	internal/auth/pushprojection
+internal/envelopemint	keygen.go	internal/auth/repoidentityprojection
 internal/envelopemint	keygen.go	internal/auth/serviceaccount
 internal/envelopemint	keygen.go	internal/auth/session
 internal/envelopemint	keygen.go	internal/auth/usersbackfill

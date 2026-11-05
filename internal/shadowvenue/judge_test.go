@@ -1,0 +1,323 @@
+package shadowvenue
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
+
+var t0 = time.Date(2026, 11, 5, 23, 0, 0, 0, time.UTC)
+
+// slotAt is slot seq of a run whose slots start 3 s apart and answer in 100 ms.
+func slotAt(seq int, row, caller string, k int) Slot {
+	start := t0.Add(time.Duration(seq-1) * 3 * time.Second)
+	return Slot{Seq: seq, Row: row, Caller: caller, Principal: caller + "-A", Expect: "match", K: k, Method: "GET",
+		Route: "/api/v1/admin/teams", Path: "/api/v1/admin/teams", Start: start, End: start.Add(100 * time.Millisecond), Status: 200}
+}
+
+func controlAt(seq int, id string, k int) Slot {
+	slot := slotAt(seq, id, "member", k)
+	slot.Expect = "mismatch"
+	return slot
+}
+
+func logLine(at time.Time, msg string, attrs ...string) string {
+	rec := map[string]string{"time": at.Format(time.RFC3339Nano), "level": "INFO", "msg": msg}
+	for i := 0; i+1 < len(attrs); i += 2 {
+		rec[attrs[i]] = attrs[i+1]
+	}
+	raw, _ := json.Marshal(rec)
+	return string(raw)
+}
+
+// result is the result line of slot, written offset after its start.
+func result(slot Slot, offset time.Duration, outcome, decision string) string {
+	attrs := []string{"route", slot.Method + " " + slot.Route, "namespace", "teams", "caller", slot.Caller, "result", outcome}
+	if decision != "" {
+		attrs = append(attrs, "decision_id", decision)
+	}
+	return logLine(slot.Start.Add(offset), MsgResult, attrs...)
+}
+
+func mismatchWarn(slot Slot, offset time.Duration, class, decision string) string {
+	return logLine(slot.Start.Add(offset), MsgMismatch, "route", slot.Method+" "+slot.Route, "caller", slot.Caller, "class", class,
+		"legacy", "deny", "shadow", "allow", "reason_code", "allowed_by_role", "decision_id", decision, "namespace", "teams")
+}
+
+func judge(t *testing.T, slots []Slot, lines []string, rulings ...Ruling) Report {
+	t.Helper()
+	ev, err := ParseLog(strings.NewReader(strings.Join(lines, "\n") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Judge(slots, ev, rulings, JudgeOptions{K: 3, Grace: 2200 * time.Millisecond})
+}
+
+// controlsOK are two control cells of one slot each... K=3, so three slots per control.
+func controlsOK() ([]Slot, []string) {
+	var slots []Slot
+	var lines []string
+	for i := 1; i <= 6; i++ {
+		id := "C1"
+		if i > 3 {
+			id = "C2"
+		}
+		slot := controlAt(i, id, (i-1)%3+1)
+		decision := "dec_CTRL" + strings.Repeat(string(rune('A'+i)), 22)
+		slots = append(slots, slot)
+		lines = append(lines, result(slot, 500*time.Millisecond, "mismatch", decision), mismatchWarn(slot, 500*time.Millisecond, "unresolved", decision))
+	}
+	return slots, lines
+}
+
+func cellOf(seqFrom int, row, caller string) []Slot {
+	return []Slot{slotAt(seqFrom, row, caller, 1), slotAt(seqFrom+1, row, caller, 2), slotAt(seqFrom+2, row, caller, 3)}
+}
+
+func matches(slots []Slot) []string {
+	var lines []string
+	for _, slot := range slots {
+		lines = append(lines, result(slot, 400*time.Millisecond, "match", "dec_"+strings.Repeat("M", 22)+string(rune('A'+slot.Seq%26))+"AAA"))
+	}
+	return lines
+}
+
+func rowVerdict(t *testing.T, report Report, row string) RowVerdict {
+	t.Helper()
+	for _, rv := range report.Rows {
+		if rv.Row == row {
+			return rv
+		}
+	}
+	t.Fatalf("row %s not in report", row)
+	return RowVerdict{}
+}
+
+func TestJudgePassesARowWhoseEveryCellMatchesWithADecision(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	slots = append(slots, cell...)
+	lines = append(lines, matches(cell)...)
+	report := judge(t, slots, lines)
+	if report.Void || !report.Pass || report.Exit() != 0 {
+		t.Fatalf("void=%v pass=%v exit=%d reasons=%v", report.Void, report.Pass, report.Exit(), report.Reasons)
+	}
+	if rv := rowVerdict(t, report, "58"); !rv.Pass {
+		t.Fatalf("row 58: %+v", rv)
+	}
+}
+
+func TestJudgeFailsLoudlyOnAMissingResultLine(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	slots = append(slots, cell...)
+	lines = append(lines, matches(cell[:2])...)
+	report := judge(t, slots, lines)
+	if report.Pass || report.Exit() != 1 || rowVerdict(t, report, "58").Pass {
+		t.Fatalf("a missing line passed: %+v", report)
+	}
+	if got := report.Slots[len(report.Slots)-1].Verdict; got != VerdictMissing {
+		t.Fatalf("last slot %s, want %s", got, VerdictMissing)
+	}
+	if !strings.Contains(strings.Join(report.Reasons, "\n"), "no result line") {
+		t.Fatalf("reasons do not name the missing line: %v", report.Reasons)
+	}
+}
+
+// A line outside the slot window, of another caller or of another route is not the slot's evidence.
+func TestJudgeCountsOnlyTheSlotsOwnLine(t *testing.T) {
+	for name, mutate := range map[string]func(Slot) string{
+		"late":  func(s Slot) string { return result(s, 2500*time.Millisecond, "match", "dec_"+strings.Repeat("L", 26)) },
+		"early": func(s Slot) string { return result(s, -200*time.Millisecond, "match", "dec_"+strings.Repeat("E", 26)) },
+		"other caller": func(s Slot) string {
+			s.Caller = "admin"
+			return result(s, 400*time.Millisecond, "match", "dec_"+strings.Repeat("O", 26))
+		},
+		"other route": func(s Slot) string {
+			s.Route = "/api/v1/admin/teams/{team_id}"
+			return result(s, 400*time.Millisecond, "match", "dec_"+strings.Repeat("R", 26))
+		},
+	} {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "58", "member")
+		slots = append(slots, cell...)
+		lines = append(lines, matches(cell[:2])...)
+		lines = append(lines, mutate(cell[2]))
+		report := judge(t, slots, lines)
+		if report.Slots[len(report.Slots)-1].Verdict != VerdictMissing || report.Pass {
+			t.Errorf("%s: last slot %s pass %v", name, report.Slots[len(report.Slots)-1].Verdict, report.Pass)
+		}
+	}
+}
+
+func TestJudgeRefusesTwoLinesForOneSlot(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	slots = append(slots, cell...)
+	lines = append(lines, matches(cell)...)
+	lines = append(lines, result(cell[0], 900*time.Millisecond, "match", "dec_"+strings.Repeat("D", 26)))
+	report := judge(t, slots, lines)
+	if report.Slots[6].Verdict != VerdictDuplicate || report.Pass {
+		t.Fatalf("slot 7 %s pass %v", report.Slots[6].Verdict, report.Pass)
+	}
+}
+
+// A match with no decision id was decided without the decision point: PDP evidence only for a cross-org cell.
+func TestJudgeMatchWithoutDecisionPassesOnlyACrossOrgCell(t *testing.T) {
+	for _, crossOrg := range []bool{false, true} {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "13", "member")
+		for i := range cell {
+			cell[i].CrossOrg = crossOrg
+			lines = append(lines, result(cell[i], 300*time.Millisecond, "match", ""))
+		}
+		slots = append(slots, cell...)
+		report := judge(t, slots, lines)
+		if rowVerdict(t, report, "13").Pass != crossOrg {
+			t.Fatalf("cross-org %v: row pass %v (%v)", crossOrg, !crossOrg, report.Slots[6].Verdict)
+		}
+		want := VerdictNoPDP
+		if crossOrg {
+			want = VerdictMatchServedOther
+		}
+		if report.Slots[6].Verdict != want {
+			t.Fatalf("cross-org %v: %s, want %s", crossOrg, report.Slots[6].Verdict, want)
+		}
+	}
+}
+
+func TestJudgeMismatchFailsUnlessIntentionalOrRuled(t *testing.T) {
+	build := func(class string) ([]Slot, []string) {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "58", "member")
+		for i, slot := range cell {
+			decision := "dec_MISM" + strings.Repeat(string(rune('A'+i)), 22)
+			lines = append(lines, result(slot, 300*time.Millisecond, "mismatch", decision), mismatchWarn(slot, 300*time.Millisecond, class, decision))
+		}
+		return append(slots, cell...), lines
+	}
+	slots, lines := build("unresolved")
+	if report := judge(t, slots, lines); rowVerdict(t, report, "58").Pass || report.Slots[6].Verdict != VerdictMismatch {
+		t.Fatalf("an unruled mismatch passed: %s", report.Slots[6].Verdict)
+	}
+	ruling := Ruling{Route: "GET /api/v1/admin/teams", Caller: "member", Class: "unresolved", Legacy: "deny", Shadow: "allow", Reason: "allowed_by_role", Verdict: "legacy_bug_kept"}
+	if report := judge(t, slots, lines, ruling); !rowVerdict(t, report, "58").Pass || report.Slots[6].Verdict != VerdictMismatchRuled {
+		t.Fatalf("a ruled mismatch: %s", report.Slots[6].Verdict)
+	}
+	other := ruling
+	other.Reason = "no_membership"
+	if report := judge(t, slots, lines, other); rowVerdict(t, report, "58").Pass {
+		t.Fatal("a ruling of another reason passed the tuple")
+	}
+	slots, lines = build("intentional")
+	if report := judge(t, slots, lines); !rowVerdict(t, report, "58").Pass || report.Slots[6].Verdict != VerdictMismatchIntentional {
+		t.Fatalf("an intentional mismatch: %s", report.Slots[6].Verdict)
+	}
+}
+
+// A mismatch result whose WARN line is not in the log has no tuple: nobody can rule it.
+func TestJudgeMismatchWithoutItsWarnLineFails(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	for i, slot := range cell {
+		lines = append(lines, result(slot, 300*time.Millisecond, "mismatch", "dec_NOWARN"+strings.Repeat(string(rune('A'+i)), 20)))
+	}
+	slots = append(slots, cell...)
+	report := judge(t, slots, lines)
+	if report.Slots[6].Verdict != VerdictMismatchNoTuple || rowVerdict(t, report, "58").Pass {
+		t.Fatalf("%s", report.Slots[6].Verdict)
+	}
+}
+
+func TestJudgeFailsEveryNonDecisionResult(t *testing.T) {
+	for outcome, want := range map[string]string{"error": VerdictError, "dropped": VerdictDropped, "skipped": VerdictSkipped, "impersonation_refused": VerdictImpersonationRefused} {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "58", "member")
+		for _, slot := range cell {
+			lines = append(lines, result(slot, 300*time.Millisecond, outcome, ""))
+		}
+		report := judge(t, append(slots, cell...), lines)
+		if report.Slots[6].Verdict != want || rowVerdict(t, report, "58").Pass {
+			t.Errorf("%s: %s", outcome, report.Slots[6].Verdict)
+		}
+	}
+}
+
+// The controls are the readout's positive check: a control that matches, or has no line, voids the run.
+func TestJudgeVoidsTheRunWhenAControlDoesNotMismatch(t *testing.T) {
+	slots, lines := controlsOK()
+	if report := judge(t, slots, lines); report.Void {
+		t.Fatalf("controls that mismatch voided the run: %v", report.Reasons)
+	}
+	matched := append([]string{}, lines...)
+	matched[0] = result(slots[0], 500*time.Millisecond, "match", "dec_"+strings.Repeat("Q", 26))
+	matched[1] = ""
+	if report := judge(t, slots, matched); !report.Void || report.Exit() != 3 {
+		t.Fatalf("a control that matched: void %v exit %d", report.Void, report.Exit())
+	}
+	missing := append([]string{}, lines[2:]...)
+	if report := judge(t, slots, missing); !report.Void {
+		t.Fatal("a control with no line did not void the run")
+	}
+	if report := judge(t, slots[:3], lines[:6]); !report.Void || !strings.Contains(strings.Join(report.Reasons, "\n"), "control") {
+		t.Fatalf("one control cell only: void %v %v", report.Void, report.Reasons)
+	}
+}
+
+func TestJudgeVoidsALogWithNoResultLine(t *testing.T) {
+	slots, _ := controlsOK()
+	report := judge(t, slots, []string{logLine(t0, "role posture check"), "not json"})
+	if !report.Void || !strings.Contains(strings.Join(report.Reasons, "\n"), "no result line") {
+		t.Fatalf("void %v %v", report.Void, report.Reasons)
+	}
+}
+
+func TestJudgeFailsAShortCellAGapAndAStrayLine(t *testing.T) {
+	slots, lines := controlsOK()
+	short := cellOf(7, "58", "member")[:2]
+	report := judge(t, append(slots, short...), append(lines, matches(short)...))
+	if rowVerdict(t, report, "58").Pass || report.Pass {
+		t.Fatal("a cell with 2 of 3 slots passed")
+	}
+	slots, lines = controlsOK()
+	gap := Slot{Seq: 7, Row: "22", Caller: "member", Principal: "member-A", Expect: "match", Method: "POST", Route: "/api/v1/billing/plans/pull-stripe", Note: "gap: ext stripe not allowed"}
+	report = judge(t, append(slots, gap), lines)
+	if rowVerdict(t, report, "22").Pass || report.Slots[6].Verdict != VerdictGap {
+		t.Fatalf("a gap: %s", report.Slots[6].Verdict)
+	}
+	slots, lines = controlsOK()
+	cell := cellOf(7, "58", "member")
+	stray := cell[0]
+	stray.Caller = "admin"
+	report = judge(t, append(slots, cell...), append(append(lines, matches(cell)...), result(stray, 300*time.Millisecond, "match", "dec_"+strings.Repeat("S", 26))))
+	if report.Pass || !strings.Contains(strings.Join(report.Reasons, "\n"), "stray") {
+		t.Fatalf("a stray line passed: %v", report.Reasons)
+	}
+}
+
+func TestJudgeRefusesOverlappingWindows(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	cell[1].Start = cell[0].End.Add(time.Second)
+	cell[1].End = cell[1].Start.Add(100 * time.Millisecond)
+	report := judge(t, append(slots, cell...), append(lines, matches(cell)...))
+	if report.Pass || !strings.Contains(strings.Join(report.Reasons, "\n"), "overlap") {
+		t.Fatalf("overlapping windows passed: %v", report.Reasons)
+	}
+}
+
+func TestParseLogRefusesAMalformedEvidenceLine(t *testing.T) {
+	for name, line := range map[string]string{
+		"no route":      logLine(t0, MsgResult, "caller", "member", "result", "match"),
+		"bad result":    logLine(t0, MsgResult, "route", "GET /x", "caller", "member", "result", "maybe"),
+		"bad caller":    logLine(t0, MsgResult, "route", "GET /x", "caller", "root", "result", "match"),
+		"bad time":      `{"time":"yesterday","msg":"` + MsgResult + `","route":"GET /x","caller":"member","result":"match"}`,
+		"warn no tuple": logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X"),
+		"number caller": `{"time":"` + t0.Format(time.RFC3339Nano) + `","msg":"` + MsgResult + `","route":"GET /x","caller":5,"result":"match"}`,
+	} {
+		if _, err := ParseLog(strings.NewReader(line + "\n")); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

@@ -261,37 +261,21 @@ func (e *routesEnv) disablePrincipal(t *testing.T, ctx context.Context, user uui
 	}
 }
 
-// acp answers-11400-impl-2 Q2: an auth-service credential whose principal is disabled is refused by the store under
-// the session lock; go-api's deactivated row (refresh.go:265) names the locked session's user and organization, in a
-// transaction of its own (no auth state changes, so no auth event).
-func TestCompatRefreshOfADisabledPrincipalsCredentialWritesGoAPIsRefusalRow(t *testing.T) {
+// D6651 (answers-12680-1, B2): the auth copy is never a decision input. A disabled auth principal of an active public
+// user does not refuse the refresh of its auth-service credential: the refresh is served and writes no refusal row.
+// (acp answers-11400-impl-2 Q2 pinned the copy as the decision; D6651 supersedes it.)
+func TestCompatRefreshOfADisabledCopyOfAnActiveUserIsServed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newRoutesEnv(t, ctx)
-	user, org, email := e.parityUser(t, ctx)
+	user, _, email := e.parityUser(t, ctx)
 	credential := e.loginCredential(t, email)
 	e.disablePrincipal(t, ctx, user)
-	events := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`)
-	before := time.Now()
-	if got := e.refreshAs(t, credential); got.status != http.StatusUnauthorized {
-		t.Fatalf("refresh of a disabled principal's credential = %d %s", got.status, got.body)
+	if got := e.refreshAs(t, credential); got.status != http.StatusOK {
+		t.Fatalf("refresh of an active public user with a disabled auth copy = %d %s", got.status, got.body)
 	}
-	if n := e.countRows(t, ctx, `SELECT count(*) FROM auth.security_audit_events`); n != events {
-		t.Errorf("auth events %d -> %d: the refusal changes no auth state", events, n)
-	}
-	want := refusalRow(org, user, true, "Token refresh failed: user deactivated", "Account is disabled")
-	got := e.compatPublicRows(t, ctx, want.action, *want.description)
-	if len(got) != 1 {
-		t.Fatalf("public.audit_logs rows of %q = %d, want go-api's 1", *want.description, len(got))
-	}
-	row := got[0]
-	if text(row.org) != text(want.org) || text(row.user) != text(want.user) || row.resourceType != want.resourceType ||
-		row.resourceID != want.resourceID || text(row.changes) != text(want.changes) || text(row.metadata) != text(want.metadata) ||
-		row.status != want.status || text(row.errorMessage) != text(want.errorMessage) {
-		t.Errorf("row %+v, want %+v", row, want)
-	}
-	if row.createdAt.Before(before.Add(-5*time.Second)) || row.createdAt.After(time.Now().Add(5*time.Second)) {
-		t.Errorf("created_at = %s, want the request's time", row.createdAt)
+	if got := e.compatPublicRows(t, ctx, "login_failed", "Token refresh failed: user deactivated"); len(got) != 0 {
+		t.Fatalf("public.audit_logs deactivated rows = %d, want 0 for a served refresh", len(got))
 	}
 }
 

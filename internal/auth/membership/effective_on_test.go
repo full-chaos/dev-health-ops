@@ -8,8 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 type fakeRow struct {
@@ -37,53 +35,46 @@ func (r fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakePair answers EffectiveOn's two reads: the public row, then the auth row.
-type fakePair struct{ public, auth fakeRow }
+// recordingQueryer answers every read with one row and records the statements.
+type recordingQueryer struct {
+	row  fakeRow
+	sqls []string
+}
 
-func (f fakePair) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
-	if strings.Contains(sql, "public.memberships") {
-		return f.public
-	}
-	return f.auth
+func (q *recordingQueryer) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+	q.sqls = append(q.sqls, sql)
+	return q.row
 }
 
 func str(s string) any { return s }
 
-func TestEffectiveOnAppliesTheEffectiveRule(t *testing.T) {
-	schema, err := authschema.NewValidatedIdentifier("auth")
-	if err != nil {
-		t.Fatal(err)
-	}
-	none := fakeRow{err: pgx.ErrNoRows}
+func TestEffectiveOnReadsThePublicRowOnly(t *testing.T) {
 	cases := map[string]struct {
-		pair fakePair
+		row  fakeRow
 		want Effective
 	}{
-		"public row wins":            {fakePair{fakeRow{values: []any{str("admin")}}, fakeRow{values: []any{"suspended", str("member")}}}, Effective{StatusActive, "admin", true}},
-		"public row, no auth row":    {fakePair{fakeRow{values: []any{str("owner")}}, none}, Effective{StatusActive, "owner", true}},
-		"no rows":                    {fakePair{none, none}, Effective{}},
-		"auth invited only":          {fakePair{none, fakeRow{values: []any{"invited", str("member")}}}, Effective{StatusInvited, "member", true}},
-		"auth suspended only":        {fakePair{none, fakeRow{values: []any{"suspended", str("admin")}}}, Effective{StatusSuspended, "admin", true}},
-		"active auth row, no public": {fakePair{none, fakeRow{values: []any{"active", str("admin")}}}, Effective{StatusRemoved, "admin", true}},
-		// effective() takes a *string: a public row with a NULL role is no
-		// public row, so the active auth row reads as removed.
-		"NULL-role public row and an active auth row": {fakePair{fakeRow{values: []any{nil}}, fakeRow{values: []any{"active", str("admin")}}}, Effective{StatusRemoved, "admin", true}},
+		"public role is an active member": {fakeRow{values: []any{str("admin")}}, Effective{StatusActive, "admin", true}},
+		"no public row is not found":      {fakeRow{err: pgx.ErrNoRows}, Effective{}},
+		"NULL public role is not found":   {fakeRow{values: []any{nil}}, Effective{}},
 	}
 	for name, c := range cases {
-		got, err := EffectiveOn(context.Background(), c.pair, schema, uuid.New(), uuid.New())
+		q := &recordingQueryer{row: c.row}
+		got, err := EffectiveOn(context.Background(), q, uuid.New(), uuid.New())
 		if err != nil || got != c.want {
 			t.Errorf("%s: %+v, %v; want %+v", name, got, err, c.want)
+		}
+		if len(q.sqls) != 1 {
+			t.Fatalf("%s: %d statements, want exactly one", name, len(q.sqls))
+		}
+		if !strings.Contains(q.sqls[0], "public.memberships") || strings.Contains(q.sqls[0], "auth") {
+			t.Errorf("%s: statement %q, want public.memberships and no auth table", name, q.sqls[0])
 		}
 	}
 }
 
-func TestEffectiveOnReadFailuresAreStoreErrors(t *testing.T) {
-	schema, _ := authschema.NewValidatedIdentifier("auth")
-	boom := fakeRow{err: errors.New("connection reset")}
-	ok := fakeRow{values: []any{str("admin")}}
-	for name, pair := range map[string]fakePair{"public": {boom, ok}, "auth": {ok, boom}} {
-		if _, err := EffectiveOn(context.Background(), pair, schema, uuid.New(), uuid.New()); !errors.Is(err, ErrStore) {
-			t.Errorf("%s read failure: %v, want ErrStore", name, err)
-		}
+func TestEffectiveOnReadFailureIsAStoreError(t *testing.T) {
+	q := &recordingQueryer{row: fakeRow{err: errors.New("connection reset")}}
+	if _, err := EffectiveOn(context.Background(), q, uuid.New(), uuid.New()); !errors.Is(err, ErrStore) {
+		t.Errorf("read failure: %v, want ErrStore", err)
 	}
 }

@@ -349,8 +349,8 @@ func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
 
 // TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring:
 // a request carrying a valid token for a caller the (unreachable) database
-// cannot confirm fails in the org scope (500), where a server without the
-// scope would answer 404.
+// cannot confirm fails in the org scope (503, the database is unavailable),
+// where a server without the scope would answer 404.
 func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 	cfg := apiTestConfig()
 	components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
@@ -378,8 +378,8 @@ func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer "+token)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("%d %s, want the org scope's 500 for an unreachable database", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != `{"detail":{"message":"Database temporarily unavailable"}}` {
+		t.Fatalf("%d %s, want the org scope's 503 for an unreachable database", recorder.Code, recorder.Body.String())
 	}
 }
 

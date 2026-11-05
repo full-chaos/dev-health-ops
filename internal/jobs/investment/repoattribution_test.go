@@ -8,8 +8,8 @@ import (
 )
 
 // TestRepoAttributionCountsFromStats_ExactPartition fixtures a run touching
-// all five sources at once and asserts the invariant CHAOS-5458 exists to
-// report: own + ancestor + children + team + unassigned always equals the
+// all four sources at once and asserts the invariant CHAOS-5458 exists to
+// report: own + ancestor + children + unassigned always equals the
 // run's Components, with no source's count silently dropped or double
 // counted against another.
 func TestRepoAttributionCountsFromStats_ExactPartition(t *testing.T) {
@@ -18,18 +18,17 @@ func TestRepoAttributionCountsFromStats_ExactPartition(t *testing.T) {
 		RepoCascadeOwn:        20,
 		RepoCascadeAncestor:   15,
 		RepoCascadeChildren:   10,
-		RepoCascadeUnassigned: 55, // 100 - 20 - 15 - 10, the pre-team-split cascade bucket
-		RepoOwnershipFallback: 12, // the NxM team-ownership fallback fired for 12 of the 55
+		RepoCascadeUnassigned: 55, // 100 - 20 - 15 - 10
 	}
 
 	got := RepoAttributionCountsFromStats(stats)
 
-	want := RepoAttributionCounts{Own: 20, Ancestor: 15, Children: 10, Team: 12, Unassigned: 43}
+	want := RepoAttributionCounts{Own: 20, Ancestor: 15, Children: 10, Unassigned: 55}
 	if got != want {
 		t.Fatalf("RepoAttributionCountsFromStats(%+v) = %+v, want %+v", stats, got, want)
 	}
 
-	sum := got.Own + got.Ancestor + got.Children + got.Team + got.Unassigned
+	sum := got.Own + got.Ancestor + got.Children + got.Unassigned
 	if sum != stats.Components {
 		t.Errorf("partition sums to %d, want components=%d", sum, stats.Components)
 	}
@@ -38,8 +37,7 @@ func TestRepoAttributionCountsFromStats_ExactPartition(t *testing.T) {
 // TestRepoAttributionCountsFromStats_ZeroRunIsAnExplicitZeroPartition pins the
 // empty-org path (materialize.go's len(components)==0 early return): every
 // field must read as an explicit zero, not an absent one, matching the
-// all-fields-including-zero discipline the run's other telemetry (Stats'
-// RepoOwnership* fields) already documents.
+// all-fields-including-zero discipline of the run's telemetry.
 func TestRepoAttributionCountsFromStats_ZeroRunIsAnExplicitZeroPartition(t *testing.T) {
 	got := RepoAttributionCountsFromStats(Stats{})
 	want := RepoAttributionCounts{}
@@ -63,15 +61,18 @@ func TestCollectorRepoAttributionObserver_RendersEverySourceIncludingZero(t *tes
 
 	observer := CollectorRepoAttributionObserver{Collector: collector}
 	observer.ObserveRepoAttribution(RepoAttributionCounts{
-		Own: 7, Ancestor: 0, Children: 3, Team: 5, Unassigned: 2,
+		Own: 7, Ancestor: 0, Children: 3, Unassigned: 2,
 	})
 
 	text := collector.PrometheusText()
+	// CHAOS-12949: the team source is gone; a series for it must not be exposed.
+	if strings.Contains(text, `dev_health_investment_repo_attribution_total{source="team"}`) {
+		t.Errorf("PrometheusText() still exposes source=\"team\"\n%s", text)
+	}
 	for _, want := range []string{
 		`dev_health_investment_repo_attribution_total{source="own"} 7`,
 		`dev_health_investment_repo_attribution_total{source="ancestor"} 0`,
 		`dev_health_investment_repo_attribution_total{source="children"} 3`,
-		`dev_health_investment_repo_attribution_total{source="team"} 5`,
 		`dev_health_investment_repo_attribution_total{source="unassigned"} 2`,
 	} {
 		if !strings.Contains(text, want) {

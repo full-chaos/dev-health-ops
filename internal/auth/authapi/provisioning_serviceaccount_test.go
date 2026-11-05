@@ -356,7 +356,7 @@ func TestServiceAccountRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testi
 		if !workloadOperations[c.op] {
 			t.Fatalf("%s is not a workload operation", c.op)
 		}
-		if classes := admittedClasses(c.path, true); !slices.Equal(slices.Sorted(slices.Values(classes)), []string{serviceSessionIssuerClass, workloadTokenClass}) {
+		if classes := admittedClasses(c.path); !slices.Equal(slices.Sorted(slices.Values(classes)), []string{serviceSessionIssuerClass, workloadTokenClass}) {
 			t.Fatalf("%s admits %v, want the session issuer credential and the workload token", c.op, classes)
 		}
 		header, jti := f.w.mint("workload+jwt", nil)

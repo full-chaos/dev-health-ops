@@ -21,8 +21,48 @@ func TestCompileInvestmentQualityStats_CountsUncategorizedUnits(t *testing.T) {
 	if !strings.Contains(q.sql, want) {
 		t.Errorf("quality stats SQL lacks the uncategorized count, got: %s", q.sql)
 	}
-	if strings.Contains(q.sql, "categorization_status NOT IN") {
+	if !strings.Contains(q.sql, "count() AS total,") {
 		t.Errorf("total must keep counting every unit, got: %s", q.sql)
+	}
+}
+
+func TestCompileInvestmentQualityStats_CountsSizedUnits(t *testing.T) {
+	q := compileInvestmentQualityStats("org-1", mustDate(t, "2026-01-01"), mustDate(t, "2026-01-31"), "", nil, nil, nil)
+	want := "countIf(work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources') AND unit_issue_size > 0) AS sized_unit_count"
+	if !strings.Contains(q.sql, want) {
+		t.Errorf("quality stats SQL lacks the sized count, got: %s", q.sql)
+	}
+	if !strings.Contains(q.sql, "unit_issue_size") || !strings.Contains(q.sql, "work_unit_issue_size") {
+		t.Errorf("quality stats source is not wrapped by the issue-size source, got: %s", q.sql)
+	}
+}
+
+func TestResolveEvidenceQualityStats_SizedUnitCount(t *testing.T) {
+	cases := []struct {
+		name  string
+		total uint64
+		sized uint64
+		want  *int
+	}{
+		{"some sized", 10, 3, intPtr(3)},
+		{"none sized is zero, not unknown", 10, 0, intPtr(0)},
+		{"no units is unknown", 0, 0, nil},
+	}
+	for _, c := range cases {
+		client := &routingFakeClient{}
+		client.on("quality_known_count", &fakeRowScanner{
+			rows: [][]any{{c.total, uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), c.total, uint64(0), c.sized}},
+		})
+		got, err := resolveEvidenceQualityStats(context.Background(), client, "org-1", uncategorizedBatch(), true, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		switch {
+		case c.want == nil && got.SizedUnitCount != nil:
+			t.Errorf("%s: SizedUnitCount = %d, want nil", c.name, *got.SizedUnitCount)
+		case c.want != nil && (got.SizedUnitCount == nil || *got.SizedUnitCount != *c.want):
+			t.Errorf("%s: SizedUnitCount = %v, want %d", c.name, got.SizedUnitCount, *c.want)
+		}
 	}
 }
 
@@ -40,7 +80,7 @@ func TestResolveEvidenceQualityStats_UncategorizedCount(t *testing.T) {
 	for _, c := range cases {
 		client := &routingFakeClient{}
 		client.on("quality_known_count", &fakeRowScanner{
-			rows: [][]any{{c.total, uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), c.total, c.unc}},
+			rows: [][]any{{c.total, uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), c.total, c.unc, uint64(0)}},
 		})
 		got, err := resolveEvidenceQualityStats(context.Background(), client, "org-1", uncategorizedBatch(), true, nil)
 		if err != nil {

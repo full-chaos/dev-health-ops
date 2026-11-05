@@ -50,6 +50,6 @@ func TestRepoGrant_LiveGrantWithoutMembershipDenies(t *testing.T) {
 		s := repoSnapshot("member", liveGrant(key))
 		s.memberships = map[string]Membership{}
 		wantDeny(t, "grant "+key+", no membership", e.Evaluate(repoRequest("acme/api"), s), ReasonNoMembership)
-		wantDeny(t, "grant "+key+", org wide request, no membership", e.Evaluate(repoRequest("*"), s), ReasonNoMembership)
+		wantDeny(t, "grant "+key+", org wide request, no membership", e.Evaluate(repoRequest("*"), s), ReasonInvalidRequest)
 	}
 }

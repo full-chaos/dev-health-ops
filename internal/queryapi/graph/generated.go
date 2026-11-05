@@ -665,6 +665,7 @@ type ComplexityRoot struct {
 	EvidenceQualityStats struct {
 		BandCounts         func(childComplexity int) int
 		Mean               func(childComplexity int) int
+		SizedUnitCount     func(childComplexity int) int
 		Stddev             func(childComplexity int) int
 		Total              func(childComplexity int) int
 		UncategorizedCount func(childComplexity int) int
@@ -4625,6 +4626,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.EvidenceQualityStats.Mean(childComplexity), true
+
+	case "EvidenceQualityStats.sizedUnitCount":
+		if e.complexity.EvidenceQualityStats.SizedUnitCount == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityStats.SizedUnitCount(childComplexity), true
 
 	case "EvidenceQualityStats.stddev":
 		if e.complexity.EvidenceQualityStats.Stddev == nil {
@@ -10520,6 +10528,8 @@ type EvidenceQualityStats {
   bandCounts: JSON!
   """Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit."""
   uncategorizedCount: Int
+  """Categorized units of the window (not under the evidence gate) that carry a positive issue size; the rest count as one unit each in ISSUE_SIZE. Null when the window has no unit."""
+  sizedUnitCount: Int
 }
 
 type EvidenceRef {
@@ -26832,6 +26842,8 @@ func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityStats(_ 
 				return ec.fieldContext_EvidenceQualityStats_bandCounts(ctx, field)
 			case "uncategorizedCount":
 				return ec.fieldContext_EvidenceQualityStats_uncategorizedCount(ctx, field)
+			case "sizedUnitCount":
+				return ec.fieldContext_EvidenceQualityStats_sizedUnitCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type EvidenceQualityStats", field.Name)
 		},
@@ -34384,6 +34396,47 @@ func (ec *executionContext) _EvidenceQualityStats_uncategorizedCount(ctx context
 }
 
 func (ec *executionContext) fieldContext_EvidenceQualityStats_uncategorizedCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityStats_sizedUnitCount(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityStats) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityStats_sizedUnitCount(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SizedUnitCount, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityStats_sizedUnitCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "EvidenceQualityStats",
 		Field:      field,
@@ -73195,6 +73248,8 @@ func (ec *executionContext) _EvidenceQualityStats(ctx context.Context, sel ast.S
 			}
 		case "uncategorizedCount":
 			out.Values[i] = ec._EvidenceQualityStats_uncategorizedCount(ctx, field, obj)
+		case "sizedUnitCount":
+			out.Values[i] = ec._EvidenceQualityStats_sizedUnitCount(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

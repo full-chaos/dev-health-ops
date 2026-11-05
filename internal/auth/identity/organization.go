@@ -11,22 +11,23 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 )
 
 var (
 	// ErrOrganizationNotFound reports a ProjectOrganization of an id the
 	// authority does not hold: public.organizations.
-	ErrOrganizationNotFound = errors.New("identity: organization not found")
+	ErrOrganizationNotFound = copyproject.ErrOrganizationNotFound
 	// ErrOrganizationSlugCollision reports a projection whose slug another
 	// organization already holds in the auth schema. Nothing is written.
-	ErrOrganizationSlugCollision = errors.New("identity: the organization slug belongs to another organization")
+	ErrOrganizationSlugCollision = copyproject.ErrOrganizationSlugCollision
 )
 
 const organizationsSlugKey = "organizations_slug_key"
 
 // errOrganizationProjectedConcurrently ends a first projection that a
 // concurrent call already inserted; it is success.
-var errOrganizationProjectedConcurrently error = concurrentProjection("identity: organization projected concurrently")
+var errOrganizationProjectedConcurrently error = &concurrentProjection{"identity: organization projected concurrently"}
 
 type orgState struct {
 	slug   string
@@ -103,10 +104,7 @@ func (s *Store) insertOrganization(ctx context.Context, orgID uuid.UUID, src org
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var inserted uuid.UUID
-			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.organizations (id, slug, name, disabled_at)
-VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN NULL ELSE clock_timestamp() END)
-ON CONFLICT DO NOTHING
-RETURNING id`, orgID, src.slug, src.name, src.active).Scan(&inserted)
+			err := tx.QueryRow(ctx, copyproject.InsertOrganizationSQL(s.q), orgID, src.slug, src.name, src.active).Scan(&inserted)
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
@@ -209,10 +207,7 @@ func (s *Store) organizationEvent(ctx context.Context, org, verb string, src org
 }
 
 func organizationAudit(eventType, reason, org string) audit.AuditEvent {
-	return audit.AuditEvent{
-		EventType: eventType, Outcome: audit.OutcomeAllowed, OrganizationID: &org,
-		Attributes: map[string]any{"reason_code": reason, "target_kind": "organization", "target_id": org},
-	}
+	return copyproject.OrganizationAudit(eventType, reason, org)
 }
 
 // orgExistsSQL proves the auth row is there.

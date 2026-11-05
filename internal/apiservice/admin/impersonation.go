@@ -26,9 +26,9 @@ const impersonationPrefix = "/api/v1/admin"
 func (h *handlers) impersonationRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate",
-			Handler: h.bodyFirstPlatform(policy.ActionAdminImpersonate, http.HandlerFunc(h.startImpersonation))},
+			Handler: h.bodyFirstPlatform(policy.ActionAdminImpersonate, h.impersonateStart())},
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate/stop",
-			Handler: h.guard.WrapPlatform(policy.ActionAdminImpersonate, http.HandlerFunc(h.stopImpersonation))},
+			Handler: h.guard.WrapPlatform(policy.ActionAdminImpersonate, h.impersonateStop())},
 		{Method: http.MethodGet, Pattern: impersonationPrefix + "/impersonate/status",
 			Handler: h.guard.Wrap(policy.Authenticated, http.HandlerFunc(h.impersonationStatus))},
 	}

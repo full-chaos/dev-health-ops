@@ -140,6 +140,7 @@ const PINNED_INVENTORY = {
 const APPROVED_REVOKED = [
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
 ];
 const APPROVED_AUDIT = [
@@ -157,6 +158,7 @@ const APPROVED_AUDIT = [
   "internal_error",
   "compromised",
   "domain_revoked",
+  "org_deprovisioned",
   "owner_request",
   "role_granted",
   "role_revoked",
@@ -222,7 +224,6 @@ const APPROVED_DECISION = [
   "grant_revoked",
   "impersonation_denied",
   "invalid_request",
-  "membership_inactive",
   "no_membership",
   "org_mismatch",
   "organization_inactive",

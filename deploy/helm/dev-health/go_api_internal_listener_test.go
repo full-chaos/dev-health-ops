@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -18,7 +17,7 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 	render := func(args ...string) []map[string]any {
 		t.Helper()
 		argv := append([]string{"template", "b", ".", "--set", "goApi.enabled=true"}, args...)
-		out, err := exec.Command("helm", argv...).CombinedOutput()
+		out, err := helmCommand(argv...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("render failed: %v\n%s", err, out)
 		}
@@ -185,7 +184,7 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 		{"non-empty matchLabels or matchExpressions", []string{"--set-json", `goApi.internal.allowedFrom=[{"matchLabels":{}}]`}},
 	} {
 		argv := append([]string{"template", "b", ".", "--set", "goApi.enabled=true"}, bad.args...)
-		if out, err := exec.Command("helm", argv...).CombinedOutput(); err == nil || !strings.Contains(string(out), bad.want) {
+		if out, err := helmCommand(argv...).CombinedOutput(); err == nil || !strings.Contains(string(out), bad.want) {
 			t.Errorf("%v must fail the render with %q: err=%v\n%s", bad.args, bad.want, err, out)
 		}
 	}
@@ -260,19 +259,19 @@ func TestGoAPIInternalListenerChart(t *testing.T) {
 // TestGoAPIInternalListenerNeverRoutedPublicly: no Ingress path may name the
 // internal Service, and its port may not collide with a public listener.
 func TestGoAPIInternalListenerNeverRoutedPublicly(t *testing.T) {
-	out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+	out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
 		"--set-json", `ingress.hosts=[{"host":"h","paths":[{"path":"/x","pathType":"Prefix","service":"go-api-internal"}]}]`).CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "routes to go-api-internal") {
 		t.Errorf("an Ingress path to go-api-internal must fail the render: err=%v\n%s", err, out)
 	}
 	for _, port := range []string{"goApi.port=8091", "goApi.operatorPort=8091"} {
-		out, err := exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", port).CombinedOutput()
+		out, err := helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", port).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "goApi.internal.port must differ") {
 			t.Errorf("%s with the internal port 8091 must fail the render: err=%v\n%s", port, err, out)
 		}
 	}
 	// A rendered Ingress that carries the public api paths names no internal Service.
-	out, err = exec.Command("helm", "template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
+	out, err = helmCommand("template", "b", ".", "--set", "goApi.enabled=true", "--set", "ingress.enabled=true",
 		"--set-json", `ingress.hosts=[{"host":"h","paths":[{"path":"/api/v1/orgs","pathType":"Prefix","service":"go-api"},{"path":"/","pathType":"Prefix","service":"web"}]}]`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)

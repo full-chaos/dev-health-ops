@@ -71,7 +71,7 @@ generate_auth_token
 	return cmdSpec{dir: root, env: env}.run("bash", "-c", script)
 }
 
-func TestSeedIdentityIsIdempotentAndUsesTheVerbs(t *testing.T) {
+func TestSeedIdentityIsIdempotentAndWritesTheMembershipRaw(t *testing.T) {
 	bin, state := stubbedSeedEnv(t)
 	first := runSeed(t, bin, state)
 	if first.code != 0 || strings.TrimSpace(first.stdout) != "token-for-bbbbbbbb-1111-4222-8333-444444444444-cccccccc-1111-4222-8333-444444444444" {
@@ -85,12 +85,15 @@ func TestSeedIdentityIsIdempotentAndUsesTheVerbs(t *testing.T) {
 	if n := strings.Count(string(log), "users create"); n != 1 {
 		t.Errorf("users create ran %d times, want 1 (the second run must reuse the existing user):\n%s", n, log)
 	}
-	if n := strings.Count(string(log), "users update --id bbbbbbbb-1111-4222-8333-444444444444 --org 11111111-2222-4333-8444-555555555555 --role admin"); n != 2 {
-		t.Errorf("the membership update ran %d times, want 2:\n%s", n, log)
+	if strings.Contains(string(log), "users update") {
+		t.Errorf("the membership is a raw write (the dho membership verbs go through auth-service, CHAOS-11799); the verb ran:\n%s", log)
 	}
 	psqlLog, _ := os.ReadFile(filepath.Join(state, "psql.log"))
-	if !strings.Contains(string(psqlLog), "INSERT INTO organizations") || strings.Contains(string(psqlLog), "INSERT INTO users") || strings.Contains(string(psqlLog), "INSERT INTO memberships") {
-		t.Errorf("only the organization row and the session rows may be raw writes:\n%s", psqlLog)
+	if !strings.Contains(string(psqlLog), "INSERT INTO organizations") || strings.Contains(string(psqlLog), "INSERT INTO users") {
+		t.Errorf("the organization row, the membership and the session rows may be raw writes, the user may not:\n%s", psqlLog)
+	}
+	if n := strings.Count(string(psqlLog), "INSERT INTO memberships"); n != 2 || !strings.Contains(string(psqlLog), "'bbbbbbbb-1111-4222-8333-444444444444', 'admin'") {
+		t.Errorf("each seed must write the admin membership once (guarded, so a rerun converges), wrote %d:\n%s", n, psqlLog)
 	}
 	if n := strings.Count(string(psqlLog), "INSERT INTO auth.sessions"); n != 2 || !strings.Contains(string(psqlLog), "legacy_token_version") {
 		t.Errorf("each seed must write one session pinned to the user's token_version, wrote %d:\n%s", n, psqlLog)

@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,4 +179,77 @@ func TestIdentityAccountsMapsAnUnusableVerificationLink(t *testing.T) {
 	if err := acc.SetEmailVerifiedConsuming(context.Background(), uuid.New(), [32]byte{3}); !errors.Is(err, ErrVerificationLinkUnusable) {
 		t.Fatalf("an unusable link = %v, want ErrVerificationLinkUnusable", err)
 	}
+}
+
+// The decoy provision runs in a rehearsal, under a throwaway address, and keeps the real request's other fields.
+func TestProvisionLocalDecoyRunsInARehearsalUnderAThrowawayAddress(t *testing.T) {
+	store := &recordingStore{}
+	name, org := "Ada", "Acme"
+	var sawRehearsal, sawDecoy bool
+	acc := IdentityAccounts{Store: rehearsalProbe{recordingStore: store, saw: &sawRehearsal, decoy: &sawDecoy}}
+	req := ProvisionLocalRequest{Email: "known@example.com", FullName: &name, PasswordHash: "$2b$12$hash", OrganizationName: &org}
+	if err := acc.ProvisionLocalDecoy(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	got := store.provisioned
+	if !sawRehearsal {
+		t.Error("the provision did not run in a rehearsal")
+	}
+	if got.Email == "known@example.com" || !strings.HasPrefix(got.Email, "rehearsal-") || !strings.HasSuffix(got.Email, "@example.invalid") {
+		t.Errorf("decoy address = %q", got.Email)
+	}
+	// The decoy address is internal: the store keeps it without the register validator, which refuses .invalid.
+	if !sawDecoy {
+		t.Error("the decoy provision is not marked identity.WithDecoyAddress")
+	}
+	if got.FullName != &name || got.Organization == nil || got.Organization.Name != org || got.PasswordHash == nil || *got.PasswordHash != "$2b$12$hash" {
+		t.Errorf("decoy request = %+v, want the real request's name, organization and hash", got)
+	}
+}
+
+type rehearsalProbe struct {
+	*recordingStore
+	saw, decoy *bool
+}
+
+func (p rehearsalProbe) ProvisionLocal(ctx context.Context, r identity.LocalProvisionRequest) (uuid.UUID, error) {
+	*p.saw = audit.Rehearsing(ctx)
+	*p.decoy = identity.DecoyAddress(ctx)
+	return p.recordingStore.ProvisionLocal(ctx, r)
+}
+
+// A real sign-up is never a decoy: its address goes through the register validator.
+func TestProvisionLocalIsNotADecoy(t *testing.T) {
+	store := &recordingStore{}
+	var sawRehearsal, sawDecoy bool
+	acc := IdentityAccounts{Store: rehearsalProbe{recordingStore: store, saw: &sawRehearsal, decoy: &sawDecoy}}
+	if _, err := acc.ProvisionLocal(context.Background(), ProvisionLocalRequest{Email: "new@example.com", PasswordHash: "$2b$12$hash"}); err != nil {
+		t.Fatal(err)
+	}
+	if sawDecoy || sawRehearsal || store.provisioned.Email != "new@example.com" {
+		t.Errorf("real provision: decoy %v, rehearsal %v, address %q; want neither, the given address", sawDecoy, sawRehearsal, store.provisioned.Email)
+	}
+}
+
+// The refusals the real sign-up swallows are not errors of the decoy.
+func TestProvisionLocalDecoySwallowsOnlyTheRefusalsARealSignUpSwallows(t *testing.T) {
+	for _, tc := range []struct {
+		err     error
+		wantNil bool
+	}{{identity.ErrEmailTaken, true}, {identity.ErrOrganizationSlugCollision, true}, {errors.New("db down"), false}} {
+		acc := IdentityAccounts{Store: failingProvision{recordingStore: &recordingStore{}, err: tc.err}}
+		err := acc.ProvisionLocalDecoy(context.Background(), ProvisionLocalRequest{Email: "a@example.com", PasswordHash: "$2b$12$hash"})
+		if (err == nil) != tc.wantNil {
+			t.Errorf("%v: decoy error = %v", tc.err, err)
+		}
+	}
+}
+
+type failingProvision struct {
+	*recordingStore
+	err error
+}
+
+func (p failingProvision) ProvisionLocal(context.Context, identity.LocalProvisionRequest) (uuid.UUID, error) {
+	return uuid.Nil, p.err
 }

@@ -51,7 +51,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -103,7 +103,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -155,7 +155,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -207,7 +207,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -259,7 +259,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -311,7 +311,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -363,7 +363,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -415,7 +415,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -467,7 +467,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -519,7 +519,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -571,7 +571,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -623,7 +623,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -675,7 +675,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -727,7 +727,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -779,7 +779,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -831,7 +831,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -899,7 +899,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -951,7 +951,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1003,7 +1003,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1056,7 +1056,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1109,7 +1109,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1162,7 +1162,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1215,7 +1215,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1267,7 +1267,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1319,7 +1319,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1371,7 +1371,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1423,7 +1423,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1475,7 +1475,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1528,7 +1528,7 @@
           "note": "func authenticateRESTRequest",
           "path": "internal/queryapi/server/rest_error_response.go"
         },
-        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
+        "description": "authenticateRESTRequest: bearer edge access token (HS256, live users row and organization membership), user access token (EdDSA, typ at+jwt, audience dev-health-api; live users row, session and organization membership; only with AUTH_ACCESS_TOKEN_ISSUER set) or EdDSA envelope; a missing or failing credential answers 401; a valid edge or user access token with no organization answers 403 Organization context required unless the caller is a superuser, who passes; a failed users-row read is answered by policy.WriteAuthFailure."
       },
       "public_rationale": null,
       "resource_resolver": "organization_from_credential: the verified credential's organization (claims.OrgID); no request parameter names the organization",
@@ -1604,7 +1604,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",
@@ -1654,7 +1654,7 @@
       },
       "classification": "protected",
       "current_state_cache_behavior": "unknown",
-      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)",
+      "disclosure_behavior": "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)",
       "gaps": [
         "Per-resolver authorization is not profiled (query-api has no auth chokepoint, 4732); this row states what the surface accepts, not what each resolver enforces.",
         "current_state_cache_behavior: declared gap, not proven by a handler-source test in this change; tracked in CHAOS-11042; no consumer may treat it as allow",

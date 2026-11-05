@@ -27,6 +27,9 @@ type fakeEdgeUsers struct {
 	state policy.UserState
 	found bool
 	err   error
+
+	notMember bool
+	memberErr error
 }
 
 func (f *fakeEdgeUsers) UserState(context.Context, uuid.UUID) (policy.UserState, bool, error) {
@@ -34,7 +37,10 @@ func (f *fakeEdgeUsers) UserState(context.Context, uuid.UUID) (policy.UserState,
 }
 
 func (f *fakeEdgeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
-	return "", false, errors.New("Membership must not be read")
+	if f.memberErr != nil {
+		return "", false, f.memberErr
+	}
+	return "admin", !f.notMember, nil
 }
 
 func (f *fakeEdgeUsers) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
@@ -59,7 +65,7 @@ func authWithEdgeUsers(t *testing.T, users policy.Store) (bool, *httptest.Respon
 		t.Fatalf("principal.NewVerifier: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/test", nil)
-	req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, validTestEdgeClaims("org-edge-1")))
+	req.Header.Set("Authorization", "Bearer "+signTestEdgeToken(t, validTestEdgeClaims("22222222-2222-2222-2222-222222222222")))
 	rec := httptest.NewRecorder()
 	_, ok := authenticateRESTRequest(rec, req, envelopeVerifier, edgeVerifier, "test")
 	return ok, rec
@@ -264,8 +270,29 @@ func TestAuthenticateRESTRequestOrglessEdgeToken(t *testing.T) {
 	if ok, rec := authWithEdgeUsersAndOrg(t, super, ""); !ok {
 		t.Fatalf("orgless superuser refused: status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if ok, rec := authWithEdgeUsersAndOrg(t, active, "org-1"); !ok {
+	if ok, rec := authWithEdgeUsersAndOrg(t, active, "22222222-2222-2222-2222-222222222222"); !ok {
 		t.Fatalf("org'd token refused: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The token's org needs a live membership row: a removed member is the same
+// 401 as a bad token, a failed read is 503, and a superuser (admin.orgs) is
+// served in an org it is no member of.
+func TestAuthenticateRESTRequestEdgeTokenOrgNeedsLiveMembership(t *testing.T) {
+	const org = "22222222-2222-2222-2222-222222222222"
+	state := policy.UserState{IsActive: true}
+	removed := &fakeEdgeUsers{state: state, found: true, notMember: true}
+	ok, rec := authWithEdgeUsersAndOrg(t, removed, org)
+	if ok || rec.Code != http.StatusUnauthorized || strings.TrimSpace(rec.Body.String()) != `{"detail":{"message":"Invalid or expired token"}}` {
+		t.Fatalf("removed member: ok=%v status=%d body=%s, want 401 refusal", ok, rec.Code, rec.Body.String())
+	}
+	down := &fakeEdgeUsers{state: state, found: true, memberErr: errors.Join(policy.ErrUnavailable, errors.New("down"))}
+	if ok, rec := authWithEdgeUsersAndOrg(t, down, org); ok || rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("membership store down: ok=%v status=%d, want 503", ok, rec.Code)
+	}
+	super := &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true, notMember: true}
+	if ok, rec := authWithEdgeUsersAndOrg(t, super, org); !ok {
+		t.Fatalf("superuser on a non-member org: status=%d body=%s, want served (admin.orgs)", rec.Code, rec.Body.String())
 	}
 }
 
@@ -282,7 +309,7 @@ func TestOrglessEdgeTokenNeverReachesAPlantedRoute(t *testing.T) {
 	}{
 		{"orgless member", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "", http.StatusForbidden, 0},
 		{"orgless superuser", &fakeEdgeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true}, "", http.StatusOK, 1},
-		{"member with org", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "org-1", http.StatusOK, 1},
+		{"member with org", &fakeEdgeUsers{state: policy.UserState{IsActive: true}, found: true}, "22222222-2222-2222-2222-222222222222", http.StatusOK, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ran = 0

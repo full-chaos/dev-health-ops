@@ -90,10 +90,16 @@ type flow struct {
 	loggerFields  map[string]bool
 	loggerResults map[string]bool
 	helperFields  map[string]map[string]bool
-	// decls maps a function or method name to its declarations; params holds, by callee name, the parameter
-	// positions that a caller passes an open queue-row value into.
-	decls  map[string][]*ast.FuncDecl
-	params map[string]map[int]bool
+	// decls maps a function or method name to its declarations; params holds, by declaration, the parameter
+	// positions that a caller passes an open queue-row value into; foreign holds the positions where that value does
+	// not come from a variable of the parameter's own declared type, so the parameter's type is not its origin.
+	decls   map[string][]*ast.FuncDecl
+	params  map[*ast.FuncDecl]map[int]bool
+	foreign map[*ast.FuncDecl]map[int]bool
+	// interfaces holds the package's own interface type names.
+	interfaces map[string]bool
+	// returning holds the functions whose return values returnsOrigin is checking, so recursion ends.
+	returning map[*ast.FuncDecl]bool
 }
 
 // isLoggerType reports whether a type expression names a slog or log logger.
@@ -126,7 +132,7 @@ func holdsStruct(expr ast.Expr) string {
 }
 
 func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
-	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}, decls: map[string][]*ast.FuncDecl{}, params: map[string]map[int]bool{}}
+	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}, decls: map[string][]*ast.FuncDecl{}, params: map[*ast.FuncDecl]map[int]bool{}, foreign: map[*ast.FuncDecl]map[int]bool{}, interfaces: map[string]bool{}}
 	fieldTypes := map[string][]string{}
 	for _, sf := range pkg {
 		for _, decl := range sf.file.Decls {
@@ -148,6 +154,9 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 				ts, ok := spec.(*ast.TypeSpec)
 				if !ok {
 					continue
+				}
+				if _, isInterface := ts.Type.(*ast.InterfaceType); isInterface {
+					f.interfaces[ts.Name.Name] = true
 				}
 				st, ok := ts.Type.(*ast.StructType)
 				if !ok {
@@ -238,7 +247,18 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 					if !ok {
 						return true
 					}
-					for _, result := range ret.Results {
+					results := ret.Results
+					if len(results) == 0 && fn.Type.Results != nil {
+						// A bare return hands back the named results as they are at that point.
+						for _, field := range fn.Type.Results.List {
+							for _, name := range field.Names {
+								named := &ast.Ident{NamePos: ret.Pos(), Name: name.Name}
+								parents[named] = ret
+								results = append(results, named)
+							}
+						}
+					}
+					for _, result := range results {
 						if lit := compositeOf(result); lit != nil {
 							for _, elt := range lit.Elts {
 								field, value := "*", elt
@@ -290,6 +310,93 @@ func paramNames(fn *ast.FuncDecl) []string {
 	return out
 }
 
+// paramIndex maps a call argument position to the callee's parameter position: past the last parameter of a variadic
+// function the argument lands in that parameter.
+func paramIndex(fn *ast.FuncDecl, arg int) (int, bool) {
+	n := len(paramNames(fn))
+	if n == 0 {
+		return 0, false
+	}
+	if _, variadic := fn.Type.Params.List[len(fn.Type.Params.List)-1].Type.(*ast.Ellipsis); variadic && arg >= n-1 {
+		return n - 1, true
+	}
+	return arg, arg < n
+}
+
+// paramType is the declared type of the parameter at a position, as normTypeText.
+func paramType(fn *ast.FuncDecl, index int) string {
+	at := 0
+	for _, field := range fn.Type.Params.List {
+		count := max(len(field.Names), 1)
+		if index < at+count {
+			return normTypeText(fn, field.Type)
+		}
+		at += count
+	}
+	return ""
+}
+
+// candidates picks, among the declarations that share a callee name, those a call can reach: when the argument's type
+// is known (a declared variable or a composite literal), the declarations whose parameter there has that type or an
+// interface type (any, error, or one of the package's own); when it is unknown, or no declaration matches, every one.
+// A parameter of another package's interface type is not recognised without go/types, so such a declaration is left
+// out when the argument's type is known and differs.
+func candidates(s *scope, decls []*ast.FuncDecl, arg int, expr ast.Expr) []*ast.FuncDecl {
+	known := s.typeOf(expr)
+	if len(decls) < 2 || known == "" {
+		return decls
+	}
+	var out []*ast.FuncDecl
+	for _, target := range decls {
+		if index, ok := paramIndex(target, arg); ok {
+			if declared := paramType(target, index); declared == known || declared == "any" || declared == "error" || declared == "interface{}" || s.flow.interfaces[strings.SplitN(declared, "[", 2)[0]] {
+				out = append(out, target)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return decls
+	}
+	return out
+}
+
+// typeOf names an expression's type when the syntax states it: a variable with a declared type, a composite literal
+// (or its address), or a variable whose only assignment is one of those. It returns "" otherwise.
+func (s *scope) typeOf(expr ast.Expr) string {
+	expr = ast.Unparen(expr)
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		expr = unary.X
+	}
+	switch typed := expr.(type) {
+	case *ast.CompositeLit:
+		if typed.Type != nil {
+			return normTypeText(s.fn, typed.Type)
+		}
+	case *ast.Ident:
+		if declared, ok := s.decl[typed.Name]; ok {
+			return declared
+		}
+		s.buildAssigns()
+		if rhs := s.assigns[typed.Name]; len(rhs) == 1 && s.assignAt[typed.Name][0] < 0 {
+			if _, ident := ast.Unparen(rhs[0]).(*ast.Ident); !ident {
+				return s.typeOf(rhs[0])
+			}
+		}
+	}
+	return ""
+}
+
+func markParam(set map[*ast.FuncDecl]map[int]bool, callee *ast.FuncDecl, index int) bool {
+	if set[callee][index] {
+		return false
+	}
+	if set[callee] == nil {
+		set[callee] = map[int]bool{}
+	}
+	set[callee][index] = true
+	return true
+}
+
 // propagateParams marks a same-package helper's parameter as holding a queue-row value when a caller passes an
 // unguarded one into that position, so the helper's own outputs are checked against it. It runs to a fixpoint,
 // because a helper can pass the value on to a further helper.
@@ -323,14 +430,16 @@ func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
 					case *ast.SelectorExpr:
 						callee = fun.Sel.Name
 					}
-					if len(f.decls[callee]) != 1 || isGuardCall(fset, sf.src, call) {
+					// Every declaration that shares the name gets the value: a method name can be declared on more than
+					// one type, and without types the census cannot tell which one the call reaches.
+					if len(f.decls[callee]) == 0 || isGuardCall(fset, sf.src, call) {
 						return true
 					}
 					for i, arg := range call.Args {
 						if id, plain := arg.(*ast.Ident); plain && (id.Name == "err" || id.Name == "ok") {
 							continue // the scope never treats these names as queue-row values
 						}
-						if f.params[callee][i] || !scope.valueTainted(arg) {
+						if !scope.valueTainted(arg) {
 							continue
 						}
 						open := false
@@ -339,12 +448,20 @@ func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
 								open = true
 							}
 						}
-						if open {
-							if f.params[callee] == nil {
-								f.params[callee] = map[int]bool{}
+						if !open {
+							continue
+						}
+						for _, target := range candidates(scope, f.decls[callee], i, arg) {
+							index, ok := paramIndex(target, i)
+							if !ok {
+								continue
 							}
-							f.params[callee][i] = true
-							changed = true
+							if markParam(f.params, target, index) {
+								changed = true
+							}
+							if !scope.originOK(arg, []string{paramType(target, index)}) && markParam(f.foreign, target, index) {
+								changed = true
+							}
 						}
 					}
 					return true
@@ -367,9 +484,13 @@ type scope struct {
 	// decl holds the declared type of each parameter, receiver, named result and var of the function, as normTypeText.
 	decl map[string]string
 	fn   *ast.FuncDecl
+	// foreign holds the parameters a caller fills with a queue-row value that its declared type does not describe.
+	foreign map[string]bool
 	// assigns holds, by variable name, the expressions assigned to the whole variable; fieldAssigns holds those
 	// assigned to a field or element of it. Both are built on first use by originOK.
 	assigns, fieldAssigns map[string][]ast.Expr
+	// assignAt holds, parallel to assigns, the result position a multi-value right side gives the name, or -1.
+	assignAt map[string][]int
 }
 
 // isLogger reports whether an expression is a logger: a variable or field of a logger type, a call that
@@ -518,7 +639,7 @@ func typeName(expr ast.Expr) string {
 }
 
 func (f *flow) scope(fn *ast.FuncDecl) *scope {
-	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, loggers: map[string]bool{}, fields: map[string]bool{}, link: map[string]string{}, decl: map[string]string{}, fn: fn}
+	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, loggers: map[string]bool{}, fields: map[string]bool{}, link: map[string]string{}, decl: map[string]string{}, fn: fn, foreign: map[string]bool{}}
 	fields := []*ast.FieldList{fn.Type.Params, fn.Recv, fn.Type.Results}
 	for _, list := range fields {
 		if list == nil {
@@ -537,8 +658,11 @@ func (f *flow) scope(fn *ast.FuncDecl) *scope {
 		}
 	}
 	for i, name := range paramNames(fn) {
-		if f.params[fn.Name.Name][i] && name != "_" && !s.structs[name] {
+		if f.params[fn][i] && name != "_" && !s.structs[name] {
 			s.locals[name] = true
+		}
+		if f.foreign[fn][i] && name != "_" {
+			s.foreign[name] = true
 		}
 	}
 	for changed := true; changed; {
@@ -1442,17 +1566,21 @@ func (s *scope) buildAssigns() {
 	if s.assigns != nil {
 		return
 	}
-	s.assigns, s.fieldAssigns = map[string][]ast.Expr{}, map[string][]ast.Expr{}
+	s.assigns, s.fieldAssigns, s.assignAt = map[string][]ast.Expr{}, map[string][]ast.Expr{}, map[string][]int{}
+	add := func(name string, rhs ast.Expr, at int) {
+		s.assigns[name] = append(s.assigns[name], rhs)
+		s.assignAt[name] = append(s.assignAt[name], at)
+	}
 	ast.Inspect(s.fn.Body, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.AssignStmt:
 			for i, lhs := range typed.Lhs {
-				rhs := typed.Rhs[0]
+				rhs, at := typed.Rhs[0], i
 				if len(typed.Rhs) == len(typed.Lhs) {
-					rhs = typed.Rhs[i]
+					rhs, at = typed.Rhs[i], -1
 				}
 				if id, ok := lhs.(*ast.Ident); ok {
-					s.assigns[id.Name] = append(s.assigns[id.Name], rhs)
+					add(id.Name, rhs, at)
 				} else if root := rootIdent(lhs); root != nil {
 					s.fieldAssigns[root.Name] = append(s.fieldAssigns[root.Name], rhs)
 				}
@@ -1460,15 +1588,15 @@ func (s *scope) buildAssigns() {
 		case *ast.ValueSpec:
 			for i, id := range typed.Names {
 				if i < len(typed.Values) {
-					s.assigns[id.Name] = append(s.assigns[id.Name], typed.Values[i])
+					add(id.Name, typed.Values[i], -1)
 				} else if len(typed.Values) == 1 {
-					s.assigns[id.Name] = append(s.assigns[id.Name], typed.Values[0])
+					add(id.Name, typed.Values[0], i)
 				}
 			}
 		case *ast.RangeStmt:
 			for _, side := range []ast.Expr{typed.Key, typed.Value} {
 				if id, ok := side.(*ast.Ident); ok {
-					s.assigns[id.Name] = append(s.assigns[id.Name], typed.X)
+					add(id.Name, typed.X, -1)
 				}
 			}
 		}
@@ -1514,9 +1642,17 @@ func (s *scope) originName(name string, origins []string, seen map[string]bool) 
 		return true
 	}
 	seen[name] = true
+	if s.foreign[name] {
+		return false
+	}
 	if declared, ok := s.decl[name]; ok {
 		if !slices.Contains(origins, declared) {
 			return false
+		}
+		for i, rhs := range s.assigns[name] {
+			if !s.originRHS(rhs, s.assignAt[name][i], origins, seen) {
+				return false
+			}
 		}
 		for _, rhs := range s.fieldAssigns[name] {
 			if !s.originExpr(rhs, origins, seen) {
@@ -1529,8 +1665,8 @@ func (s *scope) originName(name string, origins []string, seen map[string]bool) 
 	if !assigned {
 		return false
 	}
-	for _, rhs := range rhsList {
-		if !s.originExpr(rhs, origins, seen) {
+	for i, rhs := range rhsList {
+		if !s.originRHS(rhs, s.assignAt[name][i], origins, seen) {
 			return false
 		}
 	}
@@ -1540,4 +1676,98 @@ func (s *scope) originName(name string, origins []string, seen map[string]bool) 
 		}
 	}
 	return true
+}
+
+// originCalls names the calls whose first result is a value of an origin type by construction: jobcontract.Decode
+// refuses a credential-shaped field, so what it returns is the decoded envelope the exception reasons name.
+var originCalls = map[string]string{"jobcontract.Decode": "jobcontract.Envelope"}
+
+// originRHS checks one value assigned to a name. A call to a function of the same package gives the value its declared
+// result type at that position, and that function's own return values at the position must have the origin too; any
+// other expression is checked by the values it reads.
+func (s *scope) originRHS(rhs ast.Expr, at int, origins []string, seen map[string]bool) bool {
+	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+	if !ok {
+		return s.originExpr(rhs, origins, seen)
+	}
+	if fun, ok := call.Fun.(*ast.SelectorExpr); ok {
+		if pkg, ok := fun.X.(*ast.Ident); ok {
+			if produced, ok := originCalls[pkg.Name+"."+fun.Sel.Name]; ok && max(at, 0) == 0 {
+				return slices.Contains(origins, produced)
+			}
+		}
+	}
+	var callee string
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		callee = fun.Name
+	case *ast.SelectorExpr:
+		callee = fun.Sel.Name
+	}
+	targets := s.flow.decls[callee]
+	if len(targets) == 0 {
+		return s.originExpr(rhs, origins, seen)
+	}
+	position := max(at, 0)
+	for _, target := range targets {
+		if !s.flow.returnsOrigin(target, position, origins) {
+			return false
+		}
+	}
+	return true
+}
+
+// resultFields lists a function's results in order: the declared type and the name ("" when unnamed).
+func resultFields(fn *ast.FuncDecl) (typesOut, names []string) {
+	if fn.Type.Results == nil {
+		return nil, nil
+	}
+	for _, field := range fn.Type.Results.List {
+		if len(field.Names) == 0 {
+			typesOut, names = append(typesOut, normTypeText(fn, field.Type)), append(names, "")
+		}
+		for _, name := range field.Names {
+			typesOut, names = append(typesOut, normTypeText(fn, field.Type)), append(names, name.Name)
+		}
+	}
+	return typesOut, names
+}
+
+// returnsOrigin reports whether a function's result at a position has one of the origin types and every value it
+// returns there (a named result included) comes from that origin. A function already on the stack counts as proven, so
+// recursion ends.
+func (f *flow) returnsOrigin(fn *ast.FuncDecl, position int, origins []string) bool {
+	resultTypes, resultNames := resultFields(fn)
+	if position >= len(resultTypes) || !slices.Contains(origins, resultTypes[position]) || fn.Body == nil {
+		return false
+	}
+	if f.returning == nil {
+		f.returning = map[*ast.FuncDecl]bool{}
+	}
+	if f.returning[fn] {
+		return true
+	}
+	f.returning[fn] = true
+	defer delete(f.returning, fn)
+	callee := f.scope(fn)
+	callee.buildAssigns()
+	if name := resultNames[position]; name != "" && name != "_" && !callee.originName(name, origins, map[string]bool{}) {
+		return false
+	}
+	proven := true
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			switch {
+			case len(typed.Results) == len(resultTypes):
+				proven = proven && callee.originRHS(typed.Results[position], -1, origins, map[string]bool{})
+			case len(typed.Results) == 1:
+				proven = proven && callee.originRHS(typed.Results[0], position, origins, map[string]bool{})
+			}
+		}
+		return proven
+	})
+	return proven
 }

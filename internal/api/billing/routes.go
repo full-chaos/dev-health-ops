@@ -2,7 +2,8 @@
 // routes (api/billing/plans.py, subscriptions.py, and router.py's checkout
 // and portal), ported 1:1 from the Python api, with one named deviation: a
 // subscription route given another org's org_id requires the caller to be
-// a member of that org or a superuser (the Python helper does not check).
+// a member of that org or a superuser (the Python helper does not check), and
+// a subscription write there needs the owner or admin role in that org.
 package billing
 
 import (

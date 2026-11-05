@@ -21,3 +21,22 @@ func TestSnapshotRepositoryID(t *testing.T) {
 		t.Error("a snapshot that read no identities resolved a path")
 	}
 }
+
+func TestSnapshotPathForID(t *testing.T) {
+	s := &snapshot{org: "org-a",
+		repoIDs:   map[string]string{"acme/api": "github:42", "acme/dup": ""},
+		repoPaths: map[string]string{"github:42": "acme/api", "github:1": "acme/dup", "github:2": "acme/dup"}}
+	if p, ok := s.PathForID("org-a", "github:42"); !ok || p != "acme/api" {
+		t.Errorf("resolved id: %q %v", p, ok)
+	}
+	for name, c := range map[string][2]string{
+		"id on an ambiguous path": {"org-a", "github:1"},
+		"unknown id":              {"org-a", "github:9"},
+		"other org":               {"org-b", "github:42"},
+		"empty org":               {"", "github:42"},
+	} {
+		if p, ok := s.PathForID(c[0], c[1]); ok || p != "" {
+			t.Errorf("%s: resolved %q", name, p)
+		}
+	}
+}

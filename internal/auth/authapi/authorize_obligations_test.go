@@ -159,7 +159,7 @@ func TestAuthorizeNeverServesObligationsOnADeny(t *testing.T) {
 func TestAuthorizeBatchItemsKeepTheirOwnObligations(t *testing.T) {
 	planted := map[string]authorization.Decision{}
 	h := newAuthorizeHandlerFixture(t, withPlanted(planted))
-	planted["analytics.read"] = plantedAllow(&authorization.Obligations{TenantScope: h.org, RepositoryRestricted: true, RepositoryAllowlist: []string{"*"}})
+	planted["analytics.read"] = plantedAllow(&authorization.Obligations{TenantScope: h.org, RepositoryRestricted: true, RepositoryAllowlist: []string{"acme/web"}})
 	planted["metrics.read"] = plantedAllow(&authorization.Obligations{TenantScope: h.org, RepositoryRestricted: true})
 	planted["work_items.read"] = plantedAllow(&authorization.Obligations{TenantScope: h.org, RepositoryRestricted: true, RepositoryAllowlist: []string{"acme/api"}})
 	qs := []map[string]any{
@@ -177,7 +177,7 @@ func TestAuthorizeBatchItemsKeepTheirOwnObligations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the client refuses the batch: %v\n%s", err, rec.Body)
 	}
-	want := [][]string{{"*"}, nil, {}, {"acme/api"}}
+	want := [][]string{{"acme/web"}, nil, {}, {"acme/api"}}
 	for i, w := range want {
 		o := got[i].Obligations
 		switch {

@@ -3,6 +3,7 @@ package authorization
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -108,7 +109,7 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 	for _, r := range roles {
 		for _, a := range actions {
 			var req Request
-			var snap fakeSnapshot
+			var snap Snapshot
 			switch a.ResourceKind {
 			case "organization":
 				req = orgRequest(a.Action)
@@ -122,7 +123,7 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			}
 			switch r.Scope {
 			case "organization":
-				snap = orgSnapshot(r.Role)
+				snap = repoSnapshot(r.Role)
 			case "platform":
 				snap = platformSnapshot(r.Role)
 			default:
@@ -457,6 +458,7 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"workload_action_denied", "clock_unavailable", "service_account_inactive",
 		"allowed_by_membership_default", "grant_read_failed", "impersonation_denied", "delegation_invalid",
 		"repository_unresolved",
+		"repository_allowlist_too_large",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
@@ -572,6 +574,13 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 			s.memberships[testOrg] = Membership{OrgID: "org-2", Role: "owner", Status: StatusActive}
 		}), ReasonOrgMismatch, nil},
 		{"platform role absent", platformRequest("admin.users"), orgSnapshot("owner"), ReasonPlatformRoleAbsent, nil},
+		{"allowlist too large", orgRequest("analytics.read"), func() Snapshot {
+			var rows []Grant
+			for i := 0; i <= MaxRepositoryAllowlist; i++ {
+				rows = append(rows, liveGrant(fmt.Sprintf("o/r%03d", i)))
+			}
+			return repoSnapshot("member", rows...)
+		}(), ReasonRepositoryAllowlistTooLarge, nil},
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},

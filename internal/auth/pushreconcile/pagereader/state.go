@@ -1,8 +1,9 @@
-package customerpush
+package pagereader
 
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -40,4 +41,15 @@ func ExpectedState(t tokenRow) pushreconcile.Token {
 	out.Scopes = slices.Clone(pushevent.Scopes(names))
 	out.ExpiresAt = pushevent.Expiry(t.ExpiresAt)
 	return out
+}
+
+type tokenRow struct {
+	ID        uuid.UUID
+	OrgID     string
+	SourceID  *uuid.UUID
+	Name      string
+	Prefix    string
+	Scopes    []byte
+	ExpiresAt *time.Time
+	RevokedAt *time.Time
 }

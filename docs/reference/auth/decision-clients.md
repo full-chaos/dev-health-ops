@@ -21,7 +21,7 @@ lifecycle: active
 Two clients ask the auth-service decision point the question of [authorization decisions](obligations.md): the Go package `pep` of `github.com/full-chaos/dev-health-go` and the server-only TypeScript module `web:src/lib/auth/authorize` of `dev-health-web`. Both deny on every failure.
 {: .fc-page-lede }
 
-Their source is in the `dev-health-go` and `dev-health-web` repositories, not in this one. `go.mod` here pins `dev-health-go` at v0.41.0. The facts on this page are from that tag and from `dev-health-web` main.
+Their source is in the `dev-health-go` and `dev-health-web` repositories, not in this one. `go.mod` here pins `dev-health-go` at v0.44.0. The facts on this page are from that tag and from `dev-health-web` main.
 
 ## The API
 
@@ -117,7 +117,7 @@ The parse rules are those of [authorization decisions](obligations.md#parsing-ru
 | `ExpiresAt()`, `Cacheable()` | Reuse bound. `Cacheable()` is false for a decision whose `expires_at` is not after the time it was read. Use it once. |
 | `Obligations()` | The obligations of an allow. The caller must enforce them. The zero value grants nothing. |
 
-`Obligations` has `TenantScope()` and `TenantAllows(org)`, `RepositoryRestricted()`, `RepositoryAllowlist()` and `RepositoryAllowed(key)`, `Redaction()` and `Redacts(class)`, `MinimumAssurance()` and `AssuranceSatisfiedBy(level)`, and `StepUpRequired()`. See [obligations](obligations.md#obligations) for what each means. A consumer that ignores an obligation ignores a denial.
+`Obligations` has `TenantScope()` and `TenantAllows(org)`, `RepositoryScopeOrganization()`, `RepositoryRestricted()`, `RepositoryAllowlist()` and `RepositoryAllowed(key)`, `Redaction()` and `Redacts(class)`, `MinimumAssurance()` and `AssuranceSatisfiedBy(level)`, and `StepUpRequired()`. See [obligations](obligations.md#obligations) for what each means. `RepositoryAllowed(key)` is false when the allow carries neither `repository_scope` nor `repository_allowlist`, and for `*` or a key that is not a repository key: an absent member never means every repository. A consumer that ignores an obligation ignores a denial.
 
 ### Test double
 

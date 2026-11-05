@@ -398,7 +398,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 	if err != nil {
 		t.Fatal(err)
 	}
-	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows,
+	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows, Workload: workload,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {

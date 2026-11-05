@@ -225,7 +225,7 @@ func TestDecisionGoldenManifestClaimsExactlyTheFilesOnDisk(t *testing.T) {
 var (
 	decisionStateKeys   = []string{"catalog", "snapshot", "clock", "principal_status", "platform_role", "organizations", "memberships", "service_accounts", "grants", "grants_error", "workload"}
 	decisionRequestKeys = []string{"action", "resource_kind", "organization_id", "resource_key"}
-	decisionExpectKeys  = []string{"allowed", "reason", "cache_class", "expires_in_seconds", "policy_revision", "wire_reason_code"}
+	decisionExpectKeys  = []string{"allowed", "reason", "cache_class", "expires_in_seconds", "policy_revision", "wire_reason_code", "obligations"}
 )
 
 func TestDecisionGoldenFilesAreCanonicalAndClosed(t *testing.T) {

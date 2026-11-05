@@ -154,7 +154,7 @@ func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]b
 	}
 	ordered := make([]lineAnchor, 0, len(cites))
 	for a := range cites {
-		if _, declared := rewrites[a]; !declared && !structured[a] {
+		if _, declared := rewrites[a]; declared || !structured[a] {
 			ordered = append(ordered, a)
 		}
 	}
@@ -655,5 +655,45 @@ func TestSourceCommitFreeTextCiteIgnoresTextThatIsNotACite(t *testing.T) {
 	dir, base, _ := fixtureRepoAt(t, citeFile, citeBefore, citeAfter)
 	if problems := problemsForSourceCommit(dir, "fixture", inventoryWithText(base, "listens on [::1]:8080, ratio 1:2, see routes.go and internal/x/routes.go")); len(problems) != 0 {
 		t.Fatalf("plain text was read as a cite: %v", problems)
+	}
+}
+
+// CHAOS-12967. A free-text cite is judged on its own even when its file:line is a rewritten structured anchor; only the
+// structured anchor itself is exempt from the stale-line rule.
+func inventoryRewrittenWithText(commit, text string) map[string]any {
+	raw, err := json.Marshal(map[string]any{
+		"source_commit": commit,
+		"rows": []any{map[string]any{
+			"source":              map[string]any{"file": citeFile, "line": 4},
+			"disclosure_behavior": text,
+		}},
+		"rewritten_anchors": []any{map[string]any{"file": citeFile, "line": 4, "was": rewriteWas, "now": rewriteNow}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		panic(err)
+	}
+	return document
+}
+
+func TestSourceCommitFreeTextCiteRejectsALineThatChangedUnderARewrittenAnchor(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, rewriteBefore, rewriteAfter)
+	wantOneProblem(t, problemsForSourceCommit(dir, "fixture", inventoryRewrittenWithText(base, "answers 404 (internal/x/routes.go:4)")), "free-text cite internal/x/routes.go:4", "stale base")
+}
+
+func TestSourceCommitFreeTextCiteAcceptsAHoldingLineBesideARewrittenAnchor(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, rewriteBefore, rewriteAfter)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryRewrittenWithText(base, "answers 404 (internal/x/routes.go:3)")); len(problems) != 0 {
+		t.Fatalf("a holding cite beside a rewritten anchor was refused: %v", problems)
+	}
+}
+
+func TestSourceCommitRewrittenAnchorStaysExemptWithoutAFreeTextCite(t *testing.T) {
+	dir, base, _ := fixtureRepoAt(t, citeFile, rewriteBefore, rewriteAfter)
+	if problems := problemsForSourceCommit(dir, "fixture", inventoryRewrittenWithText(base, "answers 404")); len(problems) != 0 {
+		t.Fatalf("a rewritten structured anchor alone was refused: %v", problems)
 	}
 }

@@ -129,6 +129,13 @@ func (d delegatedSnapshot) RepositoryID(orgID, path string) (string, bool) {
 	return "", false
 }
 
+func (d delegatedSnapshot) PathForID(orgID, id string) (string, bool) {
+	if ri, ok := d.GrantSnapshot.(authorization.RepositoryIdentities); ok {
+		return ri.PathForID(orgID, id)
+	}
+	return "", false
+}
+
 func (d delegatedSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
 
 // DecisionTx reads decision state inside one read-only transaction. Every
@@ -558,7 +565,7 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 			req.ResourceKey = q.ResourceKey
 		}
 		d := h.Evaluator.Evaluate(req, snap)
-		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated) {
+		if _, onWire := wireReasonCode(d.Reason); !onWire || !obligationsFit(d, delegated, q.OrganizationID) {
 			return errAuthorizeStateFailure
 		}
 		if items[i].cache == cacheMiss {
@@ -577,10 +584,15 @@ func (h authorizeHandlers) evaluate(ctx context.Context, tx DecisionTx, resolved
 	return nil
 }
 
-// obligationsFit is the wire rule of obligations: only the allow of a delegated
-// session carries them, and every such allow does.
-func obligationsFit(d authorization.Decision, delegated bool) bool {
-	return (d.Allowed && delegated) == (d.Obligations != nil)
+// obligationsFit is the wire rule of obligations: every allow of an organization
+// or repository question carries them with the question's tenant scope, a
+// delegated one also its assurance level; a deny and a platform allow carry none.
+func obligationsFit(d authorization.Decision, delegated bool, organizationID string) bool {
+	if !d.Allowed || organizationID == "" {
+		return d.Obligations == nil
+	}
+	o := d.Obligations
+	return o != nil && o.TenantScope == organizationID && (!delegated || o.MinimumAssurance != "")
 }
 
 func (h authorizeHandlers) document(item authorizeItem) (decisionDocument, error) {

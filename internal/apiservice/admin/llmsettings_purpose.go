@@ -133,8 +133,13 @@ type llmPurposeUpsert struct {
 	inTx func(ctx context.Context, tx pgx.Tx) error
 }
 
+// decisionRefusal is the rule of the two decision providers for this write.
+func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
+	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL)
+}
+
 func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL); refusal != nil {
+	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""

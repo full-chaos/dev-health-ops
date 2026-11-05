@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-reason-codes
-summary: The closed reason codes of an authorization decision (24 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
+summary: The closed reason codes of an authorization decision (25 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -24,7 +24,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 
 ## Wire reason codes
 
-`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 24 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
+`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 25 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
 
 `allowed` must agree with the code. Exactly three codes mean an allow. Every other code means a deny. A decision where `allowed` and the code disagree is invalid.
 
@@ -47,6 +47,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `role_lacks_action` | no | The role does not hold the action. |
 | `grant_absent` | no | A repository action where a service account or a missing grant snapshot has no grant rows. |
 | `repository_not_granted` | no | Grant rows exist, and none covers the repository with a role that holds the action. |
+| `repository_unresolved` | no | A grant holds a repository id, and the live path of the request has no row in the organization's repository identities, so no id can be compared. The next provider sync resolves it. |
 | `grant_expired` | no | A matching grant is past its expiry. |
 | `grant_revoked` | no | A matching grant is revoked. |
 | `repository_allowlist_too_large` | no | An organization action that reads repository-bound data: the principal can read more than 256 repositories by live grants, more than an allowlist holds. The list is never truncated. |
@@ -59,7 +60,7 @@ The order of the checks decides which code a request gets when several apply. Th
 
 ### State failures are not decisions
 
-The decision core has 26 reasons. Two of them, `clock_unavailable` and `grant_read_failed`, mean the decision point could not read the state it needs. They are never a wire reason code. The call answers 503 with an `error.v1` document (`authorizeStateFailures` in `internal/auth/authapi/authorize_wire.go`). A client treats a 503 as a local deny.
+The decision core has 27 reasons. Two of them, `clock_unavailable` and `grant_read_failed`, mean the decision point could not read the state it needs. They are never a wire reason code. The call answers 503 with an `error.v1` document (`authorizeStateFailures` in `internal/auth/authapi/authorize_wire.go`). A client treats a 503 as a local deny.
 
 ## Local reasons of the Go client
 

@@ -44,6 +44,7 @@ const (
 	refreshTest    = "TestRefreshRowsRefuseUserTokens"
 	exchangeTest   = "TestTheExchangeRefusesUserTokens"
 	provisionTest  = "TestProvisioningRoutesRefuseUserTokens"
+	readTest       = "TestReadRoutesRefuseUserTokens"
 	sessStateTest  = "TestSessionStateRefusesUserTokens"
 	delegatedTest  = "TestDelegatedRoutesRefuseUserTokens"
 	authorizeTest  = "TestAuthorizeRefusesUserTokens"
@@ -98,6 +99,14 @@ var negativeProofs = map[string]negativeProof{
 	"auth-service|POST /internal/v1/grants/revoke [dev-health-auth-service @api]":                              {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/onboard [dev-health-auth-service @api]":                      {file: proofProvision, test: provisionTest},
 	"auth-service|POST /internal/v1/organizations/create [dev-health-auth-service @api]":                       {file: proofProvision, test: provisionTest},
+	"auth-service|POST /internal/v1/principals/get [dev-health-auth-service @api]":                             {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/principals/list [dev-health-auth-service @api]":                            {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/organizations/get [dev-health-auth-service @api]":                          {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/organizations/list [dev-health-auth-service @api]":                         {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/memberships/get [dev-health-auth-service @api]":                            {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/memberships/list [dev-health-auth-service @api]":                           {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/grants/get [dev-health-auth-service @api]":                                 {file: proofProvision, test: readTest},
+	"auth-service|POST /internal/v1/grants/list [dev-health-auth-service @api]":                                {file: proofProvision, test: readTest},
 	"auth-service|POST /internal/v1/sessions/state [dev-health-auth-service @api]":                             {file: proofSessState, test: sessStateTest},
 	"auth-service|POST /internal/v1/sessions/delegated [dev-health-auth-service @api]":                         {file: proofDelegated, test: delegatedTest},
 	"auth-service|POST /internal/v1/sessions/delegated/end [dev-health-auth-service @api]":                     {file: proofDelegated, test: delegatedTest},
@@ -221,8 +230,8 @@ func TestNegativeProofCensus(t *testing.T) {
 	// CHAOS-11813 retired the 6 legacy ingest rows (26, 25, 1 before); CHAOS-11798 added the 7 provisioning rows (20, 19, 1 before);
 	// CHAOS-11885 added the organization reactivate row, CHAOS-11887 the invite revoke row and the organization suspend row, CHAOS-12043 the organization state row;
 	// CHAOS-12128 the principal access read row; CHAOS-12189 the session state row; CHAOS-10992 the organization onboard and create rows.
-	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows.
-	if len(derivedRows(t)) != 51 || proven != 50 || exempt != 1 {
-		t.Fatalf("derived %d rows, %d proven, %d exempt; want 51, 50, 1", len(derivedRows(t)), proven, exempt)
+	// CHAOS-10987 the two delegated session rows; CHAOS-12273 the four service account key rows; CHAOS-12275 the organization rename row; CHAOS-10841 the two authorize rows; CHAOS-12670 the eight read rows.
+	if len(derivedRows(t)) != 59 || proven != 58 || exempt != 1 {
+		t.Fatalf("derived %d rows, %d proven, %d exempt; want 59, 58, 1", len(derivedRows(t)), proven, exempt)
 	}
 }

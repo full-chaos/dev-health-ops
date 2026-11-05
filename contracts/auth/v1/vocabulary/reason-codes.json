@@ -109,6 +109,7 @@
       "principal_inactive",
       "repository_allowlist_too_large",
       "repository_not_granted",
+      "repository_unresolved",
       "resource_mismatch",
       "role_lacks_action",
       "role_scope_mismatch",

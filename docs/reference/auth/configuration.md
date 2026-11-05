@@ -44,6 +44,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--health-check-timeout` | `AUTH_SERVICE_HEALTH_CHECK_TIMEOUT` | `2s` | 50ms to 30s. Per-check bound for each required readiness check. |
 | `--http-addr` | `AUTH_SERVICE_HTTP_ADDR` | `:8095` | `host:port`. The API listener. It mounts the session routes only when both session secrets below are set, and no route otherwise. |
 | `--operator-http-addr` | `AUTH_SERVICE_OPERATOR_HTTP_ADDR` | `:8096` | `host:port`. `/healthz`, `/readyz`, `/metrics`. Must differ from the API address. |
+| `--internal-http-addr` | `AUTH_SERVICE_INTERNAL_HTTP_ADDR` | unset (off) | `host:port`. The [internal listener](#internal-listener). Must differ from the API and operator addresses (port `0` aside). |
 | `--request-timeout` | `AUTH_SERVICE_REQUEST_TIMEOUT` | `10s` | 100ms to 5m. Per-request handler deadline. |
 | `--max-body-bytes` | `AUTH_SERVICE_MAX_BODY_BYTES` | `1048576` | 1024 to 33554432. |
 | `--rate-limit` | `AUTH_SERVICE_RATE_LIMIT_PER_SECOND` | `20` | 0.01 to 100000, per route bucket. |
@@ -77,6 +78,10 @@ and `/readyz` fails closed, naming the check. See the
 | `--sso-jit` | `AUTH_SSO_JIT` | `false` | `true` lets a federated sign-in join a known account to the provider's organization and create a new account. A provider row must allow it too (`auto_provision_users`), and it needs `AUTH_USERS_OWNED`. The chart renders it from `authService.ssoJit` and refuses `true` unless users are owned (`authService.phase` 4 with `usersOwnedStage=owned`). |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET` or `AUTH_INVITE_TOKEN_SECRET_FILE` | unset | Signing key of new invite tokens: go-api's link signing key (`LINK_TOKEN_SECRET`, else its `JWT_SECRET_KEY` chain), so a token either side minted is accepted by both. Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; startup names the missing variable only. |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET_PREVIOUS` or `AUTH_INVITE_TOKEN_SECRET_PREVIOUS_FILE` | unset | Retired invite key: accepted, never used to sign (go-api's `LINK_TOKEN_SECRET_PREVIOUS`). Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; with no retired key, set it to the signing key. A token is checked against the signing key, this key, then `AUTH_JWT_SECRET_KEY`, as go-api checks its links. |
+| (none, secret) | `AUTH_SSO_STATE_KEY` or `AUTH_SSO_STATE_KEY_FILE` | unset | Key the OIDC and OAuth state is derived from. The OIDC routes mount only when this, `APP_BASE_URL` and `SETTINGS_ENCRYPTION_KEY` are all set. The chart renders it by `secretKeyRef` from `authService.sso.secretName` (key `authService.sso.keys.stateKey`) while `authService.sso.oidc` is on. |
+| (none) | `APP_BASE_URL` | unset | go-api's public base URL (an absolute http or https URL): the callback and ACS URLs are built from it. The SAML routes mount with this and `SETTINGS_ENCRYPTION_KEY`. While `authService.sso.oidc` or `.saml` is on the chart renders it by `secretKeyRef` from the SSO Secret below phase 4; from phase 4 the mail setting renders it, and the SSO setting must name the same Secret key (otherwise the render fails: two sources). |
+| (none, secret) | `SETTINGS_ENCRYPTION_KEY` or `SETTINGS_ENCRYPTION_KEY_FILE` | unset | go-api's provider-secret key: it decrypts the provider rows go-api encrypted, so it must be go-api's own value. The chart renders it by `secretKeyRef` from `authService.sso.secretName` (key `authService.sso.keys.encryptionKey`) while a switch of `authService.sso` is on, and fails the render when a key name is empty. |
+| (none) | `SETTINGS_ENCRYPTION_SALT` | go-api's built-in default | The salt of that key. The chart renders it by an optional `secretKeyRef` (key `authService.sso.keys.encryptionSalt`): an absent key leaves the default salt, as go-api does. |
 | (none) | `AUTH_ACCESS_TOKEN_CLASS` | `hs256_compat` | The one class of access token this service mints: `hs256_compat` or `eddsa` (exact match; any other value fails startup). `eddsa` needs `AUTH_TOKEN_ISSUER_URL` (the `iss`, byte for byte) and a signing key; `AUTH_JWT_AUDIENCE` is the access token's audience (`dev-health-api`). Each sign-in, refresh and issue answer also carries `session_access_token`, the token of audience `auth-service` the session routes accept. Tokens last `AUTH_ACCESS_TOKEN_LIFETIME` (60 minutes by default) and carry the access-token.v1 claims only. <!-- gitleaks:allow --> |
 | (none) | `AUTH_ACCESS_TOKEN_LIFETIME` | `60m` | The eddsa access token's lifetime (`exp - iat`, also every answer's `expires_in`), for the access token and `session_access_token` alike: a Go duration of whole minutes from `5m` to `60m` (`1h` is 60 minutes); any other value fails startup under eddsa. Under `hs256_compat` it is not used (go-api's 60 minutes). ACP-ADR-03 targets 10 minutes after the eddsa flip. |
 | (none) | `AUTH_OAUTH_RESOURCE_ACR_API` | unset | The RFC 8707 resource URI of the `acr-api` audience: an absolute https URL, compared byte for byte with a request's `resource`. Unset leaves that audience unservable at request time; the service still starts. |
@@ -158,6 +163,14 @@ With `AUTH_MEMBERSHIP_ROUTES=true`, auth-service serves the membership, invite a
 
   The exchange goes to the origin of `AUTH_PROXY_URL` (`POST /internal/v1/token/exchange`, which auth-service mounts only while `AUTH_WORKLOAD_EXCHANGE` or `AUTH_WORKLOAD_BOOTSTRAP` is `true`; see [workload-token exchange](#workload-token-exchange)); the subject file is read again for every exchange, and one exchange serves all the clients that selected `workload` (the provisioning clients and the session issue client). `workload` with a missing or invalid input is a start-up error naming it. A failed exchange fails that call (503) with no request to the provisioning routes; there is no fallback to `svc_authsess_`.
 
+### Delegated impersonation (go-api)
+
+- `AUTH_PROXY_IMPERSONATION` (go-api; chart value `goApi.authProxy.impersonation`, default off; `true` or `false`, any other value is a start-up error). On, go-api's `POST /api/v1/admin/impersonate` asks auth-service to start a [delegated session](delegated-sessions.md) of the caller's own session, and `POST /api/v1/admin/impersonate/stop` ends it there. auth-service writes go-api's impersonation row and its audit rows; go-api writes neither. Off (or unset), go-api starts and ends its own impersonation row as before.
+- It needs `AUTH_PROXY_SESSIONS=true` and `AUTH_PROXY_URL`. go-api does not refuse to start without sessions (D6465): it logs one ERROR line, sets `devhealth_api_auth_proxy_impersonation_config_invalid` to 1, and every start and stop answers 503. The chart refuses `goApi.authProxy.impersonation=true` below `authService.phase` 2, so a chart render cannot produce that state.
+- Do not turn it on before the web change that swaps the browser session to the delegated token at start and restores it at stop (CHAOS-12913) is live.
+- With the switch on, a start answers `200` with `status`, `target_user` (`id`, `email`, `org_id`, `role`), `expires_at`, `access_token`, `token_type` (`bearer`), `expires_in` and, under the eddsa class only, `session_access_token`. The session lasts at most 15 minutes and has no refresh. A caller whose token carries no auth-service session (`sid`) is refused `409` "Impersonation needs an authentication-service session; sign in again", at start and at stop. Any failure to start or end the session at auth-service is `503` and changes nothing in go-api; there is no fallback to a go-api session.
+- Stop needs the administrator's own session: the delegated bearer is refused on every `/api/v1/admin` route, and `POST /api/v1/admin/impersonate/stop` is decided by the PDP with the administrator's own bearer (CHAOS-12814, #5760). go-api refuses an impersonation caller fail-closed on PDP-enforced rows (outcome `impersonation_refused`); the stop route is exempt from that refusal.
+
 ### Shadow PDP (go-api)
 
 go-api can ask the policy decision point (`POST /v1/authorize` on auth-service) beside its own guard and compare the two answers. It is telemetry only: the legacy answer always wins, no response changes, and the shadow reads no database. It is off by default. A bad or missing input turns it off, logs an ERROR naming the variable (never its value), sets `dev_health_api_shadow_config_invalid` to 1 (see [readiness and SLO](readiness-and-slo.md#metrics)) and never fails the start.
@@ -172,6 +185,22 @@ go-api can ask the policy decision point (`POST /v1/authorize` on auth-service) 
 With `AUTH_SHADOW_PDP=true` the call goes to the origin of `AUTH_PROXY_URL` (required; when it is malformed and no `AUTH_PROXY_*` flag is on, only the shadow turns off, with an ERROR naming `AUTH_PROXY_URL`, and the start goes on; with the shadow off, or with a flag on, a malformed `AUTH_PROXY_URL` still stops the start) and presents go-api's workload token (audience `auth-service`), with each call limited to 2 seconds. The workload client is the one the provisioning and session issue credentials share when one of them chose `workload`; otherwise go-api builds one from `AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one) and `AUTH_WORKLOAD_ISSUER`, as for the provisioning credential above. None of those inputs is read while the shadow is off. An unreachable PDP does not matter at start: the client is lazy, and a failed call counts as `error`.
 
 The shadow covers only requests that carry an EdDSA user access token; a legacy HS256 token, an impersonation and a request with no organization are `skipped`, so a zero mismatch count is no proof of parity for those callers. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS` before the shadow is turned on, and its per-pod rate limit applies to the PDP route.
+
+### PDP gate (query-api)
+
+query-api can ask the policy decision point (`POST /v1/authorize` on auth-service) on its REST routes (`/api/v1/*`). It asks for a caller that presents an EdDSA user access token, after query-api's own token and organization checks have accepted it, with the row's catalog action and the caller's organization. `/query`, `/graphql` and the MCP listener are not gated.
+
+| Environment | Rule |
+| --- | --- |
+| `QUERY_API_PDP_MODE` | `off`, `shadow` or `enforce`; unset or empty is `off`. `off` reads no other input and asks nothing. `shadow` asks in the background, counts and compares, and never changes a response. `enforce` answers a PDP deny with 403 `{"detail":"Not authorized"}`, and no verdict (the PDP is down, a timeout, a 429, a bad answer) with 503 `{"detail":"Authorization unavailable"}`; the route's handler is not reached. |
+| `AUTH_PROXY_URL` | auth-service's base URL (go-api's setting): an http(s) origin with no path, query or credentials. Read only while the mode is `shadow` or `enforce`. |
+| `AUTH_WORKLOAD_SUBJECT_FILE`, `AUTH_WORKLOAD_BOOTSTRAP_FILE`, `AUTH_WORKLOAD_ISSUER` | query-api's workload credential, with go-api's rules (exactly one file, readable; an https issuer). Read only while the mode is `shadow` or `enforce`. |
+
+A bad mode value, or `shadow`/`enforce` with a missing or bad input, never fails the start. query-api logs one ERROR naming the variable (never its value or a path), sets `dev_health_query_api_pdp_config_invalid` to 1, and answers 503 `{"detail":"Authorization unavailable"}` to every request that would ask the PDP. Each call presents query-api's workload token (audience `auth-service`, client service `dev-health-query-api`) and is limited to 2 seconds; the workload registry row `query-api` holds that audience.
+
+The HS256 edge token (`ops_access_token_hs256`) and the effective-principal envelope (`effective_principal_envelope`) are on an explicit exempt list: they never ask the PDP and stay on today's path in every mode, until HS256 and the envelope retire. Each accepted exempt caller counts in `dev_health_query_api_pdp_exempt_total` (labels `class`, `action`). PDP asks count in `dev_health_query_api_pdp_results_total` (labels `mode`: `shadow`, `enforce`, `invalid`; `result`: `allow`, `deny`, `unavailable`, `match`, `mismatch`, `error`, `dropped`, `not_configured`; `action`). `dev_health_query_api_pdp_enabled` is 1 while a shadow or enforce gate is built.
+
+Before the mode is turned on: query-api needs a workload binding (`auth-migrate workloads bind -workload query-api ...`), auth-service must list query-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS`, and its per-pod limit on the PDP route applies. A delegated (impersonation) token and a caller with no organization are decided by the PDP like any other user token.
 
 ### Workload token exchange
 
@@ -210,6 +239,19 @@ exchange reads is in the [workload registry](workload-registry.md). The reasons 
 - `expires_at` is the decision time for every deny and for every allow except a repository allow, which keeps the core's 30 s bound.
 - Each decision is logged at Info with `decision_id`, `allowed` and `reason_code` only.
 - A decision on an action the policy catalog classes high risk (`risk_class` `high`), allow or deny, writes one `auth.authorize.high_risk_decided` audit row before the answer is served. One call writes all its rows in one transaction. The row has the user principal as actor, the caller's workload principal and token id as `caller_principal_id` and `workload_jti`, and the closed attributes `decision_id`, `decision_reason_code`, `action_key`, `resource_type` and `policy_revision`, plus `resource_id` for a repository key. It holds no token, session id, request text or organization text the decision did not find. If the rows cannot be written the whole call is 503 `store_unavailable`, for an allow and for a deny. A low-risk decision and a decision on an action outside the catalog write no row.
+
+### Internal listener
+
+With `AUTH_SERVICE_INTERNAL_HTTP_ADDR` set, auth-service opens a third listener for the policy enforcement points (PEPs). Unset, there is no such listener.
+
+- It serves `POST /internal/v1/token/exchange`, `POST /v1/authorize` and `POST /v1/authorize:batch` alone, each only while it is mounted (see [workload token exchange](#workload-token-exchange) and [authorize routes](#authorize-routes)). Every other path is 404 there, the operator paths too.
+- It trusts no proxy. `AUTH_SERVICE_TRUSTED_PROXIES` is the API listener's alone: here the client address is always the TCP peer, `X-Forwarded-For` is not read, and a caller's `X-Request-ID` is logged as `untrusted`.
+- A caller is identified by its own token: the exchange by its ServiceAccount token, the authorize routes by its workload token and `AUTH_AUTHORIZE_CALLER_SUBJECTS`. The refusals are the same as on the API listener.
+- The request timeout, the body bound and the rate limits are the API listener's settings. Each route has its own bucket on each listener of each replica.
+- Its access lines and request metrics carry `listener` `internal`.
+- The API listener does not change: it serves the same routes as without the internal listener.
+
+The chart renders it from `authService.internal` (off by default): the arg, a Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits only the pods of `authService.internal.peers` (`web`, `query-api`, `go-api`) on `authService.internal.port` (default `8097`).
 
 ## auth-migrate
 
@@ -280,6 +322,6 @@ warning per attempt. See
 - `internal/auth/authconfig/config.go`: constants (defaults and bounds), `Load`, `signingKey`, `validateKeyID`, `validateIdentifier`.
 - `internal/auth/authconfig/options.go`: the option registry (flags, environment names, secret marker).
 - `internal/platform/secrets/source.go`: `Resolve` (mutual exclusion, newline trim, error wording).
-- `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`.
+- `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`, `internalServerOptions` (the internal listener).
 - `cmd/auth-migrate/main.go`: environment names, `--check`, `runBudget`.
 - `internal/auth/authconfig/workload.go`: `workloadExchange` (the exchange settings, defaults and bounds), `HTTPSOrigin`.

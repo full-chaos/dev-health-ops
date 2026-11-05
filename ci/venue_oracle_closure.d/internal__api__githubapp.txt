@@ -72,6 +72,7 @@ internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cli
@@ -112,6 +113,7 @@ internal/platform/fernet
 internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol

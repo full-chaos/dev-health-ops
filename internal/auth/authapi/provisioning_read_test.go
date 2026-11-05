@@ -179,7 +179,8 @@ func seedReads(f *provFixture) {
 
 func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 	t.Parallel()
-	f := newProvFixture(t)
+	f := newProvFixtureWith(t, dropReadRows(t, docWithRows(t, PatternOrgSuspend, PatternOrgRename)))
+	seedReads(f)
 	for _, c := range readCases() {
 		response := f.post(c.path, c.body(f), nil)
 		if response.Code != http.StatusNotFound {
@@ -189,7 +190,7 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 	if f.reads.calls+f.grantReads.calls != 0 || len(f.creds.scopes) != 0 {
 		t.Fatal("an unmounted route reached a store or the credential check")
 	}
-	one := newProvFixtureWith(t, docWithRows(t, PatternPrincipalsGet, PatternOrgSuspend, PatternOrgRename))
+	one := newProvFixtureWith(t, dropReadRows(t, docWithRows(t, PatternPrincipalsGet, PatternOrgSuspend, PatternOrgRename), PatternPrincipalsGet))
 	seedReads(one)
 	for _, c := range readCases() {
 		got := one.post(c.path, c.body(one), nil).Code
@@ -844,4 +845,26 @@ func TestMembershipWithoutJoinedAtReadsAsJoinedWhenCreated(t *testing.T) {
 	if !strings.Contains(got.Body.String(), `"joined_at":"`+stamp(readTime)+`"`) {
 		t.Fatalf("%s", got.Body)
 	}
+}
+
+// dropReadRows removes the read routes' rows (but keep) from the document, as the build had before they were profiled.
+func dropReadRows(t *testing.T, raw []byte, keep ...string) []byte {
+	t.Helper()
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	var kept []any
+	for _, item := range document["rows"].([]any) {
+		route := item.(map[string]any)["route"].(string)
+		if !slices.Contains(readPatterns(), route) || slices.Contains(keep, route) {
+			kept = append(kept, item)
+		}
+	}
+	document["rows"] = kept
+	out, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

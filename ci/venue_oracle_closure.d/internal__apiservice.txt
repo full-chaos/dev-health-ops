@@ -87,6 +87,7 @@ internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cigates/bigboyrender
@@ -134,6 +135,7 @@ internal/platform/fernet
 internal/platform/health
 internal/platform/lifecycle
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/otlpmetrics
 internal/platform/pgident
 internal/platform/queuecontrol

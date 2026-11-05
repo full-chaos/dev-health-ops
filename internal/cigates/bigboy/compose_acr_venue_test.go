@@ -273,18 +273,14 @@ func composeACRTalksToRealOps(g *guard) {
 
 const composeLLMSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
 
-func composeACROrgLLMSourcePassedThrough(g *guard) {
+func composeACROrgLLMSourceIsGone(g *guard) {
 	for _, line := range strings.Split(g.read(composePins), "\n") {
-		g.expect(!strings.HasPrefix(line, composeLLMSource), "images.env sets %s (a persistent BYO setting bills chris's key)", composeLLMSource)
+		g.expect(!strings.HasPrefix(line, composeLLMSource), "images.env sets %s, which acr no longer reads (CHAOS-12997)", composeLLMSource)
 	}
-	off := composeACR(g)
-	got := mp(off.services["acr-api"]["environment"])[composeLLMSource]
-	g.expect(got == "", "acr-api %s renders %q with nothing set, want empty", composeLLMSource, got)
-	on := composeMust(g, composeIn{profiles: []string{"acr"}, env: composeEnv(map[string]string{composeLLMSource: "ops"})})
-	got = mp(on.services["acr-api"]["environment"])[composeLLMSource]
-	g.expect(got == "ops", "acr-api %s renders %q with the environment set to ops, want ops", composeLLMSource, got)
-	_, proj := mp(off.services["acr-projector"]["environment"])[composeLLMSource]
-	g.expect(!proj, "acr-projector reads %s; only acr-api does", composeLLMSource)
+	for _, name := range []string{"acr-api", "acr-projector", "acr-mcp"} {
+		_, passed := mp(composeACR(g).services[name]["environment"])[composeLLMSource]
+		g.expect(!passed, "%s passes %s, which acr no longer reads (CHAOS-12997)", name, composeLLMSource)
+	}
 }
 
 var (
@@ -366,7 +362,7 @@ var composeACRChecks = []check{
 	{"the_acr_images_are_pinned_by_registry_digest_and_a_missing_pin_fails_the_render", composeACRImagesPinned},
 	{"the_start_order_of_the_acr_stack_is_kept", composeACRStartOrder},
 	{"acr_api_talks_to_the_real_ops_and_the_stand_in_is_off_its_path", composeACRTalksToRealOps},
-	{"the_org_llm_config_source_is_passed_through_and_no_file_sets_it", composeACROrgLLMSourcePassedThrough},
+	{"the_removed_org_llm_config_source_is_not_passed_and_no_file_sets_it", composeACROrgLLMSourceIsGone},
 	{"the_switch_procedure_removes_the_old_containers_and_keeps_the_data", composeACRSwitchProcedure},
 	{"the_acr_settings_keep_the_old_defaults_where_the_cutover_changes_the_env", composeACROldDefaults},
 }
@@ -428,10 +424,10 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRTalksToRealOps, want: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
 		{name: "retries setting back", mutate: mut(composeFile, "      ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'\n", "      ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'\n      ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES: '2'\n"),
 			check: composeACRTalksToRealOps, want: "MAX_TRANSPORT_RETRIES"},
-		{name: "llm source defaults to ops", mutate: mut(composeFile, "${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}", "${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-ops}"),
-			check: composeACROrgLLMSourcePassedThrough, want: "with nothing set"},
+		{name: "compose passes the removed llm source", mutate: mut(composeFile, "      ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai\n", "      ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai\n      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}\n"),
+			check: composeACROrgLLMSourceIsGone, want: "passes ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"},
 		{name: "env file sets the llm source", mutate: mut(composePins, "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true", "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true\nACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=ops"),
-			check: composeACROrgLLMSourcePassedThrough, want: "images.env sets"},
+			check: composeACROrgLLMSourceIsGone, want: "images.env sets"},
 		{name: "down removes the volumes", copy: readme, mutate: mut("ci/bigboy/README.md", "-f compose.yml down`", "-f compose.yml down -v`"),
 			check: composeACRSwitchProcedure, want: "removes data"},
 		{name: "up starts the whole profile", copy: readme, mutate: mut("ci/bigboy/README.md", " acr-projector acr-mcp`", " acr-projector`"),

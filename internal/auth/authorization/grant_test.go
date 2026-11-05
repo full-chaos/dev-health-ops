@@ -143,7 +143,7 @@ func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
 	for _, st := range []Status{StatusUnknown, StatusInvited, StatusSuspended, StatusRemoved} {
 		s := repoSnapshot("member", g)
 		s.memberships = map[string]Membership{testOrg: {OrgID: testOrg, Role: "member", Status: st}}
-		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonMembershipInactive)
+		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonNoMembership)
 	}
 	s = repoSnapshot("member", g)
 	s.memberships = map[string]Membership{testOrg: {OrgID: orgB, Role: "member", Status: StatusActive}}
@@ -418,7 +418,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 27 {
+	if len(AllReasons()) != 26 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

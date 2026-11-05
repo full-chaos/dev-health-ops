@@ -278,7 +278,7 @@ func TestEvaluate_EveryNonActiveStatusDenies(t *testing.T) {
 		}
 		s = orgSnapshot("owner")
 		s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: v}
-		if got := e.Evaluate(orgRequest("org.read"), s); got.Allowed || got.Reason != ReasonMembershipInactive {
+		if got := e.Evaluate(orgRequest("org.read"), s); got.Allowed || got.Reason != ReasonNoMembership {
 			t.Errorf("membership %d: %+v", v, got)
 		}
 	}
@@ -452,7 +452,7 @@ func TestReasonSetIsClosed(t *testing.T) {
 	want := []Reason{
 		"allowed_by_role", "invalid_request", "unknown_action", "resource_mismatch",
 		"principal_inactive", "organization_inactive", "no_membership", "org_mismatch",
-		"membership_inactive", "platform_role_absent", "role_unknown", "role_scope_mismatch",
+		"platform_role_absent", "role_unknown", "role_scope_mismatch",
 		"role_lacks_action", "allowed_by_repository_grant", "grant_absent", "repository_not_granted",
 		"grant_expired", "grant_revoked", "workload_audience_denied",
 		"workload_action_denied", "clock_unavailable", "service_account_inactive",
@@ -565,9 +565,9 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		{"resource mismatch", Request{Action: "org.read", ResourceKind: "platform"}, orgSnapshot("owner"), ReasonResourceMismatch, nil},
 		{"principal inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.principal = StatusSuspended }), ReasonPrincipalInactive, nil},
 		{"organization inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.orgStatus[testOrg] = StatusSuspended }), ReasonOrganizationInactive, nil},
-		{"membership inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
+		{"membership not active", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: StatusRemoved}
-		}), ReasonMembershipInactive, nil},
+		}), ReasonNoMembership, nil},
 		{"no membership", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.memberships = map[string]Membership{} }), ReasonNoMembership, nil},
 		{"org mismatch", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: "org-2", Role: "owner", Status: StatusActive}

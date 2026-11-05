@@ -10,7 +10,7 @@ import (
 
 func publishedJWKS(t *testing.T, keys KeySetSource) map[string]string {
 	t.Helper()
-	routes := WellKnownRoutes(WellKnownDeps{Keys: keys})
+	routes := WellKnownRoutes(WellKnownDeps{JWKS: documentOf(keys)})
 	var out map[string]string
 	for _, route := range routes {
 		if route.Method != http.MethodGet || route.Pattern != PatternJWKS {

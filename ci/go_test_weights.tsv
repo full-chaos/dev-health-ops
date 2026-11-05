@@ -36,6 +36,7 @@ internal/cigates/testshard	521
 internal/cigates/weightsfiles	140
 internal/cigates/workflowpaths	27
 internal/cigates/workflows	397
+internal/cli	145
 internal/fixturescli	6
 internal/goapicli/restprove	12
 internal/goapiproof	126

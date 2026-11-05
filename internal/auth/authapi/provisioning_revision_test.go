@@ -48,32 +48,42 @@ func TestIfRevisionDecodeDomainOnBothRoutes(t *testing.T) {
 		}{
 			"absent": {"", nil}, "null": {"null", nil}, "zero": {"0", &zero}, "seven": {"7", &seven}, "max": {"9223372036854775807", &top},
 		} {
-			f := newProvFixture(t)
-			if got := f.post(route.path, f.bodyWith(tc.raw), nil); got.Code != http.StatusOK {
-				t.Fatalf("%s %s: %d %s, want 200", route.name, name, got.Code, got.Body)
-			}
-			got := route.got(f)
-			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
-				t.Fatalf("%s %s: the verb got %v, want %v", route.name, name, got, tc.want)
-			}
+			t.Run(route.name+" "+name, func(t *testing.T) {
+				t.Parallel()
+				f := newProvFixture(t)
+				if got := f.post(route.path, f.bodyWith(tc.raw), nil); got.Code != http.StatusOK {
+					t.Fatalf("%s %s: %d %s, want 200", route.name, name, got.Code, got.Body)
+				}
+				got := route.got(f)
+				if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+					t.Fatalf("%s %s: the verb got %v, want %v", route.name, name, got, tc.want)
+				}
+			})
 		}
 		for name, raw := range map[string]string{"negative": "-1", "fraction": "1.5", "string": `"1"`, "overflow": "9223372036854775808",
 			"exponent": "1e2", "bool": "true", "array": "[]", "object": "{}", "leading zero": "01"} {
-			f := newProvFixture(t)
-			expectRefusal(t, f.post(route.path, f.bodyWith(raw), nil), http.StatusBadRequest, reasonMalformed)
-			if route.calls(f) != 0 {
-				t.Fatalf("%s %s: a malformed if_revision reached the verb", route.name, name)
-			}
+			t.Run(route.name+" "+name, func(t *testing.T) {
+				t.Parallel()
+				f := newProvFixture(t)
+				expectRefusal(t, f.post(route.path, f.bodyWith(raw), nil), http.StatusBadRequest, reasonMalformed)
+				if route.calls(f) != 0 {
+					t.Fatalf("%s %s: a malformed if_revision reached the verb", route.name, name)
+				}
+			})
 		}
-		f := newProvFixture(t)
-		expectRefusal(t, f.post(route.path, strings.Replace(f.bodyWith("3"), `"if_revision":3`, `"if_revision":3,"if_revision":4`, 1), nil),
-			http.StatusBadRequest, reasonMalformed)
+		t.Run(route.name+" duplicate", func(t *testing.T) {
+			t.Parallel()
+			f := newProvFixture(t)
+			expectRefusal(t, f.post(route.path, strings.Replace(f.bodyWith("3"), `"if_revision":3`, `"if_revision":3,"if_revision":4`, 1), nil),
+				http.StatusBadRequest, reasonMalformed)
+		})
 	}
 }
 
 // A stale if_revision is the verb's ErrRevisionConflict: 409 state_changed on both routes, whether the organization is at
 // the target status (a no-op) or not. The verb is given the revision; the route answers a refusal, never a 200.
 func TestStaleIfRevisionAnswers409StateChangedOnBothRoutes(t *testing.T) {
+	t.Parallel()
 	for _, route := range revisionRoutes() {
 		for _, noop := range []bool{false, true} {
 			f := newProvFixture(t)
@@ -89,6 +99,7 @@ func TestStaleIfRevisionAnswers409StateChangedOnBothRoutes(t *testing.T) {
 
 // With no if_revision a conflict cannot happen, and any other store fault stays the fail-closed 503.
 func TestIfRevisionRouteFaultsStayFailClosed(t *testing.T) {
+	t.Parallel()
 	for _, route := range revisionRoutes() {
 		f := newProvFixture(t)
 		f.reactivate.err = fmt.Errorf("%w: down", org.ErrStore)
@@ -130,6 +141,7 @@ func (f *provFixture) stateBody() string { return fmt.Sprintf(`{"organization_id
 // The state route answers the organization's status and revision, read once (one statement: the pair is never made of
 // two reads), with the organization id; it writes nothing and reads no actor.
 func TestOrgStateAnswersStatusAndRevisionFromOneRead(t *testing.T) {
+	t.Parallel()
 	for status, want := range map[org.Status]string{org.StatusActive: "active", org.StatusSuspended: "suspended"} {
 		f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 		f.reactivate.status, f.reactivate.revision, f.reactivate.revStep = status, 7, 1
@@ -154,6 +166,7 @@ func TestOrgStateAnswersStatusAndRevisionFromOneRead(t *testing.T) {
 }
 
 func TestOrgStateRefusalSet(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		err    error
 		status int
@@ -174,6 +187,7 @@ func TestOrgStateRefusalSet(t *testing.T) {
 
 // The body is one strict object of organization_id alone.
 func TestOrgStateBodyIsStrict(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 	for name, body := range map[string]string{
 		"empty":         `{}`,
@@ -194,6 +208,7 @@ func TestOrgStateBodyIsStrict(t *testing.T) {
 
 // No bearer and a refused or unknown credential are the one 401, before any read.
 func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, docWithRow(t, stateRoute))
 	expectRefusal(t, f.post(stateRoute, f.stateBody(), map[string]string{}), http.StatusUnauthorized, reasonInvalidCredentials)
 	f.creds.refusal = servicecred.RefusedRevoked
@@ -206,6 +221,7 @@ func TestOrgStateRefusesABadServiceCredential(t *testing.T) {
 // With no endpoint-profile row for the route the service does not start, naming the route; the suspend route's row does
 // not stand in for it. With both rows the route answers.
 func TestOrgStateNeedsItsProfileRowToStart(t *testing.T) {
+	t.Parallel()
 	for name, doc := range map[string][]byte{"document without the row": docWithoutRow(t, nil, stateRoute),
 		"suspend row only": docWithoutRow(t, docWithRow(t, PatternOrgSuspend), stateRoute)} {
 		routes, err := ProvisioningRoutes(provisioningDepsOver(t, doc, nil))
@@ -226,6 +242,7 @@ func TestOrgStateNeedsItsProfileRowToStart(t *testing.T) {
 }
 
 func TestOrgStateNeedsAnAuthServicePostRowListingExactlyTheAdmittedClasses(t *testing.T) {
+	t.Parallel()
 	bare := docWithoutRow(t, nil, stateRoute)
 	for name, edit := range map[string]func(row map[string]any){
 		"another service": func(row map[string]any) { row["service"] = "dev-health-ops-api" },
@@ -278,6 +295,7 @@ func docWithoutRow(t *testing.T, doc []byte, route string) []byte {
 // The embedded endpoint-profile document holds the state route's row: the route is served with it, no startup line says
 // it is not mounted, and its answer is the one the route gives with a planted row.
 func TestOrgStateIsServedWithTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, nil)
 	f.reactivate.status, f.reactivate.revision = org.StatusActive, 3
 	if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusOK {

@@ -178,6 +178,7 @@ func seedReads(f *provFixture) {
 }
 
 func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, dropReadRows(t, docWithRows(t, PatternOrgSuspend, PatternOrgRename)))
 	seedReads(f)
 	for _, c := range readCases() {
@@ -200,6 +201,7 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 }
 
 func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	routes, err := ReadRoutes(ReadDeps{Credentials: f.creds, ProfileRows: docWithRows(t, readPatterns()...)})
 	if err != nil || len(routes) != 0 {
@@ -209,6 +211,7 @@ func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 
 // The public listener's route set never holds a read route, whatever rows the document has: ProvisioningRoutes does not build them.
 func TestProvisioningRoutesNeverServeReads(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
@@ -225,24 +228,27 @@ func TestProvisioningRoutesNeverServeReads(t *testing.T) {
 
 func TestReadScopeRequired(t *testing.T) {
 	for _, c := range readCases() {
-		f := newReadFixture(t)
-		f.creds.held = []string{"memberships:write", "sessions:issue"}
-		expectRefusal(t, f.post(c.path, c.body(f), nil), http.StatusUnauthorized, reasonInvalidCredentials)
-		if f.reads.calls+f.grantReads.calls != 0 {
-			t.Errorf("%s: a credential without the read scope reached a store", c.op)
-		}
-		if !reflect.DeepEqual(f.creds.scopes, []string{c.scope}) {
-			t.Errorf("%s asked for scopes %v, want [%s]", c.op, f.creds.scopes, c.scope)
-		}
-		other := newReadFixture(t)
-		other.creds.held = []string{"principals:read", "organizations:read", "memberships:read", "grants:read"}
-		other.creds.held = slices.DeleteFunc(other.creds.held, func(s string) bool { return s == c.scope })
-		expectRefusal(t, other.post(c.path, c.body(other), nil), http.StatusUnauthorized, reasonInvalidCredentials)
-		held := newReadFixture(t)
-		held.creds.held = []string{c.scope}
-		if got := held.post(c.path, c.body(held), nil); got.Code != http.StatusOK {
-			t.Errorf("%s with its scope: %d %s", c.op, got.Code, got.Body)
-		}
+		t.Run(c.op, func(t *testing.T) {
+			t.Parallel()
+			f := newReadFixture(t)
+			f.creds.held = []string{"memberships:write", "sessions:issue"}
+			expectRefusal(t, f.post(c.path, c.body(f), nil), http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.reads.calls+f.grantReads.calls != 0 {
+				t.Errorf("%s: a credential without the read scope reached a store", c.op)
+			}
+			if !reflect.DeepEqual(f.creds.scopes, []string{c.scope}) {
+				t.Errorf("%s asked for scopes %v, want [%s]", c.op, f.creds.scopes, c.scope)
+			}
+			other := newReadFixture(t)
+			other.creds.held = []string{"principals:read", "organizations:read", "memberships:read", "grants:read"}
+			other.creds.held = slices.DeleteFunc(other.creds.held, func(s string) bool { return s == c.scope })
+			expectRefusal(t, other.post(c.path, c.body(other), nil), http.StatusUnauthorized, reasonInvalidCredentials)
+			held := newReadFixture(t)
+			held.creds.held = []string{c.scope}
+			if got := held.post(c.path, c.body(held), nil); got.Code != http.StatusOK {
+				t.Errorf("%s with its scope: %d %s", c.op, got.Code, got.Body)
+			}
+		})
 	}
 	f := newReadFixture(t)
 	for _, header := range []map[string]string{{}, {"Authorization": "Bearer nonsense"}} {
@@ -256,6 +262,7 @@ func TestReadScopeRequired(t *testing.T) {
 }
 
 func TestReadRoutesAnswerWithoutWriting(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		f := newReadFixture(t)
 		got := f.post(c.path, c.body(f), nil)
@@ -293,6 +300,7 @@ func readSources(t *testing.T) string {
 }
 
 func TestForeignAndMissingSameAnswer(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		if c.notFound == "" {
 			continue
@@ -325,20 +333,24 @@ func TestForeignAndMissingSameAnswer(t *testing.T) {
 func TestReadStoreFailuresFailClosed(t *testing.T) {
 	for _, c := range readCases() {
 		for name, err := range map[string]error{"store": errors.New("db down"), "unknown role": publicread.ErrUnknownRole, "pkg store": publicread.ErrStore, "grant store": grant.ErrStore} {
-			f := newReadFixture(t)
-			f.reads.err, f.grantReads.err = err, err
-			got := f.post(c.path, c.body(f), nil)
-			if got.Code != http.StatusServiceUnavailable || reasonOf(t, got) != reasonStoreUnavailable {
-				t.Errorf("%s with %s: %d %s", c.op, name, got.Code, got.Body)
-			}
-			if strings.Contains(got.Body.String(), "superhero") || strings.Contains(got.Body.String(), "db down") {
-				t.Errorf("%s: the answer repeats store text: %s", c.op, got.Body)
-			}
+			t.Run(c.op+" "+name, func(t *testing.T) {
+				t.Parallel()
+				f := newReadFixture(t)
+				f.reads.err, f.grantReads.err = err, err
+				got := f.post(c.path, c.body(f), nil)
+				if got.Code != http.StatusServiceUnavailable || reasonOf(t, got) != reasonStoreUnavailable {
+					t.Errorf("%s with %s: %d %s", c.op, name, got.Code, got.Body)
+				}
+				if strings.Contains(got.Body.String(), "superhero") || strings.Contains(got.Body.String(), "db down") {
+					t.Errorf("%s: the answer repeats store text: %s", c.op, got.Body)
+				}
+			})
 		}
 	}
 }
 
 func TestReadRequestRules(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	prn := wire("prn_", f.target)
@@ -387,6 +399,7 @@ func TestReadRequestRules(t *testing.T) {
 }
 
 func TestReadPagingPassesLimitAndCursor(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	f.post(PatternMembershipsList, `{"schema_version":"membership-list-request.v1","organization_id":"`+org+`"}`, nil)
@@ -409,6 +422,7 @@ func TestReadPagingPassesLimitAndCursor(t *testing.T) {
 }
 
 func TestReadNextCursorIsTheLastItemAndAbsentOnTheLastPage(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	ids := []uuid.UUID{uuid.New(), uuid.New()}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
@@ -474,6 +488,7 @@ func TestReadNextCursorIsTheLastItemAndAbsentOnTheLastPage(t *testing.T) {
 }
 
 func TestMembershipStatusFilterServesActiveOnly(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	for _, status := range []string{"invited", "suspended", "removed"} {
@@ -493,6 +508,7 @@ func TestMembershipStatusFilterServesActiveOnly(t *testing.T) {
 }
 
 func TestOrganizationStatusFollowsIsActive(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	f.reads.org.Active = false
 	got := f.post(PatternOrganizationsGet, readCases()[2].body(f), nil)
@@ -507,6 +523,7 @@ func TestOrganizationStatusFollowsIsActive(t *testing.T) {
 }
 
 func TestPrincipalAnswerHasOnlyItsFiveMembers(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	for _, c := range readCases()[:2] {
 		var doc map[string]any
@@ -532,6 +549,7 @@ func TestPrincipalAnswerHasOnlyItsFiveMembers(t *testing.T) {
 }
 
 func TestGrantListPagesAndFilters(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	var all []grant.Grant
 	for i := 0; i < 3; i++ {
@@ -569,6 +587,7 @@ func TestGrantListPagesAndFilters(t *testing.T) {
 }
 
 func TestGrantStatusRevokedThenExpiredThenActive(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 	for _, c := range []struct {
@@ -621,6 +640,7 @@ func TestReadAnswersMatchThePR1Corpus(t *testing.T) {
 		}
 		checked++
 		t.Run(v.ID, func(t *testing.T) {
+			t.Parallel()
 			f := newReadFixture(t)
 			request := mapIDs(string(v.Request))
 			loadCorpus(t, f, v.Operation, v.Response)
@@ -818,6 +838,7 @@ func loadCorpus(t *testing.T, f *provFixture, op string, response json.RawMessag
 // public.memberships.joined_at is nullable and the contract needs one for an active member: a row without it reads as joined when
 // it was created.
 func TestMembershipWithoutJoinedAtReadsAsJoinedWhenCreated(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	f.reads.mem.JoinedAt = nil
 	got := f.post(PatternMembershipsGet, readCases()[4].body(f), nil)

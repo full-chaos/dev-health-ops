@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -295,7 +296,7 @@ func Execute(
 	}
 	showVersion := flags.Bool("version", false, "print build metadata as JSON and exit")
 	bound := registerOptions(flags, spec)
-	if err := flags.Parse(args); err != nil {
+	if err := cli.ParseFlagsError(flags, streams.Stderr, args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}

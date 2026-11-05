@@ -5,6 +5,7 @@ content_type: reference
 owner: engineering
 source_of_truth:
   - internal/auth/authapi/wellknown.go
+  - internal/auth/authapi/jwks_document.go
   - internal/auth/contracts/discovery.go
   - internal/token/keyset.go
   - internal/token/states.go
@@ -51,8 +52,13 @@ it is retired, and it is never listed again after a compromise.
 
 - `Cache-Control: public, max-age=300` (5 minutes, the constant `token.JWKSCacheTTL`) and a strong `ETag`.
   A request with a matching `If-None-Match` gets `304`.
-- When the key set cannot be read, the JWKS answers `503` with `Retry-After: 1`, a body with no key
+- A request never reads the key store. A background refresher reads the key set every second
+  (`authapi.JWKSRefreshEvery`, each read cut at 2 seconds) and the JWKS serves the last document it read.
+- When the reads fail, the JWKS serves the last good document for at most 30 seconds (`authapi.JWKSMaxStale`)
+  after the read that built it began. After that it answers `503` with `Retry-After: 1`, a body with no key
   material, and no cache header.
+- When this process latches a listed key as compromised, it drops the held document at once: the JWKS
+  answers `503` until a refresh lands a set without that key.
 - The rotation floors ([planned rotation](../../operate/runbooks/auth-signing-key-planned-rotation.md), [emergency rotation and rollback](../../operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md)) are built on the 5 minutes: a new key is listed at least 5 minutes before it signs, so
   a verifier that follows `max-age` has the key before the first token that needs it.
 
@@ -101,6 +107,7 @@ of the token header (the first part of the token, base64url). Never paste a toke
 ## Verified against
 
 - `internal/auth/authapi/wellknown.go`: `WellKnownRoutes`, `serveJWKS`, `serveDiscovery`, `writeCacheable`, `writeKeySetUnavailable`.
+- `internal/auth/authapi/jwks_document.go`: `JWKSDocument`, `refresh`, `load`, `JWKSRefreshEvery`, `JWKSReadTimeout`, `JWKSMaxStale`.
 - `internal/auth/contracts/discovery.go`: `DiscoveryJWKSPath`, `ParseDiscovery`.
 - `internal/token/keyset.go`: `KeySet.Published`. `internal/token/states.go`: `JWKSCacheTTL`.
 - `github.com/full-chaos/dev-health-go` v0.37.0, `authverify/jwks_client.go`: `JWKSClientConfig`, `NewJWKSClient`, `PublicKey`, `ResolveKey`, `cached`, `refresh`, `discoveryValid`.

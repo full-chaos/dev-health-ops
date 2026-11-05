@@ -10,7 +10,6 @@ package metricscli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -604,11 +603,8 @@ func runValidateFlags(ctx context.Context, env cli.Env) int {
 	flags.Usage = func() { fmt.Fprint(env.Stderr, usage) }
 	lookback := flags.Int("lookback", 30, "number of days to inspect")
 	org := flags.String("org", "", "the organization to validate")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

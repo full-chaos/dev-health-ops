@@ -298,6 +298,10 @@ spec:
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
+            {{- with (include "dev-health.authzEnforceGoApi" .) }}
+            - name: GO_API_AUTHZ_ENFORCE
+              value: {{ . | quote }}
+            {{- end }}
             {{- with $eddsaIssuer }}
             {{- /* The eddsa access-token issuer go-api verifies against its JWKS: the same value auth-service signs. */}}
             - name: AUTH_ACCESS_TOKEN_ISSUER

@@ -180,7 +180,7 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 			return deny(ReasonOrgMismatch)
 		}
 		if m.Status != StatusActive {
-			return deny(ReasonMembershipInactive)
+			return deny(ReasonNoMembership)
 		}
 		memberRole = m.Role
 	}

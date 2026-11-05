@@ -54,20 +54,24 @@ func TestReadinessProbeDropsThreeRefusedParamsInOneRound(t *testing.T) {
 	}
 }
 
-// The catalog knows gpt-6-luna refuses reasoning_effort: the first request must not carry it.
-func TestReadinessProbeGPT6LunaFirstRequestOmitsReasoningEffort(t *testing.T) {
-	f := newParamFakeOpenAI(t, map[string]string{"reasoning_effort": paramRefusal("reasoning_effort", "unsupported_value")})
+// The catalog knows gpt-6-luna accepts reasoning_effort none only: the first request sends none and is not refused.
+func TestReadinessProbeGPT6LunaFirstRequestSendsNone(t *testing.T) {
+	f := newParamFakeOpenAI(t, nil)
 	res := detailProberOver(nil).probeDetail(context.Background(), "openai", "gpt-6-luna", f.server.URL, "test-key")
 	wantReady(t, res.Outcome, res.SafeErrorCode)
-	calls := f.snapshot()
-	if len(calls) != 2 {
+	if calls := f.snapshot(); len(calls) != 2 {
 		t.Fatalf("provider requests = %d, want 2 (no refused request)", len(calls))
 	}
-	if n := f.countKey("reasoning_effort", false) + f.countKey("reasoning_effort", true); n != 0 {
-		t.Fatalf("gpt-6-luna requests carrying reasoning_effort = %d, want 0", n)
+	if n := f.countKey("reasoning_effort", false); n != 1 {
+		t.Fatalf("gpt-6-luna round 1 requests carrying reasoning_effort = %d, want 1", n)
+	}
+	for _, c := range f.snapshot() {
+		if c.body["reasoning_effort"] != "none" {
+			t.Fatalf("reasoning_effort = %v, want none", c.body["reasoning_effort"])
+		}
 	}
 	if len(res.DroppedParams) != 0 {
-		t.Fatalf("DroppedParams = %v, want none (the flag keeps it off the wire)", res.DroppedParams)
+		t.Fatalf("DroppedParams = %v, want none", res.DroppedParams)
 	}
 }
 

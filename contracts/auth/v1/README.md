@@ -76,9 +76,28 @@ audiences, never resource URIs.
   the one the event vocabulary accepts. An invited membership has no role and has
   not joined (both null); an active one has both.
 - A provisioning event's `role_id` is `rol_` + the role key.
-- Ids are server-minted and fixed length (the prefix and the 22 base64url characters of a 16-byte id, the
-  encoding session ids use): `org_`, `mbr_`, `inv_` (the invite's own prefix; its
-  aggregate joins `provisioning-event.v1` with its first producer) and `prn_`.
+- Ids are server-minted. `mbr_` and `inv_` (the invite's own prefix; its aggregate joins
+  `provisioning-event.v1` with its first producer) are the prefix and the 22 base64url characters of a 16-byte
+  id, the encoding session ids use. `org_` and `prn_` have two forms, and each surface holds ONE of them.
+- The prn_ wire form per surface (CHAOS-12402). There is no join rule: no consumer compares or joins the two
+  forms, and none may.
+  - Form S, `session.WirePrincipalID`: `prn_` and the 22 base64url characters (no padding) of the 16 bytes.
+    Access and workload token `sub` and `act.sub`, session records (`principal_id`, `actor_principal_id`),
+    config subjects (`AUTH_ACR_WORKLOAD_SUBJECT`, `AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT` and the other subject
+    settings), authorize decisions, credential bodies (`principal_id`, `created_by`) and the principal,
+    membership and grant read API.
+  - Form U, `provisioning.WireID`: `prn_` and the canonical UUID text (36 characters).
+    Provisioning events and the audit wire: `aggregate_id`, `actor_principal_id`, `subject_principal_id`, `owner_principal_id` and the
+    `principal_id` of an external-identity change. The same as `org_` on events and the audit wire (D6624).
+    The SQL join of `aggregate_revisions.aggregate_id` builds the same text (`'prn_' || id::text`).
+  - Internal go-api and auth-service bodies and the database carry the bare UUID. A token `org_id` claim is the
+    bare UUID too.
+  - A U form is never a token `sub` or a config subject; a verifier refuses it. The chart refuses a UUID-form
+    `AUTH_ACR_WORKLOAD_SUBJECT` at render time, and go-api logs an ERROR and sets
+    `dev_health_api_acr_workload_subject_config_invalid` while still starting (D6465).
+  - If a consumer ever needs both, the one function is a pure `PrincipalWireToUUID` in
+    `contracts/provisioning` that accepts either form and returns the uuid. It is not added until a second
+    consumer exists.
 - `invite-create-request.v1` email is lowercase ASCII with a dot-atom local part and a
   dotted domain: a strict subset of the addresses the login-key normalizer keeps
   unchanged (a test holds it). The server still normalizes and refuses any value
@@ -431,7 +450,7 @@ visible in the file layout, not in a conditionally present field:
 * `scopes` use `principal.v1`'s shape and are sets; `credential_class` is the
   same enum as `principal.v1`'s (a test fails on drift); `revoked_reason` is a
   value of a closed vocabulary (`vocabulary/reason-codes.json`: `compromised`,
-  `domain_revoked`, `owner_request`), never the free text the database column allows; the audit
+  `domain_revoked`, `org_deprovisioned`, `owner_request`), never the free text the database column allows; the audit
   event's `attributes.reason_code` is a closed list in the same file, and a new
   value arrives with the producer that emits it and its own migration.
 * The list items, the receipt's credential and the entry are copies of one body

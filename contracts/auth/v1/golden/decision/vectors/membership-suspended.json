@@ -4,8 +4,8 @@
     "cache_class": "none",
     "expires_in_seconds": null,
     "policy_revision": 12,
-    "reason": "membership_inactive",
-    "wire_reason_code": "membership_inactive"
+    "reason": "no_membership",
+    "wire_reason_code": "no_membership"
   },
   "id": "membership-suspended",
   "layer": "pdp",
@@ -20,13 +20,7 @@
     "clock": "2027-01-15T08:00:00Z",
     "grants": [],
     "grants_error": false,
-    "memberships": {
-      "org-a": {
-        "org_id": "org-a",
-        "role": "member",
-        "status": "suspended"
-      }
-    },
+    "memberships": {},
     "organizations": {
       "org-a": "active"
     },
@@ -36,5 +30,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "a membership in status suspended is not active."
+  "why": "public.memberships holds a row or none (D6651): a pair whose go-api membership is suspended or gone has no row, and no row is no membership."
 }

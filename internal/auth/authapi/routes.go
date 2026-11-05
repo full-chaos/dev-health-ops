@@ -130,6 +130,7 @@ func (h handlers) authenticateWith(w http.ResponseWriter, r *http.Request, opera
 		refuse(w, r, operation, unauthorized(reasonMalformed), nil)
 		return Bearer{}, session.Record{}, false
 	case record.RevokedAt != nil:
+		h.rec.observeRevocationLag(r.Context(), record.RevokedAt, h.Issuer.now())
 		refuse(w, r, operation, unauthorized(reasonSessionRevoked), nil)
 		return Bearer{}, session.Record{}, false
 	case !record.ExpiresAt.After(h.Issuer.now()):

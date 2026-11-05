@@ -23,7 +23,7 @@ func renderWith(t *testing.T, body string) string {
 		}
 		args = append(args, "-f", values)
 	}
-	out, err := exec.Command("helm", args...).CombinedOutput()
+	out, err := helmCommand(args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render failed: %v\n%s", err, out)
 	}

@@ -63,6 +63,16 @@ func (f *paramFakeOpenAI) snapshot() []paramFakeCall {
 	return append([]paramFakeCall(nil), f.calls...)
 }
 
+func (f *paramFakeOpenAI) roundTwo() []paramFakeCall {
+	var out []paramFakeCall
+	for _, c := range f.snapshot() {
+		if c.round2 {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (f *paramFakeOpenAI) countKey(key string, round2 bool) int {
 	n := 0
 	for _, c := range f.snapshot() {
@@ -136,8 +146,8 @@ func TestReadinessProbeDropsRefusedReasoningEffortAndRetries(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{"reasoning_effort": paramRefusal("reasoning_effort", "unsupported_value")})
 	outcome, code := readinessProbeOver(f, "gpt-5-mini")
 	wantReady(t, outcome, code)
-	if got := f.countKey("reasoning_effort", false); got != 1 {
-		t.Fatalf("round 1 requests with reasoning_effort = %d, want exactly 1", got)
+	if got := f.countKey("reasoning_effort", false); got != 2 {
+		t.Fatalf("round 1 requests with reasoning_effort = %d, want 2 (current value, then none, then omitted)", got)
 	}
 	if got := f.countKey("reasoning_effort", true); got != 0 {
 		t.Fatalf("round 2 requests with reasoning_effort = %d, want 0", got)
@@ -189,15 +199,15 @@ func TestReadinessProbeUnboundedParamStaysInvalidRequest(t *testing.T) {
 	}
 }
 
-func TestReadinessProbeUnboundedRefusalAfterADropFails(t *testing.T) {
+func TestReadinessProbeSecondDistinctBoundedParamDropsOnceMore(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{
-		"temperature": paramRefusal("temperature", "unsupported_value"),
-		"tools":       paramRefusal("tools", "unsupported_parameter"),
+		"temperature":         paramRefusal("temperature", "unsupported_value"),
+		"parallel_tool_calls": paramRefusal("parallel_tool_calls", "unsupported_parameter"),
 	})
 	outcome, code := readinessProbeOver(f, "future-model-x")
-	wantInvalidRequest(t, outcome, code)
-	if got := len(f.snapshot()); got != 2 {
-		t.Fatalf("requests = %d, want 2 (one dropped, then a refusal that cannot be dropped)", got)
+	wantReady(t, outcome, code)
+	if got := len(f.snapshot()) - len(f.roundTwo()); got != 3 {
+		t.Fatalf("round 1 requests = %d, want 3 (one drop per distinct refused param)", got)
 	}
 }
 
@@ -330,16 +340,16 @@ func infoLines(logs string) []string {
 
 func TestReadinessProbeLogsEachRefusedAttemptWithItsRound(t *testing.T) {
 	f := newParamFakeOpenAI(t, map[string]string{
-		"temperature": paramRefusal("temperature", "unsupported_value"),
-		"tools":       paramRefusal("tools", "unsupported_parameter"),
+		"temperature":         paramRefusal("temperature", "unsupported_value"),
+		"parallel_tool_calls": paramRefusal("parallel_tool_calls", "unsupported_parameter"),
 	})
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	res := detailProberOver(logger).probeDetail(context.Background(), "openai", "future-model-x", f.server.URL, "test-key")
-	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
-	lines := infoLines(buf.String())
+	wantReady(t, res.Outcome, res.SafeErrorCode)
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
-		t.Fatalf("log lines = %d, want 2 (refused attempt, refused retry):\n%s", len(lines), buf.String())
+		t.Fatalf("log lines = %d, want 2 (two refused attempts):\n%s", len(lines), buf.String())
 	}
 	for i, line := range lines {
 		var entry map[string]any
@@ -350,8 +360,8 @@ func TestReadinessProbeLogsEachRefusedAttemptWithItsRound(t *testing.T) {
 			t.Fatalf("line %d round/attempt = %v/%v", i, entry["round"], entry["attempt"])
 		}
 	}
-	if !reflect.DeepEqual(res.DroppedParams, []string{"temperature"}) {
-		t.Fatalf("DroppedParams = %v, want exactly the one dropped before the second refusal", res.DroppedParams)
+	if len(res.DroppedParams) != 2 {
+		t.Fatalf("DroppedParams = %v, want both refused params", res.DroppedParams)
 	}
 }
 

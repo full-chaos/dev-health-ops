@@ -247,8 +247,14 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enfor
 		return enforceNotCovered
 	}
 	ctx := r.Context()
-	return g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
+	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
 		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil})
+	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
+	// impersonation_refused without a decision point call.
+	if verdict == enforceImpersonationRefused {
+		g.observeShadow(r, user, bearer, false)
+	}
+	return verdict
 }
 
 // writeEnforceRefusal answers a request the decision point refused or could not judge, or that no decision point can.

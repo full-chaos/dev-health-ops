@@ -66,3 +66,16 @@ func TestAuthRuntimeServesTheReadRoutesOnlyWithTheirRows(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthRuntimeServesTheReadRoutesFromTheEmbeddedProfile(t *testing.T) {
+	provisioningProfileRows = nil
+	served := servedAuthRoutes(t)
+	for _, pattern := range readRoutePatterns {
+		if !served["POST "+pattern+"@api"] {
+			t.Errorf("%s is not served on the API listener from the embedded profile", pattern)
+		}
+		if served["POST "+pattern+"@operator"] {
+			t.Errorf("%s is served on the operator listener", pattern)
+		}
+	}
+}

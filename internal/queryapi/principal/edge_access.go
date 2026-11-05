@@ -181,7 +181,7 @@ func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) 
 		if edge {
 			v.reject(ctx, ReasonOrgMissing, nil, requestMetaFrom(ctx))
 		}
-		return nil, &OrgRequiredError{}
+		return nil, &OrgRequiredError{Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}
 	}
 	if edge {
 		recordEdgeVerifyOutcome("verified")

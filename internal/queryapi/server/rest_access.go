@@ -40,7 +40,7 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 	var orgRequired *principal.OrgRequiredError
 	switch {
 	case errors.As(err, &orgRequired):
-		observeRESTShadow(r, token, "", policy.ShadowCallerMember, false, false)
+		observeRESTShadow(r, token, "", orgRequired.Caller, orgRequired.Delegated, false)
 		policy.WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 	case policy.IsRefusal(err):
 		writeRESTUnauthorized(w, r, component, "Invalid or expired token")

@@ -227,4 +227,17 @@ func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
 			t.Errorf("%s: AUTH_PROJECTION_READER_ROLES = %q, want devhealth_domain", job, value)
 		}
 	}
+	for _, doc := range docs {
+		if doc["kind"] != "Job" && doc["kind"] != "Deployment" {
+			continue
+		}
+		meta, _ := doc["metadata"].(map[string]any)
+		name, _ := meta["name"].(string)
+		if name == jobs[0] || name == jobs[1] {
+			continue
+		}
+		if _, set := containerEnvValue(t, doc, "AUTH_PROJECTION_READER_ROLES"); set {
+			t.Errorf("%s/%s sets AUTH_PROJECTION_READER_ROLES; only auth-migrate and auth-grants may", doc["kind"], name)
+		}
+	}
 }

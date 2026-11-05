@@ -178,6 +178,7 @@ func seedReads(f *provFixture) {
 }
 
 func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range readCases() {
 		response := f.post(c.path, c.body(f), nil)
@@ -199,6 +200,7 @@ func TestReadRoutesNotMountedWithoutRow(t *testing.T) {
 }
 
 func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	routes, err := ReadRoutes(ReadDeps{Credentials: f.creds, ProfileRows: docWithRows(t, readPatterns()...)})
 	if err != nil || len(routes) != 0 {
@@ -208,6 +210,7 @@ func TestReadRoutesNotMountedWithoutStore(t *testing.T) {
 
 // The public listener's route set never holds a read route, whatever rows the document has: ProvisioningRoutes does not build them.
 func TestProvisioningRoutesNeverServeReads(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
@@ -258,6 +261,7 @@ func TestReadScopeRequired(t *testing.T) {
 }
 
 func TestReadRoutesAnswerWithoutWriting(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		f := newReadFixture(t)
 		got := f.post(c.path, c.body(f), nil)
@@ -295,6 +299,7 @@ func readSources(t *testing.T) string {
 }
 
 func TestForeignAndMissingSameAnswer(t *testing.T) {
+	t.Parallel()
 	for _, c := range readCases() {
 		if c.notFound == "" {
 			continue
@@ -344,6 +349,7 @@ func TestReadStoreFailuresFailClosed(t *testing.T) {
 }
 
 func TestReadRequestRules(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	prn := wire("prn_", f.target)
@@ -392,6 +398,7 @@ func TestReadRequestRules(t *testing.T) {
 }
 
 func TestReadPagingPassesLimitAndCursor(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	f.post(PatternMembershipsList, `{"schema_version":"membership-list-request.v1","organization_id":"`+org+`"}`, nil)
@@ -414,6 +421,7 @@ func TestReadPagingPassesLimitAndCursor(t *testing.T) {
 }
 
 func TestReadNextCursorIsTheLastItemAndAbsentOnTheLastPage(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	ids := []uuid.UUID{uuid.New(), uuid.New()}
 	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
@@ -479,6 +487,7 @@ func TestReadNextCursorIsTheLastItemAndAbsentOnTheLastPage(t *testing.T) {
 }
 
 func TestMembershipStatusFilterServesActiveOnly(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	org := wire("org_", f.org)
 	for _, status := range []string{"invited", "suspended", "removed"} {
@@ -498,6 +507,7 @@ func TestMembershipStatusFilterServesActiveOnly(t *testing.T) {
 }
 
 func TestOrganizationStatusFollowsIsActive(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	f.reads.org.Active = false
 	got := f.post(PatternOrganizationsGet, readCases()[2].body(f), nil)
@@ -512,6 +522,7 @@ func TestOrganizationStatusFollowsIsActive(t *testing.T) {
 }
 
 func TestPrincipalAnswerHasOnlyItsFiveMembers(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	for _, c := range readCases()[:2] {
 		var doc map[string]any
@@ -537,6 +548,7 @@ func TestPrincipalAnswerHasOnlyItsFiveMembers(t *testing.T) {
 }
 
 func TestGrantListPagesAndFilters(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	var all []grant.Grant
 	for i := 0; i < 3; i++ {
@@ -574,6 +586,7 @@ func TestGrantListPagesAndFilters(t *testing.T) {
 }
 
 func TestGrantStatusRevokedThenExpiredThenActive(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	past, future := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 	for _, c := range []struct {
@@ -824,6 +837,7 @@ func loadCorpus(t *testing.T, f *provFixture, op string, response json.RawMessag
 // public.memberships.joined_at is nullable and the contract needs one for an active member: a row without it reads as joined when
 // it was created.
 func TestMembershipWithoutJoinedAtReadsAsJoinedWhenCreated(t *testing.T) {
+	t.Parallel()
 	f := newReadFixture(t)
 	f.reads.mem.JoinedAt = nil
 	got := f.post(PatternMembershipsGet, readCases()[4].body(f), nil)

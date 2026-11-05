@@ -593,6 +593,7 @@ func TestCompatLogoutAlwaysAnswersGoAPIs200(t *testing.T) {
 }
 
 func TestCompatLoginRefusalsAnswerGoAPIsWireAndAreAudited(t *testing.T) {
+	t.Parallel()
 	disabled, noPassword := uuid.New(), uuid.New()
 	cases := []struct {
 		golden   string
@@ -964,6 +965,7 @@ func TestCompatSocialLoginValidatesTheBodyAsGoAPIDoes(t *testing.T) {
 // same path as a refused password sign-in; an operational failure (5xx) is no
 // sign-in decision and writes none.
 func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		err      error
@@ -1559,6 +1561,7 @@ func (f faultUsers) Memberships(context.Context, uuid.UUID) ([]Membership, error
 // and an audit row in both cases (the known one then without the organization,
 // or without the subject). A failing audit write fails both the same way.
 func TestARefusedSignInAnswersTheSameForAnUnknownAndAKnownAddressUnderAStoreFault(t *testing.T) {
+	t.Parallel()
 	faults := map[string]func(f *compatFixture){
 		"membership read": func(f *compatFixture) {
 			f.usersWrap = faultUsers{fakeUsers: f.users, err: context.DeadlineExceeded}

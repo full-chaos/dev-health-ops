@@ -20,6 +20,7 @@ import (
 // document has a row, accepting the session issuer credential, for each of
 // them.
 func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
+	t.Parallel()
 	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
@@ -97,6 +98,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 // actor or store read, no organization projection, no echo of the token in the
 // body or the logs.
 func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
+	t.Parallel()
 	tokens := userTokensWithIssuer(t)
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
@@ -145,6 +147,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 // The reactivate route is one of the routes the startup gate covers: it is in provisioningPatterns, the embedded
 // document holds its row, and the default build serves it (no planted document).
 func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
+	t.Parallel()
 	if !slices.Contains(provisioningPatterns, PatternOrgReactivate) {
 		t.Fatalf("provisioningPatterns %v does not hold %s", provisioningPatterns, PatternOrgReactivate)
 	}
@@ -319,6 +322,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 // The rows gate's refusal names, for the start log, the route and every class its row must list, as a typed error with
 // a stable reason: the document's full set, with or without the workload path.
 func TestTheRowsGateRefusalNamesTheRouteAndClasses(t *testing.T) {
+	t.Parallel()
 	workload := newWorkloadIssueFixture(t).workload
 	classes := []string{serviceSessionIssuerClass, workloadTokenClass}
 	for name, w := range map[string]*SessionIssueWorkload{"without the workload path": nil, "with the workload path": workload} {
@@ -357,6 +361,7 @@ func fullClassSet(op string) []string {
 // and a document without one route's row is refused naming the route. (The two routes shipped dark until both rows were
 // embedded on main; D6617 holds for future routes, which join provisioningPatterns in their PR-2.)
 func TestRowsGateCoversStateAndRename(t *testing.T) {
+	t.Parallel()
 	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
@@ -393,6 +398,7 @@ func TestRowsGateRefusesAnExtraClass(t *testing.T) {
 // The set is the document's, not the build's: a route that takes no workload token is refused on a row that lists the
 // workload class, and a workload route on an issuer-only row, whether or not the build has the workload path.
 func TestRowsGateWantsTheDocumentsFullSet(t *testing.T) {
+	t.Parallel()
 	for op, pattern := range provisioningRouteOps {
 		other := []string{serviceSessionIssuerClass, workloadTokenClass}
 		if workloadOperations[op] {

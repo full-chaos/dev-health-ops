@@ -55,6 +55,7 @@ func (samlWriterStore) PrincipalByEmail(context.Context, string) (saml.EmailOwne
 // never reach the policy writer check). It runs here through the production
 // route flags, and a flag flipped to false must raise a writer violation.
 func TestSAMLACSSuccessRaisesNoWriterViolation(t *testing.T) {
+	t.Parallel()
 	f := newCompatFixture(t)
 	idp, err := idpstub.NewSAML(idpstub.SAMLOptions{})
 	if err != nil {

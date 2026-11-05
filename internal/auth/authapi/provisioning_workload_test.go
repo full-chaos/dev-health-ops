@@ -94,6 +94,7 @@ func callerOf(f *provFixture, op string) audit.Caller {
 // credential check and no compat count, and hands the verb the workload
 // principal and the token's jti as the caller.
 func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	want := uuidOfWire(t, f.w.subject)
 	for _, c := range workloadRouteCases() {
@@ -121,6 +122,7 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 // The session issuer credential keeps working beside it: the verb gets the
 // credential row id as the caller and the compat counter counts the use.
 func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	for _, c := range routeCases() {
 		if response := f.post(c.path, encode(c.body(f.provFixture, f.super)), nil); response.Code != http.StatusOK {
@@ -149,6 +151,7 @@ func TestProvisioningServiceCredentialCallerIsTheCredentialRow(t *testing.T) {
 // or oversized values get the same 401 body as a refused session issuer
 // credential, before any credential check, users read, verb or key-set read.
 func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	golden := func() string {
 		f := newProvWorkloadFixture(t)
 		f.creds.refusal = servicecred.RefusedRevoked
@@ -195,6 +198,7 @@ func TestProvisioningRoutesRefuseATokenTheVerifierRefuses(t *testing.T) {
 // With no workload path (the subject variable unset), a workload token is
 // refused with no read and the session issuer credential is unchanged.
 func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
+	t.Parallel()
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
@@ -213,6 +217,7 @@ func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
 
 // A key set that cannot be read is a 503, never a 401 and never a pass.
 func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.w.keys.err = errors.New("custody down")
 	for _, c := range workloadRouteCases() {
@@ -228,6 +233,7 @@ func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
 // either on it and takes a workload token, or is off it and refuses one: a new
 // route takes no workload token until it is listed.
 func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T) {
+	t.Parallel()
 	var listed []string
 	for op := range workloadOperations {
 		listed = append(listed, op)
@@ -264,6 +270,7 @@ func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T
 // key set, the credential check, the users seam or the verb (so no audit row),
 // and it is not counted. The session issuer credential still works on it.
 func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T) {
+	t.Parallel()
 	off := offWorkloadRouteCases()
 	var ops []string
 	for _, c := range off {
@@ -302,6 +309,7 @@ func TestProvisioningRoutesOffTheWorkloadListRefuseTheWorkloadToken(t *testing.T
 // No token text, jti or subject reaches the log of a workload call, accepted
 // or refused; a refusal logs its reason.
 func TestProvisioningWorkloadLogsCarryNoTokenText(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	c := routeCases()[0]
 	accepted, jti := f.w.mint("workload+jwt", nil)
@@ -330,6 +338,7 @@ func TestProvisioningWorkloadLogsCarryNoTokenText(t *testing.T) {
 // workload principal and the token's jti as the caller, and nothing reaches
 // the service credential check or the compat count.
 func TestOrgSuspendAcceptsTheGoAPIWorkloadTokenOnTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
 	header, jti := w.mint("workload+jwt", nil)
@@ -354,6 +363,7 @@ func TestOrgSuspendAcceptsTheGoAPIWorkloadTokenOnTheEmbeddedDocument(t *testing.
 // the verifier refuses and a refused session issuer credential are the same
 // 401, and none reaches the verb.
 func TestOrgSuspendStillRefusesEveryOtherBearer(t *testing.T) {
+	t.Parallel()
 	refusals := map[string]func(*workloadIssueFixture) map[string]string{}
 	for name, build := range issuePreKeyRefusals() {
 		refusals["pre-key "+name] = build

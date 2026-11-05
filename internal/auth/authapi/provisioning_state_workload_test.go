@@ -12,6 +12,7 @@ import (
 // The state route takes the go-api workload token beside the session issuer credential: the answer is the one the
 // credential gets, the workload principal and its jti are the caller, no credential check and no compat count run.
 func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.reactivate.status, f.reactivate.revision = org.StatusSuspended, 5
 	header, _ := f.w.mint("workload+jwt", nil)
@@ -39,6 +40,7 @@ func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 
 // The session issuer credential keeps working on the route; it never reads the key set and the compat counter counts it.
 func TestOrgStateKeepsTheServiceCredentialBesideTheWorkloadPath(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusOK {
 		t.Fatalf("state with the service credential: %d %s", got.Code, got.Body)
@@ -92,6 +94,7 @@ func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 
 // With a workload token the route answers an unknown organization 404 and a body that is not one organization_id 400.
 func TestOrgStateWorkloadBodyAndNotFound(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.reactivate.getErr = org.ErrNotFound
 	header, _ := f.w.mint("workload+jwt", nil)

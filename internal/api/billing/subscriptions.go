@@ -444,10 +444,10 @@ func falsy(value pyjson.Value) bool {
 // three mutation routes share: 400 "org_id required" for a superuser
 // without org_id, 404 "No subscription found".
 func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, orgParam *uuid.UUID) (*subscriptionRow, *reply, error) {
-	if h.pool == nil {
+	if h.db == nil {
 		return nil, nil, errNoPool
 	}
-	org, answer, err := h.resolveOrg(ctx, h.pool, user, orgParam)
+	org, answer, err := h.resolveOrg(ctx, h.db, user, orgParam)
 	if answer != nil || err != nil {
 		return nil, answer, err
 	}
@@ -455,7 +455,7 @@ func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, org
 		answer := detail(http.StatusBadRequest, "org_id required")
 		return nil, &answer, nil
 	}
-	sub, err := latestSubscription(ctx, h.pool, org)
+	sub, err := latestSubscription(ctx, h.db, org)
 	if err != nil {
 		return nil, nil, err
 	}

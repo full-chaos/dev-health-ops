@@ -49,7 +49,9 @@ type Deps struct {
 }
 
 type handlers struct {
-	pool          *pgxpool.Pool
+	pool *pgxpool.Pool
+	// db is pool as a querier (nil without a pool): the subscription writes read through it, so a test can serve them.
+	db            querier
 	stripe        *stripeclient.Provider
 	config        config.BillingConfig
 	webhookSecret webhookCredential
@@ -66,6 +68,9 @@ type handlers struct {
 func newHandlers(deps Deps) handlers {
 	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: newWebhookCredential(deps.WebhookSecret),
 		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now, platformRoles: deps.PlatformRoles}
+	if deps.Pool != nil {
+		h.db = deps.Pool
+	}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

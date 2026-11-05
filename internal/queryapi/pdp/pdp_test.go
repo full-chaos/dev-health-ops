@@ -437,3 +437,95 @@ func TestPDPReadsTheSubjectFileOnlyWhenOn(t *testing.T) {
 		t.Fatalf("mode = %q with a subject file, want shadow", g.Mode())
 	}
 }
+
+// Enforce runs query-api's organization-wide reads and applies no obligation: an allow passes only with the asked
+// organization as tenant scope, repository scope organization (or an action with no repository member), no allowlist,
+// no redaction, no minimum assurance and no step-up. Any other allow is a local deny with the closed reason
+// unknown_obligation (REST: 503), counted as unavailable.
+func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
+	org := strings.ToLower(testOrg)
+	for name, tc := range map[string]struct {
+		profile    string
+		obligation map[string]any
+		omit       bool
+		pass       bool
+	}{
+		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, false, true},
+		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, false, true},
+		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, false},
+		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
+		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
+		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, false},
+		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, false},
+		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, false},
+		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, false},
+		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, false},
+		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, false},
+		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, false},
+		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, false},
+		"malformed block":                      {testProfile, map[string]any{"tenant_scope": 7}, false, false},
+		"allow with no obligations":            {testProfile, nil, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := pdptest.New(t)
+			srv.Obligations(tc.obligation)
+			m, cfg := newMeter(t)
+			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+			err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, testOrg)
+			got := m.points(t, resultMetric)
+			if tc.pass {
+				if err != nil || len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result=allow"] != 1 {
+					t.Fatalf("answered %v with results %v, want a pass counted allow", err, got)
+				}
+				return
+			}
+			denied, ok := err.(*DenyError)
+			if !ok || !denied.Local {
+				t.Fatalf("answered %#v, want a local DenyError", err)
+			}
+			if denied.Reason != pep.ReasonUnknownObligation && denied.Reason != pep.ReasonMalformed {
+				t.Fatalf("reason %q is not a closed obligation reason", denied.Reason)
+			}
+			if got["action="+actionOf(tc.profile)+",mode=enforce,result=unavailable"] != 1 || len(got) != 1 {
+				t.Fatalf("results %v, want one unavailable", got)
+			}
+		})
+	}
+}
+
+func actionOf(profile string) string {
+	if profile == "GET /buildinfo" {
+		return "org.read"
+	}
+	return testAction
+}
+
+// A hand-built allow (the fake gives the default organization allow) with a repository allowlist is the case the
+// reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	denied, ok := err.(*DenyError)
+	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
+		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
+	}
+}
+
+// Shadow never changes an answer: an allow that carries an allowlist is still a match and still passes.
+func TestPDPShadowIgnoresObligations(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
+	g := New(cfg)
+	if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+		t.Fatalf("shadow refused: %v", err)
+	}
+	g.Wait()
+	if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result=match"] != 1 || len(got) != 1 {
+		t.Fatalf("results %v, want one match", got)
+	}
+}

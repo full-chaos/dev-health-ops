@@ -128,6 +128,21 @@ func TestRESTPDPEnforceDownIs503(t *testing.T) {
 	}
 }
 
+// Enforce: an allow that carries a repository allowlist must not run the organization-wide handler: 503, handler
+// not reached, and the allowlist-free allow still passes.
+func TestRESTPDPEnforceAllowlistIs503(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": "00000000-0000-4000-8000-000000000000", "repository_allowlist": []string{"acme/widgets"}})
+	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
+		t.Fatalf("allow with an allowlist: got %+v, want %+v", got, gatedUnavailable)
+	}
+	srv.Obligations(map[string]any{"tenant_scope": "x", "repository_allowlist": []string{}})
+	if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
+		t.Fatalf("allow with an empty allowlist: got %+v, want %+v", got, gatedUnavailable)
+	}
+}
+
 // Shadow asks and counts, and never denies.
 func TestRESTPDPShadowNeverDenies(t *testing.T) {
 	srv := pdptest.New(t)

@@ -43,6 +43,8 @@ type Server struct {
 	allowed   bool
 	reason    string
 	status    int
+	oblig     map[string]any
+	obligSet  bool
 	requests  []Request
 	exchanges int
 }
@@ -62,6 +64,15 @@ func (s *Server) Deny(reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.allowed, s.reason = false, reason
+}
+
+// Obligations makes every next allow carry exactly obligations (a nil map carries none). Until it is called an allow
+// carries what auth-service gives an organization-wide allow: the asked organization as tenant_scope and
+// repository_scope organization.
+func (s *Server) Obligations(obligations map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.oblig, s.obligSet = obligations, true
 }
 
 // Fail makes every next authorize call answer status with no decision.
@@ -120,11 +131,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if body.Resource.OrganizationID != "" {
 		org = body.Resource.OrganizationID
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	decision := map[string]any{
 		"schema_version": "authorization_decision.v1", "decision_id": "dec_" + strings.Repeat("A", 26), "allowed": s.allowed,
 		"reason_code": s.reason, "principal_id": "prn_AAAAAAAAAAAAAAAAAAAAAA", "organization_id": org, "policy_revision": 1,
 		"expires_at": time.Now().Add(time.Hour).UTC().Format("2006-01-02T15:04:05Z"),
-	})
+	}
+	if s.allowed {
+		switch {
+		case !s.obligSet:
+			decision["obligations"] = map[string]any{"tenant_scope": body.Resource.OrganizationID, "repository_scope": "organization"}
+		case s.oblig != nil:
+			decision["obligations"] = s.oblig
+		}
+	}
+	_ = json.NewEncoder(w).Encode(decision)
 }
 
 // BootstrapFile is a workload bootstrap credential file in a temporary directory.

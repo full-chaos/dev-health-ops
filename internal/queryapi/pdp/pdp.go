@@ -266,6 +266,10 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) err
 	decision := g.decider.Decide(ctx, request)
 	switch {
 	case decision.Allowed():
+		if !runsOrgWide(decision.Obligations(), org, action) {
+			g.count(ctx, ModeEnforce, ResultUnavailable, label)
+			return &DenyError{Reason: pep.ReasonUnknownObligation, Local: true}
+		}
 		g.count(ctx, ModeEnforce, ResultAllow, label)
 		return nil
 	case decision.Local():
@@ -274,6 +278,27 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) err
 	}
 	g.count(ctx, ModeEnforce, ResultDeny, label)
 	return &DenyError{Reason: decision.Reason()}
+}
+
+// runsOrgWide reports whether an allow's obligations leave query-api's organization-wide reads as they are: the
+// tenant scope is the asked organization, no repository allowlist (an empty one included), no redaction class, no
+// minimum assurance, no step-up, and the repository scope is organization (an action the catalog marks "none" has no
+// repository member). query-api applies no obligation, so an allow that carries any other one is refused.
+func runsOrgWide(o pep.Obligations, org, action string) bool {
+	if tenant, ok := o.TenantScope(); !ok || tenant != org {
+		return false
+	}
+	if o.RepositoryRestricted() || len(o.Redaction()) > 0 || o.StepUpRequired() {
+		return false
+	}
+	if _, has := o.MinimumAssurance(); has {
+		return false
+	}
+	if o.RepositoryScopeOrganization() {
+		return true
+	}
+	a, err := policycatalog.Default().Action(action)
+	return err == nil && a.RepositoryScope == policycatalog.RepositoryScopeNone
 }
 
 // shadow compares the PDP's answer with the legacy one, which has already allowed this caller.

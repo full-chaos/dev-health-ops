@@ -213,8 +213,16 @@ func TestRESTOrganizationScopeIsTodaysReadOnEveryClass(t *testing.T) {
 // restOrgPostCases are the POST handlers that sit beside the GET handlers above: each reads its organization in its
 // own code, so each gets its own no-scope cell.
 func restOrgPostCases() []restOrgCase {
+	const filters = `{"filters":{}}`
 	post := func(class, target string, handler func(*testing.T, *teamScopeReachClient) http.HandlerFunc) restOrgCase {
-		return restOrgCase{class, http.MethodPost, target, "{}", nil, handler}
+		body := filters
+		switch class {
+		case "sankey_post":
+			body = `{"mode":"hotspot","filters":{}}`
+		case "explain_post":
+			body = `{"metric":"cycle_time","filters":{}}`
+		}
+		return restOrgCase{class, http.MethodPost, target, body, nil, handler}
 	}
 	return []restOrgCase{
 		post("sankey_post", "/api/v1/sankey", func(_ *testing.T, c *teamScopeReachClient) http.HandlerFunc { return newSankeyPostHandler(c) }),
@@ -241,6 +249,10 @@ func restOrgPostCases() []restOrgCase {
 func TestRESTPostHandlersNoOrganizationInScopeIs503BeforeAnyStatement(t *testing.T) {
 	for _, tc := range restOrgPostCases() {
 		t.Run(tc.class, func(t *testing.T) {
+			// The body is valid: with a scope the handler reaches SQL, so the refusal below is the scope's.
+			if ok := tc.run(t, authctx.Claims{OrgID: restScopeClaimsOrg, Scope: pepgate.Organization(restTestScopeOrg)}); len(ok.statements) == 0 {
+				t.Fatalf("a valid request ran no statement (status %d, body %q): the body does not reach a read", ok.status, ok.body)
+			}
 			got := tc.run(t, authctx.Claims{OrgID: restScopeClaimsOrg})
 			if got.status != http.StatusServiceUnavailable || !strings.Contains(got.body, "Authorization unavailable") {
 				t.Fatalf("no scope answered %d %q, want 503 Authorization unavailable", got.status, got.body)

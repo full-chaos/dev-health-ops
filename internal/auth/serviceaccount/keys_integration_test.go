@@ -944,8 +944,8 @@ func TestSAKeyDeprovisionRevokesTheOrganizationsKeysInItsCommit(t *testing.T) {
 	if n := e.count(t, `SELECT count(*) FROM public.organizations WHERE id = $1 AND is_active`, orgID); n != 1 {
 		t.Fatal("the cell needs go-api's public row still active")
 	}
-	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE principal_id = $1 AND revoked_reason = 'owner_request'`, id); n != 2 {
-		t.Fatalf("%d keys revoked with owner_request, want 2", n)
+	if n := e.count(t, `SELECT count(*) FROM auth.credential_registry WHERE principal_id = $1 AND revoked_reason = 'org_deprovisioned'`, id); n != 2 {
+		t.Fatalf("%d keys revoked with org_deprovisioned, want 2", n)
 	}
 	if n := e.count(t, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.service_account.key_revoked'
 AND organization_id = $1 AND subject_principal_id = $2`, orgID, id); n != 2 {

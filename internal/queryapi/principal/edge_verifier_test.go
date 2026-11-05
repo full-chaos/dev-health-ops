@@ -66,14 +66,14 @@ func validEdgeClaims(orgID string) jwt.MapClaims {
 
 func TestEdgeVerifier_AcceptsValidAccessToken(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	token := signEdgeToken(t, edgeTestSecret, validEdgeClaims("org-42"))
+	token := signEdgeToken(t, edgeTestSecret, validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 
 	claims, err := v.Verify(context.Background(), token)
 	if err != nil {
 		t.Fatalf("Verify: unexpected error: %v", err)
 	}
-	if claims.OrgID != "org-42" {
-		t.Fatalf("OrgID = %q, want %q", claims.OrgID, "org-42")
+	if claims.OrgID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("OrgID = %q, want %q", claims.OrgID, "22222222-2222-2222-2222-222222222222")
 	}
 }
 
@@ -90,7 +90,7 @@ func TestEdgeVerifier_MissingOrgIDIsRefusedForANonSuperuser(t *testing.T) {
 
 func TestEdgeVerifier_RejectsWrongSecret(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	token := signEdgeToken(t, "a-completely-different-fixture-secret!!", validEdgeClaims("org-1"))
+	token := signEdgeToken(t, "a-completely-different-fixture-secret!!", validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 
 	if _, err := v.Verify(context.Background(), token); err == nil {
 		t.Fatal("Verify: want error for a token signed with the wrong secret")
@@ -100,7 +100,7 @@ func TestEdgeVerifier_RejectsWrongSecret(t *testing.T) {
 func TestEdgeVerifier_RejectsAlgConfusion(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
 	// "none" alg, unsigned -- classic alg-confusion probe.
-	unsafeToken := jwt.NewWithClaims(jwt.SigningMethodNone, validEdgeClaims("org-1"))
+	unsafeToken := jwt.NewWithClaims(jwt.SigningMethodNone, validEdgeClaims("22222222-2222-2222-2222-222222222222"))
 	token, err := unsafeToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
 	if err != nil {
 		t.Fatalf("sign none-alg token: %v", err)
@@ -112,7 +112,7 @@ func TestEdgeVerifier_RejectsAlgConfusion(t *testing.T) {
 
 func TestEdgeVerifier_RejectsExpiredToken(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	claims["exp"] = time.Now().Add(-time.Hour).Unix()
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -123,7 +123,7 @@ func TestEdgeVerifier_RejectsExpiredToken(t *testing.T) {
 
 func TestEdgeVerifier_RejectsMissingExp(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	delete(claims, "exp")
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -134,7 +134,7 @@ func TestEdgeVerifier_RejectsMissingExp(t *testing.T) {
 
 func TestEdgeVerifier_RejectsMissingSub(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	delete(claims, "sub")
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -145,7 +145,7 @@ func TestEdgeVerifier_RejectsMissingSub(t *testing.T) {
 
 func TestEdgeVerifier_RejectsMissingType(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	delete(claims, "type")
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -156,7 +156,7 @@ func TestEdgeVerifier_RejectsMissingType(t *testing.T) {
 
 func TestEdgeVerifier_RejectsRefreshTokenType(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	claims["type"] = "refresh"
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -169,7 +169,7 @@ func TestEdgeVerifier_AcceptsMissingAudienceAndIssuer(t *testing.T) {
 	// validate_token only checks aud/iss when the token itself carries
 	// the claim at all -- absent means unchecked, not rejected.
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	delete(claims, "aud")
 	delete(claims, "iss")
 	token := signEdgeToken(t, edgeTestSecret, claims)
@@ -181,7 +181,7 @@ func TestEdgeVerifier_AcceptsMissingAudienceAndIssuer(t *testing.T) {
 
 func TestEdgeVerifier_RejectsWrongAudienceWhenPresent(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	claims["aud"] = "someone-else"
 	token := signEdgeToken(t, edgeTestSecret, claims)
 
@@ -192,7 +192,7 @@ func TestEdgeVerifier_RejectsWrongAudienceWhenPresent(t *testing.T) {
 
 func TestEdgeVerifier_RejectsWrongIssuerWhenPresent(t *testing.T) {
 	v := mustEdgeVerifier(t, edgeTestSecret, edgeTestIssuer, edgeTestAudience)
-	claims := validEdgeClaims("org-1")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	claims["iss"] = "someone-else"
 	token := signEdgeToken(t, edgeTestSecret, claims)
 

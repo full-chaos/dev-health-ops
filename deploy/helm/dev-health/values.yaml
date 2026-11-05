@@ -1274,6 +1274,8 @@ web:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # -- Extra web env ({name, value} or {name, valueFrom}). CHAOS-12928: AUTH_SSO_ENABLED on ("true"/"1", or by
+  #    valueFrom) fails the render unless AUTH_ACCESS_TOKEN_CLASS is the literal value eddsa (web.env sets neither name).
   extraEnv: []
   # -- CHAOS-6188: mount extra volumes into web in every environment (e.g. the
   #    Secret volume carrying the ACR web-assertion Ed25519 signing key).

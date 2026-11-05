@@ -132,23 +132,30 @@ func (h handlers) socialLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	isNewUser := false
 	var email string
-	if user == nil {
-		if !info.EmailVerified {
-			refuse(w, http.StatusForbidden, providerEmailUnverified)
-			return
+	var failStage string
+	outcome, err := decideSocialLink(user != nil, info.EmailVerified, func() (bool, error) {
+		var isText bool
+		if email, isText = info.Email.(string); !isText {
+			failStage = "provider email"
+			return false, errProviderValueType
 		}
-		if email, ok = info.Email.(string); !ok {
-			h.fail(w, r, "provider email", errProviderValueType)
-			return
+		holder, err := h.userByEmail(ctx, tx, pythonparity.Lower(email))
+		if err != nil {
+			failStage = "load user by email"
 		}
-		if user, err = h.userByEmail(ctx, tx, pythonparity.Lower(email)); err != nil {
-			h.fail(w, r, "load user by email", err)
-			return
-		}
-		if user != nil {
-			refuse(w, http.StatusConflict, socialAccountExists)
-			return
-		}
+		return holder != nil, err
+	})
+	if err != nil {
+		h.fail(w, r, failStage, err)
+		return
+	}
+	switch outcome {
+	case socialRefuseUnverified:
+		refuse(w, http.StatusForbidden, providerEmailUnverified)
+		return
+	case socialRefuseEmailMatch:
+		refuse(w, http.StatusConflict, socialAccountExists)
+		return
 	}
 	if user == nil {
 		created, err := h.createSocialUser(ctx, tx, info, email, provider, providerUserID)

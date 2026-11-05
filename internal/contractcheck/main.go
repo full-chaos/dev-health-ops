@@ -71,8 +71,8 @@ func runValidate(args []string, stdout, flagErrOutput io.Writer) error {
 	flags.SetOutput(flagErrOutput)
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
 	deployment := flags.String("deployment", defaultDeploymentManifest, "Go worker deployment manifest")
-	if err := flags.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(flags, flagErrOutput, args); err != nil {
+		return err
 	}
 	if flags.NArg() != 0 {
 		return usageError(errors.New("validate accepts no positional arguments"))
@@ -110,8 +110,8 @@ func runCapabilities(args []string, stdout, flagErrOutput io.Writer) error {
 	root := flags.String("root", defaultContractRoot, "contract v1 directory")
 	var queues queueList
 	flags.Var(&queues, "queues", "registered queues to consume (comma-separated or repeatable)")
-	if err := flags.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(flags, flagErrOutput, args); err != nil {
+		return err
 	}
 	if len(queues) == 0 || flags.NArg() != 0 {
 		return usageError(errors.New("capabilities requires --queues and no positional arguments"))
@@ -140,8 +140,8 @@ func runRollout(args []string, stdout, flagErrOutput io.Writer) error {
 	flags.Var(&queues, "queues", "registered queues to check (comma-separated or repeatable)")
 	var reportPaths stringList
 	flags.Var(&reportPaths, "report", "capability report path (repeat for every live binary)")
-	if err := flags.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(flags, flagErrOutput, args); err != nil {
+		return err
 	}
 	if len(queues) == 0 || len(reportPaths) == 0 || flags.NArg() != 0 {
 		return usageError(errors.New("rollout requires --queues, at least one --report, and no positional arguments"))
@@ -212,8 +212,8 @@ func runCompare(args []string, stdout, flagErrOutput io.Writer) error {
 	flags.SetOutput(flagErrOutput)
 	base := flags.String("base", "", "merge-base contract v1 directory")
 	candidate := flags.String("candidate", defaultContractRoot, "candidate contract v1 directory")
-	if err := flags.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(flags, flagErrOutput, args); err != nil {
+		return err
 	}
 	if *base == "" || flags.NArg() != 0 {
 		return usageError(errors.New("compare requires --base and no positional arguments"))

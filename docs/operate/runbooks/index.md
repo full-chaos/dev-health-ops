@@ -19,6 +19,7 @@ lifecycle: active
 - [Disaster recovery](disaster-recovery.md)
 - [Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md)
 - [Auth shadow PDP triage](auth-shadow-pdp-triage.md)
+- [Auth PDP outage and rollback](auth-pdp-outage-and-rollback.md)
 - [Auth users-owned flip and rollback](auth-users-owned-flip-and-rollback.md)
 - [Auth platform roles flip and rollback](auth-platform-roles-flip-and-rollback.md)
 - [Auth-service scrape check and alert import](auth-service-scrape-and-alerts.md)

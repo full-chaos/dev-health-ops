@@ -1,6 +1,11 @@
 package llmbudget
 
-import "sort"
+import (
+	"sort"
+	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+)
 
 var catalogProviders = []string{"anthropic", "gemini", "openai", "qwen"}
 
@@ -33,5 +38,48 @@ func CatalogModels(provider string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// unsupportedRequestParams are the request parameters a model family refuses,
+// by provider and model-name prefix. A model with no row accepts what its
+// caller sends today.
+var unsupportedRequestParams = []struct {
+	provider, prefix string
+	params           []string
+}{
+	{"openai", "gpt-6", []string{"temperature"}},
+}
+
+// onlyReasoningEffort is the one reasoning_effort value a model family accepts,
+// by provider and model-name prefix. A model with no row has no known limit.
+var onlyReasoningEffort = []struct{ provider, prefix, effort string }{
+	{"openai", "gpt-6", "none"},
+}
+
+// OnlyReasoningEffort is the one reasoning_effort value the model is known to
+// accept, or "" when no limit is known.
+func OnlyReasoningEffort(provider, model string) string {
+	p := pythonparity.Lower(pythonparity.Strip(provider))
+	m := pythonparity.Lower(pythonparity.Strip(model))
+	for _, row := range onlyReasoningEffort {
+		if row.provider == p && strings.HasPrefix(m, row.prefix) {
+			return row.effort
+		}
+	}
+	return ""
+}
+
+// UnsupportedRequestParams are the request parameters the model is known to
+// refuse, so a caller leaves them off its first request.
+func UnsupportedRequestParams(provider, model string) []string {
+	p := pythonparity.Lower(pythonparity.Strip(provider))
+	m := pythonparity.Lower(pythonparity.Strip(model))
+	var out []string
+	for _, row := range unsupportedRequestParams {
+		if row.provider == p && strings.HasPrefix(m, row.prefix) {
+			out = append(out, row.params...)
+		}
+	}
 	return out
 }

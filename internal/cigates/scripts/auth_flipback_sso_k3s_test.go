@@ -12,7 +12,7 @@ import (
 // ci/auth_flipback_sso_k3s.sh is run by the lead on bigboy k3s, never in CI. These cells hold what can be checked without a
 // cluster: the refusals before any change, the --print-plan render of every chart step, the order of the steps, and the
 // shape of the script (secrets off the command line, a namespace-scoped kubeconfig only, nothing that makes or deletes a
-// namespace, no JIT switch).
+// namespace, no JIT switch outside the JIT values layer).
 
 const fbScript = "ci/auth_flipback_sso_k3s.sh"
 
@@ -86,7 +86,7 @@ func fbRun(t *testing.T, env []string, args ...string) (cmdResult, string) {
 	path := strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1)
 	for _, a := range args {
 		if a == "--print-plan" { // the plan renders the chart with the real helm and touches no cluster
-			path = shimBasePath()
+			path = shimBasePathWith(t, "", "helm")
 		}
 	}
 	base := []string{path, "STUB_LOG=" + log, "AUTH_FB_KUBECONFIG=" + kubeconfig, "AUTH_FB_WORK=" + work}
@@ -203,6 +203,7 @@ func TestFlipbackSSOK3sPrintPlanListsTheStepsInOrderAndRendersEveryChartStep(t *
 		"PASS: plan: D1 renders stage goApi with the narrowing deferred",
 		"PASS: plan: D2 renders phase 3 with neither go-api nor auth-service owned",
 		"PASS: plan: no step renders AUTH_SSO_JIT",
+		"PASS: plan: the JIT layer renders AUTH_SSO_JIT on auth-service only, with both users switches on",
 	} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("--print-plan lacks %q\n%s", want, res.stdout)
@@ -252,11 +253,14 @@ func TestFlipbackSSOK3sShape(t *testing.T) {
 			t.Errorf("the script lacks %q", want)
 		}
 	}
-	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "authService.ssoJit", "ssoJit=", "name: AUTH_SSO_JIT",
+	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "name: AUTH_SSO_JIT",
 		"create namespace", "delete namespace", "pkill", "killall", "nohup", "/api/v1/auth/sso/providers", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "/oidc/", "oidc_config"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script contains %q", banned)
 		}
+	}
+	if n := strings.Count(text, "authService.ssoJit=true"); n != 1 {
+		t.Errorf("the script sets authService.ssoJit=true %d times; want only the JIT values layer", n)
 	}
 	if n := strings.Count(text, "INSERT INTO"); n != 1 {
 		t.Errorf("the script holds %d INSERT statements; want exactly the one sso_providers row of the rehearsal namespace", n)
@@ -296,7 +300,7 @@ func TestFlipbackSSORunbookCarriesTheStepLinesAndTheJITScope(t *testing.T) {
 		"SAML user created through go-api at phase 3",
 		"flip back 4 to 3",
 		"sign in through go-api",
-		"CHAOS-10998",
+		"JIT values layer",
 		"OIDC leg stays in the integration tests",
 		"count the SSO providers and the SSO-linked users",
 		"not applicable at 11505",

@@ -218,6 +218,80 @@ func composeAuthHardened(g *guard) {
 	g.expect(str(r.services["auth-issuer"]["user"]) == "1001:1001", "auth-issuer runs as %q, want 1001:1001 (the owner of the 0600 key file)", str(r.services["auth-issuer"]["user"]))
 }
 
+// A root container with only CHOWN has no DAC_READ_SEARCH, DAC_OVERRIDE or FOWNER: it cannot chmod a path it gave away, and
+// it cannot look inside a dir it gave away (mode 0700) or a dir it never owned. Order: dir to root first, dir to the app uid last.
+func composeAuthChownThenChmod(g *guard) {
+	r := composeAuth(g)
+	for n, s := range r.services {
+		if !equal(strs(s["cap_add"]), []string{"CHOWN"}) || !equal(strs(s["cap_drop"]), []string{"ALL"}) || !strings.HasPrefix(str(s["user"]), "0:") {
+			continue
+		}
+		var targets []string
+		for _, v := range list(s["volumes"]) {
+			targets = append(targets, strings.TrimRight(str(at(v, "target")), "/"))
+		}
+		for _, cmd := range strs(s["command"]) {
+			given := map[string]bool{}
+			rootDir := map[string]bool{}
+			vars := map[string]string{}
+			for _, seg := range regexp.MustCompile(`;|&&|\|\|`).Split(cmd, -1) {
+				seg = strings.Trim(strings.TrimSpace(seg), "{} ")
+				if k, v, ok := strings.Cut(seg, "="); ok && !strings.ContainsAny(k, " \t") && k != "" {
+					vars[k] = v
+					continue
+				}
+				for k, v := range vars {
+					for _, ref := range []string{"$$" + k, "${" + k + "}", "$" + k} {
+						seg = strings.ReplaceAll(seg, ref, v)
+					}
+				}
+				f := strings.Fields(seg)
+				for i := range f {
+					f[i] = strings.Trim(f[i], `"'`)
+				}
+				var paths []string
+				for _, w := range f {
+					if strings.HasPrefix(w, "/") {
+						paths = append(paths, w)
+					}
+				}
+				ref := func(p string) {
+					for _, d := range targets {
+						if !strings.HasPrefix(p, d+"/") {
+							continue
+						}
+						g.expect(!given[d], "%s references %s after chown of %s to a non-root uid; root cannot search it (chown 0:0 %s first)", n, p, d, d)
+						g.expect(rootDir[d], "%s references %s before %s is chowned 0:0; root has no DAC_READ_SEARCH (chown 0:0 %s first)", n, p, d, d)
+					}
+				}
+				if len(f) < 2 || f[0] != "chown" {
+					for _, p := range paths {
+						ref(p)
+					}
+				}
+				if len(f) < 2 {
+					continue
+				}
+				switch f[0] {
+				case "chown":
+					root := f[1] == "0:0" || f[1] == "0"
+					for _, p := range f[2:] {
+						ref(p)
+						given[p] = !root
+						if root {
+							rootDir[p] = true
+						}
+					}
+				case "chmod":
+					for _, p := range f[2:] {
+						g.expect(!given[p], "%s runs chmod on %s after a chown of it to a non-root uid; CHOWN alone has no CAP_FOWNER (chown 0:0 first)", n, p)
+					}
+				}
+			}
+		}
+	}
+}
+
 func composeAuthStartOrder(g *guard) {
 	r := composeAuth(g)
 	done, healthy := "service_completed_successfully", "service_healthy"
@@ -304,6 +378,10 @@ func composeAuthEddsaWiring(g *guard) {
 	g.expect(strings.Contains(strings.Join(strs(r.services["go-api-workload-volume"]["command"]), " "), "= 65532:700 ]"), "go-api-workload-volume does not give /run/workload to 65532 mode 700")
 	_, subjectSet := mp(r.services["auth-service"]["environment"])["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"]
 	g.expect(subjectSet, "auth-service has no AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: it refuses every go-api workload token")
+	const subjectProbe = "prn_probeprobeprobeprobe0"
+	withSubject := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=" + subjectProbe + "\n"})
+	authEnv := mp(withSubject.services["auth-service"]["environment"])
+	g.expect(str(authEnv["AUTH_AUTHORIZE_CALLER_SUBJECTS"]) == subjectProbe && str(authEnv["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"]) == subjectProbe, "auth-service AUTH_AUTHORIZE_CALLER_SUBJECTS is not the go-api workload subject of AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: its /v1/authorize refuses go-api")
 	const probe = "probe-jwt-key-not-a-secret-0123456789abcdef"
 	withKey := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "JWT_SECRET_KEY=" + probe + "\n"})
 	got := str(mp(withKey.services["auth-service"]["environment"])["AUTH_JWT_SECRET_KEY"])
@@ -360,6 +438,7 @@ var composeAuthChecks = []check{
 	{"the_bootstrap_credential_is_written_once_for_the_reader_uid", composeAuthBootstrap},
 	{"the_auth_images_are_pinned_and_a_missing_pin_fails_the_render", composeAuthImagesPinned},
 	{"the_auth_services_are_hardened_and_keys_are_files", composeAuthHardened},
+	{"a_chown_only_root_init_never_chmods_a_path_it_gave_away", composeAuthChownThenChmod},
 	{"the_auth_start_order_is_the_compose_yml_order", composeAuthStartOrder},
 	{"auth_service_mints_eddsa_and_the_verifiers_and_session_wiring_follow", composeAuthEddsaWiring},
 	{"the_readme_holds_the_auth_venue_procedure", composeAuthReadme},
@@ -454,6 +533,8 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "mounts go_api_workload_bootstrap"},
 		{name: "auth-service without the api workload subject", mutate: mut(composeFile, "      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"},
+		{name: "auth-service without the authorize caller subjects", mutate: mut(composeFile, "      AUTH_AUTHORIZE_CALLER_SUBJECTS: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n", ""),
+			check: composeAuthEddsaWiring, want: "AUTH_AUTHORIZE_CALLER_SUBJECTS"},
 		{name: "auth-service valkey dropped", mutate: mut(composeFile, "      AUTH_VALKEY_URI: redis://valkey:6379/1\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_VALKEY_URI"},
 		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),

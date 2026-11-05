@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -62,5 +63,22 @@ func TestExchangeRefusesAnUnusableCallBeforeAnyRequest(t *testing.T) {
 	}
 	if _, _, err := Exchange(context.Background(), client, tok, subject, orgOne); err == nil || transport.requests != 1 {
 		t.Fatalf("the usable call: err %v, %d requests", err, transport.requests)
+	}
+}
+
+// A direct caller's own client may follow redirects; Exchange still does not, so the subject token never reaches the
+// redirect target.
+func TestExchangeFollowsNoRedirectWithACallersClient(t *testing.T) {
+	f := newFake(t)
+	redirector := httptest.NewServer(http.RedirectHandler(f.srv.URL+exchangePath, http.StatusTemporaryRedirect))
+	t.Cleanup(redirector.Close)
+	tok, _ := url.Parse(redirector.URL + exchangePath)
+	_, _, err := Exchange(context.Background(), &http.Client{}, tok, subjectFile(t, subjectJWT), orgOne)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Kind != KindExchange || failure.Status != http.StatusTemporaryRedirect {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.exchanges) != 0 {
+		t.Fatalf("the redirect was followed: %d exchanges", len(f.exchanges))
 	}
 }

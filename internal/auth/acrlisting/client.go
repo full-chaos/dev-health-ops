@@ -360,9 +360,9 @@ func (c *Client) exchange(ctx context.Context) (string, time.Duration, error) {
 func ValidOrgID(orgID string) bool { return orgPattern.MatchString(orgID) }
 
 // Exchange is the RFC 8693 token exchange: the subject token read from subjectTokenFile (again on every call, never
-// cached) for an access token of the organization orgID, sent as the resource urn:acr:org:<orgID>. httpClient must
-// follow no redirect. It returns the access token and its lifetime; a failure is an *Error of KindExchange,
-// KindInvalidRequest or KindInvalidTarget that names no token and no body.
+// cached) for an access token of the organization orgID, sent as the resource urn:acr:org:<orgID>. It sends through
+// httpguard.NoRedirects(httpClient), so it follows no redirect. It returns the access token and its lifetime; a
+// failure is an *Error of KindExchange, KindInvalidRequest or KindInvalidTarget that names no token and no body.
 func Exchange(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.URL, subjectTokenFile, orgID string) (string, time.Duration, error) {
 	if httpClient == nil || !ValidOrigin(tokenEndpoint) || !ValidOrgID(orgID) {
 		return "", 0, fail(KindExchange)
@@ -377,7 +377,7 @@ func Exchange(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.U
 		return "", 0, fail(KindExchange)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := httpClient.Do(req)
+	resp, err := httpguard.NoRedirects(httpClient).Do(req)
 	if err != nil {
 		return "", 0, &Error{Kind: KindExchange, cause: contextCause(err)}
 	}

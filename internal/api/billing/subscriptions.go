@@ -471,15 +471,15 @@ func (h handlers) subscriptionTarget(ctx context.Context, user *policy.User, org
 }
 
 // servedOrgWriteRefusal is the role a billing write needs in served, the org it acts on (CHAOS-13143). The
-// route's Admin level judged the caller's role in the token's org only, so in any other org -- an org_id org, or
-// an impersonation session's target -- the caller's own membership there must be owner or admin. A holder of
-// admin.billing acts on any org, as resolveOrg admits it. It runs before any Stripe call or row write.
+// route's Admin level judged the caller's role in the token's org only, so in an org_id org the caller's own
+// membership there must be owner or admin. A holder of admin.billing acts on any org, as resolveOrg admits it.
+// An impersonation session never gets here: readsOnly refuses every billing write in one. It runs before any
+// Stripe call or row write.
 func (h handlers) servedOrgWriteRefusal(ctx context.Context, q querier, user *policy.User, served uuid.UUID) (*reply, error) {
 	if user.Holds(policy.ActionAdminBilling) {
 		return nil, nil
 	}
-	swapped := user.Holds(policy.ActionAdminImpersonate) && policy.ImpersonationFrom(ctx) != nil
-	if own, err := pythonparity.ParseUUID(user.OrgID); err == nil && own == served && !swapped {
+	if own, err := pythonparity.ParseUUID(user.OrgID); err == nil && own == served {
 		return nil, nil
 	}
 	var role string

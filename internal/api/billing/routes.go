@@ -85,7 +85,7 @@ func Routes(deps Deps) []httpapi.Route {
 	wrap := func(level policy.Authz, handler http.HandlerFunc) http.Handler { return g.Wrap(level, handler) }
 	return []httpapi.Route{
 		{Method: http.MethodGet, Pattern: prefix + "/plans", Allow: http.MethodGet, Handler: wrap(policy.Optional, h.listPlans)},
-		{Method: http.MethodPost, Pattern: prefix + "/plans", Handler: body(policy.Authenticated, h.createPlan)},
+		{Method: http.MethodPost, Pattern: prefix + "/plans", Handler: body(policy.Authenticated, readsOnly(g, h.createPlan))},
 		// The literal path is its own pattern, so a wrong method on it
 		// answers its own 405 (Allow: POST, as Starlette's first partial
 		// match), while GET/PUT/DELETE on it reach the {plan_id} routes.
@@ -95,30 +95,30 @@ func Routes(deps Deps) []httpapi.Route {
 		{Method: http.MethodHead, Pattern: prefix + "/plans/pull-stripe", Handler: http.HandlerFunc(pullStripeNotAllowed)},
 		{Method: http.MethodGet, Pattern: prefix + "/plans/{plan_id}", Allow: http.MethodGet, Handler: wrap(policy.Optional, h.getPlan)},
 		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}", Handler: http.HandlerFunc(planPostNotAllowed)},
-		{Method: http.MethodPut, Pattern: prefix + "/plans/{plan_id}", Handler: body(policy.Authenticated, h.updatePlan)},
-		{Method: http.MethodDelete, Pattern: prefix + "/plans/{plan_id}", Handler: wrap(policy.Authenticated, h.deletePlan)},
-		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}/sync-stripe", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.syncPlan)},
+		{Method: http.MethodPut, Pattern: prefix + "/plans/{plan_id}", Handler: body(policy.Authenticated, readsOnly(g, h.updatePlan))},
+		{Method: http.MethodDelete, Pattern: prefix + "/plans/{plan_id}", Handler: wrap(policy.Authenticated, readsOnly(g, h.deletePlan))},
+		{Method: http.MethodPost, Pattern: prefix + "/plans/{plan_id}/sync-stripe", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, readsOnly(g, h.syncPlan))},
 		{Method: http.MethodGet, Pattern: prefix + "/invoices", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listInvoices)},
 		{Method: http.MethodGet, Pattern: prefix + "/invoices/{invoice_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getInvoice)},
-		{Method: http.MethodPost, Pattern: prefix + "/invoices/{invoice_id}/void", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.voidInvoice)},
-		{Method: http.MethodPost, Pattern: prefix + "/refunds", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.createRefund)},
+		{Method: http.MethodPost, Pattern: prefix + "/invoices/{invoice_id}/void", Allow: http.MethodPost, Handler: wrap(policy.Admin, readsOnly(g, h.voidInvoice))},
+		{Method: http.MethodPost, Pattern: prefix + "/refunds", Allow: http.MethodPost, Handler: body(policy.Authenticated, readsOnly(g, h.createRefund))},
 		{Method: http.MethodGet, Pattern: prefix + "/refunds", Handler: wrap(policy.Authenticated, h.listRefunds)},
 		{Method: http.MethodGet, Pattern: prefix + "/refunds/{refund_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getRefund)},
 		// The Stripe webhook: Stripe's signature is its only credential.
 		{Method: http.MethodPost, Pattern: prefix + "/webhooks/stripe", Allow: http.MethodPost, Handler: http.HandlerFunc(h.stripeWebhook)},
-		{Method: http.MethodPost, Pattern: prefix + "/checkout", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.checkout)},
-		{Method: http.MethodPost, Pattern: prefix + "/portal", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.portal)},
+		{Method: http.MethodPost, Pattern: prefix + "/checkout", Allow: http.MethodPost, Handler: body(policy.Authenticated, readsOnly(g, h.checkout))},
+		{Method: http.MethodPost, Pattern: prefix + "/portal", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, readsOnly(g, h.portal))},
 		{Method: http.MethodGet, Pattern: prefix + "/entitlements/{org_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.entitlements)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions/list", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listSubscriptions)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getSubscription)},
 		{Method: http.MethodGet, Pattern: prefix + "/subscriptions/history", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.subscriptionHistory)},
-		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/change-plan", Allow: http.MethodPost, Handler: body(policy.Admin, h.changePlan)},
-		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/cancel", Allow: http.MethodPost, Handler: body(policy.Admin, h.cancelSubscription)},
-		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/reactivate", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.reactivateSubscription)},
+		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/change-plan", Allow: http.MethodPost, Handler: body(policy.Admin, readsOnly(g, h.changePlan))},
+		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/cancel", Allow: http.MethodPost, Handler: body(policy.Admin, readsOnly(g, h.cancelSubscription))},
+		{Method: http.MethodPost, Pattern: prefix + "/subscriptions/reactivate", Allow: http.MethodPost, Handler: wrap(policy.Admin, readsOnly(g, h.reactivateSubscription))},
 		{Method: http.MethodGet, Pattern: prefix + "/audit", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.listAudit)},
 		{Method: http.MethodGet, Pattern: prefix + "/audit/{audit_id}", Allow: http.MethodGet, Handler: wrap(policy.Authenticated, h.getAudit)},
-		{Method: http.MethodPost, Pattern: prefix + "/audit/{audit_id}/resolve", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.resolveAudit)},
-		{Method: http.MethodPost, Pattern: prefix + "/reconcile", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.reconcile)},
+		{Method: http.MethodPost, Pattern: prefix + "/audit/{audit_id}/resolve", Allow: http.MethodPost, Handler: body(policy.Authenticated, readsOnly(g, h.resolveAudit))},
+		{Method: http.MethodPost, Pattern: prefix + "/reconcile", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, readsOnly(g, h.reconcile))},
 	}
 }
 
@@ -137,6 +137,14 @@ func planPostNotAllowed(w http.ResponseWriter, _ *http.Request) {
 	header := http.Header{}
 	header.Set("Allow", http.MethodGet)
 	policy.WriteDetail(w, http.StatusMethodNotAllowed, "Method Not Allowed", header)
+}
+
+// readsOnly is next behind the Guard's impersonation refusal (D6714: impersonation is reads only). Every billing
+// write a user bearer reaches is wrapped in it, inside its guard: an impersonation session gets 403 "Not allowed in an
+// impersonation session" before the handler, so before any Stripe call or row write. A delegated session's bearer
+// gets the same refusal earlier, from its delegated_bearer row; pull-stripe's platform wrap refuses a session itself.
+func readsOnly(g *policy.Guard, next http.HandlerFunc) http.HandlerFunc {
+	return g.RefuseImpersonation(next).ServeHTTP
 }
 
 // reply is one route answer.

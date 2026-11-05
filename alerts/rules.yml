@@ -1268,6 +1268,29 @@ groups:
             for five minutes (target: under 5 minutes).
 
   # ---------------------------------------------------------------------------
+  # Go worker posture. Imported into SigNoz by hand as a builder threshold rule
+  # (D6417); CHAOS-13067.
+  # ---------------------------------------------------------------------------
+  - name: worker_posture
+    interval: 1m
+    rules:
+      - alert: WorkerPostureManifestMismatch
+        expr: |
+          max by (service_name) (dev_health_worker_posture_manifest_mismatch{deployment_environment="production"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Worker posture manifest mismatch for 15 minutes"
+          description: |
+            dev_health_worker_posture_manifest_mismatch was above 0 for fifteen
+            minutes for a production Go worker service: its posture manifest
+            does not match what it runs. A stuck worker group can stay silent
+            while kubelet Ready stays true. The metric reads manifest age, not
+            the worker's own readiness check.
+
+  # ---------------------------------------------------------------------------
   # In-chart Valkey (rate-limit counters, ingest streams). The series come from
   # the collector's redis receiver, which writes dotted names only
   # (redis.keys.evicted, redis.memory.used), so the rules select them by

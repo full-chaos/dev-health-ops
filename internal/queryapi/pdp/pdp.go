@@ -28,6 +28,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 const (
@@ -61,6 +63,9 @@ const (
 	configInvalidMetric = "dev_health_query_api_pdp_config_invalid"
 )
 
+// allowlistCutOver is the cut-over registry.
+var allowlistCutOver = map[string]bool{}
+
 // ExemptClasses is the explicit exempt list.
 var ExemptClasses = []string{ClassHS256, ClassEnvelope}
 
@@ -74,6 +79,16 @@ const (
 	ResultError         = "error"
 	ResultDropped       = "dropped"
 	ResultNotConfigured = "not_configured"
+	ResultNotCarriedOut = "not_carried_out"
+	ResultNoPDP         = "no_decision_point"
+)
+
+// The closed local reasons of a 503 the gate makes itself on an enforced route.
+const (
+	ReasonNoDecisionPoint  pep.Reason = "authz_enforce_no_decision_point"
+	ReasonNotCarriedOut    pep.Reason = "obligation_not_carried_out"
+	ReasonTenantMismatch   pep.Reason = "tenant_scope_mismatch"
+	ReasonNoRepositoryRule pep.Reason = "repository_scope_absent"
 )
 
 // DenyError is a typed refusal. Local is true when no PDP verdict exists (PDP down, a timeout, a bad answer, a
@@ -96,6 +111,8 @@ type Config struct {
 	Logger *slog.Logger
 	// Meter records the counters and gauges; nil is the global meter.
 	Meter metric.Meter
+	// Switch is query-api's 5.17 cell set.
+	Switch authzenforce.Switch
 }
 
 // Gate is the PEP of one process. A nil Gate is off.
@@ -103,10 +120,13 @@ type Gate struct {
 	mode    string
 	decider pep.Decider
 	actions map[string]string
-	slots   chan struct{}
-	logger  *slog.Logger
-	wg      sync.WaitGroup
-	logGate atomic.Int64
+	cells   authzenforce.Switch
+	// carriesAllowlist is the cut-over registry.
+	carriesAllowlist map[string]bool
+	slots            chan struct{}
+	logger           *slog.Logger
+	wg               sync.WaitGroup
+	logGate          atomic.Int64
 
 	exempt  metric.Int64Counter
 	results metric.Int64Counter
@@ -240,7 +260,11 @@ func (g *Gate) Mode() string {
 // Authorize asks the PDP whether the user access token bearer may perform the action of the row profile
 // ("METHOD /route") in the verified organization orgID. It returns a *DenyError only in enforce mode, or when the gate
 // is misconfigured; off and shadow return nil. Shadow asks in the background and never changes the answer.
-func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) error {
+func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pepgate.Scope, error) {
+	return pepgate.Legacy(orgID), g.authorize(ctx, profile, bearer, orgID)
+}
+
+func (g *Gate) authorize(ctx context.Context, profile, bearer, orgID string) error {
 	if g == nil || g.mode == ModeOff {
 		return nil
 	}

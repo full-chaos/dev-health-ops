@@ -1,0 +1,290 @@
+package pdp
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/full-chaos/dev-health-go/pep"
+	"github.com/full-chaos/dev-health-go/pep/pepfake"
+
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+)
+
+// The pepgate seam (CHAOS-13081, PLAN-10864-v2 section 4 PR-1): an enforced allow is served only as a Scope built
+// from the decision's tenant_scope and repository member; every obligation the gate does not carry out is a 503; the
+// gate enforces a route only while the 5.17 cell of its action namespace is on.
+
+const seamOrg = "0b6a1c9e-55d4-4a43-9e34-6f4c1d2b3a10"
+
+func cells(list string) authzenforce.Switch { return authzenforce.Parse(authzenforce.QueryAPI, list) }
+
+// countingDecider counts the decisions it was asked for.
+type countingDecider struct {
+	pep.Decider
+	calls atomic.Int64
+}
+
+func (c *countingDecider) Decide(ctx context.Context, req pep.Request) pep.Decision {
+	c.calls.Add(1)
+	return c.Decider.Decide(ctx, req)
+}
+
+// allowRule is the PDP's allow of testProfile's action for seamOrg over every repository, edited by edit.
+func allowRule(edit func(*pepfake.Rule)) pepfake.Rule {
+	r := pepfake.Rule{PrincipalReference: testBearer, Action: testAction, ResourceType: "organization", ResourceKey: seamOrg,
+		OrganizationID: seamOrg, TenantScope: seamOrg, RepositoryScope: "organization"}
+	if edit != nil {
+		edit(&r)
+	}
+	return r
+}
+
+// seamGate is an enforce gate with the analytics cell on over a fake that applies rules.
+func seamGate(t *testing.T, rules ...pepfake.Rule) (*Gate, *countingDecider, *meterReader) {
+	t.Helper()
+	m, cfg := newMeter(t)
+	decider := &countingDecider{Decider: pepfake.New(rules...)}
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, decider, cells("analytics")
+	return New(cfg), decider, m
+}
+
+func wantLocal(t *testing.T, err error, reason pep.Reason) {
+	t.Helper()
+	var denied *DenyError
+	if !errors.As(err, &denied) || !denied.Local || denied.Reason != reason {
+		t.Fatalf("answered %#v, want a local DenyError %s", err, reason)
+	}
+}
+
+func wantNoScope(t *testing.T, s pepgate.Scope) {
+	t.Helper()
+	if _, ok := s.OrgID(); ok || s.Kind() != pepgate.KindNone {
+		t.Fatalf("a refusal carries scope kind %v", s.Kind())
+	}
+}
+
+// P1, P2, P4-P8: an allow whose obligations the gate does not carry out is no verdict: 503, no scope.
+func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit   func(*pepfake.Rule)
+		reason pep.Reason
+	}{
+		"P1 tenant_scope absent":             {func(r *pepfake.Rule) { r.TenantScope = "" }, ReasonTenantMismatch},
+		"P2 tenant_scope other org":          {func(r *pepfake.Rule) { r.TenantScope = "66666666-6666-6666-6666-666666666666" }, ReasonTenantMismatch},
+		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonNotCarriedOut},
+		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonNotCarriedOut},
+		"P6 scope and allowlist (malformed)": {func(r *pepfake.Rule) { r.RepositoryAllowlist = []string{"acme/a"} }, pep.ReasonMalformed},
+		"P7 neither repository member":       {func(r *pepfake.Rule) { r.RepositoryScope = "" }, ReasonNoRepositoryRule},
+		"P8 redaction":                       {func(r *pepfake.Rule) { r.Redaction = []pep.RedactionClass{pep.RedactFreeText} }, ReasonNotCarriedOut},
+		"P8 minimum_assurance":               {func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, ReasonNotCarriedOut},
+		"P8 step_up":                         {func(r *pepfake.Rule) { r.StepUp = true }, ReasonNotCarriedOut},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, decider, _ := seamGate(t, allowRule(tc.edit))
+			scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+			wantLocal(t, err, tc.reason)
+			wantNoScope(t, scope)
+			if decider.calls.Load() != 1 {
+				t.Fatalf("asked %d times, want 1", decider.calls.Load())
+			}
+		})
+	}
+}
+
+// A request organization that is not in its lowercase form is refused: the scope's organization is the tenant
+// (lowercase), and a read must never run under a second spelling of the organization.
+func TestSeamUppercaseRequestOrganizationIs503(t *testing.T) {
+	g, _, _ := seamGate(t, allowRule(nil))
+	scope, err := g.Authorize(context.Background(), testProfile, testBearer, strings.ToUpper(seamOrg))
+	wantLocal(t, err, ReasonTenantMismatch)
+	wantNoScope(t, scope)
+}
+
+// P3: repository_scope organization serves as Organization(tenant). P15: an allowlist with "*" is every repository.
+func TestSeamOrganizationScope(t *testing.T) {
+	for name, edit := range map[string]func(*pepfake.Rule){
+		"P3 repository_scope organization": nil,
+		"P15 allowlist [*]":                func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"*"} },
+		"P15 allowlist [acme/a, *]":        func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a", "*"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, _, m := seamGate(t, allowRule(edit))
+			scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+			if err != nil {
+				t.Fatalf("allow answered %v", err)
+			}
+			if org, ok := scope.OrgID(); !ok || org != seamOrg || scope.Kind() != pepgate.KindOrganization || scope.Restricted() {
+				t.Fatalf("scope kind %v org %q restricted %v, want Organization(%s)", scope.Kind(), org, scope.Restricted(), seamOrg)
+			}
+			if got := m.points(t, resultMetric); got["action=analytics.read,mode=enforce,result=allow"] != 1 {
+				t.Fatalf("results %v", got)
+			}
+		})
+	}
+}
+
+// A route on the cut-over registry carries the allowlist as the scope's ceiling; [] is a ceiling of nothing.
+func TestSeamAllowlistOnACutOverRoute(t *testing.T) {
+	for name, keys := range map[string][]string{"empty": {}, "one": {"acme/a"}} {
+		t.Run(name, func(t *testing.T) {
+			g, _, _ := seamGate(t, allowRule(func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", keys }))
+			g.carriesAllowlist = map[string]bool{testProfile: true}
+			scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+			if err != nil {
+				t.Fatalf("allow answered %v", err)
+			}
+			if scope.Kind() != pepgate.KindAllowlist || !scope.Restricted() || !slices.Equal(scope.RepoKeys(), keys) {
+				t.Fatalf("scope kind %v keys %v, want Allowlist %v", scope.Kind(), scope.RepoKeys(), keys)
+			}
+		})
+	}
+}
+
+// PR-1 cuts no route over: an allowlist decision is refused on every REST row until the cutover lists it.
+func TestSeamNoRouteCarriesAnAllowlistYet(t *testing.T) {
+	g := New(Config{Mode: ModeOff})
+	if len(g.carriesAllowlist) != 0 {
+		t.Fatalf("cut-over registry %v, want empty in PR-1", g.carriesAllowlist)
+	}
+	for profile := range allowlistCutOver {
+		if _, known := g.actions[profile]; !known {
+			t.Errorf("cut-over registry names %q, which is no row", profile)
+		}
+	}
+}
+
+// P9: the cell on and a PDP deny is 403.
+func TestSeamCellOnDenyIs403(t *testing.T) {
+	g, _, _ := seamGate(t)
+	scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	var denied *DenyError
+	if !errors.As(err, &denied) || denied.Local {
+		t.Fatalf("deny answered %#v, want a PDP DenyError", err)
+	}
+	wantNoScope(t, scope)
+}
+
+// P11 + P13: a mode that asks, with the cell of the route's namespace off, is shadow: it asks in the background,
+// counts, never refuses, and the scope is Legacy.
+func TestSeamCellOffIsShadow(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode, cells, profile, action string
+	}{
+		"P11 enforce, no cell":             {ModeEnforce, "", testProfile, testAction},
+		"P13 enforce, other namespace on":  {ModeEnforce, "analytics", "GET /api/v1/flame", "metrics.read"},
+		"shadow, other namespace on":       {ModeShadow, "git,work_items", testProfile, testAction},
+		"enforce, cell list of bad values": {ModeEnforce, "Analytics,*,nope", testProfile, testAction},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			decider := &countingDecider{Decider: pepfake.New()}
+			cfg.Mode, cfg.Decider, cfg.Switch = tc.mode, decider, cells(tc.cells)
+			g := New(cfg)
+			scope, err := g.Authorize(context.Background(), tc.profile, testBearer, seamOrg)
+			g.Wait()
+			if err != nil {
+				t.Fatalf("cell off refused: %v", err)
+			}
+			if org, ok := scope.OrgID(); !ok || org != seamOrg || scope.Kind() != pepgate.KindLegacy {
+				t.Fatalf("scope kind %v org %q, want Legacy(%s)", scope.Kind(), org, seamOrg)
+			}
+			if decider.calls.Load() != 1 {
+				t.Fatalf("shadow asked %d times, want 1", decider.calls.Load())
+			}
+			if got := m.points(t, resultMetric); got["action="+tc.action+",mode=shadow,result=mismatch"] != 1 || len(got) != 1 {
+				t.Fatalf("results %v, want one shadow mismatch", got)
+			}
+		})
+	}
+}
+
+// Q1: the cell, not QUERY_API_PDP_MODE, decides enforcement: shadow mode with the cell on enforces.
+func TestSeamShadowModeWithTheCellOnEnforces(t *testing.T) {
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeShadow, pepfake.New(), cells("analytics")
+	scope, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	var denied *DenyError
+	if !errors.As(err, &denied) || denied.Local {
+		t.Fatalf("shadow mode, cell on, deny answered %#v, want a PDP DenyError", err)
+	}
+	wantNoScope(t, scope)
+}
+
+// P12: the cell on with no decision point client (mode off, or a misconfigured gate) is 503
+// authz_enforce_no_decision_point; the namespaces that are off keep today's path.
+func TestSeamCellOnWithoutAClientIs503(t *testing.T) {
+	for name, mode := range map[string]string{"off": ModeOff, "bad mode": "banana", "enforce, no client": ModeEnforce} {
+		t.Run(name, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			cfg.Mode, cfg.Switch = mode, cells("analytics")
+			g := New(cfg)
+			scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+			wantLocal(t, err, ReasonNoDecisionPoint)
+			wantNoScope(t, scope)
+			if got := m.points(t, configInvalidMetric)[""]; got != 1 {
+				t.Fatalf("config_invalid = %d, want 1", got)
+			}
+			if mode != ModeOff {
+				return
+			}
+			other, err := g.Authorize(context.Background(), "GET /api/v1/flame", testBearer, seamOrg)
+			if err != nil || other.Kind() != pepgate.KindLegacy {
+				t.Fatalf("a namespace that is off answered %v kind %v, want Legacy", err, other.Kind())
+			}
+			if got := m.points(t, resultMetric); got["action=analytics.read,mode=enforce,result=no_decision_point"] != 1 {
+				t.Fatalf("results %v", got)
+			}
+		})
+	}
+}
+
+// FromSettings reads the cell list through the declared lookup: QUERY_API_PDP_MODE unset with a cell on is the
+// no-client 503, and one ERROR names the variable, never its value.
+func TestSeamFromSettingsReadsTheCell(t *testing.T) {
+	var logs bytes.Buffer
+	env := map[string]string{authzenforce.QueryAPI.Env(): "analytics"}
+	g := FromSettings((&recordingLookup{values: env}).lookup, slog.New(slog.NewTextHandler(&logs, nil)))
+	_, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	wantLocal(t, err, ReasonNoDecisionPoint)
+	text := logs.String()
+	if strings.Count(text, "level=ERROR") != 1 || !strings.Contains(text, "env="+authzenforce.QueryAPI.Env()) || strings.Contains(text, "analytics") {
+		t.Fatalf("log %q, want one ERROR naming the variable, no value", text)
+	}
+}
+
+// P10: QUERY_API_PDP_MODE and the cell list unset: Legacy scope, nothing asked, nothing counted.
+func TestSeamAllUnsetIsLegacyAndAsksNothing(t *testing.T) {
+	srv := pdptest.New(t)
+	env := onEnv(t, "", srv.URL)
+	g := FromSettings((&recordingLookup{values: env}).lookup, nil)
+	scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	g.Wait()
+	if err != nil || scope.Kind() != pepgate.KindLegacy {
+		t.Fatalf("unset answered %v kind %v, want Legacy", err, scope.Kind())
+	}
+	if org, ok := scope.OrgID(); !ok || org != seamOrg {
+		t.Fatalf("legacy org %q", org)
+	}
+	if n := len(srv.Requests()); n != 0 || srv.Exchanges() != 0 {
+		t.Fatalf("asked %d times, exchanged %d times", n, srv.Exchanges())
+	}
+}
+
+// The gate exposes the 5.17 gauges of query-api: one series per namespace, 1 where the cell is on.
+func TestSeamRegistersTheCellGauges(t *testing.T) {
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Switch = ModeOff, cells("git")
+	New(cfg)
+	got := m.points(t, "dev_health_authz_enforcement_enabled")
+	if got["namespace=git,service=query-api"] != 1 || got["namespace=analytics,service=query-api"] != 0 || len(got) != len(authzenforce.Namespaces()) {
+		t.Fatalf("enforcement gauges %v", got)
+	}
+}

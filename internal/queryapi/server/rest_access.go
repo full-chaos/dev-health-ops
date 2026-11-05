@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -27,13 +28,14 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 		gate := pdp.FromContext(r.Context())
 		if principal.AccessClassOf(token) != principal.AccessClassUser {
 			gate.CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
-			return authctx.Claims{OrgID: claims.OrgID}, true
+			return authctx.Claims{OrgID: claims.OrgID, Scope: pepgate.Legacy(claims.OrgID)}, true
 		}
-		if denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID); denied != nil {
+		scope, denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID)
+		if denied != nil {
 			writePDPDenied(w, r, component, denied)
 			return authctx.Claims{}, false
 		}
-		return authctx.Claims{OrgID: claims.OrgID}, true
+		return authctx.Claims{OrgID: claims.OrgID, Scope: scope}, true
 	}
 	var orgRequired *principal.OrgRequiredError
 	switch {

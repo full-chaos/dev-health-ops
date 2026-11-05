@@ -22,6 +22,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 )
 
@@ -110,7 +111,7 @@ func onEnv(t *testing.T, mode, upstream string) map[string]string {
 		workloadinput.EnvBootstrapFile: pdptest.BootstrapFile(t)}
 }
 
-// Off (unset, empty, "off", padded) reads only the switch, builds no client and asks nothing.
+// Off (unset, empty, "off", padded) reads only the two switches, builds no client and asks nothing.
 func TestPDPOffReadsOnlyTheSwitchAndAsksNothing(t *testing.T) {
 	srv := pdptest.New(t)
 	for name, values := range map[string]map[string]string{
@@ -131,12 +132,12 @@ func TestPDPOffReadsOnlyTheSwitchAndAsksNothing(t *testing.T) {
 			if g.Mode() != ModeOff {
 				t.Fatalf("mode = %q, want off", g.Mode())
 			}
-			if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+			if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
 				t.Fatalf("off refused: %v", err)
 			}
 			g.Wait()
-			if !slices.Equal(rec.read, []string{EnvMode}) {
-				t.Fatalf("off read %v, want only %s", rec.read, EnvMode)
+			if !slices.Equal(rec.read, []string{EnvMode, authzenforce.QueryAPI.Env()}) {
+				t.Fatalf("off read %v, want only %s and the 5.17 cell list", rec.read, EnvMode)
 			}
 			if n := len(srv.Requests()); n != 0 || srv.Exchanges() != 0 {
 				t.Fatalf("off asked the PDP %d times, exchanged %d times", n, srv.Exchanges())
@@ -152,12 +153,14 @@ func TestPDPOffReadsOnlyTheSwitchAndAsksNothing(t *testing.T) {
 // client_service dev-health-query-api, the user token as the principal reference, the row action and the org.
 func TestPDPEnforceAsksWithTheQueryAPIWorkloadToken(t *testing.T) {
 	srv := pdptest.New(t)
-	g := FromSettings((&recordingLookup{values: onEnv(t, "enforce", srv.URL)}).lookup, nil)
+	env := onEnv(t, "enforce", srv.URL)
+	env[authzenforce.QueryAPI.Env()] = "analytics"
+	g := FromSettings((&recordingLookup{values: env}).lookup, nil)
 	if g.Mode() != ModeEnforce {
 		t.Fatalf("mode = %q, want enforce", g.Mode())
 	}
 	for range 2 {
-		if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+		if _, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg); err != nil {
 			t.Fatalf("allow answered %v", err)
 		}
 	}
@@ -166,19 +169,19 @@ func TestPDPEnforceAsksWithTheQueryAPIWorkloadToken(t *testing.T) {
 		t.Fatalf("requests %d exchanges %d, want 2 and 1", len(got), srv.Exchanges())
 	}
 	want := pdptest.Request{Authorization: "Bearer " + srv.WorkloadToken, PrincipalReference: testBearer, Action: testAction,
-		ResourceType: "organization", ResourceKey: strings.ToLower(testOrg), OrganizationID: strings.ToLower(testOrg), ClientService: "dev-health-query-api"}
+		ResourceType: "organization", ResourceKey: seamOrg, OrganizationID: seamOrg, ClientService: "dev-health-query-api"}
 	if got[0] != want {
 		t.Fatalf("PDP call %+v, want %+v", got[0], want)
 	}
 }
 
-// Enforce: a PDP deny is a typed deny with its wire reason, and is counted.
+// Enforce (the cell on): a PDP deny is a typed deny with its wire reason, and is counted.
 func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("role_lacks_action")
 	m, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-	err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
+	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
 	denied, ok := err.(*DenyError)
 	if !ok || denied.Local || denied.Reason != pep.ReasonRoleLacksAction {
 		t.Fatalf("deny answered %#v, want a PDP DenyError role_lacks_action", err)
@@ -188,7 +191,7 @@ func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
 	}
 }
 
-// Enforce: PDP down (refused connection, 503, timeout) is a typed local deny, never a pass.
+// Enforce (the cell on): PDP down (refused connection, 503, timeout) is a typed local deny, never a pass.
 func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closedURL := closed.URL
@@ -207,8 +210,8 @@ func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, tc.base)
-			err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, tc.base), cells("analytics")
+			_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
 			denied, ok := err.(*DenyError)
 			if !ok || !denied.Local || denied.Reason != tc.reason {
 				t.Fatalf("PDP down answered %#v, want a local DenyError %s", err, tc.reason)
@@ -241,7 +244,7 @@ func TestPDPShadowCountsAndNeverDenies(t *testing.T) {
 			m, cfg := newMeter(t)
 			cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, tc.base)
 			g := New(cfg)
-			if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+			if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
 				t.Fatalf("shadow refused: %v", err)
 			}
 			g.Wait()
@@ -280,7 +283,7 @@ func TestPDPMisconfigurationRefusesAsUnavailableAndNeverFailsTheStart(t *testing
 			tc.edit(env)
 			var logs bytes.Buffer
 			g := FromSettings((&recordingLookup{values: env}).lookup, slog.New(slog.NewTextHandler(&logs, nil)))
-			err := g.Authorize(context.Background(), testProfile, testBearer, testOrg)
+			_, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg)
 			denied, ok := err.(*DenyError)
 			if !ok || !denied.Local || denied.Reason != pep.ReasonNotConfigured {
 				t.Fatalf("misconfigured gate answered %#v, want a local not_configured DenyError", err)
@@ -328,12 +331,12 @@ func TestPDPStateGauges(t *testing.T) {
 	}
 }
 
-// A route with no row action fails closed in enforce and asks nothing.
+// A route with no row action fails closed while a cell is on, and asks nothing.
 func TestPDPEnforceUnknownRowFailsClosed(t *testing.T) {
 	srv := pdptest.New(t)
 	_, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-	err := New(cfg).Authorize(context.Background(), "GET /api/v1/no-such-route", testBearer, testOrg)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
+	_, err := New(cfg).Authorize(context.Background(), "GET /api/v1/no-such-route", testBearer, testOrg)
 	if denied, ok := err.(*DenyError); !ok || !denied.Local {
 		t.Fatalf("an unknown row answered %#v, want a local DenyError", err)
 	}
@@ -382,15 +385,15 @@ func mapsEqual(a, b map[string]int64) bool {
 func TestPDPLabelsAreClosed(t *testing.T) {
 	srv := pdptest.New(t)
 	m, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,metrics")
 	g := New(cfg)
 	for _, profile := range []string{testProfile, "GET /api/v1/flame", "GET /x/" + testOrg} {
-		_ = g.Authorize(context.Background(), profile, testBearer, testOrg)
+		_, _ = g.Authorize(context.Background(), profile, testBearer, testOrg)
 		g.CountExempt(context.Background(), ClassHS256, profile)
 	}
 	actions := []string{"analytics.read", "metrics.read", "work_items.read", "git.read", "org.read", "unknown"}
 	closed := map[string][]string{
-		"mode": {"shadow", "enforce", "invalid"}, "result": {"allow", "deny", "unavailable", "match", "mismatch", "error", "dropped", "not_configured"},
+		"mode": {"shadow", "enforce", "invalid"}, "result": {"allow", "deny", "unavailable", "match", "mismatch", "error", "dropped", "not_configured", "not_carried_out", "no_decision_point"},
 		"class": ExemptClasses, "action": actions,
 	}
 	for _, name := range []string{resultMetric, exemptMetric} {
@@ -471,7 +474,7 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
 			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-			err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, testOrg)
+			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, testOrg)
 			got := m.points(t, resultMetric)
 			if tc.pass {
 				if err != nil || len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result=allow"] != 1 {
@@ -507,7 +510,7 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
 	_, cfg := newMeter(t)
 	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-	err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
 	denied, ok := err.(*DenyError)
 	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
 		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
@@ -521,7 +524,7 @@ func TestPDPShadowIgnoresObligations(t *testing.T) {
 	m, cfg := newMeter(t)
 	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
 	g := New(cfg)
-	if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+	if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
 		t.Fatalf("shadow refused: %v", err)
 	}
 	g.Wait()

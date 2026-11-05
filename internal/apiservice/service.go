@@ -480,7 +480,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)

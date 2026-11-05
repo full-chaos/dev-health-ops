@@ -47,6 +47,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/readers"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
@@ -168,7 +169,14 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 		uncategorized = &count
 	}
 
+	var sized *int
+	if row.Total > 0 {
+		count := row.SizedUnitCount
+		sized = &count
+	}
+
 	return &model.EvidenceQualityStats{
+		SizedUnitCount:     sized,
 		Mean:               mean,
 		Stddev:             stddev,
 		Total:              row.Total,
@@ -406,16 +414,18 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 	scopeFilter, teamBindings = unitRowsScope(orgID, scopeFilter, teamScopeIDs)
 	teamFilter := ""
 
+	source := InvestmentQualityStatsSource()
+
 	sql := fmt.Sprintf(`
 SELECT
 %s
-FROM %s AS work_unit_investments%s
+FROM %s%s
 WHERE work_unit_investments.to_ts >= {start_date:Date}
   AND work_unit_investments.to_ts < {end_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
 %s%s%s
 %s
-`, InvestmentQualityStatsColumns, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+`, InvestmentQualityStatsColumns, source, teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -452,6 +462,8 @@ type investmentQualityStatsRow struct {
 	// UncategorizedCount is the units under the evidence gate (they carry a fixed uniform prior and are left out of
 	// the theme mix); Total still counts them.
 	UncategorizedCount int
+	// SizedUnitCount is the categorized units with a positive issue size (D6027).
+	SizedUnitCount int
 }
 
 // executeInvestmentQualityStats runs compileInvestmentQualityStats's
@@ -475,9 +487,9 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		return investmentQualityStatsRow{}, false, nil
 	}
 
-	var total, known, high, moderate, low, veryLow, unknown, uncategorized uint64
+	var total, known, high, moderate, low, veryLow, unknown, uncategorized, sized uint64
 	var mean, stddev float64
-	if scanErr := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized); scanErr != nil {
+	if scanErr := rows.Scan(&total, &known, &mean, &stddev, &high, &moderate, &low, &veryLow, &unknown, &uncategorized, &sized); scanErr != nil {
 		return investmentQualityStatsRow{}, false, fmt.Errorf("scan: %w", scanErr)
 	}
 	if err := rows.Err(); err != nil {
@@ -496,6 +508,7 @@ func executeInvestmentQualityStats(ctx context.Context, client QueryClient, q co
 		UnknownCount:      int(unknown),
 
 		UncategorizedCount: int(uncategorized),
+		SizedUnitCount:     int(sized),
 	}, true, nil
 }
 
@@ -550,4 +563,16 @@ const InvestmentQualityStatsColumns = `    count() AS total,
     countIf(evidence_quality_band = 'low') AS low_count,
     countIf(evidence_quality_band = 'very_low') AS very_low_count,
     countIf(evidence_quality IS NULL OR evidence_quality_band = '') AS unknown_count,
-    countIf(work_unit_investments.categorization_status IN ('insufficient_evidence', 'no_text_sources')) AS uncategorized_count`
+    countIf(work_unit_investments.categorization_status IN ('insufficient_evidence', 'no_text_sources')) AS uncategorized_count,
+    countIf(work_unit_investments.categorization_status NOT IN ('insufficient_evidence', 'no_text_sources') AND unit_issue_size > 0) AS sized_unit_count`
+
+// InvestmentQualityStatsSource is the aliased source of the evidence-quality stats read: the latest work units with
+// their issue size (unit_issue_size, 0 when unsized), which sized_unit_count reads. Shared by the GraphQL and REST readers.
+// The suffix is a constant, so the wrap cannot fail; a panic here is a programming error.
+func InvestmentQualityStatsSource() string {
+	source, err := readers.IssueSizedSource(LatestWorkUnitInvestmentsSource()+" AS work_unit_investments", "work_unit_investments")
+	if err != nil {
+		panic(err)
+	}
+	return source
+}

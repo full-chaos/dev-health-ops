@@ -36,7 +36,7 @@ func TestFetchInvestmentQualityStats_SelectsAndScansUncategorizedCount(t *testin
 	var seen string
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		seen = query
-		return &fixtureRowScanner{rows: [][]any{{uint64(10), uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), uint64(10), uint64(4)}}}, nil
+		return &fixtureRowScanner{rows: [][]any{{uint64(10), uint64(0), 0.0, 0.0, uint64(0), uint64(0), uint64(0), uint64(0), uint64(10), uint64(4), uint64(0)}}}, nil
 	}}
 	reader, err := NewReader(client)
 	if err != nil {
@@ -48,6 +48,9 @@ func TestFetchInvestmentQualityStats_SelectsAndScansUncategorizedCount(t *testin
 	}
 	if row.UncategorizedCount != 4 {
 		t.Errorf("UncategorizedCount = %d, want 4", row.UncategorizedCount)
+	}
+	if !strings.Contains(seen, "AS sized_unit_count") || !strings.Contains(seen, "unit_issue_size") {
+		t.Errorf("REST quality stats SQL lacks the sized count over the issue-sized source: %s", seen)
 	}
 	if !strings.Contains(seen, "countIf(work_unit_investments.categorization_status IN ('insufficient_evidence', 'no_text_sources')) AS uncategorized_count") {
 		t.Errorf("REST quality stats SQL lacks the uncategorized count: %s", seen)

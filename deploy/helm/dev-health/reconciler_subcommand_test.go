@@ -2,7 +2,6 @@ package devhealth_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +11,7 @@ import (
 // own default renders the verb as the first argument, after which the
 // coordinator settings follow.
 func TestDefaultReconcilerGroupRunsTheDhoVerb(t *testing.T) {
-	output, err := exec.Command("helm", "template", "reconciler-test", ".", "--set", "goWorkers.enabled=true").CombinedOutput()
+	output, err := helmCommand("template", "reconciler-test", ".", "--set", "goWorkers.enabled=true").CombinedOutput()
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, output)
 	}
@@ -91,6 +90,6 @@ func renderGroups(t *testing.T, group string) (string, error) {
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command("helm", "template", "reconciler-test", ".", "-f", values).CombinedOutput()
+	output, err := helmCommand("template", "reconciler-test", ".", "-f", values).CombinedOutput()
 	return string(output), err
 }

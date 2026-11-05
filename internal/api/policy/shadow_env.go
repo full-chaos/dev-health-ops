@@ -38,6 +38,8 @@ type ShadowEnvDeps struct {
 	// error text is never logged.
 	NewDecider func() (pep.Decider, error)
 	Logger     *slog.Logger
+	// On means the caller already decided the shadow is on; AUTH_SHADOW_PDP is then not read.
+	On bool
 }
 
 // ShadowFromEnv builds the shadow from the environment. It never fails a start: off, or any
@@ -61,8 +63,8 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 		value, _ := lookup(key)
 		return strings.TrimSpace(value)
 	}
-	on := false
-	if raw := read(EnvShadowPDP); raw != "" {
+	on := deps.On
+	if raw := read(EnvShadowPDP); raw != "" && !deps.On {
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
 			return disabled(EnvShadowPDP)

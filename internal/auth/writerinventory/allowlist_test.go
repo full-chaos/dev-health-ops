@@ -77,7 +77,8 @@ var Allowlist = []Entry{
 	{File: "internal/audit/publisher.go", Func: "Publisher.deliverOne", Table: "auth.auth_outbox_events", Verb: "UPDATE"},
 	{File: "internal/audit/reaper.go", Func: "Reap", Table: "auth.auth_outbox_events", Verb: "DELETE"},
 	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "DELETE"},
-	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "INSERT"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "UPDATE"},
 	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the grant id fill moved out of PGSink.Apply into one function that the backfill
 	// and the repository identity reader share; each caller runs it inside its own audit.Commit.
 	{File: "internal/auth/repoidentity/repoidentity.go", Func: "FillGrantRepoIDs", Table: "auth.resource_grants", Verb: "UPDATE"},
@@ -309,4 +310,6 @@ var Allowlist = []Entry{
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.memberships", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.organizations", Verb: "INSERT"},
 	{File: "internal/testsupport/sessionscenario/sessionscenario.go", Func: "Seed", Table: "public.users", Verb: "INSERT"},
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.principals", Verb: "INSERT"}, // test support: venue seed for the api's real session check
+	{File: "internal/testsupport/venueoracle/authsessions.go", Func: "Venue.WriteAuthSessions", Table: "auth.sessions", Verb: "INSERT"},   // test support: venue seed for the api's real session check
 }

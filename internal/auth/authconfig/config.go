@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/platform/netaddr"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -57,6 +58,7 @@ const (
 	EnvHealthCheckTimeout      = "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT"
 	EnvAPIAddress              = "AUTH_SERVICE_HTTP_ADDR"
 	EnvOperatorAddress         = "AUTH_SERVICE_OPERATOR_HTTP_ADDR"
+	EnvInternalAddress         = "AUTH_SERVICE_INTERNAL_HTTP_ADDR"
 	EnvRequestTimeout          = "AUTH_SERVICE_REQUEST_TIMEOUT"
 	EnvMaxBodyBytes            = "AUTH_SERVICE_MAX_BODY_BYTES"
 	EnvRateLimitPerSecond      = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
@@ -228,6 +230,9 @@ type Config struct {
 
 	APIAddress      string
 	OperatorAddress string
+	// InternalAddress is EnvInternalAddress, "" when the internal listener is off. That listener serves the
+	// service-to-service routes alone and trusts no forwarded client address.
+	InternalAddress string
 	RequestTimeout  time.Duration
 	MaxBodyBytes    int64
 	RateLimit       RateLimit
@@ -386,6 +391,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("health_check_timeout", c.HealthCheckTimeout.String()),
 		slog.String("api_address", c.APIAddress),
 		slog.String("operator_address", c.OperatorAddress),
+		slog.String("internal_address", c.InternalAddress),
 		slog.String("request_timeout", c.RequestTimeout.String()),
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 		slog.Float64("rate_limit_per_second", c.RateLimit.PerSecond),
@@ -475,6 +481,17 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"%s and %s must not be the same address", EnvAPIAddress, EnvOperatorAddress,
 		)
+	}
+	if internal := strings.TrimSpace(valueOf(lookup, EnvInternalAddress)); internal != "" {
+		if cfg.InternalAddress, err = address(lookup, EnvInternalAddress, ""); err != nil {
+			return Config{}, err
+		}
+		// Port 0 is exempt, since each such bind gets its own port.
+		if netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.APIAddress) || netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.OperatorAddress) {
+			return Config{}, fmt.Errorf(
+				"%s must not be the same address as %s or %s", EnvInternalAddress, EnvAPIAddress, EnvOperatorAddress,
+			)
+		}
 	}
 	if cfg.RequestTimeout, err = duration(
 		lookup, EnvRequestTimeout, defaultRequestTimeout, minRequestTimeout, maxRequestTimeout,

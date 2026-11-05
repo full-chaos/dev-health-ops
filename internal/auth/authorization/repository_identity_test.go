@@ -2,6 +2,7 @@ package authorization
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -143,4 +144,40 @@ func TestRepoIdentity_12851_OutsideRepoWithAnotherIDIsDeniedWithoutObligations(t
 	if d.Obligations != nil {
 		t.Errorf("a deny carries obligations: %+v", d.Obligations)
 	}
+}
+
+func TestRepoIdentity_12851_AllIDRowsResolvingToNothingListNoneNeverOrganizationScope(t *testing.T) {
+	// two id grants: one id has no identity row, one id shares its path with another identity (the fake maps a path to one id only)
+	s := idSnapshot(map[string]string{testOrg + "|acme/other": "github:7"}, idGrant("acme/a", "github:1"), idGrant("acme/b", "github:2"))
+	o := idOrgObligations(t, s)
+	if o.RepositoryScope != "" || !o.RepositoryRestricted || len(o.RepositoryAllowlist) != 0 {
+		t.Fatalf("scope %q restricted %v allowlist %v: want restricted and empty", o.RepositoryScope, o.RepositoryRestricted, o.RepositoryAllowlist)
+	}
+}
+
+func idsFor(n int, distinctPaths int) (map[string]string, []Grant) {
+	ids := map[string]string{}
+	var grants []Grant
+	for i := 0; i < n; i++ {
+		id := "github:" + strconv.Itoa(i+1)
+		path := "acme/r" + strconv.Itoa(i%distinctPaths)
+		if _, taken := ids[testOrg+"|"+path]; !taken {
+			ids[testOrg+"|"+path] = id
+		}
+		grants = append(grants, idGrant("acme/stale"+strconv.Itoa(i), id))
+	}
+	return ids, grants
+}
+
+func TestRepoIdentity_12851_TheBoundCountsAfterResolutionAndDedupe(t *testing.T) {
+	// 257 id grants whose ids resolve to 256 distinct live paths (the 257th id shares a path, so it resolves to nothing): allowed, 256 listed
+	ids, grants := idsFor(MaxRepositoryAllowlist+1, MaxRepositoryAllowlist)
+	o := idOrgObligations(t, idSnapshot(ids, grants...))
+	if len(o.RepositoryAllowlist) != MaxRepositoryAllowlist {
+		t.Fatalf("listed %d, want %d", len(o.RepositoryAllowlist), MaxRepositoryAllowlist)
+	}
+	// 257 id grants resolving to 257 distinct live paths: the bound trips
+	ids, grants = idsFor(MaxRepositoryAllowlist+1, MaxRepositoryAllowlist+1)
+	d := NewEvaluator().Evaluate(orgRequest(filteredOrgAction), idSnapshot(ids, grants...))
+	wantDeny(t, "257 distinct live paths", d, ReasonRepositoryAllowlistTooLarge)
 }

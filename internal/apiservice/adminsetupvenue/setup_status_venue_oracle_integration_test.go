@@ -18,7 +18,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
@@ -350,15 +349,8 @@ func startGoServer(t *testing.T, ctx context.Context, venue *venueoracle.Venue, 
 		t.Fatalf("go pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatalf("verifier: %v", err)
-	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatalf("authenticator: %v", err)
-	}
+	auth := venue.TokenIssuer.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	guard := policy.NewGuard(auth, logger)
 	client, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {

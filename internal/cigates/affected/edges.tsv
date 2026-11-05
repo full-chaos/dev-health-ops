@@ -36,6 +36,7 @@ internal/auth/contracts	endpoint_profile_source_commit_test.go	unexpressed
 internal/auth/delegationinput	deps_test.go	unexpressed
 internal/auth/entitlement	deps_test.go	internal/auth/...
 internal/auth/entitlement	deps_test.go	unexpressed
+internal/auth/identity	service_provider_callers_test.go	internal/auth/...
 internal/auth/identity/oidc	environment_proxy_test.go	unexpressed
 internal/authzenforce	census_test.go	unexpressed
 internal/cigates	governance.go	unexpressed
@@ -166,6 +167,8 @@ internal/cigates/workflows	workflows_go_queue_skip_test.go	unexpressed
 internal/cigates/workflows	workflows_gowork_off_test.go	deploy/helm/dev-health
 internal/cigates/workflows	workflows_path_filters_test.go	unexpressed
 internal/cigates/workflows	workflows_wire_parity_test.go	unexpressed
+internal/cli	flagparse_census_test.go	cmd/dho
+internal/cli	flagparse_census_test.go	unexpressed
 internal/fixturescli	provider_worlds_producer_integration_test.go	unexpressed
 internal/fixturescli	synthetic_integration_test.go	cmd/dho
 internal/goapiproof	legclient_pin_test.go	unexpressed

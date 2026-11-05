@@ -3,7 +3,6 @@ package pgmigrate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -232,11 +231,8 @@ func preflight(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     must be 1, as the upgrade verb requires\n"+
 			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river)\n")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

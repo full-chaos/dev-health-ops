@@ -2,7 +2,6 @@ package usersbackfill
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"time"
@@ -48,11 +47,8 @@ func (f fixedRepos) Repos(context.Context) ([]repoidentity.Repo, error) { return
 func runRepoIdentities(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth repo-identities-sync", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

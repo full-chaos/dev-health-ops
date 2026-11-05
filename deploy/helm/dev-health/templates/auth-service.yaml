@@ -23,6 +23,7 @@ stage-signing-key init container exists.
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
 {{- $tokenIssuer := include "dev-health.authTokenIssuer" . }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
+{{- $internalOn := eq (include "dev-health.authInternal" .) "true" }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
 {{- include "dev-health.authConnectionBudget" . }}
@@ -111,6 +112,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- fail (printf "authService.terminationGracePeriodSeconds=%s is below authService.drain.preStopSeconds (%d) + authService.shutdownTimeout (%d) + 5 = %d: kubelet counts the preStop hook inside the grace period and kills the pod when it ends, so the ordered shutdown would be cut" $graceRaw $sleep $shutdown $minGrace) }}
 {{- end }}
 {{- range $a.extraArgs }}
+{{- if eq (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) "internal-http-addr" }}{{- fail "authService.extraArgs must not set internal-http-addr: use authService.internal, which renders the listener with its own NetworkPolicy" }}{{- end }}
 {{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns" "shutdown-timeout") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns), and authService.shutdownTimeout owns --shutdown-timeout (the grace-period guard reads that value)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
@@ -126,6 +128,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- end }}
 {{- end }}
 {{- range $a.extraEnv }}
+{{- if eq (upper (trim (toString .name))) "AUTH_SERVICE_INTERNAL_HTTP_ADDR" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_INTERNAL_HTTP_ADDR: use authService.internal, which renders the listener with its own NetworkPolicy" }}{{- end }}
 {{- if eq .name "AUTH_SERVICE_TRUSTED_PROXIES" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_TRUSTED_PROXIES: use authService.trustedProxies, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
@@ -216,6 +219,9 @@ spec:
           args:
             - {{ printf "--http-addr=:%v" $a.port | quote }}
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
+            {{- if $internalOn }}
+            - {{ printf "--internal-http-addr=:%d" (int $a.internal.port) | quote }}
+            {{- end }}
             - {{ printf "--shutdown-timeout=%s" $shutdownRaw | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
             - {{ printf "--database-max-conns=%s" (include "dev-health.authMaxConns" .) | quote }}
@@ -235,6 +241,11 @@ spec:
             - name: operator
               containerPort: {{ $a.operatorPort }}
               protocol: TCP
+            {{- if $internalOn }}
+            - name: internal
+              containerPort: {{ int $a.internal.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: AUTH_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
@@ -423,6 +434,26 @@ spec:
       targetPort: operator
       protocol: TCP
     {{- end }}
+{{- if $internalOn }}
+---
+{{- /* The internal listener's own Service: an internal-only name for the PEPs, never an Ingress backend. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+  ports:
+    - name: internal
+      port: {{ int $a.internal.port }}
+      targetPort: internal
+      protocol: TCP
+{{- end }}
 {{- if $ksOn }}
 ---
 apiVersion: v1
@@ -576,5 +607,36 @@ spec:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.otlp.port }}
     {{- end }}
+{{- if $internalOn }}
+---
+{{- /*
+CHAOS-12661: the internal port's own boundary. It admits the pods of authService.internal.peers on that port and
+nothing else; it adds no egress, and the policy above stays the API port's whole ingress. NetworkPolicies are
+additive, so this one only opens the internal port.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range $a.internal.peers }}
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" . "context" $) | nindent 14 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ int $a.internal.port }}
+{{- end }}
 {{- end }}
 {{- end }}

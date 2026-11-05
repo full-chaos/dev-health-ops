@@ -178,8 +178,12 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 		deps.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID, RedirectURI: pagerDutyAuthorizeVenueRedirectURI}
 	})
 	goAnswers := map[string]string{}
+	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/pagerduty_authorize_"+mode+".go-pin.json", pagerDutyAuthorizeOrgClaimPinSHA256[mode],
+		"W authorize uppercase org id claim", "W authorize malformed org id claim is 403")
+	defer claimPin.Finish(t)
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
-		Golden: golden,
+		Golden:      golden,
+		Retirements: []venueoracle.Retirement{claimRetirement},
 		Normalize: func(request venueoracle.Request, body string) string {
 			return normalizeAuthorizeURL(t, body)
 		},
@@ -194,6 +198,12 @@ VALUES ($1, $2, 'v1:not-decryptable-here', now() - interval '2 hours', now() - i
 	compare := func(name, query string) {
 		t.Helper()
 		goRows := venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.GoDB), query)
+		if mode == "full" {
+			// The Python plane held a request for the uppercase org claim, which Go refuses (orgClaimRuling).
+			golden.RetireRows(t, name, orgClaimRuling)
+			claimPin.Check(t, name+" rows", goRows)
+			return
+		}
 		golden.CompareRows(t, name, goRows)
 	}
 	// The random state hash is excluded: per org, how many requests are

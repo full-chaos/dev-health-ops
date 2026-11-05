@@ -466,6 +466,18 @@ func TestDelegation_RepositoryRequestOfAnotherOrganizationIsInvalid(t *testing.T
 	}
 }
 
+// The plain path refuses key "*" as invalid_request; the delegated path keeps impersonation_denied.
+func TestDelegation_WildcardRepositoryKeyKeepsImpersonationDenied(t *testing.T) {
+	e := plantedEvaluator()
+	got := e.Evaluate(repoRequest("*"), delegatedRepo([]string{repoAction}, liveGrant("*")))
+	if got.Allowed || got.Reason != ReasonImpersonationDenied || got.Obligations != nil {
+		t.Fatalf("delegated: %+v want impersonation_denied", got)
+	}
+	if plain := e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("*"))); plain.Allowed || plain.Reason != ReasonInvalidRequest {
+		t.Fatalf("plain: %+v want invalid_request", plain)
+	}
+}
+
 func TestDelegation_RepositoryDenyKeepsTheGrantReason(t *testing.T) {
 	e := plantedEvaluator()
 	got := e.Evaluate(repoRequest("acme/api"), delegatedRepo([]string{repoAction}, liveGrant("acme/web")))

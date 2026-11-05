@@ -15,6 +15,12 @@ import (
 	"strings"
 )
 
+// UnrecognizedMessage is the one text for arguments the parser does not take. It states how many there
+// were and never what they were.
+func UnrecognizedMessage(count int) string {
+	return fmt.Sprintf("unrecognized arguments (%d)", count)
+}
+
 // Kind is what an option takes.
 type Kind int
 

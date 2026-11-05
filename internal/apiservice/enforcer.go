@@ -13,6 +13,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
 
@@ -62,12 +63,12 @@ func buildEnforcer(lookup func(string) (string, bool), logger *slog.Logger, dp *
 	if err != nil {
 		return nil, fmt.Errorf("%s lists a namespace: the action map: %w", env, err)
 	}
-	decider, err := dp.decider(workloadAsk{flag: env + " lists a namespace"})
+	decider, err := dp.decider(workloadAsk{Flag: env + " lists a namespace"})
 	if err != nil {
 		variable := "decision point client"
-		var input *workloadInputError
-		if errors.As(err, &input) && input.variable != "" {
-			variable = input.variable
+		var input *workloadinput.InputError
+		if errors.As(err, &input) && input.Variable != "" {
+			variable = input.Variable
 		}
 		logger.Error("authz enforcement: a namespace is switched on but go-api cannot ask the decision point; its requests are refused with a 503",
 			slog.String("env", env), slog.String("variable", variable))

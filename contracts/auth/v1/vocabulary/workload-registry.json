@@ -29,7 +29,7 @@
     {
       "name": "query-api",
       "owner": "platform-operations",
-      "audiences": [],
+      "audiences": ["auth-service"],
       "allowed_actions": []
     }
   ]

@@ -236,6 +236,14 @@ auth-service has 48 profile rows. Its routes do not carry an `action` field. The
 | `POST /internal/v1/organizations/reactivate` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/suspend` | protected | `internal_svc_authsess_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/state` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/principals/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/principals/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/organizations/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/memberships/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/memberships/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/grants/get` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
+| `POST /internal/v1/grants/list` | protected | `internal_svc_authsess_token`, `workload_token` | `cross_org_superuser_only` |
 | `POST /internal/v1/organizations/rename` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/service-accounts/create` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |
 | `POST /internal/v1/service-accounts/disable` | protected | `internal_svc_authsess_token`, `workload_token` | `org_scoped` |

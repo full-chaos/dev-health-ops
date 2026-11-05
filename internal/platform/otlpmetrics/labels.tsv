@@ -52,6 +52,10 @@ dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.g
 dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
+dev_health_query_api_pdp_config_invalid		code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_enabled		code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_exempt_total	action,class	code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_results_total	action,mode,result	code: internal/queryapi/pdp/pdp.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go

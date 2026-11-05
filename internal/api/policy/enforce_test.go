@@ -18,10 +18,12 @@ import (
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
 
@@ -261,21 +263,239 @@ func TestALegacyHS256CallerKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T
 	}
 }
 
-func TestADelegatedSessionKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
-	rec := recordEnforce(t)
-	pdp := newTestPDP(t, denyWith("role_lacks_action"))
-	inner := enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams")))
-	delegated := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		session := &Impersonation{ID: uuid.New(), AdminUserID: userID, TargetUserID: uuid.New(), TargetOrgID: ownOrgID, TargetRole: "admin", ExpiresAt: time.Now().Add(time.Hour)}
-		inner.ServeHTTP(w, r.WithContext(WithImpersonation(r.Context(), session)))
+// impersonating serves next with a live go-api impersonation row for the caller: the admin's own bearer, acting in
+// targetOrgID. The decision point has no delegated session for that bearer to judge.
+func impersonating(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := &Impersonation{ID: uuid.New(), AdminUserID: userID, TargetUserID: targetUserID, TargetOrgID: targetOrgID, TargetRole: "admin",
+			ExpiresAt: time.Now().Add(time.Hour)}
+		next.ServeHTTP(w, r.WithContext(WithImpersonation(r.Context(), session)))
 	})
-	base := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), nil), "GET", "/api/v1/admin/teams")
-	got := enforceRequest(delegated, "GET", "/api/v1/admin/teams")
-	if got.status != base.status {
-		t.Fatalf("delegated: %d %q, want the legacy %d", got.status, got.body, base.status)
+}
+
+const impersonationRefusalBody = `{"detail":"Not allowed in an impersonation session"}`
+
+// An enforced row refuses a caller with a live go-api impersonation row before any decision point call: the bearer
+// is the actor's own, so the decision point would judge the actor in the actor's organization, not the delegation.
+func TestAnImpersonatingAdminOnAnEnforcedRowIsRefusedBeforeThePDP(t *testing.T) {
+	for _, cell := range []struct {
+		namespace, path string
+		who             persona
+	}{
+		{"teams", "/api/v1/admin/teams", personaAdmin},
+		{"billing", "/api/v1/billing/invoices", personaAdmin},
+		{"admin", "/api/v1/admin/orgs", personaSuperuser},
+	} {
+		t.Run(cell.namespace, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, allowAll)
+			h := impersonating(enforceHandler(t, personaStore(cell.who), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor(cell.namespace))))
+			got := enforceRequest(h, http.MethodGet, cell.path)
+			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody {
+				t.Errorf("impersonating caller on an enforced row: %d %q, want 403 %q", got.status, got.body, impersonationRefusalBody)
+			}
+			if n := len(pdp.calls()); n != 0 {
+				t.Errorf("%d PDP calls, want 0", n)
+			}
+			if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{cell.namespace + "/impersonation_refused"}) || len(u) != 0 {
+				t.Errorf("decisions %v unjudged %v, want [%s/impersonation_refused] and none", d, u, cell.namespace)
+			}
+		})
 	}
-	if n := len(pdp.calls()); n != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/delegated"}) {
-		t.Fatalf("%d PDP calls, unjudged %v, want 0 and [GET /api/v1/admin/teams/delegated]", n, rec.unjudgedSnapshot())
+}
+
+// A legacy HS256 bearer with a live go-api impersonation row is refused too: the row, not the token class, makes the
+// caller one the decision point cannot judge as the delegation.
+func TestAnImpersonatingHS256CallerOnAnEnforcedRowIsRefused(t *testing.T) {
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	got := serve(impersonating(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodGet, "/api/v1/admin/teams",
+		validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	if got.status != http.StatusForbidden || got.body != impersonationRefusalBody || len(pdp.calls()) != 0 {
+		t.Fatalf("impersonating HS256 caller: %d %q, %d PDP calls, want 403 %q and 0", got.status, got.body, len(pdp.calls()), impersonationRefusalBody)
+	}
+	if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{"teams/impersonation_refused"}) || len(u) != 0 {
+		t.Fatalf("decisions %v unjudged %v, want [teams/impersonation_refused] and none", d, u)
+	}
+}
+
+const stopImpersonationRoute = "/api/v1/admin/impersonate/stop"
+
+// stopRouteRow is the stop route's row as the catalog gives it.
+func stopRouteRow(t *testing.T) ShadowRow {
+	t.Helper()
+	action, err := policycatalog.Default().Action(ActionAdminImpersonate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return shadowRowOf(action)
+}
+
+func stopRouteHandler(t *testing.T, decider pep.Decider) http.Handler {
+	t.Helper()
+	rows := maps.Clone(shadowTestRows)
+	rows[stopImpersonationPattern] = stopRouteRow(t)
+	enf, err := NewEnforcer(EnforceConfig{Decider: decider, Rows: rows, Switch: onFor("admin"), Timeout: time.Second, Logger: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := NewGuard(routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)}), quiet())
+	guard.SetEnforcer(enf)
+	mux := http.NewServeMux()
+	mux.Handle(stopImpersonationPattern, guard.WrapPlatform(ActionAdminImpersonate, echo))
+	return impersonating(mux)
+}
+
+// The stop route is the one way out of an impersonation, as in the legacy guard: the admin acts on their own session,
+// so the decision point judges the admin's own bearer there.
+func TestTheStopRouteOfAnImpersonatingAdminIsDecidedByThePDP(t *testing.T) {
+	for _, cell := range []struct {
+		name    string
+		verdict func(string) (bool, string)
+		status  int
+		counted string
+	}{
+		{"allow", allowAll, http.StatusOK, "admin/allow"},
+		{"deny", denyWith("platform_role_absent"), http.StatusForbidden, "admin/deny"},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, cell.verdict)
+			got := enforceRequest(stopRouteHandler(t, pdp.client(t)), http.MethodPost, stopImpersonationRoute)
+			if got.status != cell.status {
+				t.Errorf("stop route: %d %q, want %d", got.status, got.body, cell.status)
+			}
+			if calls := pdp.calls(); len(calls) != 1 || calls[0].Action != ActionAdminImpersonate || calls[0].Principal != shadowBearer {
+				t.Errorf("PDP saw %+v, want one admin.impersonate question with the admin's bearer", calls)
+			}
+			if d := rec.snapshot(); !slices.Equal(d, []string{cell.counted}) {
+				t.Errorf("decisions %v, want [%s]", d, cell.counted)
+			}
+		})
+	}
+}
+
+var delegatedActorWire = "prn_" + wireID(uuid.MustParse("77777777-7777-4777-8777-777777777777"))
+
+// delegatedBearerHandler serves the teams rows to a delegated session's bearer (an act claim) whose row admits it.
+func delegatedBearerHandler(t *testing.T, enf *Enforcer) http.Handler {
+	t.Helper()
+	auth := routed(t, personaStore(personaAdmin), &fakeValidator{result: userClaims(func(c *AccessTokenClaims) { c.Actor = &delegatedActorWire })})
+	auth.DelegatedRows(func(string) bool { return true })
+	guard := NewGuard(auth, quiet())
+	guard.SetEnforcer(enf)
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+	return mux
+}
+
+// A delegated session's bearer is decided by the decision point: the bearer is the delegated session's own, so the
+// decision point reads its delegation. Its allow carries the delegated obligations; go-api does not carry out
+// minimum_assurance, so that allow is no verdict (503).
+func TestADelegatedBearerOnAnEnforcedRowIsDecidedByThePDP(t *testing.T) {
+	for _, cell := range []struct {
+		name        string
+		verdict     func(string) (bool, string)
+		obligations map[string]any
+		status      int
+		counted     string
+	}{
+		{"allow", allowAll, nil, http.StatusOK, "teams/allow"},
+		{"allow with the delegated obligations", allowAll, map[string]any{"tenant_scope": ownOrg, "minimum_assurance": "aal2"}, http.StatusServiceUnavailable, "teams/error_deny"},
+		{"deny", denyWith("impersonation_denied"), nil, http.StatusForbidden, "teams/deny"},
+		{"default deny", denyWith("role_lacks_action"), nil, http.StatusForbidden, "teams/deny"},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			rec := recordEnforce(t)
+			pdp := newTestPDP(t, cell.verdict)
+			pdp.obligations = cell.obligations
+			got := enforceRequest(delegatedBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
+			if got.status != cell.status {
+				t.Errorf("delegated bearer: %d %q, want %d", got.status, got.body, cell.status)
+			}
+			if cell.status == http.StatusForbidden && got.body != enforceDenyBodies["teams"] {
+				t.Errorf("delegated bearer deny body %q, want %q", got.body, enforceDenyBodies["teams"])
+			}
+			if calls := pdp.calls(); len(calls) != 1 || calls[0].Principal != shadowBearer || calls[0].Org != ownOrg || calls[0].Action != "teams.read" {
+				t.Errorf("PDP saw %+v, want one teams.read question with the delegated bearer on its organization", calls)
+			}
+			if d, u := rec.snapshot(), rec.unjudgedSnapshot(); !slices.Equal(d, []string{cell.counted}) || len(u) != 0 {
+				t.Errorf("decisions %v unjudged %v, want [%s] and none", d, u, cell.counted)
+			}
+		})
+	}
+}
+
+// collectSum reads every data point of the int64 sum name from reader: the description and each value of label.
+func collectSum(t *testing.T, reader *sdkmetric.ManualReader, name, label string) (description string, values []string) {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != name {
+				continue
+			}
+			description = m.Description
+			sum, _ := m.Data.(metricdata.Sum[int64])
+			for _, point := range sum.DataPoints {
+				value, _ := point.Attributes.Value(attribute.Key(label))
+				values = append(values, value.AsString())
+			}
+		}
+	}
+	sort.Strings(values)
+	return description, values
+}
+
+// No caller gives the unjudged counter a "delegated" reason: its closed reason set is hs256 and no_org.
+func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
+	recordEnforce(t)
+	reader := sdkmetric.NewManualReader()
+	previous := enforceUnjudgedAdd
+	enforceUnjudgedAdd = newEnforceUnjudgedAdder(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test"))
+	t.Cleanup(func() { enforceUnjudgedAdd = previous })
+	pdp := newTestPDP(t, allowAll)
+	enforceRequest(impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodGet, "/api/v1/admin/teams")
+	enforceRequest(impersonating(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("admin")))), http.MethodGet, "/api/v1/admin/orgs")
+	enforceRequest(delegatedBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
+	serve(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	description, reasons := collectSum(t, reader, enforceUnjudgedMetric, "reason")
+	if !slices.Equal(reasons, []string{"hs256"}) {
+		t.Errorf("unjudged reasons %v, want [hs256] (no delegated point)", reasons)
+	}
+	if want := "by route row and reason: hs256, no_org"; !strings.HasSuffix(description, want) {
+		t.Errorf("unjudged description %q, want it to end %q", description, want)
+	}
+}
+
+// The decision counter's outcome set is closed: allow, deny, error_deny and impersonation_refused, each reached, and
+// the description names exactly those.
+func TestTheEnforcementOutcomeSetIsClosed(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	previous := enforceDecisionAdd
+	enforceDecisionAdd = newEnforceDecisionAdder(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test"))
+	t.Cleanup(func() { enforceDecisionAdd = previous })
+	allow, deny, dead := newTestPDP(t, allowAll), newTestPDP(t, denyWith("role_lacks_action")), newTestPDP(t, allowAll)
+	deadClient := dead.client(t)
+	dead.srv.Close()
+	for _, h := range []http.Handler{
+		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams"))),
+		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, deny.client(t), onFor("teams"))),
+		enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, deadClient, onFor("teams"))),
+		impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, allow.client(t), onFor("teams")))),
+	} {
+		enforceRequest(h, http.MethodGet, "/api/v1/admin/teams")
+	}
+	description, outcomes := collectSum(t, reader, enforceDecisionMetric, "outcome")
+	want := []string{"allow", "deny", "error_deny", "impersonation_refused"}
+	if !slices.Equal(outcomes, want) {
+		t.Errorf("outcomes %v, want %v", outcomes, want)
+	}
+	if suffix := "outcome: allow, deny, error_deny, impersonation_refused"; !strings.HasSuffix(description, suffix) {
+		t.Errorf("decision description %q, want it to end %q", description, suffix)
 	}
 }
 
@@ -328,7 +548,7 @@ func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
 }
 
 // Both counters carry closed label sets: the decision counter has a namespace, the service and an outcome; the
-// unjudged counter a route row and one of three reasons.
+// unjudged counter a route row and one of its reasons.
 func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("enforce-test")
@@ -361,9 +581,9 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 	if got := keys["dev_health_authz_enforcement_unjudged_total"]; !slices.Equal(got, []string{"reason", "route"}) {
 		t.Fatalf("unjudged counter labels %v", got)
 	}
-	reasons := []string{enforceUnjudgedHS256, enforceUnjudgedDelegated, enforceUnjudgedNoOrg}
-	if !slices.Equal(reasons, []string{"hs256", "delegated", "no_org"}) {
-		t.Fatalf("reasons %v, want the closed set hs256, delegated, no_org", reasons)
+	reasons := []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg}
+	if !slices.Equal(reasons, []string{"hs256", "no_org"}) {
+		t.Fatalf("reasons %v, want hs256 and no_org", reasons)
 	}
 }
 

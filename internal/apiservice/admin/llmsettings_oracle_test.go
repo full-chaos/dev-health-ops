@@ -54,6 +54,13 @@ const llmUndecryptableRuling = "CHAOS-12172: a stored BYO key the configured key
 // /api/v1/admin row (403). The Python plane served it. Go's answers are pinned,
 // and TestDelegatedBearerIsRefusedOnEveryWrap and the delegated_bearer row
 // contract own the rule.
+// llmTargetChangeRuling names why four keyed answers the model rule already
+// retired changed again (CHAOS-13096): a provider or base_url change with a
+// stored key and no new key is refused, and the later reads of that org see the
+// rows the refusal kept. Go's answers are pinned; nothing more leaves the Python
+// compare, and TestAProviderChangeNeverKeepsTheOldVendorsKey owns the rule.
+const llmTargetChangeRuling = "CHAOS-13096 (D6711): provider/base_url change without a key is refused; Python accepted it, that acceptance is the defect"
+
 const llmDelegatedRuling = "CHAOS-10991: a delegated session's bearer (impersonating_user_id) is refused on /api/v1/admin rows (403)"
 
 // llmDelegatedRetired names the requests the delegated deny retires: the
@@ -165,7 +172,7 @@ func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest st
 	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
 	ruling := llmModelRuling + "; " + llmDelegatedRuling
 	if withKey {
-		ruling = llmModelRuling + "; " + llmUndecryptableRuling + "; " + llmDelegatedRuling
+		ruling = llmModelRuling + "; " + llmUndecryptableRuling + "; " + llmDelegatedRuling + "; " + llmTargetChangeRuling
 	}
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: ruling})
 	root := repoRoot(t)

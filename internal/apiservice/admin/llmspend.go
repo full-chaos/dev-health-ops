@@ -196,20 +196,15 @@ func (h *handlers) orgLLMActive(ctx context.Context, orgID string) (bool, error)
 	if !llmorgsettings.IsKnownProvider(provider) {
 		return false, nil
 	}
-	apiKey, err := h.settingText(ctx, orgID, llmCategory, "api_key")
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, true)
 	if err != nil {
 		return false, err
-	}
-	if bound, err := defaultKeyBound(ctx, h.store.Pool, orgID); err != nil {
-		return false, err
-	} else if !bound {
-		apiKey = nil
 	}
 	baseURL, err := h.settingText(ctx, orgID, llmCategory, "base_url")
 	if err != nil {
 		return false, err
 	}
-	return h.byoConfigUsable(ctx, provider, orEmpty(apiKey), orEmpty(baseURL))
+	return h.byoConfigUsable(ctx, provider, key.Served(), orEmpty(baseURL))
 }
 
 // byoConfigUsable is the credentials half of orgLLMActive: credential material

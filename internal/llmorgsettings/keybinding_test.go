@@ -166,3 +166,74 @@ func TestAnOverrideInheritsOnlyABoundDefaultKey(t *testing.T) {
 		}
 	}
 }
+
+// The Q3 cell of CHAOS-13096 (red on main 2ed1bd5d, lane-scratch/cag-13096/
+// logs/q3-main-13096.log sha256 6760052c...) in head form: the same provider
+// with a NEW base_url and no new key. The default key is older than the new
+// base_url row, so it is not served; an override on its own base_url does not
+// inherit the default key.
+func TestQ3HeadSameProviderNewBaseURLNoKeyServesNoKey(t *testing.T) {
+	const storedKey = "sk-PLANTEDstoredOpenAIKey0123456789"
+	const newHost = "https://8.8.8.8/v1"
+	for _, purpose := range []Purpose{"", PurposeExplain} {
+		rows := []bindingRow{{"provider", "openai", keyWritten}, {"model", "gpt-5", keyWritten}, {"api_key", storedKey, keyWritten}}
+		if purpose == "" {
+			rows = append(rows, bindingRow{"base_url", newHost, providerChanged})
+		} else {
+			rows = append(rows, bindingRow{PurposeKey(purpose, "provider"), "openai", providerChanged},
+				bindingRow{PurposeKey(purpose, "model"), "gpt-5", providerChanged},
+				bindingRow{PurposeKey(purpose, "base_url"), newHost, providerChanged})
+		}
+		effective := project(loadRows(t, rows), purpose)
+		reason, err := CheckOrgConfig(context.Background(), OrgConfig{Purpose: purpose, Provider: effective["provider"],
+			Model: effective["model"], BaseURL: effective["base_url"], APIKey: secrets.NewHidden(effective["api_key"])})
+		t.Logf("purpose=%q: effective base_url=%s api_key_is_stored_key=%v CheckOrgConfig=%q err=%v", purpose, effective["base_url"], effective["api_key"] == storedKey, reason, err)
+		if effective["api_key"] == storedKey || reason == ConfigActive {
+			t.Errorf("purpose=%q: the stored key is served to the new base_url host", purpose)
+		}
+	}
+}
+
+// The base_url half of the reader table: scope x (key older | same instant |
+// newer than its base_url row, set or cleared).
+func TestTheReaderServesAKeyOnlyWhenItIsNotOlderThanItsBaseURL(t *testing.T) {
+	for _, scope := range KeyScopes() {
+		for _, baseURL := range []string{"https://8.8.8.8/v1", ""} {
+			for _, c := range []struct {
+				name   string
+				keyAt  time.Time
+				served bool
+			}{
+				{"key older", keyWritten, false},
+				{"same instant", providerChanged, true},
+				{"key newer", providerChanged.Add(time.Millisecond), true},
+			} {
+				rows := []bindingRow{{scope.ProviderKey, "openai", keyWritten}, {scope.BaseURLKey, baseURL, providerChanged}, {scope.APIKeyKey, plantedOpenAIKey, c.keyAt}}
+				if scope.ProviderKey != keyProvider {
+					rows = append(rows, bindingRow{keyProvider, "anthropic", keyWritten})
+				}
+				purpose := Purpose("")
+				for _, p := range append(append([]Purpose{}, Purposes...), PurposeCategorize) {
+					if ScopeOf(p) == scope {
+						purpose = p
+					}
+				}
+				got := project(loadRows(t, rows), purpose)[keyAPIKey] == plantedOpenAIKey
+				if got != c.served {
+					t.Errorf("%s / base_url %q / %s: served=%v, want %v", scope.APIKeyKey, baseURL, c.name, got, c.served)
+				}
+			}
+		}
+	}
+}
+
+// An override on the default provider but another base_url never inherits the
+// default key, whatever the timestamps.
+func TestAnOverrideOnAnotherBaseURLDoesNotInherit(t *testing.T) {
+	settings := orgSettings{"provider": "openai", "api_key": plantedDefaultKey,
+		PurposeKey(PurposeExplain, "provider"): "openai", PurposeKey(PurposeExplain, "model"): "gpt-5",
+		PurposeKey(PurposeExplain, "base_url"): "https://8.8.8.8/v1"}
+	if got := project(settings, PurposeExplain)["api_key"]; got != "" {
+		t.Fatal("an override on another base_url inherits the default key")
+	}
+}

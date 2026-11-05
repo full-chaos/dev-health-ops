@@ -10,8 +10,8 @@ import (
 )
 
 // TestLLMSettingsSetRefusesAProviderChangeWithoutAKey is CHAOS-13096 on the
-// operator path: `admin llm-settings set` runs the route's write, so a provider
-// change with no --api-key is refused and changes no row, and a change to a
+// operator path: `admin llm-settings set` runs the route's write, so a provider or
+// base_url change with no --api-key is refused and changes no row, and a change to a
 // keyless provider deletes the old key row. Go-only: the Python verb kept the key.
 func TestLLMSettingsSetRefusesAProviderChangeWithoutAKey(t *testing.T) {
 	db := startDatabase(t)
@@ -34,6 +34,14 @@ VALUES ('%s', 'team-org', 'Team', 'team', 'manual', true, now(), now())`, teamOr
 	code, stdout := set("--provider", "anthropic", "--model", "claude-haiku-5-5")
 	t.Logf("openai -> anthropic, no key: exit=%d stdout=%q", code, stdout)
 	if code != 1 || !strings.HasPrefix(stdout, "Error: ") || strings.Contains(stdout, apiKeyLong) {
+		t.Fatalf("exit %d, stdout %q: want the refusal", code, stdout)
+	}
+	if after := db.llmState(t); after != before {
+		t.Fatalf("a refused set changed rows:\n%s\n---\n%s", before, after)
+	}
+	code, stdout = set("--provider", "openai", "--model", "gpt-5", "--base-url", "https://8.8.8.8/v1")
+	t.Logf("same provider, new base_url, no key: exit=%d stdout=%q", code, stdout)
+	if code != 1 || !strings.HasPrefix(stdout, "Error: ") {
 		t.Fatalf("exit %d, stdout %q: want the refusal", code, stdout)
 	}
 	if after := db.llmState(t); after != before {

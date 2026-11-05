@@ -202,8 +202,8 @@ func storedKeyInBaseURL(raw orgSettings, baseURL string) bool {
 	if baseURL == "" {
 		return false
 	}
-	for _, key := range append([]string{keyAPIKey}, otherPurposeAPIKeys()...) {
-		if BaseURLCarriesKey(baseURL, raw[key]) {
+	for _, key := range keysForLeakChecks(raw) {
+		if BaseURLCarriesKey(baseURL, key) {
 			return true
 		}
 	}

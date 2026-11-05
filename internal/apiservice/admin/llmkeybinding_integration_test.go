@@ -21,9 +21,9 @@ import (
 )
 
 // TestAProviderChangeNeverKeepsTheOldVendorsKey is CHAOS-13096 over the real
-// route and rows: a PUT that changes the provider of the default row or of a
-// purpose override, with no api_key, is refused (400
-// provider_change_requires_api_key) and changes no row; a change with a key
+// route and rows: a PUT that changes the provider or the base_url of the default
+// row or of a purpose override, with no api_key, is refused (400
+// provider_or_base_url_change_requires_api_key) and changes no row; a change with a key
 // replaces it; a change to a known keyless provider, or an override switched to
 // the default row's provider, deletes the old key row. Go-only: Python has no
 // such rule.
@@ -109,8 +109,8 @@ VALUES ($1, 'llmbinding-admin@example.com', true, true, false, 0, now(), now())`
 		status, out := call(body)
 		detail, _ := out["detail"].(map[string]any)
 		t.Logf("%s: status=%d error=%v", name, status, detail["error"])
-		if status != 400 || detail["error"] != "provider_change_requires_api_key" {
-			t.Fatalf("%s: status=%d body=%v, want 400 provider_change_requires_api_key", name, status, out)
+		if status != 400 || detail["error"] != "provider_or_base_url_change_requires_api_key" {
+			t.Fatalf("%s: status=%d body=%v, want 400 provider_or_base_url_change_requires_api_key", name, status, out)
 		}
 		if after := rows(); after != before {
 			t.Fatalf("%s: a refused write changed rows:\n%s\n---\n%s", name, before, after)
@@ -132,9 +132,15 @@ VALUES ($1, 'llmbinding-admin@example.com', true, true, false, 0, now(), now())`
 		t.Fatal("a same-provider write without a key dropped the key")
 	}
 	ok("default -> anthropic with its key", fmt.Sprintf(`{"provider":"anthropic","model":"claude-haiku-5-5","api_key":%q}`, anthropicKey))
+	refused("default: same provider, base_url set, no key", `{"provider":"anthropic","model":"claude-haiku-5-5","base_url":"https://8.8.8.8/v1"}`)
+	ok("default: base_url set with the key", fmt.Sprintf(`{"provider":"anthropic","model":"claude-haiku-5-5","api_key":%q,"base_url":"https://8.8.8.8/v1"}`, anthropicKey))
+	ok("default: same provider and base_url, no key", `{"provider":"anthropic","model":"claude-sonnet-5-5","base_url":"https://8.8.8.8/v1"}`)
+	refused("default: base_url cleared, no key", `{"provider":"anthropic","model":"claude-haiku-5-5"}`)
+	ok("default: base_url cleared with the key", fmt.Sprintf(`{"provider":"anthropic","model":"claude-haiku-5-5","api_key":%q}`, anthropicKey))
 
 	ok("explain openai with its key", fmt.Sprintf(`{"purpose":"explain","provider":"openai","model":"gpt-5","api_key":%q}`, explainKey))
 	refused("explain -> gemini, no key", `{"purpose":"explain","provider":"gemini","model":"gemini-x"}`)
+	refused("explain: base_url set, no key", `{"purpose":"explain","provider":"openai","model":"gpt-5","base_url":"https://8.8.8.8/v1"}`)
 	ok("explain -> the default provider, no key", `{"purpose":"explain","provider":"anthropic","model":"claude-haiku-5-5"}`)
 	if stored("purpose:explain:api_key") {
 		t.Fatal("an override switched to the default provider kept its own old key: it would block the default key")

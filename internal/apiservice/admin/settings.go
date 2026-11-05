@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -86,6 +87,9 @@ func (s pgStore) settingByKey(ctx context.Context, orgID, category, key string) 
 // settingByKeyOn reads one settings row over db (the pool or an open
 // transaction).
 func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
+	if category == llmCategory && isLLMKeyRow(key) {
+		return nil, errLLMKeyRowNeedsAccessor
+	}
 	var row setting
 	err := db.QueryRow(ctx,
 		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`,
@@ -277,6 +281,13 @@ UPDATE settings SET value = $2, is_encrypted = $3, description = $4, updated_at 
 	}
 	return existing, nil
 }
+
+// errLLMKeyRowNeedsAccessor refuses a direct read of a BYO api_key row: every
+// key read goes through scopeKey, which withholds a key written for another
+// provider or base_url (CHAOS-13096).
+var errLLMKeyRowNeedsAccessor = errors.New("read a BYO llm api_key row through scopeKey")
+
+func isLLMKeyRow(key string) bool { return key == "api_key" || strings.HasSuffix(key, ":api_key") }
 
 // setSetting answers the 500 for a failed upsertSetting.
 func (h *handlers) setSetting(ctx context.Context, w http.ResponseWriter, orgID, category, key string, value *string, encrypt bool, description *string) (*setting, bool) {

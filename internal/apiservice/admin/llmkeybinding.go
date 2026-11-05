@@ -3,64 +3,35 @@ package admin
 import (
 	"context"
 	"net/http"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// A stored key never serves a provider it was not written for (CHAOS-13096).
-// The write side refuses or clears it on a provider change; the readers
-// withhold a key row older than its provider row (llmorgsettings.KeyBound).
+// A stored key never reaches a provider or base_url it was not written for
+// (CHAOS-13096). Every key read here goes through scopeKey
+// (llmorgsettings.ReadScopeKey); the writes refuse, keep or delete the key on a
+// change of either.
 
-const llmProviderChangeNeedsKey = "provider_change_requires_api_key"
+const llmTargetChangeNeedsKey = "provider_or_base_url_change_requires_api_key"
 
-func providerChangeRefusal() *llmRefusal {
-	return newLLMRefusal(http.StatusBadRequest, "error", llmProviderChangeNeedsKey, "feature", byoLLMFeature,
-		"message", "A new provider needs its own API key.")
+func targetChangeRefusal() *llmRefusal {
+	return newLLMRefusal(http.StatusBadRequest, "error", llmTargetChangeNeedsKey, "feature", byoLLMFeature,
+		"message", "A new provider or base URL needs its API key entered again.")
 }
 
-// scopeKeyRows are the provider and api_key rows of one stored config.
-type scopeKeyRows struct {
-	provider   string // "" when absent or empty
-	providerAt time.Time
-	keyStored  bool
-	keyAt      time.Time
-}
-
-// keyBound is whether the stored key may be served with the stored provider.
-func (s scopeKeyRows) keyBound() bool {
-	return !s.keyStored || s.provider == "" || llmorgsettings.KeyBound(s.keyAt, s.providerAt)
-}
-
-// readScopeKeyRows reads one scope's rows; lock takes their row locks first, so
-// a concurrent write cannot change them before the caller's transaction ends.
-func readScopeKeyRows(ctx context.Context, db pgExecer, orgID string, scope llmorgsettings.KeyScope, lock bool) (scopeKeyRows, error) {
-	if lock {
-		if _, err := db.Exec(ctx, `
-SELECT 1 FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($3) FOR UPDATE`,
-			orgID, llmCategory, []string{scope.ProviderKey, scope.APIKeyKey}); err != nil {
-			return scopeKeyRows{}, err
+// scopeKey is the one read of a stored api_key in this package. open=false
+// reads presence and binding only; lock takes the scope's row locks (inside a
+// write transaction).
+func (h *handlers) scopeKey(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose, lock, open bool) (llmorgsettings.ScopeKey, error) {
+	var opener llmorgsettings.KeyOpener
+	if open {
+		opener = func(key string, value *string, encrypted bool) (*string, error) {
+			return h.settingValue(&setting{Key: key, Value: value, IsEncrypted: encrypted})
 		}
 	}
-	var provider *string
-	var providerAt, keyAt *time.Time
-	if err := db.QueryRow(ctx, `
-SELECT
-  (SELECT value FROM settings WHERE org_id = $1 AND category = $2 AND key = $3),
-  (SELECT updated_at FROM settings WHERE org_id = $1 AND category = $2 AND key = $3),
-  (SELECT updated_at FROM settings WHERE org_id = $1 AND category = $2 AND key = $4 AND coalesce(value, '') <> '')`,
-		orgID, llmCategory, scope.ProviderKey, scope.APIKeyKey).Scan(&provider, &providerAt, &keyAt); err != nil {
-		return scopeKeyRows{}, err
-	}
-	var out scopeKeyRows
-	if provider != nil && *provider != "" && providerAt != nil {
-		out.provider, out.providerAt = *provider, *providerAt
-	}
-	if keyAt != nil {
-		out.keyStored, out.keyAt = true, *keyAt
-	}
-	return out, nil
+	return llmorgsettings.ReadScopeKey(ctx, db, orgID, purpose, lock, opener)
 }
 
 // keyStep is what a write does to the scope's stored api_key row.
@@ -68,79 +39,105 @@ type keyStep int
 
 const (
 	keyStepKeep   keyStep = iota // the row stays as it is
+	keyStepRebind                // the row stays and is re-stamped: provider and base_url did not change
 	keyStepWrite                 // the body's api_key replaces it
 	keyStepDelete                // the row is deleted
-	keyStepRefuse                // the write is refused: 400 provider_change_requires_api_key
+	keyStepRefuse                // the write is refused: 400 provider_or_base_url_change_requires_api_key
 )
 
-// providerChangeKeyStep is the one provider-change rule of the default row and
-// every purpose override. stored is the scope's rows before the write;
-// inheritsDefault is whether the new provider of an override takes the default
-// row's bound key (same provider).
-func providerChangeKeyStep(stored scopeKeyRows, newProvider string, bodyKey, inheritsDefault bool) keyStep {
+// keyTarget is the provider and base_url a key is sent to.
+type keyTarget struct{ provider, baseURL string }
+
+// storedProvider is a provider name as the writers store it.
+func storedProvider(name string) string { return pythonparity.Lower(pythonparity.Strip(name)) }
+
+func (t keyTarget) same(other keyTarget) bool {
+	return storedProvider(t.provider) == storedProvider(other.provider) && t.baseURL == other.baseURL
+}
+
+// targetChangeKeyStep is the one rule of the default row and every purpose
+// override. stored is the scope's key before the write; inheritsDefault is
+// whether the new target of an override takes the default row's bound key.
+func targetChangeKeyStep(stored llmorgsettings.ScopeKey, next keyTarget, bodyKey, inheritsDefault bool) keyStep {
 	if bodyKey {
 		return keyStepWrite
 	}
-	next := llmorgsettings.NormalizeProvider(newProvider)
-	if !stored.keyStored || llmorgsettings.NormalizeProvider(stored.provider) == next {
+	if !stored.Stored() {
+		return keyStepKeep
+	}
+	if next.same(keyTarget{stored.Provider, stored.BaseURL}) {
+		if stored.Bound() {
+			return keyStepRebind
+		}
 		return keyStepKeep
 	}
 	if inheritsDefault {
 		return keyStepDelete
 	}
-	if !llmorgsettings.CredentialsComplete(next, "") {
+	provider := storedProvider(next.provider)
+	if !llmorgsettings.CredentialsComplete(provider, "") {
 		return keyStepRefuse
 	}
-	if llmorgsettings.IsKnownProvider(next) {
+	if llmorgsettings.IsKnownProvider(provider) {
 		return keyStepDelete
 	}
+	// No BYO ("", auto, mock, none) or an unknown provider: no reader serves the
+	// kept row (its provider or base_url row is newer), and a later change to a
+	// provider that needs a key is refused without one.
 	return keyStepKeep
 }
 
-// keyStepFor reads the scope's rows inside the write transaction and answers
-// the provider-change rule for a write of provider to purpose ("" = default).
-func keyStepFor(ctx context.Context, tx pgExecer, orgID string, purpose llmorgsettings.Purpose, provider string, bodyKey bool) (keyStep, error) {
-	stored, err := readScopeKeyRows(ctx, tx, orgID, llmorgsettings.ScopeOf(purpose), true)
+// suppliesKeyFor is whether the default row's stored key serves an override
+// whose target is next: the same provider and base_url, and the key bound.
+func suppliesKeyFor(def llmorgsettings.ScopeKey, next keyTarget) bool {
+	return def.Bound() && next.same(keyTarget{def.Provider, def.BaseURL})
+}
+
+// keyStepFor reads the scope inside the write transaction and answers the rule
+// for a write of next to purpose ("" = default).
+func (h *handlers) keyStepFor(ctx context.Context, tx pgExecer, orgID string, purpose llmorgsettings.Purpose, next keyTarget, bodyKey bool) (keyStep, error) {
+	stored, err := h.scopeKey(ctx, tx, orgID, purpose, true, false)
 	if err != nil {
 		return keyStepKeep, err
 	}
 	inherits := false
-	if purpose != "" && !bodyKey && stored.keyStored {
-		def, err := readScopeKeyRows(ctx, tx, orgID, llmorgsettings.ScopeOf(""), false)
+	if purpose != "" && !bodyKey && stored.Stored() {
+		def, err := h.scopeKey(ctx, tx, orgID, "", false, false)
 		if err != nil {
 			return keyStepKeep, err
 		}
-		inherits = def.suppliesKeyFor(provider)
+		inherits = suppliesKeyFor(def, next)
 	}
-	return providerChangeKeyStep(stored, provider, bodyKey, inherits), nil
+	return targetChangeKeyStep(stored, next, bodyKey, inherits), nil
 }
 
-// suppliesKeyFor is whether the default row's stored key serves an override of
-// provider: the same provider, and the key bound to it.
-func (s scopeKeyRows) suppliesKeyFor(provider string) bool {
-	return s.keyStored && s.keyBound() &&
-		llmorgsettings.NormalizeProvider(s.provider) == llmorgsettings.NormalizeProvider(provider)
+// applyKeyStep runs the step's row change inside the write transaction, after
+// the provider and base_url rows are written.
+func (h *handlers) applyKeyStep(ctx context.Context, tx pgExecer, orgID string, purpose llmorgsettings.Purpose, step keyStep) error {
+	scope := llmorgsettings.ScopeOf(purpose)
+	switch step {
+	case keyStepDelete:
+		_, err := tx.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`, orgID, llmCategory, scope.APIKeyKey)
+		return err
+	case keyStepRebind:
+		// An unchanged provider or base_url row can still move (its description
+		// is rewritten); the bound key moves with it.
+		_, err := tx.Exec(ctx, `
+UPDATE settings AS k SET updated_at = scope.at
+FROM (SELECT max(updated_at) AS at FROM settings WHERE org_id = $1 AND category = $2 AND key = ANY($4)) AS scope
+WHERE k.org_id = $1 AND k.category = $2 AND k.key = $3 AND k.updated_at < scope.at`,
+			orgID, llmCategory, scope.APIKeyKey, []string{scope.ProviderKey, scope.BaseURLKey})
+		return err
+	}
+	return nil
 }
 
-func deleteSettingRow(ctx context.Context, db pgExecer, orgID, key string) error {
-	_, err := db.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`, orgID, llmCategory, key)
-	return err
-}
-
-// bindDefaultKey withholds the default row's key from cfg when it was written
-// for an earlier provider; the key stays in staleKey for the base_url checks.
-func (cfg readinessBYOConfig) bindDefaultKey(bound bool) readinessBYOConfig {
-	if !bound {
-		cfg.staleKey, cfg.apiKey = cfg.apiKey, secrets.NewHidden("")
+// bindDefaultKey sets cfg's key from the accessor: served only when bound; the
+// stored key stays in staleKey for the base_url checks.
+func (cfg readinessBYOConfig) bindDefaultKey(key llmorgsettings.ScopeKey) readinessBYOConfig {
+	cfg.apiKey = secrets.NewHidden(key.Served())
+	if key.Stored() && !key.Bound() {
+		cfg.staleKey = secrets.NewHidden(key.ForChecks())
 	}
 	return cfg
-}
-
-// defaultKeyBound is keyBound of the default row's stored rows.
-func defaultKeyBound(ctx context.Context, db pgExecer, orgID string) (bool, error) {
-	rows, err := readScopeKeyRows(ctx, db, orgID, llmorgsettings.ScopeOf(""), false)
-	if err != nil {
-		return false, err
-	}
-	return rows.keyBound(), nil
 }

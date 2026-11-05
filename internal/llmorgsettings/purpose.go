@@ -57,14 +57,16 @@ func overrideStored(stored func(key string) bool, purpose Purpose) bool {
 	return purpose != "" && stored(PurposeKey(purpose, keyProvider))
 }
 
-// inheritsDefaultKey: an override for the same provider as the default row
-// and with no api_key of its own uses the default row's key, so one provider
-// key serves several models. A different provider never inherits it.
+// inheritsDefaultKey: an override for the same provider and base_url as the
+// default row and with no api_key of its own uses the default row's key, so one
+// provider key serves several models. A different provider or base_url never
+// inherits it: the key would reach a target it was not written for.
 func inheritsDefaultKey(stored func(key string) bool, value func(key string) string, purpose Purpose) bool {
 	return overrideStored(stored, purpose) &&
 		!stored(PurposeKey(purpose, keyAPIKey)) &&
 		stored(keyAPIKey) &&
-		normalizeProvider(value(keyProvider)) == normalizeProvider(value(PurposeKey(purpose, keyProvider)))
+		normalizeProvider(value(keyProvider)) == normalizeProvider(value(PurposeKey(purpose, keyProvider))) &&
+		value(keyBaseURL) == value(PurposeKey(purpose, keyBaseURL))
 }
 
 // sourceKeys are the stored keys the effective config of purpose reads.
@@ -74,7 +76,7 @@ func sourceKeys(stored func(key string) bool, value func(key string) string, pur
 	}
 	keys := PurposeKeys(purpose)
 	if inheritsDefaultKey(stored, value, purpose) {
-		keys = append(keys, keyProvider, keyAPIKey)
+		keys = append(keys, keyProvider, keyBaseURL, keyAPIKey)
 	}
 	return keys
 }
@@ -103,19 +105,5 @@ func project(settings orgSettings, purpose Purpose) orgSettings {
 			out[keyAPIKey] = v
 		}
 	}
-	return out
-}
-
-// withServedDefaultKey is settings without the default row's key when that key
-// is not bound to the default provider; settings itself otherwise.
-func withServedDefaultKey(settings orgSettings) orgSettings {
-	if servedKey(settings, keyAPIKey) == settings[keyAPIKey] {
-		return settings
-	}
-	out := make(orgSettings, len(settings))
-	for key, v := range settings {
-		out[key] = v
-	}
-	delete(out, keyAPIKey)
 	return out
 }

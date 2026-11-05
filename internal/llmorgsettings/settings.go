@@ -91,10 +91,10 @@ func (s Store) loadRawSettingsFrom(ctx context.Context, q rowQuerier, orgID stri
 		if err := rows.Scan(&key, &value, &isEncrypted, &updated); err != nil {
 			return nil, fmt.Errorf("scan org llm setting: %w", err)
 		}
+		updatedAt[key] = updated
 		if value == nil || *value == "" {
 			continue
 		}
-		updatedAt[key] = updated
 		resolved := *value
 		if isEncrypted {
 			plain, err := s.Decryptor.Decrypt(secrets.NewValue(resolved))

@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -265,6 +266,103 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 			}
 			if got := len(stub.requests()); got != wantCalls {
 				t.Errorf("control: auth-service saw %d calls, want %d", got, wantCalls)
+			}
+		})
+	}
+}
+
+// failingReadStore is legacySessionStore with a failing users-row read or session read.
+type failingReadStore struct {
+	legacySessionStore
+	userErr, sessionErr error
+}
+
+func (s *failingReadStore) UserState(ctx context.Context, id uuid.UUID) (policy.UserState, bool, error) {
+	if s.userErr != nil {
+		return policy.UserState{}, false, s.userErr
+	}
+	return s.legacySessionStore.UserState(ctx, id)
+}
+
+func (s *failingReadStore) ActiveImpersonation(ctx context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
+	if s.sessionErr != nil {
+		return nil, s.sessionErr
+	}
+	return s.legacySessionStore.ActiveImpersonation(ctx, admin)
+}
+
+const switchOrgUnavailable = `{"detail":{"message":"Database temporarily unavailable"}}`
+
+// TestSwitchOrgAnswers503WhenACallerReadFails: with the sessions proxy on, any
+// failed read in the refusal (the users row, the impersonation session) is a
+// dependency failure: 503 with go-api's unavailable body, nothing forwarded.
+func TestSwitchOrgAnswers503WhenACallerReadFails(t *testing.T) {
+	cases := map[string]func(*failingReadStore){
+		"users row read fails": func(s *failingReadStore) { s.userErr = errors.New("users read: connection reset") },
+		"session read fails":   func(s *failingReadStore) { s.sessionErr = errors.New("session read: connection reset") },
+	}
+	for name, fail := range cases {
+		t.Run(name, func(t *testing.T) {
+			key := strings.Repeat("fixture-key-", 3)
+			verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &failingReadStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
+			fail(store)
+			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := goAPIScopeRows()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stub := newStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTeapot)
+				_, _ = w.Write([]byte(ownerUpstreamBody))
+			})
+			upstream, _ := url.Parse(stub.URL)
+			proxy := AuthProxyConfig{Upstream: upstream, Impersonation: true, On: map[AuthAggregate]bool{AuthSessions: true}}
+			protected, err := newProtection(apiTestConfig(), nil, false, proxy, quietLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			scope := policy.NewScope(auth, quietLogger())
+			scope.DeclaredRows(rows)
+			scope.RefuseLegacyImpersonation(protected.scope.RefusesLegacyImpersonation())
+			pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable&connect_timeout=1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			routes := Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+				AuthProxy: proxy, Limits: httpapi.NewMemoryCounters(time.Now)}, quietLogger())
+			server, err := newServer(apiTestConfig(), quietLogger(), routes, nil, proxy.ScopeExemptRoutes(), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			access, err := signer.Access(edgetoken.AccessClaims{UserID: store.admin.String(), Email: "admin@example.com", OrgID: uuid.NewString(),
+				Role: "member", IsSuperuser: true, TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/switch-org", strings.NewReader(switchOrgBody))
+			request.RemoteAddr = "192.0.2.10:4711"
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+access)
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusServiceUnavailable || strings.TrimSpace(recorder.Body.String()) != switchOrgUnavailable {
+				t.Errorf("%s: %d %s, want 503 %s", name, recorder.Code, recorder.Body.String(), switchOrgUnavailable)
+			}
+			if got := len(stub.requests()); got != 0 {
+				t.Errorf("auth-service saw %d calls, want 0", got)
 			}
 		})
 	}

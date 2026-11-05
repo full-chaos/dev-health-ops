@@ -50,6 +50,9 @@ type OrgResult struct {
 
 // Sink writes the identities of one organization and backfills its grants.
 type Sink interface {
+	// OrgsWithIdentities lists the organizations that hold identity rows, so an organization the source no longer
+	// lists is given an empty set.
+	OrgsWithIdentities(ctx context.Context) ([]uuid.UUID, error)
 	Apply(ctx context.Context, org uuid.UUID, repos []Repo) (OrgResult, error)
 }
 
@@ -115,6 +118,15 @@ func Run(ctx context.Context, src Source, sink Sink) (Report, error) {
 	}
 	groups, skipped := Group(repos)
 	rep := Report{SkippedInvalid: skipped}
+	stale, err := sink.OrgsWithIdentities(ctx)
+	if err != nil {
+		return Report{}, fmt.Errorf("repoidentity: list organizations: %w", err)
+	}
+	for _, org := range stale {
+		if _, ok := groups[org]; !ok {
+			groups[org] = nil
+		}
+	}
 	orgs := make([]uuid.UUID, 0, len(groups))
 	for org := range groups {
 		orgs = append(orgs, org)
@@ -145,6 +157,24 @@ func Run(ctx context.Context, src Source, sink Sink) (Report, error) {
 type PGSink struct {
 	Pool   *pgxpool.Pool
 	Schema authschema.ValidatedIdentifier
+}
+
+// OrgsWithIdentities reads the distinct organizations of the identity table.
+func (s PGSink) OrgsWithIdentities(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT DISTINCT organization_id FROM `+authschema.Quote(s.Schema)+`.repository_identities`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // Apply upserts the organization's identities, removes the ones the source no longer lists, backfills the live

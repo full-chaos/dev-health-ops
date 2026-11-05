@@ -239,7 +239,7 @@ func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string)
 
 // StateVersion is a digest of every row a decision of the pair depends on, in the transaction's snapshot: the principal's
 // public.users row, the organization's public.organizations row, the pair's public.memberships row (each by the values a
-// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, and
+// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, the organization's repository identity rows while the pair holds an id-bearing grant, and
 // the principal's platform role assignments while auth owns them (by xmin). The auth copies of the first three are not
 // hashed: a write of a copy does not move the version. A committed insert, delete, or change of a value a decision reads
 // is a new digest, with or without an outbox event; VACUUM FREEZE keeps it.
@@ -280,7 +280,8 @@ func stateQuery(schema string, org, owned bool) string {
 		parts = append(parts,
 			`SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
 			`SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
-			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`)
+			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+			`SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM `+schema+`.repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`)
 	}
 	if owned {
 		parts = append(parts, `SELECT 'platform_role_assignments', id::text, xmin::text FROM `+schema+`.platform_role_assignments WHERE principal_id = $1`)

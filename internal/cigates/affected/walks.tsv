@@ -296,6 +296,7 @@ internal/jobs/investment	providerselection_census_test.go	scripts	tree	*
 internal/jobs/investment	providerselection_census_test.go	src	tree	*
 internal/jobs/investment	shadowexecutor_test.go	cmd	tree	*
 internal/jobs/investment	shadowexecutor_test.go	internal	tree	*
+internal/jobs/investment	typesafebyo_test.go	internal/jobs/investment	dir	*
 internal/jobs/investment/categorize	org_egress_guard_test.go	internal/jobs/investment/categorize	dir	*
 internal/jobs/investment/categorize/decision	adapter_test.go	cmd	tree	*
 internal/jobs/investment/categorize/decision	adapter_test.go	internal	tree	*

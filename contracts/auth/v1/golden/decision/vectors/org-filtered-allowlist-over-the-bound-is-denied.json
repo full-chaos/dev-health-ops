@@ -1,0 +1,2098 @@
+{
+  "expect": {
+    "allowed": false,
+    "cache_class": "none",
+    "expires_in_seconds": null,
+    "obligations": null,
+    "policy_revision": 13,
+    "reason": "repository_allowlist_too_large",
+    "wire_reason_code": "repository_allowlist_too_large"
+  },
+  "id": "org-filtered-allowlist-over-the-bound-is-denied",
+  "layer": "pdp",
+  "request": {
+    "action": "analytics.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r000",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r001",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r002",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r003",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r004",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r005",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r006",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r007",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r008",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r009",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r010",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r011",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r012",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r013",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r014",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r015",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r016",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r017",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r018",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r019",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r020",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r021",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r022",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r023",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r024",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r025",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r026",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r027",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r028",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r029",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r030",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r031",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r032",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r033",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r034",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r035",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r036",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r037",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r038",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r039",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r040",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r041",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r042",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r043",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r044",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r045",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r046",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r047",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r048",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r049",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r050",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r051",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r052",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r053",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r054",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r055",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r056",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r057",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r058",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r059",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r060",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r061",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r062",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r063",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r064",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r065",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r066",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r067",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r068",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r069",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r070",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r071",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r072",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r073",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r074",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r075",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r076",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r077",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r078",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r079",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r080",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r081",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r082",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r083",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r084",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r085",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r086",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r087",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r088",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r089",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r090",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r091",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r092",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r093",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r094",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r095",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r096",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r097",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r098",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r099",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r100",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r101",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r102",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r103",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r104",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r105",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r106",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r107",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r108",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r109",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r110",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r111",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r112",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r113",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r114",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r115",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r116",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r117",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r118",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r119",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r120",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r121",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r122",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r123",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r124",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r125",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r126",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r127",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r128",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r129",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r130",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r131",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r132",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r133",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r134",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r135",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r136",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r137",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r138",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r139",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r140",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r141",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r142",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r143",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r144",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r145",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r146",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r147",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r148",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r149",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r150",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r151",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r152",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r153",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r154",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r155",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r156",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r157",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r158",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r159",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r160",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r161",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r162",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r163",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r164",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r165",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r166",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r167",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r168",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r169",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r170",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r171",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r172",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r173",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r174",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r175",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r176",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r177",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r178",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r179",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r180",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r181",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r182",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r183",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r184",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r185",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r186",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r187",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r188",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r189",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r190",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r191",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r192",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r193",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r194",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r195",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r196",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r197",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r198",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r199",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r200",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r201",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r202",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r203",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r204",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r205",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r206",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r207",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r208",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r209",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r210",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r211",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r212",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r213",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r214",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r215",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r216",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r217",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r218",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r219",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r220",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r221",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r222",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r223",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r224",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r225",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r226",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r227",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r228",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r229",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r230",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r231",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r232",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r233",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r234",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r235",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r236",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r237",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r238",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r239",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r240",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r241",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r242",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r243",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r244",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r245",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r246",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r247",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r248",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r249",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r250",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r251",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r252",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r253",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r254",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r255",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "o/r256",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      }
+    ],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "257 live grants: the allowlist is never truncated; the decision is a deny with its own reason."
+}

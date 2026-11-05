@@ -60,6 +60,14 @@
         }
       }
     },
+    "queryApi": {
+      "type": "object",
+      "required": ["extraVolumes", "extraVolumeMounts"],
+      "properties": {
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" }
+      }
+    },
     "goApi": {
       "type": "object",
       "required": ["extraVolumes", "extraVolumeMounts"],

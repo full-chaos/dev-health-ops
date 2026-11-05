@@ -417,3 +417,39 @@ func provisioningDepsOver(t *testing.T, rows []byte, workload *SessionIssueWorkl
 	return ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs, Memberships: f.members,
 		Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants, Workload: workload, ProfileRows: rows}
 }
+
+// TestReadRoutesRefuseUserTokens: every user access token class is the same 401 on every read route, with no
+// credential-row lookup, no store read and no echo of the token in the body or the logs.
+func TestReadRoutesRefuseUserTokens(t *testing.T) {
+	tokens := userTokensWithIssuer(t)
+	pool, connects := usertokens.CountingPool(t)
+	f := newReadFixture(t)
+	routes, err := ReadRoutes(ReadDeps{Credentials: servicecred.PG{Pool: pool}, Reads: f.reads, GrantReads: f.grantReads,
+		ProfileRows: docWithRows(t, readPatterns()...), Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range routes {
+		mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(route.Handler))
+	}
+	for _, c := range readCases() {
+		for _, tok := range tokens {
+			request := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body(f)))
+			request.Header.Set("Authorization", "Bearer "+tok.Value)
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), reasonInvalidCredentials) {
+				t.Errorf("%s %s: %d %s, want 401 %s", c.op, tok.Kind, response.Code, response.Body, reasonInvalidCredentials)
+			}
+			usertokens.NoLeak(t, c.op+" "+tok.Kind+" body", response.Body.String(), tokens)
+		}
+	}
+	if got := connects.Count(); got != 0 {
+		t.Errorf("a user token reached the credential table: %d connection attempt(s), want 0", got)
+	}
+	if f.reads.calls+f.grantReads.calls != 0 {
+		t.Errorf("a user token reached a store: %d calls", f.reads.calls+f.grantReads.calls)
+	}
+	usertokens.NoLeak(t, "the logs", f.logs.String(), tokens)
+}

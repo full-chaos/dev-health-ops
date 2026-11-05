@@ -102,6 +102,31 @@ var queryAPIOptions = func() []Option {
 			Usage: "https issuer of EdDSA user access tokens (go-api's value): set, the REST, /query and /graphql routes validate the edge and user access tokens by their endpoint-profile row against its JWKS; unset, they do not",
 		},
 		{
+			Flag: "pdp-mode", Env: "QUERY_API_PDP_MODE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "the REST routes' PDP gate: off (unset, default: no call), shadow (ask auth-service's PDP, count and compare, never deny) or enforce (a PDP deny is 403, no verdict is 503); a bad value, or shadow/enforce with a missing input, never fails the start: one ERROR names the variable and every PDP-gated request answers 503",
+		},
+		{
+			Flag: "auth-proxy-url", Env: "AUTH_PROXY_URL", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "auth-service's base URL (go-api's setting), an http(s) origin: the PDP gate's workload exchange and authorize calls go there; read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-subject-file", Env: "AUTH_WORKLOAD_SUBJECT_FILE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "projected ServiceAccount token file, the PDP gate's workload exchange subject on Kubernetes (exactly one of this and the bootstrap file); read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-bootstrap-file", Env: "AUTH_WORKLOAD_BOOTSTRAP_FILE", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "workload bootstrap credential file, the PDP gate's workload exchange subject on Compose; read only while QUERY_API_PDP_MODE is on",
+		},
+		{
+			Flag: "auth-workload-issuer", Env: "AUTH_WORKLOAD_ISSUER", Kind: KindString,
+			Services: q, Group: GroupRoutes,
+			Usage: "https issuer (auth-service's token issuer URL) every workload token of the PDP gate must carry; read only while QUERY_API_PDP_MODE is on",
+		},
+		{
 			Flag: "drilldown-issues-enabled", Env: "GO_API_DRILLDOWN_ISSUES_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
 			Usage: "enable the drilldown issues route (default off; it also needs its dependencies configured, or it stays unmounted)",

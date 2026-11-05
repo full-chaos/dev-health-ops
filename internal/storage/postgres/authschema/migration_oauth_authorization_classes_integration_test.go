@@ -1,0 +1,98 @@
+//go:build integration
+
+package authschema
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	oauthClassesMigrationName = "credential_class_oauth_authorization"
+	oauthClassesPrincipal     = "00000000-0000-4000-8000-000000124001"
+)
+
+// TestMigrationAdmitsTheOAuthAuthorizationClasses: a row stored before the
+// migration stays, after it a registry row of class oauth_authorization_code and
+// one of oauth_consent_csrf_token insert, a class nobody defined is still refused,
+// the CHECK is validated (it is added NOT VALID, then validated), and it
+// is the prior list plus exactly those two values, compared as sets. The migration
+// is found by name: its ordinal is the next free one at the merge.
+func TestMigrationAdmitsTheOAuthAuthorizationClasses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	env := newAuthMigrationOnly(t, ctx)
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	applied := false
+	for _, m := range migrations {
+		target := m.Name == oauthClassesMigrationName
+		if target {
+			before = classCheckDef(t, ctx, env)
+			if err := domainOwnedExec(t, ctx, env,
+				`INSERT INTO auth.principals (id, kind, display_name) VALUES ('`+oauthClassesPrincipal+`', 'service_account', 'oauthclasses')`); err != nil {
+				t.Fatalf("seed principal: %v", err)
+			}
+			for _, class := range oauthClasses {
+				m10Fail(t, domainOwnedExec(t, ctx, env, oauthClassCredential(class, "a")), "a "+class+" row before the migration")
+			}
+			// A stored row of a class the prior list admits: the re-validated CHECK must keep it.
+			if err := domainOwnedExec(t, ctx, env, oauthClassCredential("service_account_token", "f")); err != nil {
+				t.Fatalf("seed a row of an admitted class: %v", err)
+			}
+		}
+		if err := applyOne(ctx, env.conn, env.options, m); err != nil {
+			t.Fatalf("apply %04d: %v", m.Version, err)
+		}
+		if target {
+			applied = true
+			break
+		}
+	}
+	if !applied {
+		t.Fatalf("the lineage lacks migration %s", oauthClassesMigrationName)
+	}
+	for i, class := range oauthClasses {
+		if err := domainOwnedExec(t, ctx, env, oauthClassCredential(class, string(rune('b'+i)))); err != nil {
+			t.Fatalf("a %s row after the migration: %v", class, err)
+		}
+	}
+	m10Fail(t, domainOwnedExec(t, ctx, env, oauthClassCredential("nobody_defined_class", "e")), "a row of a class nobody defined")
+	var kept int
+	if err := env.conn.QueryRow(ctx, `SELECT count(*) FROM auth.credential_registry
+		WHERE principal_id = '`+oauthClassesPrincipal+`' AND credential_class = 'service_account_token'`).Scan(&kept); err != nil || kept != 1 {
+		t.Fatalf("the stored row of an admitted class: %d rows (%v), want 1", kept, err)
+	}
+	var validated bool
+	if err := env.conn.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
+		WHERE conname = 'credential_registry_credential_class_closed' AND conrelid = 'auth.credential_registry'::regclass`).Scan(&validated); err != nil || !validated {
+		t.Fatalf("class CHECK validated = %v (%v), want true", validated, err)
+	}
+	want := classSet(before)
+	if len(want) == 0 || want[oauthClasses[0]] || want[oauthClasses[1]] {
+		t.Fatalf("the prior CHECK read %v; the comparison would prove nothing", want)
+	}
+	for _, class := range oauthClasses {
+		want[class] = true
+	}
+	got := classSet(classCheckDef(t, ctx, env))
+	var wantList []string
+	for class := range want {
+		wantList = append(wantList, class)
+	}
+	for _, problem := range classCheckDifferences(wantList, got) {
+		t.Error(problem)
+	}
+}
+
+var oauthClasses = []string{"oauth_authorization_code", "oauth_consent_csrf_token"}
+
+func oauthClassCredential(class, n string) string {
+	return `INSERT INTO auth.credential_registry (principal_id, credential_class, secret_hash, hash_algorithm, fingerprint)
+		VALUES ('` + oauthClassesPrincipal + `', '` + class + `', decode('` + strings.Repeat(n, 64) + `', 'hex'), 'sha256', '` + strings.Repeat(n, 16) + `')`
+}

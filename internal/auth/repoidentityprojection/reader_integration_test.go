@@ -13,7 +13,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
+	"github.com/full-chaos/dev-health-ops/internal/auth/decisionstate"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/restorefence"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
@@ -209,6 +212,42 @@ func TestTheReaderCopiesObservedRepositoriesAndFollowsARename(t *testing.T) {
 		}
 		if n := e.count(t, `SELECT count(*) FROM auth.resource_grants WHERE id = $1 AND resource_repo_id = 'gitlab:77'`, grant); n != 1 {
 			t.Fatal("the grant on the new path did not get the provider id")
+		}
+	})
+
+	t.Run("after the rename the decision snapshot resolves the new path to the id and the old path to nothing", func(t *testing.T) {
+		var principal uuid.UUID
+		if err := e.admin.QueryRow(context.Background(), `SELECT principal_id FROM auth.resource_grants WHERE resource_repo_id = 'gitlab:77'`).Scan(&principal); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := decisionstate.New(decisionstate.Config{Pool: e.runtime, Schema: e.schema,
+			Users: authapi.PGUsers{Pool: e.runtime, AuthSchema: e.schema}, RefreshTTL: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids authorization.RepositoryIdentities
+		if err := reader.Read(context.Background(), func(tx authapi.DecisionTx) error {
+			snap, err := tx.Snapshot(context.Background(), principal, org.String())
+			if err != nil {
+				return err
+			}
+			var ok bool
+			ids, ok = snap.(authorization.RepositoryIdentities)
+			if !ok {
+				return errors.New("the snapshot resolves no repository identity")
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if id, ok := ids.RepositoryID(org.String(), "group/new-name"); !ok || id != "gitlab:77" {
+			t.Fatalf("new path resolves to %q (%v), want gitlab:77", id, ok)
+		}
+		if id, ok := ids.RepositoryID(org.String(), "group/old-name"); ok || id != "" {
+			t.Fatalf("old path still resolves to %q: an id-bearing grant would match the old path", id)
+		}
+		if path, ok := ids.PathForID(org.String(), "gitlab:77"); !ok || path != "group/new-name" {
+			t.Fatalf("PathForID(gitlab:77) = %q (%v), want group/new-name", path, ok)
 		}
 	})
 

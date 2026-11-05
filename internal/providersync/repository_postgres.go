@@ -29,7 +29,7 @@ type PostgresRepository struct {
 	renewPool *pgxpool.Pool
 	// RepositoryIdentities, when set, is the auth outbox a `repos` effect commit
 	// appends its repository identity events to (WORKER_REPO_IDENTITY_OUTBOX).
-	RepositoryIdentities *RepositoryIdentityOutbox
+	RepositoryIdentities RepositoryIdentityAppender
 }
 
 // NewPostgresRepository constructs the production unit repository. metrics is

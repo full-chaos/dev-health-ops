@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -103,7 +104,7 @@ func newIdentityOutboxFixture(t *testing.T, ctx context.Context) *identityOutbox
 	if err != nil {
 		t.Fatal(err)
 	}
-	repo.RepositoryIdentities = &RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth")}
+	repo.RepositoryIdentities = audit.RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth")}
 	f := &identityOutboxFixture{admin: admin, goAPI: login(names["rio_goapi"]), repo: repo, now: time.Date(2026, 11, 5, 7, 30, 0, 0, time.UTC)}
 	f.seedRun(t, ctx)
 	return f
@@ -362,7 +363,7 @@ func TestRepositoryIdentityEventsCommitWithTheReposEffect(t *testing.T) {
 		claim := f.claim(t, ctx)
 		batch := reposBatch(t, "repos", identityRow("github", "9003", "acme/fenced"))
 		broken := *f.repo
-		broken.RepositoryIdentities = &RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth_absent")}
+		broken.RepositoryIdentities = audit.RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth_absent")}
 		if _, err := committer(&broken, &scriptedSink{}, EffectExact).Commit(ctx, claim, []EffectBatch{batch}, f.now); err == nil {
 			t.Fatal("a commit without the append function succeeded")
 		}
@@ -416,15 +417,16 @@ func TestRepositoryIdentityOutboxStartupCheck(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	f := newIdentityOutboxFixture(t, ctx)
-	if err := f.repo.RepositoryIdentities.Check(ctx, f.repo.Pool); err != nil {
+	outbox := audit.RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth")}
+	if err := outbox.Check(ctx, f.repo.Pool); err != nil {
 		t.Fatalf("caller login: %v", err)
 	}
-	if err := f.repo.RepositoryIdentities.Check(ctx, f.goAPI); !errors.Is(err, ErrRepositoryIdentityOutboxNotExecutable) ||
+	if err := outbox.Check(ctx, f.goAPI); !errors.Is(err, audit.ErrRepositoryIdentityOutboxNotExecutable) ||
 		!strings.Contains(err.Error(), "no EXECUTE") {
 		t.Fatalf("login without EXECUTE: err=%v", err)
 	}
-	absent := &RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth_absent")}
-	if err := absent.Check(ctx, f.repo.Pool); !errors.Is(err, ErrRepositoryIdentityOutboxNotExecutable) ||
+	absent := audit.RepositoryIdentityOutbox{Schema: identityTestSchema(t, "auth_absent")}
+	if err := absent.Check(ctx, f.repo.Pool); !errors.Is(err, audit.ErrRepositoryIdentityOutboxNotExecutable) ||
 		!strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("schema without the function: err=%v", err)
 	}

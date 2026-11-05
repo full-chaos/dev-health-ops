@@ -3,7 +3,6 @@ package providersync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -12,11 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/repoidentityevent"
 	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
-	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
 // EnvRepositoryIdentityOutbox switches the repository identity producer: on, the
@@ -42,39 +39,12 @@ func ParseRepositoryIdentityOutbox(lookup func(string) (string, bool)) (bool, er
 	return on, nil
 }
 
-// RepositoryIdentityOutbox is the auth schema whose append function receives
-// the events. A PostgresRepository without one appends nothing.
-type RepositoryIdentityOutbox struct {
-	Schema authschema.ValidatedIdentifier
-}
-
-// ErrRepositoryIdentityOutboxNotExecutable: the login cannot execute the
-// append function (absent, or no EXECUTE), so every `repos` commit would fail.
-var ErrRepositoryIdentityOutboxNotExecutable = errors.New("repository identity append function is not executable by this login")
-
-// Check reads the catalog only: the append function exists in the schema and
-// the pool's login may execute it.
-func (outbox *RepositoryIdentityOutbox) Check(ctx context.Context, pool *pgxpool.Pool) error {
-	procedure := authschema.Quote(outbox.Schema) + "." + authschema.RepoIdentityFunction + authschema.RepoIdentityFunctionSignature
-	var exists, executable bool
-	if err := pool.QueryRow(ctx, `SELECT to_regprocedure($1) IS NOT NULL,
-		COALESCE(has_function_privilege(to_regprocedure($1), 'EXECUTE'), false)`, procedure).Scan(&exists, &executable); err != nil {
-		return fmt.Errorf("%w: %w", ErrRepositoryIdentityOutboxNotExecutable, err)
-	}
-	switch {
-	case !exists:
-		return fmt.Errorf("%w: %s does not exist", ErrRepositoryIdentityOutboxNotExecutable, procedure)
-	case !executable:
-		return fmt.Errorf("%w: no EXECUTE on %s", ErrRepositoryIdentityOutboxNotExecutable, procedure)
-	}
-	return nil
-}
-
-func (outbox *RepositoryIdentityOutbox) append(ctx context.Context, tx pgx.Tx, events []audit.RepositoryIdentityEvent) error {
-	if len(events) == 0 {
-		return nil
-	}
-	return audit.AppendRepositoryIdentity(ctx, tx, outbox.Schema, events)
+// RepositoryIdentityAppender appends repository identity events inside the
+// caller's transaction (audit.RepositoryIdentityOutbox in production). The
+// provider sync holds it as an interface so its own dependency closure stays
+// free of the auth writer's logging and schema packages.
+type RepositoryIdentityAppender interface {
+	AppendRepositoryIdentity(context.Context, pgx.Tx, []repoidentityevent.Event) error
 }
 
 // repositoryIdentityPath is the canonical repository key of a provider path:
@@ -108,11 +78,11 @@ type repositoryIdentityRow struct {
 // `repos` destination carries identities. A row without a provider id (local
 // git, External Push) gives no event; a row whose organization, provider, id or
 // path is malformed is skipped and counted, as the backfill skips it.
-func repositoryIdentityEvents(batch EffectBatch) ([]audit.RepositoryIdentityEvent, int, error) {
+func repositoryIdentityEvents(batch EffectBatch) ([]repoidentityevent.Event, int, error) {
 	if batch.Destination != repositoryIdentityDestination {
 		return nil, 0, nil
 	}
-	events := make([]audit.RepositoryIdentityEvent, 0, len(batch.Rows))
+	events := make([]repoidentityevent.Event, 0, len(batch.Rows))
 	skipped := 0
 	for _, raw := range batch.Rows {
 		var row repositoryIdentityRow
@@ -124,7 +94,7 @@ func repositoryIdentityEvents(batch EffectBatch) ([]audit.RepositoryIdentityEven
 		}
 		// A malformed organization parses to uuid.Nil, which Validate refuses.
 		org, _ := uuid.Parse(row.OrgID)
-		event := audit.RepositoryIdentityEvent{
+		event := repoidentityevent.Event{
 			OrganizationID: org, Provider: row.Provider, ProviderRepoID: row.ProviderRepoID,
 			Path: repositoryIdentityPath(row.Repo), ObservedAt: row.LastSynced.UTC(),
 		}
@@ -162,5 +132,8 @@ func (repository *PostgresRepository) appendRepositoryIdentities(
 		slog.Default().WarnContext(ctx, "repository_identity_rows_skipped",
 			"provider", claim.Provider, "dataset", claim.Dataset, "skipped", skipped, "events", len(events))
 	}
-	return repository.RepositoryIdentities.append(ctx, tx, events)
+	if len(events) == 0 {
+		return nil
+	}
+	return repository.RepositoryIdentities.AppendRepositoryIdentity(ctx, tx, events)
 }

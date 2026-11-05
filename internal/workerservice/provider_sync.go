@@ -579,8 +579,8 @@ func constructProviderSyncWorkerWithDependencies(
 	if err != nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	repository.RepositoryIdentities = identities
 	if identities != nil {
+		repository.RepositoryIdentities = identities
 		// Loud, not fatal: with the flag on before the auth migration, the
 		// repo-metadata units fail closed; the other routes keep running.
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

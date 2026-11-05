@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/auth/repoidentityevent"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"github.com/google/uuid"
@@ -86,7 +86,7 @@ func TestRepositoryIdentityEventsOfTheRealRepoMetadataRoutes(t *testing.T) {
 		if err != nil || skipped != 0 {
 			t.Fatalf("%s: skipped=%d err=%v", c.provider, skipped, err)
 		}
-		want := audit.RepositoryIdentityEvent{OrganizationID: org, Provider: c.provider, ProviderRepoID: c.id, Path: "acme/api", ObservedAt: c.observed}
+		want := repoidentityevent.Event{OrganizationID: org, Provider: c.provider, ProviderRepoID: c.id, Path: "acme/api", ObservedAt: c.observed}
 		if len(events) != 1 || events[0] != want {
 			t.Fatalf("%s: events=%+v want %+v", c.provider, events, want)
 		}

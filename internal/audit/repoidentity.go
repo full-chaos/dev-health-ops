@@ -2,14 +2,13 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"sort"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/repoidentityevent"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -17,46 +16,8 @@ import (
 // or failed part way. The caller owns the transaction and must roll it back on any error.
 var ErrRepositoryIdentity = fmt.Errorf("%w: repository identity events", ErrMutationFailed)
 
-// The shapes of migration 0055 (repository_identities) and of the 0056 append function.
-var (
-	repoIdentityProviderShape = regexp.MustCompile(`^[a-z]{1,16}$`)
-	repoIdentityIDShape       = regexp.MustCompile(`^[0-9]{1,20}$`)
-	repoIdentityPathShape     = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*$`)
-)
-
-// RepositoryIdentityEvent is one repository a provider sync observed: its organization, the provider and the
-// provider's stable id, the live path (a canonical repository key) and the instant the sync fetched it.
-type RepositoryIdentityEvent struct {
-	OrganizationID uuid.UUID
-	Provider       string
-	ProviderRepoID string
-	Path           string
-	ObservedAt     time.Time
-}
-
-// AggregateID is the outbox aggregate id of the repository: "<organization>/<provider>/<provider id>".
-func (e RepositoryIdentityEvent) AggregateID() string {
-	return e.OrganizationID.String() + "/" + e.Provider + "/" + e.ProviderRepoID
-}
-
-// Validate reports whether AppendRepositoryIdentity accepts the event, so a producer can skip a row it would refuse.
-func (e RepositoryIdentityEvent) Validate() error { return e.validate() }
-
-func (e RepositoryIdentityEvent) validate() error {
-	switch {
-	case e.OrganizationID == uuid.Nil:
-		return fmt.Errorf("%w: organization id is required", ErrRepositoryIdentity)
-	case !repoIdentityProviderShape.MatchString(e.Provider):
-		return fmt.Errorf("%w: provider is not a provider name", ErrRepositoryIdentity)
-	case !repoIdentityIDShape.MatchString(e.ProviderRepoID):
-		return fmt.Errorf("%w: provider repository id is not a number", ErrRepositoryIdentity)
-	case len(e.Path) > 255 || !repoIdentityPathShape.MatchString(e.Path):
-		return fmt.Errorf("%w: path is not a canonical repository key", ErrRepositoryIdentity)
-	case e.ObservedAt.IsZero():
-		return fmt.Errorf("%w: observed_at is required", ErrRepositoryIdentity)
-	}
-	return nil
-}
+// RepositoryIdentityEvent is one repository a provider sync observed (repoidentityevent.Event).
+type RepositoryIdentityEvent = repoidentityevent.Event
 
 // AppendRepositoryIdentity appends one repository_identity.observed event per repository to the auth outbox inside the
 // caller's transaction tx, so the caller's state change and its events commit or roll back together.
@@ -73,8 +34,8 @@ func AppendRepositoryIdentity(ctx context.Context, tx pgx.Tx, schema authschema.
 	}
 	ordered := append([]RepositoryIdentityEvent(nil), events...)
 	for _, e := range ordered {
-		if err := e.validate(); err != nil {
-			return err
+		if err := e.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", ErrRepositoryIdentity, err)
 		}
 	}
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].AggregateID() < ordered[j].AggregateID() })
@@ -84,6 +45,38 @@ func AppendRepositoryIdentity(ctx context.Context, tx pgx.Tx, schema authschema.
 		if err := tx.QueryRow(ctx, statement, e.OrganizationID, e.Provider, e.ProviderRepoID, e.Path, e.ObservedAt.UTC()).Scan(&revision); err != nil {
 			return fmt.Errorf("%w: appending an event: %w", ErrRepositoryIdentity, err)
 		}
+	}
+	return nil
+}
+
+// RepositoryIdentityOutbox is the auth schema whose append function receives a provider sync's events.
+type RepositoryIdentityOutbox struct {
+	Schema authschema.ValidatedIdentifier
+}
+
+// AppendRepositoryIdentity is AppendRepositoryIdentity on the outbox's schema.
+func (o RepositoryIdentityOutbox) AppendRepositoryIdentity(ctx context.Context, tx pgx.Tx, events []RepositoryIdentityEvent) error {
+	return AppendRepositoryIdentity(ctx, tx, o.Schema, events)
+}
+
+// ErrRepositoryIdentityOutboxNotExecutable: the login cannot execute the append function (absent, or no EXECUTE).
+var ErrRepositoryIdentityOutboxNotExecutable = errors.New("repository identity append function is not executable by this login")
+
+// Check reads the catalog only: the append function exists in the schema and the login of db may execute it.
+func (o RepositoryIdentityOutbox) Check(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) error {
+	procedure := authschema.Quote(o.Schema) + "." + authschema.RepoIdentityFunction + authschema.RepoIdentityFunctionSignature
+	var exists, executable bool
+	if err := db.QueryRow(ctx, `SELECT to_regprocedure($1) IS NOT NULL,
+		COALESCE(has_function_privilege(to_regprocedure($1), 'EXECUTE'), false)`, procedure).Scan(&exists, &executable); err != nil {
+		return fmt.Errorf("%w: %w", ErrRepositoryIdentityOutboxNotExecutable, err)
+	}
+	switch {
+	case !exists:
+		return fmt.Errorf("%w: %s does not exist", ErrRepositoryIdentityOutboxNotExecutable, procedure)
+	case !executable:
+		return fmt.Errorf("%w: no EXECUTE on %s", ErrRepositoryIdentityOutboxNotExecutable, procedure)
 	}
 	return nil
 }

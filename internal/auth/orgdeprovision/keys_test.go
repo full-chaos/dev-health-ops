@@ -22,6 +22,17 @@ func TestKeyClassIsTheServiceAccountClass(t *testing.T) {
 	}
 }
 
+// A key a deprovision ends names the deprovision as the reason, not the
+// operator's owner_request (CHAOS-12941).
+func TestKeyRevokedReasonIsOrgDeprovisioned(t *testing.T) {
+	if keyRevokedReason != "org_deprovisioned" {
+		t.Fatalf("keyRevokedReason = %q, want org_deprovisioned", keyRevokedReason)
+	}
+	if keyRevokedReason == serviceaccount.KeyReasonOwnerRequest {
+		t.Fatal("the deprovision reason equals the operator reason")
+	}
+}
+
 // pm answers-12680-1 Q1 (b): one key_revoked audit row and one key_changed
 // event per live key, in serviceaccount.RevokeKey's shape, for the key's own
 // account and the deprovisioned organization.

@@ -151,8 +151,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		if g.pdp.shadow != nil || g.pdp.enforcer != nil {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
+		// With the admin cell on, the handler's platform questions go to the decision point too (HoldsPlatform).
+		platform := g.pdp.enforcer.platformDecisionsFor(bearer, user)
+		if platform != nil {
+			r = r.WithContext(context.WithValue(r.Context(), platformDecisionsKey, platform))
+		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
+		switch verdict := g.enforceVerdict(r, user, bearer, gt, platform); verdict {
 		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
 			writeEnforceRefusal(w, level, verdict)
 			return

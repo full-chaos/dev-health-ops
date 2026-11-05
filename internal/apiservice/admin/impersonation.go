@@ -318,7 +318,12 @@ func (h *handlers) impersonationStatus(w http.ResponseWriter, r *http.Request) {
 		response.Set("expires_at", nil)
 		return response
 	}
-	if !user.Holds(policy.ActionAdminImpersonate) {
+	held, err := policy.HoldsPlatform(r.Context(), user, policy.ActionAdminImpersonate)
+	if err != nil {
+		policy.WritePlatformDecisionUnavailable(w)
+		return
+	}
+	if !held {
 		policy.WriteModel(w, http.StatusOK, notImpersonating(), nil)
 		return
 	}

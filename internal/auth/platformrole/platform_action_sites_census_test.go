@@ -30,7 +30,12 @@ func (s platformActionSite) key() string { return s.file + "\t" + s.function + "
 var actionTakingCalls = map[string]bool{
 	"Holds": true, "WrapPlatform": true, "WrapAdminOr": true, "BodyFirstPlatform": true, "BodyFirstAdminOr": true,
 	"bodyFirstPlatform": true, "bodyFirstAdminOr": true,
+	"HoldsPlatform": true, "PlatformBypassesOrg": true,
 }
+
+// actionLastCalls name their action in the last argument: policy.HoldsPlatform(ctx, user, action) and
+// policy.PlatformBypassesOrg(ctx, user, action).
+var actionLastCalls = map[string]bool{"HoldsPlatform": true, "PlatformBypassesOrg": true}
 
 // platformActionReads lists, per function, the actions it names in a Holds
 // call: x.Holds(<ActionAdmin*|actionAdmin*|rule.ActionAdmin*>).
@@ -53,7 +58,11 @@ func platformActionReads(file *ast.File) map[string]map[string]bool {
 				return true
 			}
 			name := ""
-			switch arg := call.Args[0].(type) {
+			actionArg := call.Args[0]
+			if actionLastCalls[sel.Sel.Name] {
+				actionArg = call.Args[len(call.Args)-1]
+			}
+			switch arg := actionArg.(type) {
 			case *ast.Ident:
 				name = arg.Name
 			case *ast.SelectorExpr:

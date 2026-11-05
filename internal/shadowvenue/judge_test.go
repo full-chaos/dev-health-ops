@@ -337,15 +337,74 @@ func TestJudgeRefusesOverlappingWindows(t *testing.T) {
 
 func TestParseLogRefusesAMalformedEvidenceLine(t *testing.T) {
 	for name, line := range map[string]string{
-		"no route":      logLine(t0, MsgResult, "caller", "member", "result", "match"),
-		"bad result":    logLine(t0, MsgResult, "route", "GET /x", "caller", "member", "result", "maybe"),
-		"bad caller":    logLine(t0, MsgResult, "route", "GET /x", "caller", "root", "result", "match"),
-		"bad time":      `{"time":"yesterday","msg":"` + MsgResult + `","route":"GET /x","caller":"member","result":"match"}`,
-		"warn no tuple": logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X"),
-		"number caller": `{"time":"` + t0.Format(time.RFC3339Nano) + `","msg":"` + MsgResult + `","route":"GET /x","caller":5,"result":"match"}`,
+		"no route":               logLine(t0, MsgResult, "caller", "member", "result", "match"),
+		"bad result":             logLine(t0, MsgResult, "route", "GET /x", "caller", "member", "result", "maybe"),
+		"bad caller":             logLine(t0, MsgResult, "route", "GET /x", "caller", "root", "result", "match"),
+		"bad time":               `{"time":"yesterday","msg":"` + MsgResult + `","route":"GET /x","caller":"member","result":"match"}`,
+		"warn no tuple":          logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X"),
+		"warn no class":          logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X", "legacy", "deny", "shadow", "allow", "reason_code", "r"),
+		"warn no legacy":         logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X", "class", "c", "shadow", "allow", "reason_code", "r"),
+		"warn no shadow":         logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X", "class", "c", "legacy", "deny", "reason_code", "r"),
+		"warn no reason":         logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "decision_id", "dec_X", "class", "c", "legacy", "deny", "shadow", "allow"),
+		"warn no decision":       logLine(t0, MsgMismatch, "route", "GET /x", "caller", "member", "class", "c", "legacy", "deny", "shadow", "allow", "reason_code", "r"),
+		"served-other no reason": logLine(t0, MsgServedOther, "route", "GET /x", "caller", "admin", "class", "intentional", "legacy", "allow", "shadow", "deny"),
+		"number caller":          `{"time":"` + t0.Format(time.RFC3339Nano) + `","msg":"` + MsgResult + `","route":"GET /x","caller":5,"result":"match"}`,
 	} {
 		if _, err := ParseLog(strings.NewReader(line + "\n")); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// Lines before the first slot and after the last one are other traffic, not stray evidence of the run.
+func TestJudgeIgnoresLinesOutsideTheRunWindow(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	lines = append(lines, matches(cell)...)
+	before, after := cell[0], cell[2]
+	before.Caller, after.Caller = "admin", "admin"
+	lines = append(lines, result(slotAt(1, "58", "admin", 1), -time.Minute, "match", "dec_"+strings.Repeat("B", 26)),
+		result(after, 10*time.Second, "match", "dec_"+strings.Repeat("F", 26)))
+	if report := judge(t, append(slots, cell...), lines); !report.Pass {
+		t.Fatalf("lines outside the run window failed the run: %v", report.Reasons)
+	}
+}
+
+// A WARN line joins its result line by decision id, and only one of the same route and caller.
+func TestJudgeJoinsTheWarnLineOfTheSameDecisionRouteAndCaller(t *testing.T) {
+	slots, lines := controlsOK()
+	cell := cellOf(7, "58", "member")
+	for i, slot := range cell {
+		decision := "dec_JOIN" + strings.Repeat(string(rune('A'+i)), 22)
+		other := slot
+		other.Route = "/api/v1/admin/teams/{team_id}"
+		lines = append(lines, result(slot, 300*time.Millisecond, "mismatch", decision), mismatchWarn(other, 300*time.Millisecond, "intentional", decision))
+	}
+	report := judge(t, append(slots, cell...), lines)
+	if report.Slots[6].Verdict != VerdictMismatchNoTuple {
+		t.Fatalf("a WARN line of another route joined: %s", report.Slots[6].Verdict)
+	}
+}
+
+// A mismatch with no decision id (the request names another org) takes the served-org WARN line in its own window.
+func TestJudgeServedOtherMismatchTakesTheWarnInItsWindow(t *testing.T) {
+	served := func(slot Slot, offset time.Duration) string {
+		return logLine(slot.Start.Add(offset), MsgServedOther, "route", slot.Key(), "caller", slot.Caller, "class", "intentional",
+			"legacy", "allow", "shadow", "deny", "reason", "served_org_not_judged_org", "namespace", "members")
+	}
+	for name, offset := range map[string]time.Duration{"in window": 10 * time.Millisecond, "before": -60 * time.Millisecond, "after": 2500 * time.Millisecond} {
+		slots, lines := controlsOK()
+		cell := cellOf(7, "2", "admin")
+		for _, slot := range cell {
+			lines = append(lines, result(slot, 10*time.Millisecond, "mismatch", ""), served(slot, offset))
+		}
+		report := judge(t, append(slots, cell...), lines)
+		want := VerdictMismatchNoTuple
+		if name == "in window" {
+			want = VerdictMismatchIntentional
+		}
+		if got := report.Slots[6].Verdict; got != want {
+			t.Errorf("%s: %s, want %s", name, got, want)
 		}
 	}
 }

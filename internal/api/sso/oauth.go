@@ -317,6 +317,9 @@ func fetchOAuthUserInfo(ctx context.Context, client *oauthprovider.Client, provi
 	if err != nil {
 		var userInfoErr *oauthprovider.UserInfoError
 		if errors.As(err, &userInfoErr) {
+			if userInfoErr.Reason == oauthprovider.ReasonNoVerifiedEmail {
+				return oauthClaims{}, errOAuthNoVerifiedEmail
+			}
 			return oauthClaims{}, errors.New(userInfoErr.Reason)
 		}
 		return oauthClaims{}, err // ErrUnexpected: the bare 500, propagated as-is.

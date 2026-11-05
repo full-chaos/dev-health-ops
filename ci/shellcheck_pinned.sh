@@ -164,6 +164,8 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set.sh"
   # go-api's workload session issue credential, sourced by the corpus and the rotation rehearsal.
   "${ROOT}/ci/lib/auth_workload_session_issue.sh"
+  # CHAOS-13039: the k3s form of it, sourced by the SSO flipback rehearsal.
+  "${ROOT}/ci/lib/auth_workload_session_issue_k3s.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
   "${ROOT}/ci/run_tests.sh"

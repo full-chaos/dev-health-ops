@@ -86,7 +86,17 @@
           "required": ["secretName", "secretKey"],
           "properties": {
             "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
-            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" },
+            "workloadBootstrap": {
+              "description": "CHAOS-13039: go-api's workload token on the session issue route, from a bootstrap credential file that a Secret mounts. Off renders nothing.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
+                "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+              }
+            }
           }
         },
         "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },

@@ -686,9 +686,17 @@ func reasoningEffortRefused(failure *providerFailure, req chatCompletionRequest)
 		failure.detail.refusedParam() == "reasoning_effort" && req.ReasoningEffort != ""
 }
 
-// runRound posts one probe round. A 400/422 that names a bounded parameter the
-// request carries drops it, and the round is retried once; the drop carries into
-// later rounds. Any other failure, or a second 400, is returned as classified.
+const (
+	readinessEffortLadderSteps = 2
+	// readinessRoundMaxRequests bounds one round: the first request, the ladder
+	// steps, and one drop per bounded parameter other than reasoning_effort.
+	readinessRoundMaxRequests = 1 + readinessEffortLadderSteps + 3
+)
+
+// runRound posts one probe round as one bounded loop (at most
+// readinessRoundMaxRequests requests). A reasoning_effort refusal moves down the
+// ladder; a refusal of another bounded parameter drops it once and retries; any
+// other failure is returned as classified. What was learned carries into later rounds.
 func (p *openAICompatibleReadinessProber) runRound(
 	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest, round int, state *probeState,
 ) (*chatCompletionResponse, *providerFailure) {
@@ -698,49 +706,42 @@ func (p *openAICompatibleReadinessProber) runRound(
 	if state.effort != "" && req.ReasoningEffort != "" {
 		req.ReasoningEffort = state.effort
 	}
-	resp, failure := p.doCompletion(ctx, baseURL, apiKey, req)
-	if failure == nil {
-		return resp, nil
-	}
-	p.logFailedRound(ctx, round, 1, failure)
-	if reasoningEffortRefused(failure, req) {
-		// CHAOS-12116: fixed ladder current -> "none" -> omit, at most 3 probes per round.
-		steps := []string{"none", ""}
-		if req.ReasoningEffort == "none" {
-			steps = steps[1:]
-		}
-		attempt := 1
-		for _, step := range steps {
-			attempt++
-			req.ReasoningEffort = step
-			resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
-			if failure == nil {
-				if step == "" {
+	laddered := false
+	ladderLeft := readinessEffortLadderSteps
+	droppedHere := map[string]bool{}
+	for attempt := 1; ; attempt++ {
+		resp, failure := p.doCompletion(ctx, baseURL, apiKey, req)
+		if failure == nil {
+			if laddered {
+				if req.ReasoningEffort == "" {
 					state.effort = ""
 					state.dropped = append(state.dropped, "reasoning_effort")
 				} else {
-					state.effort = step
+					state.effort = req.ReasoningEffort
 				}
-				return resp, nil
 			}
-			p.logFailedRound(ctx, round, attempt, failure)
-			if step == "" || !reasoningEffortRefused(failure, req) {
-				return nil, failure
-			}
+			return resp, nil
 		}
+		p.logFailedRound(ctx, round, attempt, failure)
+		if ladderLeft > 0 && reasoningEffortRefused(failure, req) {
+			// CHAOS-12116: fixed ladder current -> "none" -> omit.
+			ladderLeft--
+			laddered = true
+			if req.ReasoningEffort == "none" {
+				req.ReasoningEffort = ""
+			} else {
+				req.ReasoningEffort = "none"
+			}
+			continue
+		}
+		name := refusedBoundedParam(failure, req)
+		if name == "" || name == "reasoning_effort" || droppedHere[name] {
+			return nil, failure
+		}
+		droppedHere[name] = true
+		dropRequestParam(&req, name)
+		state.dropped = append(state.dropped, name)
 	}
-	name := refusedBoundedParam(failure, req)
-	if name == "" {
-		return nil, failure
-	}
-	dropRequestParam(&req, name)
-	state.dropped = append(state.dropped, name)
-	resp, failure = p.doCompletion(ctx, baseURL, apiKey, req)
-	if failure != nil {
-		p.logFailedRound(ctx, round, 2, failure)
-		return nil, failure
-	}
-	return resp, nil
 }
 
 // probe runs the fixed two-round readiness exchange and returns

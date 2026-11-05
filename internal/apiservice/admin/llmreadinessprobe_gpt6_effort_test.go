@@ -261,3 +261,165 @@ func TestReadinessProbeLadderLogsEachFailedStep(t *testing.T) {
 		}
 	}
 }
+
+// seqFake refuses a request with the param refuse(body) names (400, error naming it); "" accepts.
+// seq records "<effort>[-param...]" per request: the effort, then each of the two tested params the request lacks.
+func seqFake(t *testing.T, refuse func(body map[string]any) string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var seq []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(raw, &body)
+		round2 := isRound2Request(raw)
+		effort, has := body["reasoning_effort"].(string)
+		if !has {
+			effort = "<absent>"
+		}
+		entry := effort
+		if _, ok := body["parallel_tool_calls"]; !ok {
+			entry += "-ptc"
+		}
+		if _, ok := body["max_completion_tokens"]; !ok {
+			entry += "-mct"
+		}
+		if round2 {
+			entry = "r2:" + entry
+		}
+		mu.Lock()
+		seq = append(seq, entry)
+		mu.Unlock()
+		if param := refuse(body); param != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(paramRefusal(param, "unsupported_value")))
+			return
+		}
+		if !round2 {
+			writeToolCallJSON(w)
+			return
+		}
+		writeFinalAnswerJSON(w, `{"kind":"final_answer","value":{"nonce":"ready-v1"}}`)
+	}))
+	t.Cleanup(server.Close)
+	return server, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), seq...) }
+}
+
+// Round 2 never carries parallel_tool_calls.
+func r2suffix(s string) string {
+	if s == "-ptc" {
+		return s
+	}
+	return "-ptc" + s
+}
+
+func has(body map[string]any, k string) bool { _, ok := body[k]; return ok }
+
+// CHAOS-12116: a ladder step refused for another bounded parameter takes the one-drop retry.
+func TestReadinessProbeLadderStepTakesOneDropRetry(t *testing.T) {
+	for _, other := range []string{"parallel_tool_calls", "max_completion_tokens"} {
+		suffix := map[string]string{"parallel_tool_calls": "-ptc", "max_completion_tokens": "-mct"}[other]
+		t.Run("none+"+other, func(t *testing.T) {
+			// none + other: minimal is refused for effort; none carries the other param and is refused for it.
+			server, seq := seqFake(t, func(b map[string]any) string {
+				if b["reasoning_effort"] == "minimal" {
+					return "reasoning_effort"
+				}
+				if has(b, other) {
+					return other
+				}
+				return ""
+			})
+			res, _ := probeWithLog(server)
+			wantReady(t, res.Outcome, res.SafeErrorCode)
+			want := []string{"minimal", "none", "none" + suffix, "r2:none" + r2suffix(suffix)}
+			if got := seq(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("none+%s: seq = %v, want %v", other, got, want)
+			}
+			if !reflect.DeepEqual(res.DroppedParams, []string{other}) {
+				t.Fatalf("none+%s: DroppedParams = %v", other, res.DroppedParams)
+			}
+
+		})
+		t.Run("omitted+"+other, func(t *testing.T) {
+			// omitted + other: effort is refused whenever present; the omit request is refused for the other param.
+			server, seq := seqFake(t, func(b map[string]any) string {
+				if has(b, "reasoning_effort") {
+					return "reasoning_effort"
+				}
+				if has(b, other) {
+					return other
+				}
+				return ""
+			})
+			res, _ := probeWithLog(server)
+			wantReady(t, res.Outcome, res.SafeErrorCode)
+			want := []string{"minimal", "none", "<absent>", "<absent>" + suffix, "r2:<absent>" + r2suffix(suffix)}
+			if got := seq(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("omitted+%s: seq = %v, want %v", other, got, want)
+			}
+			if !reflect.DeepEqual(res.DroppedParams, []string{other, "reasoning_effort"}) {
+				t.Fatalf("omitted+%s: DroppedParams = %v", other, res.DroppedParams)
+			}
+		})
+	}
+}
+
+// A drop retry refused again for reasoning_effort continues the ladder to omit.
+func TestReadinessProbeDropRetryRefusedForEffortContinuesLadder(t *testing.T) {
+	server, seq := seqFake(t, func(b map[string]any) string {
+		if b["reasoning_effort"] == "minimal" && !has(b, "parallel_tool_calls") {
+			return "reasoning_effort"
+		}
+		if has(b, "parallel_tool_calls") {
+			return "parallel_tool_calls"
+		}
+		if has(b, "reasoning_effort") {
+			return "reasoning_effort"
+		}
+		return ""
+	})
+	res, _ := probeWithLog(server)
+	wantReady(t, res.Outcome, res.SafeErrorCode)
+	want := []string{"minimal", "minimal-ptc", "none-ptc", "<absent>-ptc", "r2:<absent>-ptc"}
+	if got := seq(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("seq = %v, want %v", got, want)
+	}
+}
+
+// Every request refused: the round makes exactly readinessRoundMaxRequests requests, then fails classified.
+func TestReadinessProbeEveryRequestRefusedStopsAtBound(t *testing.T) {
+	if readinessRoundMaxRequests != 6 {
+		t.Fatalf("readinessRoundMaxRequests = %d, want 6", readinessRoundMaxRequests)
+	}
+	server, seq := seqFake(t, func(b map[string]any) string {
+		for _, k := range []string{"reasoning_effort", "parallel_tool_calls", "max_completion_tokens"} {
+			if has(b, k) {
+				return k
+			}
+		}
+		return "temperature"
+	})
+	res, lines := probeWithLog(server)
+	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
+	if got := len(seq()); got > readinessRoundMaxRequests {
+		t.Fatalf("requests = %d, want <= %d: %v", got, readinessRoundMaxRequests, seq())
+	}
+	if len(lines) != len(seq()) {
+		t.Fatalf("log lines = %d, requests = %d", len(lines), len(seq()))
+	}
+	// Longest path for a real model: gpt-6 sends no temperature, so 5 of the 6 capped requests.
+	server, seq = seqFake(t, func(b map[string]any) string {
+		for _, k := range []string{"reasoning_effort", "parallel_tool_calls", "max_completion_tokens", "temperature"} {
+			if has(b, k) {
+				return k
+			}
+		}
+		return "model"
+	})
+	res, _ = probeWithLog(server)
+	wantInvalidRequest(t, res.Outcome, res.SafeErrorCode)
+	if got := len(seq()); got != readinessRoundMaxRequests-1 {
+		t.Fatalf("requests = %d, want %d: %v", got, readinessRoundMaxRequests-1, seq())
+	}
+}

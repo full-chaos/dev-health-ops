@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "28d312b039feca18d6582a86455ad1ae26deb82965dec715ed367bcf1af1c588", Ruling: protectedRoutesPinRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -468,7 +468,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // the pin shows any change in Go's answers.
 const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
 
-// productTelemetryRuling retired the Python reference of nine product-telemetry
+// productTelemetryRuling retired the Python reference of ten product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops
 // only the event that breaks a rule, and bounds the org hash that names the
 // stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in

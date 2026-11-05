@@ -154,7 +154,7 @@ func freeTextCiteProblems(repo, name, commit string, structured map[lineAnchor]b
 	}
 	ordered := make([]lineAnchor, 0, len(cites))
 	for a := range cites {
-		if _, declared := rewrites[a]; !declared && !structured[a] {
+		if _, declared := rewrites[a]; declared || !structured[a] {
 			ordered = append(ordered, a)
 		}
 	}

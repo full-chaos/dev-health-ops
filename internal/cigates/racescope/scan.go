@@ -518,7 +518,6 @@ func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool, presence map[
 		}
 		if (r.Class != "none" && r.Class != renderGuardClass) || r.Witness != "-" {
 			problems = append(problems, r.Package+": only class none or "+renderGuardClass+" with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
-			continue
 		}
 		if r.Class == renderGuardClass {
 			if _, ok := renderGuardPackages[r.Package]; !ok {

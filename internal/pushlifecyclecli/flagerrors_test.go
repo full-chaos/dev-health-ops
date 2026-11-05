@@ -59,3 +59,16 @@ func TestFlagErrorsNeverEchoTypedInput(t *testing.T) {
 		})
 	}
 }
+
+func TestHelpFlagStillPrintsUsage(t *testing.T) {
+	for _, c := range Command().Children {
+		var so, se bytes.Buffer
+		env := cli.Env{Args: []string{"-h"}, Stdout: &so, Stderr: &se, Lookup: func(string) (string, bool) { return "", false }}
+		if code := c.Run(context.Background(), env); code != cli.ExitOK {
+			t.Fatalf("%s: exit %d", c.Name, code)
+		}
+		if !strings.Contains(se.String(), "-batch") || !strings.Contains(se.String(), "-dsn-env") {
+			t.Fatalf("%s: usage %q", c.Name, se.String())
+		}
+	}
+}

@@ -1252,7 +1252,7 @@ push lifecycle role, or the render fails (auth-migrate refuses the first two at 
 {{- $m := .Values.authService.migrate -}}
 {{- $owner := trim (toString (default "" $m.ownerRole)) -}}
 {{- if $owner -}}
-{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
+{{- $others := concat (list $m.runtimeRole $m.pushLifecycle.writerRole) (default (list) $m.sessionReaderRoles) (default (list) $m.projectionReaderRoles) (default (list) $m.pushLifecycle.callerRoles) (list (trim (toString $m.sessionReaders.goApi)) (trim (toString $m.sessionReaders.queryApi))) -}}
 {{- if has $owner $others }}{{- fail "authService.migrate.ownerRole must differ from authService.migrate.runtimeRole, every session reader role and every push lifecycle role" }}{{- end -}}
 {{- $owner -}}
 {{- end -}}

@@ -203,3 +203,28 @@ func TestAccessTokenKeyCannotBeOverriddenAwayFromGoAPI(t *testing.T) {
 		t.Errorf("auth-service key Secret %q, go-api %q", asName, gaName)
 	}
 }
+
+// auth-migrate and auth-grants grant the projection read to exactly the listed
+// logins, and only when some are listed.
+func TestAuthJobsGrantProjectionReadsToTheListedRoles(t *testing.T) {
+	jobs := []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"}
+	docs, out, err := renderAuth(t, authBase...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, set := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_PROJECTION_READER_ROLES"); set {
+			t.Errorf("%s: the default render sets AUTH_PROJECTION_READER_ROLES=%q; want it unset", job, value)
+		}
+	}
+	docs, out, err = renderAuth(t, append(append([]string{}, authBase...),
+		"--set-json", `authService.migrate.projectionReaderRoles=["devhealth_domain"]`)...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	for _, job := range jobs {
+		if value, _ := containerEnvValue(t, authDoc(docs, "Job", job), "AUTH_PROJECTION_READER_ROLES"); value != "devhealth_domain" {
+			t.Errorf("%s: AUTH_PROJECTION_READER_ROLES = %q, want devhealth_domain", job, value)
+		}
+	}
+}

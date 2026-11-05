@@ -512,6 +512,12 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-13063: the logins granted SELECT on the External Push credential projection (auth.credential_projection:
+    #    domain_owner, organization_id, external_reference, revision, status, expires_at, scopes, source_id), for the worker
+    #    reconcile drift probe (PUSH_RECONCILE_PROBE=on reads it through the worker's domain login). Rendered as
+    #    AUTH_PROJECTION_READER_ROLES on the auth-migrate and auth-grants Jobs, only when listed. Each must already exist and
+    #    must differ from the migration login and runtimeRole. Empty grants none: the probe then logs SQLSTATE 42501.
+    projectionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
     #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and

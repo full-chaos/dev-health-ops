@@ -6787,8 +6787,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
-	gqlHandler.Use(graphQLShadow())
-	gqlHandler.Use(graph.OperationOrgGuard{})
+	useGraphQLGuards(gqlHandler)
 	gqlHandler.AroundResponses(recordErrorCount)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for

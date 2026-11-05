@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
+	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -20,6 +22,12 @@ func graphQLShadow() graph.OperationShadow {
 		}
 		return nil
 	}}
+}
+
+// useGraphQLGuards is the guard slot of every GraphQL server: the shadow first, then the org guard.
+func useGraphQLGuards(gql *gqlhandler.Server) {
+	gql.Use(graphQLShadow())
+	gql.Use(graph.OperationOrgGuard{})
 }
 
 // graphQLShadowRows are the shadow's rows of the GraphQL roots: "Query.name" and "Mutation.name", each the catalog row

@@ -79,16 +79,17 @@ func TestGatedPlaneShadowHoldsTheGraphQLRows(t *testing.T) {
 	}
 }
 
-// C10: one constructor builds the interceptor for both servers, which place it before the org guard.
+// C10: one constructor builds the interceptor for both servers; both servers install it through the one guard slot,
+// shadow first, then the org guard, and neither names the org guard itself.
 func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
-	entries, err := filepath.Glob("*.go")
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	literals := 0
 	fset := token.NewFileSet()
-	order := map[string][]string{}
-	for _, name := range entries {
+	calls := map[string][]string{}
+	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {
 			continue
 		}
@@ -107,7 +108,9 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 					literals++
 				}
 			case *ast.FuncDecl:
-				if node.Name.Name != "newGraphQLServerWithLimits" && node.Name.Name != "newMCPGraphQLServer" {
+				switch node.Name.Name {
+				case "newGraphQLServerWithLimits", "newMCPGraphQLServer", "useGraphQLGuards":
+				default:
 					return true
 				}
 				ast.Inspect(node.Body, func(m ast.Node) bool {
@@ -117,14 +120,14 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 					}
 					switch fun := call.Fun.(type) {
 					case *ast.Ident:
-						if fun.Name == "graphQLShadow" {
-							order[node.Name.Name] = append(order[node.Name.Name], "shadow")
+						if fun.Name == "graphQLShadow" || fun.Name == "useGraphQLGuards" {
+							calls[node.Name.Name] = append(calls[node.Name.Name], fun.Name)
 						}
 					case *ast.SelectorExpr:
-						if len(call.Args) == 1 {
+						if len(call.Args) == 1 && fun.Sel.Name == "Use" {
 							if lit, ok := call.Args[0].(*ast.CompositeLit); ok {
 								if sel, ok := lit.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "OperationOrgGuard" {
-									order[node.Name.Name] = append(order[node.Name.Name], "guard")
+									calls[node.Name.Name] = append(calls[node.Name.Name], "guard")
 								}
 							}
 						}
@@ -138,10 +141,24 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 	if literals != 1 {
 		t.Errorf("%d graph.OperationShadow literals in the server package, want the one in graphQLShadow", literals)
 	}
+	if got := calls["useGraphQLGuards"]; !slices.Equal(got, []string{"graphQLShadow", "guard"}) {
+		t.Errorf("useGraphQLGuards: calls %v, want the shadow before the org guard", got)
+	}
 	for _, fn := range []string{"newGraphQLServerWithLimits", "newMCPGraphQLServer"} {
-		if !slices.Equal(order[fn], []string{"shadow", "guard"}) {
-			t.Errorf("%s: use order %v, want graphQLShadow() immediately before the org guard", fn, order[fn])
+		if got := calls[fn]; !slices.Equal(got, []string{"useGraphQLGuards"}) {
+			t.Errorf("%s: calls %v, want only useGraphQLGuards", fn, got)
 		}
+	}
+}
+
+// The plane hands the MCP listener a handler that carries the process's gate.
+func TestGraphQLShadowMCPPlaneIsGated(t *testing.T) {
+	raw, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "MCPHandler: withGate(mcpMux, gate)") {
+		t.Fatal("server.go does not wrap the MCP listener's handler with the process's gate")
 	}
 }
 

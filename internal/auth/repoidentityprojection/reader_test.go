@@ -107,7 +107,7 @@ func TestEventFromRowAgreesWithTheContractCorpus(t *testing.T) {
 	}
 }
 
-// The reader, the 0056 function and the contract hold one set of shapes.
+// The reader, the 0057 function and the contract hold one set of shapes.
 func TestTheReaderShapesAreTheContractShapes(t *testing.T) {
 	root, err := moduleroot.Root()
 	if err != nil {

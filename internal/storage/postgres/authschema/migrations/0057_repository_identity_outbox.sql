@@ -1,4 +1,4 @@
--- 0056 repository identity outbox events (CHAOS-13057, part of CHAOS-13034).
+-- 0057 repository identity outbox events (CHAOS-13057, part of CHAOS-13034).
 -- NOT ADDITIVE in two places, on purpose (additiveExemptions): it REDEFINES the aggregate_type CHECK and the
 -- aggregate_id CHECK of aggregate_revisions and only WIDENS them (the 0048 type list plus one value; every id the 0044
 -- pattern admitted is still admitted), so no stored row can violate either.
@@ -41,7 +41,7 @@ CREATE INDEX auth_outbox_events_repository_identity_idx
 -- SELECT/INSERT/UPDATE on the revision table. It holds nothing on repository_identities: the auth service writes that.
 --
 -- What the function fixes, so a caller cannot choose it: the aggregate type, the event type, the payload members, the
--- shapes (the 0055 CHECKs of repository_identities), the revision (the next one, under the aggregate's revision row
+-- shapes (the 0056 CHECKs of repository_identities), the revision (the next one, under the aggregate's revision row
 -- lock) and the idempotency key (aggregate_type:aggregate_id:revision). created_at is the column default, the database
 -- clock. The schema name is spliced in once, here, so every object in the body is schema-qualified and search_path
 -- is pinned.

@@ -163,7 +163,7 @@ default); a `SET`-only membership fails the migration with a permission error.
 
 ### Provider id copy events: the writer role and the roll order (CHAOS-13057)
 
-Migration 0056 adds `append_repository_identity_event`, the provider sync's only door to the auth outbox
+Migration 0057 adds `append_repository_identity_event`, the provider sync's only door to the auth outbox
 for its id copy events. It runs as a `NOLOGIN` writer role of its own (`AUTH_REPO_IDENTITY_WRITER_ROLE`,
 production `devhealth_auth_repo_identity_writer`) that holds exactly `INSERT` on `auth_outbox_events`,
 `USAGE` on its sequence and `SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions`, and no privilege on the

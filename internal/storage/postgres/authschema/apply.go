@@ -114,7 +114,7 @@ type Options struct {
 	// (CHAOS-12828), and no other. Required when PushLifecycleWriterRole is set.
 	PushLifecycleCallerRoles []string
 	// RepoIdentityWriterRole is the dedicated NOLOGIN role that owns append_repository_identity_event (migration
-	// 0056), set up like PushLifecycleWriterRole. Empty leaves the function unexecutable.
+	// 0057), set up like PushLifecycleWriterRole. Empty leaves the function unexecutable.
 	RepoIdentityWriterRole string
 	// RepoIdentityCallerRoles are the logins that may execute that function: the worker domain login, and no other.
 	// Required when RepoIdentityWriterRole is set.

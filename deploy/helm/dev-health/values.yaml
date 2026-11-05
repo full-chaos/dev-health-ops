@@ -513,7 +513,7 @@ authService:
     pushLifecycle:
       writerRole: ""
       callerRoles: []
-    # -- CHAOS-13057: the repository identity append function (migration 0056). writerRole is
+    # -- CHAOS-13057: the repository identity append function (migration 0057). writerRole is
     #    a NOLOGIN role that owns it (AUTH_REPO_IDENTITY_WRITER_ROLE) and holds only the outbox
     #    and revision privileges, none on repository_identities; callerRoles is exactly one login,
     #    the worker domain login of the provider sync (AUTH_REPO_IDENTITY_CALLER_ROLES). Both or

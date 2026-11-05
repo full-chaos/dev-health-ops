@@ -31,7 +31,7 @@ type fenceDB struct {
 	runtime     *pgxpool.Pool
 	runtimeRole string
 	writerRole  string
-	// ridWriter owns the repository identity append function (0056).
+	// ridWriter owns the repository identity append function (0057).
 	ridWriter string
 	schema    authschema.ValidatedIdentifier
 }

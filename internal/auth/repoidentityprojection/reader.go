@@ -1,5 +1,5 @@
 // Package repoidentityprojection is the auth-service reader of repository identity events: it reads the
-// repository_identity rows of the auth outbox (the provider sync appends them through the 0056 function) and upserts
+// repository_identity rows of the auth outbox (the provider sync appends them through the 0057 function) and upserts
 // auth.repository_identities from each, the copy of the provider repository ids (D6651; ClickHouse repos stays the
 // source).
 //

@@ -40,7 +40,7 @@ func restoreFenceMigration(t *testing.T) string {
 // because CREATE OR REPLACE swaps both. The runtime role reads the timeline
 // itself, so no function lends the owner's authority to another role.
 //
-// The second is append_repository_identity_event (migration 0056, CHAOS-13057, acp ruling on CHAOS-13034 Q-A): the
+// The second is append_repository_identity_event (migration 0057, CHAOS-13057, acp ruling on CHAOS-13034 Q-A): the
 // worker's door to the outbox for repository identities, built the same way (its own NOLOGIN owner with exactly the
 // outbox and revision privileges, EXECUTE revoked from PUBLIC, the posture row functionWriterViolations). One
 // migration declares it.

@@ -6,7 +6,7 @@ import (
 )
 
 // RepoIdentityFunction is the one function the worker domain login may execute for repository identities (migration
-// 0056), and RepoIdentityFunctionSignature its argument list. It runs as RepoIdentityWriterRole and appends one
+// 0057), and RepoIdentityFunctionSignature its argument list. It runs as RepoIdentityWriterRole and appends one
 // repository_identity.observed event to the outbox under the commit guard.
 const (
 	RepoIdentityFunction          = "append_repository_identity_event"

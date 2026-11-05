@@ -69,6 +69,9 @@ devhealth_auth_push_projection_parked_rows		code: internal/auth/pushprojection/r
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_repository_identity_projection_final_rows		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_lag		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_parked_rows		code: internal/auth/repoidentityprojection/reader.go
 devhealth_auth_revision_feed_events_total	disposition	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_resync_total	cause	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_subscription_up		code: internal/auth/revisionfeed/subscriber.go

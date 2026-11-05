@@ -123,6 +123,7 @@ internal/auth/acrlisting	client.go	internal/auth/acrlisting
 internal/auth/acrlisting	client.go	internal/auth/acrrevoke
 internal/auth/acrlisting	client.go	internal/auth/authapi
 internal/auth/acrlisting	client.go	internal/auth/authruntime
+internal/auth/acrlisting	client.go	internal/cigates/workflows
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho

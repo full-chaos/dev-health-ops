@@ -81,11 +81,13 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		"table:service_accounts":          "bypass: read for a service-account principal only, whose decisions never use the cache",
 		"table:principals":                "bypass: kind and disabled_at of a principal with no public.users row (service account, auth-native, no public twin)",
 		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
+		"table:repository_identities":     "read only for a pair that holds an id-bearing grant; its rows are in the StateVersion digest, so a change misses the cache",
 		"table:aggregate_revisions":       "the dependency revisions, same transaction",
 		"state:public.users":              "StateVersion: the principal's public.users row version",
 		"state:public.organizations":      "StateVersion: the organization's public.organizations row version",
 		"state:public.memberships":        "StateVersion: the pair's public.memberships row version",
 		"state:resource_grants":           "StateVersion: every grant row of the pair",
+		"state:repository_identities":     "StateVersion: the organization's identity rows while the pair holds an id-bearing grant",
 		"state:platform_role_assignments": "StateVersion: the principal's assignments while auth owns the platform roles",
 		"public:users":                    "Unfed: is_active, is_superuser when the platform roles are not owned; StateVersion",
 		"public:organizations":            "organization status; StateVersion",
@@ -134,6 +136,7 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 		"org":         `SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
 		"membership":  `SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
 		"grants":      `SELECT 'resource_grants', id::text, xmin::text FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+		"identities":  `SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM "auth".repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM "auth".resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`,
 		"assignments": `SELECT 'platform_role_assignments', id::text, xmin::text FROM "auth".platform_role_assignments WHERE principal_id = $1`,
 	}
 	for _, tc := range []struct {
@@ -142,8 +145,8 @@ func TestTheStateQueryReadsEveryRowOfThePair(t *testing.T) {
 	}{
 		{false, false, []string{"principal"}},
 		{false, true, []string{"principal", "assignments"}},
-		{true, false, []string{"principal", "org", "membership", "grants"}},
-		{true, true, []string{"principal", "org", "membership", "grants", "assignments"}},
+		{true, false, []string{"principal", "org", "membership", "grants", "identities"}},
+		{true, true, []string{"principal", "org", "membership", "grants", "identities", "assignments"}},
 	} {
 		q := stateQuery(schema, tc.org, tc.owned)
 		for name, part := range parts {

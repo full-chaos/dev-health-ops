@@ -536,7 +536,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 	_, _ = g.get(g.orglessUserToken())
 	time.Sleep(200 * time.Millisecond)
 	closed := map[string][]string{
-		"result":    {"match", "mismatch", "error", "dropped", "skipped"},
+		"result":    {"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"},
 		"reason":    policy.ShadowReasons(),
 		"caller":    {"member", "admin", "superuser"},
 		"class":     {"legacy_bug", "new_bug", "unresolved", "intentional"},

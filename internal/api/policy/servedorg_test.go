@@ -470,3 +470,30 @@ func TestServedOrgARowOutsideTheCensusIsNotCompared(t *testing.T) {
 		t.Fatalf("%d %q, PDP saw %+v, want 200 and one question on A", got.status, got.body, calls)
 	}
 }
+
+// The rows the seam compares are the census: OrgFromPath on exactly its path rows, the query table on exactly its
+// org_id rows.
+func TestServedOrgSeamRowsAreTheCensus(t *testing.T) {
+	var flagged, query, censusPath, censusQuery []string
+	for pattern, row := range servedOrgRows(t) {
+		if row.OrgFromPath {
+			flagged = append(flagged, pattern)
+		}
+	}
+	for pattern := range goAPIQueryOrgRows {
+		query = append(query, pattern)
+	}
+	for _, row := range servedOrgCensus {
+		if row.query {
+			censusQuery = append(censusQuery, row.pattern)
+		} else {
+			censusPath = append(censusPath, row.pattern)
+		}
+	}
+	for _, list := range [][]string{flagged, query, censusPath, censusQuery} {
+		slices.Sort(list)
+	}
+	if !slices.Equal(flagged, censusPath) || !slices.Equal(query, censusQuery) {
+		t.Fatalf("OrgFromPath rows %v and query rows %v, want the census %v and %v", flagged, query, censusPath, censusQuery)
+	}
+}

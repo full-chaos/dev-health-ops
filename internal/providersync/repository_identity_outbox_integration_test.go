@@ -131,7 +131,7 @@ func (f *identityOutboxFixture) seedRun(t *testing.T, ctx context.Context) {
 		{`INSERT INTO public.sync_runs
 		  (id, org_id, integration_id, triggered_by, mode, status, credential_id, credential_fingerprint, auth_source,
 		   total_units, completed_units, failed_units, created_at)
-		  VALUES ($1, $2, $3, 'test', 'full', 'running', $4, 'safe-fingerprint', 'integration_credential', 0, 0, 0, NOW())`,
+		  VALUES ($1, $2, $3, 'test', 'incremental', 'running', $4, 'safe-fingerprint', 'integration_credential', 0, 0, 0, NOW())`,
 			[]any{firstRunID, repositoryIdentityTestOrg, firstIntegrationID, firstCredentialID}},
 	} {
 		if _, err := f.admin.Exec(ctx, statement.sql, statement.args...); err != nil {
@@ -147,14 +147,15 @@ func (f *identityOutboxFixture) claim(t *testing.T, ctx context.Context) Claim {
 	unitID := fmt.Sprintf("77777777-7777-4777-8777-%012d", f.unitSeed)
 	if _, err := f.admin.Exec(ctx, `INSERT INTO public.sync_run_units (
 			id, org_id, sync_run_id, integration_id, source_id, provider,
-			dataset_key, cost_class, mode, status, processor_flags, updated_at, created_at, attempts
-		  ) VALUES ($1, $2, $3, $4, $5, 'github', 'repo-metadata', 'light', 'full', 'dispatching', '{}', NOW(), NOW(), 0)`,
+			dataset_key, cost_class, mode, since_at, before_at, status, processor_flags, updated_at, created_at, attempts
+		  ) VALUES ($1, $2, $3, $4, $5, 'github', 'repo-metadata', 'light', 'incremental',
+		    '2026-11-04T07:30:00Z', '2026-11-05T07:30:00Z', 'dispatching', '{}', NOW(), NOW(), 0)`,
 		unitID, repositoryIdentityTestOrg, firstRunID, firstIntegrationID, firstSourceID); err != nil {
 		t.Fatal(err)
 	}
 	claim, err := f.repo.Claim(ctx, ClaimRequest{
 		UnitID: unitID, OrgID: repositoryIdentityTestOrg, Owner: uuid.NewString(), Now: f.now,
-		LeaseDuration: time.Hour, AllowExpiredRecovery: true,
+		LeaseDuration: 10 * time.Minute, AllowExpiredRecovery: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +306,7 @@ func TestRepositoryIdentityEventsCommitWithTheReposEffect(t *testing.T) {
 		if len(rows) != 1 {
 			t.Fatalf("recovery events = %d, want 1", len(rows))
 		}
-		assertIdentityEvent(t, rows[0], 1, "github", "9001", "acme/recovered", "2026-11-05T07:30:00.000000Z")
+		assertIdentityEvent(t, rows[0], 1, "github", "9001", "acme/recovered", "2026-11-05T07:30:00.123000Z")
 	})
 
 	t.Run("the ledger write fails after the append: no event, ledger still writing", func(t *testing.T) {

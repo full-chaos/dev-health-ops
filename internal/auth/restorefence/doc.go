@@ -10,7 +10,8 @@
 // every input is a floor or a one-way state, so applying is idempotent and a
 // second run changes nothing.
 //
-// Everything here runs as the migration role. The runtime role only reads
+// The auth schema work runs as the migration role; export and apply also read and write the legacy public tables, so the
+// fence runs on the owner login (Secret auth-migrate-database-owner). The runtime role only reads
 // whether the current timeline is fenced (Check), and the readiness check built
 // on it fails closed: a database on a timeline with no fence record takes no
 // traffic.

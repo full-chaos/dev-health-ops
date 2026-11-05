@@ -1,7 +1,6 @@
 package devhealth_test
 
 import (
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -19,7 +18,7 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 	base := []string{"template", "b", ".", "--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true"}
 	render := func(args ...string) []map[string]any {
 		t.Helper()
-		out, err := exec.Command("helm", append(append([]string{}, base...), args...)...).CombinedOutput()
+		out, err := helmCommand(append(append([]string{}, base...), args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("render failed: %v\n%s", err, out)
 		}
@@ -149,7 +148,7 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 	}
 
 	// Off by default: no MCP Service, policy, port or env.
-	out, err := exec.Command("helm", "template", "b", ".", "--set", "queryApi.enabled=true").CombinedOutput()
+	out, err := helmCommand("template", "b", ".", "--set", "queryApi.enabled=true").CombinedOutput()
 	if err != nil {
 		t.Fatalf("default render failed: %v\n%s", err, out)
 	}
@@ -182,7 +181,7 @@ func TestQueryAPIMCPListenerChart(t *testing.T) {
 		{"must differ from queryApi.internal.port", []string{"--set", "queryApi.internal.enabled=true", "--set", "queryApi.mcp.port=8091"}},
 	} {
 		argv := append(append([]string{}, base...), bad.args...)
-		if out, err := exec.Command("helm", argv...).CombinedOutput(); err == nil || !strings.Contains(string(out), bad.want) {
+		if out, err := helmCommand(argv...).CombinedOutput(); err == nil || !strings.Contains(string(out), bad.want) {
 			t.Errorf("%v must fail the render with %q: err=%v\n%s", bad.args, bad.want, err, out)
 		}
 	}
@@ -199,7 +198,7 @@ func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing
 		{"--set", "queryApi.enabled=true", "--set-json", marker},
 		{"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", marker},
 	} {
-		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		out, err := helmCommand(append([]string{"template", "b", "."}, args...)...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_BOUNDARY") {
 			t.Errorf("extraEnv QUERY_API_MCP_BOUNDARY must fail the render: err=%v\n%s", err, out)
 		}
@@ -209,7 +208,7 @@ func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing
 		"mcp disabled, release policy": {"--set", "queryApi.enabled=true", "--set", "networkPolicy.enabled=true", "--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24", "--set-json", envs},
 		"mcp enabled":                  {"--set", "queryApi.enabled=true", "--set", "queryApi.mcp.enabled=true", "--set-json", envs},
 	} {
-		out, err := exec.Command("helm", append([]string{"template", "b", "."}, args...)...).CombinedOutput()
+		out, err := helmCommand(append([]string{"template", "b", "."}, args...)...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "must not set QUERY_API_MCP_ADDR") {
 			t.Errorf("%s: extraEnv QUERY_API_MCP_ADDR must fail the render: err=%v\n%s", name, err, out)
 		}
@@ -221,7 +220,7 @@ func TestQueryAPIMCPAddrInExtraEnvFailsTheRenderEvenWhenMCPIsDisabled(t *testing
 // to the MCP Service and NetworkPolicy. Disabled renders carry neither.
 func TestQueryAPIMCPBoundaryMarkerRendersOnlyWithTheMCPBoundary(t *testing.T) {
 	render := func(args ...string) string {
-		out, err := exec.Command("helm", append([]string{"template", "b", ".", "--set", "queryApi.enabled=true"}, args...)...).CombinedOutput()
+		out, err := helmCommand(append([]string{"template", "b", ".", "--set", "queryApi.enabled=true"}, args...)...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("render failed: %v\n%s", err, out)
 		}

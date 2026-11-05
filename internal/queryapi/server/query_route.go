@@ -3292,6 +3292,68 @@ const registeredInvestmentBreakdownRepositoryV1Document = `query InvestmentBreak
   }
 }`
 
+// registeredTeamWorkItemBreakdownDocument is CHAOS-13017's registered document for acr's work-item team breakdown
+// (CHAOS-13001): the investmentBreakdown body byte for byte under its own operation name "TeamWorkItemBreakdown". acr maps
+// each operation it serves to ONE row of this registry by name, and serves the work-item basis (batch.useInvestment
+// forced false, dimension TEAM) apart from the investment basis (forced true), so it needs its own name and digest.
+// Ops behaviour does not change: with dimension TEAM and useInvestment false or unset, resolveUseInvestment reads the
+// work-item path (analytics/investment.go). Like the other scoped texts since CHAOS-12999 it also selects
+// evidenceQualityStats.sizedUnitCount. Literal text for cmd/registrydump;
+// TestInvestmentBreakdownScopedDocuments_AreTheBreakdownTextUnderTheirOwnName pins the body equality.
+const registeredTeamWorkItemBreakdownDocument = `query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      sizedUnitCount
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredTeamWorkItemBreakdownV1Document is the TeamWorkItemBreakdown text before it selected sizedUnitCount (as
+// registered by CHAOS-13017 and sent by web's TEAM_WORK_ITEM_BREAKDOWN_QUERY). It stays accepted under the same
+// operation until every client sends the current text.
+const registeredTeamWorkItemBreakdownV1Document = `query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    breakdowns {
+      dimension
+      measure
+      items {
+        key
+        value
+        __typename
+      }
+      __typename
+    }
+    evidenceQualityDistribution
+    evidenceQualityStats {
+      mean
+      stddev
+      total
+      bandCounts
+      uncategorizedCount
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentEvidenceQualityDocument is CHAOS-8104's registered
 // document for the Investment Evidence table's served mean-by-group column.
 // Its text is the captured wire document that CHAOS-8745's browser client
@@ -6531,6 +6593,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
 		"investmentBreakdownTeam":           digestHex(registeredInvestmentBreakdownTeamDocument),
 		"investmentBreakdownRepository":     digestHex(registeredInvestmentBreakdownRepositoryDocument),
+		"teamWorkItemBreakdown":             digestHex(registeredTeamWorkItemBreakdownDocument),
 		"investmentEvidenceQuality":         digestHex(registeredInvestmentEvidenceQualityDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
@@ -7044,6 +7107,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"investmentBreakdown":           {digestHex(registeredInvestmentBreakdownV1Document)},
 	"investmentBreakdownTeam":       {digestHex(registeredInvestmentBreakdownTeamV1Document)},
 	"investmentBreakdownRepository": {digestHex(registeredInvestmentBreakdownRepositoryV1Document)},
+	"teamWorkItemBreakdown":         {digestHex(registeredTeamWorkItemBreakdownV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

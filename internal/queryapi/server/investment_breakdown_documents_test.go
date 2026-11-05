@@ -76,6 +76,7 @@ func TestInvestmentBreakdown_BothTextsResolveToTheOneOperation(t *testing.T) {
 var scopedInvestmentBreakdownDocuments = []struct{ operation, name, text string }{
 	{"investmentBreakdownTeam", "InvestmentBreakdownTeam", registeredInvestmentBreakdownTeamDocument},
 	{"investmentBreakdownRepository", "InvestmentBreakdownRepository", registeredInvestmentBreakdownRepositoryDocument},
+	{"teamWorkItemBreakdown", "TeamWorkItemBreakdown", registeredTeamWorkItemBreakdownDocument},
 }
 
 // Each scoped text is the CURRENT investmentBreakdown text with only the operation name changed, so the three bodies
@@ -171,6 +172,7 @@ func TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDige
 	for operation, legacyText := range map[string]string{
 		"investmentBreakdownTeam":       registeredInvestmentBreakdownTeamV1Document,
 		"investmentBreakdownRepository": registeredInvestmentBreakdownRepositoryV1Document,
+		"teamWorkItemBreakdown":         registeredTeamWorkItemBreakdownV1Document,
 	} {
 		if legacy := legacyDigestsByOperation[operation]; len(legacy) != 1 || legacy[0] != digestHex(legacyText) {
 			t.Errorf("legacyDigestsByOperation[%s] = %v, want exactly the digest of the text before sizedUnitCount", operation, legacy)

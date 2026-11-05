@@ -228,6 +228,7 @@ internal/auth/keystore	open_unix.go	internal/auth/decisionstate
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/auth/lockorder
+internal/auth/keystore	open_unix.go	internal/auth/repoidentityprojection
 internal/auth/keystore	open_unix.go	internal/auth/workloadexchange
 internal/auth/keystore	open_unix.go	internal/cigates/chartgates
 internal/auth/keystore	open_unix.go	internal/queryapi/server

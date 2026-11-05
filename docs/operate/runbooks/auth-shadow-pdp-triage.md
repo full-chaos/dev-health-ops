@@ -52,7 +52,7 @@ A bad value never stops the service. The shadow stays off, the log has an ERROR 
 | --- | --- | --- |
 | `match` | PDP and legacy agree. | never |
 | `mismatch` | They differ. Also counted in `dev_health_api_shadow_mismatch_total{namespace,caller,class}`. | see the triage loop |
-| `error` | The PDP gave no verdict (a local deny: unreachable, timeout, refused, rate limited and so on). Nothing is compared. | a rising share: check auth-service readiness and the `POST /v1/authorize` route; the PDP outage runbook is not written yet |
+| `error` | The PDP gave no verdict (a local deny: unreachable, timeout, refused, rate limited and so on). Nothing is compared. | a rising share: check auth-service readiness and the `POST /v1/authorize` route; for the enforced side, see [Auth PDP outage and rollback](auth-pdp-outage-and-rollback.md) |
 | `dropped` | The in-flight bound was full. | a rising share: raise `AUTH_SHADOW_PDP_MAX_IN_FLIGHT` or lower `AUTH_SHADOW_PDP_SAMPLE` |
 | `skipped` | A covered request the shadow cannot ask. | only to judge coverage |
 

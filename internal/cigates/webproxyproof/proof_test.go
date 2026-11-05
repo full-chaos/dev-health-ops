@@ -168,3 +168,33 @@ func TestAuthWebProxyProofJobIsWired(t *testing.T) {
 		}
 	}
 }
+
+// The proof signs go-api in to auth-service's session issue route with go-api's workload token: the bootstrap
+// credential and the api principal come before go-api and auth-service start, and no svc_authsess_ credential is made,
+// stored or handed to go-api.
+func TestAuthWebProxyProofSignsInWithTheWorkloadToken(t *testing.T) {
+	root := authProofRoot(t)
+	script, err := os.ReadFile(filepath.Join(root, "ci", "check_auth_web_proxy_compose.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	over, err := os.ReadFile(filepath.Join(root, "ci", "auth_webproof_compose.override.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"the proof script": string(script), "the proof override": string(over)} {
+		for _, banned := range []string{"svc_authsess_", "AUTH_SESSION_ISSUE_TOKEN", "internal_service_credentials"} {
+			if strings.Contains(text, banned) {
+				t.Errorf("%s still carries %q", name, banned)
+			}
+		}
+	}
+	call := strings.Index(string(script), "auth_workload_session_issue compose")
+	up := strings.Index(string(script), "--profile auth up ")
+	if call < 0 || up < 0 || call > up {
+		t.Errorf("want auth_workload_session_issue (%d) before the first compose up (%d)", call, up)
+	}
+	if !regexp.MustCompile(`(?m)^\s*AUTH_SESSION_ISSUE_CREDENTIAL:\s*\$\{AUTH_SESSION_ISSUE_CREDENTIAL`).Match(over) {
+		t.Error("the proof override does not hand go-api AUTH_SESSION_ISSUE_CREDENTIAL")
+	}
+}

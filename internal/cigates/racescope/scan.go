@@ -81,8 +81,8 @@ func Parse(path string) ([]Row, error) {
 			return nil, fmt.Errorf("%s: %s is listed twice", path, f[0])
 		}
 		seen[f[0]] = true
-		if f[1] != "none" || f[2] != "-" {
-			return nil, fmt.Errorf("%s: %s has class %q and witness %q: only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)", path, f[0], f[1], f[2])
+		if (f[1] != "none" && f[1] != renderGuardClass) || f[2] != "-" {
+			return nil, fmt.Errorf("%s: %s has class %q and witness %q: only class none or %s with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)", path, f[0], f[1], f[2], renderGuardClass)
 		}
 		if len(rows) > 0 && rows[len(rows)-1].Package >= f[0] {
 			return nil, fmt.Errorf("%s: %s is not in LC_ALL=C order", path, f[0])
@@ -516,8 +516,14 @@ func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool, presence map[
 			problems = append(problems, r.Package+": has no test, so no race run to retire")
 			continue
 		}
-		if r.Class != "none" || r.Witness != "-" {
-			problems = append(problems, r.Package+": only class none with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
+		if (r.Class != "none" && r.Class != renderGuardClass) || r.Witness != "-" {
+			problems = append(problems, r.Package+": only class none or "+renderGuardClass+" with witness - exists (covered-by was retired: every row is judged on its whole in-module closure)")
+		}
+		if r.Class == renderGuardClass {
+			if _, ok := renderGuardPackages[r.Package]; !ok {
+				problems = append(problems, r.Package+": class "+renderGuardClass+" is a closed list and this package is not in racescope's renderGuardPackages")
+			}
+			continue
 		}
 		for _, hit := range scanPackage(p, true, modpath, ts, loadErrs, typedAnywhere) {
 			problems = append(problems, fmt.Sprintf("%s: own file: %s", r.Package, hit))
@@ -525,6 +531,16 @@ func judge(l *archLoad, rows []Row, typedAnywhere map[string]bool, presence map[
 	}
 	sort.Strings(problems)
 	return problems
+}
+
+// renderGuardClass is the one deliberate exception to the concurrency proof (CHAOS-13051, D6694): a package whose tests only exec helm or
+// kubectl renders and check the output. No product code is under test and it starts no goroutine beyond exec plumbing, and the race
+// detector costs about 18 GiB RSS on it, which kills the 16 GB hosted runner. The list is closed: a row of this class for any other
+// package is refused, so the class cannot grow by a TSV edit alone.
+const renderGuardClass = "render-guard"
+
+var renderGuardPackages = map[string]string{
+	"internal/cigates/chartgates": "chart-render guard tests exec helm only; race run measured at 18.3 GiB RSS and 13 min, no product concurrency under test",
 }
 
 // stdlibAllowed is the deny-by-default allowlist of standard-library imports (acp, CHAOS-11413): a package that is not here is refused,

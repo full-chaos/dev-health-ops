@@ -47,7 +47,7 @@ type RepositoryIdentityOutbox struct {
 }
 
 func (outbox *RepositoryIdentityOutbox) append(ctx context.Context, tx pgx.Tx, events []audit.RepositoryIdentityEvent) error {
-	if outbox == nil || len(events) == 0 {
+	if len(events) == 0 {
 		return nil
 	}
 	return audit.AppendRepositoryIdentity(ctx, tx, outbox.Schema, events)
@@ -56,19 +56,20 @@ func (outbox *RepositoryIdentityOutbox) append(ctx context.Context, tx pgx.Tx, e
 // repositoryIdentityPath is the canonical repository key of a provider path:
 // spaces trimmed and lower case, as the backfill reads ClickHouse
 // (lowerUTF8(trimBoth(repo))). Only ASCII is accepted, so Go and ClickHouse
-// case mapping cannot disagree; a path that is not a repository key is refused.
-func repositoryIdentityPath(repo string) (string, bool) {
+// case mapping cannot disagree. A path that is not a repository path is "",
+// which the event check refuses.
+func repositoryIdentityPath(repo string) string {
 	trimmed := strings.Trim(repo, " ")
 	for i := 0; i < len(trimmed); i++ {
 		if trimmed[i] >= 0x80 {
-			return "", false
+			return ""
 		}
 	}
 	path := strings.ToLower(trimmed)
-	if path == "*" || !repokey.Valid(path) {
-		return "", false
+	if !repokey.Valid(path) {
+		return ""
 	}
-	return path, true
+	return path
 }
 
 type repositoryIdentityRow struct {
@@ -97,13 +98,13 @@ func repositoryIdentityEvents(batch EffectBatch) ([]audit.RepositoryIdentityEven
 		if row.ProviderRepoID == "" {
 			continue
 		}
-		org, orgErr := uuid.Parse(row.OrgID)
-		path, pathOK := repositoryIdentityPath(row.Repo)
+		// A malformed organization parses to uuid.Nil, which Validate refuses.
+		org, _ := uuid.Parse(row.OrgID)
 		event := audit.RepositoryIdentityEvent{
 			OrganizationID: org, Provider: row.Provider, ProviderRepoID: row.ProviderRepoID,
-			Path: path, ObservedAt: row.LastSynced.UTC(),
+			Path: repositoryIdentityPath(row.Repo), ObservedAt: row.LastSynced.UTC(),
 		}
-		if orgErr != nil || !pathOK || event.Validate() != nil {
+		if event.Validate() != nil {
 			skipped++
 			continue
 		}
@@ -113,9 +114,9 @@ func repositoryIdentityEvents(batch EffectBatch) ([]audit.RepositoryIdentityEven
 }
 
 // appendRepositoryIdentities runs in the transaction that flips entry to
-// Committed: it appends the identity events of batch, the rows that effect
-// wrote. It appends nothing when the repository has no outbox or the effect is
-// not a `repos` effect.
+// Committed: it appends the identity events of batch, which must be the batch
+// of that effect (same content digest). It appends nothing when the repository
+// has no outbox or the batch is not a `repos` batch.
 func (repository *PostgresRepository) appendRepositoryIdentities(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -123,9 +124,7 @@ func (repository *PostgresRepository) appendRepositoryIdentities(
 	entry EffectLedgerEntry,
 	batch EffectBatch,
 ) error {
-	if repository.RepositoryIdentities == nil ||
-		entry.Destination != repositoryIdentityDestination ||
-		batch.Destination != repositoryIdentityDestination {
+	if repository.RepositoryIdentities == nil {
 		return nil
 	}
 	if batch.ContentDigest != entry.ContentDigest {

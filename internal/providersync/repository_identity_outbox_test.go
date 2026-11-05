@@ -118,7 +118,7 @@ func TestRepositoryIdentityEventsNegativeAndSkippedCells(t *testing.T) {
 		{"provider is not a provider name", reposBatch(t, "repos", identityRow("Git-Hub", "4567", "acme/api")), 0, 1, ""},
 		{"path of one segment", reposBatch(t, "repos", identityRow("github", "4567", "api")), 0, 1, ""},
 		{"path is the wildcard", reposBatch(t, "repos", identityRow("github", "4567", "*")), 0, 1, ""},
-		{"path is not ASCII", reposBatch(t, "repos", identityRow("github", "4567", "acme/Kpi")), 0, 1, ""},
+		{"path is not ASCII", reposBatch(t, "repos", identityRow("github", "4567", "acme/\u212api")), 0, 1, ""},
 		{"two rows, one without id", reposBatch(t, "repos", identityRow("github", "", "acme/web"), identityRow("github", "4567", "acme/api")), 1, 0, "acme/api"},
 	}
 	for _, c := range cases {
@@ -139,24 +139,20 @@ func TestRepositoryIdentityEventsNegativeAndSkippedCells(t *testing.T) {
 // TestRepositoryIdentityPathMatchesTheBackfill: the producer's path is the backfill's lowerUTF8(trimBoth(repo))
 // (internal/auth/usersbackfill/repoidentity_command.go) restricted to repository keys: trimBoth trims spaces only.
 func TestRepositoryIdentityPathMatchesTheBackfill(t *testing.T) {
-	for _, c := range []struct {
-		in, want string
-		ok       bool
-	}{
-		{"acme/api", "acme/api", true},
-		{"Acme/API", "acme/api", true},
-		{"  acme/api ", "acme/api", true},
-		{"group/sub/Project.Name", "group/sub/project.name", true},
-		{"\tacme/api", "", false},
-		{"acme/api ", "", false},
-		{"ACME/KEY", "", false},
-		{"acme", "", false},
-		{"*", "", false},
-		{"", "", false},
+	for _, c := range []struct{ in, want string }{
+		{"acme/api", "acme/api"},
+		{"Acme/API", "acme/api"},
+		{"  acme/api ", "acme/api"},
+		{"group/sub/Project.Name", "group/sub/project.name"},
+		{"\tacme/api", ""},
+		{"acme/api\u00a0", ""},
+		{"ACME/\u212aEY", ""},
+		{"acme", ""},
+		{"*", "*"},
+		{"", ""},
 	} {
-		got, ok := repositoryIdentityPath(c.in)
-		if got != c.want || ok != c.ok {
-			t.Fatalf("repositoryIdentityPath(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
+		if got := repositoryIdentityPath(c.in); got != c.want {
+			t.Fatalf("repositoryIdentityPath(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"testing"
@@ -365,6 +366,26 @@ func TestRepositoryIdentityEventsCommitWithTheReposEffect(t *testing.T) {
 		result, err := committer(f.repo, &scriptedSink{}, EffectExact).Commit(ctx, claim, []EffectBatch{batch}, f.now)
 		if err != nil || result.MarkedCommitted != 1 || len(f.events(t, ctx, "github", "9003")) != 1 {
 			t.Fatalf("recovery after the fix: result=%+v err=%v", result, err)
+		}
+	})
+
+	t.Run("a batch that is not the effect's own is refused: no event, ledger still writing", func(t *testing.T) {
+		claim := f.claim(t, ctx)
+		batch := reposBatch(t, "repos", identityRow("github", "9005", "acme/own"))
+		if _, err := committer(f.repo, &scriptedSink{fail: true}, EffectExact).Commit(ctx, claim, []EffectBatch{batch}, f.now); err == nil {
+			t.Fatal("want the sink failure")
+		}
+		other := reposBatch(t, "repos", identityRow("github", "9006", "acme/other"))
+		for name, commit := range map[string]func() error{
+			"write flip":    func() error { return f.repo.CommitEffectRows(ctx, claim, 0, batch.ContentDigest, other, f.now) },
+			"recovery flip": func() error { return f.repo.MarkEffectCommittedRows(ctx, claim, 0, batch.ContentDigest, other, f.now) },
+		} {
+			if err := commit(); !errors.Is(err, ErrEffectLedgerConflict) {
+				t.Fatalf("%s: err=%v, want ErrEffectLedgerConflict", name, err)
+			}
+			if f.status(t, ctx, claim) != GenerationBlockWriting || len(f.events(t, ctx, "github", "9006")) != 0 {
+				t.Fatalf("%s: a foreign batch flipped the ledger or appended", name)
+			}
 		}
 	})
 

@@ -97,6 +97,7 @@ const (
 	ReasonNotCarriedOut    pep.Reason = pep.ReasonUnknownObligation
 	ReasonTenantMismatch   pep.Reason = "tenant_scope_mismatch"
 	ReasonNoRepositoryRule pep.Reason = "repository_scope_absent"
+	ReasonEnforceCellOff   pep.Reason = "authz_enforce_cell_off"
 )
 
 // DenyError is a typed refusal. Local is true when no PDP verdict exists (PDP down, a timeout, a bad answer, a

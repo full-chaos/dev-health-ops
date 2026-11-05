@@ -107,13 +107,46 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 	}
 }
 
-// A request organization that is not in its lowercase form is refused: the scope's organization is the tenant
-// (lowercase), and a read must never run under a second spelling of the organization.
-func TestSeamUppercaseRequestOrganizationIs503(t *testing.T) {
-	g, _, _ := seamGate(t, allowRule(nil))
-	scope, err := g.Authorize(context.Background(), testProfile, testBearer, strings.ToUpper(seamOrg))
-	wantLocal(t, err, ReasonTenantMismatch)
-	wantNoScope(t, scope)
+// acp ruling (2): the request organization, the decision's organization and its tenant_scope compare as UUIDs
+// (RFC 9562 text form, any case) by their canonical form; a value that does not parse is tenant_scope_mismatch. The
+// scope carries the canonical (lowercase) form.
+func TestSeamOrganizationsCompareAsUUIDs(t *testing.T) {
+	upper := strings.ToUpper(seamOrg)
+	for name, tc := range map[string]struct {
+		request string
+		edit    func(*pepfake.Rule)
+		pass    bool
+	}{
+		"uppercase request org":  {upper, nil, true},
+		"uppercase tenant_scope": {seamOrg, func(r *pepfake.Rule) { r.TenantScope = upper }, true},
+		"different UUID tenant":  {seamOrg, func(r *pepfake.Rule) { r.TenantScope = "66666666-6666-6666-6666-666666666666" }, false},
+		"non-UUID tenant":        {seamOrg, func(r *pepfake.Rule) { r.TenantScope = "acme" }, false},
+		"non-UUID request org":   {"acme", func(r *pepfake.Rule) { r.ResourceKey, r.OrganizationID, r.TenantScope = "acme", "acme", "acme" }, false},
+		"braced UUID request org": {"{" + seamOrg + "}", func(r *pepfake.Rule) {
+			k := "{" + seamOrg + "}"
+			r.ResourceKey, r.OrganizationID, r.TenantScope = k, k, k
+		}, false},
+		"unhyphenated UUID everywhere": {strings.ReplaceAll(seamOrg, "-", ""), func(r *pepfake.Rule) {
+			k := strings.ReplaceAll(seamOrg, "-", "")
+			r.ResourceKey, r.OrganizationID, r.TenantScope = k, k, k
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, decider, _ := seamGate(t, allowRule(tc.edit))
+			scope, err := g.Authorize(context.Background(), testProfile, testBearer, tc.request)
+			if decider.calls.Load() != 1 {
+				t.Fatalf("asked %d times, want 1", decider.calls.Load())
+			}
+			if !tc.pass {
+				wantLocal(t, err, ReasonTenantMismatch)
+				wantNoScope(t, scope)
+				return
+			}
+			if org, ok := scope.OrgID(); err != nil || !ok || org != seamOrg || scope.Kind() != pepgate.KindOrganization {
+				t.Fatalf("answered %v, scope kind %v org %q, want Organization(%s)", err, scope.Kind(), org, seamOrg)
+			}
+		})
+	}
 }
 
 // P3: repository_scope organization serves as Organization(tenant). P15: an allowlist with "*" is every repository.
@@ -181,16 +214,16 @@ func TestSeamCellOnDenyIs403(t *testing.T) {
 	wantNoScope(t, scope)
 }
 
-// P11 + P13: a mode that asks, with the cell of the route's namespace off, is shadow: it asks in the background,
-// counts, never refuses, and the scope is Legacy.
+// P11 + P13: shadow mode with the cell of the route's namespace off asks in the background, counts, never refuses,
+// and the scope is Legacy.
 func TestSeamCellOffIsShadow(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mode, cells, profile, action string
 	}{
-		"P11 enforce, no cell":             {ModeEnforce, "", testProfile, testAction},
-		"P13 enforce, other namespace on":  {ModeEnforce, "analytics", "GET /api/v1/flame", "metrics.read"},
-		"shadow, other namespace on":       {ModeShadow, "git,work_items", testProfile, testAction},
-		"enforce, cell list of bad values": {ModeEnforce, "Analytics,*,nope", testProfile, testAction},
+		"P11 shadow, no cell":             {ModeShadow, "", testProfile, testAction},
+		"P13 shadow, other namespace on":  {ModeShadow, "analytics", "GET /api/v1/flame", "metrics.read"},
+		"shadow, other namespaces on":     {ModeShadow, "git,work_items", testProfile, testAction},
+		"shadow, cell list of bad values": {ModeShadow, "Analytics,*,nope", testProfile, testAction},
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, cfg := newMeter(t)
@@ -210,6 +243,35 @@ func TestSeamCellOffIsShadow(t *testing.T) {
 			}
 			if got := m.points(t, resultMetric); got["action="+tc.action+",mode=shadow,result=mismatch"] != 1 || len(got) != 1 {
 				t.Fatalf("results %v, want one shadow mismatch", got)
+			}
+		})
+	}
+}
+
+// acp ruling (1): a mode named enforce never acts as shadow. With the cell of the route's namespace off it refuses
+// (503, authz_enforce_cell_off) and asks nothing.
+func TestSeamEnforceModeWithTheCellOffIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cells, profile, action string
+	}{
+		"no cell":               {"", testProfile, testAction},
+		"other namespace on":    {"analytics", "GET /api/v1/flame", "metrics.read"},
+		"cell list of bad only": {"Analytics,*,nope", testProfile, testAction},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			decider := denyDecider(t)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, decider, cells(tc.cells)
+			g := New(cfg)
+			scope, err := g.Authorize(context.Background(), tc.profile, testBearer, seamOrg)
+			g.Wait()
+			wantLocal(t, err, ReasonEnforceCellOff)
+			wantNoScope(t, scope)
+			if decider.calls.Load() != 0 {
+				t.Fatalf("asked %d times, want 0", decider.calls.Load())
+			}
+			if got := m.points(t, resultMetric); got["action="+tc.action+",mode=enforce,result=not_configured"] != 1 || len(got) != 1 {
+				t.Fatalf("results %v, want one enforce not_configured", got)
 			}
 		})
 	}

@@ -203,24 +203,26 @@ func namespaceOf(action string) string {
 	return namespace
 }
 
-// P1, P4, P5, P7, P8, P9, P12 on every namespace: a refusal answers before the handler, so no read runs. P4 is the
+// P1, P4, P5, P7, P8, P9, P11, P12 on every namespace: a refusal answers before the handler, so no read runs. P4 is the
 // F-A form: an allow with repository_allowlist [] on a route not cut over is 503, never the org-wide read.
 func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 	cases := []struct {
-		name   string
-		mode   string
-		rule   func(*pepfake.Rule)
-		noRule bool
-		want   answer
+		name    string
+		mode    string
+		rule    func(*pepfake.Rule)
+		noRule  bool
+		want    answer
+		cellOff bool
 	}{
-		{"P1 tenant_scope absent", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = "" }, false, gatedUnavailable},
-		{"P2 tenant_scope other org", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = liveOtherOrg.String() }, false, gatedUnavailable},
-		{"P4 allowlist []", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, false, gatedUnavailable},
-		{"P5 allowlist [acme/a]", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, false, gatedUnavailable},
-		{"P7 no repository member", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope = "" }, false, gatedUnavailable},
-		{"P8 minimum_assurance", pdp.ModeEnforce, func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, false, gatedUnavailable},
-		{"P9 deny", pdp.ModeEnforce, nil, true, gatedForbidden},
-		{"P12 cell on, mode off", pdp.ModeOff, nil, false, gatedUnavailable},
+		{"P1 tenant_scope absent", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = "" }, false, gatedUnavailable, false},
+		{"P2 tenant_scope other org", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = liveOtherOrg.String() }, false, gatedUnavailable, false},
+		{"P4 allowlist []", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, false, gatedUnavailable, false},
+		{"P5 allowlist [acme/a]", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, false, gatedUnavailable, false},
+		{"P7 no repository member", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope = "" }, false, gatedUnavailable, false},
+		{"P8 minimum_assurance", pdp.ModeEnforce, func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, false, gatedUnavailable, false},
+		{"P9 deny", pdp.ModeEnforce, nil, true, gatedForbidden, false},
+		{"P12 cell on, mode off", pdp.ModeOff, nil, false, gatedUnavailable, false},
+		{"P11 enforce, cell off", pdp.ModeEnforce, nil, false, gatedUnavailable, true},
 	}
 	for _, route := range seamRoutes() {
 		for _, tc := range cases {
@@ -237,7 +239,11 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 				case tc.mode != pdp.ModeOff:
 					decider = pepfake.New(rules...)
 				}
-				gate, _ := seamGate(t, tc.mode, namespaceOf(route.action), decider)
+				cellList := namespaceOf(route.action)
+				if tc.cellOff {
+					cellList = ""
+				}
+				gate, _ := seamGate(t, tc.mode, cellList, decider)
 				got := s.run(gate, s.user)
 				if (answer{got.status, strings.TrimSpace(got.body)}) != tc.want {
 					t.Fatalf("answered %d %q, want %+v", got.status, got.body, tc.want)
@@ -269,7 +275,7 @@ func TestSeamRESTOrganizationScopeServesTodaysRead(t *testing.T) {
 }
 
 // P10, P11: every path the PDP does not decide is today's path: the same read, the same bytes, the Legacy scope. P10
-// (both switches unset, the PDP configured) asks nothing; P11 (QUERY_API_PDP_MODE=enforce, no cell, a PDP that
+// (both switches unset, the PDP configured) asks nothing; P11 (QUERY_API_PDP_MODE=shadow, no cell, a PDP that
 // denies) asks in the background and still serves.
 func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 	srv := pdptest.New(t)
@@ -281,9 +287,9 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 				env := map[string]string{pdp.EnvAuthProxyURL: srv.URL, workloadinput.EnvIssuer: pdptest.Issuer, workloadinput.EnvBootstrapFile: pdptest.BootstrapFile(t)}
 				return pdp.FromSettings(func(k string) (string, bool) { v, ok := env[k]; return v, ok }, slog.New(slog.NewTextHandler(io.Discard, nil))), nil
 			},
-			"P11 enforce, cell off, PDP denies": func(*seamStack) (*pdp.Gate, *seamDecider) {
+			"P11 shadow, cell off, PDP denies": func(*seamStack) (*pdp.Gate, *seamDecider) {
 				d := seamDenier(t)
-				g, _ := seamGate(t, pdp.ModeEnforce, "", d)
+				g, _ := seamGate(t, pdp.ModeShadow, "", d)
 				return g, d
 			},
 			"other namespaces on": func(*seamStack) (*pdp.Gate, *seamDecider) {
@@ -294,7 +300,7 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 					}
 				}
 				d := seamDenier(t)
-				g, _ := seamGate(t, pdp.ModeEnforce, strings.Join(others, ","), d)
+				g, _ := seamGate(t, pdp.ModeShadow, strings.Join(others, ","), d)
 				return g, d
 			},
 		} {

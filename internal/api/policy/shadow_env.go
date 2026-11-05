@@ -38,6 +38,8 @@ type ShadowEnvDeps struct {
 	// error text is never logged.
 	NewDecider func() (pep.Decider, error)
 	Logger     *slog.Logger
+	// On means the caller already decided the shadow is on.
+	On bool
 }
 
 // ShadowFromEnv builds the shadow from the environment. It never fails a start: off, or any

@@ -387,3 +387,9 @@ func (s *Shadow) logAllowed(gate int) bool {
 	last := s.logGate[gate].Load()
 	return now-last >= int64(time.Second) && s.logGate[gate].CompareAndSwap(last, now)
 }
+
+// ShadowRowFor returns the catalog row of an action, the form every service's row map holds.
+func ShadowRowFor(actionID string) (ShadowRow, error) { return ShadowRow{}, errors.New("stub") }
+
+// ShadowCaller is the closed caller kind of a caller's admin.orgs holding and role.
+func ShadowCaller(holdsAdminOrgs bool, role string) string { return "" }

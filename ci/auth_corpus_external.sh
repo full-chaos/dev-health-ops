@@ -9,7 +9,8 @@
 #    releases its host-global names and ports) starts go-api with its dependencies: postgres, pgbouncer, clickhouse,
 #    valkey, the migrations, the roles and the envelope key. The stores are published on ephemeral loopback ports.
 # 2. The corpus seeds those stores as a superuser, then sends its requests to go-api's published api listener. Its
-#    mail sink listens on the runner (0.0.0.0:2525); go-api mails to host.docker.internal.
+#    mail sink is the project's smtpsink service (CHAOS-11387): the planes mail smtpsink:2525 on the project network,
+#    and the test reads the capture from its :9090 read API, published on loopback only.
 # 3. Where a corpus case changes go-api's environment, ci/auth_corpus_set_env.sh recreates go-api through compose.
 # Leg acp turns on the AUTH_PROXY_* flag of an aggregate only when the running auth-service serves every route of it
 # (ci/auth_corpus_acp_routes.tsv): a route auth-service mounts answers OPTIONS with 405, one it does not with 404.

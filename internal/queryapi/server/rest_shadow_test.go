@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -162,10 +164,10 @@ func TestRESTShadowCountsOnTheCoreAndNeverChangesTheAnswer(t *testing.T) {
 		want map[string]int64
 	}{
 		"deny": {true, map[string]int64{
-			shadowResultsMetric + "|result=mismatch":                                    1,
+			shadowResultsMetric + "|reason=none,result=mismatch":                        1,
 			shadowMismatchMetric + "|caller=admin,class=unresolved,namespace=analytics": 1,
 		}},
-		"allow": {false, map[string]int64{shadowResultsMetric + "|result=match": 1}},
+		"allow": {false, map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := pdptest.New(t)
@@ -215,7 +217,7 @@ func TestRESTShadowPDPFailureHasNoEffect(t *testing.T) {
 			if took > 500*time.Millisecond {
 				t.Fatalf("the request waited %v for the PDP", took)
 			}
-			want := map[string]int64{shadowResultsMetric + "|result=error": 1}
+			want := map[string]int64{shadowResultsMetric + "|reason=none,result=error": 1}
 			if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 				t.Fatalf("5.12 counters %v, want %v", d, want)
 			}
@@ -230,7 +232,7 @@ func TestRESTShadowDeciderPanicHasNoEffect(t *testing.T) {
 	if got, _ := g.get(g.userToken()); got != gatedOK {
 		t.Fatalf("answer %+v, want %+v", got, gatedOK)
 	}
-	want := map[string]int64{shadowResultsMetric + "|result=error": 1}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=error": 1}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 		t.Fatalf("5.12 counters %v, want %v", d, want)
 	}
@@ -274,7 +276,7 @@ func TestRESTShadowNoOrgDenyIsSkipped(t *testing.T) {
 	if want := (answer{http.StatusForbidden, `{"detail":"Organization context required"}`}); got != want {
 		t.Fatalf("answer %+v, want %+v", got, want)
 	}
-	want := map[string]int64{shadowResultsMetric + "|result=skipped": 1}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=skipped": 1}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 		t.Fatalf("5.12 counters %v, want %v", d, want)
 	}
@@ -313,10 +315,10 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 		calls                             int
 	}{
 		"legacy deny, PDP allow": {false, false, false, "admin", map[string]int64{
-			shadowResultsMetric + "|result=mismatch":                                    1,
+			shadowResultsMetric + "|reason=none,result=mismatch":                        1,
 			shadowMismatchMetric + "|caller=admin,class=unresolved,namespace=analytics": 1}, 1},
-		"legacy allow, PDP allow": {true, false, false, "superuser", map[string]int64{shadowResultsMetric + "|result=match": 1}, 1},
-		"delegated":               {true, true, false, "member", map[string]int64{shadowResultsMetric + "|result=skipped": 1}, 0},
+		"legacy allow, PDP allow": {true, false, false, "superuser", map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}, 1},
+		"delegated":               {true, true, false, "member", map[string]int64{shadowResultsMetric + "|reason=none,result=skipped": 1}, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := pdptest.New(t)
@@ -340,8 +342,9 @@ func TestRESTShadowObserveSeam(t *testing.T) {
 // A user token asks the PDP (match); the HS256 edge token routed or not and the envelope are counted skipped; the
 // #5679 exempt counter is unchanged.
 func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
-	skipped := map[string]int64{shadowResultsMetric + "|result=skipped": 1}
-	matched := map[string]int64{shadowResultsMetric + "|result=match": 1}
+	skippedHS256 := map[string]int64{shadowResultsMetric + "|reason=hs256,result=skipped": 1}
+	skippedEnvelope := map[string]int64{shadowResultsMetric + "|reason=envelope,result=skipped": 1}
+	matched := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		for class, tc := range map[string]struct {
 			token func(*gatedREST, *testing.T) string
@@ -349,8 +352,8 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 			calls int
 		}{
 			"user token": {func(g *gatedREST, _ *testing.T) string { return g.userToken() }, matched, 1},
-			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skipped, 0},
-			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skipped, 0},
+			"edge token": {func(g *gatedREST, t *testing.T) string { return g.edgeToken(t) }, skippedHS256, 0},
+			"envelope":   {func(g *gatedREST, _ *testing.T) string { return g.f.envelope }, skippedEnvelope, 0},
 		} {
 			if class == "user token" && !routed {
 				continue
@@ -399,7 +402,7 @@ func TestRESTShadowDelegatedUserTokenIsSkipped(t *testing.T) {
 	if got, _ := g.get(g.minter.mint(ecUser, map[string]any{"act": map[string]any{"sub": actor}}, nil)); got != gatedOK {
 		t.Fatalf("answer %+v, want %+v", got, gatedOK)
 	}
-	want := map[string]int64{shadowResultsMetric + "|result=skipped": 1}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=skipped": 1}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 		t.Fatalf("5.12 counters %v, want %v", d, want)
 	}
@@ -430,7 +433,7 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	if got, _ := g.get(g.userToken()); got != gatedOK {
 		t.Fatalf("second: %+v", got)
 	}
-	want := map[string]int64{shadowResultsMetric + "|result=dropped": 1}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=dropped": 1}
 	got := settle(t, before, want)
 	close(release)
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -534,6 +537,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	closed := map[string][]string{
 		"result":    {"match", "mismatch", "error", "dropped", "skipped"},
+		"reason":    policy.ShadowReasons(),
 		"caller":    {"member", "admin", "superuser"},
 		"class":     {"legacy_bug", "new_bug", "unresolved", "intentional"},
 		"namespace": {"admin", "analytics", "billing", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "teams", "work_items"},
@@ -601,7 +605,7 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 		t.Fatalf("answer %+v, want %+v", got, gatedOK)
 	}
 	want := map[string]int64{
-		shadowResultsMetric + "|result=mismatch":                                        1,
+		shadowResultsMetric + "|reason=none,result=mismatch":                            1,
 		shadowMismatchMetric + "|caller=superuser,class=unresolved,namespace=analytics": 1,
 	}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
@@ -609,13 +613,86 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	}
 }
 
-// A credential class that never asks the PDP has one reason from a closed set; a user token has none.
+// A credential class that never asks the PDP has one reason from the closed list; a user token has "none".
 func TestRESTShadowSkipReasonsAreClosed(t *testing.T) {
 	for class, want := range map[principal.AccessClass]string{
-		principal.AccessClassEdge: "hs256", principal.AccessClassOther: "envelope", principal.AccessClassUser: "",
+		principal.AccessClassEdge: "hs256", principal.AccessClassOther: "envelope", principal.AccessClassUser: "none",
 	} {
 		if got := shadowSkipReason(class); got != want {
 			t.Errorf("class %v: reason %q, want %q", class, got, want)
 		}
+	}
+}
+
+// R1: the hs256 and envelope paths record the reason on the counter, from the one closed list the go-api core owns.
+func TestRESTShadowSkipReasonsAreTheCoreList(t *testing.T) {
+	for _, class := range []principal.AccessClass{principal.AccessClassEdge, principal.AccessClassOther, principal.AccessClassUser} {
+		if reason := shadowSkipReason(class); !slices.Contains(policy.ShadowReasons(), reason) {
+			t.Errorf("class %v: reason %q is outside %v", class, reason, policy.ShadowReasons())
+		}
+	}
+}
+
+// recordingHomeClient answers like an empty organization and keeps every statement with its bindings, in order.
+type recordingHomeClient struct {
+	mu         sync.Mutex
+	statements []string
+}
+
+func (c *recordingHomeClient) Query(_ context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.statements = append(c.statements, fmt.Sprintf("%s | %v", query, bindings))
+	return emptyOrSizingRow(query), nil
+}
+
+// R2: a PDP decision WITH obligations never changes the legacy answer (status and body byte-equal to the gate-less
+// answer) and never changes the SQL the handler runs (recording client). It replaces #5679's
+// TestPDPShadowIgnoresObligations on the new shadow path.
+func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t *testing.T) {
+	serve := func(t *testing.T, gate *pdp.Gate) (answer, []string) {
+		t.Helper()
+		m := newAccessMinter(t)
+		client := &recordingHomeClient{}
+		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true, newHomeGetHandler(client, nil))
+		mux := f.handler.(*http.ServeMux)
+		var handler http.Handler = mux
+		if gate != nil {
+			handler = planeHandler(mux, gate)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/home?scope_type=org", nil)
+		req.Header.Set("Authorization", "Bearer "+m.mint(ecUser, nil, nil))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if gate != nil {
+			gate.Shadow().Wait()
+		}
+		body, _ := io.ReadAll(rec.Result().Body)
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return answer{rec.Code, strings.TrimSpace(string(body))}, slices.Clone(client.statements)
+	}
+	quietStdLog(t)
+	baseAnswer, baseSQL := serve(t, nil)
+	if baseAnswer.Status != http.StatusOK || len(baseSQL) == 0 {
+		t.Fatalf("gate-less run: %+v with %d statements, want a 200 that reads", baseAnswer, len(baseSQL))
+	}
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(ecOrg.String()), "repository_allowlist": []string{"acme/widgets"}})
+	gate := pdp.New(pdp.Config{Mode: pdp.ModeShadow, Decider: pepOf(t, srv.URL), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	before := shadowCounters(t)
+	gotAnswer, gotSQL := serve(t, gate)
+	if gotAnswer != baseAnswer {
+		t.Fatalf("answer with obligations %+v, gate-less %+v: not byte-equal", gotAnswer, baseAnswer)
+	}
+	if !slices.Equal(gotSQL, baseSQL) {
+		t.Fatalf("SQL with obligations %q, gate-less %q: not equal", gotSQL, baseSQL)
+	}
+	if n := len(srv.Requests()); n != 1 {
+		t.Fatalf("PDP asked %d times, want 1 (the cell must reach the shadow)", n)
+	}
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=match": 1}
+	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
+		t.Fatalf("5.12 counters %v, want %v", d, want)
 	}
 }

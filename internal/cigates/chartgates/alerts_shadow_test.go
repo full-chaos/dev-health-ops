@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "service.name": true, "deployment.environment": true}
-	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "reason", "instance_id"}, prohibitedLabels...)
+	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "reason": true, "service.name": true, "deployment.environment": true}
+	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "instance_id"}, prohibitedLabels...)
 	shadowFilterKey   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*(?:!=|=~|=|\bNOT IN\b|\bIN\b|\bNOT LIKE\b|\bLIKE\b|\bEXISTS\b)`)
 	shadowQuoted      = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 	shadowPromMatcher = regexp.MustCompile(`\{([^}]*)\}`)
@@ -104,7 +104,7 @@ func shadowMetricNamesAreEmitted(g *guard) {
 
 func shadowCheckKeys(g *guard, where string, keys []string) {
 	for _, k := range keys {
-		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, service.name, deployment.environment}", where, k)
+		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, reason, service.name, deployment.environment}", where, k)
 		for _, b := range shadowBannedKeys {
 			g.expect(k != b, "%s uses the prohibited label %q", where, k)
 		}
@@ -128,7 +128,7 @@ func shadowLabelsStayInAllowlist(g *guard) {
 		}
 	}
 	g.expect(rows[shadowMismatch] == "caller,class,namespace", "%s row for %s is %q, want caller,class,namespace", shadowLabelsRel, shadowMismatch, rows[shadowMismatch])
-	g.expect(rows[shadowResults] == "result", "%s row for %s is %q, want result", shadowLabelsRel, shadowResults, rows[shadowResults])
+	g.expect(rows[shadowResults] == "reason,result", "%s row for %s is %q, want reason,result", shadowLabelsRel, shadowResults, rows[shadowResults])
 
 	expr := str(alertNamed(g, shadowAlert)["expr"])
 	var keys []string

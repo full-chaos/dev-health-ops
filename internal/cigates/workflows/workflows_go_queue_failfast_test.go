@@ -162,6 +162,10 @@ var aggRows = []aggRow{
 	{"queue-tested-zero-legs-skipped", "success", "0", []string{}, true, "", "queue"},
 	{"draft-zero-legs-not-run", "success", "0", []string{}, false, "", "draft"},
 	{"zero-legs-without-a-reason", "success", "0", []string{}, false, "", ""},
+	{"zero-legs-matrix-success-draft", "success", "0", []string{"success"}, false, "success", "draft"},
+	{"zero-legs-matrix-success-label", "success", "0", []string{"success"}, false, "success", "label"},
+	{"zero-legs-matrix-success-no-reason", "success", "0", []string{"success"}, false, "success", ""},
+	{"zero-legs-matrix-success-docs", "success", "0", []string{"success"}, false, "success", "docs"},
 	{"plan-cancelled", "cancelled", "3", []string{"success", "success", "success"}, false, "success", ""},
 	{"plan-failure", "failure", "0", []string{}, false, "", ""},
 	{"plan-skipped", "skipped", "0", []string{}, false, "", ""},
@@ -204,7 +208,9 @@ func TestIntegrationAggregateNeverGreenOnCancelledFailedOrSkippedShards(t *testi
 	for _, m := range []mutation{
 		{failFastGoYml, `if [ "${SHARD_RESULT}" != "success" ]; then`, `if [ "${SHARD_RESULT}" = "failure" ]; then`},
 		{failFastGoYml, `if [ "${SHARD_RESULT}" != "success" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
-		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ]; then`, `if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `            if [ "${SHARD_RESULT}" != "skipped" ]; then`, `            if false; then`},
 		{failFastGoYml, `if [ "${PLAN_RESULT}" != "success" ]; then`, `if [ "${PLAN_RESULT}" = "failure" ]; then`},
 		{failFastGoYml, `              docs | queue | planner)`, `              docs | queue | planner | draft)`},
 		{failFastGoYml, `              *)

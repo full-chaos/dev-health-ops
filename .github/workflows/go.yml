@@ -871,15 +871,13 @@ jobs:
             echo "integration plan result: ${PLAN_RESULT}" >&2
             exit 1
           fi
-          if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then
-            # CHAOS-9947: skipped is valid ONLY with an explicit zero. CHAOS-13075: and only with a reason that stands
-            # for a run elsewhere or for no reachable test: docs-only, merge-queue-tested, the planner's own NONE. A
-            # draft skip, or any other or missing reason, ran nothing and is never success.
+          if [ "${PLAN_LEGS}" = "0" ]; then
+            # CHAOS-9947: skipped is valid ONLY with an explicit zero. CHAOS-13075: a zero-leg plan always meets the reason
+            # check first, whatever the matrix result: it passes only for a reason that stands for a run elsewhere or for no
+            # reachable test (docs-only, merge-queue-tested, the planner's own NONE) and a skipped matrix. A draft skip, any
+            # other or missing reason, or a matrix that did not skip ran nothing this plan stands for and is never success.
             case "${SKIP_REASON:-}" in
-              docs | queue | planner)
-                echo "plan selected 0 integration shards; none ran (reason: ${SKIP_REASON})"
-                exit 0
-                ;;
+              docs | queue | planner) ;;
               draft)
                 echo "INTEGRATION NOT RUN: draft (a draft pull request without a ci:integration or ci:full label; mark it ready or add the label and push)" >&2
                 exit 1
@@ -889,6 +887,12 @@ jobs:
                 exit 1
                 ;;
             esac
+            if [ "${SHARD_RESULT}" != "skipped" ]; then
+              echo "INTEGRATION NOT RUN: plan selected 0 shards but the shard result is '${SHARD_RESULT}'" >&2
+              exit 1
+            fi
+            echo "plan selected 0 integration shards; none ran (reason: ${SKIP_REASON})"
+            exit 0
           fi
           if [ "${SHARD_RESULT}" != "success" ]; then
             echo "shard result: ${SHARD_RESULT}" >&2

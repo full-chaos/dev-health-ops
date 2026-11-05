@@ -301,7 +301,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		return authctx.Claims{}, false
 	}
 	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
-	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, false, true)
+	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
 	return authctx.Claims{OrgID: claims.OrgID}, true
 }
 

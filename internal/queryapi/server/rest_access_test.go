@@ -30,6 +30,7 @@ type restFixture struct {
 	handler  http.Handler
 	reader   *accessReader
 	envelope string
+	priv     ed25519.PrivateKey
 }
 
 func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool) *restFixture {
@@ -46,7 +47,7 @@ func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup,
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &restFixture{envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
+	f := &restFixture{priv: priv, envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
 	if setup != nil {
 		f.reader = setup.reader
 		if err := routeEdgeVerifier(edge, setup.opts, legacyOn); err != nil {

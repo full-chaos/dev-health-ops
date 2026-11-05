@@ -1137,6 +1137,7 @@ services:
     - path: ./ops/.env
       required: true
     environment:
+      AUTH_PROXY_SESSIONS: 'true'
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MIGRATION_DATABASE_URI: postgresql://${POSTGRES_USER:-devhealth}:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/${POSTGRES_DB:-devhealth}
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
@@ -1765,6 +1766,7 @@ services:
     entrypoint:
     - /usr/local/bin/dho
     environment:
+      AUTH_PROXY_SESSIONS: 'true'
       API_DATABASE_ROLE: devhealth_api
       MIGRATION_DATABASE_URI: postgresql://devhealth:${POSTGRES_PASSWORD:-devhealth}@postgres:5432/devhealth?sslmode=disable
       RIVER_COORDINATOR_DATABASE_ROLE: devhealth_coordinator

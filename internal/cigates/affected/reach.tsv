@@ -152,6 +152,7 @@ internal/auth/contracts	contracts.go	internal/auth/pushreconcile
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/pagereader
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/projectionreader
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/reconcilejob
+internal/auth/contracts	contracts.go	internal/auth/repoidentity
 internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
@@ -163,6 +164,7 @@ internal/auth/contracts	contracts.go	internal/auth/workloadexchange
 internal/auth/contracts	contracts.go	internal/cigates/chartgates
 internal/auth/contracts	contracts.go	internal/cigates/docs
 internal/auth/contracts	contracts.go	internal/cigates/workflows
+internal/auth/contracts	contracts.go	internal/clicredentials
 internal/auth/contracts	contracts.go	internal/fixturescli
 internal/auth/contracts	contracts.go	internal/jobs/pushexpiry
 internal/auth/contracts	contracts.go	internal/platform/logging

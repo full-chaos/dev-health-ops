@@ -38,6 +38,10 @@
       "why": "A deny for an action asked about the wrong resource kind."
     },
     {
+      "file": "decision-valid-reason-repository-unresolved.json",
+      "why": "A deny for a repository path that no repository identity of the organization resolves."
+    },
+    {
       "file": "decision-valid-reason-principal-inactive.json",
       "why": "A deny for a principal that is not active."
     },

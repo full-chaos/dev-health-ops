@@ -128,6 +128,7 @@ type azGrant struct {
 	Role         string  `json:"role"`
 	ResourceKind string  `json:"resource_kind"`
 	ResourceKey  string  `json:"resource_key"`
+	RepoID       string  `json:"resource_repo_id"`
 	ExpiresAt    *string `json:"expires_at"`
 	Revoked      bool    `json:"revoked"`
 }

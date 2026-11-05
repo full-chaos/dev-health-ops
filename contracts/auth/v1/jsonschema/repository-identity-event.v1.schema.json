@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/repository-identity-event.v1.schema.json",
+  "title": "Repository identity event (v1 wire format)",
+  "description": "One repository a provider sync observed, as the Auth Control Plane receives it from the auth outbox. The provider sync (the worker) is the producer: it appends one event per synced repository that has a provider id, in the transaction that records the repository effect as committed, through the auth schema function append_repository_identity_event (migration 0056). The auth service is the consumer: it upserts auth.repository_identities, the copy of the provider ids (D6651; ClickHouse repos stays the source).\n\nSTATE TRANSFER. The event carries the full current state of one repository (provider, provider id, live path, observed_at), so an add and a rename are the same event kind. Removal and transfer out of an organization are not events of this surface.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE (the aggregate is one repository of one organization), never global. The `idempotency_key` must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, and `aggregate_id` must equal payload.organization_id + \"/\" + change.provider + \"/\" + change.provider_repo_id; the clients enforce both. Consumer rule: an event whose revision is at or below the revision the stored row was written from is decided and changes nothing; a larger revision replaces the stored state (no gap rule: each event carries the whole state). The consumer also keeps the newer observed_at: an event observed before the stored row is not applied.\n\n`revision` is an integer token in 1..2^53-1; a decimal- or exponent-form token is refused by the clients on the raw token.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "aggregate_type",
+    "aggregate_id",
+    "event_type",
+    "idempotency_key",
+    "created_at",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "repository-identity-event.v1"
+    },
+    "aggregate_type": {
+      "const": "repository_identity"
+    },
+    "aggregate_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[a-z]{1,16}/[0-9]{1,20}$",
+      "description": "\"<organization uuid>/<provider>/<provider id>\": one repository of one organization."
+    },
+    "event_type": {
+      "const": "repository_identity.observed"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^repository_identity:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[a-z]{1,16}/[0-9]{1,20}:[0-9]{1,16}$",
+      "description": "Must equal aggregate_type:aggregate_id:payload.revision; the schema pins the shape and the clients enforce the equality (reject_by_client)."
+    },
+    "created_at": {
+      "type": "string",
+      "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+      "description": "When the event committed (the database clock). RFC 3339, every component bounded as in error.v1."
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "organization_id",
+        "change"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "organization_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "The organization the repository belongs to: the lowercase uuid of auth.organizations."
+        },
+        "change": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provider",
+            "provider_repo_id",
+            "path",
+            "observed_at"
+          ],
+          "properties": {
+            "provider": {
+              "type": "string",
+              "pattern": "^[a-z]{1,16}$",
+              "description": "The provider name (github, gitlab), the 0055 shape of repository_identities.provider."
+            },
+            "provider_repo_id": {
+              "type": "string",
+              "pattern": "^[0-9]{1,20}$",
+              "description": "The provider's stable numeric repository id, as text."
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 255,
+              "pattern": "^[a-z0-9][a-z0-9._/-]*$",
+              "description": "The live path as a canonical repository key (lowercase), the 0055 shape of repository_identities.current_path."
+            },
+            "observed_at": {
+              "type": "string",
+              "pattern": "^([0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])$",
+              "description": "When the sync fetched the repository. RFC 3339, every component bounded as in error.v1."
+            }
+          }
+        }
+      }
+    }
+  }
+}

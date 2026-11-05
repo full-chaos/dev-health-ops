@@ -499,6 +499,16 @@ authService:
     pushLifecycle:
       writerRole: ""
       callerRoles: []
+    # -- CHAOS-13057: the repository identity append function (migration 0056). writerRole is
+    #    a NOLOGIN role that owns it (AUTH_REPO_IDENTITY_WRITER_ROLE) and holds only the outbox
+    #    and revision privileges, none on repository_identities; callerRoles is exactly one login,
+    #    the worker domain login of the provider sync (AUTH_REPO_IDENTITY_CALLER_ROLES). Both or
+    #    neither. The writer role must exist and the migration login must be a member of it
+    #    BEFORE this Job runs (the same privileged step as pushLifecycle). Empty leaves the
+    #    function unexecutable (the worker's WORKER_REPO_IDENTITY_OUTBOX must stay off).
+    repoIdentity:
+      writerRole: ""
+      callerRoles: []
     # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
     #    are granted like sessionReaderRoles (the rendered list is the union);
     #    phase >= 2 fails the render while either is empty.

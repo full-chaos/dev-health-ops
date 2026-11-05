@@ -302,6 +302,10 @@ var optionRegistry = []Option{
 		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
 	},
 	{
+		Flag: "repo-identity-projection", Env: EnvRepoIdentityProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the repository identity projection reader on this replica: it upserts repository_identities from the repository_identity rows of the auth outbox (the provider sync's events); off (default) runs none. Mounts no route",
+	},
+	{
 		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,
 		Usage: "on gives the auth outbox publisher a Valkey sink and subscribes this replica to the revision feed channel; off (default) keeps publishing disabled. Needs " +
 			EnvValkeyURI + ". Mounts no route",

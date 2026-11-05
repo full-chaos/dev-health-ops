@@ -153,6 +153,18 @@ func Run(ctx context.Context, src Source, sink Sink) (Report, error) {
 	return rep, nil
 }
 
+// FillGrantRepoIDs gives each live repository grant of the organization that has no id yet the id of its path, when
+// the path names exactly one repository of the organization. It runs inside the caller's guarded write.
+func FillGrantRepoIDs(ctx context.Context, tx audit.TxOps, schema authschema.ValidatedIdentifier, org uuid.UUID) error {
+	q := authschema.Quote(schema)
+	_, err := tx.Exec(ctx, `UPDATE `+q+`.resource_grants g SET resource_repo_id = u.rid, updated_at = now()
+FROM (SELECT current_path, min(provider || ':' || provider_repo_id) AS rid FROM `+q+`.repository_identities
+      WHERE organization_id = $1 GROUP BY current_path HAVING count(*) = 1) u
+WHERE g.organization_id = $1 AND g.resource_kind = 'repository' AND g.resource_id <> '*'
+AND g.revoked_at IS NULL AND g.resource_repo_id IS NULL AND g.resource_id = u.current_path`, org)
+	return err
+}
+
 // PGSink writes through audit.Commit as the auth runtime role.
 type PGSink struct {
 	Pool   *pgxpool.Pool
@@ -198,12 +210,7 @@ WHERE `+q+`.repository_identities.current_path IS DISTINCT FROM EXCLUDED.current
 AND (provider, provider_repo_id) NOT IN (SELECT t.p, t.i FROM unnest($2::text[], $3::text[]) AS t(p, i))`, org, providers, ids); err != nil {
 				return err
 			}
-			_, err := tx.Exec(ctx, `UPDATE `+q+`.resource_grants g SET resource_repo_id = u.rid, updated_at = now()
-FROM (SELECT current_path, min(provider || ':' || provider_repo_id) AS rid FROM `+q+`.repository_identities
-      WHERE organization_id = $1 GROUP BY current_path HAVING count(*) = 1) u
-WHERE g.organization_id = $1 AND g.resource_kind = 'repository' AND g.resource_id <> '*'
-AND g.revoked_at IS NULL AND g.resource_repo_id IS NULL AND g.resource_id = u.current_path`, org)
-			return err
+			return FillGrantRepoIDs(ctx, tx, s.Schema, org)
 		},
 		Audit:     audit.AuditEvent{EventType: "auth.repository_identity.synced", Outcome: audit.OutcomeAllowed, OrganizationID: &orgText},
 		OffStream: audit.OffStreamRepositoryIdentity,

@@ -30,6 +30,11 @@ ALTER TABLE repository_identities
     ADD COLUMN source_revision bigint NOT NULL DEFAULT 0 CHECK (source_revision >= 0),
     ADD COLUMN observed_at timestamptz;
 
+-- The auth service's reader of these events reads the rows of this one aggregate type in id order from its low-water
+-- mark (as the push reader does with auth_outbox_events_push_idx of 0049).
+CREATE INDEX auth_outbox_events_repository_identity_idx
+    ON auth_outbox_events (id) WHERE aggregate_type = 'repository_identity';
+
 -- The only door the worker has to the outbox for this aggregate. The worker's login holds EXECUTE on this function and
 -- no table privilege in this schema; the function runs as a dedicated NOLOGIN owner (auth-migrate hands it over, see
 -- the repository identity writer in authschema) that holds exactly INSERT on the outbox, USAGE on its sequence and

@@ -190,17 +190,22 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		rows = filtered
 	}
 
-	// The quote text of a unit that touches a repository outside the ceiling is never read nor served.
-	var omitQuotes map[string]bool
-	if opts.IncludeText {
+	// The quote text and the structural evidence of a unit that touches a repository outside the ceiling are never read
+	// nor served: both are unit-level and cannot be narrowed (acp Q3, R1).
+	var mixedUnits map[string]bool
+	if opts.Ceiling.Restricted() {
 		unitIDs := make([]string, 0, len(rows))
 		for _, row := range rows {
 			unitIDs = append(unitIDs, row.WorkUnitID)
 		}
 		var err error
-		if omitQuotes, err = reader.FetchUnitsTouchingOtherRepos(ctx, opts.OrgID, unitIDs, opts.Ceiling); err != nil {
+		if mixedUnits, err = reader.FetchUnitsTouchingOtherRepos(ctx, opts.OrgID, unitIDs, opts.Ceiling); err != nil {
 			return nil, err
 		}
+	}
+	omitQuotes := map[string]bool{}
+	if opts.IncludeText {
+		omitQuotes = mixedUnits
 	}
 
 	var unitRuns []WorkUnitRunPair
@@ -222,6 +227,9 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 	var issueIDs, prRefs []string
 	for _, row := range rows {
+		if mixedUnits[row.WorkUnitID] {
+			continue
+		}
 		payload := derefString(row.StructuralEvidenceJSON)
 		issueIDs = append(issueIDs, extractIssueIDs(payload)...)
 		prRefs = append(prRefs, extractPRRefs(payload)...)
@@ -314,6 +322,10 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		var structuralEvidence []map[string]any
 		var structuralOrdered []*pyjson.Object
 		structuralPayload := derefString(row.StructuralEvidenceJSON)
+		structuralOmitted := mixedUnits[unitID]
+		if structuralOmitted {
+			structuralPayload = ""
+		}
 		if structuralPayload != "" {
 			if decoded, err := pyjson.Decode([]byte(structuralPayload)); err == nil {
 				if parsed, ok := decoded.(*pyjson.Object); ok {
@@ -429,6 +441,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				Contextual: contextualEvidence,
 
 				StructuralOrdered: structuralOrdered,
+				StructuralOmitted: structuralOmitted,
 			},
 			ChangeSet: changeSetOf(row.EffortMetric, row.EffortValue),
 		})

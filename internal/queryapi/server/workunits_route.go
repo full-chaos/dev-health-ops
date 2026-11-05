@@ -206,6 +206,28 @@ type workUnitEvidenceWire struct {
 	Textual    []any `json:"textual"`
 	Structural []any `json:"structural"`
 	Contextual []any `json:"contextual"`
+
+	// omitStructural writes no "structural" key (R1, CHAOS-13090): an omitted field, not an empty list that reads as
+	// "no evidence". Never set on an unrestricted read.
+	omitStructural bool
+}
+
+func (e workUnitEvidenceWire) MarshalJSON() ([]byte, error) {
+	var model any
+	if e.omitStructural {
+		model = struct {
+			Textual    []any `json:"textual"`
+			Contextual []any `json:"contextual"`
+		}{e.Textual, e.Contextual}
+	} else {
+		type plain workUnitEvidenceWire
+		model = plain(e)
+	}
+	value, err := pyjson.FromGoModel(model)
+	if err != nil {
+		return nil, err
+	}
+	return pyjson.Marshal(value)
 }
 
 // evidenceKeyOrder is the key order work_units.py builds each fixed-shape
@@ -345,6 +367,8 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) w
 			Textual:    textual,
 			Structural: structural,
 			Contextual: contextual,
+
+			omitStructural: investment.Evidence.StructuralOmitted,
 		},
 		ChangeSet: changeSetWire(investment.ChangeSet),
 	}

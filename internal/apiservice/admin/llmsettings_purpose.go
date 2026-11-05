@@ -258,29 +258,6 @@ func (h *handlers) deleteLLMPurpose(w http.ResponseWriter, r *http.Request, orgI
 	policy.WriteModel(w, http.StatusOK, out, nil)
 }
 
-// purposeProviderChangeNeedsKey is ProviderChangeNeedsKey over the stored rows
-// of the override: a categorize write with no api_key that changes the saved
-// provider must bring the new provider's key.
-func (h *handlers) purposeProviderChangeNeedsKey(ctx context.Context, orgID string, purpose llmorgsettings.Purpose, providerName string) (bool, error) {
-	if purpose != llmorgsettings.PurposeCategorize {
-		return false, nil
-	}
-	keyRow, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, "api_key"))
-	if err != nil {
-		return false, err
-	}
-	providerRow, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, "provider"))
-	if err != nil {
-		return false, err
-	}
-	var storedProvider *string
-	if providerRow != nil {
-		storedProvider = providerRow.Value
-	}
-	keyStored := keyRow != nil && keyRow.Value != nil && *keyRow.Value != ""
-	return llmorgsettings.ProviderChangeNeedsKey(purpose, keyStored, storedProvider, providerName), nil
-}
-
 // purposeNeedsKey is whether a purpose write without an api_key must be
 // refused: the provider needs a key, the override has none stored, and the
 // default row does not supply one (same provider, key stored).

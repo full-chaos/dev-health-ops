@@ -311,7 +311,6 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 			{"preview alias", categorize(ts("jev-preview", "")), "categorize_byo_model_unsupported", 400},
 			{"unlisted model", categorize(ts("jev-1.14.0", "")), "categorize_byo_model_unsupported", 400},
 			{"base url", categorize(ts("jev-1.13.0", `,"base_url":"https://api.typesafe.ai"`)), "invalid_base_url", 400},
-			{"switch with no key", categorize(`{"provider":"typesafe","model":"jev-1.13.0"}`), "", 422},
 		} {
 			status, resp := call("PUT", route, c.payload)
 			if status != c.status {
@@ -336,9 +335,6 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 		}
 		if status, resp := call("PUT", route, categorize(`{"provider":"typesafe","model":"jev-1.13.0"}`)); status != 200 {
 			t.Fatalf("same provider with no new key: %d %v, want 200", status, resp)
-		}
-		if status, resp := call("PUT", route, categorize(fmt.Sprintf(`{"provider":"clef","model":"clef","base_url":%q}`, clefBase))); status != 422 {
-			t.Fatalf("switch back to clef with no key: %d %v, want 422", status, resp)
 		}
 		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND (key LIKE 'purpose:categorize:%' OR key = 'categorize_byo_enabled')`, org.String()); err != nil {
 			t.Fatal(err)

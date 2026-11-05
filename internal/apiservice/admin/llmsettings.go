@@ -386,16 +386,6 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apiKey == nil || *apiKey == "" {
-			changed, err := h.purposeProviderChangeNeedsKey(ctx, orgID, purpose, *provider)
-			if err != nil {
-				h.internalError(ctx, w, "check llm purpose key", err)
-				return
-			}
-			if changed {
-				writeValidation(w, pybody.Errors{pydanticValueError([]pyjson.Value{"body", "api_key"}, nil,
-					"api_key is required when the provider changes: the stored key belongs to the other provider")})
-				return
-			}
 			need, err := h.purposeNeedsKey(ctx, orgID, purpose, *provider)
 			if err != nil {
 				h.internalError(ctx, w, "check llm purpose key", err)

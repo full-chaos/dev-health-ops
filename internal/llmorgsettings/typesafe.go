@@ -33,14 +33,3 @@ func TypeSafeModels() []string {
 	sort.Strings(out)
 	return out
 }
-
-// ProviderChangeNeedsKey is the key rule of a categorize override written with
-// no api_key: when an override key is stored and the saved provider is not the
-// new one, the stored key belongs to the other vendor and must not be sent to
-// the new one, so the write needs a new key. Other purposes keep their rule.
-func ProviderChangeNeedsKey(purpose Purpose, keyStored bool, storedProvider *string, newProvider string) bool {
-	if purpose != PurposeCategorize || !keyStored {
-		return false
-	}
-	return storedProvider == nil || normalizeProvider(*storedProvider) != normalizeProvider(newProvider)
-}

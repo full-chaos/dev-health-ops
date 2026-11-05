@@ -70,8 +70,8 @@ What does not exist on `main`:
 ### Rule out other causes
 
 - A `403` is a PDP deny, not an outage. Triage the reason with [Auth shadow PDP triage](auth-shadow-pdp-triage.md).
-- A legacy HS256 token, a delegated (impersonation) session, or an organization route with no organization keeps the legacy answer and is never refused with a `503` (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
-- An allow with a `redaction`, `minimum_assurance` or `step_up` obligation is a `503` for every such request, however healthy the PDP is. So is a `repository_allowlist` or `repository_scope` allow: no route is listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` is empty, `enforce.go:52`). The only log signal is the second WARN line above.
+- A legacy HS256 token or an organization route with no organization keeps the legacy answer and is never refused with a `503` (`enforce.go:147-152`, `unjudgedReason` at `:192`). They are counted in `dev_health_authz_enforcement_unjudged_total{route,reason}` (`enforcecounters.go:14`).
+- An allow with a `redaction` or `step_up` obligation, or a `minimum_assurance` above `aal1`, is a `503` for every such request, however healthy the PDP is. So is a `repository_allowlist` or `repository_scope` allow: no route is listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` is empty, `enforce.go:52`). The only log signal is the second WARN line above.
 
 ## Roll back
 

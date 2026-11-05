@@ -316,6 +316,17 @@ jobs:
           test -n "${want}"
           grep -q "^${want}+g" "${RUNNER_TEMP}/helm-version.txt"
 
+      # CHAOS-13084: the k3s scripts the race legs test check `command -v envsubst` (gettext-base). A build that lost it fails
+      # here; the substitution is run, not only looked up.
+      - name: Check envsubst inside the built image
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/arm64 -e PROBE=envsubst-ok \
+            ghcr.io/full-chaos/arc-runner:check \
+            sh -c 'printf "%s" "\${PROBE}" | envsubst "\${PROBE}"' > "${RUNNER_TEMP}/envsubst-probe.txt"
+          cat "${RUNNER_TEMP}/envsubst-probe.txt"
+          grep -qx 'envsubst-ok' "${RUNNER_TEMP}/envsubst-probe.txt"
+
       - name: Determine whether this build is main's current head
         # CHAOS-5166: this job now routes to the ARC pool (self-hosted leg
         # above), and the `gh` CLI is NOT part of the arc-runner image --

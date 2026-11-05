@@ -83,6 +83,8 @@ type ReadDeps struct {
 	Meter       metric.Meter
 	// ProfileRows is the endpoint-profile document; nil is the one the binary embeds.
 	ProfileRows []byte
+	// Workload is the go-api workload path; nil refuses every workload token.
+	Workload *SessionIssueWorkload
 }
 
 // ReadRoutes returns the versioned read routes for the internal listener only: ProvisioningRoutes never returns them, so the

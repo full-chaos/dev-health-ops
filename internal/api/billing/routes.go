@@ -2,8 +2,7 @@
 // routes (api/billing/plans.py, subscriptions.py, and router.py's checkout
 // and portal), ported 1:1 from the Python api, with one named deviation: a
 // subscription route given another org's org_id requires the caller to be
-// a member of that org or a superuser (the Python helper does not check), and
-// a subscription write there needs the owner or admin role in that org.
+// a member of that org or a superuser (the Python helper does not check).
 package billing
 
 import (
@@ -50,8 +49,7 @@ type Deps struct {
 }
 
 type handlers struct {
-	pool *pgxpool.Pool
-	// db is pool as a querier (nil without a pool): the subscription writes read through it, so a test can serve them.
+	pool          *pgxpool.Pool
 	db            querier
 	stripe        *stripeclient.Provider
 	config        config.BillingConfig
@@ -67,11 +65,7 @@ type handlers struct {
 // newHandlers is the handlers of deps, with the defaults a nil logger and
 // clock take.
 func newHandlers(deps Deps) handlers {
-	h := handlers{pool: deps.Pool, stripe: deps.Stripe, config: deps.Config, webhookSecret: newWebhookCredential(deps.WebhookSecret),
-		licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now, platformRoles: deps.PlatformRoles}
-	if deps.Pool != nil {
-		h.db = deps.Pool
-	}
+	h := handlers{pool: deps.Pool, db: querierOf(deps.Pool), stripe: deps.Stripe, config: deps.Config, webhookSecret: newWebhookCredential(deps.WebhookSecret), licenseKey: deps.LicensePrivateKey, stripeKey: deps.StripeKey, producer: deps.Producer, logger: deps.Logger, now: deps.Now, platformRoles: deps.PlatformRoles}
 	if h.logger == nil {
 		h.logger = slog.Default()
 	}

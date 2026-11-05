@@ -51,8 +51,7 @@ func composeAuthIssuerIsOne(g *guard) {
 		aliases = append(aliases, str(a))
 	}
 	g.expect(equal(aliases, []string{"auth.bigboy.internal"}), "auth-issuer answers %v on dev-health, want [auth.bigboy.internal] (the issuer host go-api dials)", aliases)
-	g.expect(str(at(r.top, "configs", "auth_issuer_nginx", "file")) != "", "auth-issuer config is not a file config (compose refuses content configs on a read-only service)")
-	conf := g.read("ci/bigboy/auth-issuer.nginx.conf")
+	conf := str(mp(front["environment"])["AUTH_ISSUER_NGINX_CONF"])
 	g.expect(strings.Contains(conf, "listen 8443 ssl;"), "auth-issuer does not listen on 8443 with TLS (the issuer port)")
 	locations := regexp.MustCompile(`location ([^{]+)\{`).FindAllStringSubmatch(conf, -1)
 	var got []string
@@ -286,9 +285,9 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthIssuerIsOne, want: "auth-service AUTH_TOKEN_ISSUER_URL"},
 		{name: "issuer alias lost", mutate: mut(composeFile, "        aliases: [auth.bigboy.internal]\n", "        aliases: [auth-issuer.bigboy.internal]\n"),
 			check: composeAuthIssuerIsOne, want: "auth-issuer answers"},
-		{name: "issuer serves every path", mutate: mut("ci/bigboy/auth-issuer.nginx.conf", "    location / { return 404; }\n", "    location / { proxy_pass $auth_upstream; }\n"),
+		{name: "issuer serves every path", mutate: mut(composeFile, "            location / { return 404; }\n", "            location / { proxy_pass $$auth_upstream; }\n"),
 			check: composeAuthIssuerIsOne, want: "two documents"},
-		{name: "issuer plain http", mutate: mut("ci/bigboy/auth-issuer.nginx.conf", "    listen 8443 ssl;\n", "    listen 8443;\n"),
+		{name: "issuer plain http", mutate: mut(composeFile, "            listen 8443 ssl;\n", "            listen 8443;\n"),
 			check: composeAuthIssuerIsOne, want: "TLS"},
 		{name: "acr-api on auth_plane", mutate: mut(composeFile, "      acr_auth_workload: null\n      dho-clickhouse-readers: null\n      dho-query-internal: null\n    profiles: [acr]", "      acr_auth_workload: null\n      auth_plane: null\n      dho-clickhouse-readers: null\n      dho-query-internal: null\n    profiles: [acr]"),
 			check: composeAuthNetworks, want: "network auth_plane has members"},

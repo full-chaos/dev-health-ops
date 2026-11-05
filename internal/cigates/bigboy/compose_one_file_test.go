@@ -221,7 +221,7 @@ var composeOneFileChecks = []check{
 
 func TestComposeOneFileReal(t *testing.T) { runReal(t, composeOneFileChecks...) }
 
-var composeFiles = []string{composeFile, composePins, "ci/bigboy/auth-issuer.nginx.conf"}
+var composeFiles = []string{composeFile, composePins}
 
 const (
 	composeOpNotResolved = "${BIGBOY_OPERATOR_IMAGE:-ghcr.io/full-chaos/dev-health-go-operator:not-resolved}"

@@ -336,8 +336,7 @@ VALUES ($1, $2, $3, $4, $5, 'v1:seed-not-decrypted', 'v1', $6, now(), now(), $7:
 			return text
 		},
 	})
-	pin.Finish(t)
-	claimPin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	t.Log(receipt)
 
 	compare := func(name, query string) {

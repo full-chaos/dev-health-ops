@@ -343,10 +343,14 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 	inspected, entitlementsInspected, stripeFailures := 0, 0, 0
 	var orglessRefused []string
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-ledger.go-pin.json", SHA256: ledgerPinSHA256, Ruling: overflowPageRuling})
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim/billing-ledger.go-pin.json", SHA256: ledgerOrgClaimPinSHA256, Ruling: orgClaimRuling})
+	claimRetired := map[string]bool{"ent: bad org claim": true, "ent: token names another org": true, "ent: token org without membership": true,
+		"inv list: bad org claim": true}
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
-		Golden: golden,
-		Retire: retiredLedgerRequest,
-		Pin:    pin,
+		Golden:      golden,
+		Retire:      retiredLedgerRequest,
+		Pin:         pin,
+		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
 		// D6145: the org-less caller's entitlements and invoice-list reads answer 403 where Python answered another
 		// status or body; neither request writes a row or calls Stripe.
 		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 2,
@@ -434,9 +438,12 @@ func TestVenueOracleBillingLedger(t *testing.T) {
 		_ = os.WriteFile(path+".ledger", []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	golden.Finish(t)
 }
+
+// ledgerOrgClaimPinSHA256 is the digest of testdata/orgclaim/billing-ledger.go-pin.json.
+const ledgerOrgClaimPinSHA256 = ""
 
 // goOnlyEntitlementKeys are decision keys added after the frozen Python build
 // (acr_service_model: CHAOS-9311, #4032; platform_model_fallback: CHAOS-10262):

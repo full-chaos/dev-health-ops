@@ -489,7 +489,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 		Pin:         pin,
 		Retirements: []venueoracle.Retirement{claimRetirement},
 	})
-	claimPin.Finish(t)
 	t.Log(receipt)
 
 	pinRows := func(name, query string) {
@@ -508,7 +507,7 @@ FROM settings ORDER BY org_id, category, key`)
 	if withKey {
 		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
 	}
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	golden.Finish(t)
 }
 

@@ -300,10 +300,10 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 
 // ssoOrgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
 // holds no live membership in.
-const ssoOrgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:85-99); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+const ssoOrgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
 
 // ssoOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
-const ssoOrgClaimPinSHA256 = ""
+const ssoOrgClaimPinSHA256 = "7a2edb56f1b47ebf630d0e5ac820670842e3432889356ac708fc89abd4be485a"
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {

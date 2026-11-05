@@ -519,9 +519,13 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 }
 
 // billingOrglessSuperusers is the "super" seed: a superuser whose org claim (orgD) names an organization it holds
-// no membership in. auth-service login mints such a user's access token with no org claim (authapi/login.go:420-423),
+// no membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190),
 // so its user access token carries none; the recorded request stays keyed by the recorded claim.
 var billingOrglessSuperusers = []string{"super"}
+
+// orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user holds
+// no live membership in, or is not a UUID.
+const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
 
 func (f billingFixture) tokenSpecs() map[string]map[string]any {
 	spec := func(user uuid.UUID, org, role string, extra map[string]any) map[string]any {
@@ -921,11 +925,17 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	var refusedNames []string
 	refusedCheckouts := 0
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/billing-plans-checkout.go-pin.json", SHA256: plansCheckoutPinSHA256, Ruling: overflowPageRuling})
+	// orgClaimRuling: Go refuses the bad-org-claim checkout, so Python's checkout of that request is one more Stripe call
+	// and one more session number Go never spends, counted the same way.
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim/billing-plans-checkout.go-pin.json", SHA256: plansCheckoutOrgClaimPinSHA256, Ruling: orgClaimRuling})
+	claimRetired := map[string]bool{"checkout: bad org claim": true, "portal: bad org claim": true, "sub: bad org claim": true}
+	claimCheckouts := 0
 	receipt := venueoracle.Diff(t, base, main, python[:len(main)], venueoracle.DiffOptions{
 		Normalize:     func(_ venueoracle.Request, body string) string { return normalize(body) },
 		Golden:        golden,
 		Retire:        func(request venueoracle.Request) bool { return request.Name == "list: offset overflow" },
 		Pin:           pin,
+		Retirements:   []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
 		OrglessTokens: map[string]bool{venue.Tokens["noOrg"]: true}, MaxOrglessRefusals: 3,
 		OnOrglessRefused: func(request venueoracle.Request) {
 			refusedNames = append(refusedNames, request.Name)
@@ -933,8 +943,12 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 				refusedCheckouts++
 			}
 		},
-		NormalizePython: func(_ venueoracle.Request, body string) string {
-			return shiftSessionNumbers(body, refusedCheckouts)
+		NormalizePython: func(request venueoracle.Request, body string) string {
+			shifted := shiftSessionNumbers(body, refusedCheckouts+claimCheckouts)
+			if claimRetired[request.Name] && request.Method == "POST" && strings.HasSuffix(request.Path, "/checkout") {
+				claimCheckouts++
+			}
+			return shifted
 		},
 	})
 	// Diff declares a refusal only when Go answered exactly 403 {"detail":"Organization context required"}; the
@@ -951,7 +965,7 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 	fake.mu.Lock()
 	goCalls := append([]string(nil), fake.calls["go"]...)
 	fake.mu.Unlock()
-	pyCalls := dropEmptyOrgCheckouts(t, pythonCalls(t, golden, fake), refusedCheckouts)
+	pyCalls := dropCheckouts(t, dropEmptyOrgCheckouts(t, pythonCalls(t, golden, fake), refusedCheckouts), badOrgCheckout, claimCheckouts)
 	callsSame := len(pyCalls) >= len(goCalls) && strings.Join(pyCalls[:len(goCalls)], "\n") == strings.Join(goCalls, "\n")
 	if !callsSame {
 		t.Errorf("stripe calls differ:\n python %s\n go     %s", strings.Join(pyCalls, "\n        "), strings.Join(goCalls, "\n        "))
@@ -1014,9 +1028,12 @@ func TestVenueOracleBillingPlansCheckout(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	golden.Finish(t)
 }
+
+// plansCheckoutOrgClaimPinSHA256 is the digest of testdata/orgclaim/billing-plans-checkout.go-pin.json.
+const plansCheckoutOrgClaimPinSHA256 = ""
 
 // plansCheckoutPinSHA256 is the digest of testdata/billing-plans-checkout.go-pin.json.
 const plansCheckoutPinSHA256 = "e20c8364febd8df034c2768ee4dcd2a3972db8d7867ca1448b146fce1ed805d8"
@@ -1158,6 +1175,28 @@ func dropEmptyOrgCheckouts(t *testing.T, calls []string, refused int) []string {
 	}
 	if dropped < refused {
 		t.Errorf("go refused %d no-org checkouts, python made %d empty-org checkout calls", refused, dropped)
+	}
+	return kept
+}
+
+// badOrgCheckout marks the Stripe checkout call of the bad-org-claim checkout (its org claim is not a UUID).
+const badOrgCheckout = "client_reference_id=not-a-uuid&line_items[0][price]="
+
+// dropCheckouts removes from Python's Stripe calls exactly the first n checkout calls that carry marker, and fails
+// when Python made fewer.
+func dropCheckouts(t *testing.T, calls []string, marker string, n int) []string {
+	t.Helper()
+	var kept []string
+	dropped := 0
+	for _, call := range calls {
+		if dropped < n && strings.HasPrefix(call, "POST /v1/checkout/sessions") && strings.Contains(call, marker) {
+			dropped++
+			continue
+		}
+		kept = append(kept, call)
+	}
+	if dropped < n {
+		t.Errorf("go refused %d checkouts marked %q, python made %d such calls", n, marker, dropped)
 	}
 	return kept
 }

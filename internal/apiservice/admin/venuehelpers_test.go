@@ -422,7 +422,7 @@ func splitRows(joined string) []string {
 
 // orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
 // holds no live membership in, as written (not a member, not a UUID, not canonical, no such organization).
-const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:85-99); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
 
 // orgClaimRetirement pins Go's answer to each named request under orgClaimRuling in the pin at path (relative to
 // this package). The caller finishes the pin.

@@ -103,7 +103,7 @@ type Options struct {
 	// OrglessSuperusers names superuser seeds whose org claim names an
 	// organization the user holds no membership in: their user access token
 	// carries no org claim, as auth-service login mints one for a user without a
-	// membership (authapi/login.go:420-423). The recorded request is keyed as
+	// membership (auth/authapi/login.go:184-190). The recorded request is keyed as
 	// recorded. A named seed that is not a superuser is refused.
 	OrglessSuperusers []string
 	// PythonEnv is the Python plane's settings the golden was recorded under,

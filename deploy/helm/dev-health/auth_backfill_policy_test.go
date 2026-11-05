@@ -2,7 +2,6 @@ package devhealth_test
 
 import (
 	"fmt"
-	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -179,7 +178,7 @@ func hasString(list []string, want string) bool {
 
 func renderRelease(t *testing.T, release string, args ...string) []map[string]any {
 	t.Helper()
-	out, err := exec.Command("helm", append([]string{"template", release, "."}, args...)...).CombinedOutput()
+	out, err := helmCommand(append([]string{"template", release, "."}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%.300s", err, out)
 	}

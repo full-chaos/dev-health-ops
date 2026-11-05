@@ -43,7 +43,7 @@ func startScopeLagHarness(t *testing.T, ctx context.Context) *scopeLagHarness {
 		t.Fatalf("open raw ClickHouse connection: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL) {
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededQualityIssueSizeDDL) {
 		if err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}

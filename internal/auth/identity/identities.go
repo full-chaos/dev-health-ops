@@ -130,7 +130,7 @@ func (s *Store) IdentityBySubject(ctx context.Context, issuer string, provider P
 		}
 		return Principal{}, false, err
 	}
-	if err := s.projectIdentity(ctx, key, userID); err != nil {
+	if err := s.projectIdentity(ctx, key, userID, legacy.AuthProvider); err != nil {
 		if errors.Is(err, ErrProviderAlreadyLinked) {
 			// The refusal concerns the projected user: name it.
 			return Principal{ID: userID}, false, err
@@ -228,7 +228,7 @@ WHERE u.auth_provider = $1 AND u.auth_provider_id = $2 AND `+scope, args...)
 // projectIdentity links key to the projected legacy user. A principal that
 // holds another subject at the key's issuer and provider is
 // ErrProviderAlreadyLinked: the projection writes nothing.
-func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID) (err error) {
+func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal uuid.UUID, protocol string) (err error) {
 	defer func() { s.countLink(ctx, "project", err) }()
 	linkID := uuid.New()
 	target, subject := linkID.String(), principal.String()
@@ -248,7 +248,7 @@ func (s *Store) projectIdentity(ctx context.Context, key ExternalKey, principal 
 	if err != nil {
 		return s.domainErr(ctx, "project external identity", err)
 	}
-	s.logger.InfoContext(ctx, "identity: legacy external identity projected", "provider", providerLabel(key.Provider))
+	s.logger.InfoContext(ctx, "identity: legacy external identity projected", projectedLogAttrs(key, protocol)...)
 	return nil
 }
 
@@ -294,7 +294,14 @@ type ProvisionRequest struct {
 	// id); a social key derives both from itself.
 	LegacyProvider string
 	LegacySubject  string
+	// SAMLNameID is the assertion NameID's own Format and SPNameQualifier of a SAML sign-up, written to
+	// public.users as go-api writes them (saml_nameid_format, saml_sp_name_qualifier): as asserted, an empty
+	// string stays an empty string. nil for every other account (NULL).
+	SAMLNameID *SAMLNameIDParts
 }
+
+// SAMLNameIDParts are the NameID attributes the SAML identity key needs besides the NameID value.
+type SAMLNameIDParts struct{ Format, SPNameQualifier string }
 
 // ProvisionFederated creates a user principal, its auth.users row and its
 // external identity in one audit.Commit (reason principal_provisioned). It

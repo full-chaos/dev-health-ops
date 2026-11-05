@@ -33,6 +33,8 @@ type publicUser struct {
 	// SSOProviderID is the provider row an OIDC or SAML account belongs to
 	// (go-api writes it since ops revision 0155); nil for every other account.
 	SSOProviderID *uuid.UUID
+	// SAMLNameID is the NameID Format and SPNameQualifier of a SAML account; nil is NULL for both.
+	SAMLNameID *SAMLNameIDParts
 }
 
 // insertPublicUser writes the public.users row inside the audit.Commit that
@@ -51,11 +53,17 @@ func insertPublicUser(ctx context.Context, tx audit.TxOps, u publicUser) error {
 			return err
 		}
 	}
+	var format, qualifier *string
+	if u.SAMLNameID != nil {
+		format, qualifier = &u.SAMLNameID.Format, &u.SAMLNameID.SPNameQualifier
+	}
 	_, err := tx.Exec(ctx, `INSERT INTO public.users
 	(id, email, username, password_hash, full_name, auth_provider, auth_provider_id,
-	 is_active, is_verified, token_version, created_at, updated_at, sso_provider_id)
-VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, 0, now(), now(), $9)`,
-		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified, u.SSOProviderID)
+	 is_active, is_verified, token_version, created_at, updated_at, sso_provider_id,
+	 saml_nameid_format, saml_sp_name_qualifier)
+VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, true, $8, 0, now(), now(), $9, $10, $11)`,
+		u.ID, u.Email, u.Username, u.PasswordHash, u.FullName, u.AuthProvider, u.AuthProviderID, u.Verified, u.SSOProviderID,
+		format, qualifier)
 	return err
 }
 
@@ -127,6 +135,9 @@ func federatedPublicUser(id uuid.UUID, emailLower string, req ProvisionRequest) 
 				return publicUser{}, ErrLegacyProjection
 			}
 			u.SSOProviderID = &provider
+		}
+		if req.LegacyProvider == "saml" {
+			u.SAMLNameID = req.SAMLNameID
 		}
 	default:
 		return publicUser{}, ErrLegacyProjection

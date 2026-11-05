@@ -25,6 +25,9 @@ import (
 // lock, so the wait for the lock is not counted as earlier time.
 var activeSQL = rule.ActiveRule("r", "p")
 
+// publicActiveSQL is rule.PublicActiveRule over r the assignment and u its public.users row.
+var publicActiveSQL = rule.PublicActiveRule("r", "u")
+
 // HoldsSQL is the one SQL condition that principalExpr holds the platform role
 // roleExpr now, under the store's rule; it is rule.HoldsSQL. schema is a quoted
 // auth schema; principalExpr and roleExpr are SQL expressions of the caller's
@@ -102,9 +105,10 @@ type rowQuerier interface {
 // RowQuerier is a connection or transaction a read runs on.
 type RowQuerier = rowQuerier
 
-// ResolveOn is Resolve on q, so a caller's transaction reads its own snapshot.
+// ResolveOn is Resolve on q, so a caller's transaction reads its own snapshot. It is a decision input: the holder is
+// an active public.users row (D6651), not an auth.principals row.
 func (s *Store) ResolveOn(ctx context.Context, q RowQuerier, principal uuid.UUID) (Authority, error) {
-	a, err := s.resolveOn(ctx, q, principal)
+	a, err := s.resolvePublicOn(ctx, q, principal)
 	if err != nil {
 		return Authority{}, s.storeErr(ctx, "resolve", err)
 	}
@@ -123,12 +127,26 @@ func (s *Store) Resolve(ctx context.Context, principal uuid.UUID) (Authority, er
 
 // resolveOn reads the active role keys of principal through q. A write calls
 // it after lockWrites and lockPrincipals, so it decides on the clock of a
-// statement that runs after every lock wait.
+// statement that runs after every lock wait. It stays on auth.principals: it
+// guards a write of auth's own table.
 func (s *Store) resolveOn(ctx context.Context, q rowQuerier, principal uuid.UUID) (Authority, error) {
 	var stored []string
 	err := q.QueryRow(ctx, `SELECT coalesce(array_agg(role_key ORDER BY role_key), '{}') FROM (
 	SELECT r.role_key FROM `+s.q+`.platform_role_assignments r JOIN `+s.q+`.principals p ON p.id = r.principal_id
 	WHERE r.principal_id = $1 AND `+activeSQL+`) AS held`, principal).Scan(&stored)
+	return s.authority(ctx, stored, err)
+}
+
+// resolvePublicOn is resolveOn with the holder read from public.users.
+func (s *Store) resolvePublicOn(ctx context.Context, q rowQuerier, principal uuid.UUID) (Authority, error) {
+	var stored []string
+	err := q.QueryRow(ctx, `SELECT coalesce(array_agg(role_key ORDER BY role_key), '{}') FROM (
+	SELECT r.role_key FROM `+s.q+`.platform_role_assignments r JOIN public.users u ON u.id = r.principal_id
+	WHERE r.principal_id = $1 AND `+publicActiveSQL+`) AS held`, principal).Scan(&stored)
+	return s.authority(ctx, stored, err)
+}
+
+func (s *Store) authority(ctx context.Context, stored []string, err error) (Authority, error) {
 	if err != nil {
 		return Authority{}, err
 	}

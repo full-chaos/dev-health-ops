@@ -525,8 +525,8 @@ internal/queryapi/analytics/breakdown.go|executeBreakdownRaw|*string,**float64|c
 internal/queryapi/analytics/catalog.go|executeCatalogValues|*string,*uint64|92f0953d0b7c|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryEdges|*string,*string,*string,*string,**float64|a19dc243308f|statement-not-static
 internal/queryapi/analytics/flowmatrix.go|queryNodes|*string,*string,**float64|86e5d5b721b7|statement-not-static
-internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|0511d077ced1|statement-not-static
-internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|a9c3f447bb08|statement-not-static
+internal/queryapi/analytics/investmentquality.go|executeEvidenceQualityByGroup|*string,*float64,*uint64,*uint64|30049a8da29f|statement-not-static
+internal/queryapi/analytics/investmentquality.go|executeInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|2219e7f838c7|statement-not-static
 internal/queryapi/analytics/sankeycoverage.go|runSankeyCoverageQuery|*float64,*float64,*float64,*float64,**float64,**float64,**float64,**float64,**float64|7474017a0a07|statement-not-static
 internal/queryapi/analytics/sankeygrouped.go|executeSankeyGrouped|[]any|02426fb74c03|variadic-destinations
 internal/queryapi/analytics/timeseries.go|ExecuteOrgTimeseries|*time.Time,**float64,**float64|30a7cdd2fa01|statement-not-static
@@ -558,6 +558,7 @@ internal/queryapi/home/queries_signals.go|fetchRiskSignals|*string,*string,**flo
 internal/queryapi/home/queries_sync.go|FetchLatestSuccessfulSyncAt|**time.Time|9dfe899f0474|statement-not-static
 internal/queryapi/home/repolinked.go|readBasis|*string,*string,*uint8|ed45fd9e4470|spliced-select-list
 internal/queryapi/hotspots/hotspots.go|queryHotspotRows|*string,*string,*uint64,*uint32,*uint32,*float64,**float64,*float64|448efde8f6df|not-describable
+internal/queryapi/investment/qualitystats.go|FetchInvestmentQualityStats|*uint64,*uint64,*float64,*float64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64,*uint64|fa80d64b4a5b|not-describable
 internal/queryapi/investment/sunburst.go|FetchInvestmentSunburst|*string,*string,*string,*float64|9c36b6f1ad4c|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentBreakdown|*string,*string,*float64|2283428d08a0|spliced-select-list
 internal/queryapi/investmentexplain/reader.go|FetchInvestmentThemeEffort|*string,*float64,*float64,*float64|66b93f6e2aee|spliced-select-list

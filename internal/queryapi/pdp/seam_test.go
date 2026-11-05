@@ -37,6 +37,14 @@ func (c *countingDecider) Decide(ctx context.Context, req pep.Request) pep.Decis
 	return c.Decider.Decide(ctx, req)
 }
 
+// denyDecider is a PDP that answers every request with a deny verdict (a wire deny, not a local no-decision).
+func denyDecider(t *testing.T) *countingDecider {
+	t.Helper()
+	srv := pdptest.New(t)
+	srv.Deny("role_lacks_action")
+	return &countingDecider{Decider: pepClient(t, srv.URL)}
+}
+
 // allowRule is the PDP's allow of testProfile's action for seamOrg over every repository, edited by edit.
 func allowRule(edit func(*pepfake.Rule)) pepfake.Rule {
 	r := pepfake.Rule{PrincipalReference: testBearer, Action: testAction, ResourceType: "organization", ResourceKey: seamOrg,
@@ -163,8 +171,9 @@ func TestSeamNoRouteCarriesAnAllowlistYet(t *testing.T) {
 
 // P9: the cell on and a PDP deny is 403.
 func TestSeamCellOnDenyIs403(t *testing.T) {
-	g, _, _ := seamGate(t)
-	scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, denyDecider(t), cells("analytics")
+	scope, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, seamOrg)
 	var denied *DenyError
 	if !errors.As(err, &denied) || denied.Local {
 		t.Fatalf("deny answered %#v, want a PDP DenyError", err)
@@ -185,7 +194,7 @@ func TestSeamCellOffIsShadow(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m, cfg := newMeter(t)
-			decider := &countingDecider{Decider: pepfake.New()}
+			decider := denyDecider(t)
 			cfg.Mode, cfg.Decider, cfg.Switch = tc.mode, decider, cells(tc.cells)
 			g := New(cfg)
 			scope, err := g.Authorize(context.Background(), tc.profile, testBearer, seamOrg)
@@ -209,7 +218,7 @@ func TestSeamCellOffIsShadow(t *testing.T) {
 // Q1: the cell, not QUERY_API_PDP_MODE, decides enforcement: shadow mode with the cell on enforces.
 func TestSeamShadowModeWithTheCellOnEnforces(t *testing.T) {
 	_, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider, cfg.Switch = ModeShadow, pepfake.New(), cells("analytics")
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeShadow, denyDecider(t), cells("analytics")
 	scope, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, seamOrg)
 	var denied *DenyError
 	if !errors.As(err, &denied) || denied.Local {

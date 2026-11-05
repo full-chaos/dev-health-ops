@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
@@ -155,7 +156,19 @@ func (r seamRun) same(other seamRun) bool {
 	return true
 }
 
-// seamDecider is pepfake over rules, counting its decisions.
+// seamDenier is a PEP client over the wire fake answering every request with a deny verdict.
+func seamDenier(t *testing.T) *seamDecider {
+	t.Helper()
+	srv := pdptest.New(t)
+	srv.Deny("role_lacks_action")
+	client, err := pep.New(pep.Config{BaseURL: srv.URL, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: pdp.ClientService, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &seamDecider{Decider: client}
+}
+
+// seamDecider is a decider counting its decisions.
 type seamDecider struct {
 	pep.Decider
 	calls atomic.Int64
@@ -218,7 +231,10 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 					rules = append(rules, seamAllow(s, tc.rule))
 				}
 				var decider pep.Decider
-				if tc.mode != pdp.ModeOff {
+				switch {
+				case tc.noRule:
+					decider = seamDenier(t)
+				case tc.mode != pdp.ModeOff:
 					decider = pepfake.New(rules...)
 				}
 				gate, _ := seamGate(t, tc.mode, namespaceOf(route.action), decider)
@@ -266,7 +282,7 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 				return pdp.FromSettings(func(k string) (string, bool) { v, ok := env[k]; return v, ok }, slog.New(slog.NewTextHandler(io.Discard, nil))), nil
 			},
 			"P11 enforce, cell off, PDP denies": func(*seamStack) (*pdp.Gate, *seamDecider) {
-				d := &seamDecider{Decider: pepfake.New()}
+				d := seamDenier(t)
 				g, _ := seamGate(t, pdp.ModeEnforce, "", d)
 				return g, d
 			},
@@ -277,7 +293,7 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 						others = append(others, namespace)
 					}
 				}
-				d := &seamDecider{Decider: pepfake.New()}
+				d := seamDenier(t)
 				g, _ := seamGate(t, pdp.ModeEnforce, strings.Join(others, ","), d)
 				return g, d
 			},
@@ -311,7 +327,7 @@ func TestSeamRESTExemptCallersStayOnTodaysPath(t *testing.T) {
 			edge := func(*seamStack) string { return (&gatedREST{}).edgeToken(t) }
 			envelope := func(s *seamStack) string { return s.envelope }
 			legacyEdge, legacyEnvelope := legacyRun(t, route, edge), legacyRun(t, route, envelope)
-			decider := &seamDecider{Decider: pepfake.New()}
+			decider := seamDenier(t)
 			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
 			for name, tc := range map[string]struct {
 				bearer func(*seamStack) string

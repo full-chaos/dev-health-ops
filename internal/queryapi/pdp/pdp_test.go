@@ -441,56 +441,56 @@ func TestPDPReadsTheSubjectFileOnlyWhenOn(t *testing.T) {
 	}
 }
 
-// Enforce runs query-api's organization-wide reads and applies no obligation: an allow passes only with the asked
-// organization as tenant scope, repository scope organization (or an action with no repository member), no allowlist,
-// no redaction, no minimum assurance and no step-up. Any other allow is a local deny with the closed reason
-// unknown_obligation (REST: 503), counted as unavailable.
+// The fail-closed obligation table of the PDP client (pm, F-A), now answered by the pepgate seam with the cells of
+// both actions on and the request organization in lowercase. Each row states the seam's answer: an allow passes only
+// with the asked organization as tenant_scope and repository_scope organization (or an action with no repository
+// member); every obligation the seam cannot apply yet is a local deny with the PEP's unknown_obligation; a tenant the
+// seam cannot match is tenant_scope_mismatch; a repository-filtered allow with no repository member is
+// repository_scope_absent; a document the PEP client refuses keeps the client's local reason (counted unavailable).
 func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	org := strings.ToLower(testOrg)
 	for name, tc := range map[string]struct {
 		profile    string
 		obligation map[string]any
-		omit       bool
 		pass       bool
+		reason     pep.Reason
+		result     string
 	}{
-		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, false, true},
-		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, false, true},
-		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, false},
-		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
-		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
-		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, false},
-		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, false},
-		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, false},
-		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, false},
-		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, false},
-		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, false},
-		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, false},
-		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, false},
-		"malformed block":                      {testProfile, map[string]any{"tenant_scope": 7}, false, false},
-		"allow with no obligations":            {testProfile, nil, true, false},
+		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, true, "", ResultAllow},
+		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
+		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
+		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, pep.ReasonUnknownObligation, ResultUnavailable},
+		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, pep.ReasonUnknownObligation, ResultUnavailable},
+		"malformed block":                      {testProfile, map[string]any{"tenant_scope": 7}, false, pep.ReasonMalformed, ResultUnavailable},
+		"allow with no obligations":            {testProfile, nil, false, ReasonTenantMismatch, ResultNotCarriedOut},
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := pdptest.New(t)
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, testOrg)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org")
+			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, org)
 			got := m.points(t, resultMetric)
+			if len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result="+tc.result] != 1 {
+				t.Fatalf("results %v, want one %s", got, tc.result)
+			}
 			if tc.pass {
-				if err != nil || len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result=allow"] != 1 {
-					t.Fatalf("answered %v with results %v, want a pass counted allow", err, got)
+				if err != nil {
+					t.Fatalf("answered %v, want a pass", err)
 				}
 				return
 			}
 			denied, ok := err.(*DenyError)
-			if !ok || !denied.Local {
-				t.Fatalf("answered %#v, want a local DenyError", err)
-			}
-			if denied.Reason != pep.ReasonUnknownObligation && denied.Reason != pep.ReasonMalformed {
-				t.Fatalf("reason %q is not a closed obligation reason", denied.Reason)
-			}
-			if got["action="+actionOf(tc.profile)+",mode=enforce,result=unavailable"] != 1 || len(got) != 1 {
-				t.Fatalf("results %v, want one unavailable", got)
+			if !ok || !denied.Local || denied.Reason != tc.reason {
+				t.Fatalf("answered %#v, want a local DenyError %s", err, tc.reason)
 			}
 		})
 	}
@@ -503,14 +503,14 @@ func actionOf(profile string) string {
 	return testAction
 }
 
-// A hand-built allow (the fake gives the default organization allow) with a repository allowlist is the case the
-// reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+// A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
+// over is the case the reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
 	_, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
-	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
+	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
 	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
 		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)

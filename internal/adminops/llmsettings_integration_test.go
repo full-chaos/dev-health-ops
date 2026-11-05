@@ -27,7 +27,7 @@ const (
 	llmKeySecret = "oracle-settings-key-not-real"
 	llmSalt      = "oracle-salt"
 	// llmGoPinDigest is the sha256 of the go pin file.
-	llmGoPinDigest = "bdb607b459902c7ec4ed094a6a8e8a14f5470138d967b3af3897f8b473566d50"
+	llmGoPinDigest = "9b936be826df1a96951ce9ee67ea7575710ff0f8e21d8240c049215e8fe59ff0"
 )
 
 type llmStep struct {

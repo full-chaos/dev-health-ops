@@ -157,7 +157,7 @@ const (
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "e0b116f9b29895e48e2e15d377ed7616dc8a11157fe9335553687c25ebcb7b55")
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "2dab59c634c1c16a91d5a7557eb9fe90582002f0daf17d51a39af4d7d483cff9")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on

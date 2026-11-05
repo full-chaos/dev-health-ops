@@ -76,45 +76,14 @@ func ImpersonationDecided(ctx context.Context) bool {
 	return decided
 }
 
-// Scope holds the request-wide steps: Principal, then OrgScope and
-// Impersonation. They run for every request on the api listener, public
-// routes and unknown paths included, as the Python middlewares do.
+// Scope holds the request-wide steps: Principal, then OrgScope and Impersonation. They run for
+// every request on the api listener, public routes and unknown paths included, as the Python middlewares do.
 type Scope struct {
 	auth         *Authenticator
 	logger       *slog.Logger
 	rows         func(profile string) (BearerRow, bool)
 	authenticate func(ctx context.Context, token string) (*User, error)
-	// refuseLegacy is RefuseLegacyImpersonation.
 	refuseLegacy bool
-}
-
-// RefuseLegacyImpersonation sets whether Impersonation refuses the legacy
-// impersonation caller (the admin's own bearer beside a live go-api session
-// row) on every route but the session's status and stop. Call it once,
-// before the Scope serves.
-func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
-
-// RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
-func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
-
-// legacySessionRoutes are the route templates where a refused legacy caller
-// is still served in its session: the admin's own bearer reads and ends it.
-var legacySessionRoutes = map[string]bool{
-	"GET /api/v1/admin/impersonate/status": true,
-	"POST /api/v1/admin/impersonate/stop":  true,
-}
-
-// refusesLegacyCaller reports whether the legacy caller is refused on r: the
-// option is on and r is not one of legacySessionRoutes. The route is the
-// template RouteProfiles recorded, whose method must be the request's own (a
-// GET template also matches HEAD); a request no route matches is refused.
-func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
-	if !s.refuseLegacy {
-		return false
-	}
-	profile := RouteProfileFrom(r.Context())
-	method, _, _ := strings.Cut(profile, " ")
-	return method != r.Method || !legacySessionRoutes[profile]
 }
 
 // NewScope builds the middlewares over auth.
@@ -243,14 +212,12 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 	return role, member, err
 }
 
-// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
-// in whose users row says superuser, an active session makes the target's
-// org the request's org, sets the impersonation context, and stamps
-// X-Impersonating / X-Impersonated-User-Id on the response. A session
-// lookup failure refuses the request with the generic 500, like the other
-// authorization lookups (fail closed, logged). With RefuseLegacyImpersonation
-// on, a caller with an active session is refused with 403 before the route
-// runs, but on legacySessionRoutes.
+// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets in whose users
+// row says superuser, an active session makes the target's org the request's org, sets the
+// impersonation context, and stamps X-Impersonating / X-Impersonated-User-Id on the response;
+// with RefuseLegacyImpersonation on, it refuses the request with 403 instead, but on
+// legacySessionRoutes. A session lookup failure refuses the request with the generic 500,
+// like the other authorization lookups (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -300,6 +267,35 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 		header.Add("X-Impersonated-User-Id", session.TargetUserID.String())
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// RefuseLegacyImpersonation sets whether Impersonation refuses the legacy
+// impersonation caller (the admin's own bearer beside a live go-api session
+// row) on every route but the session's status and stop. Call it once,
+// before the Scope serves.
+func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
+
+// RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
+func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
+
+// legacySessionRoutes are the route templates where a refused legacy caller
+// is still served in its session: the admin's own bearer reads and ends it.
+var legacySessionRoutes = map[string]bool{
+	"GET /api/v1/admin/impersonate/status": true,
+	"POST /api/v1/admin/impersonate/stop":  true,
+}
+
+// refusesLegacyCaller reports whether the legacy caller is refused on r: the
+// option is on and r is not one of legacySessionRoutes. The route is the
+// template RouteProfiles recorded, whose method must be the request's own (a
+// GET template also matches HEAD); a request no route matches is refused.
+func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
+	if !s.refuseLegacy {
+		return false
+	}
+	profile := RouteProfileFrom(r.Context())
+	method, _, _ := strings.Cut(profile, " ")
+	return method != r.Method || !legacySessionRoutes[profile]
 }
 
 // pyTruthy is bool() of a decoded JSON value.

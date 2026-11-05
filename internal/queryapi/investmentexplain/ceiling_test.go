@@ -368,3 +368,24 @@ func TestWorkUnits_NoCeiling_StructuralEvidenceServedForEveryUnit(t *testing.T) 
 		}
 	}
 }
+
+// R1: the issue and pull-request references of the omitted structural evidence of a mixed unit are not read either.
+func TestWorkUnits_MixedUnit_StructuralReferencesNotRead(t *testing.T) {
+	client := &recordingClient{mixed: []string{"unit-1"}}
+	reader, _ := NewReader(client)
+	if _, err := reader.BuildWorkUnitInvestments(context.Background(), ceilingUnitOpts(restrictedCeiling(t, ceilingRepo))); err != nil {
+		t.Fatal(err)
+	}
+	reads := client.statementsContaining("FROM work_item_team_attributions")
+	if len(reads) == 0 {
+		t.Fatal("no work-item lookup ran: the cell proves nothing")
+	}
+	var ids []string
+	for _, i := range reads {
+		ids = append(ids, bindingIDs(client.binds[i], "work_item_ids")...)
+	}
+	joined := strings.Join(ids, ",")
+	if strings.Contains(joined, "issue-a") || !strings.Contains(joined, "issue-b") {
+		t.Fatalf("work_item_ids = %v: the mixed unit's reference must be absent, the inside unit's present", ids)
+	}
+}

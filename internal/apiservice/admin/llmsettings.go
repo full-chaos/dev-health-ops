@@ -529,7 +529,7 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
 	}
-	keyStep, err := h.keyStepFor(ctx, tx, orgID, "", keyTarget{in.provider, baseURLText}, in.apiKey != nil)
+	keyStep, err := h.keyStepFor(ctx, tx, orgID, "", keyTarget{in.provider, baseURLText}, in.apiKey)
 	if err != nil {
 		return nil, nil, &llmStepError{"read llm key binding", err}
 	}

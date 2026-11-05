@@ -110,9 +110,13 @@ func suppliesKeyFor(def llmorgsettings.ScopeKey, next keyTarget) bool {
 	return def.Bound() && next.same(keyTarget{def.Provider, def.BaseURL})
 }
 
+// keySupplied is whether a write carries a new key: an empty api_key is no key.
+func keySupplied(apiKey *string) bool { return apiKey != nil && *apiKey != "" }
+
 // keyStepFor reads the scope inside the write transaction and answers the rule
-// for a write of next to purpose ("" = default).
-func (h *handlers) keyStepFor(ctx context.Context, tx pgExecer, orgID string, purpose llmorgsettings.Purpose, next keyTarget, bodyKey bool) (keyStep, error) {
+// for a write of next to purpose ("" = default) with the body's api_key.
+func (h *handlers) keyStepFor(ctx context.Context, tx pgExecer, orgID string, purpose llmorgsettings.Purpose, next keyTarget, apiKey *string) (keyStep, error) {
+	bodyKey := keySupplied(apiKey)
 	stored, err := h.scopeKey(ctx, tx, orgID, purpose, true, false)
 	if err != nil {
 		return keyStepKeep, err

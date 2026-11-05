@@ -179,7 +179,7 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, llmorgsettings.PurposeKey(in.purpose, field), value, encrypt, &description)
 		return err
 	}
-	keyStep, err := h.keyStepFor(ctx, tx, orgID, in.purpose, keyTarget{in.provider, baseURLText}, in.apiKey != nil)
+	keyStep, err := h.keyStepFor(ctx, tx, orgID, in.purpose, keyTarget{in.provider, baseURLText}, in.apiKey)
 	if err != nil {
 		return nil, nil, &llmStepError{"read llm key binding", err}
 	}

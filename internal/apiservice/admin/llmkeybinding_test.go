@@ -250,3 +250,40 @@ func TestTheWriteOfAKeyRowIsNotRefused(t *testing.T) {
 		t.Fatalf("writes=%q", execs)
 	}
 }
+
+// An empty api_key in the body is no new key (r1 of PR 5787): a provider or
+// base_url change with it is refused, and the same target keeps the stored key,
+// for the default row and every purpose scope.
+func TestAnEmptyAPIKeyIsNoKey(t *testing.T) {
+	empty := ""
+	h := &handlers{}
+	for _, purpose := range []llmorgsettings.Purpose{"", llmorgsettings.PurposeInvestigate, llmorgsettings.PurposeExplain, llmorgsettings.PurposeCategorize} {
+		for _, c := range []struct {
+			name   string
+			stored scopeRows
+			next   keyTarget
+			want   keyStep
+		}{
+			{"provider change", boundRows("anthropic", "https://a.example/v1"), keyTarget{"openai", "https://a.example/v1"}, keyStepRefuse},
+			{"base_url set", boundRows("anthropic", ""), keyTarget{"anthropic", "https://8.8.8.8/v1"}, keyStepRefuse},
+			{"base_url change", boundRows("anthropic", "https://a.example/v1"), keyTarget{"anthropic", "https://b.example/v1"}, keyStepRefuse},
+			{"base_url clear", boundRows("anthropic", "https://a.example/v1"), keyTarget{"anthropic", ""}, keyStepRefuse},
+			{"same target", boundRows("anthropic", "https://a.example/v1"), keyTarget{"anthropic", "https://a.example/v1"}, keyStepRebind},
+		} {
+			got, err := h.keyStepFor(context.Background(), c.stored, "org", purpose, c.next, &empty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Errorf("purpose=%q %s with api_key \"\": step=%d, want %d", purpose, c.name, got, c.want)
+			}
+		}
+	}
+	if keySupplied(nil) || keySupplied(&empty) {
+		t.Error("an absent or empty api_key counts as a new key")
+	}
+	key := "sk-new-" + "0123456789"
+	if !keySupplied(&key) {
+		t.Error("a non-empty api_key is not a new key")
+	}
+}

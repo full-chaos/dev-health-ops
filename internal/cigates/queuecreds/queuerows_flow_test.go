@@ -96,8 +96,9 @@ type flow struct {
 	decls   map[string][]*ast.FuncDecl
 	params  map[*ast.FuncDecl]map[int]bool
 	foreign map[*ast.FuncDecl]map[int]bool
-	// interfaces holds the package's own interface type names.
+	// interfaces holds the package's own interface type names; globals holds its package-level variable names.
 	interfaces map[string]bool
+	globals    map[string]bool
 	// returning holds the functions whose return values returnsOrigin is checking, so recursion ends.
 	returning map[*ast.FuncDecl]bool
 }
@@ -132,7 +133,7 @@ func holdsStruct(expr ast.Expr) string {
 }
 
 func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
-	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}, decls: map[string][]*ast.FuncDecl{}, params: map[*ast.FuncDecl]map[int]bool{}, foreign: map[*ast.FuncDecl]map[int]bool{}, interfaces: map[string]bool{}}
+	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}, decls: map[string][]*ast.FuncDecl{}, params: map[*ast.FuncDecl]map[int]bool{}, foreign: map[*ast.FuncDecl]map[int]bool{}, interfaces: map[string]bool{}, globals: map[string]bool{}}
 	fieldTypes := map[string][]string{}
 	for _, sf := range pkg {
 		for _, decl := range sf.file.Decls {
@@ -211,6 +212,22 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 			}
 		}
 	}
+	f.collectGlobals(pkg)
+	// Helper results and helper parameters feed each other: a parameter a caller fills makes the helper's result carry
+	// the value, and a result that carries it taints the next call's argument. Both run to one joint fixpoint.
+	for {
+		changed := f.summarizeReturns(fset, pkg)
+		if !f.propagateParams(fset, pkg) && !changed {
+			break
+		}
+	}
+	return f
+}
+
+// summarizeReturns marks the helpers whose result (or a field of a returned composite) carries an open queue-row value,
+// to a fixpoint. It reports whether it marked anything new.
+func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) bool {
+	grew := false
 	for changed := true; changed; {
 		changed = false
 		for _, sf := range pkg {
@@ -274,14 +291,14 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 									}
 									if !f.helperFields[fn.Name.Name][field] {
 										f.helperFields[fn.Name.Name][field] = true
-										changed = true
+										changed, grew = true, true
 									}
 								}
 							}
 						}
 						if !f.helpers[fn.Name.Name] && open(result) {
 							f.helpers[fn.Name.Name] = true
-							changed = true
+							changed, grew = true, true
 						}
 					}
 					return true
@@ -289,8 +306,7 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 			}
 		}
 	}
-	f.propagateParams(fset, pkg)
-	return f
+	return grew
 }
 
 // paramNames lists the parameter names of a function in call order, one entry per name.
@@ -334,6 +350,77 @@ func paramType(fn *ast.FuncDecl, index int) string {
 		at += count
 	}
 	return ""
+}
+
+// collectGlobals records the package-level variable names, so a selector on one of them is not read as a package name.
+func (f *flow) collectGlobals(pkg []srcFile) {
+	for _, sf := range pkg {
+		for _, decl := range sf.file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				for _, name := range spec.(*ast.ValueSpec).Names {
+					f.globals[name.Name] = true
+				}
+			}
+		}
+	}
+}
+
+// receiverBase names a method's receiver type without pointer and type arguments ("" for a function).
+func receiverBase(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	return strings.SplitN(normTypeText(fn, fn.Recv.List[0].Type), "[", 2)[0]
+}
+
+// resolve lists the same-package declarations a call can reach. A plain name reaches the package functions of that
+// name, unless a local of the function holds it. `x.M` reaches nothing when x is neither a local nor a package-level
+// variable (it is an imported package); otherwise it reaches the methods named M, narrowed to x's receiver type when
+// the syntax states that type and a method on it exists.
+func (s *scope) resolve(call *ast.CallExpr) []*ast.FuncDecl {
+	s.buildAssigns()
+	local := func(name string) bool {
+		_, declared := s.decl[name]
+		_, assigned := s.assigns[name]
+		return declared || assigned
+	}
+	var out []*ast.FuncDecl
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		if local(fun.Name) {
+			return nil
+		}
+		for _, target := range s.flow.decls[fun.Name] {
+			if target.Recv == nil {
+				out = append(out, target)
+			}
+		}
+	case *ast.SelectorExpr:
+		if base, ok := fun.X.(*ast.Ident); ok && !local(base.Name) && !s.flow.globals[base.Name] {
+			return nil
+		}
+		var methods []*ast.FuncDecl
+		for _, target := range s.flow.decls[fun.Sel.Name] {
+			if target.Recv != nil {
+				methods = append(methods, target)
+			}
+		}
+		if known := strings.SplitN(s.typeOf(fun.X), "[", 2)[0]; known != "" {
+			for _, target := range methods {
+				if receiverBase(target) == known {
+					out = append(out, target)
+				}
+			}
+		}
+		if len(out) == 0 {
+			out = methods
+		}
+	}
+	return out
 }
 
 // candidates picks, among the declarations that share a callee name, those a call can reach: when the argument's type
@@ -400,7 +487,8 @@ func markParam(set map[*ast.FuncDecl]map[int]bool, callee *ast.FuncDecl, index i
 // propagateParams marks a same-package helper's parameter as holding a queue-row value when a caller passes an
 // unguarded one into that position, so the helper's own outputs are checked against it. It runs to a fixpoint,
 // because a helper can pass the value on to a further helper.
-func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
+func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) bool {
+	grew := false
 	for changed := true; changed; {
 		changed = false
 		for _, sf := range pkg {
@@ -423,16 +511,8 @@ func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
 					if !ok {
 						return true
 					}
-					var callee string
-					switch fun := call.Fun.(type) {
-					case *ast.Ident:
-						callee = fun.Name
-					case *ast.SelectorExpr:
-						callee = fun.Sel.Name
-					}
-					// Every declaration that shares the name gets the value: a method name can be declared on more than
-					// one type, and without types the census cannot tell which one the call reaches.
-					if len(f.decls[callee]) == 0 || isGuardCall(fset, sf.src, call) {
+					targets := scope.resolve(call)
+					if len(targets) == 0 || isGuardCall(fset, sf.src, call) {
 						return true
 					}
 					for i, arg := range call.Args {
@@ -451,16 +531,16 @@ func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
 						if !open {
 							continue
 						}
-						for _, target := range candidates(scope, f.decls[callee], i, arg) {
+						for _, target := range candidates(scope, targets, i, arg) {
 							index, ok := paramIndex(target, i)
 							if !ok {
 								continue
 							}
 							if markParam(f.params, target, index) {
-								changed = true
+								changed, grew = true, true
 							}
 							if !scope.originOK(arg, []string{paramType(target, index)}) && markParam(f.foreign, target, index) {
-								changed = true
+								changed, grew = true, true
 							}
 						}
 					}
@@ -469,6 +549,7 @@ func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) {
 			}
 		}
 	}
+	return grew
 }
 
 // scope is the taint state of one function: the locals that hold a queue-row
@@ -1685,14 +1766,7 @@ func (s *scope) originRHS(rhs ast.Expr, at int, origins []string, seen map[strin
 	if !ok {
 		return s.originExpr(rhs, origins, seen)
 	}
-	var callee string
-	switch fun := call.Fun.(type) {
-	case *ast.Ident:
-		callee = fun.Name
-	case *ast.SelectorExpr:
-		callee = fun.Sel.Name
-	}
-	targets := s.flow.decls[callee]
+	targets := s.resolve(call)
 	if len(targets) == 0 {
 		return s.originExpr(rhs, origins, seen)
 	}

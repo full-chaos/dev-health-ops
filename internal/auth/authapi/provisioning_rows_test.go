@@ -28,7 +28,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := document["rows"].([]any)
-	plant := func(edit func(row map[string]any) (map[string]any, bool)) []byte {
+	plant := func(t *testing.T, edit func(row map[string]any) (map[string]any, bool)) []byte {
 		t.Helper()
 		var kept []any
 		for _, item := range rows {
@@ -67,10 +67,13 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 				return row, true
 			},
 		} {
-			err := provisioningRowsPresent(plant(edit))
-			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
-				t.Fatalf("%s, %s: %v, want a refusal naming the route", pattern, name, err)
-			}
+			t.Run(pattern+" "+name, func(t *testing.T) {
+				t.Parallel()
+				err := provisioningRowsPresent(plant(t, edit))
+				if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+					t.Fatalf("%s, %s: %v, want a refusal naming the route", pattern, name, err)
+				}
+			})
 		}
 	}
 	if err := provisioningRowsPresent([]byte("{")); !errors.Is(err, errProvisioningRows) {
@@ -81,7 +84,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
-		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
+		ProfileRows: plant(t, func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
 	}
@@ -266,24 +269,27 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 // issuer class, and the go-api workload token on a workload operation. The set is the document's, so it holds in a
 // build with or without the workload path.
 func TestProvisioningRoutesBuildOnlyOnRowsListingExactlyTheAdmittedClasses(t *testing.T) {
-	workload := newWorkloadIssueFixture(t).workload
 	for op, pattern := range provisioningRouteOps {
-		exact := plantClasses(t, pattern, fullClassSet(op)...)
-		for _, w := range []*SessionIssueWorkload{nil, workload} {
-			patterns, err := provisioningRoutesOver(t, exact, w)
-			if err != nil || len(patterns) != 25 {
-				t.Errorf("%s on its exact row: %d routes, %v; want all 25", op, len(patterns), err)
-			}
-			for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}} {
-				if slices.Equal(wrong, fullClassSet(op)) {
-					continue
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			workload := newWorkloadIssueFixture(t).workload
+			exact := plantClasses(t, pattern, fullClassSet(op)...)
+			for _, w := range []*SessionIssueWorkload{nil, workload} {
+				patterns, err := provisioningRoutesOver(t, exact, w)
+				if err != nil || len(patterns) != 25 {
+					t.Errorf("%s on its exact row: %d routes, %v; want all 25", op, len(patterns), err)
 				}
-				if _, err := provisioningRoutesOver(t, plantClasses(t, pattern, wrong...), w); !errors.Is(err, errProvisioningRows) ||
-					!strings.Contains(err.Error(), "POST "+pattern+" ") {
-					t.Errorf("%s on the row %v: %v, want a refusal naming the route", op, wrong, err)
+				for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}} {
+					if slices.Equal(wrong, fullClassSet(op)) {
+						continue
+					}
+					if _, err := provisioningRoutesOver(t, plantClasses(t, pattern, wrong...), w); !errors.Is(err, errProvisioningRows) ||
+						!strings.Contains(err.Error(), "POST "+pattern+" ") {
+						t.Errorf("%s on the row %v: %v, want a refusal naming the route", op, wrong, err)
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -370,14 +376,17 @@ func TestRowsGateCoversStateAndRename(t *testing.T) {
 // route.
 func TestRowsGateRefusesAnExtraClass(t *testing.T) {
 	for op, pattern := range provisioningRouteOps {
-		raw := plantClasses(t, pattern, append(fullClassSet(op), "extra_class")...)
-		err := provisioningRowsPresent(raw)
-		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
-			t.Errorf("%s with an extra class: %v, want a refusal naming the route", op, err)
-		}
-		if _, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) {
-			t.Errorf("%s with an extra class: ProvisioningRoutes %v, want a start-up refusal", op, err)
-		}
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			raw := plantClasses(t, pattern, append(fullClassSet(op), "extra_class")...)
+			err := provisioningRowsPresent(raw)
+			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+				t.Errorf("%s with an extra class: %v, want a refusal naming the route", op, err)
+			}
+			if _, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) {
+				t.Errorf("%s with an extra class: ProvisioningRoutes %v, want a start-up refusal", op, err)
+			}
+		})
 	}
 }
 

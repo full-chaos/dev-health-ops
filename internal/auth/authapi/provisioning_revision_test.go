@@ -48,26 +48,35 @@ func TestIfRevisionDecodeDomainOnBothRoutes(t *testing.T) {
 		}{
 			"absent": {"", nil}, "null": {"null", nil}, "zero": {"0", &zero}, "seven": {"7", &seven}, "max": {"9223372036854775807", &top},
 		} {
-			f := newProvFixture(t)
-			if got := f.post(route.path, f.bodyWith(tc.raw), nil); got.Code != http.StatusOK {
-				t.Fatalf("%s %s: %d %s, want 200", route.name, name, got.Code, got.Body)
-			}
-			got := route.got(f)
-			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
-				t.Fatalf("%s %s: the verb got %v, want %v", route.name, name, got, tc.want)
-			}
+			t.Run(route.name+" "+name, func(t *testing.T) {
+				t.Parallel()
+				f := newProvFixture(t)
+				if got := f.post(route.path, f.bodyWith(tc.raw), nil); got.Code != http.StatusOK {
+					t.Fatalf("%s %s: %d %s, want 200", route.name, name, got.Code, got.Body)
+				}
+				got := route.got(f)
+				if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+					t.Fatalf("%s %s: the verb got %v, want %v", route.name, name, got, tc.want)
+				}
+			})
 		}
 		for name, raw := range map[string]string{"negative": "-1", "fraction": "1.5", "string": `"1"`, "overflow": "9223372036854775808",
 			"exponent": "1e2", "bool": "true", "array": "[]", "object": "{}", "leading zero": "01"} {
-			f := newProvFixture(t)
-			expectRefusal(t, f.post(route.path, f.bodyWith(raw), nil), http.StatusBadRequest, reasonMalformed)
-			if route.calls(f) != 0 {
-				t.Fatalf("%s %s: a malformed if_revision reached the verb", route.name, name)
-			}
+			t.Run(route.name+" "+name, func(t *testing.T) {
+				t.Parallel()
+				f := newProvFixture(t)
+				expectRefusal(t, f.post(route.path, f.bodyWith(raw), nil), http.StatusBadRequest, reasonMalformed)
+				if route.calls(f) != 0 {
+					t.Fatalf("%s %s: a malformed if_revision reached the verb", route.name, name)
+				}
+			})
 		}
-		f := newProvFixture(t)
-		expectRefusal(t, f.post(route.path, strings.Replace(f.bodyWith("3"), `"if_revision":3`, `"if_revision":3,"if_revision":4`, 1), nil),
-			http.StatusBadRequest, reasonMalformed)
+		t.Run(route.name+" duplicate", func(t *testing.T) {
+			t.Parallel()
+			f := newProvFixture(t)
+			expectRefusal(t, f.post(route.path, strings.Replace(f.bodyWith("3"), `"if_revision":3`, `"if_revision":3,"if_revision":4`, 1), nil),
+				http.StatusBadRequest, reasonMalformed)
+		})
 	}
 }
 

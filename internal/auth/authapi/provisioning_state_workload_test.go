@@ -55,18 +55,24 @@ func TestOrgStateKeepsTheServiceCredentialBesideTheWorkloadPath(t *testing.T) {
 // with no store read; a key-set outage is 503; with the path off a workload token is the same 401.
 func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 	for name, build := range issuePreKeyRefusals() {
-		f := newProvWorkloadFixture(t)
-		expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 || f.w.keys.reads != 0 {
-			t.Fatalf("%s: read before the verdict", name)
-		}
+		t.Run("pre-key "+name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 || f.w.keys.reads != 0 {
+				t.Fatalf("%s: read before the verdict", name)
+			}
+		})
 	}
 	for name, build := range issueVerifierRefusals() {
-		f := newProvWorkloadFixture(t)
-		expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 {
-			t.Fatalf("%s: a refused token reached a store", name)
-		}
+		t.Run("verifier "+name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 {
+				t.Fatalf("%s: a refused token reached a store", name)
+			}
+		})
 	}
 	f := newProvWorkloadFixture(t)
 	f.w.keys.err = errors.New("custody down")

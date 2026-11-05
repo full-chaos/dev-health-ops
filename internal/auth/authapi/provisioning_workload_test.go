@@ -157,16 +157,19 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 	}()
 	for name, build := range issuePreKeyRefusals() {
 		for _, c := range routeCases() {
-			f := newProvWorkloadFixture(t)
-			response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
-			expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
-				t.Fatalf("%s %s: read before the verdict (checks %d, verbs %d, users %d, key set %d)", name, c.op,
-					len(f.creds.scopes), f.storeCalls(), f.users.reads, f.w.keys.reads)
-			}
-			if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
-				t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
-			}
+			t.Run(name+" "+c.op, func(t *testing.T) {
+				t.Parallel()
+				f := newProvWorkloadFixture(t)
+				response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
+				expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+				if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
+					t.Fatalf("%s %s: read before the verdict (checks %d, verbs %d, users %d, key set %d)", name, c.op,
+						len(f.creds.scopes), f.storeCalls(), f.users.reads, f.w.keys.reads)
+				}
+				if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
+					t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
+				}
+			})
 		}
 	}
 }
@@ -177,11 +180,14 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 func TestProvisioningRoutesRefuseATokenTheVerifierRefuses(t *testing.T) {
 	for name, build := range issueVerifierRefusals() {
 		for _, c := range routeCases() {
-			f := newProvWorkloadFixture(t)
-			expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-			if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 {
-				t.Fatalf("%s %s: a refused token reached a store", name, c.op)
-			}
+			t.Run(name+" "+c.op, func(t *testing.T) {
+				t.Parallel()
+				f := newProvWorkloadFixture(t)
+				expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+				if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 {
+					t.Fatalf("%s %s: a refused token reached a store", name, c.op)
+				}
+			})
 		}
 	}
 }
@@ -356,14 +362,17 @@ func TestOrgSuspendStillRefusesEveryOtherBearer(t *testing.T) {
 		refusals["verifier "+name] = build
 	}
 	for name, build := range refusals {
-		w := newWorkloadIssueFixture(t)
-		f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
-		body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
-		expectRefusal(t, f.post(PatternOrgSuspend, body, build(w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if f.reactivate.suspends != 0 || f.users.reads != 0 || len(f.creds.scopes) != 0 {
-			t.Fatalf("%s: a refused bearer reached the suspend verb (%d), the users seam (%d) or the credential check (%d)", name,
-				f.reactivate.suspends, f.users.reads, len(f.creds.scopes))
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorkloadIssueFixture(t)
+			f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)
+			body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
+			expectRefusal(t, f.post(PatternOrgSuspend, body, build(w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.reactivate.suspends != 0 || f.users.reads != 0 || len(f.creds.scopes) != 0 {
+				t.Fatalf("%s: a refused bearer reached the suspend verb (%d), the users seam (%d) or the credential check (%d)", name,
+					f.reactivate.suspends, f.users.reads, len(f.creds.scopes))
+			}
+		})
 	}
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w.workload)

@@ -553,7 +553,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_DRAFT: ${{ github.event.pull_request.draft }}
-          MERGE_QUEUE: ${{ vars.MERGE_QUEUE }}
         run: |
           set -uo pipefail
           out="${RUNNER_TEMP}/affected.txt"
@@ -562,8 +561,8 @@ jobs:
           if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
           # A draft pull request skips the shards unless it has the ci:integration or ci:full label; ready_for_review starts
-          # the run. With the merge queue enabled a pull request skips too (the queue runs them for every entry that is not
-          # docs-only). A label change starts no run (no `labeled` trigger): it applies at the next push.
+          # the run. No pull request skips for the merge queue (CHAOS-13075: the repository's merge-queue variable said
+          # enabled with no queue on main). A label change starts no run (no `labeled` trigger): it applies at the next push.
           # Any script failure (bad labels JSON, bad PR_DRAFT, malformed list) falls through to the planner.
           elif scope="$(PR_LABELS_JSON="${PR_LABELS_JSON}" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
             printf "NONE\n" > "${out}"
@@ -611,7 +610,8 @@ jobs:
         id: plan
         run: bash ci/check_go.sh integration-shard-plan
 
-      # CHAOS-13075: why a NONE selection runs no shard (docs, queue, planner, draft; empty when no step wrote NONE).
+      # CHAOS-13075: why a NONE selection runs no shard (docs, queue = a main push the merge queue ran green, planner, draft;
+      # empty when no step wrote NONE).
       # The go-storage-integration aggregate passes a zero-leg plan only for docs, queue and planner.
       - name: Name why no integration shard runs
         id: skip

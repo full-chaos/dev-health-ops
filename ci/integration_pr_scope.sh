@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # CHAOS-10700, CHAOS-13075: decide whether a pull request runs the Go integration shards.
 # Usage: integration_pr_scope.sh <changed-file-list>
-#   env: PR_LABELS_JSON (JSON array of label names), PR_DRAFT (true|false), MERGE_QUEUE (the repository variable)
+#   env: PR_LABELS_JSON (JSON array of label names), PR_DRAFT (true|false)
 # The list is the NUL-terminated output of ci/go_relevant_diff.sh.
-# stdout: "run <reason>" (let the planner pick shards) or "skip <draft|queue> <reason>" (no shard runs).
+# stdout: "run <reason>" (let the planner pick shards) or "skip draft <reason>" (no shard runs).
 # Any bad input (usage, unreadable labels, a PR_DRAFT that is not true/false, empty list, unterminated or empty record)
 # exits non-zero and prints no verdict: the caller must then fall back to the planner (run), never to a skip.
 # A ci:integration or ci:full label runs the planner on any pull request. A ready pull request runs the planner. A
-# draft skips (it runs at ready_for_review), and so does a pull request when the merge queue is enabled (the queue runs the
-# shards for every entry). The go-storage-integration aggregate never reports a draft skip as success.
+# draft skips (it runs at ready_for_review); the go-storage-integration aggregate never reports a draft skip as success.
+# No pull request skips for the merge queue: the MERGE_QUEUE repository variable said "enabled" while main had no merge
+# queue rule (D6671), so a ready pull request skipped every shard green (CHAOS-13075, run 42030628111).
 set -euo pipefail
 
 list="${1:-}"
@@ -37,8 +38,6 @@ done < "${list}"
 
 if [ "${PR_DRAFT}" = true ]; then
   echo "skip draft a draft pull request without a ci:integration or ci:full label (${n} changed files); the shards run when it is marked ready"
-elif [ "${MERGE_QUEUE:-}" = enabled ]; then
-  echo "skip queue no ci:integration or ci:full label (${n} changed files); the shards run in the merge queue"
 else
   echo "run ready pull request (${n} changed files); the planner selects the shards"
 fi

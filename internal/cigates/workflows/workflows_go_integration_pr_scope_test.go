@@ -9,8 +9,8 @@ import (
 )
 
 // The integration shards run on the main push and, CHAOS-13075, on a ready pull request through the planner; a draft runs
-// them only with the ci:integration or ci:full label, a pull request skips them when the merge queue is enabled, and a
-// docs-only change skips them everywhere. These pins keep the skip and its reason wired into the plan job without
+// them only with the ci:integration or ci:full label, no pull request skips them for the merge queue, and a docs-only change
+// skips them everywhere. These pins keep the skip and its reason wired into the plan job without
 // renaming a pinned job.
 func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	root := rootOf(t)
@@ -43,8 +43,8 @@ func TestIntegrationShardsSkipOnPullRequestWiring(t *testing.T) {
 	if asString(env["PR_DRAFT"]) != "${{ github.event.pull_request.draft }}" {
 		t.Errorf("the selection step must pass the draft flag, got %q", asString(env["PR_DRAFT"]))
 	}
-	if asString(env["MERGE_QUEUE"]) != "${{ vars.MERGE_QUEUE }}" {
-		t.Errorf("the selection step must pass the merge queue variable, got %q", asString(env["MERGE_QUEUE"]))
+	if _, ok := env["MERGE_QUEUE"]; ok || strings.Contains(run, "MERGE_QUEUE") {
+		t.Error("the pull request selection must not read MERGE_QUEUE: it said enabled while main had no merge queue (CHAOS-13075)")
 	}
 	plan := pinJob(doc, "go-storage-integration-plan")
 	outs, _ := plan["outputs"].(yamlMap)
@@ -98,7 +98,7 @@ func TestIntegrationShardsSelectionStepBehaviour(t *testing.T) {
 		{"draft leaf go file is NONE", "internal/foo/bar.go\\0", "[]", "true", "", "", "NONE", "draft"},
 		{"draft auth path is NONE", "internal/auth/authapi/oauth.go\\0", "[]", "true", "", "", "NONE", "draft"},
 		{"ready leaf go file reaches the planner", "internal/foo/bar.go\\0", "[]", "false", "", "", "FULL", ""},
-		{"ready pull request with the queue on is NONE", "internal/foo/bar.go\\0", "[]", "false", "enabled", "", "NONE", "queue"},
+		{"ready pull request with the queue variable on reaches the planner", "internal/foo/bar.go\\0", "[]", "false", "enabled", "", "FULL", ""},
 		{"draft ci:full reaches the planner", "internal/foo/bar.go\\0", `["ci:full"]`, "true", "", "", "FULL", ""},
 		{"draft label reaches the planner", "internal/foo/bar.go\\0", `["ci:integration"]`, "true", "", "", "FULL", ""},
 		{"malformed labels fall through", "internal/foo/bar.go\\0", "{bad", "true", "", "", "FULL", ""},

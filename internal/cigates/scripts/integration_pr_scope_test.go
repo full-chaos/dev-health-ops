@@ -9,9 +9,9 @@ import (
 )
 
 // CHAOS-10700, CHAOS-13075: ci/integration_pr_scope.sh decides if a pull request runs the Go integration shards. A
-// ci:integration or ci:full label runs them on any pull request; a ready pull request runs the planner; a draft skips
-// (draft), and with the merge queue enabled a pull request skips (queue). Any bad input must exit non-zero with no verdict
-// (the workflow then falls back to the planner), never print skip.
+// ci:integration or ci:full label runs them on any pull request; a ready pull request runs the planner, whatever MERGE_QUEUE
+// says; a draft skips (draft). Any bad input must exit non-zero with no verdict (the workflow then falls back to the planner),
+// never print skip.
 func TestIntegrationPRScope(t *testing.T) {
 	script := filepath.Join(repoRoot(t), "ci", "integration_pr_scope.sh")
 	nul := func(f ...string) string { return strings.Join(f, "\x00") + "\x00" }
@@ -34,8 +34,8 @@ func TestIntegrationPRScope(t *testing.T) {
 		{"draft leaf go file skips", nul("internal/foo/bar.go"), nil, "", "true", "", "skip draft", 0},
 		{"draft auth code skips", nul("internal/auth/authapi/jwks_document.go", "internal/token/signer.go"), nil, "", "true", "", "skip draft", 0},
 		{"draft migration skips", nul("internal/pgmigrate/sql/001.sql"), nil, "", "true", "", "skip draft", 0},
-		{"draft with the queue on skips as draft", nul("internal/foo/bar.go"), nil, "", "true", "enabled", "skip draft", 0},
-		{"ready with the queue on skips", nul("internal/foo/bar.go"), nil, "", "false", "enabled", "skip queue", 0},
+		{"draft with the queue variable on skips as draft", nul("internal/foo/bar.go"), nil, "", "true", "enabled", "skip draft", 0},
+		{"ready with the queue variable on runs (no queue skip on a pull request)", nul("internal/foo/bar.go"), nil, "", "false", "enabled", "run ready", 0},
 		{"draft with ci:integration runs", nul("internal/foo/bar.go"), []string{"x", "ci:integration"}, "", "true", "", "run label", 0},
 		{"draft with ci:full runs", nul("internal/foo/bar.go"), []string{"ci:full"}, "", "true", "", "run label", 0},
 		{"ready with ci:integration runs", nul("internal/foo/bar.go"), []string{"ci:integration"}, "", "false", "enabled", "run label", 0},

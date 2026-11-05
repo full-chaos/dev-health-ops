@@ -162,6 +162,8 @@ FILES=(
   "${ROOT}/ci/auth_corpus_set_env.sh"
   # CHAOS-11670: the shared set (roots, tested package) both corpus scripts source.
   "${ROOT}/ci/auth_corpus_set.sh"
+  # go-api's workload session issue credential, sourced by the corpus and the rotation rehearsal.
+  "${ROOT}/ci/lib/auth_workload_session_issue.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
   "${ROOT}/ci/run_tests.sh"

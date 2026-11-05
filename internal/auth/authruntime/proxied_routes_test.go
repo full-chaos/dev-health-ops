@@ -210,7 +210,7 @@ func mountedAuthRoutes(t *testing.T, env map[string]string) map[string]bool {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+	routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestNotMountedStubsAnswer503WithRetryAfterInEveryPhase(t *testing.T) {
 			t.Fatal(err)
 		}
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+		routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

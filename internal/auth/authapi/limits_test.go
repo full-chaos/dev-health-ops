@@ -521,6 +521,7 @@ func TestMailRoutesCapTheMailOneAddressCanStart(t *testing.T) {
 // The cap cannot be dodged by rotating inside one IPv6 /64, or by naming a
 // forwarded address from a peer that is not the trusted proxy.
 func TestTheAddressKeyHoldsAgainstRotationAndSpoofing(t *testing.T) {
+	t.Parallel()
 	c := newCredFixture(t)
 	h := trustedProxy(t, c.routes)
 	forgot := func(peer, forwarded string, i int) *httptest.ResponseRecorder {

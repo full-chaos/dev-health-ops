@@ -91,11 +91,8 @@ func runPlatformRoleGrant(ctx context.Context, env cli.Env) int {
 	role := flags.String("role", "", "platform role of the catalog (platform_admin)")
 	grantedBy := flags.String("granted-by", "", "principal uuid of the granter; it must hold the role's grant action now")
 	expiresAt := flags.String("expires-at", "", "optional RFC 3339 expiry, in the future")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *role == "" {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -role is required")
@@ -141,11 +138,8 @@ func runPlatformRoleRevoke(ctx context.Context, env cli.Env) int {
 	principal := flags.String("principal", "", "principal uuid that holds the role")
 	role := flags.String("role", "", "platform role of the catalog (platform_admin)")
 	revokedBy := flags.String("revoked-by", "", "principal uuid of the revoker; it must hold the role's grant action now")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *role == "" {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -role is required")
@@ -178,11 +172,8 @@ func runPlatformRoleList(ctx context.Context, env cli.Env) int {
 	const verb = "platform-role-list"
 	flags := flag.NewFlagSet("dho auth "+verb, flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

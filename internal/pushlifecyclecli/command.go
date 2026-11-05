@@ -2,7 +2,6 @@ package pushlifecyclecli
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"regexp"
@@ -49,15 +48,11 @@ func Command() cli.Command {
 
 func run(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho push-lifecycle backfill-created", flag.ContinueOnError)
-	flags.SetOutput(env.Stderr)
 	apply := flags.Bool("apply", false, "write the events (without it the run only counts)")
 	batch := flags.Int("batch", 100, "tokens read per page")
 	dsnEnv := flags.String("dsn-env", defaultDSNEnv, "name of the environment variable that holds the database URI (NAME or NAME_FILE)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := parseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > 10000 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted and -batch must be 1..10000")
@@ -121,16 +116,12 @@ func reconcile(ctx context.Context, pool *pgxpool.Pool, schema string, batch int
 // one "class token_id" line per confirmed finding. Exit 0 on zero drift, 1 on drift or a failed read.
 func runReconcile(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho push-lifecycle reconcile", flag.ContinueOnError)
-	flags.SetOutput(env.Stderr)
 	batch := flags.Int("batch", reconcilejob.DefaultBatch, "rows read per page")
 	delay := flags.Duration("confirm-delay", reconcilejob.DefaultConfirmDelay, "wait between the two passes (must be positive)")
 	list := flags.Bool("list", false, "also print one line per finding: class and token id")
 	dsnEnv := flags.String("dsn-env", defaultDSNEnv, "name of the environment variable that holds the database URI (NAME or NAME_FILE)")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := parseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 || *batch < 1 || *batch > maxReconcileBatch || *delay <= 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted, -batch must be 1..1000 and -confirm-delay must be positive")

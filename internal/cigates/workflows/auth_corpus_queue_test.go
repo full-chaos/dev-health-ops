@@ -13,14 +13,15 @@ import (
 	"testing"
 )
 
-// CHAOS-11596: the external auth corpus (ci/auth_corpus_external.sh, 3 legs) runs on a merge queue entry that touches
-// its path set (ci/auth_corpus_paths.txt), as a job of go-auth-service.yml that fans into the required context
+// CHAOS-11596 / CHAOS-12993: the external auth corpus (ci/auth_corpus_external.sh, 4 legs) runs on a merge queue entry
+// and, while the merge queue is off, on a pull request that touches its path set (ci/auth_corpus_paths.txt), as a job of go-auth-service.yml that fans into the required context
 // `auth-gate`. These tests pin the job, the fan-in and the path set.
 
 const (
 	corpusQueueWorkflow = ".github/workflows/go-auth-service.yml"
 	corpusQueuePaths    = "ci/auth_corpus_paths.txt"
-	corpusQueueIf       = "github.event_name == 'merge_group' && needs.auth-changes.outputs.corpus == 'true'"
+	corpusQueueIf       = "(github.event_name == 'merge_group' || github.event_name == 'pull_request') && needs.auth-changes.outputs.corpus == 'true'"
+	corpusPRRelevance   = `bash ci/auth_corpus_queue_relevance.sh "${BASE_SHA}" "${HEAD_SHA}" > corpus.txt || echo "corpus=true" > corpus.txt`
 )
 
 var corpusQueueFiles = []string{corpusQueueWorkflow, corpusQueuePaths}
@@ -97,6 +98,12 @@ func authCorpusQueueViolations(t *testing.T, root string) []string {
 	}
 	if got := asString(job["if"]); got != corpusQueueIf {
 		out = append(out, fmt.Sprintf("auth-corpus-queue.if must be exactly %q, got %q", corpusQueueIf, got))
+	}
+	if !strings.Contains(text, corpusPRRelevance) {
+		out = append(out, "the corpus step must judge a pull request with ci/auth_corpus_queue_relevance.sh BASE_SHA HEAD_SHA, failing closed to corpus=true")
+	}
+	if strings.Contains(text, "the external auth corpus runs on merge queue entries only") {
+		out = append(out, "the corpus step still forces corpus=false on a pull request")
 	}
 	if tm, ok := job["timeout-minutes"].(int); !ok || tm <= 0 || tm > 60 {
 		out = append(out, fmt.Sprintf("auth-corpus-queue needs timeout-minutes 1..60, got %v", job["timeout-minutes"]))
@@ -365,7 +372,10 @@ func TestAuthCorpusQueuePlantedDefects(t *testing.T) {
 		muts []mutation
 		want []string
 	}{
-		{"job runs on pull requests too", []mutation{{wf, corpusQueueIf, "needs.auth-changes.outputs.corpus == 'true'"}}, []string{"auth-corpus-queue.if must be exactly"}},
+		{"job runs on merge queue entries only", []mutation{{wf, corpusQueueIf, "github.event_name == 'merge_group' && needs.auth-changes.outputs.corpus == 'true'"}}, []string{"auth-corpus-queue.if must be exactly"}},
+		{"job runs on every event", []mutation{{wf, corpusQueueIf, "needs.auth-changes.outputs.corpus == 'true'"}}, []string{"auth-corpus-queue.if must be exactly"}},
+		{"pull request is not judged by the path set", []mutation{{wf, corpusPRRelevance, `echo "corpus=false" > corpus.txt`}}, []string{"must judge a pull request"}},
+		{"pull request verdict does not fail closed", []mutation{{wf, corpusPRRelevance, `bash ci/auth_corpus_queue_relevance.sh "${BASE_SHA}" "${HEAD_SHA}" > corpus.txt || echo "corpus=false" > corpus.txt`}}, []string{"must judge a pull request"}},
 		{"job loses its timeout", []mutation{{wf, "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n    timeout-minutes: 30\n", "  auth-corpus-queue:\n    name: auth-corpus-queue (${{ matrix.leg }})\n    needs: [auth-changes]\n    if: " + corpusQueueIf + "\n    runs-on: ubuntu-latest\n"}}, []string{"timeout-minutes"}},
 		{"job hides a red leg behind continue-on-error", []mutation{{wf, "    timeout-minutes: 30\n    env:\n      CHECK_GO_JOB_CAP_MIN: 30\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]", "    timeout-minutes: 30\n    continue-on-error: true\n    strategy:\n      fail-fast: false\n      matrix:\n        leg: [go-api, acp, acp-nokeys, acp-social-unowned]"}}, []string{"continue-on-error"}},
 		{"a leg is retried", []mutation{{wf, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`, `run: bash ci/auth_corpus_external.sh "${{ matrix.leg }}" || bash ci/auth_corpus_external.sh "${{ matrix.leg }}"`}}, []string{"runs the corpus script more than once"}},

@@ -70,6 +70,7 @@ internal/apiservice	githubapp_config.go	internal/apiservice/ssovenue
 internal/apiservice	githubapp_config.go	internal/auth/authapi
 internal/apiservice	githubapp_config.go	internal/auth/authruntime
 internal/auth/acrlisting	client.go	internal/auth/acrlisting
+internal/auth/acrlisting	client.go	internal/auth/acrrevoke
 internal/auth/contracts	contracts.go	cmd/auth-migrate
 internal/auth/contracts	contracts.go	cmd/auth-service
 internal/auth/contracts	contracts.go	cmd/dho

@@ -16,7 +16,13 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/externalurl"
+	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -135,6 +141,7 @@ type readinessProbeResult struct {
 	SafeErrorCode *string
 	ErrorParam    string
 	ErrorCode     string
+	ErrorMessage  string
 	DroppedParams []string
 }
 
@@ -673,7 +680,30 @@ func (p *openAICompatibleReadinessProber) logFailedRound(ctx context.Context, ro
 		"error_param", failure.detail.param,
 		"error_type", failure.detail.errType,
 		"error_message", message,
+		"trace_id", traceIDOf(ctx),
 	)
+}
+
+// traceIDOf is the trace id of the span in ctx, or "" when there is none.
+func traceIDOf(ctx context.Context) string {
+	if sc := oteltrace.SpanContextFromContext(ctx); sc.HasTraceID() {
+		return sc.TraceID().String()
+	}
+	return ""
+}
+
+// plainProviderText cuts redacted provider text to the log limit and turns
+// control characters into spaces; it reaches the logs, the record and the UI.
+func plainProviderText(s string) string {
+	if runes := []rune(s); len(runes) > providerMessageMaxLogRunes {
+		s = string(runes[:providerMessageMaxLogRunes])
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // probeState carries what the probe learned about the model across rounds.
@@ -682,7 +712,10 @@ type probeState struct {
 	// effort is the reasoning_effort the ladder settled on ("none"); empty until
 	// a refusal moves the probe off the default.
 	effort string
+	rounds int
 }
+
+const readinessTracerName = "github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 
 // reasoningEffortRefused reports a 400/422 invalid_request refusal of
 // reasoning_effort for a request that carries one. The message text is never read.
@@ -705,6 +738,13 @@ const (
 func (p *openAICompatibleReadinessProber) runRound(
 	ctx context.Context, baseURL, apiKey string, req chatCompletionRequest, round int, state *probeState,
 ) (*chatCompletionResponse, *providerFailure) {
+	state.rounds++
+	ctx, span := otel.Tracer(readinessTracerName).Start(ctx, "llm.readiness.round", oteltrace.WithAttributes(
+		attribute.String("gen_ai.request.model", req.Model),
+		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.Int("llm.probe.round", round),
+	))
+	defer span.End()
 	for _, name := range state.dropped {
 		dropRequestParam(&req, name)
 	}
@@ -718,10 +758,12 @@ func (p *openAICompatibleReadinessProber) runRound(
 	var lastFailure *providerFailure
 	for attempt := 1; ; attempt++ {
 		if budget <= 0 {
+			endRoundSpanFailed(span, attempt-1, lastFailure)
 			return nil, lastFailure
 		}
 		resp, failure := p.doCompletion(ctx, baseURL, apiKey, req, &budget)
 		if failure == nil {
+			span.SetAttributes(attribute.Int("llm.probe.attempts", attempt))
 			if laddered {
 				if req.ReasoningEffort == "" {
 					state.effort = ""
@@ -747,12 +789,18 @@ func (p *openAICompatibleReadinessProber) runRound(
 		}
 		name := refusedBoundedParam(failure, req)
 		if name == "" || name == "reasoning_effort" || droppedHere[name] {
+			endRoundSpanFailed(span, attempt, failure)
 			return nil, failure
 		}
 		droppedHere[name] = true
 		dropRequestParam(&req, name)
 		state.dropped = append(state.dropped, name)
 	}
+}
+
+func endRoundSpanFailed(span oteltrace.Span, attempts int, failure *providerFailure) {
+	span.SetAttributes(attribute.Int("llm.probe.attempts", attempts), attribute.String("llm.probe.error_code", failure.code))
+	span.SetStatus(codes.Error, failure.code)
 }
 
 // probe runs the fixed two-round readiness exchange and returns
@@ -764,11 +812,51 @@ func (p *openAICompatibleReadinessProber) probe(
 	return result.Outcome, result.SafeErrorCode
 }
 
-// probeDetail is probe plus the provider's refusal details and the parameters it dropped.
+// probeDetail is probe plus the provider's refusal details and the parameters it
+// dropped. It runs under one span and logs one WARN line when the probe fails.
 func (p *openAICompatibleReadinessProber) probeDetail(
 	ctx context.Context, provider, model, baseURL, apiKey string,
 ) readinessProbeResult {
+	ctx, span := otel.Tracer(readinessTracerName).Start(ctx, "llm.readiness.probe", oteltrace.WithAttributes(
+		attribute.String("llm.provider", provider),
+		attribute.String("llm.model", model),
+	))
+	defer span.End()
 	state := &probeState{}
+	out := p.probeRounds(ctx, provider, model, baseURL, apiKey, state)
+	span.SetAttributes(
+		attribute.String("llm.probe.outcome", out.Outcome),
+		attribute.Int("llm.probe.rounds", state.rounds),
+		attribute.StringSlice("llm.probe.dropped_params", out.DroppedParams),
+	)
+	if out.Outcome != readinessOutcomeReady {
+		code := ""
+		if out.SafeErrorCode != nil {
+			code = *out.SafeErrorCode
+		}
+		span.SetAttributes(
+			attribute.String("llm.probe.error_code", code),
+			attribute.String("llm.probe.provider_error_code", out.ErrorCode),
+			attribute.String("llm.probe.error_param", out.ErrorParam),
+		)
+		span.SetStatus(codes.Error, code)
+		p.log().WarnContext(ctx, "admin: llm readiness probe failed",
+			"provider", provider,
+			"model", model,
+			"dropped_params", strings.Join(out.DroppedParams, ","),
+			"safe_error_code", code,
+			"error_code", out.ErrorCode,
+			"error_param", out.ErrorParam,
+			"error_message", out.ErrorMessage,
+			"trace_id", traceIDOf(ctx),
+		)
+	}
+	return out
+}
+
+func (p *openAICompatibleReadinessProber) probeRounds(
+	ctx context.Context, provider, model, baseURL, apiKey string, state *probeState,
+) readinessProbeResult {
 	result := func(failure *providerFailure) readinessProbeResult {
 		out := readinessProbeResult{Outcome: readinessOutcomeReady, DroppedParams: state.dropped}
 		if failure != nil {
@@ -776,6 +864,7 @@ func (p *openAICompatibleReadinessProber) probeDetail(
 			out.SafeErrorCode = ptrString(failure.code)
 			out.ErrorParam = vetProviderToken(failure.detail.refusedParam())
 			out.ErrorCode = vetProviderToken(failure.detail.code)
+			out.ErrorMessage = plainProviderText(failure.detail.message)
 		}
 		return out
 	}
@@ -810,6 +899,18 @@ func (p *openAICompatibleReadinessProber) probeDetail(
 		Temperature:         temperature,
 		ReasoningEffort:     reasoningEffort(model),
 	}
+
+	unsupported := llmbudget.UnsupportedRequestParams(provider, model)
+	onlyEffort := llmbudget.OnlyReasoningEffort(provider, model)
+	applyCapabilities := func(req *chatCompletionRequest) {
+		for _, name := range unsupported {
+			dropRequestParam(req, name)
+		}
+		if onlyEffort != "" && req.ReasoningEffort != "" {
+			req.ReasoningEffort = onlyEffort
+		}
+	}
+	applyCapabilities(&round1)
 
 	resp1, failure := p.runRound(ctx, baseURL, apiKey, round1, 1, state)
 	if failure != nil {
@@ -863,6 +964,7 @@ func (p *openAICompatibleReadinessProber) probeDetail(
 		},
 	}
 
+	applyCapabilities(&round2)
 	resp2, failure := p.runRound(ctx, baseURL, apiKey, round2, 2, state)
 	if failure != nil {
 		return result(failure)

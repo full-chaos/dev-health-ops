@@ -108,6 +108,7 @@ func TestIssueSessionWithoutAnOrganization(t *testing.T) {
 }
 
 func TestIssueSessionRefusesAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	stranger := uuid.New()
 	for name, tc := range map[string]struct {
 		mutate    func(*compatFixture)

@@ -269,11 +269,8 @@ func runFinalizeSynthetic(ctx context.Context, env cli.Env) int {
 	repoName := flags.String("repo-name", "", "the synthetic repo name")
 	org := flags.String("org", "", "the organization id")
 	backfill := flags.Int("backfill", 1, "window in days ending now")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

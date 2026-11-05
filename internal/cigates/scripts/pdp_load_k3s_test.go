@@ -42,7 +42,7 @@ func pdpRun(t *testing.T, env []string, args ...string) cmdResult {
 	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/usr/bin/env bash\necho 'kubectl is denied in this cell' >&2\nexit 99\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "AUTH_PDP_KUBECONFIG=" + filepath.Join(dir, "no-such-k3s.yaml")}
+	base := []string{shimBasePathWith(t, dir, "helm"), "AUTH_PDP_KUBECONFIG=" + filepath.Join(dir, "no-such-k3s.yaml")}
 	return cmdSpec{dir: root, env: append(base, env...)}.run("bash", append([]string{filepath.Join(root, pdpScript)}, args...)...)
 }
 
@@ -106,7 +106,7 @@ func TestPDPLoadK3sNeedsTheBinaryAndANewOutputDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(extra ...string) cmdResult {
-		env := append([]string{strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "AUTH_PDP_KUBECONFIG=" + kubeconfig}, pdpImages()...)
+		env := append([]string{shimBasePathWith(t, dir, "helm"), "AUTH_PDP_KUBECONFIG=" + kubeconfig}, pdpImages()...)
 		return cmdSpec{dir: root, env: append(env, extra...)}.run("bash", filepath.Join(root, pdpScript))
 	}
 	if res := run(); res.code == 0 || !strings.Contains(res.stderr, "AUTH_PDP_LOADTEST_BIN") {
@@ -281,7 +281,7 @@ func pdpFakeRun(t *testing.T, fail string, extra ...string) (res cmdResult, ran 
 		t.Fatal(err)
 	}
 	fakeSum := "#!/usr/bin/env bash\n[ \"$(basename \"${1:-}\")\" != \"${PDP_FAIL_HASH:-}\" ] || { echo 'fake sha256sum failed' >&2; exit 42; }\nexec /usr/bin/sha256sum \"$@\"\n"
-	for name, body := range map[string]string{"kubectl": pdpFakeKubectl, "loadtest": pdpFakeLoadtest, "helm": "#!/usr/bin/env bash\nexit 0\n", "sha256sum": fakeSum} {
+	for name, body := range map[string]string{"kubectl": pdpFakeKubectl, "loadtest": pdpFakeLoadtest, "helm": "#!/usr/bin/env bash\nexit 0\n", "sha256sum": fakeSum, "envsubst": fakeEnvsubst} {
 		if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}

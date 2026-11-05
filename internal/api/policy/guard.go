@@ -165,10 +165,38 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
 			return
 		}
-		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
+		// With the admin cell on, a caller the decision point judges is admitted by a platform action only through
+		// the decision point's answer, and no platform action stands in for organization power (fail closed while
+		// superuser access without a membership is an open question). Off, the local set decides as before.
+		judged := platform != nil && platform.judged
+		holds := func(action string) (held, ok bool) {
+			if !judged {
+				return user.Holds(action), true
+			}
+			held, err := platform.holds(r.Context(), action)
+			return held, err == nil
+		}
+		refuseNoVerdict := func() {
 			g.observeShadow(r, caller, bearer, false)
-			WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
-			return
+			WritePlatformDecisionUnavailable(w)
+		}
+		if user.OrgID == "" && !OrglessMayReach(r.Method, r.URL.Path) {
+			reach, ok := false, true
+			switch {
+			case !judged:
+				reach = user.Holds(gt.orglessAction())
+			case gt.kind != gateNone:
+				reach, ok = holds(gt.action)
+			}
+			if !ok {
+				refuseNoVerdict()
+				return
+			}
+			if !reach {
+				g.observeShadow(r, caller, bearer, false)
+				WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
+				return
+			}
 		}
 		switch level {
 		case Admin, AdminOrg:
@@ -180,7 +208,19 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				acting.OrgID = org
 				user = &acting
 			}
-			if !user.IsAdmin() && !(gt.kind == gateAdminOr && user.Holds(gt.action)) {
+			admitted := user.IsAdmin()
+			if judged {
+				admitted = user.Role == "owner" || user.Role == "admin"
+			}
+			if !admitted && gt.kind == gateAdminOr {
+				held, ok := holds(gt.action)
+				if !ok {
+					refuseNoVerdict()
+					return
+				}
+				admitted = held
+			}
+			if !admitted {
 				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Admin access required", nil)
 				return
@@ -191,7 +231,15 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				return
 			}
 		case Superuser:
-			if gt.kind != gatePlatform || !user.Holds(gt.action) {
+			held, ok := false, true
+			if gt.kind == gatePlatform {
+				held, ok = holds(gt.action)
+			}
+			if !ok {
+				refuseNoVerdict()
+				return
+			}
+			if !held {
 				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
@@ -257,7 +305,11 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz,
 			countRoleSource(r.Context(), kindRoleClaimFallback)
 		}
 	}
-	if (level != Admin && level != AdminOrg) || user.Holds(ActionAdminOrgs) || (gt.kind == gateAdminOr && user.Holds(gt.action)) || user.OrgID == "" {
+	// With the admin cell on, a user access token's platform actions never skip the membership read: the role in the
+	// token's organization is the membership row's, as for any caller (fail closed, see wrap).
+	judged := g.pdp.enforcer != nil && g.pdp.enforcer.sw.On(platformNamespace) && user.accessToken
+	platformSkip := !judged && (user.Holds(ActionAdminOrgs) || (gt.kind == gateAdminOr && user.Holds(gt.action)))
+	if (level != Admin && level != AdminOrg) || platformSkip || user.OrgID == "" {
 		return user, true
 	}
 	// At an admin level the caller's role in the token's own org is the

@@ -381,17 +381,35 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
 	}
 }
 
-// GAP (flips in 10863 PR-1/PR-2): the platform-admin rows with no action are not judged by the decision point with
-// the admin cell on. A decision point that denies everything is never asked, and go-api's own superuser flag admits
-// the caller cross-org.
-func TestPlatformAdminGapRowsAreNotJudgedYet(t *testing.T) {
-	for pattern := range platformAdminGapRoutes {
+// The platform-admin rows with no action yet are not decided by a route question with the admin cell on (GAP: the
+// /admin/users rows join the batch when their profile rows name admin.users). Their guard still admits a caller who is
+// no org admin only through the decision point's platform answer, never go-api's own flag (Q1 fail closed): a
+// legacy superuser that the decision point denies is refused, with one platform question and no route decision.
+// The telemetry report row's guard is Authenticated; its handler asks (see the telemetry package).
+func TestPlatformAdminGapRowsAdmitOnlyByThePDPPlatformAnswer(t *testing.T) {
+	for pattern, level := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
-			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("GAP pin: %d %q, %d PDP calls, counted %v; today the legacy 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			if len(rec.snapshot()) != 0 {
+				t.Fatalf("counted %v: a row with no action has no route decision", rec.snapshot())
+			}
+			if level == Authenticated {
+				if got.status != http.StatusOK || len(pdp.calls()) != 0 {
+					t.Fatalf("%d %q, %d PDP calls; want the Authenticated 200 and 0", got.status, got.body, len(pdp.calls()))
+				}
+				return
+			}
+			calls := pdp.calls()
+			want := pdpSeen{Principal: shadowBearer, Action: rule.ActionAdminUsers, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if got.status != http.StatusForbidden || got.body != `{"detail":"Admin access required"}` || len(calls) != 1 || calls[0] != want {
+				t.Fatalf("%d %q, PDP saw %+v; want 403 Admin access required after one platform question %+v", got.status, got.body, calls, want)
+			}
+			allow := newTestPDP(t, evaluatorVerdict(pdpState{status: authorization.StatusActive, role: rule.PlatformAdmin}))
+			got = serveCell(cellHandler(t, legacyStore(false, "member"), userClaims(nil), productionEnforcer(t, allow, "admin", "members")), pattern, cellBearer())
+			if got.status != http.StatusOK || len(allow.calls()) != 1 {
+				t.Fatalf("PDP platform_admin, no local flag: %d %q, %d PDP calls; want 200 after one question", got.status, got.body, len(allow.calls()))
 			}
 		})
 	}

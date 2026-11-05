@@ -6,7 +6,6 @@ package admincli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -102,11 +101,8 @@ func runSeed(ctx context.Context, env cli.Env) int {
 			"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   the database, as the migrate Job gives it\n"+
 			"  POSTGRES_URI (or _FILE)   used when MIGRATION_DATABASE_URI is not configured\n")
 	}
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

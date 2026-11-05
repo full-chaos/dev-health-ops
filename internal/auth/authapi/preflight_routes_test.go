@@ -90,6 +90,7 @@ func compatOnEdDSA(mutate func(*compatFixture)) func(*testing.T, AccessSigner) *
 }
 
 func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	opaque := func(f *compatFixture) *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
 	}
@@ -120,6 +121,7 @@ func TestCompatRefreshRefusesBeforeExchangeWhenSignerUnavailable(t *testing.T) {
 }
 
 func TestCompatLoginRefusesBeforeTheCredentialCheckWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	good := func(f *compatFixture) *httptest.ResponseRecorder {
 		return f.do(http.MethodPost, PatternCompatLogin, loginBody(compatEmail, compatPassword, ""), nil)
 	}
@@ -166,6 +168,7 @@ func TestAPreflightFailedLoginDoesNotSpendTheBudget(t *testing.T) {
 }
 
 func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		program func(*compatFixture, *fakeSocial)
 		healthy int
@@ -324,6 +327,7 @@ func (s *lateSigner) Check(context.Context) error { return nil }
 // A mint that fails because the signer cannot sign answers go-api's 503; any
 // other mint failure (here the kid record) keeps go-api's generic 500.
 func TestAMintFailureAnswers503OnlyWhenTheSignerCannotSign(t *testing.T) {
+	t.Parallel()
 	const internal = `{"detail":"Internal Server Error"}`
 	late := func(t *testing.T) (*Issuer, *lateSigner) {
 		signer := &lateSigner{}

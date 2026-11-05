@@ -148,6 +148,7 @@ func loginSteps(t *testing.T, email, password string, requestedOrg, locked bool)
 // disabled, locked); against an unknown account it adds exactly the principal lookups the audit row needs. The
 // audit row names the principal on purpose (go-api parity, every known refusal).
 func TestCompatLoginRefusalsTakeOneStepSequence(t *testing.T) {
+	t.Parallel()
 	for _, requested := range []bool{false, true} {
 		t.Run(fmt.Sprintf("requested org %v", requested), func(t *testing.T) {
 			known := map[string]struct {

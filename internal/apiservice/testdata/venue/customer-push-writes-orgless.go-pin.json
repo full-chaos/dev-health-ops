@@ -1,0 +1,3 @@
+{
+  "create: superuser x-org": "404 {\"detail\":\"Organization not found\"}"
+}

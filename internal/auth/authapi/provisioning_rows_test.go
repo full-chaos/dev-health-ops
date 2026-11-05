@@ -20,6 +20,7 @@ import (
 // document has a row, accepting the session issuer credential, for each of
 // them.
 func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
+	t.Parallel()
 	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
@@ -28,7 +29,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := document["rows"].([]any)
-	plant := func(edit func(row map[string]any) (map[string]any, bool)) []byte {
+	plant := func(t *testing.T, edit func(row map[string]any) (map[string]any, bool)) []byte {
 		t.Helper()
 		var kept []any
 		for _, item := range rows {
@@ -67,10 +68,13 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 				return row, true
 			},
 		} {
-			err := provisioningRowsPresent(plant(edit))
-			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
-				t.Fatalf("%s, %s: %v, want a refusal naming the route", pattern, name, err)
-			}
+			t.Run(pattern+" "+name, func(t *testing.T) {
+				t.Parallel()
+				err := provisioningRowsPresent(plant(t, edit))
+				if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+					t.Fatalf("%s, %s: %v, want a refusal naming the route", pattern, name, err)
+				}
+			})
 		}
 	}
 	if err := provisioningRowsPresent([]byte("{")); !errors.Is(err, errProvisioningRows) {
@@ -81,7 +85,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 	f := newProvFixture(t)
 	routes, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision, Orgs: f.reactivate, ServiceAccounts: f.sa, Grants: f.grants,
-		ProfileRows: plant(func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
+		ProfileRows: plant(t, func(row map[string]any) (map[string]any, bool) { return row, row["route"] != PatternInviteAccept })})
 	if !errors.Is(err, errProvisioningRows) || routes != nil {
 		t.Fatalf("ProvisioningRoutes over a document without a row: %d routes, %v; want none and a refusal", len(routes), err)
 	}
@@ -94,6 +98,7 @@ func TestProvisioningRoutesNeedTheirProfileRows(t *testing.T) {
 // actor or store read, no organization projection, no echo of the token in the
 // body or the logs.
 func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
+	t.Parallel()
 	tokens := userTokensWithIssuer(t)
 	pool, connects := usertokens.CountingPool(t)
 	f := newProvFixture(t)
@@ -142,6 +147,7 @@ func TestProvisioningRoutesRefuseUserTokens(t *testing.T) {
 // The reactivate route is one of the routes the startup gate covers: it is in provisioningPatterns, the embedded
 // document holds its row, and the default build serves it (no planted document).
 func TestTheReactivateRouteIsInTheStartupGate(t *testing.T) {
+	t.Parallel()
 	if !slices.Contains(provisioningPatterns, PatternOrgReactivate) {
 		t.Fatalf("provisioningPatterns %v does not hold %s", provisioningPatterns, PatternOrgReactivate)
 	}
@@ -266,24 +272,27 @@ func provisioningRoutesOver(t *testing.T, rows []byte, workload *SessionIssueWor
 // issuer class, and the go-api workload token on a workload operation. The set is the document's, so it holds in a
 // build with or without the workload path.
 func TestProvisioningRoutesBuildOnlyOnRowsListingExactlyTheAdmittedClasses(t *testing.T) {
-	workload := newWorkloadIssueFixture(t).workload
 	for op, pattern := range provisioningRouteOps {
-		exact := plantClasses(t, pattern, fullClassSet(op)...)
-		for _, w := range []*SessionIssueWorkload{nil, workload} {
-			patterns, err := provisioningRoutesOver(t, exact, w)
-			if err != nil || len(patterns) != 25 {
-				t.Errorf("%s on its exact row: %d routes, %v; want all 25", op, len(patterns), err)
-			}
-			for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}} {
-				if slices.Equal(wrong, fullClassSet(op)) {
-					continue
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			workload := newWorkloadIssueFixture(t).workload
+			exact := plantClasses(t, pattern, fullClassSet(op)...)
+			for _, w := range []*SessionIssueWorkload{nil, workload} {
+				patterns, err := provisioningRoutesOver(t, exact, w)
+				if err != nil || len(patterns) != 25 {
+					t.Errorf("%s on its exact row: %d routes, %v; want all 25", op, len(patterns), err)
 				}
-				if _, err := provisioningRoutesOver(t, plantClasses(t, pattern, wrong...), w); !errors.Is(err, errProvisioningRows) ||
-					!strings.Contains(err.Error(), "POST "+pattern+" ") {
-					t.Errorf("%s on the row %v: %v, want a refusal naming the route", op, wrong, err)
+				for _, wrong := range [][]string{{serviceSessionIssuerClass}, {serviceSessionIssuerClass, workloadTokenClass}} {
+					if slices.Equal(wrong, fullClassSet(op)) {
+						continue
+					}
+					if _, err := provisioningRoutesOver(t, plantClasses(t, pattern, wrong...), w); !errors.Is(err, errProvisioningRows) ||
+						!strings.Contains(err.Error(), "POST "+pattern+" ") {
+						t.Errorf("%s on the row %v: %v, want a refusal naming the route", op, wrong, err)
+					}
 				}
 			}
-		}
+		})
 	}
 }
 
@@ -313,6 +322,7 @@ func TestProvisioningRouteOpsCoverTheRoutes(t *testing.T) {
 // The rows gate's refusal names, for the start log, the route and every class its row must list, as a typed error with
 // a stable reason: the document's full set, with or without the workload path.
 func TestTheRowsGateRefusalNamesTheRouteAndClasses(t *testing.T) {
+	t.Parallel()
 	workload := newWorkloadIssueFixture(t).workload
 	classes := []string{serviceSessionIssuerClass, workloadTokenClass}
 	for name, w := range map[string]*SessionIssueWorkload{"without the workload path": nil, "with the workload path": workload} {
@@ -351,6 +361,7 @@ func fullClassSet(op string) []string {
 // and a document without one route's row is refused naming the route. (The two routes shipped dark until both rows were
 // embedded on main; D6617 holds for future routes, which join provisioningPatterns in their PR-2.)
 func TestRowsGateCoversStateAndRename(t *testing.T) {
+	t.Parallel()
 	if err := provisioningRowsPresent(authv1.AuthServiceEndpointProfiles); err != nil {
 		t.Fatalf("the embedded document: %v", err)
 	}
@@ -370,20 +381,24 @@ func TestRowsGateCoversStateAndRename(t *testing.T) {
 // route.
 func TestRowsGateRefusesAnExtraClass(t *testing.T) {
 	for op, pattern := range provisioningRouteOps {
-		raw := plantClasses(t, pattern, append(fullClassSet(op), "extra_class")...)
-		err := provisioningRowsPresent(raw)
-		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
-			t.Errorf("%s with an extra class: %v, want a refusal naming the route", op, err)
-		}
-		if _, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) {
-			t.Errorf("%s with an extra class: ProvisioningRoutes %v, want a start-up refusal", op, err)
-		}
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			raw := plantClasses(t, pattern, append(fullClassSet(op), "extra_class")...)
+			err := provisioningRowsPresent(raw)
+			if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+pattern+" ") {
+				t.Errorf("%s with an extra class: %v, want a refusal naming the route", op, err)
+			}
+			if _, err := ProvisioningRoutes(provisioningDepsOver(t, raw, nil)); !errors.Is(err, errProvisioningRows) {
+				t.Errorf("%s with an extra class: ProvisioningRoutes %v, want a start-up refusal", op, err)
+			}
+		})
 	}
 }
 
 // The set is the document's, not the build's: a route that takes no workload token is refused on a row that lists the
 // workload class, and a workload route on an issuer-only row, whether or not the build has the workload path.
 func TestRowsGateWantsTheDocumentsFullSet(t *testing.T) {
+	t.Parallel()
 	for op, pattern := range provisioningRouteOps {
 		other := []string{serviceSessionIssuerClass, workloadTokenClass}
 		if workloadOperations[op] {

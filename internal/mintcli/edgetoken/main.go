@@ -114,8 +114,8 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	org := fs.String("org", "", "org id (UUID) to mint the token for; the principal must hold its membership in it (read-level for proof, admin for admin-proof)")
 	principal := fs.String("principal", principalProof, "which dedicated service principal to mint for: proof (read-level, the default) or admin-proof (the org-admin principal, admin role only)")
 	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; dho goapi prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
-	if err := fs.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(fs, flagErrOutput, args); err != nil {
+		return err
 	}
 	if *principal != principalProof && *principal != principalAdminProof {
 		return fmt.Errorf("-principal must be %s or %s", principalProof, principalAdminProof)

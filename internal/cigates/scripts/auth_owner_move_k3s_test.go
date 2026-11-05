@@ -27,7 +27,7 @@ func k3sRun(t *testing.T, env []string, args ...string) cmdResult {
 	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte("#!/usr/bin/env bash\necho 'kubectl is denied in this cell' >&2\nexit 99\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	base := []string{strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1), "AUTH_MOVE_KUBECONFIG=" + filepath.Join(dir, "no-such-k3s.yaml")}
+	base := []string{shimBasePathWith(t, dir, "helm"), "AUTH_MOVE_KUBECONFIG=" + filepath.Join(dir, "no-such-k3s.yaml")}
 	return cmdSpec{dir: root, env: append(base, env...)}.run("bash", append([]string{filepath.Join(root, k3sScript)}, args...)...)
 }
 
@@ -149,14 +149,14 @@ esac
 
 func k3sStubRun(t *testing.T, env []string, args ...string) (cmdResult, string) {
 	t.Helper()
-	for _, tool := range []string{"jq", "openssl", "envsubst", "od"} {
+	for _, tool := range []string{"jq", "openssl", "od"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not installed", tool)
 		}
 	}
 	root := rootOf(t)
 	dir := t.TempDir()
-	for name, body := range map[string]string{"kubectl": k3sStubKubectl, "helm": "#!/usr/bin/env bash\nexit 1\n"} {
+	for name, body := range map[string]string{"kubectl": k3sStubKubectl, "helm": "#!/usr/bin/env bash\nexit 1\n", "envsubst": fakeEnvsubst} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}

@@ -10,6 +10,7 @@ internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
+internal/apiservice/accessrouting
 internal/audit
 internal/auth/accessverify
 internal/auth/acraudience
@@ -127,6 +128,7 @@ internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/health
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
@@ -236,6 +238,7 @@ internal/testsupport/chquery
 internal/testsupport/chschema
 internal/testsupport/containers
 internal/testsupport/crossorg
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/pgschema

@@ -53,6 +53,7 @@ func TestRootFlagsMatchThePythonRootParser(t *testing.T) {
 	mismatches := 0
 	for index, argv := range corpus {
 		got := cli.RootResult(argv)
+		stripQuotedValue(want[index])
 		if _, compared := got["msg"]; !compared {
 			// dho's other refusals are worded by its own dispatcher; only the exit code is compared.
 			delete(want[index], "msg")
@@ -109,5 +110,18 @@ func TestTheRootAnswersAreExactlyOneJSONValue(t *testing.T) {
 		if got, err := decodeRootAnswers(body); err == nil {
 			t.Errorf("%s: decoded %v", name, got)
 		}
+	}
+}
+
+// stripQuotedValue drops the quoted value from Python's `invalid int value: 'x'`: dho's text deliberately
+// never repeats what was typed (see internal/pyargparse), so the oracle compares everything but that value.
+func stripQuotedValue(answer map[string]any) {
+	const prefix = "argument --llm-concurrency: invalid int value"
+	msg, ok := answer["msg"].(map[string]any)
+	if !ok {
+		return
+	}
+	if text, _ := msg["v"].(string); strings.HasPrefix(text, prefix) {
+		msg["v"] = prefix
 	}
 }

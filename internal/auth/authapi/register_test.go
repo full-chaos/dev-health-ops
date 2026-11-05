@@ -263,6 +263,7 @@ func TestRegisterParityTableNamesTheDivergentRows(t *testing.T) {
 }
 
 func TestRegisterParityTableNamesARealTestForEveryRow(t *testing.T) {
+	t.Parallel()
 	registerEnv(t, "")
 	declared := func(dir string) map[string]bool {
 		pkgs, err := parser.ParseDir(token.NewFileSet(), dir, nil, 0)

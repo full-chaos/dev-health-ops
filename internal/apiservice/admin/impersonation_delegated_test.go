@@ -54,6 +54,12 @@ type delegatedDB struct {
 	begins       int
 	statements   []string
 	txStatements []string
+
+	// openBy, when set, keys the open impersonation row by the admin the lookup names; lookups and ended record
+	// the admin of each lookup and the id of each row the stop ends.
+	openBy  map[uuid.UUID]uuid.UUID
+	lookups []uuid.UUID
+	ended   []uuid.UUID
 }
 
 type delegatedTarget struct {
@@ -66,7 +72,7 @@ func (d *delegatedDB) Begin(context.Context) (pgx.Tx, error) {
 	return &delegatedTx{db: d}, nil
 }
 
-func (d *delegatedDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (d *delegatedDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	d.statements = append(d.statements, sql)
 	switch {
 	case strings.Contains(sql, "FROM memberships"):
@@ -75,6 +81,15 @@ func (d *delegatedDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 		}
 		return delegatedRow{[]any{*d.org, "member"}}
 	case strings.Contains(sql, "FROM impersonation_sessions"):
+		if d.openBy != nil {
+			admin, _ := args[0].(uuid.UUID)
+			d.lookups = append(d.lookups, admin)
+			if id, ok := d.openBy[admin]; ok {
+				d.open = &id
+			} else {
+				d.open = nil
+			}
+		}
 		if d.open == nil {
 			return delegatedRow{nil}.noRows()
 		}
@@ -101,8 +116,12 @@ type delegatedTx struct {
 	db *delegatedDB
 }
 
-func (x *delegatedTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+func (x *delegatedTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	x.db.txStatements = append(x.db.txStatements, sql)
+	if strings.HasPrefix(sql, "UPDATE impersonation_sessions") {
+		id, _ := args[0].(uuid.UUID)
+		x.db.ended = append(x.db.ended, id)
+	}
 	return pgconn.NewCommandTag("INSERT 1"), nil
 }
 

@@ -218,11 +218,8 @@ func runSet(ctx context.Context, env cli.Env) int {
 	status := flags.String("status", "", "policy status: "+strings.Join(Statuses, "|"))
 	reason := flags.String("reason", "", "optional policy rationale")
 	org := flags.String("org", "", "the organization id")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")
@@ -279,11 +276,8 @@ func runList(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, listUsage) }
 	org := flags.String("org", "", "the organization id")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

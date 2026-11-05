@@ -325,6 +325,9 @@ func bearerIdentity(value string) string {
 	if !ok {
 		return value
 	}
+	if recorded, ok := recordedCallers.Load(token); ok {
+		return recorded.(string)
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return value

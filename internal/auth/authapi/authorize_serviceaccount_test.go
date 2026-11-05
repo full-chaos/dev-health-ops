@@ -140,6 +140,7 @@ func TestAuthorizeServiceAccountWithALiveKeyAndGrantIsAllowed(t *testing.T) {
 }
 
 func TestAuthorizeServiceAccountReferenceNeedsALiveKey(t *testing.T) {
+	t.Parallel()
 	for name, mutate := range map[string]func(s *saFixture, k *DecisionKey){
 		"unknown key":                 func(_ *saFixture, k *DecisionKey) { *k = DecisionKey{} },
 		"revoked":                     func(_ *saFixture, k *DecisionKey) { k.Revoked = true },

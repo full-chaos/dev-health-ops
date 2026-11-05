@@ -316,3 +316,40 @@ const msgImpersonationDenied = "Not allowed in an impersonation session"
 // stopImpersonationPattern is the one platform route that stays reachable in
 // an impersonation session: it ends the session.
 const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
+
+// RefuseImpersonatingCaller returns next behind the impersonation write
+// refusal (403) for a caller whose go-api HS256 bearer belongs to an admin
+// with an active impersonation session. It is for a route the scope layers
+// skip, so it reads the session itself. A bearer go-api cannot verify
+// (auth-service's) or a user who may not impersonate passes through. A failed
+// lookup refuses the request (fail closed, like Scope.Impersonation).
+func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := BearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		user, err := g.auth.AuthenticateLegacy(r.Context(), token)
+		if isRefusal(err) || (err == nil && !user.Holds(ActionAdminImpersonate)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		var session *Impersonation
+		if err == nil {
+			session, err = g.auth.activeImpersonation(r.Context(), user.ID)
+		}
+		switch {
+		case err != nil:
+			g.logger.ErrorContext(r.Context(), "api guard: impersonation lookup failed; refusing the request",
+				slog.Bool("unavailable", isUnavailable(err)), slog.Any("error", err))
+			writeCallerLookupFailure(w, err)
+		case session != nil:
+			g.logger.WarnContext(r.Context(), "api guard: route refused in an impersonation session",
+				slog.String("path", r.URL.Path), slog.String("admin_user_id", session.AdminUserID.String()))
+			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
+		default:
+			next.ServeHTTP(w, r)
+		}
+	})
+}

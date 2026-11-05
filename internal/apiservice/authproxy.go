@@ -397,6 +397,16 @@ type authProxy struct {
 	cfg       AuthProxyConfig
 	logger    *slog.Logger
 	transport http.RoundTripper
+	// refuseImpersonating, when set, fronts the owner-authenticated routes, which skip the scope layers.
+	refuseImpersonating func(http.Handler) http.Handler
+}
+
+// withImpersonatingCallerRefusal makes the owner-authenticated routes refuse an admin bearer with a live go-api impersonation row.
+func (p *authProxy) withImpersonatingCallerRefusal(guard *policy.Guard) *authProxy {
+	if guard != nil {
+		p.refuseImpersonating = guard.RefuseImpersonatingCaller
+	}
+	return p
 }
 
 func newAuthProxy(cfg AuthProxyConfig, logger *slog.Logger) *authProxy {
@@ -524,7 +534,11 @@ func (p *authProxy) wrap(routes []httpapi.Route) []httpapi.Route {
 		}
 		if owner, owned := ownerAuthenticatedRoutes[key]; owned && p.cfg.Enabled(owner) {
 			// go-api's guard, validator and limiter are dropped: the forward is the whole route.
-			routes[index].Handler = p.sessionRoute(aggregate, p.inner(routes[index].Pattern, nil))
+			forward := p.inner(routes[index].Pattern, nil)
+			if p.refuseImpersonating != nil && key == "POST /api/v1/auth/switch-org" {
+				forward = p.refuseImpersonating(forward)
+			}
+			routes[index].Handler = p.sessionRoute(aggregate, forward)
 			continue
 		}
 		routes[index].Handler = p.sessionRoute(aggregate, routes[index].Handler)

@@ -204,7 +204,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 	// The /api/v1/auth/* proxy to auth-service (CHAOS-10231): each flag off
 	// keeps go-api's own handler; on, only the innermost handler forwards,
 	// behind go-api's guard, validator and rate limiter.
-	proxy := newAuthProxy(deps.AuthProxy, logger)
+	proxy := newAuthProxy(deps.AuthProxy, logger).withImpersonatingCallerRefusal(deps.Guard)
 	routes = append(routes, session.Routes(session.Deps{
 		Pool: deps.Pool, Guard: deps.Guard, Auth: deps.Auth, Verifier: deps.Verifier, Signer: deps.Signer,
 		// The api's own ClickHouse login: organization activity.

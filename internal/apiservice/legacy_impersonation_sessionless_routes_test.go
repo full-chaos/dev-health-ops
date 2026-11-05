@@ -25,8 +25,9 @@ type sessionlessAnswer struct {
 	forwarded   int
 }
 
-// TestSessionlessRoutesAnswerTheLegacyImpersonationCaller serves the nine
-// routes that never read the session, with AUTH_PROXY_IMPERSONATION on and the
+// TestSessionlessRoutesAnswerTheLegacyImpersonationCaller serves the eight
+// routes that never read the session (switch-org is refused in go-api, see
+// TestSwitchOrgRefusesTheImpersonatingAdminBearer), with AUTH_PROXY_IMPERSONATION on and the
 // legacy caller (the admin's own bearer beside a live go-api session row),
 // and names each answer.
 func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
@@ -126,7 +127,6 @@ func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
 		{"POST /api/v1/billing/webhooks/stripe", nil, http.StatusBadRequest, "nobody: 400 invalid Stripe signature"},
 		{"POST /api/v1/webhooks/github", githubHeaders, http.StatusUnauthorized, "nobody: 401 invalid signature"},
 		{"POST /api/v1/webhooks/pagerduty/{binding_id}", nil, http.StatusInternalServerError, "nobody: binding lookup (no store here)"},
-		{"POST /api/v1/auth/switch-org", nil, http.StatusTeapot, "auth-service, from the bearer it is forwarded"},
 	}
 	for _, cell := range cells {
 		t.Run(cell.profile, func(t *testing.T) {
@@ -143,28 +143,13 @@ func TestSessionlessRoutesAnswerTheLegacyImpersonationCaller(t *testing.T) {
 			if withBearer.status != without.status || withBearer.body != without.body {
 				t.Errorf("the admin bearer changed the answer: with %d %s, without %d %s", withBearer.status, withBearer.body, without.status, without.body)
 			}
-			wantForwarded := 0
-			if cell.profile == "POST /api/v1/auth/switch-org" {
-				wantForwarded = 1
-			}
-			if withBearer.forwarded != wantForwarded {
-				t.Errorf("forwarded to auth-service %d times, want %d", withBearer.forwarded, wantForwarded)
+			if withBearer.forwarded != 0 {
+				t.Errorf("forwarded to auth-service %d times, want 0", withBearer.forwarded)
 			}
 		})
 	}
 
-	seen := stub.requests()
-	if len(seen) != 2 {
-		t.Fatalf("auth-service saw %d requests, want the two switch-org forwards", len(seen))
-	}
-	if got := seen[0].header.Get("Authorization"); got != "Bearer "+access {
-		t.Errorf("switch-org forwarded Authorization %q, want the client's bearer unread", got)
-	}
-	for _, forwarded := range seen {
-		for name := range forwarded.header {
-			if strings.HasPrefix(strings.ToLower(name), "x-impersonat") {
-				t.Errorf("switch-org forwarded %s to auth-service", name)
-			}
-		}
+	if seen := stub.requests(); len(seen) != 0 {
+		t.Fatalf("auth-service saw %d requests from the eight routes, want 0", len(seen))
 	}
 }

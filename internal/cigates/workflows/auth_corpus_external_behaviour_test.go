@@ -46,7 +46,7 @@ case "$*" in
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
   *" config --format json"*)
-    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{}}'; fi ;;
+    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}'; fi ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
@@ -66,7 +66,8 @@ case "$1" in
     case "$*" in
       *" -c "*) ;;
       *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `"
-         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded" ;;
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded"
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER-unset}" >> "` + record + `.issuer" ;;
     esac
     case "$*" in
       *" -c "*)
@@ -1332,7 +1333,7 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 	for _, tc := range []struct {
 		name, config, want string
 	}{
-		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}}}}`, "sessions"},
+		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}`, "sessions"},
 		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, ""},
 		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, ""},
 		{"no environment", `{"services":{"go-api":{}}}`, ""},
@@ -1357,6 +1358,50 @@ func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
 			}
 			if got := strings.TrimSpace(string(raw)); got != tc.want {
 				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_FORWARDED=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// CHAOS-13107: with sessions forwarded the corpus checks each answer's session_access_token against auth-service's issuer
+// (authrows.SessionAccessTokenErr): the script hands it the issuer as compose renders it, and refuses a leg that names none.
+// Without sessions the corpus is handed no issuer.
+func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *testing.T) {
+	const issuer = "https://auth.corpus.example"
+	for _, tc := range []struct {
+		name, config, want string
+		refused            bool
+	}{
+		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, issuer, false},
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "unset", false},
+		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{}}}}`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeDocker(t)
+			fake.withCurl(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+			cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + tc.config)
+			out, err := cmd.CombinedOutput()
+			if tc.refused {
+				if err == nil || !strings.Contains(string(out), "auth-service names no AUTH_TOKEN_ISSUER_URL") {
+					t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
+				}
+				if _, statErr := os.Stat(fake.record + ".issuer"); statErr == nil {
+					t.Error("the corpus test ran without the issuer")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("leg go-api failed: %v\n%s", err, out)
+			}
+			raw, err := os.ReadFile(fake.record + ".issuer")
+			if err != nil {
+				t.Fatalf("the corpus test never ran: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(raw)); got != tc.want {
+				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER=%q, want %q", got, tc.want)
 			}
 		})
 	}

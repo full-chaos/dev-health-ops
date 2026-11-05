@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// The answers of the corpus's sign-in steps are compared as projected bodies (tokens as their claims). Three
+// The answers of the corpus's sign-in steps are compared as projected bodies (tokens as their claims). Four
 // differences between go-api's golden and auth-service are ruled, each classified exactly and nowhere else; a body
 // that differs in any other way still differs.
 //
@@ -13,6 +13,9 @@ import (
 //     credentialLength), where go-api's is a JWT. Each side must have its own shape; the field is never ignored.
 //   - The access token carries the sid claim (a session id, "ses_" and 22 base64url characters) that go-api's does not.
 //   - Alice's two sign-ins answer her earliest organization where go-api answers the one with activity data (CHAOS-10228).
+//   - Under the eddsa class the answer ends with session_access_token, which go-api's golden never held (CHAOS-13107):
+//     the projected member is dropped only as the last member of the answer, after SessionAccessTokenErr checked its
+//     raw value (sessiontoken.go).
 
 const opaqueRefresh = `"refresh_token":"<opaque refresh credential>"`
 
@@ -20,6 +23,8 @@ var (
 	goldenRefreshJWT    = regexp.MustCompile(`"refresh_token":"<jwt\|(?:[^"<>]|<id>)*\|type=string:refresh>"`)
 	targetRefreshOpaque = regexp.MustCompile(`"refresh_token":"dhr1_[A-Za-z0-9_-]{43}"`)
 	accessTokenSID      = regexp.MustCompile(`("access_token":"<jwt\|(?:[^"<>]|<id>)*)\|sid=string:ses_[A-Za-z0-9_-]{22}((?:\|(?:[^"<>|]|<id>)*)*>")`)
+	// projectedSessionAccess is a projected session_access_token as the answer's last member.
+	projectedSessionAccess = regexp.MustCompile(`,"session_access_token":"<jwt\|(?:[^"<>]|<id>)*>"\}$`)
 )
 
 // aliceSteps are alice's two successful sign-ins of the corpus, by exact step name.
@@ -55,8 +60,10 @@ func GoldenResponseBody(step, body string) string {
 
 // TargetResponseBody is the ACP target's (auth-service) answer's body, projected for comparison with the golden's:
 // a well-formed opaque refresh credential as the same place holder, and the access token without its sid claim.
-// A refresh token of any other shape, and any other claim, stay as they are.
+// A refresh token of any other shape, and any other claim, stay as they are. A projected session_access_token as the
+// last member is dropped (the golden never held it; SessionAccessTokenErr checks its raw value).
 func TargetResponseBody(body string) string {
+	body = projectedSessionAccess.ReplaceAllString(body, "}")
 	body = targetRefreshOpaque.ReplaceAllString(body, opaqueRefresh)
 	return accessTokenSID.ReplaceAllString(body, "${1}${2}")
 }

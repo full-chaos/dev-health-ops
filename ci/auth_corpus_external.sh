@@ -447,6 +447,19 @@ if [ "${LEG}" = "go-api" ]; then
   fi
 fi
 
+if [[ " ${FORWARDED[*]-} " == *" sessions "* ]]; then
+  # CHAOS-13107: with sessions forwarded, auth-service's eddsa class adds session_access_token to every token answer. The
+  # golden does not hold it by value, so the corpus checks its iss against auth-service's issuer, read as compose renders
+  # it for this leg. Only that one key is read from the rendered config; nothing of it is printed.
+  config_json="$(compose config --format json)" || die "could not render the compose config of leg ${LEG}"
+  DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER="$(jq -r '.services["auth-service"].environment.AUTH_TOKEN_ISSUER_URL // ""' <<<"${config_json}")" \
+    || die "could not read auth-service's AUTH_TOKEN_ISSUER_URL from the rendered compose config"
+  unset config_json
+  [ -n "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER}" ] || die "sessions are forwarded, and auth-service names no AUTH_TOKEN_ISSUER_URL"
+  printf 'sessions forwarded: session_access_token checked against issuer %s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER}"
+  export DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER
+fi
+
 printf 'step 2: TestAuthFlowVenueOracle through the base-URL runner\n'
 export DEV_HEALTH_VENUE_ORACLES=1
 export DEVHEALTH_AUTH_ORACLE_BASE_URL="http://127.0.0.1:${API_PORT}"

@@ -282,6 +282,9 @@ type runner struct {
 	// retired maps a step whose Python answer a ruling retired to that ruling and the pin that holds Go's answer
 	// (in-process run only).
 	retired map[string]retiredStep
+	// sessionIssuer is the issuer auth-service signs under, set when sessions are forwarded: every target answer that
+	// carries an access token is checked for its session_access_token (authrows.SessionAccessTokenErr).
+	sessionIssuer string
 }
 
 // retiredStep is the ruling that retired a step's Python answer and the pin of Go's answer.
@@ -317,6 +320,12 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		goResponse := venueoracle.Do(r.t, r.goBase, s.goSide)
 		if r.external {
 			goResponse = venueoracle.WithoutProvenanceHeaders(goResponse)
+		}
+		if r.sessionIssuer != "" {
+			// The golden does not hold session_access_token by value (GoldenSpec.GoBlanked): its raw value is checked here.
+			if err := authrows.SessionAccessTokenErr(goResponse.Body, r.sessionIssuer); err != nil {
+				r.t.Errorf("%s: %v", s.name, err)
+			}
 		}
 		// The golden holds the Python answer projected (tokens to their claims,
 		// generated ids and times blanked); the Go answer is compared the same way.
@@ -706,6 +715,16 @@ VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, exp
 	return tokens
 }
 
+// sessionsForwardedLeg reports whether this run is an external leg that forwards sessions to auth-service. An
+// unreadable forwarded set is false here; the runner reads it again and fails on it.
+func sessionsForwardedLeg() bool {
+	if os.Getenv(sessionscenario.EnvBaseURL) == "" {
+		return false
+	}
+	forwarded, err := authrows.FromEnv()
+	return err == nil && forwarded.Has(authrows.Sessions)
+}
+
 // TestAuthFlowVenueOracle is the venue differential of register, verify,
 // resend-verification, forgot-password, reset-password, accept-invite,
 // onboard, onboarding/state and onboarding/skip-integration: the REAL
@@ -720,6 +739,10 @@ VALUES ($1, $2, $3, now() - interval '1 hour', now() - interval '2 hours')`, exp
 func TestAuthFlowVenueOracle(t *testing.T) {
 	spec := venueGolden("auth-flow-venue-oracle", t.Name(), "7783ad744176666041e916fb2a1f92d4337bee8a3cb46759dcb25079cfbb207b")
 	spec.Scrub, spec.KeyScrub = authScrub, requestKeyScrub
+	if sessionsForwardedLeg() {
+		// CHAOS-13107: auth-service's eddsa class adds session_access_token, a fresh token per run, to every token answer.
+		spec.GoBlanked = map[string]string{authrows.SessionAccessTokenPattern: authrows.SessionAccessTokenReason}
+	}
 	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
 	// the header's first hop. Trust this test's loopback peer so both planes agree.
@@ -819,6 +842,11 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		}
 		if r.usersOwned, err = authrows.UsersOwnedFromEnv(); err != nil {
 			t.Fatal(err)
+		}
+		if r.forwarded.Has(authrows.Sessions) {
+			if r.sessionIssuer, err = authrows.SessionIssuerFromEnv(); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if r.ledger, err = authrows.NewLedger(r.forwarded, r.usersOwned); err != nil {

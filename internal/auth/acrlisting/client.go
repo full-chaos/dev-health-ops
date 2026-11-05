@@ -145,7 +145,9 @@ type Client struct {
 	expires time.Time
 }
 
-func validOrigin(u *url.URL) bool {
+// ValidOrigin reports whether u is a usable acr origin: https, or http on a loopback host, with a host and no user
+// info or fragment.
+func ValidOrigin(u *url.URL) bool {
 	if u == nil || u.Host == "" || u.User != nil || u.Fragment != "" {
 		return false
 	}
@@ -166,13 +168,13 @@ func validOrigin(u *url.URL) bool {
 // New returns a Client.
 func New(cfg Config) (*Client, error) {
 	switch {
-	case !validOrigin(cfg.BaseURL) || cfg.BaseURL.RawQuery != "":
+	case !ValidOrigin(cfg.BaseURL) || cfg.BaseURL.RawQuery != "":
 		return nil, fmt.Errorf("%w: base url", ErrInvalidConfig)
-	case !validOrigin(cfg.TokenEndpoint):
+	case !ValidOrigin(cfg.TokenEndpoint):
 		return nil, fmt.Errorf("%w: token endpoint", ErrInvalidConfig)
 	case strings.TrimSpace(cfg.SubjectTokenFile) == "":
 		return nil, fmt.Errorf("%w: subject token file", ErrInvalidConfig)
-	case !orgPattern.MatchString(cfg.OrgID):
+	case !ValidOrgID(cfg.OrgID):
 		return nil, fmt.Errorf("%w: org id", ErrInvalidConfig)
 	case cfg.PageLimit < 0 || cfg.PageLimit > maxPageLimit:
 		return nil, fmt.Errorf("%w: page limit", ErrInvalidConfig)
@@ -351,17 +353,31 @@ func (c *Client) accessToken(ctx context.Context) (string, error) {
 }
 
 func (c *Client) exchange(ctx context.Context) (string, time.Duration, error) {
-	subject, err := readSubject(c.subjectFile)
+	return Exchange(ctx, c.http, c.endpoint, c.subjectFile, c.org)
+}
+
+// ValidOrgID reports whether orgID is a lowercase UUID, the form the exchange names.
+func ValidOrgID(orgID string) bool { return orgPattern.MatchString(orgID) }
+
+// Exchange is the RFC 8693 token exchange: the subject token read from subjectTokenFile (again on every call, never
+// cached) for an access token of the organization orgID, sent as the resource urn:acr:org:<orgID>. httpClient must
+// follow no redirect. It returns the access token and its lifetime; a failure is an *Error of KindExchange,
+// KindInvalidRequest or KindInvalidTarget that names no token and no body.
+func Exchange(ctx context.Context, httpClient *http.Client, tokenEndpoint *url.URL, subjectTokenFile, orgID string) (string, time.Duration, error) {
+	if httpClient == nil || !ValidOrigin(tokenEndpoint) || !ValidOrgID(orgID) {
+		return "", 0, fail(KindExchange)
+	}
+	subject, err := readSubject(subjectTokenFile)
 	if err != nil {
 		return "", 0, fail(KindExchange)
 	}
-	form := url.Values{"grant_type": {exchangeGrant}, "subject_token": {subject}, "subject_token_type": {exchangeSubject}, "resource": {"urn:acr:org:" + c.org}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint.String(), strings.NewReader(form.Encode()))
+	form := url.Values{"grant_type": {exchangeGrant}, "subject_token": {subject}, "subject_token_type": {exchangeSubject}, "resource": {"urn:acr:org:" + orgID}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint.String(), strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", 0, fail(KindExchange)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := c.http.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", 0, &Error{Kind: KindExchange, cause: contextCause(err)}
 	}

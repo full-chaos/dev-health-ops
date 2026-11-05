@@ -499,6 +499,70 @@ func TestTheStopExemptionThroughTheMux(t *testing.T) {
 	}
 }
 
+// profilePath is a request path that the mux routes to pattern's route: each wildcard becomes one segment.
+func profilePath(route string) string {
+	route = strings.ReplaceAll(route, "{$}", "")
+	var b strings.Builder
+	for {
+		open := strings.IndexByte(route, '{')
+		if open < 0 {
+			b.WriteString(route)
+			return b.String()
+		}
+		end := strings.IndexByte(route[open:], '}')
+		b.WriteString(route[:open] + "x")
+		route = route[open+end+1:]
+	}
+}
+
+// With enforcement and the shadow both on, as go-api installs them on one guard, every non-stop go-api profile row
+// refuses an impersonating caller with the 403 and counts it once in each: the enforcement outcome and the shadow
+// result impersonation_refused, with no decision point call.
+func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *testing.T) {
+	rows, err := ParseShadowRows(authv1.GoAPIEndpointProfiles, "dev-health-ops-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := 0
+	for pattern, row := range rows {
+		if pattern == stopImpersonationPattern {
+			continue
+		}
+		cells++
+		t.Run(pattern, func(t *testing.T) {
+			erec, srec := recordEnforce(t), recordShadow(t)
+			pdp := newTestPDP(t, allowAll)
+			enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: onFor(row.Namespace), Timeout: time.Second, Logger: quiet()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			sh, _ := newShadowFor(t, pdp.client(t), func(c *ShadowConfig) { c.Rows = rows })
+			guard := NewGuard(routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)}), quiet())
+			guard.SetEnforcer(enf)
+			guard.SetShadow(sh)
+			mux := http.NewServeMux()
+			mux.Handle(pattern, guard.Wrap(Authenticated, echo))
+			method, route, _ := strings.Cut(pattern, " ")
+			got := enforceRequest(impersonating(mux), method, profilePath(route))
+			sh.wg.Wait()
+			if got.status != http.StatusForbidden || got.body != impersonationRefusalBody {
+				t.Errorf("%d %q, want 403 %q", got.status, got.body, impersonationRefusalBody)
+			}
+			_, results := srec.snapshot()
+			if !slices.Equal(erec.snapshot(), []string{row.Namespace + "/impersonation_refused"}) || !slices.Equal(results, []string{"impersonation_refused"}) {
+				t.Errorf("enforcement %v shadow %v, want [%s/impersonation_refused] and [impersonation_refused]", erec.snapshot(), results, row.Namespace)
+			}
+			if n := len(pdp.calls()); n != 0 {
+				t.Errorf("%d PDP calls, want 0", n)
+			}
+		})
+	}
+	if cells < 60 {
+		t.Fatalf("%d non-stop profile rows, want the go-api profile's (60 or more)", cells)
+	}
+	t.Logf("non-stop profile rows: %d", cells)
+}
+
 var delegatedActorWire = "prn_" + wireID(uuid.MustParse("77777777-7777-4777-8777-777777777777"))
 
 // delegatedBearerHandler serves the teams rows to a delegated session's bearer (an act claim) whose row admits it.

@@ -172,6 +172,7 @@ func TestInvestmentBreakdownScopedDocuments_RegistryServesEachNameWithItsOwnDige
 	for operation, legacyText := range map[string]string{
 		"investmentBreakdownTeam":       registeredInvestmentBreakdownTeamV1Document,
 		"investmentBreakdownRepository": registeredInvestmentBreakdownRepositoryV1Document,
+		"teamWorkItemBreakdown":         registeredTeamWorkItemBreakdownV1Document,
 	} {
 		if legacy := legacyDigestsByOperation[operation]; len(legacy) != 1 || legacy[0] != digestHex(legacyText) {
 			t.Errorf("legacyDigestsByOperation[%s] = %v, want exactly the digest of the text before sizedUnitCount", operation, legacy)

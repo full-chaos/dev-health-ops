@@ -252,7 +252,7 @@ func composeAuthEddsaWiring(g *guard) {
 	r := composeAuth(g)
 	env := func(svc string) map[string]any { return mp(r.services[svc]["environment"]) }
 	want := map[string]map[string]string{
-		"auth-service": {"AUTH_ACCESS_TOKEN_CLASS": "eddsa", "AUTH_JWT_AUDIENCE": "dev-health-api", "AUTH_SESSION_SUCCESSOR_KEY_FILE": "/run/auth/session/successor-key"},
+		"auth-service": {"AUTH_ACCESS_TOKEN_CLASS": "eddsa", "AUTH_JWT_AUDIENCE": "dev-health-api", "AUTH_SESSION_SUCCESSOR_KEY_FILE": "/run/auth/session/successor-key", "AUTH_VALKEY_URI": "redis://valkey:6379/1"},
 		"go-api":       {"AUTH_PROXY_SESSIONS": "true", "AUTH_PROXY_URL": "http://auth-service:8095", "AUTH_SESSION_ISSUE_CREDENTIAL": "workload", "AUTH_WORKLOAD_BOOTSTRAP_FILE": "/run/workload/api.bootstrap", "AUTH_WORKLOAD_ISSUER": composeAuthIssuer},
 		"query-api":    {"AUTH_PROXY_SESSIONS": "true", "SSL_CERT_DIR": composeAuthIssuerCA},
 		"web":          {"AUTH_ACCESS_TOKEN_CLASS": "eddsa", "NODE_EXTRA_CA_CERTS": composeAuthIssuerCA + "/issuer.pem"},
@@ -454,6 +454,8 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "mounts go_api_workload_bootstrap"},
 		{name: "auth-service without the api workload subject", mutate: mut(composeFile, "      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"},
+		{name: "auth-service valkey dropped", mutate: mut(composeFile, "      AUTH_VALKEY_URI: redis://valkey:6379/1\n", ""),
+			check: composeAuthEddsaWiring, want: "AUTH_VALKEY_URI"},
 		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_JWT_SECRET_KEY"},
 		{name: "readme loses the bootstrap step", copy: readme, mutate: mut("ci/bigboy/README.md", "run --rm acr-workload-bootstrap", "up -d acr-workload-bootstrap"),

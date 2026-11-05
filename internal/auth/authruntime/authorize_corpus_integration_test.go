@@ -73,9 +73,9 @@ func (a *azRouterEnv) seedCorpusRow(t *testing.T, ctx context.Context, v azVecto
 			}
 			ahead = &seconds
 		}
-		a.armed(t, ctx, `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id, expires_at, revoked_at)
-VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::double precision), CASE WHEN $7::boolean THEN now() END)`,
-			out.user, out.orgs[g.OrgID], g.Role, g.ResourceKind, g.ResourceKey, ahead, g.Revoked)
+		a.armed(t, ctx, `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id, expires_at, revoked_at, resource_repo_id)
+VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6::double precision), CASE WHEN $7::boolean THEN now() END, NULLIF($8::text, ''))`,
+			out.user, out.orgs[g.OrgID], g.Role, g.ResourceKind, g.ResourceKey, ahead, g.Revoked, g.RepoID)
 	}
 	out.reference = a.azSession(t, ctx, out.user)
 	if s.PrincipalStatus == "suspended" {

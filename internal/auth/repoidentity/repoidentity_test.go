@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/auditwire"
 )
 
 const (
@@ -105,4 +108,9 @@ func TestRunCapsListedUnresolvedIDs(t *testing.T) {
 	if len(rep.Unresolved) != MaxListedGrants || rep.UnresolvedTotal != len(many) {
 		t.Errorf("listed %d total %d", len(rep.Unresolved), rep.UnresolvedTotal)
 	}
+}
+
+func TestSyncAuditRowMatchesTheWireSchema(t *testing.T) {
+	org := orgA
+	auditwire.MustValidate(t, audit.AuditEvent{EventType: "auth.repository_identity.synced", Outcome: audit.OutcomeAllowed, OrganizationID: &org})
 }

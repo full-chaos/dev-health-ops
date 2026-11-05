@@ -81,6 +81,7 @@ func TestEveryTableTheDecisionReadsIsMarked(t *testing.T) {
 		"table:service_accounts":          "bypass: read for a service-account principal only, whose decisions never use the cache",
 		"table:principals":                "bypass: kind and disabled_at of a principal with no public.users row (service account, auth-native, no public twin)",
 		"table:resource_grants":           "dep resource_grant (grt_) + tag resource_grant",
+		"table:repository_identities":     "bypass: read only for a pair that holds an id-bearing grant; a rename shows within the 30 s allow bound, a deny is never cached",
 		"table:aggregate_revisions":       "the dependency revisions, same transaction",
 		"state:public.users":              "StateVersion: the principal's public.users row version",
 		"state:public.organizations":      "StateVersion: the organization's public.organizations row version",

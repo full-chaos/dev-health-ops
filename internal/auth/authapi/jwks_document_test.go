@@ -233,6 +233,50 @@ func TestJWKSCompromiseLatchDropsTheDocumentAtOnce(t *testing.T) {
 	}
 }
 
+// The latch contract: a request whose latch check runs after the latch is set
+// never carries the pre-latch document, on GET, conditional GET and HEAD, on
+// both JWKS routes (oauth.go mounts the same serveJWKS).
+func TestJWKSRequestCheckedAfterTheLatchNeverCarriesThePreLatchDocument(t *testing.T) {
+	cells := []struct {
+		name, method, path string
+		conditional        bool
+	}{
+		{"root GET", http.MethodGet, PatternJWKS, false},
+		{"root conditional GET", http.MethodGet, PatternJWKS, true},
+		{"root HEAD", http.MethodHead, PatternJWKS, false},
+		{"oauth GET", http.MethodGet, PatternOAuthJWKS, false},
+		{"oauth conditional GET", http.MethodGet, PatternOAuthJWKS, true},
+	}
+	for _, cell := range cells {
+		t.Run(cell.name, func(t *testing.T) {
+			set, _ := keysOf(t, [2]string{"auth-old", "retiring"}, [2]string{"auth-bad", "active"})
+			keys := &scriptedKeys{set: set}
+			deps := WellKnownDeps{JWKS: documentOf(keys)}
+			mux := http.NewServeMux()
+			for _, route := range WellKnownRoutes(deps) {
+				mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+			}
+			mux.Handle(http.MethodGet+" "+PatternOAuthJWKS, http.HandlerFunc(deps.serveJWKS))
+			before := httptest.NewRecorder()
+			mux.ServeHTTP(before, httptest.NewRequest(http.MethodGet, cell.path, nil))
+			etag := before.Header().Get("ETag")
+			if before.Code != http.StatusOK || etag == "" || !strings.Contains(before.Body.String(), "auth-bad") {
+				t.Fatalf("before the latch: status %d etag %q", before.Code, etag)
+			}
+			keys.latch("auth-bad")
+			req := httptest.NewRequest(cell.method, cell.path, nil)
+			if cell.conditional {
+				req.Header.Set("If-None-Match", etag)
+			}
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("ETag") == etag || strings.Contains(rec.Body.String(), "auth-bad") {
+				t.Fatalf("after the latch: status %d etag %q, want 503 without the pre-latch document", rec.Code, rec.Header().Get("ETag"))
+			}
+		})
+	}
+}
+
 // The refresher reads in the background with no request, and stops with the
 // server lifecycle, also while its read hangs: no goroutine is left.
 func TestJWKSRefresherRunsInTheBackgroundAndStopsWithTheServer(t *testing.T) {

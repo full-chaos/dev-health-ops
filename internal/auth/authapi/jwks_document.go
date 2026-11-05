@@ -56,6 +56,12 @@ type jwksSnapshot struct {
 // only loads the pointer and checks it against the compromise latch in memory,
 // so no request waits on the key store. It is a lifecycle component: Start
 // reads once and starts the refresher, Shutdown stops it.
+//
+// Latch contract: no response whose latch check runs after the latch is set
+// carries the pre-latch document. A request whose check ran before the latch is
+// served as if a moment earlier; after the latch, exposure of a compromised key
+// is bounded by the verifiers' cache lifetime (Cache-Control max-age =
+// token.JWKSCacheTTL, 300 s), not by this handler.
 type JWKSDocument struct {
 	keys         KeySetSource
 	latch        CompromiseLatch

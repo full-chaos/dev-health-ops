@@ -21,6 +21,22 @@ type Grant struct {
 	Revoked           bool
 }
 
+// RepositoryIdentities is the optional read side of a GrantSnapshot that maps a
+// live repository path of an organization to its stable id. A snapshot without it
+// resolves no path, so a grant that holds an id never matches.
+type RepositoryIdentities interface {
+	RepositoryID(orgID, path string) (id string, found bool)
+}
+
+func requestRepoID(s Snapshot, r Request) (string, bool) {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return "", false
+	}
+	id, found := ri.RepositoryID(r.OrganizationID, r.ResourceKey)
+	return id, found && id != ""
+}
+
 // ServiceAccount is a service-account principal's row in one organization.
 type ServiceAccount struct {
 	OrgID  string
@@ -211,13 +227,26 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		return repositoryAllow(ReasonAllowedByMembershipDefault, act, rev, now)
 	}
 
-	var sawRevoked, sawExpired bool
+	var sawRevoked, sawExpired, sawUnresolved bool
 	for _, g := range rows {
 		if g.ResourceKind != resourceRepository {
 			continue
 		}
-		if g.ResourceKey != r.ResourceKey && g.ResourceKey != wildcardKey {
-			continue
+		if g.ResourceKey != wildcardKey {
+			if g.RepoID == "" {
+				if g.ResourceKey != r.ResourceKey {
+					continue
+				}
+			} else {
+				id, found := requestRepoID(s, r)
+				if !found {
+					sawUnresolved = true
+					continue
+				}
+				if id != g.RepoID {
+					continue
+				}
+			}
 		}
 		if !e.roleHolds(g.Role, act) {
 			continue
@@ -237,6 +266,8 @@ func (e *Evaluator) evaluateRepository(r Request, act policycatalog.Action, s Sn
 		return deny(ReasonGrantExpired)
 	case sawRevoked:
 		return deny(ReasonGrantRevoked)
+	case sawUnresolved:
+		return deny(ReasonRepositoryUnresolved)
 	}
 	return deny(ReasonRepositoryNotGranted)
 }

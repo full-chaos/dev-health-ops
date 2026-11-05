@@ -419,7 +419,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 25 {
+	if len(AllReasons()) != 26 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

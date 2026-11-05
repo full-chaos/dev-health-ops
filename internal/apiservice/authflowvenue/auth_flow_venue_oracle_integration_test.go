@@ -285,6 +285,9 @@ type runner struct {
 	// sessionIssuer is the issuer auth-service signs under, set when sessions are forwarded: every target answer that
 	// carries an access token is checked for its session_access_token (authrows.SessionAccessTokenErr).
 	sessionIssuer string
+	// goBlanked is the golden spec's GoBlanked (set on a leg that forwards sessions): authrows.TargetResponseBody
+	// drops only the keys it names.
+	goBlanked map[string]string
 }
 
 // retiredStep is the ruling that retired a step's Python answer and the pin of Go's answer.
@@ -364,7 +367,7 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 			// auth-service answers a sign-in with an opaque refresh credential, a sid claim and (for alice) her
 			// earliest organization: each ruled difference is classified by authrows, any other still differs.
 			pyCompared.Body = authrows.GoldenResponseBody(s.name, pyCompared.Body)
-			goProjected.Body = authrows.TargetResponseBody(goProjected.Body)
+			goProjected.Body = authrows.TargetResponseBody(goProjected.Body, r.goBlanked)
 		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
@@ -823,7 +826,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	}
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails: map[string]map[string][]sentMail{"python": {}, "go": {}}, divergencesFired: map[string]int{},
-		goBase: externalBase, external: external != nil}
+		goBase: externalBase, external: external != nil, goBlanked: spec.GoBlanked}
 	var claimPin, rolePin *venueoracle.GoPin
 	if external == nil {
 		// orgClaimRuling: the in-process go-api verifies the venue's user access tokens (EdDSA); an external target

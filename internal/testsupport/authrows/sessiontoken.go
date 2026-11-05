@@ -13,8 +13,8 @@ import (
 // token carries session_access_token too: the token the session routes accept. go-api's frozen golden never held
 // that member, and its value is a fresh token per run, so the golden does not hold it by value: the test declares the
 // one path on its GoldenSpec (SessionAccessTokenPattern, with SessionAccessTokenReason). Blanked is not unchecked:
-// SessionAccessTokenErr checks the target's raw answer, and TargetResponseBody drops only the projected member from
-// the body it compares.
+// SessionAccessTokenErr checks the target's raw answer, and TargetResponseBody drops the projected member by the key
+// the leg's GoldenSpec.GoBlanked names from the body it compares.
 
 // EnvSessionIssuer is the environment variable ci/auth_corpus_external.sh sets to the issuer auth-service signs under
 // (its AUTH_TOKEN_ISSUER_URL as compose renders it for the leg).

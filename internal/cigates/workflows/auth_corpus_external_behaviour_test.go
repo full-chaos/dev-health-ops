@@ -45,7 +45,8 @@ case "$*" in
   *" logs "*" auth-service"*)
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
-  *" config --format json"*) printf '%s\n' "${FAKE_COMPOSE_CONFIG:-{\"services\":{}}}" ;;
+  *" config --format json"*)
+    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{}}'; fi ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)

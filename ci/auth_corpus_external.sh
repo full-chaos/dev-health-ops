@@ -432,6 +432,21 @@ if [ "${LEG}" = "acp" ]; then
   }
 fi
 
+if [ "${LEG}" = "go-api" ]; then
+  # CHAOS-13107: compose.yml can route go-api's sessions through auth-service (AUTH_PROXY_SESSIONS). Read the value as
+  # compose renders it for this leg (its override files and env): "true" hands the corpus the sessions aggregate, so it
+  # classifies auth-service's session answers (internal/testsupport/authrows); anything else leaves the set empty. Only
+  # that one key is read from the rendered config; nothing of it is printed.
+  config_json="$(compose config --format json)" || die "could not render the compose config of leg go-api"
+  go_api_sessions="$(jq -r '.services["go-api"].environment.AUTH_PROXY_SESSIONS // ""' <<<"${config_json}")" \
+    || die "could not read go-api's AUTH_PROXY_SESSIONS from the rendered compose config"
+  unset config_json
+  printf 'leg go-api: go-api AUTH_PROXY_SESSIONS=%s\n' "${go_api_sessions:-unset}"
+  if [ "${go_api_sessions}" = "true" ]; then
+    FORWARDED=(sessions)
+  fi
+fi
+
 printf 'step 2: TestAuthFlowVenueOracle through the base-URL runner\n'
 export DEV_HEALTH_VENUE_ORACLES=1
 export DEVHEALTH_AUTH_ORACLE_BASE_URL="http://127.0.0.1:${API_PORT}"

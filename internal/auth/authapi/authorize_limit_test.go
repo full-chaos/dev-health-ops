@@ -105,7 +105,6 @@ func rejectionCount(t *testing.T, id string) int {
 }
 
 func TestAuthorizeCallersDoNotShareABucket(t *testing.T) {
-	t.Parallel()
 	f := newLimitFixture(t, PDPCallerLimit{PerSecond: 10, Burst: 20})
 	limited := 0
 	for i := 0; i < 200; i++ {
@@ -175,7 +174,6 @@ func TestAuthorizeLimitIsPerRoute(t *testing.T) {
 }
 
 func TestAuthorizeBatchCostsItsDecisionCount(t *testing.T) {
-	t.Parallel()
 	f := newLimitFixture(t, PDPCallerLimit{PerSecond: 1, Burst: 100})
 	if got := f.code(PatternAuthorizeBatch, f.tokenA, f.batch(60)); got != http.StatusOK {
 		t.Fatalf("batch of 60 on a full bucket: %d, want 200", got)
@@ -214,7 +212,6 @@ func TestAuthorizeRefusedCallerNeverTouchesABucket(t *testing.T) {
 }
 
 func TestAuthorizeZeroCallerLimitSetsNoLimit(t *testing.T) {
-	t.Parallel()
 	f := newLimitFixture(t, PDPCallerLimit{})
 	for i := 0; i < 50; i++ {
 		if got := f.code(PatternAuthorize, f.tokenA, f.payload(PatternAuthorize)); got != http.StatusOK {

@@ -44,15 +44,14 @@ func TestRepoIdentityWriterProvisioningAndPosture(t *testing.T) {
 	goAPIRole, _ := containers.RoleName("ri_goapi", instance)
 	database, _ := containers.DatabaseName(instance.URI)
 	const password = "repo-writer-test-not-a-real-credential"
-	q := func(name string) string { return Quote(mustValidatedIdentifier(name)) }
 	for _, s := range []string{
-		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", q(migrationRole), password),
-		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", q(runtimeRole), password),
-		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", q(workerRole), password),
-		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", q(goAPIRole), password),
-		fmt.Sprintf("CREATE ROLE %s NOLOGIN", q(pushWriter)),
-		fmt.Sprintf("GRANT %s TO %s", q(pushWriter), q(migrationRole)),
-		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", q(database), q(migrationRole)),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(migrationRole)), password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(runtimeRole)), password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(workerRole)), password),
+		fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD '%s'", Quote(mustValidatedIdentifier(goAPIRole)), password),
+		fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(mustValidatedIdentifier(pushWriter))),
+		fmt.Sprintf("GRANT %s TO %s", Quote(mustValidatedIdentifier(pushWriter)), Quote(mustValidatedIdentifier(migrationRole))),
+		fmt.Sprintf("GRANT CREATE, CONNECT ON DATABASE %s TO %s", Quote(mustValidatedIdentifier(database)), Quote(mustValidatedIdentifier(migrationRole))),
 	} {
 		mustExec(t, ctx, admin, s)
 	}
@@ -78,14 +77,14 @@ func TestRepoIdentityWriterProvisioningAndPosture(t *testing.T) {
 		}
 	})
 	t.Run("a migrator that is not a member is refused", func(t *testing.T) {
-		mustExec(t, ctx, admin, fmt.Sprintf("CREATE ROLE %s NOLOGIN", q(writerRole)))
+		mustExec(t, ctx, admin, fmt.Sprintf("CREATE ROLE %s NOLOGIN", Quote(mustValidatedIdentifier(writerRole))))
 		_, err := Apply(ctx, mig, options)
 		if !errors.Is(err, ErrRepoIdentityWriter) || !strings.Contains(err.Error(), "not a member") {
 			t.Fatalf("err = %v", err)
 		}
 	})
 	t.Run("with the privileged step done the writer owns the function and EXECUTE reaches the worker only", func(t *testing.T) {
-		mustExec(t, ctx, admin, fmt.Sprintf("GRANT %s TO %s", q(writerRole), q(migrationRole)))
+		mustExec(t, ctx, admin, fmt.Sprintf("GRANT %s TO %s", Quote(mustValidatedIdentifier(writerRole)), Quote(mustValidatedIdentifier(migrationRole))))
 		if _, err := Apply(ctx, mig, options); err != nil {
 			t.Fatalf("Apply: %v", err)
 		}
@@ -127,16 +126,16 @@ func TestRepoIdentityWriterProvisioningAndPosture(t *testing.T) {
 	})
 	for name, plant := range map[string]struct{ plant, undo, want string }{
 		"a table grant on repository_identities": {
-			fmt.Sprintf("GRANT SELECT ON auth.repository_identities TO %s", q(writerRole)),
-			fmt.Sprintf("REVOKE SELECT ON auth.repository_identities FROM %s", q(writerRole)),
+			fmt.Sprintf("GRANT SELECT ON auth.repository_identities TO %s", Quote(mustValidatedIdentifier(writerRole))),
+			fmt.Sprintf("REVOKE SELECT ON auth.repository_identities FROM %s", Quote(mustValidatedIdentifier(writerRole))),
 			"holds a privilege outside its declared set"},
 		"EXECUTE for go-api's login": {
-			fmt.Sprintf("GRANT EXECUTE ON FUNCTION %s TO %s", fn, q(goAPIRole)),
-			fmt.Sprintf("REVOKE EXECUTE ON FUNCTION %s FROM %s", fn, q(goAPIRole)),
+			fmt.Sprintf("GRANT EXECUTE ON FUNCTION %s TO %s", fn, Quote(mustValidatedIdentifier(goAPIRole))),
+			fmt.Sprintf("REVOKE EXECUTE ON FUNCTION %s FROM %s", fn, Quote(mustValidatedIdentifier(goAPIRole))),
 			"is not a caller"},
 		"a foreign owner": {
-			fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, q(runtimeRole)),
-			fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, q(writerRole)),
+			fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, Quote(mustValidatedIdentifier(runtimeRole))),
+			fmt.Sprintf("ALTER FUNCTION %s OWNER TO %s", fn, Quote(mustValidatedIdentifier(writerRole))),
 			"does not own the append function"},
 	} {
 		t.Run("planted drift: "+name, func(t *testing.T) {

@@ -485,7 +485,6 @@ func (r *Reader) applyWithOrganization(ctx context.Context, event Event) (outcom
 // live repository grants the id of their path (repoidentity.FillGrantRepoIDs, the backfill's rule). A revision at or
 // below the stored one changes nothing, fills nothing and writes no audit row.
 func (r *Reader) apply(ctx context.Context, event Event) (outcome, error) {
-	org := event.OrganizationID.String()
 	err := audit.Commit(ctx, r.cfg.Pool, r.cfg.Schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			args := []any{event.OrganizationID, event.Provider, event.ProviderRepoID, event.Path, event.Revision, event.ObservedAt}
@@ -517,8 +516,7 @@ WHERE i.source_revision < $5`, args...); err != nil {
 			}
 			return repoidentity.FillGrantRepoIDs(ctx, tx, r.cfg.Schema, event.OrganizationID)
 		},
-		Audit: audit.AuditEvent{EventType: "auth.repository_identity.observed", Outcome: audit.OutcomeAllowed, OrganizationID: &org,
-			Attributes: map[string]any{"revision": event.Revision}},
+		Audit:     observedRow(event),
 		OffStream: audit.OffStreamRepositoryIdentity,
 	})
 	var pgErr *pgconn.PgError
@@ -669,16 +667,28 @@ func (r *Reader) countParked(ctx context.Context) error {
 // mutate runs one guarded write of the reader's own bookkeeping inside audit.Commit with one audit row and no outbox
 // event. A write that changed nothing is not an error.
 func (r *Reader) mutate(ctx context.Context, eventType string, revision int64, apply func(context.Context, audit.TxOps) error) error {
-	attrs := map[string]any{}
-	if revision > 0 {
-		attrs["revision"] = revision
-	}
 	err := audit.Commit(ctx, r.cfg.Pool, r.cfg.Schema, audit.Mutation{
-		Apply: apply, Audit: audit.AuditEvent{EventType: eventType, Outcome: audit.OutcomeAllowed, Attributes: attrs},
+		Apply: apply, Audit: bookkeepingRow(eventType, revision),
 		OffStream: audit.OffStreamRepositoryIdentity,
 	})
 	if err != nil && !errors.Is(err, audit.ErrNoStateChange) {
 		return err
 	}
 	return nil
+}
+
+// observedRow is the audit row of an applied event: its organization and revision.
+func observedRow(event Event) audit.AuditEvent {
+	org := event.OrganizationID.String()
+	return audit.AuditEvent{EventType: "auth.repository_identity.observed", Outcome: audit.OutcomeAllowed, OrganizationID: &org,
+		Attributes: map[string]any{"revision": event.Revision}}
+}
+
+// bookkeepingRow is the audit row of the reader's own cursor and retry writes.
+func bookkeepingRow(eventType string, revision int64) audit.AuditEvent {
+	attrs := map[string]any{}
+	if revision > 0 {
+		attrs["revision"] = revision
+	}
+	return audit.AuditEvent{EventType: eventType, Outcome: audit.OutcomeAllowed, Attributes: attrs}
 }

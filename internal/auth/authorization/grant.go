@@ -26,6 +26,9 @@ type Grant struct {
 // resolves no path, so a grant that holds an id never matches.
 type RepositoryIdentities interface {
 	RepositoryID(orgID, path string) (id string, found bool)
+	// PathForID is the one live path of an id; false when the id has no identity row or its path is shared by
+	// two identity rows.
+	PathForID(orgID, id string) (path string, found bool)
 }
 
 func requestRepoID(s Snapshot, r Request) (string, bool) {
@@ -35,6 +38,15 @@ func requestRepoID(s Snapshot, r Request) (string, bool) {
 	}
 	id, found := ri.RepositoryID(r.OrganizationID, r.ResourceKey)
 	return id, found && id != ""
+}
+
+func idPath(s Snapshot, orgID, id string) (string, bool) {
+	ri, ok := s.(RepositoryIdentities)
+	if !ok {
+		return "", false
+	}
+	path, found := ri.PathForID(orgID, id)
+	return path, found && path != ""
 }
 
 // ServiceAccount is a service-account principal's row in one organization.

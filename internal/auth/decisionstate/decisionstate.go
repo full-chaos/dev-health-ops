@@ -525,12 +525,13 @@ func (t *txReader) repositoryIdentities(ctx context.Context, org uuid.UUID, s *s
 		return storeErr("repository identities", err)
 	}
 	defer rows.Close()
-	s.repoIDs = map[string]string{}
+	s.repoIDs, s.repoPaths = map[string]string{}, map[string]string{}
 	for rows.Next() {
 		var id, path string
 		if err := rows.Scan(&id, &path); err != nil {
 			return storeErr("repository identities", err)
 		}
+		s.repoPaths[id] = path
 		if _, dup := s.repoIDs[path]; dup {
 			s.repoIDs[path] = ""
 			continue
@@ -566,6 +567,8 @@ type snapshot struct {
 	grants       []authorization.Grant
 	// repoIDs maps a live repository path of the organization to its id; nil unless a grant holds an id.
 	repoIDs map[string]string
+	// repoPaths maps an id to its path.
+	repoPaths map[string]string
 	// account is the service-account row of a service-account principal.
 	account *authorization.ServiceAccount
 	now     int64
@@ -605,6 +608,17 @@ func (s *snapshot) RepositoryID(orgID, path string) (string, bool) {
 	}
 	id := s.repoIDs[path]
 	return id, id != ""
+}
+
+func (s *snapshot) PathForID(orgID, id string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	path, ok := s.repoPaths[id]
+	if !ok || s.repoIDs[path] == "" {
+		return "", false
+	}
+	return path, true
 }
 
 func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {

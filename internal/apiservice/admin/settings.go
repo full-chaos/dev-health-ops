@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -84,17 +83,8 @@ func (s pgStore) settingByKey(ctx context.Context, orgID, category, key string) 
 	return settingByKeyOn(ctx, s.Pool, orgID, category, key)
 }
 
-// settingByKeyOn reads one settings row over db (the pool or an open
-// transaction). A BYO api_key row is read through scopeKey only.
-func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
-	if category == llmCategory && isLLMKeyRow(key) {
-		return nil, errLLMKeyRowNeedsAccessor
-	}
-	return settingRowForWrite(ctx, db, orgID, category, key)
-}
-
-// settingRowForWrite is the row a write replaces, any key: upsertSetting reads
-// it to compare and overwrite, never to serve its value.
+// settingRowForWrite reads one settings row over db (the pool or an open
+// transaction), any key; readers go through settingByKeyOn (llmkeybinding.go).
 func settingRowForWrite(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
 	var row setting
 	err := db.QueryRow(ctx,
@@ -287,13 +277,6 @@ UPDATE settings SET value = $2, is_encrypted = $3, description = $4, updated_at 
 	}
 	return existing, nil
 }
-
-// errLLMKeyRowNeedsAccessor refuses a direct read of a BYO api_key row: every
-// key read goes through scopeKey, which withholds a key written for another
-// provider or base_url (CHAOS-13096).
-var errLLMKeyRowNeedsAccessor = errors.New("read a BYO llm api_key row through scopeKey")
-
-func isLLMKeyRow(key string) bool { return key == "api_key" || strings.HasSuffix(key, ":api_key") }
 
 // setSetting answers the 500 for a failed upsertSetting.
 func (h *handlers) setSetting(ctx context.Context, w http.ResponseWriter, orgID, category, key string, value *string, encrypt bool, description *string) (*setting, bool) {

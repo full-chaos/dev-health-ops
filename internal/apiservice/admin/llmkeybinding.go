@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -13,6 +15,21 @@ import (
 // (CHAOS-13096). Every key read here goes through scopeKey
 // (llmorgsettings.ReadScopeKey); the writes refuse, keep or delete the key on a
 // change of either.
+
+// errLLMKeyRowNeedsAccessor refuses a direct read of a BYO api_key row: every
+// key read goes through scopeKey.
+var errLLMKeyRowNeedsAccessor = errors.New("read a BYO llm api_key row through scopeKey")
+
+func isLLMKeyRow(key string) bool { return key == "api_key" || strings.HasSuffix(key, ":api_key") }
+
+// settingByKeyOn reads one settings row over db (the pool or an open
+// transaction). A BYO api_key row is read through scopeKey only.
+func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
+	if category == llmCategory && isLLMKeyRow(key) {
+		return nil, errLLMKeyRowNeedsAccessor
+	}
+	return settingRowForWrite(ctx, db, orgID, category, key)
+}
 
 const llmTargetChangeNeedsKey = "provider_or_base_url_change_requires_api_key"
 

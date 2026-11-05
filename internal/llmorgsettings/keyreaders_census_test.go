@@ -53,7 +53,7 @@ var settingReads = map[string]bool{"settingByKeyOn": true, "settingText": true, 
 
 // rowForWriteUsers are the only callers of the unguarded row read: the write.
 var rowForWriteUsers = map[string]bool{
-	"internal/apiservice/admin.upsertSetting":   true,
+	"internal/apiservice/admin.upsertSetting":  true,
 	"internal/apiservice/admin.settingByKeyOn": true,
 }
 

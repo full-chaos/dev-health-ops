@@ -23,7 +23,7 @@ var (
 // scopeRows are one scope's stored rows as llmorgsettings.ReadScopeKey selects
 // them; a nil time is an absent row.
 type scopeRows struct {
-	provider, baseURL, key        string
+	provider, baseURL, key       string
 	providerAt, baseURLAt, keyAt *time.Time
 }
 

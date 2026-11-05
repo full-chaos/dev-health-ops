@@ -328,7 +328,7 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	decision := g.decider.Decide(ctx, g.request(action, bearer, orgID))
 	switch {
 	case decision.Allowed():
-		scope, refused := g.scopeOf(decision, profile, orgID)
+		scope, refused := g.scopeOf(decision, profile, action, orgID)
 		if refused != "" {
 			g.count(ctx, ModeEnforce, ResultNotCarriedOut, label)
 			return pepgate.Scope{}, &DenyError{Reason: refused, Local: true}
@@ -352,8 +352,8 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 // its tenant_scope must both name the request's organization, in the lowercase form a read binds; redaction,
 // minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
 // every repository; any other allowlist is a ceiling only on a route the cut-over registry lists; neither repository
-// member allows no repository.
-func (g *Gate) scopeOf(d pep.Decision, profile, orgID string) (pepgate.Scope, pep.Reason) {
+// member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
+func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason) {
 	org := strings.ToLower(orgID)
 	if org == "" || orgID != org {
 		return pepgate.Scope{}, ReasonTenantMismatch
@@ -380,6 +380,9 @@ func (g *Gate) scopeOf(d pep.Decision, profile, orgID string) (pepgate.Scope, pe
 			return pepgate.Scope{}, ReasonNotCarriedOut
 		}
 		return pepgate.Allowlist(org, keys), ""
+	}
+	if catalogued, err := policycatalog.Default().Action(action); err == nil && catalogued.RepositoryScope == policycatalog.RepositoryScopeNone {
+		return pepgate.Organization(org), ""
 	}
 	return pepgate.Scope{}, ReasonNoRepositoryRule
 }

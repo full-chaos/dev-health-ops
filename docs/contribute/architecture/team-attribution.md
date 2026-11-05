@@ -26,22 +26,13 @@ children after direct repository evidence. That compute-time repository cascade
 is separate from the work-item team precedence below. Its multi-pass behavior,
 ambiguity rules, and persisted provenance are defined in
 [Investment repository inheritance](../../reference/data-models/investment.md#repository-inheritance).
-The final [team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback)
-uses only the latest primary ownership-based issue attribution and live,
-non-manual repository ownership. It unions all eligible repositories across the
-member issues' teams and weights them by linked share (equal only where no share is measured); it does not use person membership
-or change this page's primary attribution precedence.
-
-That fallback is bound by the §0.4 provider coverage contract below and is
-tested across the whole `{jira, gitlab, github, linear}` x
-`{teams, projects, members, issues}` matrix, never Linear-only. Two of those
-cells are negative by contract and are asserted as negatives, not skipped:
-**members** -- `assignee_membership` and `author_membership` attributions, and
-`team_memberships` rows, never donate a repository share even when their team
-owns live repositories -- and **manual** ownership, which stays a fallback
-record and never a donor. GitHub's `projects` cell is n/a because the repository
-is the scope there. The precedence table and the per-cell coverage are in
-[Investment: team ownership fallback](../../reference/data-models/investment.md#team-ownership-fallback).
+There is no final team-ownership fallback (removed by CHAOS-12949, chris: "Drop
+fallback"). A unit with no repository evidence is unattributed: a team's
+repositories are never a unit's repository, and no team, project, member or
+manual ownership of any provider reaches an investment allocation. See
+[Investment: units without repository evidence](../../reference/data-models/investment.md#units-without-repository-evidence).
+Older allocation generations written by that fallback are replaced unit by unit
+as materialization recomputes the units.
 
 > **Restoration note (2026-08-19, CHAOS-3968).** This page was deleted on 2026-07-27 when
 > `.github/docs-legacy/` was removed, with no replacement of equivalent scope. It is restored here
@@ -2438,10 +2429,9 @@ Only another ACTIVE team's tenure delays a start: an inactive team owns nothing 
   time (it mirrors the reference job, which loads its context once per run), but it stores no team attribution:
   the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
   `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
-- **The investment materialize job** follows the same rule for its team ownership fallback: a work unit takes
-  the repositories of its donor team valid at the end of the unit's own span, never later than the run
-  (CHAOS-9179; [investment](../../reference/data-models/investment.md), "Team ownership fallback"). It takes
-  the instant the span ends, not the start of a day.
+- **The investment materialize job** reads no team ownership. Its former team-ownership fallback was removed
+  (CHAOS-12949); the ownership windows of this section still govern the team readers (`teamscope`,
+  `analytics/investmentownershipteam.go`), not the allocation of a unit to a repository.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

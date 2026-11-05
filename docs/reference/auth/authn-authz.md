@@ -5,6 +5,8 @@ content_type: reference
 owner: engineering
 source_of_truth:
   - internal/api/policy/guard.go
+  - internal/api/policy/enforce.go
+  - internal/authzenforce/authzenforce.go
   - internal/api/policy/scope.go
   - internal/api/policy/principalonce.go
   - internal/api/policy/principal.go
@@ -145,6 +147,19 @@ A route in `signatureOnlyRoutes` (`internal/apiservice/scopeexempt.go`) skips st
 15 protected rows use another validator: a push token, a webhook signature, a workload token check, or the handler's own check. The row's `primary_validator` says which.
 
 A caller with no organization and no superuser flag gets `403 Organization context required`, unless the route is in `OrglessMayReach` (`internal/api/policy/orgless.go`).
+
+### Enforcement switch
+
+A switch per action namespace and service lets the policy decision point decide a route instead of the route level (`internal/authzenforce`, `internal/api/policy/enforce.go`). It is off for every namespace by default and is read once at start.
+
+- go-api reads `GO_API_AUTHZ_ENFORCE`, a comma list of catalog namespaces (the chart renders it from `authService.enforce.goApi`). An item that is not a namespace, a repeat, an empty item and `*` are ignored and stay off; the start is never refused for them (one ERROR line, and the `dev_health_authz_enforcement_ignored_items` gauge).
+- query-api has a cell per namespace in the package, but no wiring: it has no route-level chokepoint and no row that names an action.
+- For a route whose profile row names an action in an enforced namespace, the decision replaces the route level. Allow passes; deny answers `403` with the body the route level gives (`Admin access required`, `Superuser access required`, `Access denied` at the Authenticated level); no verdict (the decision point is down, answers late, answers a malformed body, or an allow carries an obligation go-api does not carry out) answers `503` with `Retry-After`. There is no fallback to the legacy check on a failure.
+- An allow serves only when go-api carries out every obligation it carries: a `tenant_scope` that is the request's organization (never on a platform route, whose request names no organization), and a `repository_allowlist` or the `repository_scope` `organization` only on a route listed with no repository dimension (`goAPIRoutesWithoutRepositoryDimension` in `enforce.go`; a route not listed has one). `redaction`, `minimum_assurance` and `step_up` are never carried out. One obligation not carried out makes the allow no verdict: `503` with `Retry-After`, counted `error_deny`.
+- A caller the decision point cannot judge keeps the legacy answer: a legacy HS256 token, a delegated (impersonation) session, an organization route with no organization. The request is counted in `dev_health_authz_enforcement_unjudged_total` by route and reason (`hs256`, `delegated`, `no_org`).
+- A route with no action in its row is never enforced. Authentication and the token organization's membership read still run first.
+- Rollback is removing the namespace from the list and rolling go-api. The switch holds no policy data, and the legacy path reads the same live membership, user and session rows, so a revoked caller stays refused.
+- go-api needs a way to ask: `AUTH_PROXY_URL`, and a workload credential (`AUTH_WORKLOAD_SUBJECT_FILE` or `AUTH_WORKLOAD_BOOTSTRAP_FILE`, and `AUTH_WORKLOAD_ISSUER`). A namespace on with one of them missing does not stop the start: go-api logs one ERROR naming the missing variable, sets `dev_health_authz_enforcement_config_invalid` to 1, and refuses every request of the switched-on namespaces with a `503` whose detail carries `reason_code` `authz_enforce_no_decision_point`; the rest of go-api serves. auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS`. The switch and the shadow (`AUTH_SHADOW_PDP`) ask through one decision point client, which uses the workload token of the provisioning or session client when go-api built one.
 
 ### Organization scope
 

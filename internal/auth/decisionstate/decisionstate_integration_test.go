@@ -164,6 +164,24 @@ func (e *env) org(t *testing.T, ctx context.Context) uuid.UUID {
 	return id
 }
 
+// publicUser seeds go-api's users row only: there is no auth copy.
+func (e *env) publicUser(t *testing.T, ctx context.Context, active, superuser bool) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	e.exec(t, ctx, `INSERT INTO public.users
+	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, $2, NULL, 'local', $3, true, $4, 0, now(), now())`, id, "ds-"+id.String()[:8]+"@example.com", active, superuser)
+	return id
+}
+
+// publicOrg seeds go-api's organizations row only: there is no auth copy.
+func (e *env) publicOrg(t *testing.T, ctx context.Context) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	e.exec(t, ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'decisionstate-test')`, id, "org-"+id.String()[:8])
+	return id
+}
+
 func (e *env) snapshot(t *testing.T, ctx context.Context, principal uuid.UUID, org string) authorization.GrantSnapshot {
 	t.Helper()
 	var snap authorization.GrantSnapshot
@@ -201,18 +219,18 @@ func TestSnapshotReadsAnActiveMemberFromBothSchemas(t *testing.T) {
 // TestSnapshotMembershipOrgIsTheAskedOrg pins the construction the router corpus
 // replay relies on (authruntime azMembershipOrgIsTheKey): the membership is read
 // keyed by the asked organization, so its OrgID is that organization on every
-// state. If this changes, the corpus exclusion is wrong and this cell goes red.
+// state it has (a public row or none). If this changes, the corpus exclusion is wrong and this cell goes red.
 func TestSnapshotMembershipOrgIsTheAskedOrg(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	user, orgA, orgB, orgC := e.user(t, ctx, true, false), e.org(t, ctx), e.org(t, ctx), e.org(t, ctx)
 	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, uuid.New(), user, orgA)
 	e.exec(t, ctx, `INSERT INTO public.memberships (id, user_id, org_id, role, joined_at) VALUES ($1, $2, $3, 'viewer', now())`, uuid.New(), user, orgB)
-	// orgC: an auth row with no public row, the removed state.
+	// orgC: an auth row with no public row, which is no membership.
 	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, orgC, user)
 	asked := []string{orgA.String(), orgB.String(), orgC.String(), uuid.NewString(), strings.ToUpper(orgA.String()), ""}
 	roles := map[string]string{orgA.String(): "admin", orgB.String(): "viewer"}
-	orgs := map[string]bool{orgA.String(): true, orgB.String(): true, orgC.String(): true}
+	orgs := map[string]bool{orgA.String(): true, orgB.String(): true}
 	for _, ask := range asked {
 		snap := e.snapshot(t, ctx, user, ask)
 		m, ok := snap.Membership(ask)
@@ -238,55 +256,46 @@ func TestSnapshotMembershipOrgIsTheAskedOrg(t *testing.T) {
 	}
 }
 
-func TestSnapshotActiveAuthRowWithoutAPublicRowIsRemoved(t *testing.T) {
+func TestSnapshotAuthMembershipWithoutAPublicRowIsNoMembership(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
-	user, org := e.user(t, ctx, true, false), e.org(t, ctx)
-	e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, 'active', 'admin', now())`, org, user)
-	m, ok := e.snapshot(t, ctx, user, org.String()).Membership(org.String())
-	if !ok || m.Status != authorization.StatusRemoved {
-		t.Fatalf("membership %+v %v, want removed", m, ok)
-	}
-	d := authorization.NewEvaluator().Evaluate(authorization.Request{Action: "settings.write", ResourceKind: "organization", OrganizationID: org.String()},
-		e.snapshot(t, ctx, user, org.String()))
-	if d.Allowed || d.Reason != authorization.ReasonMembershipInactive {
-		t.Fatalf("decision %+v, want membership_inactive", d)
+	org := e.org(t, ctx)
+	for _, status := range []string{"active", "suspended", "invited"} {
+		other := e.user(t, ctx, true, false)
+		e.armed(t, ctx, `INSERT INTO auth.memberships (organization_id, principal_id, status, role, joined_at) VALUES ($1, $2, $3, 'admin', now())`, org, other, status)
+		if _, ok := e.snapshot(t, ctx, other, org.String()).Membership(org.String()); ok {
+			t.Fatalf("an auth membership %s with no public row read as a membership", status)
+		}
+		d := authorization.NewEvaluator().Evaluate(authorization.Request{Action: "settings.write", ResourceKind: "organization", OrganizationID: org.String()},
+			e.snapshot(t, ctx, other, org.String()))
+		if d.Allowed || d.Reason != authorization.ReasonNoMembership {
+			t.Fatalf("auth membership %s, no public row: %+v, want no_membership", status, d)
+		}
 	}
 }
 
-func TestSnapshotPrincipalNeedsBothFlagsAndTheUserKind(t *testing.T) {
+func TestSnapshotPrincipalIsThePublicUsersRow(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	inactive := e.user(t, ctx, false, false)
-	if s := e.snapshot(t, ctx, inactive, "").PrincipalStatus(); s == authorization.StatusActive {
-		t.Fatal("users.is_active false read as active")
+	if s := e.snapshot(t, ctx, inactive, "").PrincipalStatus(); s != authorization.StatusSuspended {
+		t.Fatalf("users.is_active false: %v, want suspended", s)
 	}
-	disabled := e.user(t, ctx, true, false)
-	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabled)
-	if s := e.snapshot(t, ctx, disabled, "").PrincipalStatus(); s == authorization.StatusActive {
-		t.Fatal("a disabled principal read as active")
+	disabledCopy := e.user(t, ctx, true, false)
+	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabledCopy)
+	if s := e.snapshot(t, ctx, disabledCopy, "").PrincipalStatus(); s != authorization.StatusActive {
+		t.Fatalf("a disabled auth copy of an active public user: %v, want active (public wins)", s)
 	}
-	noUsersRow := uuid.New()
-	e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'user')`, noUsersRow)
-	if s := e.snapshot(t, ctx, noUsersRow, "").PrincipalStatus(); s != authorization.StatusUnknown {
-		t.Fatalf("a user principal with no public.users row: %v, want unknown", s)
+	noCopy := e.publicUser(t, ctx, true, false)
+	if s := e.snapshot(t, ctx, noCopy, "").PrincipalStatus(); s != authorization.StatusActive {
+		t.Fatalf("an active public user with no auth copy: %v, want active", s)
 	}
-	for _, kind := range []string{"service_account", "workload"} {
+	for _, kind := range []string{"user", "service_account", "workload"} {
 		id := uuid.New()
 		e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, $2)`, id, kind)
 		if s := e.snapshot(t, ctx, id, "").PrincipalStatus(); s != authorization.StatusUnknown {
-			t.Fatalf("kind %s: %v, want unknown", kind, s)
+			t.Fatalf("auth principal of kind %s with no public.users row: %v, want unknown", kind, s)
 		}
-	}
-	// A non-user principal whose id also has a public.users row is still not
-	// a user: the kind decides, not the row.
-	shadow := uuid.New()
-	e.exec(t, ctx, `INSERT INTO public.users
-	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
-VALUES ($1, $2, NULL, 'local', true, true, true, 0, now(), now())`, shadow, "shadow-"+shadow.String()[:8]+"@example.com")
-	e.armed(t, ctx, `INSERT INTO auth.principals (id, kind) VALUES ($1, 'service_account')`, shadow)
-	if snap := e.snapshot(t, ctx, shadow, ""); snap.PrincipalStatus() != authorization.StatusUnknown || snap.PlatformRole() != "" {
-		t.Fatalf("a service account with a users row: %v %q, want unknown and no platform role", snap.PrincipalStatus(), snap.PlatformRole())
 	}
 	if s := e.snapshot(t, ctx, uuid.New(), "").PrincipalStatus(); s != authorization.StatusUnknown {
 		t.Fatalf("an unknown principal: %v, want unknown", s)
@@ -332,9 +341,18 @@ func TestSnapshotOrganizationStatus(t *testing.T) {
 	e := getEnv(t)
 	ctx := context.Background()
 	user, org := e.user(t, ctx, true, false), e.org(t, ctx)
-	e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, org)
+	e.exec(t, ctx, `UPDATE public.organizations SET is_active = false WHERE id = $1`, org)
 	if s := e.snapshot(t, ctx, user, org.String()).OrganizationStatus(org.String()); s != authorization.StatusSuspended {
-		t.Fatalf("disabled organization: %v", s)
+		t.Fatalf("inactive public organization: %v", s)
+	}
+	copyOff := e.org(t, ctx)
+	e.armed(t, ctx, `UPDATE auth.organizations SET disabled_at = now() WHERE id = $1`, copyOff)
+	if s := e.snapshot(t, ctx, user, copyOff.String()).OrganizationStatus(copyOff.String()); s != authorization.StatusActive {
+		t.Fatalf("a disabled auth copy of an active public organization: %v, want active (public wins)", s)
+	}
+	noCopy := e.publicOrg(t, ctx)
+	if s := e.snapshot(t, ctx, user, noCopy.String()).OrganizationStatus(noCopy.String()); s != authorization.StatusActive {
+		t.Fatalf("an active public organization with no auth copy: %v, want active", s)
 	}
 	unknown := uuid.NewString()
 	if s := e.snapshot(t, ctx, user, unknown).OrganizationStatus(unknown); s != authorization.StatusUnknown {
@@ -565,11 +583,30 @@ func TestActorDeactivatedUserIsNotActiveWhateverItsRole(t *testing.T) {
 	if a := e.actor(t, ctx, inactive); a.Active {
 		t.Fatalf("users.is_active false read as active: %+v", a)
 	}
-	disabled := e.user(t, ctx, true, false)
-	e.role(t, ctx, disabled, "platform_admin")
-	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabled)
-	if a := e.actor(t, ctx, disabled); a.Active || a.CanImpersonate {
-		t.Fatalf("a disabled principal: %+v", a)
+	disabledCopy := e.user(t, ctx, true, false)
+	e.role(t, ctx, disabledCopy, "platform_admin")
+	e.armed(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabledCopy)
+	if a := e.actor(t, ctx, disabledCopy); !a.Active || !a.CanImpersonate {
+		t.Fatalf("a disabled auth copy of an active public user: %+v, want active with the role (public wins)", a)
+	}
+}
+
+// An actor with a public.users row and an auth assignment but no auth.principals row is read as the role holder.
+func TestActorWithNoAuthCopyHoldsItsRole(t *testing.T) {
+	e := getEnv(t)
+	ctx := context.Background()
+	actor := e.publicUser(t, ctx, true, false)
+	e.role(t, ctx, actor, "platform_admin")
+	if a := e.actor(t, ctx, actor); !a.Active || !a.CanImpersonate || a.Owner {
+		t.Fatalf("no auth copy: %+v, want an active admin", a)
+	}
+	e.role(t, ctx, actor, "platform_owner")
+	if a := e.actor(t, ctx, actor); !a.Owner {
+		t.Fatalf("no auth copy, owner assignment: %+v, want owner", a)
+	}
+	e.exec(t, ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, actor)
+	if a := e.actor(t, ctx, actor); a.Active || a.CanImpersonate || a.Owner {
+		t.Fatalf("public user inactive: %+v, want no authority", a)
 	}
 }
 

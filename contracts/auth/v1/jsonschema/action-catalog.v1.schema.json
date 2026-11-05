@@ -72,6 +72,13 @@
               "allowed"
             ],
             "description": "Whether a delegated session may exercise this action (G-51, ACP-ADR-10). denied is the safe value."
+          },
+          "repository_scope": {
+            "enum": [
+              "filtered",
+              "none"
+            ],
+            "description": "filtered: an allow of this action carries the repositories the principal may read as an obligation (repository_allowlist), because the action reads repository-bound data. none: it does not. Optional; an absent member is none. A census requires the member on every action whose id ends in .read or .export and on every repository-kind action, so a new such action makes an explicit choice."
           }
         },
         "allOf": [

@@ -19,4 +19,4 @@ The Ask Dev v1 schemas, fixture manifest and goldens that lived in
 `contracts/ask-dev/v1/` (removed with the Python api) were generated from the
 Python Dev API. The Go api does not serve that surface, and
 nothing in this repository reads those files, so they were deleted. The v2
-record is in [Ask Dev v2 contracts](../../contribute/architecture/ask-dev-contracts-v2.md).
+record is in the deprecated [Ask Dev v2 contracts](../../contribute/architecture/ask-dev-contracts-v2.md).

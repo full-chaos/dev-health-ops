@@ -30,10 +30,10 @@ type usersReader interface {
 // the refusal names all three, and the part of the third that is the
 // sso_subject_unverifiable bucket (identity.IsSSOSubjectUnverifiable). Two more own classes hold the guard
 // though a social key exists (CHAOS-11576): oauth_sso_missing_row_key (an OAuth-SSO user whose one provider row has no
-// key yet), oauth_sso_ambiguous_row (two or more candidate rows, none carried) and oauth_sso_selfhosted_unbindable (a self-hosted row's user, never carried).
+// key yet) and oauth_sso_ambiguous_row (two or more candidate rows, none carried).
 func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.ValidatedIdentifier) error {
 	q := authschema.Quote(schema)
-	var missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous, oauthSelfHosted int64
+	var missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous int64
 	var candidates string
 	if err := db.QueryRow(ctx, `SELECT
   (SELECT count(*) FROM public.users u WHERE NOT EXISTS (SELECT 1 FROM `+q+`.users a WHERE a.principal_id = u.id)),
@@ -51,9 +51,8 @@ func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.Vali
      WHERE `+identity.SSOSubjectUnverifiableSQL("u")+` AND u.saml_nameid_format IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM `+q+`.external_identities e WHERE e.principal_id = u.id)),
   `+identity.OAuthSSOMissingKeySubquery(q)+`,
-  `+identity.OAuthSSOAmbiguousSubquery(q)+`,
-  `+identity.OAuthSSOSelfHostedSubquery(q),
-	).Scan(&missingInAuth, &missingInPublic, &noIdentity, &unverifiable, &candidates, &oauthMissingKey, &oauthAmbiguous, &oauthSelfHosted); err != nil {
+  `+identity.OAuthSSOAmbiguousSubquery(q),
+	).Scan(&missingInAuth, &missingInPublic, &noIdentity, &unverifiable, &candidates, &oauthMissingKey, &oauthAmbiguous); err != nil {
 		return fmt.Errorf("authruntime: reading the users-owned guard counts failed")
 	}
 	waived, err := keyableSAML(candidates)
@@ -62,11 +61,11 @@ func checkUsersOwned(ctx context.Context, db usersReader, schema authschema.Vali
 	}
 	noIdentity -= waived
 	unverifiable -= waived
-	if missingInAuth == 0 && missingInPublic == 0 && noIdentity == 0 && oauthMissingKey == 0 && oauthAmbiguous == 0 && oauthSelfHosted == 0 {
+	if missingInAuth == 0 && missingInPublic == 0 && noIdentity == 0 && oauthMissingKey == 0 && oauthAmbiguous == 0 {
 		return nil
 	}
-	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d (sso_subject_unverifiable=%d), oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d, oauth_sso_selfhosted_unbindable=%d",
-		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous, oauthSelfHosted)
+	return fmt.Errorf("%w: public users without an auth user=%d, auth users without a public user=%d, provider users without an external identity=%d (sso_subject_unverifiable=%d), oauth_sso_missing_row_key=%d, oauth_sso_ambiguous_row=%d",
+		ErrUsersOwnedNotReady, missingInAuth, missingInPublic, noIdentity, unverifiable, oauthMissingKey, oauthAmbiguous)
 }
 
 // keyableSAML counts the accounts of the sso_subject_unverifiable bucket whose stored NameID parts key under

@@ -236,6 +236,40 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 	}
 }
 
+// TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute takes every route
+// from the probed route table, removes its row in memory and requires the
+// comparison to name exactly that route: no other route missing, no row stale.
+func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	if len(served) != servedAuthRouteCount {
+		t.Fatalf("%d served routes found, want %d: a mount was dropped or added without a row", len(served), servedAuthRouteCount)
+	}
+	keys := make([]string, 0, len(served))
+	for key := range served {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	rows := loadAuthServiceRows(t)
+	for _, key := range keys {
+		var kept []map[string]any
+		for _, row := range rows {
+			id, _ := row["id"].(string)
+			if match := authRowID.FindStringSubmatch(id); match != nil && match[1]+" "+match[2]+"@"+match[3] == key {
+				continue
+			}
+			kept = append(kept, row)
+		}
+		if len(kept) != len(rows)-1 {
+			t.Errorf("%s: %d rows removed, want exactly one: no row, or more than one, carries this route", key, len(rows)-len(kept))
+			continue
+		}
+		missing, stale := compareServedToRows(t, served, kept)
+		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
+			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
+		}
+	}
+}
+
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
 // the twenty-five provisioning routes, the two authorize routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the

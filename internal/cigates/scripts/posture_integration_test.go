@@ -158,6 +158,38 @@ func TestPostureIntegrationDefaultModePrintsTheBaseSha(t *testing.T) {
 	}
 }
 
+func TestPostureIntegrationCleanEnvCallerGitVarsDoNotReachGit(t *testing.T) {
+	mk := func(name string) (string, string) {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		git := func(args ...string) string {
+			a := append([]string{"-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0"}, args...)
+			res := cmdSpec{dir: dir, env: []string{shimBasePath()}}.run("git", a...)
+			if res.code != 0 {
+				t.Fatalf("git %v: %q", args, res.stderr)
+			}
+			return strings.TrimSpace(res.stdout)
+		}
+		git("init", "-q", "-b", "main")
+		git("commit", "-q", "--allow-empty", "-m", name)
+		sha := git("rev-parse", "HEAD")
+		git("update-ref", "refs/remotes/origin/main", sha)
+		return dir, sha
+	}
+	repo, base := mk("real")
+	decoy, decoyBase := mk("decoy")
+	if base == decoyBase {
+		t.Fatal("the two fixture repositories must differ")
+	}
+	res := cmdSpec{dir: repo, env: []string{shimBasePath(), "POSTURE_CLEAN_ENV=1", "GIT_DIR=" + filepath.Join(decoy, ".git")}}.run("bash", filepath.Join(repoRoot(t), "ci", "posture_integration.sh"))
+	gotBase, _ := postureLines(res.stdout)
+	if res.code != 0 || gotBase != base {
+		t.Fatalf("GIT_DIR from the caller reached git: exit %d BASE %q, want %q (decoy %q) stderr=%q", res.code, gotBase, base, decoyBase, res.stderr)
+	}
+}
+
 // postureDefects returns what is wrong with keys against the listed go packages: a key that is no package, and a
 // package that holds posture tests but is not in keys.
 func postureDefects(keys []string, goList string) []string {

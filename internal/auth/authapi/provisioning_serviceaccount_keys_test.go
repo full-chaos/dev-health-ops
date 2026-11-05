@@ -541,7 +541,7 @@ func TestKeyRoutesAreOnTheStartupGate(t *testing.T) {
 		if provisioningRouteOps[c.op] != c.path {
 			t.Errorf("%s is not in the route operations", c.op)
 		}
-		err := provisioningRowsPresent(embeddedDocWithoutRow(t, c.path), false)
+		err := provisioningRowsPresent(embeddedDocWithoutRow(t, c.path))
 		if !errors.Is(err, errProvisioningRows) || !strings.Contains(err.Error(), "POST "+c.path+" ") {
 			t.Errorf("a document without the %s row: %v, want a refusal naming the route", c.path, err)
 		}

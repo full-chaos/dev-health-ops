@@ -20,22 +20,24 @@ const untrustedCallerID = "untrusted"
 //     X-Auth-Request-ID is never read: go-api relays the client's copy.
 //   - caller_request_id: the X-Request-ID go-api sends (its own request_id),
 //     under go-api's log rule (canonical UUID or 32 hex, else "invalid"), only
-//     from a trusted proxy peer; "untrusted" from any other peer; "" when absent.
-func accessLogIDs(trust clientaddr.Trust) func(*http.Request, http.Header) []slog.Attr {
+//     from a believed forwarder (clientaddr.Policy.Forwarded: a valid proof, or a
+//     trusted-proxy peer where the mode reads the list); "untrusted" from any
+//     other peer; "" when absent.
+func accessLogIDs(policy clientaddr.Policy) func(*http.Request, http.Header) []slog.Attr {
 	return func(r *http.Request, answer http.Header) []slog.Attr {
 		return []slog.Attr{
 			slog.String("auth_request_id", requestid.LoggableWire(answer.Get(requestid.Header))),
-			slog.String("caller_request_id", callerRequestID(trust, r)),
+			slog.String("caller_request_id", callerRequestID(policy, r)),
 		}
 	}
 }
 
-func callerRequestID(trust clientaddr.Trust, r *http.Request) string {
+func callerRequestID(policy clientaddr.Policy, r *http.Request) string {
 	values := r.Header.Values(httpapi.RequestIDHeader)
 	switch {
 	case len(values) == 0:
 		return ""
-	case !trust.TrustsPeer(r):
+	case !policy.Forwarded(r):
 		return untrustedCallerID
 	case len(values) != 1:
 		return "invalid"

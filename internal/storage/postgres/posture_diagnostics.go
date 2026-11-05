@@ -97,7 +97,18 @@ SELECT
 	-- rolePostureQuery also refuses an INSERT or UPDATE held on ANY column of a table that does not allow it
 	-- (has_any_column_privilege sees the table-level entry too). The UPDATE half has one exception, as there: a
 	-- table the posture also declares column-scoped with an UPDATE column ($6) legitimately holds column UPDATEs.
-	relation IS NOT NULL AND NOT allow_insert AND has_any_column_privilege($1, relation, 'INSERT') AS excess_insert,
+	relation IS NOT NULL AND NOT allow_insert AND (
+		has_table_privilege($1, relation, 'INSERT')
+		OR EXISTS (
+			SELECT 1 FROM pg_catalog.pg_attribute AS attribute
+			WHERE attribute.attrelid = relation AND attribute.attnum > 0 AND NOT attribute.attisdropped
+				AND has_column_privilege($1, relation, attribute.attname, 'INSERT')
+				AND NOT EXISTS (
+					SELECT 1 FROM unnest($7::text[], $8::text[]) AS declared(table_name, column_name)
+					WHERE declared.table_name = resolved.table_name AND declared.column_name = attribute.attname
+				)
+		)
+	) AS excess_insert,
 	relation IS NOT NULL AND NOT allow_update AND (
 		has_table_privilege($1, relation, 'UPDATE')
 		OR (has_any_column_privilege($1, relation, 'UPDATE') AND NOT table_name = ANY(COALESCE($6::text[], '{}'::text[])))
@@ -413,10 +424,14 @@ func diagnoseTablePosture(
 	tables []TablePrivilege,
 	columns []ColumnPrivilege,
 ) ([]PostureGap, error) {
-	var columnUpdateTables []string
+	var columnUpdateTables, columnInsertTables, columnInsertNames []string
 	for _, column := range columns {
-		if column.Privilege == "UPDATE" {
+		switch column.Privilege {
+		case "UPDATE":
 			columnUpdateTables = append(columnUpdateTables, column.TableName)
+		case "INSERT":
+			columnInsertTables = append(columnInsertTables, column.TableName)
+			columnInsertNames = append(columnInsertNames, column.ColumnName)
 		}
 	}
 	tableNames := make([]string, len(tables))
@@ -430,7 +445,7 @@ func diagnoseTablePosture(
 		allowDeletes[i] = table.AllowDelete
 	}
 	rows, err := pool.Query(
-		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes, columnUpdateTables,
+		ctx, diagnoseTablePostureQuery, expectedRole, tableNames, allowInserts, allowUpdates, allowDeletes, columnUpdateTables, columnInsertTables, columnInsertNames,
 	)
 	if err != nil {
 		return nil, ErrUnavailable

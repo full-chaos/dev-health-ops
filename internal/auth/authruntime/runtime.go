@@ -700,6 +700,15 @@ func (a announcedListener) Shutdown(ctx context.Context) error { return a.listen
 
 func (a announcedListener) Errors() <-chan error { return a.listener.Errors() }
 
+func (a announcedListener) Drained() <-chan struct{} {
+	if source, ok := a.listener.(lifecycle.ShutdownDrainSource); ok {
+		return source.Drained()
+	}
+	drained := make(chan struct{})
+	close(drained)
+	return drained
+}
+
 // reasonOf renders a bounded reason code for a dependency-construction
 // failure. It never falls back to err.Error(): those errors can carry a DSN.
 func reasonOf(err error) string {
@@ -823,6 +832,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 			routes[i].RateLimitBurst = cfg.PDPRoute.Burst
 		}
 	}
+	policy := clientAddrPolicy(cfg, logger)
 	return httpapi.ServerOptions{
 		PublicMaxInFlight: cfg.Public.MaxInFlight,
 		Address:           cfg.APIAddress,
@@ -838,7 +848,7 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		// carry X-Auth-Request-ID as route answers do. The client address
 		// (every audit row and session) and the user agent (every session)
 		// are bound by internal/auth/clientaddr.
-		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.Middleware(cfg.TrustedProxies), publicaudit.Middleware},
+		Middleware: []func(http.Handler) http.Handler{requestid.Middleware, clientaddr.PolicyMiddleware(policy), publicaudit.Middleware},
 		// The transport id is always minted here, never a client's
 		// X-Request-ID: it reaches every log line and envelope.
 		AcceptRequestID: func(string) bool { return false },
@@ -847,7 +857,23 @@ func apiServerOptions(cfg authconfig.Config, logger *slog.Logger, routes []httpa
 		ExplicitHead: true,
 		// Each access line also carries this service's wire id and the
 		// caller's id, which join it to go-api's proxy line.
-		AccessAttrs: accessLogIDs(cfg.TrustedProxies),
+		AccessAttrs: accessLogIDs(policy),
+	}
+}
+
+// clientAddrPolicy is the client-address rule of the API listener (CHAOS-11645): the mode, the trusted-proxy list and
+// the proof keys. A failed proof check logs its outcome and route class only.
+func clientAddrPolicy(cfg authconfig.Config, logger *slog.Logger) clientaddr.Policy {
+	mode := cfg.ClientAddrMode
+	if mode == "" {
+		mode = clientaddr.ModeCIDR
+	}
+	return clientaddr.Policy{
+		Mode: mode, Trust: cfg.TrustedProxies, Verifier: clientaddr.NewVerifier(cfg.ClientAddrKeys),
+		Log: func(ctx context.Context, outcome, route string) {
+			logger.WarnContext(ctx, "client address proof refused", slog.String("outcome", outcome), slog.String("route", route),
+				slog.String("mode", string(mode)))
+		},
 	}
 }
 

@@ -1182,6 +1182,33 @@ true
 {{- end -}}
 
 {{/*
+CHAOS-13130: checks authService.networkPolicy.workloadClients, the workloads outside this release (acr-api) admitted on
+the internal port alone. Renders nothing; fails the render on a value the internal policy must not carry. Each entry
+is a podSelector (required, non-empty) and an optional non-empty namespaceSelector, and nothing else: an entry has no
+port, so it can only join the internal port's one rule and never reach the API port, which stays go-api's while
+go-api forwards the auth routes. null is the empty list. Call with (dict "context" . "internalOn" "true"|"").
+*/}}
+{{- define "dev-health.authWorkloadClients" -}}
+{{- $key := "authService.networkPolicy.workloadClients" -}}
+{{- $clients := .context.Values.authService.networkPolicy.workloadClients -}}
+{{- if not (or (kindIs "invalid" $clients) (kindIs "slice" $clients)) }}{{- fail (printf "%s must be a list of {podSelector, namespaceSelector} entries" $key) }}{{- end -}}
+{{- if and $clients (ne .internalOn "true") }}{{- fail (printf "%s needs authService.internal.enabled: the clients are admitted on the internal port alone, by its own NetworkPolicy" $key) }}{{- end -}}
+{{- range $i, $client := $clients }}
+{{- if not (kindIs "map" $client) }}{{- fail (printf "%s[%d] must be an object with a podSelector and an optional namespaceSelector" $key $i) }}{{- end -}}
+{{- range $name := keys $client | sortAlpha }}
+{{- if not (has $name (list "namespaceSelector" "podSelector")) }}{{- fail (printf "%s[%d] takes only podSelector and namespaceSelector, not %q: the entries open the internal port (authService.internal.port) alone, so a port, an ipBlock or any other key is refused" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- if not (hasKey $client "podSelector") }}{{- fail (printf "%s[%d] needs a podSelector: without one the entry admits every pod" $key $i) }}{{- end -}}
+{{- range $name := list "podSelector" "namespaceSelector" }}
+{{- if hasKey $client $name }}
+{{- $selector := index $client $name }}
+{{- if not (and (kindIs "map" $selector) (or (and $selector.matchLabels (gt (len $selector.matchLabels) 0)) (and $selector.matchExpressions (gt (len $selector.matchExpressions) 0)))) }}{{- fail (printf "%s[%d].%s needs a non-empty matchLabels or matchExpressions: an empty selector admits every pod or namespace" $key $i $name) }}{{- end -}}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 The auth-service ServiceAccount token mount: the configured value, or on while the exchange runs (the pod's own token is
 the TokenReview reviewer token).
 */}}

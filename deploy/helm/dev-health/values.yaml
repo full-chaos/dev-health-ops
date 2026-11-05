@@ -605,6 +605,15 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- CHAOS-13130: workloads outside this release admitted on the INTERNAL port (authService.internal.port) alone,
+    #    as more `from` entries of the <fullname>-auth-service-internal policy; needs authService.internal.enabled.
+    #    The API port is not opened. Each entry: `podSelector` (required, a non-empty matchLabels or
+    #    matchExpressions) and an optional `namespaceSelector` (non-empty; omit it for this release's namespace).
+    #    Any other key (a port, an ipBlock) fails the render. For acr-api:
+    #    `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/component":"api"}},`
+    #    `"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"<acr namespace>"}}}]`.
+    #    A pod admitted here still gets a workload token only when its ServiceAccount is registered for the exchange.
+    workloadClients: []
     # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
     #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
     #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.

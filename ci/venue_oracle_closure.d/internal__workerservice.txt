@@ -9,8 +9,10 @@ internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
 internal/api/recordvalidation
+internal/apiservice/accessrouting
 internal/atlassianteams
 internal/audit
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts/externalpush
@@ -172,6 +174,7 @@ internal/teamprovider
 internal/teamresolve
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/fakehttp
 internal/testsupport/fakepg

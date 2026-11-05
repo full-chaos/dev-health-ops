@@ -41,6 +41,7 @@ internal/api/teamsidentity
 internal/api/telemetry
 internal/api/usersowned
 internal/api/webhookintake
+internal/apiservice/accessrouting
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
@@ -180,6 +181,7 @@ internal/teamkeytables
 internal/teamprovider
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/ingestpg
 internal/testsupport/moduleroot

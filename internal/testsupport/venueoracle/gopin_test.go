@@ -144,12 +144,13 @@ func TestDiffRetiringPinPicksTheRulingThatNamesTheRequest(t *testing.T) {
 }
 
 func TestFinishPinsWritesEveryRecordingPinAndNeverPasses(t *testing.T) {
-	dir := t.TempDir()
-	first, err := openGoPin(GoPinSpec{Path: filepath.Join(dir, "first.json"), Ruling: "r1"}, true)
+	firstPath := filepath.Join(t.TempDir(), "first.json")
+	secondPath := filepath.Join(t.TempDir(), "second.json")
+	first, err := openGoPin(GoPinSpec{Path: firstPath, Ruling: "r1"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := openGoPin(GoPinSpec{Path: filepath.Join(dir, "second.json"), Ruling: "r2"}, true)
+	second, err := openGoPin(GoPinSpec{Path: secondPath, Ruling: "r2"}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +164,17 @@ func TestFinishPinsWritesEveryRecordingPinAndNeverPasses(t *testing.T) {
 	if !errors.Is(err, errGoPinRecorded) {
 		t.Fatalf("finishPins = %v, want a recorded error", err)
 	}
-	for _, name := range []string{"first.json", "second.json"} {
-		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr != nil {
-			t.Errorf("%s not written: %v", name, statErr)
-		}
-		if !strings.Contains(err.Error(), name) {
-			t.Errorf("finishPins error %q does not name %s", err, name)
+	firstRaw, firstErr := os.ReadFile(firstPath)
+	if firstErr != nil || !strings.Contains(string(firstRaw), `"a"`) {
+		t.Errorf("first pin not written: %q %v", firstRaw, firstErr)
+	}
+	secondRaw, secondErr := os.ReadFile(secondPath)
+	if secondErr != nil || !strings.Contains(string(secondRaw), `"b"`) {
+		t.Errorf("second pin not written: %q %v", secondRaw, secondErr)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("finishPins error %q does not name %s", err, path)
 		}
 	}
 }

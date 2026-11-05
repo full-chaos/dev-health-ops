@@ -209,6 +209,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		SafeErrorCode:    result.SafeErrorCode,
 		ErrorParam:       result.ErrorParam,
 		ErrorCode:        result.ErrorCode,
+		ErrorMessage:     result.ErrorMessage,
 		DroppedParams:    result.DroppedParams,
 	}
 	payload, err := json.Marshal(record)

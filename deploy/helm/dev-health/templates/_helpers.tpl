@@ -943,13 +943,16 @@ true
 {{- end -}}
 
 {{/*
-"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused (CHAOS-12678).
+"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused unless users are owned
+(authOn usersOwned): go-api refuses its own sign-in join and account create while AUTH_USERS_OWNED is on (internal/api/sso/provision.go),
+and go-api has that switch from stage goApi, before auth-service owns users, so auth-service is then the only writer.
 */}}
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- fail "authService.ssoJit=true is refused at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race; phase 5 (orgs owned) is cancelled (D6651)" -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.ssoJit=true needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (below it go-api's own sign-in join still writes, and two writers would race)" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 

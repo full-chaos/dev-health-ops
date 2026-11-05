@@ -19,6 +19,7 @@ internal/api/billing/subscriptions.go	handlers.resolveOrg	admin.billing	handler
 internal/api/orgs/orgs.go	handlers.entitlements	admin.billing	7
 internal/api/policy/guard.go	Guard.currentUser	admin.orgs	4
 internal/api/policy/principal.go	User.IsAdmin	admin.orgs	1
+internal/api/policy/scope.go	Authenticator.CheckTokenOrg	admin.orgs	4
 internal/api/policy/scope.go	EffectiveOrgID	admin.impersonate	4
 internal/api/policy/scope.go	Scope.Impersonation	admin.impersonate	carry
 internal/api/policy/scope.go	Scope.mayUseOrg	admin.orgs	4

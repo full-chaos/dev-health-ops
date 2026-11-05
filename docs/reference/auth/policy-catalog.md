@@ -197,7 +197,7 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 | --- | --- |
 | `authorization_decision.v1` `reason_code` | 24 values; see [reason codes](reason-codes.md) |
 | `audit-event.v1` `attributes.reason_code` | 65 values; the file lists them |
-| `revoked_reason` of a credential | `compromised`, `domain_revoked`, `owner_request` |
+| `revoked_reason` of a credential | `compromised`, `domain_revoked`, `org_deprovisioned`, `owner_request` |
 
 A value is added only with the pull request of the producer that emits it. `error.v1` `reason_code` is not governed by this file. It is shape-only.
 

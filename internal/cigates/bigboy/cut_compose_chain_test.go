@@ -502,7 +502,7 @@ func cutCheckOneOffsYAML(g *guard) {
 	env := cutEnvMap(river["environment"])
 	delete(env, "MIGRATION_DATABASE_URI")
 	g.expect(equal(env, map[string]string{"RIVER_DATABASE_SCHEMA": "river", "RIVER_DOMAIN_DATABASE_ROLE": "devhealth_domain",
-		"RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue", "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator", "API_DATABASE_ROLE": "devhealth_api"}),
+		"RIVER_QUEUE_DATABASE_ROLE": "devhealth_queue", "RIVER_COORDINATOR_DATABASE_ROLE": "devhealth_coordinator", "API_DATABASE_ROLE": "devhealth_api", "AUTH_PROXY_SESSIONS": "true"}),
 		"venue-river environment is %v", env)
 	g.expect(cutEnvMap(at(d, "services", "venue-hook", "environment"))["CLICKHOUSE_URI"] == "clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/default",
 		"venue-hook CLICKHOUSE_URI is not the compose-substituted DSN")

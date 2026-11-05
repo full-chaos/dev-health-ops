@@ -156,10 +156,10 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 		return refusalWithoutPerRequestFields(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), nil).Body.Bytes())
 	}()
 	for name, build := range issuePreKeyRefusals() {
-		for _, c := range routeCases() {
-			t.Run(name+" "+c.op, func(t *testing.T) {
-				t.Parallel()
-				f := newProvWorkloadFixture(t)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			for _, c := range routeCases() {
 				response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
 				expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
 				if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
@@ -169,8 +169,8 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 				if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
 					t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
 				}
-			})
-		}
+			}
+		})
 	}
 }
 
@@ -179,16 +179,16 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 // credential check, users read or verb.
 func TestProvisioningRoutesRefuseATokenTheVerifierRefuses(t *testing.T) {
 	for name, build := range issueVerifierRefusals() {
-		for _, c := range routeCases() {
-			t.Run(name+" "+c.op, func(t *testing.T) {
-				t.Parallel()
-				f := newProvWorkloadFixture(t)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			for _, c := range routeCases() {
 				expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
 				if len(f.creds.scopes) != 0 || f.storeCalls() != 0 || f.users.reads != 0 {
 					t.Fatalf("%s %s: a refused token reached a store", name, c.op)
 				}
-			})
-		}
+			}
+		})
 	}
 }
 

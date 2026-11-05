@@ -8,6 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -17,10 +18,21 @@ import (
 // refusal is the same 401 "Invalid or expired token"; a valid token with no
 // organization is 403 unless the caller is a superuser; a check that could not
 // be made is policy.WriteAuthFailure's 503 (unavailable) or 500, never a pass.
+// An accepted user access token then asks the request's PDP gate; an accepted
+// edge token is on the exempt list and is counted.
 func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier *principal.EdgeVerifier, token, component string) (authctx.Claims, bool) {
 	ctx := principal.WithRequestMeta(r.Context(), r.RemoteAddr, envelopeRequestID(r))
 	claims, err := edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)
 	if err == nil {
+		gate := pdp.FromContext(r.Context())
+		if principal.AccessClassOf(token) != principal.AccessClassUser {
+			gate.CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
+			return authctx.Claims{OrgID: claims.OrgID}, true
+		}
+		if denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID); denied != nil {
+			writePDPDenied(w, r, component, denied)
+			return authctx.Claims{}, false
+		}
 		return authctx.Claims{OrgID: claims.OrgID}, true
 	}
 	var orgRequired *principal.OrgRequiredError

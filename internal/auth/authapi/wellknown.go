@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -17,7 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
@@ -41,7 +39,9 @@ type KeySetSource interface {
 
 // WellKnownDeps are the discovery and JWKS handlers' collaborators.
 type WellKnownDeps struct {
-	Keys KeySetSource
+	// JWKS is the last-known key set document the JWKS route serves; a
+	// request reads it in memory only. Nil answers 503.
+	JWKS *JWKSDocument
 	// IssuerURL is the https issuer the access tokens carry as iss. Empty
 	// mounts the JWKS route only: a discovery document cannot conform without
 	// a pinned https issuer, and the issuer is never derived from a request.
@@ -98,23 +98,12 @@ func markPublicClass(routes []httpapi.Route) []httpapi.Route {
 }
 
 func (d WellKnownDeps) serveJWKS(w http.ResponseWriter, r *http.Request) {
-	set, err := d.Keys.KeySet(r.Context())
-	if err != nil {
-		d.Logger.ErrorContext(r.Context(), "auth well-known: key set unavailable",
-			slog.String("route", "jwks"), slog.String("reason_code", token.ReasonOf(err)),
-			slog.String("request_id", httpapi.LoggableRequestID(r.Context())), logging.ErrorAttr(err))
+	snapshot := d.JWKS.load()
+	if snapshot == nil {
 		writeKeySetUnavailable(w, r)
 		return
 	}
-	published := set.Published()
-	doc := jwksDocument{Keys: make([]jwk, 0, len(published))}
-	for _, key := range published {
-		doc.Keys = append(doc.Keys, jwk{
-			Kty: "OKP", Crv: "Ed25519", Alg: key.Algorithm, Use: "sig", Kid: key.KeyID,
-			X: base64.RawURLEncoding.EncodeToString(key.PublicKey),
-		})
-	}
-	writeCacheable(w, r, doc)
+	writeDocument(w, r, snapshot.raw, snapshot.etag)
 }
 
 func (d WellKnownDeps) serveDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -131,8 +120,17 @@ func writeCacheable(w http.ResponseWriter, r *http.Request, body any) {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	writeDocument(w, r, raw, etagOf(raw))
+}
+
+// etagOf is the strong ETag of a rendered document.
+func etagOf(raw []byte) string {
 	sum := sha256.Sum256(raw)
-	etag := `"` + hex.EncodeToString(sum[:16]) + `"`
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+// writeDocument writes raw as writeCacheable does.
+func writeDocument(w http.ResponseWriter, r *http.Request, raw []byte, etag string) {
 	h := w.Header()
 	h.Set("Cache-Control", "public, max-age="+strconv.Itoa(wellKnownMaxAge))
 	h.Set("ETag", etag)

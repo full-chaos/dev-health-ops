@@ -98,6 +98,7 @@ func (h *authorizeHandlerFixture) org1(action string) map[string]any {
 // (no organization, no actor, bad amr) is delegation_invalid for every action,
 // never a 503 and never the plain user.
 func TestAuthorizeIncompleteDelegatedRowDeniesEveryCatalogAction(t *testing.T) {
+	t.Parallel()
 	org := uuid.New()
 	for name, s := range map[string]DecisionSession{
 		"only delegated_from_session_id": {HasDelegatedFrom: true, OrganizationID: &org, AMR: []string{"pwd"}},
@@ -128,8 +129,9 @@ func TestAuthorizeDelegatedAllowCarriesObligations(t *testing.T) {
 	if !d.Allowed || d.ReasonCode != "allowed_by_role" {
 		t.Fatalf("%+v", d)
 	}
-	want := map[string]any{"tenant_scope": h.org, "minimum_assurance": "aal1"}
-	if len(d.Obligations) != len(want) || d.Obligations["tenant_scope"] != want["tenant_scope"] || d.Obligations["minimum_assurance"] != want["minimum_assurance"] {
+	want := map[string]any{"tenant_scope": h.org, "minimum_assurance": "aal1", "repository_scope": "organization"}
+	if len(d.Obligations) != len(want) || d.Obligations["tenant_scope"] != want["tenant_scope"] || d.Obligations["minimum_assurance"] != want["minimum_assurance"] ||
+		d.Obligations["repository_scope"] != want["repository_scope"] {
 		t.Fatalf("obligations %v, want %v", d.Obligations, want)
 	}
 }
@@ -272,9 +274,9 @@ func TestAuthorizeDelegatedActorIsReadOncePerReferenceAndNeverForPlain(t *testin
 	}
 }
 
-func TestAuthorizeDenyAndPlainAllowCarryNoObligations(t *testing.T) {
+func TestAuthorizeDenyCarriesNoObligationsAndAPlainAllowItsTenantScope(t *testing.T) {
 	h := newAuthorizeHandlerFixture(t)
-	if d := h.decideOne(h.org1("analytics.read")); !d.Allowed || d.Obligations != nil {
+	if d := h.decideOne(h.org1("analytics.read")); !d.Allowed || d.Obligations == nil || d.Obligations["minimum_assurance"] != nil {
 		t.Fatalf("plain allow: %+v", d)
 	}
 	if d := h.decideOne(h.question("admin.users", "platform", "platform", "")); d.Allowed || d.Obligations != nil {
@@ -338,7 +340,8 @@ func TestAuthorizeBatchMixesPlainAndDelegatedSessionsOfOnePrincipal(t *testing.T
 			if isDelegated && (item.Decision.Allowed || item.Decision.ReasonCode != "impersonation_denied") {
 				t.Errorf("item %d delegated (action not permitted): %+v", i, item.Decision)
 			}
-			if !isDelegated && (!item.Decision.Allowed || item.Decision.ReasonCode != "allowed_by_role" || item.Decision.Obligations != nil) {
+			if !isDelegated && (!item.Decision.Allowed || item.Decision.ReasonCode != "allowed_by_role" || item.Decision.Obligations == nil ||
+				item.Decision.Obligations["minimum_assurance"] != nil) {
 				t.Errorf("item %d plain: %+v", i, item.Decision)
 			}
 		}
@@ -348,21 +351,28 @@ func TestAuthorizeBatchMixesPlainAndDelegatedSessionsOfOnePrincipal(t *testing.T
 // The wire rule of obligations is fail closed: a mismatch is a state failure,
 // not a decision.
 func TestObligationsFitRule(t *testing.T) {
-	with := &authorization.Obligations{TenantScope: "t"}
+	plain := &authorization.Obligations{TenantScope: "t"}
+	delegatedWith := &authorization.Obligations{TenantScope: "t", MinimumAssurance: "aal1"}
+	other := &authorization.Obligations{TenantScope: "u"}
 	for name, tc := range map[string]struct {
 		d         authorization.Decision
 		delegated bool
+		org       string
 		want      bool
 	}{
-		"delegated allow with":    {authorization.Decision{Allowed: true, Obligations: with}, true, true},
-		"delegated allow without": {authorization.Decision{Allowed: true}, true, false},
-		"delegated deny without":  {authorization.Decision{}, true, true},
-		"delegated deny with":     {authorization.Decision{Obligations: with}, true, false},
-		"plain allow without":     {authorization.Decision{Allowed: true}, false, true},
-		"plain allow with":        {authorization.Decision{Allowed: true, Obligations: with}, false, false},
-		"plain deny with":         {authorization.Decision{Obligations: with}, false, false},
+		"delegated allow with":              {authorization.Decision{Allowed: true, Obligations: delegatedWith}, true, "t", true},
+		"delegated allow without assurance": {authorization.Decision{Allowed: true, Obligations: plain}, true, "t", false},
+		"delegated allow without":           {authorization.Decision{Allowed: true}, true, "t", false},
+		"delegated deny without":            {authorization.Decision{}, true, "t", true},
+		"delegated deny with":               {authorization.Decision{Obligations: delegatedWith}, true, "t", false},
+		"plain allow with":                  {authorization.Decision{Allowed: true, Obligations: plain}, false, "t", true},
+		"plain allow without":               {authorization.Decision{Allowed: true}, false, "t", false},
+		"plain allow of another tenant":     {authorization.Decision{Allowed: true, Obligations: other}, false, "t", false},
+		"plain deny with":                   {authorization.Decision{Obligations: plain}, false, "t", false},
+		"platform allow without":            {authorization.Decision{Allowed: true}, false, "", true},
+		"platform allow with":               {authorization.Decision{Allowed: true, Obligations: plain}, false, "", false},
 	} {
-		if got := obligationsFit(tc.d, tc.delegated); got != tc.want {
+		if got := obligationsFit(tc.d, tc.delegated, tc.org); got != tc.want {
 			t.Errorf("%s: %v, want %v", name, got, tc.want)
 		}
 	}

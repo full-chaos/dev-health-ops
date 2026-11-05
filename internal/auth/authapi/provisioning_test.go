@@ -398,7 +398,7 @@ func newProvFixtureFor(t *testing.T, profileRows []byte, workload *SessionIssueW
 	if err != nil {
 		t.Fatal(err)
 	}
-	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows,
+	readRoutes, err := ReadRoutes(ReadDeps{Credentials: f.creds, Reads: f.reads, GrantReads: f.grantReads, ProfileRows: profileRows, Workload: workload,
 		Logger: slog.New(slog.NewJSONHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test")})
 	if err != nil {
@@ -549,6 +549,7 @@ var fakeInviteID = uuid.MustParse("6f1b8f1e-7c43-4a7e-9b62-1d2a3c4e5f60")
 // a failed credential lookup is a 503. Accepted uses are counted per route;
 // the counter is declared at 0 for every route.
 func TestProvisioningRoutesTakeOnlyTheMembershipsWriteCredential(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
 		if got, declared := f.uses(c.op); !declared || got != 0 {
@@ -605,6 +606,7 @@ func TestProvisioningRoutesTakeOnlyTheMembershipsWriteCredential(t *testing.T) {
 // mistyped member, a non-canonical id, trailing data or a body over 4 KiB is
 // a 400 with no read and no write.
 func TestProvisioningBodiesAreStrict(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range routeCases() {
 		valid := c.body(f, f.super)
@@ -683,6 +685,7 @@ func without(a map[string]any, name string) map[string]any {
 // no organization projection and no store call. A non-superuser actor may not
 // change a superuser member.
 func TestProvisioningActorRule(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	stranger := uuid.New()
@@ -738,6 +741,7 @@ func TestProvisioningActorRule(t *testing.T) {
 // change the first read missed (the actor demoted, the target made a
 // superuser) is refused by the verb.
 func TestProvisioningActorRuleRunsAgainUnderTheLocks(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.inTx = &fakeProvUsers{states: f.users.states, roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "viewer"}}
 	for _, c := range routeCases()[:5] {
@@ -762,6 +766,7 @@ func TestProvisioningActorRuleRunsAgainUnderTheLocks(t *testing.T) {
 // The organization is projected (only when the auth schema has no row) after
 // the actor rule and before the verb.
 func TestProvisioningEnsuresTheOrganization(t *testing.T) {
+	t.Parallel()
 	for name, tc := range map[string]struct {
 		err    error
 		status int
@@ -787,6 +792,7 @@ func TestProvisioningEnsuresTheOrganization(t *testing.T) {
 // An accept needs an active account; the token and the verified address
 // decide the rest inside the invite aggregate.
 func TestInviteAcceptNeedsAnActiveAccount(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false}
 	accept := routeCases()[5]
@@ -809,6 +815,7 @@ func TestInviteAcceptNeedsAnActiveAccount(t *testing.T) {
 // with that organization. The route itself projects nothing before the token is
 // read.
 func TestInviteAcceptHandsTheOrganizationProjectionToTheStore(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	accept := routeCases()[5]
 	if response := f.post(accept.path, encode(accept.body(f, f.target)), nil); response.Code != http.StatusOK {
@@ -832,6 +839,7 @@ func TestInviteAcceptHandsTheOrganizationProjectionToTheStore(t *testing.T) {
 // What each verb is given: the body's values, the actor and the request id,
 // and the request part of go-api's audit_logs row.
 func TestProvisioningPassesTheRequestToTheStores(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	inviter := uuid.New()
 	add := routeCases()[0]
@@ -870,6 +878,7 @@ func TestProvisioningPassesTheRequestToTheStores(t *testing.T) {
 
 // The answers: every store error has one answer; a store failure is a 503.
 func TestProvisioningRefusalAnswers(t *testing.T) {
+	t.Parallel()
 	stored := fmt.Errorf("%w: boom", membership.ErrStore)
 	for err, want := range map[error]refusal{
 		membership.ErrDenied: {403, reasonAdminRequired}, membership.ErrSuperuserRequired: {403, reasonSuperuserRequired},
@@ -921,6 +930,7 @@ func TestProvisioningRefusalAnswers(t *testing.T) {
 
 // The success answers carry ids only, and the invite token once.
 func TestProvisioningSuccessAnswers(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	decode := func(response *httptest.ResponseRecorder) map[string]any {
 		t.Helper()
@@ -955,6 +965,7 @@ func TestProvisioningSuccessAnswers(t *testing.T) {
 // No log line carries an invite token, an address, a description or the
 // request metadata, on success or refusal.
 func TestProvisioningLogsCarryNoTokenOrAuditText(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	acceptToken := fakeTokenID + ".SENTINEL-ACCEPT-TOKEN"
 	const (
@@ -989,6 +1000,7 @@ func TestProvisioningLogsCarryNoTokenOrAuditText(t *testing.T) {
 // reads the account through the users seam alone (StateOn, never a role), and
 // refuses before the verb is reached.
 func TestOrgReactivateIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	c := routeCases()[7]
@@ -1022,6 +1034,7 @@ func TestOrgReactivateIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
 // The rule runs again inside the verb's transaction, after the row lock: a
 // superuser demoted since the first read is refused by the verb.
 func TestOrgReactivateRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[7]
 	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
@@ -1031,6 +1044,7 @@ func TestOrgReactivateRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
 }
 
 func TestOrgReactivateAnswers(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[7]
 	decode := func() map[string]any {
@@ -1057,6 +1071,7 @@ func TestOrgReactivateAnswers(t *testing.T) {
 }
 
 func TestOrgReactivateRefusalsAreNamedReasonCodes(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[7]
 	for _, tc := range []struct {
@@ -1075,6 +1090,7 @@ func TestOrgReactivateRefusalsAreNamedReasonCodes(t *testing.T) {
 }
 
 func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	_, err := ProvisioningRoutes(ProvisioningDeps{Credentials: f.creds, Users: f.users, Reader: noRows{}, Organizations: f.orgs,
 		Memberships: f.members, Invites: f.invites, Deprovision: f.deprovision})
@@ -1086,6 +1102,7 @@ func TestProvisioningRoutesNeedTheOrganizationVerb(t *testing.T) {
 // The suspend route mirrors reactivate: superuser only through the users seam alone, the rule again under the row
 // lock, no revision sent, and the verb is given the org, the actor and a request id.
 func TestOrgSuspendIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	c := routeCases()[8]
@@ -1117,6 +1134,7 @@ func TestOrgSuspendIsSuperuserOnlyThroughTheUsersSeam(t *testing.T) {
 }
 
 func TestOrgSuspendRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[8]
 	f.users.inTx = &fakeProvUsers{states: map[uuid.UUID]UserState{f.super: {IsActive: true}}}
@@ -1126,6 +1144,7 @@ func TestOrgSuspendRunsTheActorRuleAgainUnderTheLock(t *testing.T) {
 }
 
 func TestOrgSuspendAnswers(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[8]
 	decode := func() map[string]any {
@@ -1154,6 +1173,7 @@ func TestOrgSuspendAnswers(t *testing.T) {
 // Every fault is a named refusal, and a fault of the store is the same fail-closed 503 store_unavailable, never a 500:
 // the acting account has no auth.principals row (the audit row's actor foreign key fails), or the store is down.
 func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	c := routeCases()[8]
 	missingPrincipal := errors.New(`audit: security mutation failed: inserting the audit row: ERROR: insert or update on table "security_audit_events" violates foreign key constraint "security_audit_events_actor_principal_id_fkey" (SQLSTATE 23503)`)
@@ -1180,6 +1200,7 @@ func TestOrgSuspendRefusalsAreNamedReasonCodes(t *testing.T) {
 
 // The suspend route is on the startup gate: a document without its row builds no route at all, and the refusal names it.
 func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
+	t.Parallel()
 	if !slices.Contains(provisioningPatterns, PatternOrgSuspend) {
 		t.Fatalf("provisioningPatterns = %v, want the suspend route", provisioningPatterns)
 	}
@@ -1194,6 +1215,7 @@ func TestOrgSuspendIsOnTheStartupGate(t *testing.T) {
 
 // The embedded document serves the suspend route with the others, and no startup line calls it unmounted.
 func TestOrgSuspendIsServedWithTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, authv1.AuthServiceEndpointProfiles)
 	if got := f.post(PatternOrgSuspend, encode(routeCases()[8].body(f, f.super)), nil); got.Code != http.StatusOK {
 		t.Fatalf("suspend with the embedded document: %d %s, want 200", got.Code, got.Body)

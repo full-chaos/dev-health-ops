@@ -32,12 +32,30 @@ func TestDefaultRegistryIsTheFiveSeededWorkloads(t *testing.T) {
 	}
 	for _, s := range specs {
 		switch s.Name {
-		case "web", "query-api", "auth-service":
+		case "auth-service":
 			if len(s.Audiences) != 0 {
 				t.Errorf("%q is a registry identity and holds no workload audience, got %v", s.Name, s.Audiences)
 			}
 		}
 	}
+}
+
+// web is a PEP: its workload token is for auth-service alone (the authorize routes), with no action.
+func TestTheWebWorkloadCarriesTheAuthServiceAudienceAlone(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name != "web" {
+			continue
+		}
+		if !reflect.DeepEqual(s.Audiences, []string{"auth-service"}) || len(s.AllowedActions) != 0 {
+			t.Fatalf("web row = audiences %v, actions %v; want [auth-service] and none", s.Audiences, s.AllowedActions)
+		}
+		return
+	}
+	t.Fatal("no web row")
 }
 
 func TestDefaultRegistryEveryRowHasAnOwner(t *testing.T) {
@@ -50,6 +68,24 @@ func TestDefaultRegistryEveryRowHasAnOwner(t *testing.T) {
 			t.Errorf("registry row %q owner = %q, want platform-operations", s.Name, s.Owner)
 		}
 	}
+}
+
+// query-api asks auth-service's PDP with its own workload token, so its row holds the auth-service audience (and
+// only it): a row with no audience is never resolved by the exchange.
+func TestQueryAPIRowHoldsTheAuthServiceAudience(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name == "query-api" {
+			if !reflect.DeepEqual(s.Audiences, []string{"auth-service"}) || len(s.AllowedActions) != 0 {
+				t.Fatalf("query-api row: audiences %v actions %v, want [auth-service] and none", s.Audiences, s.AllowedActions)
+			}
+			return
+		}
+	}
+	t.Fatal("no query-api row")
 }
 
 func TestRegistryAudiencesAreOnlyWorkloadTokenAudiences(t *testing.T) {

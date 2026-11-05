@@ -1,4 +1,4 @@
-package customerpush
+package pagereader
 
 import (
 	"fmt"

@@ -105,6 +105,7 @@ nav:
           - Teams and repositories: admin/teams-and-identities/teams-and-repositories.md
           - Roles and access: admin/teams-and-identities/roles-and-access.md
           - Organization members: admin/teams-and-identities/manage-org-members.md
+          - Grant access to repositories: admin/teams-and-identities/grant-repository-access.md
       - Data sources:
           - admin/data-sources/index.md
           - GitHub: admin/data-sources/github.md
@@ -184,6 +185,7 @@ nav:
           - Query-api bootstrap: operate/runbooks/query-api-bootstrap.md
           - Auth sessions flip and rollback: operate/runbooks/auth-sessions-flip-and-rollback.md
           - Auth shadow PDP triage: operate/runbooks/auth-shadow-pdp-triage.md
+          - Auth PDP outage and rollback: operate/runbooks/auth-pdp-outage-and-rollback.md
           - Auth signing-key planned rotation: operate/runbooks/auth-signing-key-planned-rotation.md
           - Auth signing-key emergency rotation and rollback: operate/runbooks/auth-signing-key-emergency-rotation-and-rollback.md
           - Auth users-owned flip and rollback: operate/runbooks/auth-users-owned-flip-and-rollback.md
@@ -250,6 +252,7 @@ nav:
       - Auth External Push authority: reference/auth/external-push-authority.md
       - Auth organization roles and members: reference/auth/org-member-roles.md
       - Auth platform administrator: reference/auth/platform-admin.md
+      - Auth resource grants: reference/auth/resource-grants.md
       - Auth organization and membership authority: reference/auth/org-membership-authority.md
       - Auth workload registry: reference/auth/workload-registry.md
       - Auth workload audit: reference/auth/workload-audit.md

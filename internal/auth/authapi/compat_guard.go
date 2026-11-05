@@ -13,6 +13,9 @@ import (
 type GuardedSessions interface {
 	Sessions
 	ExchangeGuarded(ctx context.Context, credential contracts.SecretString, guard session.Guard) (session.Result, error)
+	// CurrentWithClientClass is Current plus the class of the session's live OAuth
+	// grant, "" when there is none: the session state answer's client_class.
+	CurrentWithClientClass(ctx context.Context, sessionID uuid.UUID) (session.Record, string, error)
 }
 
 // userStateOn is a Users that can read on the exchange's own connection.

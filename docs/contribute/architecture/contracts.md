@@ -54,8 +54,8 @@ or error immediately followed by `done`.
 Wave 3.1 (CHAOS-3294) adds a parallel `dev_answer.v2` contract chain --
 server-owned intent, per-mention resolution, investigation planning, a
 canonical answer frame, and an optional presentation narrative -- alongside
-the unmodified v1 contracts described above. See
-[Ask Dev v2 contracts](ask-dev-contracts-v2.md) for the full contract map,
+the unmodified v1 contracts described above. The deprecated
+[Ask Dev v2 contracts](ask-dev-contracts-v2.md) page records the full contract map,
 the append-only resolution ledger, the five semantic validators, and the
 single v2-to-v1 compatibility projector.
 

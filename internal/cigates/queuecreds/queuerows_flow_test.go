@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func formatCensus(t *testing.T, root string, dirs []string) ([]string, map[strin
 
 // sinkCall names the calls that put a value into an error, a log line, a
 // printed line, a span attribute or a metric label.
-var sinkCall = regexp.MustCompile(`^(fmt\.(Errorf|Sprintf|Sprint|Sprintln|Fprintf|Fprint|Fprintln|Printf|Print|Println)|log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)|errors\.New|slog\.[A-Z][A-Za-z]*|slog\.Default\(\)\.[A-Za-z]+|.*(?:ogger|slog)(?:\(\))?\.(Debug|Info|Warn|Error|With|Log)[A-Za-z]*|.*\.SetAttributes|attribute\.[A-Za-z]+|.*\.WithLabelValues|.*\.AddEvent|metric\.With[A-Za-z]+)$`)
+var sinkCall = regexp.MustCompile(`^(fmt\.(Errorf|Sprintf|Sprint|Sprintln|Fprintf|Fprint|Fprintln|Printf|Print|Println)|log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)|errors\.New|slog\.[A-Z][A-Za-z]*|slog\.Default\(\)\.[A-Za-z]+|.*(?:ogger|slog)(?:\(\))?\.(Debug|Info|Warn|Error|With|Log)[A-Za-z]*|.*\.SetAttributes|[A-Za-z]+\.WithAttributes|.*\.WithLabelValues|.*\.AddEvent|metric\.With[A-Za-z]+)$`)
 
 var sinkLiteral = regexp.MustCompile(`^(prometheus\.Labels|attribute\.Set)$`)
 
@@ -89,6 +90,17 @@ type flow struct {
 	loggerFields  map[string]bool
 	loggerResults map[string]bool
 	helperFields  map[string]map[string]bool
+	// decls maps a function or method name to its declarations; params holds, by declaration, the parameter
+	// positions that a caller passes an open queue-row value into; foreign holds the positions where that value does
+	// not come from a variable of the parameter's own declared type, so the parameter's type is not its origin.
+	decls   map[string][]*ast.FuncDecl
+	params  map[*ast.FuncDecl]map[int]bool
+	foreign map[*ast.FuncDecl]map[int]bool
+	// interfaces holds the package's own interface type names; globals holds its package-level variable names.
+	interfaces map[string]bool
+	globals    map[string]bool
+	// returning holds the functions whose return values returnsOrigin is checking, so recursion ends.
+	returning map[*ast.FuncDecl]bool
 }
 
 // isLoggerType reports whether a type expression names a slog or log logger.
@@ -110,6 +122,8 @@ func holdsStruct(expr ast.Expr) string {
 		return holdsStruct(typed.X)
 	case *ast.ArrayType:
 		return holdsStruct(typed.Elt)
+	case *ast.Ellipsis:
+		return holdsStruct(typed.Elt)
 	case *ast.MapType:
 		return holdsStruct(typed.Value)
 	case *ast.Ident:
@@ -119,10 +133,13 @@ func holdsStruct(expr ast.Expr) string {
 }
 
 func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
-	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}}
+	f := &flow{fset: fset, structs: map[string]bool{}, helpers: map[string]bool{}, loggerFields: map[string]bool{}, loggerResults: map[string]bool{}, helperFields: map[string]map[string]bool{}, decls: map[string][]*ast.FuncDecl{}, params: map[*ast.FuncDecl]map[int]bool{}, foreign: map[*ast.FuncDecl]map[int]bool{}, interfaces: map[string]bool{}, globals: map[string]bool{}}
 	fieldTypes := map[string][]string{}
 	for _, sf := range pkg {
 		for _, decl := range sf.file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				f.decls[fn.Name.Name] = append(f.decls[fn.Name.Name], fn)
+			}
 			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Type.Results != nil {
 				for _, result := range fn.Type.Results.List {
 					if isLoggerType(result.Type) {
@@ -138,6 +155,9 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 				ts, ok := spec.(*ast.TypeSpec)
 				if !ok {
 					continue
+				}
+				if _, isInterface := ts.Type.(*ast.InterfaceType); isInterface {
+					f.interfaces[ts.Name.Name] = true
 				}
 				st, ok := ts.Type.(*ast.StructType)
 				if !ok {
@@ -192,6 +212,21 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 			}
 		}
 	}
+	f.collectGlobals(pkg)
+	// Helper results and helper parameters feed each other: a parameter a caller fills makes the helper's result carry
+	// the value, and a result that carries it taints the next call's argument. Both run to one joint fixpoint.
+	for {
+		f.summarizeReturns(fset, pkg)
+		if !f.propagateParams(fset, pkg) {
+			break
+		}
+	}
+	return f
+}
+
+// summarizeReturns marks the helpers whose result (or a field of a returned composite) carries an open queue-row value,
+// to a fixpoint.
+func (f *flow) summarizeReturns(fset *token.FileSet, pkg []srcFile) {
 	for changed := true; changed; {
 		changed = false
 		for _, sf := range pkg {
@@ -228,7 +263,18 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 					if !ok {
 						return true
 					}
-					for _, result := range ret.Results {
+					results := ret.Results
+					if len(results) == 0 && fn.Type.Results != nil {
+						// A bare return hands back the named results as they are at that point.
+						for _, field := range fn.Type.Results.List {
+							for _, name := range field.Names {
+								named := &ast.Ident{NamePos: ret.Pos(), Name: name.Name}
+								parents[named] = ret
+								results = append(results, named)
+							}
+						}
+					}
+					for _, result := range results {
 						if lit := compositeOf(result); lit != nil {
 							for _, elt := range lit.Elts {
 								field, value := "*", elt
@@ -259,7 +305,249 @@ func newFlow(fset *token.FileSet, pkg []srcFile) *flow {
 			}
 		}
 	}
-	return f
+}
+
+// paramNames lists the parameter names of a function in call order, one entry per name.
+func paramNames(fn *ast.FuncDecl) []string {
+	var out []string
+	if fn.Type.Params == nil {
+		return out
+	}
+	for _, field := range fn.Type.Params.List {
+		if len(field.Names) == 0 {
+			out = append(out, "_")
+		}
+		for _, name := range field.Names {
+			out = append(out, name.Name)
+		}
+	}
+	return out
+}
+
+// paramIndex maps a call argument position to the callee's parameter position: past the last parameter of a variadic
+// function the argument lands in that parameter.
+func paramIndex(fn *ast.FuncDecl, arg int) (int, bool) {
+	n := len(paramNames(fn))
+	if n == 0 {
+		return 0, false
+	}
+	if _, variadic := fn.Type.Params.List[len(fn.Type.Params.List)-1].Type.(*ast.Ellipsis); variadic && arg >= n-1 {
+		return n - 1, true
+	}
+	return arg, arg < n
+}
+
+// paramType is the declared type of the parameter at a position, as normTypeText.
+func paramType(fn *ast.FuncDecl, index int) string {
+	at := 0
+	for _, field := range fn.Type.Params.List {
+		count := max(len(field.Names), 1)
+		if index < at+count {
+			return normTypeText(fn, field.Type)
+		}
+		at += count
+	}
+	return ""
+}
+
+// collectGlobals records the package-level variable names, so a selector on one of them is not read as a package name.
+func (f *flow) collectGlobals(pkg []srcFile) {
+	for _, sf := range pkg {
+		for _, decl := range sf.file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				for _, name := range spec.(*ast.ValueSpec).Names {
+					f.globals[name.Name] = true
+				}
+			}
+		}
+	}
+}
+
+// receiverBase names a method's receiver type without pointer and type arguments ("" for a function).
+func receiverBase(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	return strings.SplitN(normTypeText(fn, fn.Recv.List[0].Type), "[", 2)[0]
+}
+
+// resolve lists the same-package declarations a call can reach. A plain name reaches the package functions of that
+// name, unless a local of the function holds it. `x.M` reaches nothing when x is neither a local nor a package-level
+// variable (it is an imported package); otherwise it reaches the methods named M, narrowed to x's receiver type when
+// the syntax states that type and a method on it exists.
+func (s *scope) resolve(call *ast.CallExpr) []*ast.FuncDecl {
+	s.buildAssigns()
+	local := func(name string) bool {
+		_, declared := s.decl[name]
+		_, assigned := s.assigns[name]
+		return declared || assigned
+	}
+	var out []*ast.FuncDecl
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		if local(fun.Name) {
+			return nil
+		}
+		for _, target := range s.flow.decls[fun.Name] {
+			if target.Recv == nil {
+				out = append(out, target)
+			}
+		}
+	case *ast.SelectorExpr:
+		if base, ok := fun.X.(*ast.Ident); ok && !local(base.Name) && !s.flow.globals[base.Name] {
+			return nil
+		}
+		var methods []*ast.FuncDecl
+		for _, target := range s.flow.decls[fun.Sel.Name] {
+			if target.Recv != nil {
+				methods = append(methods, target)
+			}
+		}
+		if known := strings.SplitN(s.typeOf(fun.X), "[", 2)[0]; known != "" {
+			for _, target := range methods {
+				if receiverBase(target) == known {
+					out = append(out, target)
+				}
+			}
+		}
+		if len(out) == 0 {
+			out = methods
+		}
+	}
+	return out
+}
+
+// candidates picks, among the declarations that share a callee name, those a call can reach: when the argument's type
+// is known (a declared variable or a composite literal), the declarations whose parameter there has that type or an
+// interface type (any, error, or one of the package's own); when it is unknown, or no declaration matches, every one.
+// A parameter of another package's interface type is not recognised without go/types, so such a declaration is left
+// out when the argument's type is known and differs.
+func candidates(s *scope, decls []*ast.FuncDecl, arg int, expr ast.Expr) []*ast.FuncDecl {
+	known := s.typeOf(expr)
+	if len(decls) < 2 || known == "" {
+		return decls
+	}
+	var out []*ast.FuncDecl
+	for _, target := range decls {
+		if index, ok := paramIndex(target, arg); ok {
+			if declared := paramType(target, index); declared == known || declared == "any" || declared == "error" || declared == "interface{}" || s.flow.interfaces[strings.SplitN(declared, "[", 2)[0]] {
+				out = append(out, target)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return decls
+	}
+	return out
+}
+
+// typeOf names an expression's type when the syntax states it: a variable with a declared type, a composite literal
+// (or its address), or a variable whose only assignment is one of those. It returns "" otherwise.
+func (s *scope) typeOf(expr ast.Expr) string {
+	expr = ast.Unparen(expr)
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		expr = unary.X
+	}
+	switch typed := expr.(type) {
+	case *ast.CompositeLit:
+		if typed.Type != nil {
+			return normTypeText(s.fn, typed.Type)
+		}
+	case *ast.Ident:
+		if declared, ok := s.decl[typed.Name]; ok {
+			return declared
+		}
+		s.buildAssigns()
+		if rhs := s.assigns[typed.Name]; len(rhs) == 1 && s.assignAt[typed.Name][0] < 0 {
+			if _, ident := ast.Unparen(rhs[0]).(*ast.Ident); !ident {
+				return s.typeOf(rhs[0])
+			}
+		}
+	}
+	return ""
+}
+
+func markParam(set map[*ast.FuncDecl]map[int]bool, callee *ast.FuncDecl, index int) bool {
+	if set[callee][index] {
+		return false
+	}
+	if set[callee] == nil {
+		set[callee] = map[int]bool{}
+	}
+	set[callee][index] = true
+	return true
+}
+
+// propagateParams marks a same-package helper's parameter as holding a queue-row value when a caller passes an
+// unguarded one into that position, so the helper's own outputs are checked against it. It runs to a fixpoint,
+// because a helper can pass the value on to a further helper.
+func (f *flow) propagateParams(fset *token.FileSet, pkg []srcFile) bool {
+	grew := false
+	for changed := true; changed; {
+		changed = false
+		for _, sf := range pkg {
+			for _, decl := range sf.file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				scope := f.scope(fn)
+				parents := parentMap(fn.Body)
+				var guards []*ast.CallExpr
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					if call, ok := node.(*ast.CallExpr); ok && isGuardCall(fset, sf.src, call) {
+						guards = append(guards, call)
+					}
+					return true
+				})
+				ast.Inspect(fn.Body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					targets := scope.resolve(call)
+					if len(targets) == 0 || isGuardCall(fset, sf.src, call) {
+						return true
+					}
+					for i, arg := range call.Args {
+						if id, plain := arg.(*ast.Ident); plain && (id.Name == "err" || id.Name == "ok") {
+							continue // the scope never treats these names as queue-row values
+						}
+						if !scope.valueTainted(arg) {
+							continue
+						}
+						open := false
+						for _, leaf := range scope.leavesOf(fset, sf.src, arg) {
+							if !scope.guarded(fset, sf.src, fn.Body, parents, guards, leaf) {
+								open = true
+							}
+						}
+						if !open {
+							continue
+						}
+						for _, target := range candidates(scope, targets, i, arg) {
+							index, ok := paramIndex(target, i)
+							if !ok {
+								continue
+							}
+							if markParam(f.params, target, index) {
+								changed, grew = true, true
+							}
+							if !scope.originOK(arg, []string{paramType(target, index)}) && markParam(f.foreign, target, index) {
+								changed, grew = true, true
+							}
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	return grew
 }
 
 // scope is the taint state of one function: the locals that hold a queue-row
@@ -272,6 +560,16 @@ type scope struct {
 	structs map[string]bool
 	loggers map[string]bool
 	link    map[string]string
+	// decl holds the declared type of each parameter, receiver, named result and var of the function, as normTypeText.
+	decl map[string]string
+	fn   *ast.FuncDecl
+	// foreign holds the parameters a caller fills with a queue-row value that its declared type does not describe.
+	foreign map[string]bool
+	// assigns holds, by variable name, the expressions assigned to the whole variable; fieldAssigns holds those
+	// assigned to a field or element of it. Both are built on first use by originOK.
+	assigns, fieldAssigns map[string][]ast.Expr
+	// assignAt holds, parallel to assigns, the result position a multi-value right side gives the name, or -1.
+	assignAt map[string][]int
 }
 
 // isLogger reports whether an expression is a logger: a variable or field of a logger type, a call that
@@ -420,14 +718,15 @@ func typeName(expr ast.Expr) string {
 }
 
 func (f *flow) scope(fn *ast.FuncDecl) *scope {
-	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, loggers: map[string]bool{}, fields: map[string]bool{}, link: map[string]string{}}
-	fields := []*ast.FieldList{fn.Type.Params, fn.Recv}
+	s := &scope{flow: f, locals: map[string]bool{}, structs: map[string]bool{}, loggers: map[string]bool{}, fields: map[string]bool{}, link: map[string]string{}, decl: map[string]string{}, fn: fn, foreign: map[string]bool{}}
+	fields := []*ast.FieldList{fn.Type.Params, fn.Recv, fn.Type.Results}
 	for _, list := range fields {
 		if list == nil {
 			continue
 		}
 		for _, field := range list.List {
 			for _, name := range field.Names {
+				s.decl[name.Name] = normTypeText(fn, field.Type)
 				if f.structs[holdsStruct(field.Type)] {
 					s.structs[name.Name] = true
 				}
@@ -435,6 +734,14 @@ func (f *flow) scope(fn *ast.FuncDecl) *scope {
 					s.loggers[name.Name] = true
 				}
 			}
+		}
+	}
+	for i, name := range paramNames(fn) {
+		if f.params[fn][i] && name != "_" && !s.structs[name] {
+			s.locals[name] = true
+		}
+		if f.foreign[fn][i] && name != "_" {
+			s.foreign[name] = true
 		}
 	}
 	for changed := true; changed; {
@@ -479,6 +786,9 @@ func (f *flow) scope(fn *ast.FuncDecl) *scope {
 				}
 			case *ast.ValueSpec:
 				for i, id := range typed.Names {
+					if typed.Type != nil {
+						s.decl[id.Name] = normTypeText(fn, typed.Type)
+					}
 					if f.structs[holdsStruct(typed.Type)] {
 						mark(id.Name, s.structs)
 					}
@@ -603,7 +913,7 @@ func (s *scope) tainted(expr ast.Expr) bool {
 			}
 		}
 		if sel, ok := typed.Fun.(*ast.SelectorExpr); ok {
-			if base, ok := sel.X.(*ast.Ident); ok && (base.Name == "strings" || (base.Name == "fmt" && strings.HasPrefix(sel.Sel.Name, "Sprint"))) {
+			if base, ok := sel.X.(*ast.Ident); ok && (base.Name == "strings" || base.Name == "attribute" || (base.Name == "fmt" && strings.HasPrefix(sel.Sel.Name, "Sprint"))) {
 				for _, arg := range typed.Args {
 					if s.tainted(arg) {
 						return true
@@ -810,7 +1120,7 @@ func unguardedOutputs(fset *token.FileSet, pkg []srcFile, seen map[string]bool) 
 						if sc.guarded(fset, sf.src, fn.Body, parents, guards, leaf) {
 							continue
 						}
-						if exception, ok := decodedRowFieldOutputs[where]; ok && slices.Contains(exception.values, text) {
+						if exception, ok := decodedRowFieldOutputs[where]; ok && slices.Contains(exception.values, text) && sc.originOK(leaf, exception.origins) {
 							seen[where+"|"+text] = true
 							continue
 						}
@@ -881,15 +1191,41 @@ func (s *scope) overwrites(block ast.Stmt, name string) bool {
 	return found
 }
 
-// reassigned reports whether the variable is assigned a queue-row value between two positions.
-func (s *scope) reassigned(body ast.Node, name string, from, to token.Pos) bool {
+// reassigned reports whether the variable is given a different queue-row value between two positions. A value built
+// only from the guarded value (a plain copy, a copy of a copy, a constructor around it) keeps the guard; an assignment
+// that reads any other queue-row value drops it, and so does an assignment of anything else to a name that held a copy.
+func (s *scope) reassigned(body ast.Node, fset *token.FileSet, src []byte, name string, guard *ast.CallExpr, from, to token.Pos) bool {
+	copies := map[string]bool{}
+	for _, arg := range guard.Args {
+		copies[exprText(fset, src, arg)] = true
+	}
 	found := false
 	ast.Inspect(body, func(node ast.Node) bool {
-		if assign, ok := node.(*ast.AssignStmt); ok && assign.Pos() >= from && assign.End() <= to {
-			for i, lhs := range assign.Lhs {
-				if id, ok := lhs.(*ast.Ident); ok && id.Name == name && len(assign.Rhs) == len(assign.Lhs) && s.tainted(assign.Rhs[i]) {
-					found = true
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || assign.Pos() < from || assign.End() > to || len(assign.Rhs) != len(assign.Lhs) {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			id, ok := lhs.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			foreign, fromCopy := false, false
+			for _, path := range keys(assign.Rhs[i]) {
+				switch {
+				case copies[path]:
+					fromCopy = true
+				case s.pathNeedsOrigin(path):
+					foreign = true
 				}
+			}
+			if foreign || !fromCopy {
+				delete(copies, id.Name)
+			} else {
+				copies[id.Name] = true
+			}
+			if foreign && id.Name == name && s.tainted(assign.Rhs[i]) {
+				found = true
 			}
 		}
 		return true
@@ -897,44 +1233,80 @@ func (s *scope) reassigned(body ast.Node, name string, from, to token.Pos) bool 
 	return found
 }
 
-// gateOf finds the if statement the detector's result controls: the call is its condition (or the negation of it), or
-// it is assigned to a variable that is the condition. It returns the statement and whether a true result takes the body.
-func gateOf(fset *token.FileSet, src []byte, fn ast.Node, parents map[ast.Node]ast.Node, guard *ast.CallExpr) (gate *ast.IfStmt, positive bool) {
-	condition := func(cond ast.Expr, target func(ast.Expr) bool) (bool, bool) {
-		if target(cond) {
-			return true, true
+type implies int
+
+const (
+	impliesNothing implies = iota
+	impliesTrue
+	impliesFalse
+)
+
+func firstKnown(values ...implies) implies {
+	for _, v := range values {
+		if v != impliesNothing {
+			return v
 		}
-		if not, ok := cond.(*ast.UnaryExpr); ok && not.Op == token.NOT && target(not.X) {
-			return true, false
-		}
-		return false, false
 	}
+	return impliesNothing
+}
+
+// truthOf reports what the detector's result is when the condition is true and when it is false. A negation swaps them; `a && b` being true makes every conjunct true, and `a || b` being false makes every disjunct false;
+// the other direction proves nothing, because a short-circuit can skip the detector.
+func truthOf(cond ast.Expr, isDetector func(ast.Expr) bool) (whenTrue, whenFalse implies) {
+	switch typed := cond.(type) {
+	case *ast.ParenExpr:
+		return truthOf(typed.X, isDetector)
+	case *ast.UnaryExpr:
+		if typed.Op == token.NOT {
+			t, f := truthOf(typed.X, isDetector)
+			return f, t
+		}
+	case *ast.BinaryExpr:
+		lt, lf := truthOf(typed.X, isDetector)
+		rt, rf := truthOf(typed.Y, isDetector)
+		switch typed.Op {
+		case token.LAND:
+			return firstKnown(lt, rt), impliesNothing
+		case token.LOR:
+			return impliesNothing, firstKnown(lf, rf)
+		}
+	}
+	if isDetector(cond) {
+		return impliesTrue, impliesFalse
+	}
+	return impliesNothing, impliesNothing
+}
+
+// gateOf finds the if statement the detector's result controls: the call is in its condition, directly, under a
+// negation, or as an operand of && or ||, or it is assigned to a variable that is such an operand. It returns the
+// statement and what the detector's result is when the body is taken and when the else path is taken.
+func gateOf(fset *token.FileSet, src []byte, fn ast.Node, parents map[ast.Node]ast.Node, guard *ast.CallExpr) (gate *ast.IfStmt, body, other implies) {
 	var found *ast.IfStmt
-	var polarity bool
 	ast.Inspect(fn, func(node ast.Node) bool {
 		ifs, ok := node.(*ast.IfStmt)
 		if !ok || found != nil {
 			return true
 		}
-		if matched, pos := condition(ifs.Cond, func(e ast.Expr) bool { return e == ast.Expr(guard) }); matched {
-			found, polarity = ifs, pos
-			return true
-		}
-		if parent, ok := parents[guard].(*ast.AssignStmt); ok && len(parent.Lhs) == 1 && len(parent.Rhs) == 1 && parent.Pos() < ifs.Pos() {
-			if id, ok := parent.Lhs[0].(*ast.Ident); ok {
-				if matched, pos := condition(ifs.Cond, func(e ast.Expr) bool { ident, ok := e.(*ast.Ident); return ok && ident.Name == id.Name }); matched {
-					found, polarity = ifs, pos
+		whenTrue, whenFalse := truthOf(ifs.Cond, func(e ast.Expr) bool { return e == ast.Expr(guard) })
+		if whenTrue == impliesNothing && whenFalse == impliesNothing {
+			if parent, ok := parents[guard].(*ast.AssignStmt); ok && len(parent.Lhs) == 1 && len(parent.Rhs) == 1 && parent.Pos() < ifs.Pos() {
+				if id, ok := parent.Lhs[0].(*ast.Ident); ok {
+					whenTrue, whenFalse = truthOf(ifs.Cond, func(e ast.Expr) bool { ident, ok := e.(*ast.Ident); return ok && ident.Name == id.Name })
 				}
 			}
 		}
+		if whenTrue != impliesNothing || whenFalse != impliesNothing {
+			found, body, other = ifs, whenTrue, whenFalse
+		}
 		return true
 	})
-	return found, polarity
+	return found, body, other
 }
 
 // guarded reports whether a detector call, whose arguments reach the same value as the leaf, has its result control the
-// path to the leaf: the value is not reassigned afterwards, and either the refused branch leaves the flow or overwrites
-// the value, or the leaf is only on the accepted branch.
+// path to the leaf: the value is not reassigned afterwards, and either the leaf is only on a branch where the detector
+// was false, or the path that reaches it past the if statement is one where the detector was false and the other
+// branch leaves the flow or overwrites the value.
 func (s *scope) guarded(fset *token.FileSet, src []byte, fn ast.Node, parents map[ast.Node]ast.Node, guards []*ast.CallExpr, leaf ast.Expr) bool {
 	leafKeys := keys(leaf)
 	root := rootIdent(leaf)
@@ -953,24 +1325,23 @@ func (s *scope) guarded(fset *token.FileSet, src []byte, fn ast.Node, parents ma
 		if !covers {
 			continue
 		}
-		gate, positive := gateOf(fset, src, fn, parents, guard)
+		gate, body, other := gateOf(fset, src, fn, parents, guard)
 		if gate == nil {
 			continue
 		}
-		refused, accepted := ast.Stmt(gate.Body), gate.Else
-		if !positive {
-			refused, accepted = gate.Else, ast.Stmt(gate.Body)
-		}
-		if accepted != nil && within(accepted, leaf) {
+		if body == impliesFalse && within(gate.Body, leaf) || other == impliesFalse && gate.Else != nil && within(gate.Else, leaf) {
 			return true
 		}
 		if !dominates(parents, gate, leaf) {
 			continue
 		}
-		if root != nil && s.reassigned(fn, root.Name, gate.End(), leaf.Pos()) {
+		if root != nil && s.reassigned(fn, fset, src, root.Name, guard, gate.End(), leaf.Pos()) {
 			continue
 		}
-		if refused != nil && (terminates(refused) || (root != nil && s.overwrites(refused, root.Name))) {
+		leaves := func(branch ast.Stmt) bool {
+			return branch != nil && (terminates(branch) || (root != nil && s.overwrites(branch, root.Name)))
+		}
+		if other == impliesFalse && leaves(gate.Body) || body == impliesFalse && leaves(gate.Else) {
 			return true
 		}
 	}
@@ -1185,19 +1556,19 @@ func TestQueueRowFormatCensusFollowsTheGuardResultAndTheValue(t *testing.T) {
 var exceptionCells = []struct{ name, path, plant, clean string }{
 	{"X01-execute", "internal/jobruntime/adapter.go",
 		"func execute(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
-		"func execute(envelope Row) { slog.Info(\"x\", \"k\", envelope.CorrelationID) }\n"},
+		"func execute(envelope jobcontract.Envelope) { slog.Info(\"x\", \"k\", envelope.CorrelationID) }\n"},
 	{"X02-logFinish", "internal/jobruntime/adapter.go",
 		"func logFinish(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
-		"func logFinish(envelope Row) { attributes := []any{\"c\", envelope.CorrelationID}; slog.Info(\"x\", attributes...) }\n"},
+		"func logFinish(envelope jobcontract.Envelope) { attributes := []any{\"c\", envelope.CorrelationID}; slog.Info(\"x\", attributes...) }\n"},
 	{"X03-startJobSpan", "internal/jobruntime/adapter.go",
 		"func startJobSpan(row Row, span Span) { span.SetAttributes(attribute.String(\"k\", row.DedupeKey)) }\n",
-		"func startJobSpan(envelope Row, span Span) { span.SetAttributes(attribute.String(\"k\", envelope.CorrelationID)) }\n"},
+		"func startJobSpan(envelope jobcontract.Envelope) { attributes := []attribute.KeyValue{attribute.String(\"k\", envelope.CorrelationID)}; _ = oteltrace.WithAttributes(attributes...) }\n"},
 	{"X04-writeManualInvestmentTrigger", "internal/workersctl/trigger_investment.go",
 		"func writeManualInvestmentTrigger(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
-		"func writeManualInvestmentTrigger(request Row) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
+		"func writeManualInvestmentTrigger(request workgraph.Request) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
 	{"X05-writeManualWorkgraphTrigger", "internal/workersctl/trigger_workgraph.go",
 		"func writeManualWorkgraphTrigger(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
-		"func writeManualWorkgraphTrigger(request Row) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
+		"func writeManualWorkgraphTrigger(request workgraph.Request) { generation := request.IdempotencyKey; slog.Info(\"x\", \"g\", generation) }\n"},
 	{"X06-rollbackTriggerTx", "internal/workersctl/trigger_workgraph.go",
 		"func rollbackTriggerTx(row Row) { slog.Info(\"x\", \"k\", row.DedupeKey) }\n",
 		"func rollbackTriggerTx(attrs []any) { args := make([]any, 0); args = append(args, attrs...); slog.Default().Error(\"x\", args...) }\n"},
@@ -1238,4 +1609,224 @@ func TestQueueRowSQLCensusStatementsAndOperators(t *testing.T) {
 			}
 		})
 	}
+}
+
+// normTypeText names the declared type of a variable for the exception origins: a pointer, slice or variadic marker
+// is dropped, and a type parameter of the function reads "typeparam <constraint>".
+func normTypeText(fn *ast.FuncDecl, expr ast.Expr) string {
+	for {
+		switch typed := expr.(type) {
+		case *ast.StarExpr:
+			expr = typed.X
+			continue
+		case *ast.ArrayType:
+			expr = typed.Elt
+			continue
+		case *ast.Ellipsis:
+			expr = typed.Elt
+			continue
+		}
+		break
+	}
+	text := types.ExprString(expr)
+	if fn.Type.TypeParams != nil {
+		for _, field := range fn.Type.TypeParams.List {
+			for _, name := range field.Names {
+				if name.Name == text {
+					return "typeparam " + types.ExprString(field.Type)
+				}
+			}
+		}
+	}
+	return text
+}
+
+func (s *scope) buildAssigns() {
+	if s.assigns != nil {
+		return
+	}
+	s.assigns, s.fieldAssigns, s.assignAt = map[string][]ast.Expr{}, map[string][]ast.Expr{}, map[string][]int{}
+	add := func(name string, rhs ast.Expr, at int) {
+		s.assigns[name] = append(s.assigns[name], rhs)
+		s.assignAt[name] = append(s.assignAt[name], at)
+	}
+	ast.Inspect(s.fn.Body, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.AssignStmt:
+			for i, lhs := range typed.Lhs {
+				rhs, at := typed.Rhs[0], i
+				if len(typed.Rhs) == len(typed.Lhs) {
+					rhs, at = typed.Rhs[i], -1
+				}
+				if id, ok := lhs.(*ast.Ident); ok {
+					add(id.Name, rhs, at)
+				} else if root := rootIdent(lhs); root != nil {
+					s.fieldAssigns[root.Name] = append(s.fieldAssigns[root.Name], rhs)
+				}
+			}
+		case *ast.ValueSpec:
+			for i, id := range typed.Names {
+				if i < len(typed.Values) {
+					add(id.Name, typed.Values[i], -1)
+				} else if len(typed.Values) == 1 {
+					add(id.Name, typed.Values[0], i)
+				}
+			}
+		case *ast.RangeStmt:
+			for _, side := range []ast.Expr{typed.Key, typed.Value} {
+				if id, ok := side.(*ast.Ident); ok {
+					add(id.Name, typed.X, -1)
+				}
+			}
+		}
+		return true
+	})
+}
+
+// pathNeedsOrigin reports whether a selector path or name carries a queue-row value by its own spelling or taint.
+func (s *scope) pathNeedsOrigin(path string) bool {
+	parts := strings.Split(path, ".")
+	for _, part := range parts {
+		if rowKeyName.MatchString(part) {
+			return true
+		}
+	}
+	return s.tainted(&ast.Ident{Name: parts[0]}) || s.fields[path] || s.fieldPrefix(path)
+}
+
+// originOK reports whether every queue-row value the leaf reads comes from a variable whose declared type is one of
+// the origins: the value's origin is its Go type (a decoded envelope, a typed request), not the text of the expression.
+// A variable without a declared type is followed to the expressions assigned to it; a field assigned into a variable
+// of an allowed type is followed too.
+func (s *scope) originOK(leaf ast.Expr, origins []string) bool {
+	s.buildAssigns()
+	return s.originExpr(leaf, origins, map[string]bool{})
+}
+
+func (s *scope) originExpr(expr ast.Expr, origins []string, seen map[string]bool) bool {
+	for _, path := range keys(expr) {
+		if !s.pathNeedsOrigin(path) {
+			continue
+		}
+		root := strings.Split(path, ".")[0]
+		if !s.originName(root, origins, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *scope) originName(name string, origins []string, seen map[string]bool) bool {
+	if seen[name] {
+		return true
+	}
+	seen[name] = true
+	if s.foreign[name] {
+		return false
+	}
+	if declared, ok := s.decl[name]; ok {
+		if !slices.Contains(origins, declared) {
+			return false
+		}
+		for i, rhs := range s.assigns[name] {
+			if !s.originRHS(rhs, s.assignAt[name][i], origins, seen) {
+				return false
+			}
+		}
+		for _, rhs := range s.fieldAssigns[name] {
+			if !s.originExpr(rhs, origins, seen) {
+				return false
+			}
+		}
+		return true
+	}
+	rhsList, assigned := s.assigns[name]
+	if !assigned {
+		return false
+	}
+	for i, rhs := range rhsList {
+		if !s.originRHS(rhs, s.assignAt[name][i], origins, seen) {
+			return false
+		}
+	}
+	for _, rhs := range s.fieldAssigns[name] {
+		if !s.originExpr(rhs, origins, seen) {
+			return false
+		}
+	}
+	return true
+}
+
+// originRHS checks one value assigned to a name. For a call to a function of the same package, that function's own
+// return values at the position must have the origin; any other expression is checked by the values it reads.
+func (s *scope) originRHS(rhs ast.Expr, at int, origins []string, seen map[string]bool) bool {
+	call, ok := ast.Unparen(rhs).(*ast.CallExpr)
+	if !ok {
+		return s.originExpr(rhs, origins, seen)
+	}
+	targets := s.resolve(call)
+	if len(targets) == 0 {
+		return s.originExpr(rhs, origins, seen)
+	}
+	position := max(at, 0)
+	for _, target := range targets {
+		if !s.flow.returnsOrigin(target, position, origins) {
+			return false
+		}
+	}
+	return true
+}
+
+// resultFields lists a function's results in order: the declared type and the name ("" when unnamed).
+func resultFields(fn *ast.FuncDecl) (typesOut, names []string) {
+	if fn.Type.Results == nil {
+		return nil, nil
+	}
+	for _, field := range fn.Type.Results.List {
+		if len(field.Names) == 0 {
+			typesOut, names = append(typesOut, normTypeText(fn, field.Type)), append(names, "")
+		}
+		for _, name := range field.Names {
+			typesOut, names = append(typesOut, normTypeText(fn, field.Type)), append(names, name.Name)
+		}
+	}
+	return typesOut, names
+}
+
+// returnsOrigin reports whether every value a function returns at a position (a named result included) comes from one
+// of the origins. A function already on the stack counts as proven, so recursion ends.
+func (f *flow) returnsOrigin(fn *ast.FuncDecl, position int, origins []string) bool {
+	resultTypes, resultNames := resultFields(fn)
+	if position >= len(resultTypes) || fn.Body == nil {
+		return false
+	}
+	if f.returning == nil {
+		f.returning = map[*ast.FuncDecl]bool{}
+	}
+	if f.returning[fn] {
+		return true
+	}
+	f.returning[fn] = true
+	defer delete(f.returning, fn)
+	callee := f.scope(fn)
+	callee.buildAssigns()
+	if name := resultNames[position]; name != "" && name != "_" && !callee.originName(name, origins, map[string]bool{}) {
+		return false
+	}
+	proven := true
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		switch typed := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.ReturnStmt:
+			switch {
+			case len(typed.Results) == len(resultTypes):
+				proven = proven && callee.originRHS(typed.Results[position], -1, origins, map[string]bool{})
+			case len(typed.Results) == 1:
+				proven = proven && callee.originRHS(typed.Results[0], position, origins, map[string]bool{})
+			}
+		}
+		return proven
+	})
+	return proven
 }

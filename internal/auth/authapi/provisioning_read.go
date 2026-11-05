@@ -83,10 +83,15 @@ type ReadDeps struct {
 	Meter       metric.Meter
 	// ProfileRows is the endpoint-profile document; nil is the one the binary embeds.
 	ProfileRows []byte
+	// Workload is the go-api workload path; nil refuses every workload token.
+	Workload *SessionIssueWorkload
 }
 
-// ReadRoutes returns the versioned read routes for the internal listener only: ProvisioningRoutes never returns them, so the
-// public listener cannot serve them. A route is returned only when its store is wired and its endpoint-profile row exists.
+// ReadRoutes returns the versioned read routes. They are served on the API listener; the optional internal listener
+// (authService.internal) serves only the workload exchange and the authorize routes. The isolation is the token class (a session
+// issuer credential or the go-api workload token) and the per-route scope or subject check, not the listener. ProvisioningRoutes
+// never returns them. A route is returned only when its store is wired and its endpoint-profile row lists exactly the two accepted
+// classes.
 func ReadRoutes(deps ReadDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil {
 		return nil, errors.New("authapi: the read routes need credentials")
@@ -110,8 +115,8 @@ func ReadRoutes(deps ReadDeps) ([]httpapi.Route, error) {
 	return h.withReadRoutes(nil, rows), nil
 }
 
-// withReadRoutes mounts each read route whose store is wired and whose endpoint-profile row lists the session issuer credential
-// class, else logs one line naming the route.
+// withReadRoutes mounts each read route whose store is wired and whose endpoint-profile row lists exactly the session issuer credential
+// class and the go-api workload token class, else logs one line naming the route.
 func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []httpapi.Route {
 	for _, rr := range readRoutes {
 		stored := h.Reads != nil
@@ -121,7 +126,7 @@ func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []http
 		if !stored {
 			continue
 		}
-		if rowsAcceptFor(rows, []string{rr.pattern}, []string{serviceSessionIssuerClass}) != nil {
+		if rowsExactFor(rows, []string{rr.pattern}, []string{serviceSessionIssuerClass, workloadTokenClass}) != nil {
 			h.Logger.Info("auth read route left dark: no endpoint-profile row", "route", rr.pattern)
 			continue
 		}
@@ -137,28 +142,16 @@ func (h readHandlers) withReadRoutes(routes []httpapi.Route, rows []byte) []http
 }
 
 // readAdmit checks the bearer is a session issuer credential holding the operation's read scope (a write scope never
-// satisfies it) and reads the body as one strict object of the allowed members. A refusal is already written.
+// satisfies it) or the go-api workload token (audience auth-service, the configured go-api subject; it carries no action
+// claim, so the subject equality is the binding, as on the organization state route), and reads the body as one strict
+// object of the allowed members. A refusal is already written.
 func (h readHandlers) readAdmit(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, allowed ...string) (strictObject, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
 		h.rec.refuse(w, r, op.Name, unauthorized(reasonInvalidCredentials), nil)
 		return nil, false
 	}
-	ctx := r.Context()
-	class, reason := classifyIssueBearer(token)
-	if class != issueClassCompat {
-		h.rec.logger.WarnContext(ctx, "read route refused: bearer", "operation", op.Name, "refusal", reason)
-		h.rec.refuse(w, r, op.Name, unauthorized(reasonInvalidCredentials), nil)
-		return nil, false
-	}
-	_, refused, err := h.Credentials.CheckScope(ctx, contracts.NewSecretString(token), op.Scope)
-	if err != nil {
-		h.rec.refuse(w, r, op.Name, unavailable(reasonStoreUnavailable), err)
-		return nil, false
-	}
-	if refused != "" {
-		h.rec.logger.WarnContext(ctx, "read route refused: service credential", "operation", op.Name, "refusal", string(refused))
-		h.rec.refuse(w, r, op.Name, unauthorized(reasonInvalidCredentials), nil)
+	if !h.readCaller(w, r, op, token) {
 		return nil, false
 	}
 	body, err := readStrictObject(http.MaxBytesReader(w, r.Body, maxProvisioningBody), append([]string{"schema_version"}, allowed...)...)
@@ -167,6 +160,39 @@ func (h readHandlers) readAdmit(w http.ResponseWriter, r *http.Request, op contr
 		return nil, false
 	}
 	return body, true
+}
+
+// readCaller authorizes the bearer, its class read from the text before any store or key-set read. Every refusal is the one
+// 401; the reason is only logged. On a refusal it has already answered.
+func (h readHandlers) readCaller(w http.ResponseWriter, r *http.Request, op contracts.ReadOperation, token string) bool {
+	ctx := r.Context()
+	class, reason := classifyIssueBearer(token)
+	switch class {
+	case issueClassCompat:
+		_, refused, err := h.Credentials.CheckScope(ctx, contracts.NewSecretString(token), op.Scope)
+		if err != nil {
+			h.rec.refuse(w, r, op.Name, unavailable(reasonStoreUnavailable), err)
+			return false
+		}
+		if refused == "" {
+			return true
+		}
+		h.rec.logger.WarnContext(ctx, "read route refused: service credential", "operation", op.Name, "refusal", string(refused))
+	case issueClassWorkload:
+		_, why, err := h.Workload.authorize(token)
+		if err != nil {
+			h.rec.refuse(w, r, op.Name, unavailable(reasonDependency), err)
+			return false
+		}
+		if why == "" {
+			return true
+		}
+		h.rec.logger.WarnContext(ctx, "read route refused: workload token", "operation", op.Name, "refusal", why)
+	default:
+		h.rec.logger.WarnContext(ctx, "read route refused: bearer", "operation", op.Name, "refusal", reason)
+	}
+	h.rec.refuse(w, r, op.Name, unauthorized(reasonInvalidCredentials), nil)
+	return false
 }
 
 func (o strictObject) hasString(name, want string) bool {

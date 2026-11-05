@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -22,7 +23,7 @@ var enforceDecisionAdd = newEnforceDecisionAdder(otel.Meter(shadowMeterName))
 
 func newEnforceDecisionAdder(meter metric.Meter) enforceDecisionAdder {
 	counter, err := meter.Int64Counter(enforceDecisionMetric,
-		metric.WithDescription("Enforced decisions by action namespace, service and outcome: allow, deny, error_deny"))
+		metric.WithDescription("Enforced decisions by action namespace, service and outcome: "+strings.Join(enforceOutcomes, ", ")))
 	if err != nil {
 		return func(context.Context, string, string) {}
 	}
@@ -41,10 +42,12 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 }
 
 const (
-	enforceUnjudgedHS256     = "hs256"
-	enforceUnjudgedDelegated = "delegated"
-	enforceUnjudgedNoOrg     = "no_org"
+	enforceUnjudgedHS256 = "hs256"
+	enforceUnjudgedNoOrg = "no_org"
 )
+
+// enforceUnjudgedReasons is the closed reason set of the unjudged counter.
+var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg}
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 
@@ -52,7 +55,7 @@ var enforceUnjudgedAdd = newEnforceUnjudgedAdder(otel.Meter(shadowMeterName))
 
 func newEnforceUnjudgedAdder(meter metric.Meter) enforceUnjudgedAdder {
 	counter, err := meter.Int64Counter(enforceUnjudgedMetric,
-		metric.WithDescription("Requests on an enforced cell whose caller the decision point cannot judge, so the legacy answer stood, by route row and reason: hs256, delegated, no_org"))
+		metric.WithDescription("Requests on an enforced cell whose caller the decision point cannot judge, so the legacy answer stood, by route row and reason: "+strings.Join(enforceUnjudgedReasons, ", ")))
 	if err != nil {
 		return func(context.Context, string, string) {}
 	}

@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
 	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -259,6 +260,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// recorded for, not the instant it happens to replay at.
 			Now: deps.Now, PlatformRoles: deps.platformRoles(),
 		})...)
+		routes = append(routes, acrcredentials.Routes(acrcredentials.Deps{Guard: deps.Guard, Revoker: deps.ACRRevoker, Logger: logger,
+			Members: policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned}})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:               deps.Pool,
 			Valkey:             deps.Valkey,
@@ -280,6 +283,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
+			Delegator:          deps.Delegator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -414,6 +418,7 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
+	deps.ACRRevoker = newACRRevoker(envsecrets.ProcessLookup, logger)
 	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
 	if err != nil {
 		closeComponents(depComponents)
@@ -439,6 +444,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
+	deps.Delegator = impersonationDelegator(ctx, authProxy, deps.SessionIssuer, logger)
 	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
@@ -480,7 +486,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)

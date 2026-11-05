@@ -1,4 +1,5 @@
-package config
+// Package netaddr judges listen addresses by the socket they would bind.
+package netaddr
 
 import (
 	"net"
@@ -7,7 +8,7 @@ import (
 	"strings"
 )
 
-// listenAddressesOverlap reports whether two host:port listen addresses can
+// ListenAddressesOverlap reports whether two host:port listen addresses can
 // not both be bound: the same port (port 0 is "any free port" and never
 // collides) and hosts that share an interface. A wildcard host (empty,
 // 0.0.0.0, ::) overlaps every host; the name localhost overlaps the loopback
@@ -16,7 +17,7 @@ import (
 // the socket would bind, not the string, so ":8010" and "127.0.0.1:8010"
 // collide. An address that is not host:port never overlaps (the caller has
 // already refused it).
-func listenAddressesOverlap(a, b string) bool {
+func ListenAddressesOverlap(a, b string) bool {
 	hostA, portA, okA := splitListen(a)
 	hostB, portB, okB := splitListen(b)
 	if !okA || !okB || portA != portB || portA == "0" {

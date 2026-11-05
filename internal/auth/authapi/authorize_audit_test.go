@@ -328,8 +328,7 @@ func TestAuthorizeAuditVocabularyIsTheWireVocabulary(t *testing.T) {
 	vocab := audit.AttributeVocabulary()
 	reasons := slices.Clone(vocab["decision_reason_code"])
 	slices.Sort(reasons)
-	want := append(AuthorizeWireReasonCodes(), contractOnlyReasonCodes...)
-	slices.Sort(want)
+	want := AuthorizeWireReasonCodes()
 	if !slices.Equal(reasons, want) {
 		t.Errorf("decision_reason_code %v, want the wire codes %v", reasons, want)
 	}
@@ -362,6 +361,7 @@ func TestHighRiskActionIsTheCatalogClass(t *testing.T) {
 // expiry is the decision time, and a second identical call decides again and writes a second
 // audit row. A pin cell: the rule holds on main before the audit existed.
 func TestAuthorizeHighRiskDecisionsAreNeverCachedSoEachIsAudited(t *testing.T) {
+	t.Parallel()
 	high := 0
 	for _, a := range delegatedCatalogActions {
 		act, err := policycatalog.Default().Action(a.action)

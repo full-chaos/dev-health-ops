@@ -1,0 +1,531 @@
+package pdp
+
+import (
+	"bytes"
+	"context"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-go/pep"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+)
+
+const (
+	testProfile = "GET /api/v1/home"
+	testAction  = "analytics.read"
+	testOrg     = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
+	// testBearer stands for a user access token: the PDP resolves it, the gate never reads it.
+	testBearer = "eyJhbGciOiJFZERTQSIsInR5cCI6ImF0K2p3dCJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
+)
+
+type meterReader struct {
+	reader *sdkmetric.ManualReader
+}
+
+func newMeter(t *testing.T) (*meterReader, Config) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	return &meterReader{reader: reader}, Config{Meter: provider.Meter("test"), Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+}
+
+// points is every data point of metric name as "k=v,k=v" -> value.
+func (m *meterReader) points(t *testing.T, name string) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := m.reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, scope := range rm.ScopeMetrics {
+		for _, metric := range scope.Metrics {
+			if metric.Name != name {
+				continue
+			}
+			add := func(set attribute.Set, v int64) {
+				var parts []string
+				for _, kv := range set.ToSlice() {
+					parts = append(parts, string(kv.Key)+"="+kv.Value.Emit())
+				}
+				sort.Strings(parts)
+				out[strings.Join(parts, ",")] += v
+			}
+			switch data := metric.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, p := range data.DataPoints {
+					add(p.Attributes, p.Value)
+				}
+			case metricdata.Gauge[int64]:
+				for _, p := range data.DataPoints {
+					add(p.Attributes, p.Value)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func pepClient(t *testing.T, base string) pep.Decider {
+	t.Helper()
+	client, err := pep.New(pep.Config{BaseURL: base, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: ClientService, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+type recordingLookup struct {
+	mu     sync.Mutex
+	values map[string]string
+	read   []string
+}
+
+func (r *recordingLookup) lookup(key string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.read = append(r.read, key)
+	v, ok := r.values[key]
+	return v, ok
+}
+
+func onEnv(t *testing.T, mode, upstream string) map[string]string {
+	t.Helper()
+	return map[string]string{EnvMode: mode, EnvAuthProxyURL: upstream, workloadinput.EnvIssuer: pdptest.Issuer,
+		workloadinput.EnvBootstrapFile: pdptest.BootstrapFile(t)}
+}
+
+// Off (unset, empty, "off", padded) reads only the switch, builds no client and asks nothing.
+func TestPDPOffReadsOnlyTheSwitchAndAsksNothing(t *testing.T) {
+	srv := pdptest.New(t)
+	for name, values := range map[string]map[string]string{
+		"unset":  {},
+		"empty":  {EnvMode: ""},
+		"off":    {EnvMode: "off"},
+		"padded": {EnvMode: " off "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range onEnv(t, "", srv.URL) {
+				if k != EnvMode {
+					values[k] = v
+				}
+			}
+			rec := &recordingLookup{values: values}
+			var logs bytes.Buffer
+			g := FromSettings(rec.lookup, slog.New(slog.NewTextHandler(&logs, nil)))
+			if g.Mode() != ModeOff {
+				t.Fatalf("mode = %q, want off", g.Mode())
+			}
+			if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+				t.Fatalf("off refused: %v", err)
+			}
+			g.Wait()
+			if !slices.Equal(rec.read, []string{EnvMode}) {
+				t.Fatalf("off read %v, want only %s", rec.read, EnvMode)
+			}
+			if n := len(srv.Requests()); n != 0 || srv.Exchanges() != 0 {
+				t.Fatalf("off asked the PDP %d times, exchanged %d times", n, srv.Exchanges())
+			}
+			if logs.Len() != 0 {
+				t.Fatalf("off logged: %s", logs.String())
+			}
+		})
+	}
+}
+
+// With the query-api workload credential: one exchange, the PDP call carries the workload token (never the user's),
+// client_service dev-health-query-api, the user token as the principal reference, the row action and the org.
+func TestPDPEnforceAsksWithTheQueryAPIWorkloadToken(t *testing.T) {
+	srv := pdptest.New(t)
+	g := FromSettings((&recordingLookup{values: onEnv(t, "enforce", srv.URL)}).lookup, nil)
+	if g.Mode() != ModeEnforce {
+		t.Fatalf("mode = %q, want enforce", g.Mode())
+	}
+	for range 2 {
+		if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+			t.Fatalf("allow answered %v", err)
+		}
+	}
+	got := srv.Requests()
+	if len(got) != 2 || srv.Exchanges() != 1 {
+		t.Fatalf("requests %d exchanges %d, want 2 and 1", len(got), srv.Exchanges())
+	}
+	want := pdptest.Request{Authorization: "Bearer " + srv.WorkloadToken, PrincipalReference: testBearer, Action: testAction,
+		ResourceType: "organization", ResourceKey: strings.ToLower(testOrg), OrganizationID: strings.ToLower(testOrg), ClientService: "dev-health-query-api"}
+	if got[0] != want {
+		t.Fatalf("PDP call %+v, want %+v", got[0], want)
+	}
+}
+
+// Enforce: a PDP deny is a typed deny with its wire reason, and is counted.
+func TestPDPEnforceDenyIsATypedDeny(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Deny("role_lacks_action")
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	denied, ok := err.(*DenyError)
+	if !ok || denied.Local || denied.Reason != pep.ReasonRoleLacksAction {
+		t.Fatalf("deny answered %#v, want a PDP DenyError role_lacks_action", err)
+	}
+	if got := m.points(t, resultMetric); got["action=analytics.read,mode=enforce,result=deny"] != 1 {
+		t.Fatalf("results %v", got)
+	}
+}
+
+// Enforce: PDP down (refused connection, 503, timeout) is a typed local deny, never a pass.
+func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	failing := pdptest.New(t)
+	failing.Fail(http.StatusServiceUnavailable)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(1500 * time.Millisecond) }))
+	t.Cleanup(slow.Close)
+	for name, tc := range map[string]struct {
+		base   string
+		reason pep.Reason
+	}{
+		"refused": {closedURL, pep.ReasonUnreachable},
+		"503":     {failing.URL, pep.ReasonUnavailable},
+		"timeout": {slow.URL, pep.ReasonTimeout},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, tc.base)
+			err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+			denied, ok := err.(*DenyError)
+			if !ok || !denied.Local || denied.Reason != tc.reason {
+				t.Fatalf("PDP down answered %#v, want a local DenyError %s", err, tc.reason)
+			}
+			if got := m.points(t, resultMetric); got["action=analytics.read,mode=enforce,result=unavailable"] != 1 {
+				t.Fatalf("results %v", got)
+			}
+		})
+	}
+}
+
+// Shadow asks, counts and compares, and never denies: not for a PDP deny, not for a PDP that is down.
+func TestPDPShadowCountsAndNeverDenies(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	allow := pdptest.New(t)
+	deny := pdptest.New(t)
+	deny.Deny("no_membership")
+	for name, tc := range map[string]struct {
+		base   string
+		result string
+		calls  func() int
+	}{
+		"allow": {allow.URL, ResultMatch, func() int { return len(allow.Requests()) }},
+		"deny":  {deny.URL, ResultMismatch, func() int { return len(deny.Requests()) }},
+		"down":  {closedURL, ResultError, func() int { return 1 }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, tc.base)
+			g := New(cfg)
+			if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+				t.Fatalf("shadow refused: %v", err)
+			}
+			g.Wait()
+			if tc.calls() != 1 {
+				t.Fatalf("shadow asked %d times, want 1", tc.calls())
+			}
+			if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result="+tc.result] != 1 || len(got) != 1 {
+				t.Fatalf("results %v, want one %s", got, tc.result)
+			}
+		})
+	}
+}
+
+// A bad mode, or a mode that is on with a missing or bad input, still builds: one ERROR naming the variable (never
+// a value or a path), the config-invalid gauge 1, and every PDP-gated request refused as unavailable, asking nothing.
+func TestPDPMisconfigurationRefusesAsUnavailableAndNeverFailsTheStart(t *testing.T) {
+	srv := pdptest.New(t)
+	unreadable := filepath.Join(t.TempDir(), "missing-secret-file")
+	for name, tc := range map[string]struct {
+		edit     func(map[string]string)
+		variable string
+	}{
+		"bad mode":            {func(e map[string]string) { e[EnvMode] = "banana" }, EnvMode},
+		"capitalised mode":    {func(e map[string]string) { e[EnvMode] = "Enforce" }, EnvMode},
+		"shadow without url":  {func(e map[string]string) { e[EnvMode] = "shadow"; delete(e, EnvAuthProxyURL) }, EnvAuthProxyURL},
+		"url with a path":     {func(e map[string]string) { e[EnvAuthProxyURL] = srv.URL + "/x" }, EnvAuthProxyURL},
+		"url with secret":     {func(e map[string]string) { e[EnvAuthProxyURL] = "http://u:hunter2@auth:8095" }, EnvAuthProxyURL},
+		"no workload file":    {func(e map[string]string) { delete(e, workloadinput.EnvBootstrapFile) }, workloadinput.EnvSubjectFile + "," + workloadinput.EnvBootstrapFile},
+		"both workload files": {func(e map[string]string) { e[workloadinput.EnvSubjectFile] = unreadable }, workloadinput.EnvSubjectFile + "," + workloadinput.EnvBootstrapFile},
+		"unreadable file":     {func(e map[string]string) { e[workloadinput.EnvBootstrapFile] = unreadable }, workloadinput.EnvBootstrapFile},
+		"no issuer":           {func(e map[string]string) { delete(e, workloadinput.EnvIssuer) }, workloadinput.EnvIssuer},
+		"http issuer":         {func(e map[string]string) { e[workloadinput.EnvIssuer] = "http://auth.example.test" }, workloadinput.EnvIssuer},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := onEnv(t, "enforce", srv.URL)
+			tc.edit(env)
+			var logs bytes.Buffer
+			g := FromSettings((&recordingLookup{values: env}).lookup, slog.New(slog.NewTextHandler(&logs, nil)))
+			err := g.Authorize(context.Background(), testProfile, testBearer, testOrg)
+			denied, ok := err.(*DenyError)
+			if !ok || !denied.Local || denied.Reason != pep.ReasonNotConfigured {
+				t.Fatalf("misconfigured gate answered %#v, want a local not_configured DenyError", err)
+			}
+			if n := len(srv.Requests()); n != 0 {
+				t.Fatalf("a misconfigured gate asked the PDP %d times", n)
+			}
+			text := logs.String()
+			if strings.Count(text, "level=ERROR") != 1 || !strings.Contains(text, "variable="+tc.variable) {
+				t.Fatalf("log %q, want one ERROR naming %s", text, tc.variable)
+			}
+			for _, secret := range []string{"hunter2", unreadable, env[workloadinput.EnvBootstrapFile], "banana"} {
+				if secret != "" && strings.Contains(text, secret) {
+					t.Fatalf("the log carries a value: %q", text)
+				}
+			}
+		})
+	}
+}
+
+// The gauges: enabled 1 only for a built shadow or enforce gate; config_invalid 1 only for a misconfigured one.
+func TestPDPStateGauges(t *testing.T) {
+	srv := pdptest.New(t)
+	for name, tc := range map[string]struct {
+		cfg              Config
+		enabled, invalid int64
+	}{
+		"off":     {Config{Mode: ModeOff}, 0, 0},
+		"shadow":  {Config{Mode: ModeShadow, Decider: pepClient(t, srv.URL)}, 1, 0},
+		"enforce": {Config{Mode: ModeEnforce, Decider: pepClient(t, srv.URL)}, 1, 0},
+		"bad":     {Config{Mode: "banana"}, 0, 1},
+		"no pdp":  {Config{Mode: ModeEnforce}, 0, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m, base := newMeter(t)
+			tc.cfg.Meter, tc.cfg.Logger = base.Meter, base.Logger
+			New(tc.cfg)
+			if got := m.points(t, enabledMetric)[""]; got != tc.enabled {
+				t.Errorf("enabled = %d, want %d", got, tc.enabled)
+			}
+			if got := m.points(t, configInvalidMetric)[""]; got != tc.invalid {
+				t.Errorf("config_invalid = %d, want %d", got, tc.invalid)
+			}
+		})
+	}
+}
+
+// A route with no row action fails closed in enforce and asks nothing.
+func TestPDPEnforceUnknownRowFailsClosed(t *testing.T) {
+	srv := pdptest.New(t)
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	err := New(cfg).Authorize(context.Background(), "GET /api/v1/no-such-route", testBearer, testOrg)
+	if denied, ok := err.(*DenyError); !ok || !denied.Local {
+		t.Fatalf("an unknown row answered %#v, want a local DenyError", err)
+	}
+	if n := len(srv.Requests()); n != 0 {
+		t.Fatalf("asked the PDP %d times for a route with no action", n)
+	}
+}
+
+// The exempt list is exactly the two legacy classes; each accepted caller counts in every mode, a user token never.
+func TestPDPExemptListAndCounter(t *testing.T) {
+	if !slices.Equal(ExemptClasses, []string{"ops_access_token_hs256", "effective_principal_envelope"}) {
+		t.Fatalf("exempt list %v", ExemptClasses)
+	}
+	for _, mode := range []string{ModeOff, ModeShadow, ModeEnforce, "banana"} {
+		t.Run(mode, func(t *testing.T) {
+			m, cfg := newMeter(t)
+			cfg.Mode = mode
+			if mode == ModeShadow || mode == ModeEnforce {
+				cfg.Decider = pepClient(t, pdptest.New(t).URL)
+			}
+			g := New(cfg)
+			g.CountExempt(context.Background(), ClassHS256, testProfile)
+			g.CountExempt(context.Background(), ClassEnvelope, "POST /api/v1/drilldown/prs")
+			g.CountExempt(context.Background(), "user_access_token", testProfile)
+			want := map[string]int64{"action=analytics.read,class=ops_access_token_hs256": 1, "action=git.read,class=effective_principal_envelope": 1}
+			if got := m.points(t, exemptMetric); !mapsEqual(got, want) {
+				t.Fatalf("exempt %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func mapsEqual(a, b map[string]int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Every label value is from a closed set: no request, token or organization value is ever a label.
+func TestPDPLabelsAreClosed(t *testing.T) {
+	srv := pdptest.New(t)
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	g := New(cfg)
+	for _, profile := range []string{testProfile, "GET /api/v1/flame", "GET /x/" + testOrg} {
+		_ = g.Authorize(context.Background(), profile, testBearer, testOrg)
+		g.CountExempt(context.Background(), ClassHS256, profile)
+	}
+	actions := []string{"analytics.read", "metrics.read", "work_items.read", "git.read", "org.read", "unknown"}
+	closed := map[string][]string{
+		"mode": {"shadow", "enforce", "invalid"}, "result": {"allow", "deny", "unavailable", "match", "mismatch", "error", "dropped", "not_configured"},
+		"class": ExemptClasses, "action": actions,
+	}
+	for _, name := range []string{resultMetric, exemptMetric} {
+		for key := range m.points(t, name) {
+			for _, pair := range strings.Split(key, ",") {
+				k, v, _ := strings.Cut(pair, "=")
+				if !slices.Contains(closed[k], v) {
+					t.Errorf("%s label %s=%q is outside its closed set", name, k, v)
+				}
+			}
+		}
+	}
+}
+
+// The row map is every protected query-api row on the query or internal listener that names an action.
+func TestPDPRowsCoverEveryProtectedRESTRow(t *testing.T) {
+	actions, err := parseActions(authv1.QueryAPIEndpointProfiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest := 0
+	for key, action := range actions {
+		if strings.Contains(key, " /api/v1/") {
+			rest++
+		}
+		if action == "" {
+			t.Errorf("%s has no action", key)
+		}
+	}
+	if rest != 29 || actions[testProfile] != testAction || actions["GET /api/v1/drilldown/prs"] != "git.read" {
+		t.Fatalf("rows: %d REST rows, home=%q prs=%q", rest, actions[testProfile], actions["GET /api/v1/drilldown/prs"])
+	}
+}
+
+// The subject file is the Kubernetes form of the credential: it is read only while a mode is on.
+func TestPDPReadsTheSubjectFileOnlyWhenOn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "subject")
+	if err := os.WriteFile(path, []byte("eyJhbGciOiJSUzI1NiJ9.c3ViamVjdA.c2ln"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := pdptest.New(t)
+	env := map[string]string{EnvMode: "shadow", EnvAuthProxyURL: srv.URL, workloadinput.EnvIssuer: pdptest.Issuer, workloadinput.EnvSubjectFile: path}
+	if g := FromSettings((&recordingLookup{values: env}).lookup, nil); g.Mode() != ModeShadow {
+		t.Fatalf("mode = %q with a subject file, want shadow", g.Mode())
+	}
+}
+
+// Enforce runs query-api's organization-wide reads and applies no obligation: an allow passes only with the asked
+// organization as tenant scope, repository scope organization (or an action with no repository member), no allowlist,
+// no redaction, no minimum assurance and no step-up. Any other allow is a local deny with the closed reason
+// unknown_obligation (REST: 503), counted as unavailable.
+func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
+	org := strings.ToLower(testOrg)
+	for name, tc := range map[string]struct {
+		profile    string
+		obligation map[string]any
+		omit       bool
+		pass       bool
+	}{
+		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, false, true},
+		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, false, true},
+		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, false},
+		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
+		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, false},
+		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, false},
+		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, false},
+		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, false},
+		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, false},
+		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, false},
+		"step up":                              {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "step_up": true}, false, false},
+		"unknown obligation key":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "audit": true}, false, false},
+		"unknown repository scope":             {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "everything"}, false, false},
+		"malformed block":                      {testProfile, map[string]any{"tenant_scope": 7}, false, false},
+		"allow with no obligations":            {testProfile, nil, true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := pdptest.New(t)
+			srv.Obligations(tc.obligation)
+			m, cfg := newMeter(t)
+			cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+			err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, testOrg)
+			got := m.points(t, resultMetric)
+			if tc.pass {
+				if err != nil || len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result=allow"] != 1 {
+					t.Fatalf("answered %v with results %v, want a pass counted allow", err, got)
+				}
+				return
+			}
+			denied, ok := err.(*DenyError)
+			if !ok || !denied.Local {
+				t.Fatalf("answered %#v, want a local DenyError", err)
+			}
+			if denied.Reason != pep.ReasonUnknownObligation && denied.Reason != pep.ReasonMalformed {
+				t.Fatalf("reason %q is not a closed obligation reason", denied.Reason)
+			}
+			if got["action="+actionOf(tc.profile)+",mode=enforce,result=unavailable"] != 1 || len(got) != 1 {
+				t.Fatalf("results %v, want one unavailable", got)
+			}
+		})
+	}
+}
+
+func actionOf(profile string) string {
+	if profile == "GET /buildinfo" {
+		return "org.read"
+	}
+	return testAction
+}
+
+// A hand-built allow (the fake gives the default organization allow) with a repository allowlist is the case the
+// reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeEnforce, pepClient(t, srv.URL)
+	err := New(cfg).Authorize(context.Background(), testProfile, testBearer, testOrg)
+	denied, ok := err.(*DenyError)
+	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
+		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
+	}
+}
+
+// Shadow never changes an answer: an allow that carries an allowlist is still a match and still passes.
+func TestPDPShadowIgnoresObligations(t *testing.T) {
+	srv := pdptest.New(t)
+	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
+	g := New(cfg)
+	if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+		t.Fatalf("shadow refused: %v", err)
+	}
+	g.Wait()
+	if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result=match"] != 1 || len(got) != 1 {
+		t.Fatalf("results %v, want one match", got)
+	}
+}

@@ -37,11 +37,13 @@ devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/ll
 devhealth_acr_svc_acr_compat_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_accepted_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/workloadauth.go
+devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
+dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
 dev_health_api_http_requests_total	listener,method,route,status_class	code: internal/auth/httpapi/tracehandler.go
 dev_health_api_ingest_auth_audit_failures_total	reason	code: internal/api/externalingest/refusalaudit.go
@@ -50,6 +52,10 @@ dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.g
 dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
+dev_health_query_api_pdp_config_invalid		code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_enabled		code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_exempt_total	action,class	code: internal/queryapi/pdp/pdp.go
+dev_health_query_api_pdp_results_total	action,mode,result	code: internal/queryapi/pdp/pdp.go
 dev_health_api_stripe_refund_event_decisions_total	reason	code: internal/api/billing/refundowner.go
 dev_health_api_stripe_webhook_signature_failures_total	class	code: internal/api/billing/webhook.go
 dev_health_api_stripe_webhook_unhandled_events_total	event_type	code: internal/api/billing/webhook.go
@@ -70,6 +76,8 @@ devhealth_auth_decision_cache_lookups_total	result	code: internal/auth/authapi/a
 devhealth_auth_decision_cache_puts_total	result	code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_decision_cache_entries		code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
+devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go

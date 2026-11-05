@@ -56,8 +56,8 @@ func (e *exitError) Error() string { return e.msg }
 func runVerb(env cli.Env) error {
 	flags := flag.NewFlagSet("web-path", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
-	if err := flags.Parse(env.Args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(flags, env.Stderr, env.Args); err != nil {
+		return err
 	}
 	if flags.NArg() != 0 {
 		return &cli.FlagUsageError{Err: errors.New("web-path accepts no arguments: it reads DHO_SMOKE_* from the environment")}

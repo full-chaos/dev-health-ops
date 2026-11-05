@@ -72,7 +72,6 @@ const (
 	ReasonOrganizationInactive Reason = "organization_inactive"
 	ReasonNoMembership         Reason = "no_membership"
 	ReasonOrgMismatch          Reason = "org_mismatch"
-	ReasonMembershipInactive   Reason = "membership_inactive"
 	ReasonPlatformRoleAbsent   Reason = "platform_role_absent"
 	ReasonRoleUnknown          Reason = "role_unknown"
 	ReasonRoleScopeMismatch    Reason = "role_scope_mismatch"
@@ -91,6 +90,10 @@ const (
 	ReasonAllowedByMembershipDefault Reason = "allowed_by_membership_default"
 	ReasonGrantReadFailed            Reason = "grant_read_failed"
 
+	// ReasonRepositoryAllowlistTooLarge denies an allow whose repository allowlist would hold more than
+	// MaxRepositoryAllowlist keys.
+	ReasonRepositoryAllowlistTooLarge Reason = "repository_allowlist_too_large"
+
 	ReasonImpersonationDenied Reason = "impersonation_denied"
 	ReasonDelegationInvalid   Reason = "delegation_invalid"
 )
@@ -100,12 +103,12 @@ func AllReasons() []Reason {
 	return []Reason{
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
-		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
+		ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
 		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,
-		ReasonImpersonationDenied, ReasonDelegationInvalid,
+		ReasonImpersonationDenied, ReasonDelegationInvalid, ReasonRepositoryAllowlistTooLarge,
 	}
 }
 
@@ -127,7 +130,8 @@ type Decision struct {
 	// membership-default allow alike. 0 for every other decision, and for a
 	// repository action whose catalog cache class is none.
 	ExpiresAtUnixNano int64
-	// Obligations is set only on an allow of a delegated session.
+	// Obligations is set on every allow of an organization or repository action; a deny and a
+	// platform allow carry none.
 	Obligations *Obligations
 	// Audit is set only on an allow that the owner exemption made possible.
 	Audit *DelegationAudit

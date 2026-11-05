@@ -598,7 +598,7 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy != 196 || user != 196 {
+	if legacy != 197 || user != 197 {
 		t.Errorf("%d legacy rows, %d user rows", legacy, user)
 	}
 }

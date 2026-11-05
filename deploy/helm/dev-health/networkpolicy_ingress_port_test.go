@@ -2,7 +2,6 @@ package devhealth_test
 
 import (
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 	"testing"
@@ -54,7 +53,7 @@ func renderNetpols(t *testing.T, args ...string) []netpolDoc {
 	t.Helper()
 	full := append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "networkPolicy.enabled=true", "--set", "goApi.enabled=true",
 		"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)
-	out, err := exec.Command("helm", full...).CombinedOutput()
+	out, err := helmCommand(full...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("render: %v\n%s", err, out)
 	}
@@ -388,7 +387,7 @@ func TestQueryAPIInternalPolicyAdmitsOnlyAllowedFrom(t *testing.T) {
 // for global.namespaceOverride, and renders as before when the policy is off.
 func TestControllerNamespaceEqualToReleaseNamespaceFailsTheRender(t *testing.T) {
 	render := func(args ...string) (string, error) {
-		out, err := exec.Command("helm", append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
+		out, err := helmCommand(append([]string{"template", "np", ".", "--namespace", releaseNamespace, "--set", "goApi.enabled=true",
 			"--set", "goWorkers.pgbouncer.postgres.networkPolicyCIDR=10.0.0.0/24"}, args...)...).CombinedOutput()
 		return string(out), err
 	}

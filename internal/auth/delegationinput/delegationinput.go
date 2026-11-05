@@ -88,10 +88,26 @@ type delegatedSnapshot struct {
 
 func (d delegatedSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
 
+// delegatedGrantSnapshot keeps the grants of an inner snapshot that reports them: a filtered organization action
+// needs them for its repository allowlist.
+type delegatedGrantSnapshot struct {
+	authorization.GrantSnapshot
+	del authorization.Delegation
+}
+
+func (d delegatedGrantSnapshot) Delegation() (authorization.Delegation, bool) { return d.del, true }
+
+func delegated(inner authorization.Snapshot, del authorization.Delegation) authorization.Snapshot {
+	if gs, ok := inner.(authorization.GrantSnapshot); ok {
+		return delegatedGrantSnapshot{GrantSnapshot: gs, del: del}
+	}
+	return delegatedSnapshot{Snapshot: inner, del: del}
+}
+
 // invalid is a delegation with an empty chain: the evaluator denies every
 // action of it with delegation_invalid.
 func invalid(inner authorization.Snapshot) authorization.Snapshot {
-	return delegatedSnapshot{Snapshot: inner}
+	return delegated(inner, authorization.Delegation{})
 }
 
 // Snapshot reads the session and the actor's platform role now and returns the
@@ -124,14 +140,14 @@ func (a *Adapter) Snapshot(ctx context.Context, in Input) (authorization.Snapsho
 	if err != nil {
 		return invalid(in.Inner), fmt.Errorf("%w: platform role: %w", ErrDelegationUnavailable, err)
 	}
-	return delegatedSnapshot{Snapshot: in.Inner, del: Delegation(Facts{
+	return delegated(in.Inner, Delegation(Facts{
 		Actor:               actor,
 		Organization:        rec.OrganizationID,
 		AMR:                 rec.AMR,
 		PermittedActions:    rec.Delegation.PermittedActions,
 		ActorMayImpersonate: auth.Allows(session.ImpersonateAction),
 		ActorOwner:          auth.IsOwner(),
-	})}, nil
+	})), nil
 }
 
 // Facts are the values of one delegated session row and of its actor, read by

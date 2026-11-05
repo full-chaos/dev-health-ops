@@ -162,6 +162,27 @@ shell, no sleep binary): the native sleep action, a Kubernetes >= 1.30 feature (
 {{- if has (upper (trim (toString .name))) (include "dev-health.goApiEnvNames" $ | fromJsonArray) }}{{- fail (printf "goApi.extraEnv must not set %s: the chart renders it for go-api, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
 {{- if include "dev-health.secretLikeLiteralEnv" . }}{{- fail (printf "goApi.extraEnv must not set %s as a literal value: the name looks like a secret, and a literal would put it in the manifest; reference it with valueFrom.secretKeyRef" .name) }}{{- end }}
 {{- end }}
+{{- /*
+CHAOS-13039: goApi.sessionIssue.workloadBootstrap (off by default, and off renders nothing). On, go-api presents its workload token on
+the session issue route: AUTH_SESSION_ISSUE_CREDENTIAL=workload, with the bootstrap credential of the api workload read from a Secret
+file (AUTH_WORKLOAD_BOOTSTRAP_FILE) and the issuer auth-service signs under (AUTH_WORKLOAD_ISSUER, authService.accessToken.issuerURL).
+go-api then reads no session credential, so AUTH_SESSION_ISSUE_TOKEN is not rendered and no svc_authsess_ Secret is needed.
+auth-service takes AUTH_WORKLOAD_BOOTSTRAP and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT through authService.extraEnv.
+*/}}
+{{- $wbCfg := default dict (default dict .Values.goApi.sessionIssue).workloadBootstrap }}
+{{- $wb := eq (include "dev-health.authBool" (dict "value" (ternary $wbCfg.enabled false (hasKey $wbCfg "enabled")) "key" "goApi.sessionIssue.workloadBootstrap.enabled")) "true" }}
+{{- $wbIssuer := "" }}
+{{- $wbKey := default "api.bootstrap" $wbCfg.secretKey }}
+{{- if $wb }}
+{{- if not $sessionsOn }}{{- fail "goApi.sessionIssue.workloadBootstrap.enabled needs authService.phase >= 2 (sessions on): go-api presents its workload token on the session issue route" }}{{- end }}
+{{- $wbIssuer = include "dev-health.authTokenIssuer" . }}
+{{- if not $wbIssuer }}{{- fail "goApi.sessionIssue.workloadBootstrap.enabled needs authService.accessToken.issuerURL: every workload token carries the issuer auth-service signs under, and go-api checks it" }}{{- end }}
+{{- if not (and (kindIs "string" $wbCfg.secretName) $wbCfg.secretName) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretName is required when goApi.sessionIssue.workloadBootstrap.enabled: the Secret that holds the bootstrap credential of the api workload" }}{{- end }}
+{{- if not (include "dev-health.validSecretKey" $wbKey) }}{{- fail "goApi.sessionIssue.workloadBootstrap.secretKey must be a valid Secret key" }}{{- end }}
+{{- range .Values.goApi.extraEnv }}
+{{- if has (upper (trim (toString .name))) (list "AUTH_SESSION_ISSUE_CREDENTIAL" "AUTH_WORKLOAD_BOOTSTRAP_FILE" "AUTH_WORKLOAD_ISSUER") }}{{- fail (printf "goApi.extraEnv must not set %s: goApi.sessionIssue.workloadBootstrap renders it, and a later entry would shadow the rendered value" .name) }}{{- end }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -287,7 +308,14 @@ spec:
             - name: AUTH_PROXY_IMPERSONATION
               value: "true"
             {{- end }}
-            {{- if $sessionsOn }}
+            {{- if and $sessionsOn $wb }}
+            - name: AUTH_SESSION_ISSUE_CREDENTIAL
+              value: "workload"
+            - name: AUTH_WORKLOAD_BOOTSTRAP_FILE
+              value: "/run/workload/api.bootstrap"
+            - name: AUTH_WORKLOAD_ISSUER
+              value: {{ $wbIssuer | quote }}
+            {{- else if $sessionsOn }}
             {{- /* The auth-session-issuer svc_ credential go-api presents to
             auth-service's session issue route. Not optional: sessions on
             without it would fail every sign-in. */}}
@@ -327,13 +355,28 @@ spec:
           resources:
             {{- toYaml .Values.goApi.resources | nindent 12 }}
           securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, capabilities: {drop: [ALL]}, seccompProfile: {type: RuntimeDefault}}
-          {{- with .Values.goApi.extraVolumeMounts }}
+          {{- if or $wb .Values.goApi.extraVolumeMounts }}
           volumeMounts:
+            {{- if $wb }}
+            - {name: workload-bootstrap, mountPath: /run/workload, readOnly: true}
+            {{- end }}
+            {{- with .Values.goApi.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
-      {{- with .Values.goApi.extraVolumes }}
+      {{- if or $wb .Values.goApi.extraVolumes }}
       volumes:
+        {{- if $wb }}
+        - name: workload-bootstrap
+          secret:
+            secretName: {{ $wbCfg.secretName | quote }}
+            defaultMode: 292
+            items:
+              - {key: {{ $wbKey | quote }}, path: api.bootstrap}
+        {{- end }}
+        {{- with .Values.goApi.extraVolumes }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       {{- with .Values.goApi.nodeSelector }}
       nodeSelector:

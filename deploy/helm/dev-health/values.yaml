@@ -33,6 +33,17 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+    # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
+    #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
+    #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
+    #    (the access-token issuer), mounts secretName/secretKey read-only at /run/workload, and renders no AUTH_SESSION_ISSUE_TOKEN.
+    #    The Secret holds the bootstrap credential of the api workload (auth-migrate workloads bootstrap-create); the operator makes it.
+    #    auth-service needs AUTH_WORKLOAD_BOOTSTRAP=true and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (the api workload's prn_ id) in
+    #    authService.extraEnv. goApi.extraEnv cannot set the three names while this is on.
+    workloadBootstrap:
+      enabled: false
+      secretName: ""
+      secretKey: api.bootstrap
   # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
   #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization

@@ -95,6 +95,7 @@ var openers = map[string]struct {
 	"internal/testsupport/usertokens/usertokens.go":             {kindTest, "user-token proof: a pool that refuses every connection and counts the attempts"},
 	"internal/testsupport/venueoracle/venueoracle.go":           {kindTest, "venue oracle harness"},
 	"internal/testsupport/venueoracle/gosubstrate.go":           {kindTest, "venue oracle harness: the Go-built schema of a frozen venue"},
+	"internal/testsupport/venueoracle/authsessions.go":          {kindTest, "venue oracle harness: the auth schema and the minted sessions' principal and session rows of the Go copy"},
 	"tests/compatibility/river/go/probe.go":                     {kindTest, "compatibility probe"},
 	"tests/compatibility/river/nminus1/probe.go":                {kindTest, "compatibility probe"},
 }

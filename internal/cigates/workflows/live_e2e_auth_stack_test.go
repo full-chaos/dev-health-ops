@@ -68,8 +68,6 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 func TestLiveE2EAuthFlagTableDeltasAreTheNamedOnes(t *testing.T) {
 	// The only flags that differ from prod, each with its reason (the delta column must say it). Any other delta fails.
 	want := map[string]string{
-		"auth-service AUTH_ACCESS_TOKEN_CLASS": "class eddsa ahead of prod",
-		"auth-service AUTH_JWT_AUDIENCE":       "follows the class delta",
 		"auth-service AUTH_WORKLOAD_BOOTSTRAP": "bootstrap subject, no Kubernetes",
 	}
 	got := map[string]string{}

@@ -1,5 +1,6 @@
 contracts/auth/v1
 contracts/auth/v1/vocabulary
+internal/api/acrcredentials
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
@@ -48,7 +49,9 @@ internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
 internal/auth/acraudience
+internal/auth/acrlisting
 internal/auth/acrmint
+internal/auth/acrrevoke
 internal/auth/authconfig
 internal/auth/clientaddr
 internal/auth/contracts

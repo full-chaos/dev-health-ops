@@ -1,6 +1,7 @@
 package apiservice
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
 	"github.com/full-chaos/dev-health-ops/internal/api/githubapp"
 	"github.com/full-chaos/dev-health-ops/internal/api/oauthprovider"
@@ -205,6 +206,9 @@ type Deps struct {
 	// SELECT on projects. See EnvACRAccessProjectScope for the acr
 	// DisallowUnknownFields dependency and the roll order.
 	ACRAccessProjectScope bool
+	// ACRRevoker is the credential revoke route's acr client (EnvACRRevokeURL and its two siblings); nil is not
+	// configured, and the route answers 503.
+	ACRRevoker acrcredentials.Revoker
 	// SessionIssuer issues the session and sso routes' token pairs at
 	// auth-service when it owns sessions (AUTH_PROXY_SESSIONS); nil mints
 	// them in go-api.

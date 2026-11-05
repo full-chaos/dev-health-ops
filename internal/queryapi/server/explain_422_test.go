@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // loadExplainValidationErrorGolden decodes a testdata JSON file captured
@@ -63,7 +64,7 @@ func TestExplainGetValidationErrorsMatchPython(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := newExplainGetHandler(newEmptyRowsExplainReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/explain?"+tc.query, nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 
@@ -99,7 +100,7 @@ func TestExplainPostValidationErrorsMatchPython(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := newExplainPostHandler(newEmptyRowsExplainReader(t))
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/explain", bytes.NewReader(tc.body))
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // REST Home says why the repositories a request names matched nothing
@@ -44,7 +45,7 @@ func TestRESTHomeNamesWhyAFilterCombinationMatchedNothing(t *testing.T) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		newHomePostHandler(client, nil)(rec, req)
 		if rec.Code != http.StatusOK {

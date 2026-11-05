@@ -26,7 +26,7 @@ import (
 // cells drive the real handler of each of the 21 route classes over a recording ClickHouse client.
 
 const (
-	restScopeOrg       = "0b6a1c9e-55d4-4a43-9e34-6f4c1d2b3a10"
+	restTestScopeOrg   = "0b6a1c9e-55d4-4a43-9e34-6f4c1d2b3a10"
 	restScopeClaimsOrg = "claims-org-must-not-be-read"
 )
 
@@ -162,8 +162,8 @@ func TestRESTHandlersNoOrganizationInScopeIs503BeforeAnyStatement(t *testing.T) 
 func TestRESTHandlersReadTheOrganizationOfTheScope(t *testing.T) {
 	for _, tc := range restOrgCases() {
 		for name, scope := range map[string]pepgate.Scope{
-			"organization": pepgate.Organization(restScopeOrg),
-			"legacy":       pepgate.Legacy(restScopeOrg),
+			"organization": pepgate.Organization(restTestScopeOrg),
+			"legacy":       pepgate.Legacy(restTestScopeOrg),
 		} {
 			t.Run(tc.class+"/"+name, func(t *testing.T) {
 				got := tc.run(t, authctx.Claims{OrgID: restScopeClaimsOrg, Scope: scope})
@@ -180,7 +180,7 @@ func TestRESTHandlersReadTheOrganizationOfTheScope(t *testing.T) {
 							if value == restScopeClaimsOrg {
 								t.Fatalf("binding %s carries the claims organization, not the scope's", binding.Name)
 							}
-							if value == restScopeOrg {
+							if value == restTestScopeOrg {
 								seenScopeOrg = true
 							}
 						}
@@ -200,9 +200,9 @@ func TestRESTOrganizationScopeIsTodaysReadOnEveryClass(t *testing.T) {
 	for _, tc := range restOrgCases() {
 		t.Run(tc.class, func(t *testing.T) {
 			// Some readers keep a process-wide probe cache: the first run pays its statements.
-			tc.run(t, authctx.Claims{OrgID: restScopeOrg, Scope: pepgate.Legacy(restScopeOrg)})
-			legacy := tc.run(t, authctx.Claims{OrgID: restScopeOrg, Scope: pepgate.Legacy(restScopeOrg)})
-			enforced := tc.run(t, authctx.Claims{OrgID: restScopeOrg, Scope: pepgate.Organization(restScopeOrg)})
+			tc.run(t, authctx.Claims{OrgID: restTestScopeOrg, Scope: pepgate.Legacy(restTestScopeOrg)})
+			legacy := tc.run(t, authctx.Claims{OrgID: restTestScopeOrg, Scope: pepgate.Legacy(restTestScopeOrg)})
+			enforced := tc.run(t, authctx.Claims{OrgID: restTestScopeOrg, Scope: pepgate.Organization(restTestScopeOrg)})
 			if len(legacy.statements) == 0 || legacy.fingerprint() != enforced.fingerprint() {
 				t.Fatalf("Organization scope differs from Legacy:\nlegacy:\n%s\nenforced:\n%s", legacy.fingerprint(), enforced.fingerprint())
 			}

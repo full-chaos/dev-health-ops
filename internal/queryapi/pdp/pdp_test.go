@@ -504,7 +504,8 @@ func actionOf(profile string) string {
 }
 
 // A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
-// over is the case the reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+// over is the case the reason is pinned to: the gate's own refusal, not the client's. testProfile is an M route, so
+// it names allowlist_route_unsupported.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
@@ -512,8 +513,8 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
 	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
-	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
-		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
+	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
+		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -175,7 +176,7 @@ VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(
 	for index, tc := range cases {
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/work-units/"+tc.WorkUnitID+"/explain?llm_provider="+tc.LLMProvider, nil)
 		request.SetPathValue("work_unit_id", tc.WorkUnitID)
-		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: tc.OrgID, Role: "owner"}))
+		request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: tc.OrgID, Scope: pepgate.Legacy(tc.OrgID), Role: "owner"}))
 		recorder := httptest.NewRecorder()
 		handler(recorder, request)
 		goBody := strings.TrimSpace(recorder.Body.String())

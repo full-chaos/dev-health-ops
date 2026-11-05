@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // The Home prose that names the requested scope names it by display name, never
@@ -113,7 +114,7 @@ VALUES (?, ?, 'wip-saturation', '2026-08-18', '2026-08-25', true, 'warning', 'WI
 		}
 		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(payload))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		gql.ServeHTTP(rec, req)
 		var out struct {

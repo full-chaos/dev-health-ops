@@ -33,16 +33,16 @@ func planeHandler(mux *http.ServeMux, gate *pdp.Gate) http.Handler {
 func writePDPDenied(w http.ResponseWriter, r *http.Request, component string, err error) {
 	var denied *pdp.DenyError
 	local := !errors.As(err, &denied) || denied.Local
-	reason := ""
+	reason, class := "", ""
 	if denied != nil {
-		reason = string(denied.Reason)
+		reason, class = string(denied.Reason), denied.Class
 	}
 	requestID := envelopeRequestID(r)
 	if !acceptableCorrelationID(requestID) {
 		requestID = ""
 	}
 	slog.WarnContext(r.Context(), "query-api: the PDP refused the request", slog.String("component", component),
-		slog.String("request_id", requestID), slog.String("reason", reason), slog.Bool("unavailable", local))
+		slog.String("request_id", requestID), slog.String("reason", reason), slog.String("route_class", class), slog.Bool("unavailable", local))
 	if local {
 		policy.WriteDetail(w, http.StatusServiceUnavailable, "Authorization unavailable", nil)
 		return

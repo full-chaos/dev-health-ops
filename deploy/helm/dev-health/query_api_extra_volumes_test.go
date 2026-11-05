@@ -1,7 +1,10 @@
 package devhealth_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +74,28 @@ func TestQueryAPIExtraVolumesLeaveOtherWorkloadsUnchanged(t *testing.T) {
 		}
 		if !reflect.DeepEqual(base[i], with[i]) {
 			t.Errorf("%v %s changed with queryApi.extraVolumes set", base[i]["kind"], name)
+		}
+	}
+}
+
+func TestQueryAPIExtraVolumesSchemaRefusesNullInEveryForm(t *testing.T) {
+	for _, key := range []string{"extraVolumes", "extraVolumeMounts"} {
+		valuesFile := filepath.Join(t.TempDir(), "values.yaml")
+		if err := os.WriteFile(valuesFile, []byte("queryApi:\n  "+key+": null\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		forms := map[string][]string{
+			"values file": {"-f", valuesFile},
+			"--set":       {"--set", "queryApi." + key + "=null"},
+			"--set-json":  {"--set-json", "queryApi." + key + "=null"},
+		}
+		for form, args := range forms {
+			_, out, err := renderAuth(t, append([]string{"--set", "queryApi.enabled=true"}, args...)...)
+			if err == nil {
+				t.Errorf("queryApi.%s null via %s rendered; the schema must refuse it", key, form)
+			} else if !strings.Contains(out, key) {
+				t.Errorf("queryApi.%s null via %s refusal does not name the key:\n%.400s", key, form, out)
+			}
 		}
 	}
 }

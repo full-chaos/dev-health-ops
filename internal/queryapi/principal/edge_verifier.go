@@ -38,6 +38,10 @@ func (*OrgRequiredError) Error() string { return "principal: edge: organization 
 // Python dataclass does.
 type EdgeClaims struct {
 	OrgID string
+	// Caller is the shadow's closed caller kind and Delegated is true under a delegated session; VerifyRouted sets
+	// both for the PDP shadow, which only observes them.
+	Caller    string
+	Delegated bool
 }
 
 // EdgeVerifier verifies the edge access token -- the HS256-signed JWT

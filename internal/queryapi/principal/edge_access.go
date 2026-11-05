@@ -186,5 +186,5 @@ func (v *EdgeVerifier) VerifyRouted(ctx context.Context, profile, token string) 
 	if edge {
 		recordEdgeVerifyOutcome("verified")
 	}
-	return &EdgeClaims{OrgID: user.OrgID}, nil
+	return &EdgeClaims{OrgID: user.OrgID, Caller: user.ShadowCaller(), Delegated: user.ImpersonatedBy != nil}, nil
 }

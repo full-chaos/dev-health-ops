@@ -339,6 +339,13 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	go s.run(call)
 }
 
+// Wait blocks until every call in flight has ended. A nil Shadow has none.
+func (s *Shadow) Wait() {
+	if s != nil {
+		s.wg.Wait()
+	}
+}
+
 func (s *Shadow) run(call shadowCall) {
 	defer s.wg.Done()
 	defer func() { <-s.slots }()

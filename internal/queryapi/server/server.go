@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -395,12 +394,11 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		if edgeErr != nil {
 			return fail(edgeErr)
 		}
-		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, graphQLEdgeDeps{
-			auth:        edgeAuth,
-			corsOrigins: corsAllowedOrigins(lookup),
-			maxBytes:    graphQLMaxQueryBytes(getenv),
-			logger:      slog.Default(),
-		})
+		edgeDeps, depsErr := newGraphQLEdgeDeps(getenv, lookup, edgeAuth)
+		if depsErr != nil {
+			return fail(depsErr)
+		}
+		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, edgeDeps)
 		ready = readyFn
 		probes = handlers.Probes
 		registryPool = handlers.RegistryPool

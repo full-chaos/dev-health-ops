@@ -107,12 +107,15 @@ func (w *wholeResponse) send() {
 
 // graphQLEdgeDeps is what /graphql's request middleware needs beyond the
 // /query pipeline: the edge authenticator the org scope and impersonation
-// middlewares read the caller with, the CORS allow-list, the body limit.
+// middlewares read the caller with, the CORS allow-list, the body limit, and
+// whether the impersonation middleware refuses the legacy impersonation
+// caller (AUTH_PROXY_IMPERSONATION, policy.Scope.RefuseLegacyImpersonation).
 type graphQLEdgeDeps struct {
-	auth        *policy.Authenticator
-	corsOrigins []string
-	maxBytes    int
-	logger      *slog.Logger
+	auth                      *policy.Authenticator
+	corsOrigins               []string
+	maxBytes                  int
+	logger                    *slog.Logger
+	refuseLegacyImpersonation bool
 }
 
 // graphQLEdgeChain is /graphql with the Python api's request middleware, in

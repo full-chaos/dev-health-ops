@@ -426,6 +426,46 @@ func TestCompatRefreshOfAGoneOrDisabledUserRevokesTheSession(t *testing.T) {
 	}
 }
 
+// The store refuses an auth-service credential whose public user is inactive or
+// gone under the session lock (D6651) and names the locked session: go-api's
+// answer and row come from the route's own read of the user, and the session
+// is revoked, as for a user the store served.
+func TestCompatRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
+	for golden, mutate := range map[string]func(*fixture){
+		"refresh: live jti, subject no user": func(f *fixture) { delete(f.users.users, f.principal) },
+		"refresh: judy deactivated": func(f *fixture) {
+			user := f.users.users[f.principal]
+			user.IsActive = false
+			f.users.users[f.principal] = user
+		},
+	} {
+		f := newCompatFixture(t)
+		mutate(f.fixture)
+		f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+		response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+		expectGolden(t, response, response.Body.Bytes(), golden)
+		if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+			t.Fatalf("%s: revoked %v, want the session", golden, f.sessions.revoked)
+		}
+	}
+}
+
+// A store refusal (D6651) whose public user the route reads active (a
+// concurrent change) mints nothing, answers go-api's generic 401 and revokes the
+// locked session the store named.
+func TestCompatRefreshOfAStoreRefusedUserReadActiveRevokesTheSession(t *testing.T) {
+	f := newCompatFixture(t)
+	f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+	response := f.do(http.MethodPost, PatternCompatRefresh, `{"refresh_token":"`+credential()+`"}`, nil)
+	expectGolden(t, response, response.Body.Bytes(), "refresh: garbage")
+	if len(f.sessions.revoked) != 1 || f.sessions.revoked[0] != f.record.ID {
+		t.Fatalf("revoked %v, want the locked session %s", f.sessions.revoked, f.record.ID)
+	}
+	if f.sessions.minted != 0 {
+		t.Fatalf("%d successors minted, want 0", f.sessions.minted)
+	}
+}
+
 func TestCompatRefreshAnswersGoAPIsBodyWithTheRotatedCredential(t *testing.T) {
 	f := newCompatFixture(t)
 	rotated := "dhr1_" + strings.Repeat("r", 43)
@@ -914,6 +954,7 @@ func TestCompatSocialLoginValidatesTheBodyAsGoAPIDoes(t *testing.T) {
 // same path as a refused password sign-in; an operational failure (5xx) is no
 // sign-in decision and writes none.
 func TestCompatSocialRefusalsAreAuditedLikeEveryOtherSignInRefusal(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		err      error
@@ -1509,6 +1550,7 @@ func (f faultUsers) Memberships(context.Context, uuid.UUID) ([]Membership, error
 // and an audit row in both cases (the known one then without the organization,
 // or without the subject). A failing audit write fails both the same way.
 func TestARefusedSignInAnswersTheSameForAnUnknownAndAKnownAddressUnderAStoreFault(t *testing.T) {
+	t.Parallel()
 	faults := map[string]func(f *compatFixture){
 		"membership read": func(f *compatFixture) {
 			f.usersWrap = faultUsers{fakeUsers: f.users, err: context.DeadlineExceeded}

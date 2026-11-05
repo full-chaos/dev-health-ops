@@ -68,6 +68,7 @@ func buildDailyWorker(
 	if !queueSelected(cfg.Queues, metricsQueue) || registry == nil {
 		return workerFamily{}, nil
 	}
+	var reconcileProbeStop func() error
 	var drainTriggers dailyDrainTriggers
 	if workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
@@ -383,6 +384,10 @@ func buildDailyWorker(
 				if _, ageErr := refresh.RegisterAgeProbe(otel.GetMeterProvider().Meter("github.com/full-chaos/dev-health-ops/internal/orgactivity/refresh"),
 					postgresDatabase.pools.Domain, logger, nil); ageErr != nil {
 					logger.Warn("org activity age gauge not registered", "error", ageErr)
+				}
+				// CHAOS-10897: the External Push projection drift probe; off unless PUSH_RECONCILE_PROBE=on.
+				if reconcileProbeStop == nil {
+					reconcileProbeStop = startPushReconcileProbe(context.Background(), postgresDatabase.pools.Domain, logger)
 				}
 				drainTriggers.finalize = handler
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
@@ -894,6 +899,9 @@ func buildDailyWorker(
 	}
 
 	var cleanups []func() error
+	if reconcileProbeStop != nil {
+		cleanups = append(cleanups, reconcileProbeStop)
+	}
 	if metricsClickHouse != nil {
 		cleanups = append(cleanups, metricsClickHouse.Close)
 	}

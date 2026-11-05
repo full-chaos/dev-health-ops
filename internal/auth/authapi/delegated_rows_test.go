@@ -24,6 +24,7 @@ var bearerRowOperations = map[string]string{
 	opSwitchOrg:        "POST /api/v1/auth/switch-org",
 	opSocialLink:       "POST /v1/identities/social",
 	opSocialUnlink:     "DELETE /v1/identities/social/{id}",
+	oauthOpConsent:     "POST " + PatternOAuthAuthorize,
 }
 
 type profileRow struct {

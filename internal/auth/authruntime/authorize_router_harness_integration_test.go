@@ -141,15 +141,18 @@ VALUES ($1, $2, NULL, 'local', true, true, $3, 0, now(), now())`, id, "az-"+id.S
 	return id
 }
 
-// azOrg seeds go-api's organization row; projected, it is also auth's.
-func (a *azRouterEnv) azOrg(t *testing.T, ctx context.Context, projected bool) uuid.UUID {
+// azOrg seeds go-api's organization row, the authority the decision reads
+// (D6651), and projects it as auth's copy. An organization the state does not
+// know has neither row. A suspended one is inactive in go-api's row.
+func (a *azRouterEnv) azOrg(t *testing.T, ctx context.Context, known, active bool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	a.exec(t, ctx, `INSERT INTO public.organizations (id, slug, name) VALUES ($1, $2, 'az-org')`, id, "az-"+id.String()[:8])
-	if projected {
-		if err := a.identity.ProjectOrganization(ctx, id); err != nil {
-			t.Fatalf("project the organization: %v", err)
-		}
+	if !known {
+		return id
+	}
+	a.exec(t, ctx, `INSERT INTO public.organizations (id, slug, name, is_active) VALUES ($1, $2, 'az-org', $3)`, id, "az-"+id.String()[:8], active)
+	if err := a.identity.ProjectOrganization(ctx, id); err != nil {
+		t.Fatalf("project the organization: %v", err)
 	}
 	return id
 }

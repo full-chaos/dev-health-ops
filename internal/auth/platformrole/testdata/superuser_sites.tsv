@@ -29,6 +29,7 @@ internal/api/session/tokens.go	accessClaims	1
 internal/api/session/tokens.go	userInfo	1
 internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1
 internal/apiservice/admin/impersonation.go	handlers.startImpersonation	1
+internal/apiservice/admin/impersonation_delegated.go	handlers.startDelegatedImpersonation	1
 internal/apiservice/admin/operator.go	userView	1
 internal/apiservice/admin/store.go	pgStore.userByID	1
 internal/apiservice/admin/users.go	handlers.updateUser	2
@@ -63,3 +64,6 @@ internal/queryapi/server/internal_auth.go	authenticateInternalRequest	1
 internal/queryapi/server/internal_auth.go	checkEdgeCarrier	2
 internal/queryapi/server/internal_auth.go	liveScope	1
 internal/queryapi/server/mcp_route.go	mcpAuthenticate	1
+internal/testsupport/venueoracle/gosubstrate.go	Venue.mintGo	1
+internal/testsupport/venueoracle/gosubstrate.go	Venue.mintLegacy	1
+internal/testsupport/venueoracle/gosubstrate.go	legacyClaims.recordedIdentity	1

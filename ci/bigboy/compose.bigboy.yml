@@ -141,6 +141,10 @@ networks:
   acr:
     driver: bridge
     name: dev-health-acr
+  auth_plane:
+    driver: bridge
+  acr_auth_workload:
+    driver: bridge
 services:
   bugsink:
     container_name: bugsink
@@ -223,9 +227,12 @@ services:
     - path: ./.go-api-dev/go-api.env
       required: true
     environment:
+    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
+    - AUTH_ACR_WORKLOAD_SUBJECT=${AUTH_ACR_WORKLOAD_SUBJECT:-}
     - CORS_ALLOWED_ORIGINS=http://localhost:3000
     - DEV_HEALTH_API_INTERNAL_ADDR=:8091
     - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
+    - SSL_CERT_DIR=/run/auth-issuer-ca
     - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
     - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
     image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
@@ -246,6 +253,13 @@ services:
       published: '8093'
       target: 8000
     restart: unless-stopped
+    volumes:
+    - type: bind
+      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/ca
+      target: /run/auth-issuer-ca
+      read_only: true
+      bind:
+        create_host_path: false
   go-contractcheck:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
@@ -1471,6 +1485,7 @@ services:
       timeout: 5s
     image: postgres:18-alpine
     networks:
+      auth_plane: null
       dev-health: null
     ports:
     - ${POSTGRES_PORT:-5432}:5432
@@ -1880,7 +1895,7 @@ services:
     working_dir: /smoke
   # ---- the acr venue stack (CHAOS-10004): was the compose project dev-health-acr-mcp on this host ----
   # Profiles: `acr` starts everything; `acr-venue` starts only what must exist before acr-api (the database, its roles, the
-  # migrations, the grants, the entitlement stand-in). Start with plain docker compose:
+  # migrations, the grants). Start with plain docker compose:
   #   docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env \
   #     -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
   # Every long-running service is in `acr` (a service whose dependency is in an inactive profile is an invalid project, so
@@ -1890,15 +1905,15 @@ services:
   # Hostnames: container_name is the old project's name, and the aliases `postgres` and `falkordb` exist on the acr network
   # only (the dev-health `postgres` stays unreachable from the acr services), so no acr setting changes.
   # acr-api talks to the REAL ops (the venue moved off the stand-in, CHAOS-10004): ACR_DEV_HEALTH_ENTITLEMENT_URL defaults to the go-api
-  # internal listener by alias, http://go-api:8091 (acr-api is on dho-query-internal, where go-api listens), and the bearer is the
-  # file-backed secret acr_ops_svc_token (only its host path is here, ACR_OPS_SVC_TOKEN_FILE overrides it). CHAOS-9989:
-  # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE is passed through, EMPTY unless the environment sets it (empty = acr's own behaviour);
-  # no tracked env file sets it, and none may on bigboy (chris: a persistent BYO setting bills his key). `ops` makes acr read an
-  # org's BYO LLM config from ops' internal route with that token (it needs the scope llm_config:read); set it for one run in the
-  # environment of the `docker compose up`, never in a file that stays. The entitlement stand-in is no longer
-  # needed by acr-api (no dependency, no URL): it stays defined, in profile acr-venue, so a rollback is
-  # two env values and a start of the stand-in: ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088 and
-  # ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token.
+  # internal listener by alias, http://go-api:8091 (acr-api is on dho-query-internal, where go-api listens), and the bearer is a
+  # workload token (CHAOS-12976, the prod shape): ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload, and acr-api exchanges the Compose
+  # bootstrap credential of the workload acr-api (the volume acr_workload_bootstrap, written by acr-workload-bootstrap, profile auth)
+  # at auth-service (the auth venue below) for a token of audience dev-health-api. go-api verifies it against the issuer's JWKS and
+  # the pinned subject AUTH_ACR_WORKLOAD_SUBJECT. There is no service token. CHAOS-12997: acr reads an org's BYO LLM config from ops'
+  # internal route with that token (scope llm_config:read) whenever it has an entitlement client; the
+  # ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE setting was removed from acr and is not passed.
+  # The entitlement stand-in is gone (CHAOS-12976): prod has none (deploy values.acr-prod.yaml "No stand-in on prod"), and it checked
+  # a static bearer where acr-api now sends a workload token.
   # Every acr image is pinned by registry digest in the pins file _records/images.env (BIGBOY_ACR_API_IMAGE, BIGBOY_ACR_MCP_IMAGE, BIGBOY_ACR_POSTGRES_IMAGE,
   # BIGBOY_ACR_FALKORDB_IMAGE, BIGBOY_ACR_NGINX_IMAGE); each is REQUIRED (`:?`): with a pin missing every compose command fails, naming it, instead of
   # a default tag that could start a wrong image. So the acr lines must be in a host's _records/images.env BEFORE its checkout holds this file.
@@ -2037,41 +2052,6 @@ services:
     - type: bind
       source: /var/lib/oci-cache/mcp-venue/postgres-data
       target: /var/lib/postgresql
-  acr-entitlement-standin:
-    container_name: dev-health-acr-mcp-acr-entitlement-standin-1
-    command:
-    - |
-      set -eu
-      T="$$(cat /run/secrets/acr_entitlement_token)"
-      sed "s|@TOKEN@|$$T|" /tpl/nginx.conf.tpl > /tmp/nginx.conf
-      exec nginx -c /tmp/nginx.conf -g 'daemon off;'
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-        reservations:
-          cpus: 0.01
-          memory: 16M
-    entrypoint: [/bin/sh, -c]
-    healthcheck:
-      interval: 10s
-      retries: 5
-      test: [CMD, wget, --spider, -q, 'http://127.0.0.1:8088/healthz']
-      timeout: 5s
-    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
-    networks:
-      acr: null
-    profiles: [acr, acr-venue]
-    restart: unless-stopped
-    secrets: [acr_entitlement_token]
-    volumes:
-    - type: bind
-      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/acr-entitlement-standin/nginx.conf.tpl
-      target: /tpl/nginx.conf.tpl
-      read_only: true
-    - type: volume
-      source: acr_entitlement_tmp
-      target: /tmp
   acr-api:
     container_name: dev-health-acr-mcp-acr-api-1
     command: [serve]
@@ -2090,6 +2070,10 @@ services:
           memory: 128M
     environment:
       ACR_ADDR: :8080
+      ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: 'true'
+      ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/acr-api.bootstrap
+      ACR_AUTH_WORKLOAD_EXCHANGE_URL: http://auth-service:8095
+      ACR_AUTH_WORKLOAD_ISSUER: https://auth.bigboy.internal:8443
       ACR_CLICKHOUSE_DSN_FILE: /run/secrets/acr_clickhouse_dsn
       ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
       ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: 'true'
@@ -2103,11 +2087,10 @@ services:
       ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS: '1'
       ACR_CONTEXT_FABRIC_MODEL_PROVIDER: openai
       ACR_CONTEXT_FABRIC_MODEL_TIMEOUT: 100s
-      ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE: ${ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE:-}
       ACR_DATA_GRAPHQL_URL: http://query-api:8096
       ACR_DATA_QUERY_TIMEOUT: 30s
       ACR_DATA_QUERY_URL: http://query-api:8095
-      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_svc_token
+      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload
       ACR_DEV_HEALTH_ENTITLEMENT_URL: ${ACR_DEV_HEALTH_ENTITLEMENT_URL:-http://go-api:8091}
       ACR_DEVICE_VERIFICATION_URL: http://127.0.0.1:8081/device
       ACR_ENABLE_EPISODE_WRITEBACK: 'false'
@@ -2123,6 +2106,7 @@ services:
     image: ${BIGBOY_ACR_API_IMAGE:?BIGBOY_ACR_API_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     networks:
       acr: null
+      acr_auth_workload: null
       dho-clickhouse-readers: null
       dho-query-internal: null
     profiles: [acr]
@@ -2132,10 +2116,14 @@ services:
     - acr_clickhouse_dsn
     - acr_evidence_active_kid
     - acr_evidence_keys
-    - acr_ops_svc_token
     - acr_openai_api_key
     - acr_falkordb_password
     user: 1001:1001
+    volumes:
+    - type: volume
+      source: acr_workload_bootstrap
+      target: /run/workload
+      read_only: true
     working_dir: /tmp
   acr-projector:
     container_name: dev-health-acr-mcp-acr-projector-1
@@ -2248,6 +2236,326 @@ services:
       protocol: tcp
     profiles: [acr]
     restart: unless-stopped
+  # ---- the auth venue (CHAOS-12976): auth-service and the workload token of acr-api, the prod target shape ----
+  # The services of ops compose.yml's `auth` profile (auth-keys-init, auth-provision, auth-owner-grants, auth-migrate, auth-grants,
+  # auth-fence-init, auth-workload-seed, auth-service), the acr-api bootstrap pair of acr deploy/compose/acr-auth-workload.compose.yml
+  # (acr-workload-volume, acr-workload-bootstrap), and auth-issuer, the https origin of the token issuer. All are in profile `auth`;
+  # every command names its services, as everywhere in this file:
+  #   docker compose -p dev-health ... -f ops/ci/bigboy/compose.bigboy.yml --profile auth up -d --no-deps --no-build <service>
+  # Order: auth-keys-init, auth-provision, auth-owner-grants (after the ops `migrate`), auth-migrate, auth-grants, auth-fence-init,
+  # auth-workload-seed, auth-service, auth-issuer; then once `run --rm acr-workload-bootstrap` (never a depends_on: a later `up`
+  # would run bootstrap-create again, and it refuses a workload with a live credential); then the prn_ id of the workload acr-api
+  # goes into AUTH_ACR_WORKLOAD_SUBJECT (ops/.env) and go-api and acr-api are recreated. README "auth venue" has the commands.
+  # Isolation (CHAOS-4886): auth-service and the auth one-shots are on auth_plane, where only postgres joins them. acr-api reaches
+  # auth-service on acr_auth_workload (only the two of them; acr-api never joins auth_plane). go-api reaches the issuer origin
+  # (auth-issuer, alias auth.bigboy.internal on dev-health), which forwards only the discovery and JWKS documents.
+  # Values: the issuer https://auth.bigboy.internal:8443 is a signed claim; auth-service, go-api and acr-api carry the same literal.
+  # The signing key is made in the venue (auth-keys-init, volume auth_signing_keys); the TLS pair of auth-issuer is a host test pair
+  # (README); the database logins have the local test passwords of compose.yml. No prod secret is in the venue.
+  auth-keys-init:
+    cap_drop: [ALL]
+    command:
+    - mint
+    - envelope-keys
+    - --dir=/var/lib/dev-health/envelope-keys
+    - --key-id=auth-signing-bigboy
+    - --skip-existing
+    image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
+    network_mode: none
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+    volumes:
+    - type: volume
+      source: auth_signing_keys
+      target: /var/lib/dev-health/envelope-keys
+  auth-provision:
+    cap_drop: [ALL]
+    command:
+    - |
+      psql -v ON_ERROR_STOP=1 <<'SQL'
+      \getenv role AUTH_RUNTIME_DATABASE_ROLE
+      \getenv pw AUTH_RUNTIME_DATABASE_PASSWORD
+      SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'role', :'pw')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role') \gexec
+      SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'role', :'pw') \gexec
+      \getenv mrole AUTH_MIGRATION_DATABASE_ROLE
+      \getenv mpw AUTH_MIGRATION_DATABASE_PASSWORD
+      \getenv schema AUTH_DATABASE_SCHEMA
+      SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'mrole', :'mpw')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'mrole') \gexec
+      SELECT format('ALTER ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'mrole', :'mpw') \gexec
+      SELECT format('CREATE SCHEMA %I AUTHORIZATION %I', :'schema', :'mrole')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :'schema') \gexec
+      SQL
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: [/bin/sh, -ec]
+    environment:
+      AUTH_DATABASE_SCHEMA: auth
+      AUTH_MIGRATION_DATABASE_PASSWORD: ${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}
+      AUTH_MIGRATION_DATABASE_ROLE: devhealth_auth_migrator
+      AUTH_RUNTIME_DATABASE_PASSWORD: ${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}
+      AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
+      PGDATABASE: ${POSTGRES_DB:-devhealth}
+      PGHOST: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-devhealth}
+      PGPORT: '5432'
+      PGUSER: ${POSTGRES_USER:-devhealth}
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: '70:70'
+  auth-owner-grants:
+    cap_drop: [ALL]
+    command: [owner-move, -from, '${POSTGRES_USER:-devhealth}', -to, devhealth_auth_migrator, -grants-only, -apply]
+    depends_on:
+      auth-provision:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      AUTH_DATABASE_SCHEMA: auth
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${POSTGRES_USER:-devhealth} password='${POSTGRES_PASSWORD:-devhealth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+      AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+  auth-migrate:
+    cap_drop: [ALL]
+    depends_on:
+      auth-owner-grants:
+        condition: service_completed_successfully
+      auth-provision:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment: &auth-migration-env
+      AUTH_DATABASE_SCHEMA: auth
+      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=devhealth_auth_migrator password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+      AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
+      AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator
+      AUTH_USERS_OWNED: 'false'
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+  auth-grants:
+    cap_drop: [ALL]
+    command: [grants]
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    environment: *auth-migration-env
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+  auth-fence-init:
+    cap_drop: [ALL]
+    command: [restore-fence, init, -if-absent]
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+    environment: *auth-migration-env
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+  auth-workload-seed:
+    cap_drop: [ALL]
+    command: [workloads, seed, -apply]
+    depends_on:
+      auth-grants:
+        condition: service_completed_successfully
+    environment: *auth-migration-env
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+  # The bootstrap credential of the workload acr-api, written into the volume acr_workload_bootstrap (0600) as uid 1001: the uid
+  # acr-api runs as here (it reads the 0600 host secret files of ubuntu). auth-service never mounts the volume; acr-api mounts it
+  # read-only. Run it once, with `run --rm`; a re-create after expiry is the README "auth venue" procedure.
+  acr-workload-volume:
+    cap_add: [CHOWN]
+    cap_drop: [ALL]
+    command: ['[ "$$(stat -c %u:%a /run/workload)" = 1001:700 ] || { chmod 0700 /run/workload && chown 1001:1001 /run/workload; }']
+    entrypoint: [/bin/sh, -eu, -c]
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    network_mode: none
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    user: '0:0'
+    volumes:
+    - type: volume
+      source: acr_workload_bootstrap
+      target: /run/workload
+  acr-workload-bootstrap:
+    cap_drop: [ALL]
+    command: [workloads, bootstrap-create, -workload, acr-api, -out, /run/workload/acr-api.bootstrap, -apply]
+    depends_on:
+      acr-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+    environment: *auth-migration-env
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 1001:1001
+    volumes:
+    - type: volume
+      source: acr_workload_bootstrap
+      target: /run/workload
+  # The workload-token exchange runs with the Compose bootstrap credential subject (AUTH_WORKLOAD_BOOTSTRAP); AUTH_WORKLOAD_EXCHANGE
+  # (the Kubernetes TokenReview subject) stays off: there is no cluster. The API listener :8095 is reached by acr-api
+  # (acr_auth_workload) and by auth-issuer (auth_plane); no port is published.
+  auth-service:
+    cap_drop: [ALL]
+    depends_on:
+      auth-fence-init:
+        condition: service_completed_successfully
+      auth-grants:
+        condition: service_completed_successfully
+      auth-keys-init:
+        condition: service_completed_successfully
+    environment:
+      AUTH_DATABASE_SCHEMA: auth
+      AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+      AUTH_SERVICE_HTTP_ADDR: :8095
+      AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096
+      AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
+      AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
+      AUTH_SIGNING_KEY_ID: auth-signing-bigboy
+      AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
+      AUTH_USERS_OWNED: 'false'
+      AUTH_WORKLOAD_BOOTSTRAP: 'true'
+      OTEL_ENABLED: 'false'
+    healthcheck:
+      interval: 10s
+      retries: 3
+      start_period: 10s
+      test: [CMD, /usr/local/bin/auth-service, --healthcheck]
+      timeout: 5s
+    image: '${BIGBOY_AUTH_SERVICE_IMAGE:?BIGBOY_AUTH_SERVICE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      acr_auth_workload: null
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+    volumes:
+    - type: volume
+      source: auth_signing_keys
+      target: /run/auth/signing
+      read_only: true
+      volume:
+        subpath: private
+  # The https origin of the issuer, as prod's issuer host (deploy values.prod.yaml, CHAOS-12359): exactly the two public
+  # documents of auth-service, nothing else. go-api's JWKS client dials https only, so the issuer cannot be auth-service's plain
+  # listener. The TLS pair is a host test pair under BIGBOY_AUTH_ISSUER_TLS_DIR (README "auth venue"); go-api trusts its ca/
+  # directory through SSL_CERT_DIR, which keeps the image's own CA file. Runs as 1001 so the key file stays 0600.
+  auth-issuer:
+    cap_drop: [ALL]
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    entrypoint: [sh, -c, 'printf "%s\n" "$$AUTH_ISSUER_NGINX_CONF" > /tmp/auth-issuer.conf && exec nginx -e /dev/stderr -c /tmp/auth-issuer.conf -g "daemon off;"']
+    environment:
+      AUTH_ISSUER_NGINX_CONF: |
+        worker_processes 1;
+        pid /tmp/nginx.pid;
+        events { worker_connections 128; }
+        http {
+          access_log off;
+          client_body_temp_path /tmp/client_body;
+          proxy_temp_path /tmp/proxy;
+          fastcgi_temp_path /tmp/fastcgi;
+          uwsgi_temp_path /tmp/uwsgi;
+          scgi_temp_path /tmp/scgi;
+          resolver 127.0.0.11 valid=1s ipv6=off;
+          server {
+            listen 8443 ssl;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_certificate /run/tls/issuer.pem;
+            ssl_certificate_key /run/tls/issuer.key;
+            set $$auth_upstream http://auth-service:8095;
+            location = /.well-known/openid-configuration { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
+            location = /.well-known/jwks.json { proxy_pass $$auth_upstream; proxy_http_version 1.1; }
+            location / { return 404; }
+          }
+        }
+    image: ${BIGBOY_ACR_NGINX_IMAGE:?BIGBOY_ACR_NGINX_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    networks:
+      auth_plane: null
+      dev-health:
+        aliases: [auth.bigboy.internal]
+    profiles: [auth]
+    read_only: true
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 1001:1001
+    volumes:
+    - type: bind
+      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/ca/issuer.pem
+      target: /run/tls/issuer.pem
+      read_only: true
+      bind:
+        create_host_path: false
+    - type: bind
+      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/key/issuer.key
+      target: /run/tls/issuer.key
+      read_only: true
+      bind:
+        create_host_path: false
 volumes:
   clickhouse_data:
     driver: local
@@ -2255,8 +2563,10 @@ volumes:
     driver: local
   valkey_data:
     driver: local
-  acr_entitlement_tmp:
-    name: dev-health-acr-entitlement-tmp
+  auth_signing_keys:
+    driver: local
+  acr_workload_bootstrap:
+    driver: local
 secrets:
   acr_postgres_password:
     file: ${ACR_POSTGRES_ADMIN_PASSWORD_FILE:-/var/lib/oci-cache/mcp-venue/secrets/postgres_admin_password}
@@ -2276,10 +2586,6 @@ secrets:
     file: ${ACR_EVIDENCE_KEYS_FILE:-/var/lib/oci-cache/mcp-venue/secrets/evidence_keys}
   acr_openai_api_key:
     file: /var/lib/oci-cache/mcp-venue/secrets/openai_api_key
-  acr_entitlement_token:
-    file: ${ACR_ENTITLEMENT_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/entitlement_token}
-  acr_ops_svc_token:
-    file: ${ACR_OPS_SVC_TOKEN_FILE:-/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token}
   acr_falkordb_acl:
     file: ${ACR_FALKORDB_ACL_FILE:-/var/lib/oci-cache/mcp-venue/secrets/falkordb_acl}
   acr_falkordb_password:

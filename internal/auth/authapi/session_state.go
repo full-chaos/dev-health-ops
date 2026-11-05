@@ -27,7 +27,8 @@ const reasonSessionNotFound = "session_not_found"
 // after the session was created), and expired is the rule of authenticate
 // (the effective expiry, the absolute cap or the idle expiry, whichever is
 // first, is not after now). ActorPrincipalID is present only on a delegated
-// session. Ids are canonical UUIDs.
+// session, and ClientClass only on a session with a live OAuth grant (go-api's
+// decoder takes it since CHAOS-12398). Ids are canonical UUIDs.
 type sessionStateAnswer struct {
 	PrincipalID        string  `json:"principal_id"`
 	OrganizationID     *string `json:"organization_id"`
@@ -35,6 +36,7 @@ type sessionStateAnswer struct {
 	Expired            bool    `json:"expired"`
 	LegacyTokenVersion *int64  `json:"legacy_token_version"`
 	ActorPrincipalID   *string `json:"actor_principal_id,omitempty"`
+	ClientClass        string  `json:"client_class,omitempty"`
 }
 
 // withSessionStateRoute mounts the session state route when the embedded
@@ -86,7 +88,7 @@ func (h compatHandlers) sessionState(w http.ResponseWriter, r *http.Request) {
 		h.rec.refuse(w, r, opSessionState, refusal{http.StatusBadRequest, reasonMalformed}, nil)
 		return
 	}
-	record, err := h.Sessions.Current(ctx, id)
+	record, class, err := h.Sessions.CurrentWithClientClass(ctx, id)
 	switch {
 	case errors.Is(err, session.ErrSessionNotFound):
 		h.rec.refuse(w, r, opSessionState, refusal{http.StatusNotFound, reasonSessionNotFound}, nil)
@@ -100,6 +102,7 @@ func (h compatHandlers) sessionState(w http.ResponseWriter, r *http.Request) {
 		Revoked:            record.RevokedAt != nil,
 		Expired:            !record.ExpiresAt.After(h.Issuer.now()),
 		LegacyTokenVersion: record.LegacyTokenVersion,
+		ClientClass:        class,
 	}
 	if record.OrganizationID != nil {
 		org := record.OrganizationID.String()

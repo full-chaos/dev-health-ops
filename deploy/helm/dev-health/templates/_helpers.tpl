@@ -810,7 +810,7 @@ Every env name the chart renders for the go-api container, as a JSON list. goApi
 any case, for the same reason as dev-health.authServiceEnvNames. auth_phase_test.go walks the rendered names. The DSN name is appended, not listed, so the worker DSN list keeps the only listed spelling (a chartgates planted defect edits it).
 */}}
 {{- define "dev-health.goApiEnvNames" -}}
-{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
+{{- $names := list "JWT_SECRET_KEY" "AUTH_DATABASE_SCHEMA" "HIDE_MIGRATED_CHILD_CONFIGS" "SYNC_WATERMARK_OVERLAP" "SYNC_INCREMENTAL_HEAVY_MAX_WINDOW_DAYS" "AUTH_PLATFORM_ROLES_OWNED" "GO_API_AUTHZ_ENFORCE" "AUTH_PROXY_URL" "AUTH_PROXY_SESSIONS" "AUTH_PROXY_LOCAL_LOGIN" "AUTH_PROXY_CREDENTIALS" "AUTH_PROXY_SOCIAL" "AUTH_PROXY_OIDC" "AUTH_PROXY_SAML" "AUTH_PROXY_ORG_PROVISIONING" "AUTH_SESSION_ISSUE_TOKEN" "AUTH_USERS_OWNED" "AUTH_ACCESS_TOKEN_ISSUER" "TRUSTED_PROXIES_NETWORK_FENCED" -}}
 {{- $names = (append $names "API_DATABASE_URI") }}{{- toJson $names -}}
 {{- end -}}
 
@@ -917,6 +917,18 @@ true
 {{- end -}}
 
 {{/*
+The go-api enforcement list as one comma list, "" when empty (authService.enforce.goApi). A non-empty list needs
+AUTH_PROXY_URL on go-api, so it is refused unless go-api reaches auth-service. Rendered as GO_API_AUTHZ_ENFORCE.
+*/}}
+{{- define "dev-health.authzEnforceGoApi" -}}
+{{- $list := default (list) (default dict .Values.authService.enforce).goApi -}}
+{{- if $list -}}
+{{- if ne (include "dev-health.authProxyOn" .) "true" }}{{- fail "authService.enforce.goApi needs go-api to reach auth-service: set authService.phase to 2 or higher" }}{{- end -}}
+{{- join "," $list -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 "true" when authService.revisionFeed.enabled renders AUTH_REVISION_FEED=on on auth-service, else "". templates/auth-revision-feed-guard.yaml
 runs it on every render, so a switch that auth-service would not carry (phase 0 renders no auth-service) fails instead of being dropped.
 */}}
@@ -931,13 +943,16 @@ true
 {{- end -}}
 
 {{/*
-"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused (CHAOS-12678).
+"true" when authService.ssoJit is on, else "". The one read of the switch. true is refused unless users are owned
+(authOn usersOwned): go-api refuses its own sign-in join and account create while AUTH_USERS_OWNED is on (internal/api/sso/provision.go),
+and go-api has that switch from stage goApi, before auth-service owns users, so auth-service is then the only writer.
 */}}
 {{- define "dev-health.ssoJit" -}}
 {{- $v := .Values.authService.ssoJit -}}
 {{- if not (kindIs "bool" $v) }}{{- fail "authService.ssoJit must be true or false" }}{{- end -}}
 {{- if $v -}}
-{{- fail "authService.ssoJit=true is refused at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race; phase 5 (orgs owned) is cancelled (D6651)" -}}
+{{- if ne (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}{{- fail "authService.ssoJit=true needs users owned: authService.phase 4 with authService.usersOwnedStage=owned (below it go-api's own sign-in join still writes, and two writers would race)" }}{{- end -}}
+true
 {{- end -}}
 {{- end -}}
 
@@ -1136,6 +1151,31 @@ the trust domain and cluster issuer named, the API server an https origin, and a
 {{- range $i, $peer := $k.to }}{{- if not (and (kindIs "map" $peer) (gt (len $peer) 0)) }}{{- fail (printf "authService.networkPolicy.egress.kubeAPI.to[%d] must be a non-empty NetworkPolicy peer (podSelector, namespaceSelector or ipBlock): an empty peer admits every destination" $i) }}{{- end }}{{- end -}}
 {{- $port := $k.port -}}
 {{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.networkPolicy.egress.kubeAPI.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- end -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
+"true" while auth-service's internal listener is on (authService.internal), "" while it is off; fails the render on a
+setting the listener cannot run with. The listener serves the service-to-service routes alone and trusts no forwarded
+address, so its own NetworkPolicy, admitting the listed peer workloads only, is part of it.
+*/}}
+{{- define "dev-health.authInternal" -}}
+{{- $in := default dict .Values.authService.internal -}}
+{{- if eq (include "dev-health.authBool" (dict "value" (ternary $in.enabled false (hasKey $in "enabled")) "key" "authService.internal.enabled")) "true" -}}
+{{- if not (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") }}{{- fail "authService.internal.enabled needs authService.phase >= 1: there is no auth-service to listen" }}{{- end -}}
+{{- if not .Values.authService.networkPolicy.enabled }}{{- fail "authService.internal.enabled needs authService.networkPolicy.enabled: the internal port is open only to authService.internal.peers, by its own NetworkPolicy" }}{{- end -}}
+{{- $port := $in.port -}}
+{{- if or (not (or (kindIs "float64" $port) (kindIs "int64" $port) (kindIs "int" $port))) (ne (floor $port) (float64 $port)) (lt (int $port) 1) (gt (int $port) 65535) }}{{- fail "authService.internal.port must be a whole number from 1 to 65535" }}{{- end -}}
+{{- if has (int $port) (list (int .Values.authService.port) (int .Values.authService.operatorPort)) }}{{- fail "authService.internal.port must differ from authService.port and authService.operatorPort" }}{{- end -}}
+{{- if not (kindIs "slice" $in.peers) }}{{- fail "authService.internal.peers must be a list of workload names (web, query-api, go-api)" }}{{- end -}}
+{{- if not $in.peers }}{{- fail "authService.internal.peers must name at least one workload (web, query-api, go-api): the internal port admits only the listed peers" }}{{- end -}}
+{{- $seen := dict -}}
+{{- range $in.peers }}
+{{- if not (and (kindIs "string" .) (has . (list "web" "query-api" "go-api"))) }}{{- fail (printf "authService.internal.peers: %v is not one of web, query-api, go-api" .) }}{{- end -}}
+{{- if hasKey $seen . }}{{- fail (printf "authService.internal.peers lists %s twice" .) }}{{- end -}}
+{{- $_ := set $seen . true -}}
 {{- end -}}
 true
 {{- end -}}

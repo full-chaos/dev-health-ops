@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -456,6 +456,10 @@ usage() {
          Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
          CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
          line without a cap. ci/check_golden_drift.sh takes it once for its rows.
+  census-ops
+         (CHAOS-12939) The ops census: go test -count=1 over ./internal/cigates/... ./internal/testsupport/...
+         ./internal/httpguard/... with the -timeout of cigates_go_test_timeout (20m while the cigates packages
+         are listed).
   job-timeout MINUTES
          Print the go test -timeout, in seconds, of one integration call whose
          own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
@@ -842,6 +846,18 @@ cigates_go_test_timeout() {
     esac
   done
   printf '10m\n'
+}
+
+# check_census_ops: the ops census (CHAOS-12939): go test over the cigates, testsupport and httpguard packages with the
+# -timeout of cigates_go_test_timeout, so a caller with no -timeout of its own never meets the 10m default in internal/cigates/scripts.
+check_census_ops() {
+  local modpath cmd=(go test -mod=readonly -trimpath -count=1)
+  [ "$#" -eq 0 ] || die "census-ops accepts no arguments"
+  modpath="$(awk '$1 == "module" { print $2; exit }' "${ROOT}/go.mod")"
+  [ -n "${modpath}" ] || die "no module line in ${ROOT}/go.mod"
+  cmd+=(-timeout "$(cigates_go_test_timeout "${modpath}/internal/cigates/..." "${modpath}/internal/testsupport/..." "${modpath}/internal/httpguard/...")")
+  cmd+=(./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/...)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOENV=off GOWORK=off "${cmd[@]}")
 }
 
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
@@ -2423,6 +2439,13 @@ go_run_name_ok() {
   [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
 }
 
+# byte_len STRING: sets BYTE_LEN to the length of STRING in bytes. ${#var} counts characters under a UTF-8 locale, and the
+# -run budget is in bytes (Linux refuses one argument over 128 KiB).
+byte_len() {
+  local LC_ALL=C
+  BYTE_LEN=${#1}
+}
+
 # go_test_name_ok NAME: go_run_name_ok for a "Test" name.
 go_test_name_ok() {
   case "$1" in Test*) go_run_name_ok "$1" ;; *) return 1 ;; esac
@@ -2651,7 +2674,8 @@ run_integration_packages() {
       [ -n "${name}" ] || continue
       [ -z "${seen[${name}]+set}" ] || continue
       seen["${name}"]=1
-      names_len=$((names_len + ${#name} + 1))
+      byte_len "${name}"
+      names_len=$((names_len + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     [ $((names_len + 4)) -le "${regex_max}" ] \
       || die "${label}: the selected test names of ${key} alone exceed the ${regex_max}-byte -run budget"
@@ -2678,7 +2702,7 @@ run_integration_packages() {
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
         if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0 why="collision ${name} ${skipped_in[${group}|${name}]}"; break; fi
-        [ -n "${selected_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
+        if [ -z "${selected_in[${group}|${name}]+set}" ]; then byte_len "${name}"; size=$((size + BYTE_LEN + 1)); fi
       done <<<"${select_names[${pkg}]}"
       if [ "${fits}" -eq 1 ] && [ "${size}" -gt "${regex_max}" ]; then fits=0 why="budget ${size}"; fi
       if [ "${fits}" -eq 1 ]; then
@@ -2699,7 +2723,8 @@ run_integration_packages() {
       [ -z "${selected_in[${group}|${name}]+set}" ] || continue
       selected_in["${group}|${name}"]="${key}"
       group_regex[group]+="${group_regex[${group}]:+|}${name}"
-      group_size[group]=$((group_size[group] + ${#name} + 1))
+      byte_len "${name}"
+      group_size[group]=$((group_size[group] + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
@@ -5250,6 +5275,10 @@ case "${1:-all}" in
     ;;
   integration-vet)
     check_integration_vet
+    ;;
+  census-ops)
+    shift
+    check_census_ops "$@"
     ;;
   integration-coverage)
     check_integration_coverage

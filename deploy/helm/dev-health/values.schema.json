@@ -60,6 +60,14 @@
         }
       }
     },
+    "queryApi": {
+      "type": "object",
+      "required": ["extraVolumes", "extraVolumeMounts"],
+      "properties": {
+        "extraVolumes": { "type": "array" },
+        "extraVolumeMounts": { "type": "array" }
+      }
+    },
     "goApi": {
       "type": "object",
       "required": ["extraVolumes", "extraVolumeMounts"],
@@ -78,7 +86,17 @@
           "required": ["secretName", "secretKey"],
           "properties": {
             "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
-            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+            "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" },
+            "workloadBootstrap": {
+              "description": "CHAOS-13039: go-api's workload token on the session issue route, from a bootstrap credential file that a Secret mounts. Off renders nothing.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "secretName": { "type": "string", "maxLength": 253, "pattern": "^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*)?$" },
+                "secretKey": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]{0,252}$" }
+              }
+            }
           }
         },
         "shutdownTimeout": { "type": "string", "pattern": "^[1-9][0-9]{0,4}s$" },
@@ -141,12 +159,24 @@
           "enum": ["", "goApi", "owned"]
         },
         "ssoJit": {
-          "description": "Render AUTH_SSO_JIT=true on auth-service. true is refused until CHAOS-12678.",
+          "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",
           "type": "boolean"
         },
         "platformRolesOwned": {
           "description": "CHAOS-12191: render AUTH_PLATFORM_ROLES_OWNED=true on every reader. Refused unless users are owned (the templates check it).",
           "type": "boolean"
+        },
+        "enforce": {
+          "description": "The enforcement switch per action namespace and service. goApi lists the namespaces the policy decision point decides for go-api; empty is every namespace off. Each name is a namespace of the action catalog (contracts/auth/v1/vocabulary/actions.v1.json); the templates refuse a non-empty list without go-api reaching auth-service.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "goApi": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "enum": ["acr", "admin", "analytics", "authz", "billing", "credentials", "git", "integrations", "license", "members", "metrics", "org", "reports", "settings", "teams", "work_items"] }
+            }
+          }
         },
         "revisionFeed": {
           "description": "CHAOS-11816: enabled renders AUTH_REVISION_FEED=on on auth-service. Refused without valkey.secretName (the templates check it).",

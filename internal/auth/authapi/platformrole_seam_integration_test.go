@@ -10,11 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/platformroleseam"
 )
 
-// While owned, StateOn's is_superuser is the auth assignment under the store's
-// rule; off, it is public is_superuser. A failed auth read while owned is the
+// While owned, StateOn's is_superuser is the auth assignment held by an active public.users row; off, it is public is_superuser. A failed auth read while owned is the
 // users store error, never "not a superuser".
 func TestAuthServiceStateOnSameRules(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -25,6 +25,8 @@ func TestAuthServiceStateOnSameRules(t *testing.T) {
 	expired := env.ExpiredUser(ctx, t, true)
 	disabled := env.User(ctx, t, true, true)
 	env.Disable(ctx, t, disabled)
+	inactive := env.User(ctx, t, true, true)
+	pgseed.SetUserState(ctx, t, env.Admin, inactive.String(), false, true, 0)
 	on := PGUsers{Pool: env.Admin, AuthSchema: env.Schema, PlatformRolesOwned: true}
 	off := PGUsers{Pool: env.Admin, AuthSchema: env.Schema}
 	for _, c := range []struct {
@@ -35,7 +37,8 @@ func TestAuthServiceStateOnSameRules(t *testing.T) {
 		{"an assignment, public false", assigned, true, false},
 		{"public superuser, no assignment", publicOnly, false, true},
 		{"an expired assignment", expired, false, true},
-		{"a disabled principal", disabled, false, true},
+		{"a disabled auth copy of an active public user: public wins", disabled, true, true},
+		{"an inactive public user with an assignment", inactive, false, true},
 	} {
 		for _, store := range []PGUsers{on, off} {
 			want := c.off

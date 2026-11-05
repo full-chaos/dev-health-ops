@@ -137,11 +137,8 @@ func Execute(
 			"  AUTH_PLATFORM_ROLES_OWNED (optional, go-api's flag: true narrows the api role's users writes to columns, the superuser column out)\n"+
 			"MIGRATION_DATABASE_URI and the DEV_HEALTH_MIGRATION_PG_* component form are mutually exclusive; set exactly one.\n")
 	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	if code, ok := cli.ParseFlags(flags, stderr, args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "argument error: positional arguments are not accepted")

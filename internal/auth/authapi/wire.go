@@ -89,6 +89,8 @@ type recorder struct {
 	// retiredRefusals counts, by operation, the session route requests refused because they presented the retired
 	// session issuer credential.
 	retiredRefusals metric.Int64Counter
+	// revocationLag is the lag of a refused revoked session (revocation_lag.go).
+	revocationLag metric.Float64Histogram
 }
 
 func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
@@ -105,7 +107,11 @@ func newRecorder(logger *slog.Logger, meter metric.Meter) (recorder, error) {
 	for _, op := range []string{opSessionIssue, opSessionState, opDelegatedStart, opDelegatedEnd} {
 		retiredRefusals.Add(context.Background(), 0, metric.WithAttributes(attribute.String("operation", op)))
 	}
-	return recorder{logger: logger, outcomes: outcomes, retiredRefusals: retiredRefusals}, nil
+	lag, err := registerRevocationLag(meter)
+	if err != nil {
+		return recorder{}, err
+	}
+	return recorder{logger: logger, outcomes: outcomes, retiredRefusals: retiredRefusals, revocationLag: lag}, nil
 }
 
 func (rec recorder) record(ctx context.Context, operation, result, reason string, err error) {

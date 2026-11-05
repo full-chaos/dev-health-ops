@@ -65,7 +65,7 @@ without `BIGBOY_OPERATOR_IMAGE` (now compose refuses: the variable is required),
 
 ## The acr venue stack (CHAOS-10004)
 
-The acr pre-prod venue (acr-api, acr-projector, acr-mcp, its postgres and falkordb, the entitlement stand-in and the one-offs that
+The acr pre-prod venue (acr-api, acr-projector, acr-mcp, its postgres and falkordb and the one-offs that
 prepare the database) is in the same file, in the same project, started with the same command and a profile:
 
 ```
@@ -75,11 +75,10 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
 ```
 
 - `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
-  (roles), `acr-migrate`, `acr-db-acl` (grants) and `acr-entitlement-standin`. Pass both when you want to name no service.
+  (roles), `acr-migrate` and `acr-db-acl` (grants). Pass both when you want to name no service.
   Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the
   names `postgres` and `falkordb` on the acr network only.
-- Data does not move. The bind mounts are the old paths, `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data`; the one named
-  volume has the explicit name `dev-health-acr-entitlement-tmp`; the network is `dev-health-acr`. `container_name` is the old project's
+- Data does not move. The bind mounts are the old paths, `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data`; the network is `dev-health-acr`. `container_name` is the old project's
   (`dev-health-acr-mcp-<service>-1`). acr-api and acr-projector reach `dho-query-internal` and `dho-clickhouse-readers` as before; no acr
   service is on the `dev-health` network. The data URLs use the alias `query-api`, never an address.
 - Secrets are files under `/var/lib/oci-cache/mcp-venue/secrets/`, mounted by compose as `/run/secrets/<name>`; the file holds the paths
@@ -89,7 +88,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
 - Images: all pinned by registry digest in the pins file (`BIGBOY_ACR_*_IMAGE`, each REQUIRED: with one missing every compose command fails and names it, so a host's `_records/images.env` must hold the acr lines before its checkout holds this file). acr-api (which also
   runs the projector and the migrations) and acr-mcp are the images of the acr release build, `ghcr.io/full-chaos/dev-health-acr/acr-api` and `.../acr-mcp`. A build
   on this host needs `--build-arg VERSION=0.1.0 --build-arg COMMIT=<full sha>`; without both args acr-api refuses the sidecar with a 426.
-- acr-api talks to the real ops, as the venue does after its move off the stand-in: `ACR_DEV_HEALTH_ENTITLEMENT_URL` defaults to `http://go-api:8091` (the go-api internal listener, by alias, on `dho-query-internal`) and the bearer is the file-backed secret `acr_ops_svc_token` (the file `/var/lib/oci-cache/mcp-venue/secrets/ops_svc_acr_token`, or the path in `ACR_OPS_SVC_TOKEN_FILE`; no value is in the repository). BYO LLM config (CHAOS-9989): `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` is passed through and is EMPTY unless the environment of one `up` sets it; no env file on bigboy sets it (a persistent BYO setting would bill a key), and `ops` needs the scope `llm_config:read` on the token. The entitlement stand-in is no longer needed by acr-api; it stays defined (profile `acr-venue`) for a rollback: set `ACR_DEV_HEALTH_ENTITLEMENT_URL=http://acr-entitlement-standin:8088` and `ACR_OPS_SVC_TOKEN_FILE=/var/lib/oci-cache/mcp-venue/secrets/entitlement_token`, and start the stand-in.
+- acr-api talks to the real ops, as the venue does after its move off the stand-in: `ACR_DEV_HEALTH_ENTITLEMENT_URL` defaults to `http://go-api:8091` (the go-api internal listener, by alias, on `dho-query-internal`) and the bearer is a workload token (CHAOS-12976, the prod shape): `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload`, and acr-api exchanges its Compose bootstrap credential at auth-service (`ACR_AUTH_WORKLOAD_*`, the section "auth venue" below). There is no service token in the venue. BYO LLM config (CHAOS-12997): acr reads an org's BYO config from ops with the same workload token (scope `llm_config:read`); the `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` setting was removed from acr and the compose file no longer passes it. The entitlement stand-in is removed (CHAOS-12976): prod has none (deploy `values.acr-prod.yaml`: "No stand-in on prod"), and it checked a static bearer. On the roll, its container `dev-health-acr-mcp-acr-entitlement-standin-1` and the volume `dev-health-acr-entitlement-tmp` are left as orphans: remove them by exact name (`docker rm -f dev-health-acr-mcp-acr-entitlement-standin-1`, `docker volume rm dev-health-acr-entitlement-tmp`).
 - The one-time move from the old project `dev-health-acr-mcp` to this file is a recreate of the acr stack (new project label, same container
   names and data). Run it only in a window MCP opens. The new file fixes the old project's container names, so the old containers must be
   REMOVED, not only stopped (a stopped container keeps its name and the new `up` fails with `Conflict. The container name ... is already in use`;
@@ -104,17 +103,54 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
      (NEVER `-v`, and never `--rmi`). The bind mounts `/var/lib/oci-cache/mcp-venue/postgres-data` and `.../falkordb-data` are host paths and stay; the networks
      `dho-query-internal` and `dho-clickhouse-readers` are external and stay.
   4. Set the projector switch in bigboy's env BEFORE the `up`: `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` must be a line of the host's `_records/images.env` (the tracked
-     `ci/bigboy/images.env` has it; the compose file defaults it to false, as the old file did, and the projector writes nothing without it). Then start ONLY the nine acr services,
-     by name (a bare `--profile acr up -d` also starts or recreates every default-profile dev-health service, 42 containers instead of 9, checked with a dry-run):
-     `cd "$BIGBOY_ROOT" && docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-build acr-postgres acr-db-init acr-migrate acr-db-acl acr-entitlement-standin acr-falkordb acr-api acr-projector acr-mcp`
-     (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the nine acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
+     `ci/bigboy/images.env` has it; the compose file defaults it to false, as the old file did, and the projector writes nothing without it). Then start ONLY the acr services (eight since CHAOS-12976 removed the entitlement stand-in),
+     by name (a bare `--profile acr up -d` also starts or recreates every default-profile dev-health service, 42 containers instead of 9 at the move, checked with a dry-run):
+     `cd "$BIGBOY_ROOT" && docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.env --env-file _records/images.env -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-build acr-postgres acr-db-init acr-migrate acr-db-acl acr-falkordb acr-api acr-projector acr-mcp`
+     (their `depends_on` stays inside the acr profiles, so a dry-run of exactly this command creates the acr containers and nothing else). Then `ps`, and confirm the images are the pinned digests: `docker inspect --format '{{.Image}}' dev-health-acr-mcp-acr-api-1 dev-health-acr-mcp-acr-mcp-1`
      must print the ids in `BIGBOY_ACR_API_IMAGE` and `BIGBOY_ACR_MCP_IMAGE` of the host's `_records/images.env` (fb4c745e: `01cab48f...` and `38aeb351...`).
   5. Readback: the venue answers, and the graph still holds the repository count noted in step 2 (34): run the same
      `docker exec -e REDISCLI_AUTH="$(cat /var/lib/oci-cache/mcp-venue/secrets/falkordb_password)" dev-health-acr-mcp-falkordb-1 redis-cli GRAPH.QUERY <graph> "MATCH (r:Repository) RETURN count(r)"` again and compare. Also check that the host's
      `_records/images.env` carries `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true` (the file defaults it to false; the projector writes nothing without it).
   6. After the readback, the old named volume `dev-health-acr-mcp_acr_entitlement_tmp` is left behind on purpose (it only held the stand-in's generated
-     nginx.conf; the new file uses `dev-health-acr-entitlement-tmp`): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
+     nginx.conf): remove it with `docker volume rm dev-health-acr-mcp_acr_entitlement_tmp` when the
      readback is good, or leave it.
+
+## auth venue (CHAOS-12976)
+
+The bigboy venue has the prod target shape of the acr-api -> go-api credential: auth-service issues acr-api a workload token, and go-api
+verifies it. Profile `auth` of `compose.bigboy.yml` holds the services of ops `compose.yml`'s `auth` profile, the acr-api bootstrap pair of acr
+`deploy/compose/acr-auth-workload.compose.yml`, and `auth-issuer` (the https origin of the issuer). Test values only: the signing key is made in
+the venue, the TLS pair is a host test pair, the database logins have compose.yml's local passwords. No prod secret is used.
+
+- Issuer: `https://auth.bigboy.internal:8443`, one literal in auth-service (`AUTH_TOKEN_ISSUER_URL`), go-api (`AUTH_ACCESS_TOKEN_ISSUER`) and
+  acr-api (`ACR_AUTH_WORKLOAD_ISSUER`). go-api fetches the discovery document and the JWKS from it over https only; `auth-issuer` (alias
+  `auth.bigboy.internal` on `dev-health`) forwards exactly those two documents to auth-service, as prod's issuer host does.
+- go-api trusts the issuer certificate through `SSL_CERT_DIR=/run/auth-issuer-ca` (the `ca/` directory of the TLS dir, read-only). Not
+  `SSL_CERT_FILE`: it would replace the image's CA file for every outbound call. All go-api user routes keep `legacy_hs256`, so the HS256
+  logins of bigboy are unchanged by the issuer.
+- Networks: auth-service and the one-shots are on `auth_plane` (postgres joins it); acr-api reaches auth-service on `acr_auth_workload`
+  (only those two); acr-api never joins `auth_plane`.
+- The venue acr-api runs as uid 1001, so `acr-workload-volume` gives `/run/workload` to 1001 (mode 700) and `acr-workload-bootstrap` writes
+  the 0600 credential as 1001. acr-api mounts the volume read-only.
+
+Bring-up, in this order (every command names its services; `-p dev-health ... --profile auth` as in the first section):
+
+1. Pins: `_records/images.env` holds `BIGBOY_AUTH_SERVICE_IMAGE`, `BIGBOY_AUTH_MIGRATE_IMAGE` (required) and an acr-api pin of acr d168fa95
+   or later (the workload credential, acr CHAOS-11203).
+2. TLS test pair, once, as ubuntu (1001), under `BIGBOY_AUTH_ISSUER_TLS_DIR` (default `/var/lib/oci-cache/mcp-venue/auth-issuer-tls`):
+   `mkdir -p -m 0700 "$D/key" && mkdir -p -m 0755 "$D/ca" && openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 365 -subj "/CN=auth.bigboy.internal" -addext "subjectAltName=DNS:auth.bigboy.internal" -keyout "$D/key/issuer.key" -out "$D/ca/issuer.pem" && chmod 0600 "$D/key/issuer.key" && chmod 0644 "$D/ca/issuer.pem"`
+   (`D` = the TLS dir). Both binds have `create_host_path: false`: a missing file fails the start instead of mounting a new directory.
+3. postgres joins `auth_plane`: it is recreated, in its own step (a data store restart).
+4. `--profile auth up -d --no-deps --no-build auth-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed`
+   (one at a time, each must exit 0), then `--profile auth up -d --no-deps --no-build auth-service auth-issuer`.
+5. Once: `--profile auth run --rm acr-workload-bootstrap` (runs `acr-workload-volume` first). It prints the credential id and its
+   `expires_at`; re-create before that time (a second `run` refuses while a credential is live: revoke it first with
+   `auth-migrate workloads bootstrap-revoke -credential <id> -reason owner_request -apply`, or rotate with `bootstrap-rotate`). It is never a `depends_on`.
+6. The subject: read the principal of the workload acr-api,
+   `docker exec dev-health-postgres-1 psql -U devhealth -d devhealth -Atc "SELECT 'prn_' || rtrim(translate(encode(uuid_send(principal_id), 'base64'), '+/', '-_'), '=') FROM auth.workloads WHERE name = 'acr-api'"`,
+   and write it to `ops/.env` as `AUTH_ACR_WORKLOAD_SUBJECT=prn_...` (an id, not a secret). Unset, go-api refuses every workload token as
+   not configured.
+7. Recreate go-api (`up -d --no-deps --no-build go-api`), then acr-api (`--profile acr up -d --no-deps --no-build acr-api`).
 
 ## Go-only stack (CHAOS-8361)
 

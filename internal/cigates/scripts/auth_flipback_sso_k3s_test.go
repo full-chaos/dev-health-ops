@@ -12,7 +12,7 @@ import (
 // ci/auth_flipback_sso_k3s.sh is run by the lead on bigboy k3s, never in CI. These cells hold what can be checked without a
 // cluster: the refusals before any change, the --print-plan render of every chart step, the order of the steps, and the
 // shape of the script (secrets off the command line, a namespace-scoped kubeconfig only, nothing that makes or deletes a
-// namespace, no JIT switch).
+// namespace, no JIT switch outside the JIT values layer).
 
 const fbScript = "ci/auth_flipback_sso_k3s.sh"
 
@@ -86,7 +86,7 @@ func fbRun(t *testing.T, env []string, args ...string) (cmdResult, string) {
 	path := strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1)
 	for _, a := range args {
 		if a == "--print-plan" { // the plan renders the chart with the real helm and touches no cluster
-			path = shimBasePath()
+			path = shimBasePathWith(t, "", "helm")
 		}
 	}
 	base := []string{path, "STUB_LOG=" + log, "AUTH_FB_KUBECONFIG=" + kubeconfig, "AUTH_FB_WORK=" + work}
@@ -203,6 +203,8 @@ func TestFlipbackSSOK3sPrintPlanListsTheStepsInOrderAndRendersEveryChartStep(t *
 		"PASS: plan: D1 renders stage goApi with the narrowing deferred",
 		"PASS: plan: D2 renders phase 3 with neither go-api nor auth-service owned",
 		"PASS: plan: no step renders AUTH_SSO_JIT",
+		"PASS: plan: the JIT layer renders AUTH_SSO_JIT on auth-service only, with both users switches on",
+		"PASS: plan: the workload layer renders go-api's workload token and auth-service's bootstrap exchange in every step",
 	} {
 		if !strings.Contains(res.stdout, want) {
 			t.Errorf("--print-plan lacks %q\n%s", want, res.stdout)
@@ -252,11 +254,14 @@ func TestFlipbackSSOK3sShape(t *testing.T) {
 			t.Errorf("the script lacks %q", want)
 		}
 	}
-	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "authService.ssoJit", "ssoJit=", "name: AUTH_SSO_JIT",
+	for _, banned := range []string{"kind create", "kind load", "docker ", "ctr ", "sudo ", "--from-literal", "--password ", "name: AUTH_SSO_JIT",
 		"create namespace", "delete namespace", "pkill", "killall", "nohup", "/api/v1/auth/sso/providers", "UPDATE public", "DELETE FROM", "externalIPs", "IDP_IP", "/oidc/", "oidc_config"} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the script contains %q", banned)
 		}
+	}
+	if n := strings.Count(text, "authService.ssoJit=true"); n != 1 {
+		t.Errorf("the script sets authService.ssoJit=true %d times; want only the JIT values layer", n)
 	}
 	if n := strings.Count(text, "INSERT INTO"); n != 1 {
 		t.Errorf("the script holds %d INSERT statements; want exactly the one sso_providers row of the rehearsal namespace", n)
@@ -296,7 +301,7 @@ func TestFlipbackSSORunbookCarriesTheStepLinesAndTheJITScope(t *testing.T) {
 		"SAML user created through go-api at phase 3",
 		"flip back 4 to 3",
 		"sign in through go-api",
-		"CHAOS-10998",
+		"JIT values layer",
 		"OIDC leg stays in the integration tests",
 		"count the SSO providers and the SSO-linked users",
 		"not applicable at 11505",
@@ -335,13 +340,6 @@ func TestFlipbackSSOK3sPortForwardIsADirectKubectlWithoutTheSlotFd(t *testing.T)
 func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 	text := readText(t, filepath.Join(rootOf(t), fbScript))
 	for _, want := range []string{
-		// go-api's session issue token needs an auth-session-issuer row of internal_service_credentials, held in its own Secret
-		"service-credentials create --service auth-session-issuer --scope sessions:issue",
-		`K wait --for=jsonpath='{.status.phase}'=Succeeded pod/fb-issue-cred`,
-		"secretName: session-issue",
-		"put_secret session-issue AUTH_SESSION_ISSUE_TOKEN",
-		// the verb reads the owner DSN, not the API login
-		`name: "MIGRATION_DATABASE_URI"`,
 		// RELEASE is readonly: the barrier gets it through env, after the superseded pods are gone
 		"barrier() { no_terminating_pods; env RELEASE=",
 	} {
@@ -351,6 +349,36 @@ func TestFlipbackSSOK3sLiveStepsKeepTheFixesOfTheFirstRuns(t *testing.T) {
 	}
 	if strings.Contains(text, "AUTH_SESSION_ISSUE_TOKEN: \"%s\"") {
 		t.Errorf("the secrets values still carry a random AUTH_SESSION_ISSUE_TOKEN go-api cannot present")
+	}
+}
+
+// CHAOS-13039: go-api signs the SSO user in through auth-service with its workload token, from the bootstrap credential of the api
+// workload (ci/lib/auth_workload_session_issue_k3s.sh), not with an svc_authsess_ credential of internal_service_credentials.
+func TestFlipbackSSOK3sSignsInWithTheWorkloadTokenNotAnSvcCredential(t *testing.T) {
+	text := readText(t, filepath.Join(rootOf(t), fbScript))
+	for _, banned := range []string{"svc_authsess_", "auth-session-issuer", "sessions:issue", "service-credentials", "session-issue", "fb-issue-cred"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("the script still holds %q: the svc_authsess_ session issue path is gone", banned)
+		}
+	}
+	for _, want := range []string{
+		"lib/auth_workload_session_issue_k3s.sh",
+		"auth_workload_session_issue_k3s K pgq",
+		"write_workload_values",
+		"workloadBootstrap: {enabled: true, secretName: go-api-workload}",
+		"AUTH_WORKLOAD_BOOTSTRAP",
+		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT",
+		"S0 the go-api workload credential",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the script lacks %q", want)
+		}
+	}
+	// the credential is made before the first rollout wait of go-api, and the layer is part of every helm call
+	issue := strings.Index(text, "auth_workload_session_issue_k3s K pgq")
+	goWait := strings.Index(text, `K rollout status deploy/"${FULL}-go-api"`)
+	if issue < 0 || goWait < 0 || issue > goWait {
+		t.Errorf("the workload credential (%d) must be made before the first go-api rollout wait (%d)", issue, goWait)
 	}
 }
 

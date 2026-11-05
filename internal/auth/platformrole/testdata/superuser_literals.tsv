@@ -30,6 +30,7 @@ internal/auth/authapi/compat.go	refreshUserInfo	1	response key
 internal/auth/authapi/login.go	userInfo	1	response key
 internal/auth/authapi/users.go	PGUsers.stateSQL	1	read: the off column of the switched statement
 internal/auth/authconfig/options.go	-	1	help text
+internal/auth/decisionstate/decisionstate.go	stateQuery	1	read: the state version digests the public users row (is_active, is_superuser); it decides nothing
 internal/auth/edgetoken/signer.go	Signer.AccessUntil	1	claim key
 internal/auth/restorefence/specs.go	-	4	restore fence of the public legacy column (a narrowing; it decides no platform power)
 internal/auth/usersbackfill/platformrole_command.go	platformRoleOwnedGate	1	message text
@@ -45,6 +46,8 @@ internal/testsupport/pgseed/pgseed.go	SetUserState	1	test support write
 internal/testsupport/sessionscenario/sessionscenario.go	Run	1	test support read
 internal/testsupport/sessionscenario/sessionscenario.go	Seed	2	test support write and claim
 internal/testsupport/sessionscenario/target.go	MintTokens	1	test support claim key
+internal/testsupport/usertokens/usertokens.go	hs256Access	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	-	1	test support claim key
 internal/testsupport/venueoracle/gosubstrate.go	accessClaims	2	test support claim key
 internal/testsupport/superuserwriter/superuserwriter.go	Pool	1	test support: the one users column the role cannot write
+internal/testsupport/venueoracle/gosubstrate.go	legacyClaims.recordedIdentity	1	test support claim key

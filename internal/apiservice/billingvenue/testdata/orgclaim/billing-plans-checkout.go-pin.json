@@ -1,0 +1,5 @@
+{
+  "checkout: bad org claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "portal: bad org claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "sub: bad org claim": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
+}

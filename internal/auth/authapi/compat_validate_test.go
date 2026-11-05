@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-go/authverify"
 
@@ -128,6 +129,7 @@ type validateFixture struct {
 	server    http.Handler
 	goAPI     http.Handler
 	bodyLimit int64
+	meter     metric.Meter
 }
 
 func newValidateFixture(t *testing.T, eddsa bool) *validateFixture {
@@ -181,6 +183,7 @@ func (f *validateFixture) deps() CompatDeps {
 		AppendAudit: func(context.Context, audit.AuditEvent) error { return nil },
 		Limits:      mustLimits(f.t, f.counters),
 		Validate:    config,
+		Meter:       f.meter,
 	}
 }
 
@@ -601,6 +604,7 @@ func TestValidateCompatC4RefusedInputsAnswerGoAPIsStatusAndBody(t *testing.T) {
 // membership reads) for the same token and rows, byte for byte; an HS256
 // token beside it is go-api's routed legacy answer.
 func TestValidateCompatEdDSAAnswerIsGoAPIsRoutedAnswerByteForByte(t *testing.T) {
+	t.Parallel()
 	stale, other := int64(3), uuid.New()
 	for _, tc := range []struct {
 		name    string
@@ -678,6 +682,7 @@ func jsonEqual(a, b any) bool {
 // a query-api token are refused. Without the EdDSA configuration the route
 // still mounts and judges HS256 alone.
 func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
+	t.Parallel()
 	t.Run("eddsa", func(t *testing.T) {
 		f := newValidateFixture(t, true)
 		expectAnswer(t, "user token, aud dev-health-api", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil),
@@ -742,6 +747,7 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 // only) and routed under the EdDSA configuration, where go-api's legacy
 // verifier hands the route policy.ErrUnavailable without the driver error.
 func TestValidateCompatC6AStoreFaultIsThe503(t *testing.T) {
+	t.Parallel()
 	down := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 	dead, err := pgxpool.New(context.Background(), "postgres://validate:none@127.0.0.1:1/none?connect_timeout=1")
 	if err != nil {

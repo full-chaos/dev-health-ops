@@ -7,7 +7,9 @@
 #   ci/auth_flipback_sso_k3s.sh --print-plan   no cluster: print the steps and check that helm renders every chart step (needs helm)
 #   ci/auth_flipback_sso_k3s.sh                the steps below
 #
-# S0 install at phase 3 (go-api forwards login), the hooks, the restore fence
+# S0 install at phase 3 (go-api forwards login), the hooks, the restore fence, then go-api's workload credential: the api workload is
+#    seeded, its bootstrap credential goes into a Secret of this namespace (ci/lib/auth_workload_session_issue_k3s.sh), and the workload
+#    values layer makes go-api present its workload token on auth-service's session issue route (every later step keeps the layer)
 # S1 an admin user and an organization (one-off pods of the dho image)
 # S2 a SAML provider row: ONE INSERT in this rehearsal namespace (go-api serves no provider create route; pm 2026-11-02)
 # S3 a SAML sign-in through go-api at phase 3: go-api writes the SSO user (the join is off in auth-service)
@@ -18,8 +20,8 @@
 # S8 flip back 4 to 3: D1 (stage goApi, grants kept), barrier down-auth, D2 (phase 3)
 # S9 the sign-in through go-api again: same accounts, no new account, no identity conflict
 #
-# What is NOT here (pm 2026-11-02): an account that auth-service provisions through its sign-in join under owned. AUTH_SSO_JIT renders only
-# from phase 5, so it belongs to the orgs-owned flip (CHAOS-10998). Nothing here sets AUTH_SSO_JIT.
+# What is NOT a step here: an account that auth-service provisions through its sign-in join under owned. The JIT values layer (U3 plus the
+# ssoJit switch) exists and --print-plan renders it, but no step of the run applies it; every other layer sets no AUTH_SSO_JIT.
 #
 # The identity provider is the test stub internal/testsupport/idpstub (SAML mode), built and imported into the k3s containerd by the lead.
 # Scope (pm 2026-11-02, answers-11620-1.md amendment): SAML only. go-api dials an OIDC issuer only at a global address
@@ -37,6 +39,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 ROOT="$(cd -- "${SCRIPT_DIR}/.." >/dev/null 2>&1 && pwd -P)"
 readonly SCRIPT_DIR ROOT
+# shellcheck source=ci/lib/auth_workload_session_issue_k3s.sh
+source "${SCRIPT_DIR}/lib/auth_workload_session_issue_k3s.sh"
 readonly CHART="${ROOT}/deploy/helm/dev-health"
 readonly DIGEST_RE='^[a-z0-9]+([._-][a-z0-9]+)*(:[0-9]+)?(/[a-z0-9]+([._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}$'
 readonly IDP_RE='^idpstub-fb/idpstub:[a-z0-9][a-z0-9_.-]{0,62}$'
@@ -45,6 +49,7 @@ readonly RELEASE="ap" FULL="ap-dev-health"
 readonly IDP_HOST="idp.fb.test"
 readonly SP_ENTITY="https://sp.fb.test/saml/metadata"
 readonly DOMAIN="fbrehearsal.dev"
+readonly WL_ISSUER="https://auth.workload-proof.example"
 PASSES=0
 
 die() {
@@ -124,7 +129,6 @@ goApi:
   enabled: true
   replicas: 1
   image: {repository: "${IMG_DHO}", pullPolicy: IfNotPresent}
-  sessionIssue: {secretName: session-issue}
   extraArgs: ["--health-check-timeout=10s"]
   readinessProbe: {timeoutSeconds: 10}
 EOF1
@@ -184,6 +188,20 @@ write_secret_values() { # FILE API_PASSWORD JWT_KEY  (the file is mode 0600; the
   )
 }
 
+write_workload_values() { # FILE SUBJECT  (the api workload's prn_ id; a signed claim issuer that nothing dials)
+  : >"$1"
+  cat >>"$1" <<EOF7
+authService:
+  accessToken: {issuerURL: "${WL_ISSUER}"}
+  extraEnv:
+    - {name: AUTH_WORKLOAD_BOOTSTRAP, value: "true"}
+    - {name: AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT, value: "$2"}
+goApi:
+  sessionIssue:
+    workloadBootstrap: {enabled: true, secretName: go-api-workload}
+EOF7
+}
+
 ACK=""
 # layer NAME -> LAYER (an array of helm arguments), one per chart step
 layer() {
@@ -197,6 +215,7 @@ layer() {
     REC) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=goApi --set authService.backfill.enabled=true
       --set authService.backfill.verb=users-reconcile --set authService.backfill.dryRun=true --set "authService.backfill.runId=fb-reconcile-${RUN_TOKEN}") ;;
     U3) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=owned) ;;
+    JIT) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=owned --set authService.ssoJit=true) ;;
     D1) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=goApi "${ack[@]}") ;;
     D2) LAYER=(--set authService.phase=3 --set authService.loginStage=goApi "${ack[@]}") ;;
     *) die "unknown layer $1" ;;
@@ -205,17 +224,21 @@ layer() {
 
 VALUES_BASE=""
 VALUES_SECRET=""
+VALUES_WL=""
+wl_args() { WL_ARGS=(); if [ -n "${VALUES_WL}" ]; then WL_ARGS=(-f "${VALUES_WL}"); fi; }
 # helm_run VERB LAYER-NAME [extra args]: helm template (plan) or helm upgrade --install (run)
 helm_cluster() { # LAYER-NAME [extra helm args]
   local name=$1
   shift
   layer "${name}"
-  helm upgrade --install "${RELEASE}" "${CHART}" --kubeconfig "${KUBECONFIG_FILE}" --namespace "${NS}" -f "${VALUES_BASE}" -f "${VALUES_SECRET}" \
+  wl_args
+  helm upgrade --install "${RELEASE}" "${CHART}" --kubeconfig "${KUBECONFIG_FILE}" --namespace "${NS}" -f "${VALUES_BASE}" -f "${VALUES_SECRET}" "${WL_ARGS[@]}" \
     "${LAYER[@]}" --timeout 10m "$@"
 }
 render() { # LAYER-NAME TEMPLATE
   layer "$1"
-  helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${VALUES_BASE}" -f "${VALUES_SECRET}" "${LAYER[@]}" --show-only "templates/$2"
+  wl_args
+  helm template "${RELEASE}" "${CHART}" --namespace "${NS}" -f "${VALUES_BASE}" -f "${VALUES_SECRET}" "${WL_ARGS[@]}" "${LAYER[@]}" --show-only "templates/$2"
 }
 env_of() { # NAME (rendered manifest on stdin): the value of the first container env entry, empty when absent
   awk -v n="$1" '$1 == "-" && $2 == "name:" && $3 == n {getline; gsub(/"/, "", $2); print $2; exit}'
@@ -276,6 +299,24 @@ print_plan() {
     if grep -q 'AUTH_SSO_JIT' <<<"${all}"; then die "plan: ${name} renders AUTH_SSO_JIT"; fi
   done
   pass "plan: no step renders AUTH_SSO_JIT"
+  expect_env JIT auth-service.yaml AUTH_SSO_JIT true "JIT"
+  expect_env JIT auth-service.yaml AUTH_USERS_OWNED true "JIT"
+  expect_env JIT go-api-deployment.yaml AUTH_USERS_OWNED true "JIT"
+  expect_env JIT go-api-deployment.yaml AUTH_SSO_JIT "" "JIT"
+  pass "plan: the JIT layer renders AUTH_SSO_JIT on auth-service only, with both users switches on"
+  expect_env P3 go-api-deployment.yaml AUTH_SESSION_ISSUE_TOKEN "{secretKeyRef:" "before the workload layer"
+  VALUES_WL="${work}/workload.yaml"
+  write_workload_values "${VALUES_WL}" prn_AAAAAAAAAAAAAAAAAAAAAA
+  for name in P3 U1 U3 D1 D2; do
+    expect_env "${name}" go-api-deployment.yaml AUTH_SESSION_ISSUE_CREDENTIAL workload "workload layer"
+    expect_env "${name}" go-api-deployment.yaml AUTH_WORKLOAD_BOOTSTRAP_FILE /run/workload/api.bootstrap "workload layer"
+    expect_env "${name}" go-api-deployment.yaml AUTH_WORKLOAD_ISSUER "${WL_ISSUER}" "workload layer"
+    expect_env "${name}" go-api-deployment.yaml AUTH_SESSION_ISSUE_TOKEN "" "workload layer"
+    expect_env "${name}" auth-service.yaml AUTH_WORKLOAD_BOOTSTRAP true "workload layer"
+    expect_env "${name}" auth-service.yaml AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT prn_AAAAAAAAAAAAAAAAAAAAAA "workload layer"
+    expect_env "${name}" auth-service.yaml AUTH_TOKEN_ISSUER_URL "${WL_ISSUER}" "workload layer"
+  done
+  pass "plan: the workload layer renders go-api's workload token and auth-service's bootstrap exchange in every step"
   rm -rf "${work}"
 }
 
@@ -334,7 +375,7 @@ cleanup() {
   if [ "${status}" -ne 0 ]; then
     printf '\n--- namespace state at failure ---\n' >&2
     K get pods,jobs -o wide >&2 || true
-    for pod in $(K get pods -o name 2>/dev/null | grep -E 'migrate|provision|grants|backfill|go-api|auth-service|idpstub' || true); do
+    for pod in $(K get pods -o name 2>/dev/null | grep -E 'migrate|provision|grants|backfill|go-api|auth-service|idpstub|fb-wl' || true); do
       printf '\n--- logs %s ---\n' "${pod}" >&2
       K logs "${pod}" --all-containers --tail 40 >&2 || true
     done
@@ -406,7 +447,6 @@ pass "S0 the identity provider stub runs (SAML mode, local image ${IMG_IDP})"
 API_PASSWORD="$(openssl rand -hex 12)"
 AUTH_PASSWORD="$(openssl rand -hex 12)"
 JWT_KEY="$(openssl rand -hex 24)"
-ISSUE_TOKEN="svc_authsess_$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n' | cut -c1-43)"
 VALUES_BASE="${WORK}/base.yaml"
 VALUES_SECRET="${WORK}/secrets.yaml"
 write_base_values "${VALUES_BASE}"
@@ -418,7 +458,6 @@ K rollout status statefulset/"${FULL}-clickhouse" --timeout=240s >/dev/null
 K rollout status deploy/"${FULL}-valkey" --timeout=240s >/dev/null
 printf "CREATE ROLE devhealth_api LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\nCREATE ROLE devhealth_query_api NOLOGIN;\nCREATE ROLE devhealth_auth LOGIN PASSWORD '%s' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n" \
   "${API_PASSWORD}" "${AUTH_PASSWORD}" | pgq >/dev/null
-put_secret session-issue AUTH_SESSION_ISSUE_TOKEN "${ISSUE_TOKEN}"
 put_secret auth-db AUTH_DATABASE_URI "$(dsn devhealth_auth "${AUTH_PASSWORD}")"
 put_secret auth-migrate-db AUTH_MIGRATION_DATABASE_URI "$(dsn devhealth devhealth)"
 openssl genpkey -algorithm ed25519 2>/dev/null | K create secret generic auth-key --from-file=signing-key.pem=/dev/stdin >/dev/null
@@ -446,8 +485,17 @@ K run auth-fence-init --restart=Never --image="${IMG_MIG}" --override-type=strat
 K wait --for=jsonpath='{.status.phase}'=Succeeded pod/auth-fence-init --timeout=180s >/dev/null || die "the restore-fence init did not succeed"
 K delete pod auth-fence-init --wait=true >/dev/null
 K rollout status deploy/"${FULL}-auth-service" --timeout=480s >/dev/null
+# go-api's session issue credential is its workload token: seed the api workload, put its bootstrap credential in a Secret, then roll go-api
+# and auth-service with the workload layer (go-api had no session issue credential until now, so its first pod waits for this)
+auth_workload_session_issue_k3s K pgq "${IMG_MIG}" "$(K get pod "${PG_POD}" -o 'jsonpath={.spec.containers[0].image}')" go-api-workload ||
+  die "S0: the go-api workload credential is not ready"
+VALUES_WL="${WORK}/workload.yaml"
+write_workload_values "${VALUES_WL}" "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}"
+pass "S0 the go-api workload credential exists: the api workload is seeded and its bootstrap credential is in a Secret of ${NS}"
+helm_cluster P3 --history-max 0 >/dev/null
+K rollout status deploy/"${FULL}-auth-service" --timeout=480s >/dev/null
 K rollout status deploy/"${FULL}-go-api" --timeout=300s >/dev/null
-pass "S0 phase 3 is up: go-api and auth-service Ready, hooks and restore fence done"
+pass "S0 phase 3 is up: go-api and auth-service Ready, hooks and restore fence done, go-api on its workload token"
 
 # ---- port-forward and HTTP helpers --------------------------------------------------------------------------------------------------------
 PF_GO=""
@@ -496,21 +544,7 @@ oneoff_dho() { # NAME STDIN-VALUE ARGS...: a one-off pod of the dho image with t
 }
 oneoff_dho fb-admin-user "${ADMIN_PASSWORD}" admin users create --email "${ADMIN_EMAIL}" --full-name "FB Admin" --superuser --password-stdin || die "S1: the admin user verb failed"
 oneoff_dho fb-admin-org "" admin orgs create --name "FB Org" --tier enterprise --owner-email "${ADMIN_EMAIL}" || die "S1: the admin organization verb failed"
-# the verb reads MIGRATION_DATABASE_URI (the owner DSN); go-api presents an auth-session-issuer row of its own internal_service_credentials to auth-service's session issue route (401 for a token with no row)
-# no attach: a fast pod can end before kubectl attaches (the token is then lost); wait for the pod to succeed, read its log, delete it
-K run fb-issue-cred --restart=Never --image="${IMG_DHO}" --override-type=strategic \
-  --overrides="$(jq -nc --arg image "${IMG_DHO}" --arg secret auth-migrate-db '{spec: {containers: [{name: "fb-issue-cred", image: $image,
-    env: [{name: "MIGRATION_DATABASE_URI", valueFrom: {secretKeyRef: {name: $secret, key: "AUTH_MIGRATION_DATABASE_URI"}}}]}]}}')" -- \
-  service-credentials create --service auth-session-issuer --scope sessions:issue >/dev/null || die "S1: the session issue credential pod did not start"
-K wait --for=jsonpath='{.status.phase}'=Succeeded pod/fb-issue-cred --timeout=120s >/dev/null || die "S1: the session issue credential pod did not succeed"
-ISSUE_TOKEN="$(K logs pod/fb-issue-cred 2>/dev/null)"
-K delete pod fb-issue-cred --wait=true >/dev/null || die "S1: the session issue credential pod was not removed"
-ISSUE_TOKEN="${ISSUE_TOKEN//[$'\r\n ']/}"
-[[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "S1: the session issue credential was not minted"
-put_secret session-issue AUTH_SESSION_ISSUE_TOKEN "${ISSUE_TOKEN}"
-K rollout restart deploy/"${FULL}-go-api" >/dev/null
-K rollout status deploy/"${FULL}-go-api" --timeout=300s >/dev/null
-pass "S1 admin user and organization created by the admin verbs; go-api holds a minted session issue credential"
+pass "S1 admin user and organization created by the admin verbs"
 
 # ---- S2 the SAML provider row: one INSERT, as the integration tests seed it (internal/api/sso seedProvider) -------------------------------------
 pf_all

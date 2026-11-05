@@ -187,7 +187,7 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 | `auth-service` | none | none |
 | `acr-api` | `auth-service`, `dev-health-api` | none |
 | `web` | none | none |
-| `query-api` | none | none |
+| `query-api` | `auth-service` | none |
 
 ## Related closed vocabularies
 
@@ -195,9 +195,9 @@ go-api and query-api request handlers do not read the catalog. See [action map](
 
 | Field | Values |
 | --- | --- |
-| `authorization_decision.v1` `reason_code` | 24 values; see [reason codes](reason-codes.md) |
+| `authorization_decision.v1` `reason_code` | 25 values; see [reason codes](reason-codes.md) |
 | `audit-event.v1` `attributes.reason_code` | 65 values; the file lists them |
-| `revoked_reason` of a credential | `compromised`, `domain_revoked`, `owner_request` |
+| `revoked_reason` of a credential | `compromised`, `domain_revoked`, `org_deprovisioned`, `owner_request` |
 
 A value is added only with the pull request of the producer that emits it. `error.v1` `reason_code` is not governed by this file. It is shape-only.
 
@@ -216,6 +216,7 @@ From `contracts/auth/v1/README.md`:
 - Version 10: `credentials.project` (platform, high, `none`, `denied`), the action the acr-api workload row lists for the acr credential events route. No role holds it, so no decision changes (CHAOS-11196).
 - Version 11: `acr.evidence.read` (organization scope, repository resource kind, low risk, `resource_revision_bound`) and `acr.credential.issue` (organization, organization, high, `none`) (CHAOS-12660). No role holds either, so the decision core denies both to every role until a roles change grants them.
 - Version 12: `reports.write` (organization scope, organization resource kind, high risk, `none`, impersonation `denied`), held by `viewer`, `member`, `admin` and `owner` (CHAOS-12657). It covers the five saved-report GraphQL writes. Those writes check only the caller's organization today, never a role (`requireMutationOrg`, `internal/queryapi/graph/reports_mutations.go`), so every organization role holds it. It is catalog-only: `/auth/me` does not serve it. Narrowing it to a smaller role set is a separate decision.
+- Version 13: an optional `repository_scope` member on an action (`filtered` or `none`, absent is `none`) (CHAOS-12851). `filtered` on `acr.context.read`, `acr.evidence.read`, `analytics.read`, `analytics.export`, `metrics.read`, `work_items.read` and `git.read`: an allow of these carries the repositories the principal may read, as the `repository_scope` (`organization`) or the `repository_allowlist` obligation (see [obligations](obligations.md)). A census requires the member on every action whose id ends in `.read` or `.export` and on every repository-kind action. No role changed.
 
 ## Platform actions
 

@@ -79,7 +79,7 @@ func WithImpersonation(ctx context.Context, session *Impersonation) context.Cont
 type Guard struct {
 	auth   *Authenticator
 	logger *slog.Logger
-	shadow *Shadow
+	pdp    pdpHooks
 }
 
 // NewGuard builds a Guard over auth.
@@ -148,8 +148,17 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		// never changes the answer.
 		caller := user
 		bearer := ""
-		if g.shadow != nil {
+		if g.pdp.shadow != nil || g.pdp.enforcer != nil {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
+		}
+		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
+		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
+			writeEnforceRefusal(w, level, verdict)
+			return
+		case enforceAllow:
+			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+			return
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
 			g.observeShadow(r, caller, bearer, false)

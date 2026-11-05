@@ -111,3 +111,30 @@ func TestCredentialProjectionStoresTheBindingAndOneOrganizationPrincipal(t *test
 		t.Error("credential_projection.source_id is still NOT NULL")
 	}
 }
+
+// 0054 widens the revoked_reason list by org_deprovisioned (CHAOS-12941): the
+// 0049 list plus one value, added NOT VALID and validated apart.
+func TestCredentialRevokedReasonOrgDeprovisionedMigration(t *testing.T) {
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sql string
+	for _, m := range migrations {
+		if m.Name == "credential_revoked_reason_org_deprovisioned" {
+			if m.Version != 54 {
+				t.Errorf("version = %d, want 54", m.Version)
+			}
+			sql = sqlCode(m.SQL)
+		}
+	}
+	if sql == "" {
+		t.Fatal("the lineage lacks the migration credential_revoked_reason_org_deprovisioned")
+	}
+	if !strings.Contains(sql, "revoked_reason IN ('compromised', 'domain_revoked', 'org_deprovisioned', 'owner_request')") {
+		t.Error("the revoked_reason CHECK does not list org_deprovisioned with the three earlier values")
+	}
+	if !strings.Contains(sql, ") NOT VALID;") || !strings.Contains(sql, "VALIDATE CONSTRAINT credential_registry_revoked_reason_code;") {
+		t.Error("the CHECK is not added NOT VALID and validated in its own statement")
+	}
+}

@@ -34,7 +34,6 @@ internal/apiservice	accessroute_unset_test.go
 internal/apiservice	endpoint_profile_rows_test.go
 internal/apiservice	endpoint_profile_scan_test.go
 internal/apiservice	githubapp_config.go
-internal/apiservice	provisioning_credential.go
 internal/apiservice/admin	routeguard_test.go
 internal/apiservice/authflowvenue	auth_flow_venue_oracle_integration_test.go
 internal/apiservice/authflowvenue	linkformat_test.go
@@ -89,6 +88,7 @@ internal/auth/contracts	jwks_document_goldens_test.go
 internal/auth/contracts	llm_api_keys_anchor_test.go
 internal/auth/contracts	openapi_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
+internal/auth/contracts	principal_wire_form_surface_test.go
 internal/auth/contracts	producer_columns_test.go
 internal/auth/contracts	provisioning_event_goldens_test.go
 internal/auth/contracts	provisioning_resources_test.go
@@ -113,6 +113,7 @@ internal/auth/contracts/tokencorpus	service_account_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
+internal/auth/identity	sp_callsite_ast_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
@@ -134,10 +135,12 @@ internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
 internal/auth/session	liveness_census_test.go
 internal/auth/workloadexchange	tokenreview.go
+internal/auth/workloadinput	workloadinput.go
 internal/auth/writerinventory	membership_census_test.go
 internal/auth/writerinventory	scan_test.go
 internal/auth/writerinventory	usersowned_census_shapes_test.go
 internal/auth/writerinventory	usersowned_census_test.go
+internal/authzenforce	census_test.go
 internal/bigboycompose	billing_edge_override_test.go
 internal/bigboycompose	dsn_class_test.go
 internal/bigboycompose	restart_policy_test.go
@@ -273,6 +276,7 @@ internal/cigates/routing	planes_test.go
 internal/cigates/routing	tools_test.go
 internal/cigates/scripts	auth_corpus_queue_relevance_test.go
 internal/cigates/scripts	auth_queue_relevance_test.go
+internal/cigates/scripts	census_ops_script_test.go
 internal/cigates/scripts	chmigrate_history_frozen_test.go
 internal/cigates/scripts	ci_script_helpers_test.go
 internal/cigates/scripts	e2e_fixture_lib_test.go

@@ -113,7 +113,6 @@ func TestRepoGrant_AllowsLiveGrant(t *testing.T) {
 	for _, tc := range []struct{ name, grantKey, reqKey string }{
 		{"exact key", "acme/api", "acme/api"},
 		{"org wide grant, one repo", "*", "acme/api"},
-		{"org wide grant, org wide request", "*", "*"},
 	} {
 		d := e.Evaluate(repoRequest(tc.reqKey), repoSnapshot("member", liveGrant(tc.grantKey)))
 		if !d.Allowed || d.Reason != ReasonAllowedByRepositoryGrant {
@@ -132,7 +131,7 @@ func TestRepoGrant_AnyRowEndsTheMembershipDefault(t *testing.T) {
 	for _, role := range []string{"viewer", "member", "admin", "owner"} {
 		wantDeny(t, role+" other repo", e.Evaluate(repoRequest("acme/api"), repoSnapshot(role, liveGrant("acme/web"))), ReasonRepositoryNotGranted)
 	}
-	wantDeny(t, "repo grant for org wide request", e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("acme/api"))), ReasonRepositoryNotGranted)
+	wantDeny(t, "repo grant for org wide request", e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("acme/api"))), ReasonInvalidRequest)
 }
 
 func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
@@ -144,7 +143,7 @@ func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
 	for _, st := range []Status{StatusUnknown, StatusInvited, StatusSuspended, StatusRemoved} {
 		s := repoSnapshot("member", g)
 		s.memberships = map[string]Membership{testOrg: {OrgID: testOrg, Role: "member", Status: st}}
-		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonMembershipInactive)
+		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonNoMembership)
 	}
 	s = repoSnapshot("member", g)
 	s.memberships = map[string]Membership{testOrg: {OrgID: orgB, Role: "member", Status: StatusActive}}
@@ -419,7 +418,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 26 {
+	if len(AllReasons()) != 27 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

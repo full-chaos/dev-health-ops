@@ -36,7 +36,7 @@ func routesNamed(routes []httpapi.Route, pattern string) []httpapi.Route {
 }
 
 func TestSessionRoutesWithoutKeysAreExactlyTheRefreshLogoutValidateSwitchOrgStubs(t *testing.T) {
-	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
+	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

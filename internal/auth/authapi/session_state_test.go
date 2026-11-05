@@ -38,6 +38,13 @@ func (c *countingCurrent) Current(ctx context.Context, id uuid.UUID) (session.Re
 	return c.CompatSessions.Current(ctx, id)
 }
 
+func (c *countingCurrent) CurrentWithClientClass(ctx context.Context, id uuid.UUID) (session.Record, string, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return c.CompatSessions.CurrentWithClientClass(ctx, id)
+}
+
 func (c *countingCurrent) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -120,7 +127,13 @@ func TestSessionStateAnswersTheSessionAsAuthServiceDecidesIt(t *testing.T) {
 	atExpiry.ID, atExpiry.ExpiresAt = uuid.New(), now
 	unbound := live
 	unbound.ID, unbound.OrganizationID, unbound.LegacyTokenVersion = uuid.New(), nil, nil
-	f.sessions.records = map[uuid.UUID]session.Record{live.ID: live, revoked.ID: revoked, atExpiry.ID: atExpiry, unbound.ID: unbound}
+	browser := live
+	browser.ID = uuid.New()
+	mcp := live
+	mcp.ID = uuid.New()
+	f.sessions.records = map[uuid.UUID]session.Record{live.ID: live, revoked.ID: revoked, atExpiry.ID: atExpiry, unbound.ID: unbound,
+		browser.ID: browser, mcp.ID: mcp}
+	f.sessions.classes = map[uuid.UUID]string{browser.ID: "browser", mcp.ID: "mcp"}
 	server := stateServer(t, f, stateRowsDocument)
 	for name, tc := range map[string]struct {
 		id   uuid.UUID
@@ -130,6 +143,8 @@ func TestSessionStateAnswersTheSessionAsAuthServiceDecidesIt(t *testing.T) {
 		"revoked":                {revoked.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":"` + org.String() + `","revoked":true,"expired":false,"legacy_token_version":7}`},
 		"expiry not after now":   {atExpiry.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":"` + org.String() + `","revoked":false,"expired":true,"legacy_token_version":7}`},
 		"no organization or pin": {unbound.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":null,"revoked":false,"expired":false,"legacy_token_version":null}`},
+		"a live browser grant":   {browser.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":"` + org.String() + `","revoked":false,"expired":false,"legacy_token_version":7,"client_class":"browser"}`},
+		"a live mcp grant":       {mcp.ID, `{"principal_id":"` + f.principal.String() + `","organization_id":"` + org.String() + `","revoked":false,"expired":false,"legacy_token_version":7,"client_class":"mcp"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := (&fixture{server: server}).do(http.MethodPost, PatternSessionState, stateBody(tc.id.String()), issuerBearer())

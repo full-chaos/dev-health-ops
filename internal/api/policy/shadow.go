@@ -19,12 +19,26 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
+// catalogNamespaces is the sorted set of action namespaces of the embedded catalog.
+func catalogNamespaces() []string {
+	seen := map[string]bool{}
+	for _, action := range policycatalog.Default().Actions() {
+		seen[strings.SplitN(action.ID, ".", 2)[0]] = true
+	}
+	out := make([]string, 0, len(seen))
+	for ns := range seen {
+		out = append(out, ns)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // Closed label value sets of the shadow counters.
 var (
-	shadowNamespaces = []string{"admin", "billing", "integrations", "license", "members", "settings", "teams"}
+	shadowNamespaces = catalogNamespaces()
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
-	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped"}
+	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
 )
 
 const (
@@ -35,6 +49,8 @@ const (
 	resultError    = "error"
 	resultDropped  = "dropped"
 	resultSkipped  = "skipped"
+	// resultImpersonationRefused: a caller with a live go-api impersonation row, which enforcement refuses unasked.
+	resultImpersonationRefused = "impersonation_refused"
 
 	shadowDefaultInFlight = 32
 	shadowDefaultTimeout  = 2 * time.Second
@@ -266,7 +282,8 @@ type ShadowObservation struct {
 	Caller string
 	// UserAccessToken is true when Bearer is a user access token the PDP can resolve.
 	UserAccessToken bool
-	// Impersonating is true while a delegated session is in force: the PDP cannot decide it yet.
+	// Impersonating is true while a live go-api impersonation row is in force for the caller's own bearer. The PDP
+	// would judge that bearer as the admin, not the delegation, so such a call is never asked (stop route aside).
 	Impersonating bool
 	// LegacyAllowed is the legacy check's answer.
 	LegacyAllowed bool
@@ -297,12 +314,16 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	if s.percent < 100 && s.seen.Add(1)%100 >= s.percent {
 		return
 	}
+	if o.Impersonating && o.Pattern != stopImpersonationPattern {
+		countShadowResult(ctx, resultImpersonationRefused)
+		return
+	}
 	if row.HighRisk && !s.highRisk {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
 	org := strings.ToLower(o.OrgID)
-	if o.Bearer == "" || !o.UserAccessToken || o.Impersonating || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
+	if o.Bearer == "" || !o.UserAccessToken || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
 		countShadowResult(ctx, resultSkipped)
 		return
 	}
@@ -386,4 +407,29 @@ func (s *Shadow) logAllowed(gate int) bool {
 	now := time.Now().UnixNano()
 	last := s.logGate[gate].Load()
 	return now-last >= int64(time.Second) && s.logGate[gate].CompareAndSwap(last, now)
+}
+
+// ShadowRowFor returns the catalog row of an action, the form every service's row map holds.
+// An unknown action, or one outside the shadow's resource kinds, is an error.
+func ShadowRowFor(actionID string) (ShadowRow, error) {
+	action, err := policycatalog.Default().Action(actionID)
+	if err != nil {
+		return ShadowRow{}, fmt.Errorf("shadow row: %w", err)
+	}
+	row := shadowRowOf(action)
+	if !row.valid() {
+		return ShadowRow{}, fmt.Errorf("shadow row: action %s is outside the shadow's resource kinds", actionID)
+	}
+	return row, nil
+}
+
+// ShadowCaller is the closed caller kind of a caller's admin.orgs holding and role.
+func ShadowCaller(holdsAdminOrgs bool, role string) string {
+	switch {
+	case holdsAdminOrgs:
+		return ShadowCallerSuperuser
+	case role == "owner" || role == "admin":
+		return ShadowCallerAdmin
+	}
+	return ShadowCallerMember
 }

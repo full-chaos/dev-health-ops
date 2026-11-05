@@ -718,7 +718,7 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 	defer pool.Close()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema, nil, nil)
+	dormant, err := sessionRoutes(authconfig.Config{}, logger, pool, schema, nil, nil, nil)
 	if err != nil || len(dormant) != 4 {
 		t.Fatalf("without the session secrets: %d route(s), err %v; want the 4 refresh, logout, validate and switch-org stubs", len(dormant), err)
 	}
@@ -735,7 +735,7 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return cfg
 	}
 	mountedBy := func(cfg authconfig.Config) string {
-		mounted, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+		mounted, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 		if err != nil {
 			t.Fatalf("sessionRoutes: %v", err)
 		}

@@ -51,6 +51,7 @@ type fakeSessions struct {
 	result     session.Result
 	err        error
 	records    map[uuid.UUID]session.Record
+	classes    map[uuid.UUID]string
 	currentErr error
 	revoked    []uuid.UUID
 	revokedAll []uuid.UUID
@@ -187,6 +188,16 @@ func (f *fakeSessions) ExchangeGuarded(ctx context.Context, credential contracts
 		}
 	}
 	return f.Exchange(ctx, credential)
+}
+
+func (f *fakeSessions) CurrentWithClientClass(ctx context.Context, id uuid.UUID) (session.Record, string, error) {
+	record, err := f.Current(ctx, id)
+	if err != nil {
+		return session.Record{}, "", err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return record, f.classes[id], nil
 }
 
 func (f *fakeSessions) Current(_ context.Context, id uuid.UUID) (session.Record, error) {
@@ -386,6 +397,38 @@ func TestEveryExchangeRefusalMapsToItsStatusAndReason(t *testing.T) {
 		if want.status == 503 && response.Header().Get("Retry-After") == "" {
 			t.Fatalf("%s: a 503 without Retry-After", reason)
 		}
+	}
+}
+
+// The store refuses a session whose public user is inactive or gone under its
+// lock (D6651) and names the locked session: the route's own read of the user
+// decides the reason and revokes the session; a user the route reads active
+// (a concurrent change) gets no token, revision_stale, and the session revoked.
+func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
+	for name, c := range map[string]struct {
+		mutate  func(*fixture)
+		status  int
+		reason  string
+		revokes bool
+	}{
+		"deactivated": {func(f *fixture) {
+			user := f.users.users[f.principal]
+			user.IsActive = false
+			f.users.users[f.principal] = user
+		}, 401, "principal_deactivated", true},
+		"gone":             {func(f *fixture) { delete(f.users.users, f.principal) }, 401, "principal_not_found", true},
+		"active on reread": {func(*fixture) {}, 401, "revision_stale", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			c.mutate(f)
+			f.sessions.result = session.Result{Reason: session.ReasonPrincipalDeactivated, Issued: session.Issued{Session: f.record}}
+			response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
+			expectError(t, response, c.status, c.reason)
+			if revoked := len(f.sessions.revoked) == 1 && f.sessions.revoked[0] == f.record.ID; revoked != c.revokes || (!c.revokes && len(f.sessions.revoked) != 0) {
+				t.Fatalf("revoked %v, want the session revoked = %v", f.sessions.revoked, c.revokes)
+			}
+		})
 	}
 }
 

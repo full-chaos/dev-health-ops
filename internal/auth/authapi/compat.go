@@ -381,11 +381,15 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 		result, err = h.Sessions.ExchangeGuarded(ctx, contracts.NewSecretString(token), h.refreshGuard)
 	}
 	guardRefused := errors.Is(err, session.ErrGuardRefused)
+	// The store refuses an auth-service credential whose public user is inactive or gone under the session lock
+	// (D6651) and names the locked session. The user read below decides go-api's answer and row, the session is
+	// revoked whatever that read finds, and nothing is minted.
+	storeRefused := err == nil && storeRefusedUser(result) && legacy == nil
 	if err != nil && !guardRefused {
 		h.fail(w, r, opCompatRefresh, err)
 		return
 	}
-	if !guardRefused && !result.Reason.Success() {
+	if !guardRefused && !storeRefused && !result.Reason.Success() {
 		if result.Reason == session.ReasonPrincipalDeactivated {
 			// go-api's deactivated row (refresh.go:265), in a transaction of its own: for a go-api refresh token the
 			// store revoked its family in its own transaction; for an auth-service credential the store refused
@@ -423,6 +427,15 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonDeactivated, textDisabled)
+		return
+	}
+	if storeRefused {
+		// The store's lock read refused the user and the read above finds it active (a concurrent change): nothing
+		// was rotated, the refused session ends with go-api's generic 401.
+		if !h.revokeRefused(w, r, record, legacy, nil) {
+			return
+		}
+		h.refuseCompat(w, r, opCompatRefresh, http.StatusUnauthorized, reasonRevisionStale, textInvalidRefresh)
 		return
 	}
 	switch checkPin(ctx, h.rec.logger, record, user) {
@@ -488,6 +501,12 @@ func (h compatHandlers) compatRefresh(w http.ResponseWriter, r *http.Request) {
 	out.Set("user", refreshUserInfo(record.PrincipalID, user, orgText, role))
 	setSessionAccessToken(out, tokens)
 	writeCompatModel(w, out)
+}
+
+// storeRefusedUser reports the store's refusal of a session whose public user
+// is inactive or gone, naming the locked session.
+func storeRefusedUser(result session.Result) bool {
+	return result.Reason == session.ReasonPrincipalDeactivated && result.Session.ID != uuid.Nil
 }
 
 // isJWT reports a token in compact JWS form (three dot-separated parts). An

@@ -30,7 +30,7 @@ op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and sch
 op-job-recovery	op-run	/operate/run/job-recovery-lifecycle/	Job recovery lifecycle	reference	true	public	planned	false	
 op-ingestion	op-run	/operate/run/ingestion-and-backfills/	Ingestion and backfill operations	task-guide	true	public	planned	false	
 op-controls	op-run	/operate/run/operational-controls/	Safe operational controls	task-guide	true	public	planned	false	
-op-ask-dev-rollout	op-run	/operate/run/ask-dev-rollout/	Ask Dev rollout	task-guide	true	public	planned	false	
+op-ask-dev-rollout	op-run	/operate/run/ask-dev-rollout/	Repair stranded Ask Dev conversations	task-guide	true	public	planned	false	
 op-observe	operate	/operate/observe/	Observe the platform	landing	true	public	planned	false	
 op-healthchecks	op-observe	/operate/observe/health-checks/	Health checks	reference	true	public	planned	false	
 op-logs	op-observe	/operate/observe/logs/	Logs	reference	true	public	planned	false	
@@ -56,6 +56,7 @@ op-rb-prod-k3s	op-runbooks	/operate/runbooks/prod-k3s-deploy-and-operate/	Prod k
 op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api bootstrap on prod k3s	runbook	true	public	active	false
 op-rb-auth-sessions-flip	op-runbooks	/operate/runbooks/auth-sessions-flip-and-rollback/	Auth sessions flip and rollback	runbook	true	public	active	false
 op-rb-auth-shadow-triage	op-runbooks	/operate/runbooks/auth-shadow-pdp-triage/	Auth shadow PDP triage	runbook	true	public	active	false
+op-rb-auth-pdp-outage-rollback	op-runbooks	/operate/runbooks/auth-pdp-outage-and-rollback/	Auth PDP outage and rollback	runbook	true	public	active	false
 op-rb-auth-signing-key-planned-rotation	op-runbooks	/operate/runbooks/auth-signing-key-planned-rotation/	Auth signing-key planned rotation	runbook	true	public	active	false
 op-rb-auth-signing-key-emergency-rotation	op-runbooks	/operate/runbooks/auth-signing-key-emergency-rotation-and-rollback/	Auth signing-key emergency rotation and rollback	runbook	true	public	active	false
 op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false

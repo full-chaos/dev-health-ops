@@ -48,6 +48,14 @@ var goOnlyRoutes = map[string]struct {
 	"POST /internal/v1/organizations/create":         {false, "internal provisioning route; no go-api twin; writes no policy model"},
 	"POST /internal/v1/organizations/deprovision":    {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/reactivate":     {false, "internal provisioning route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/principals/get":               {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/principals/list":              {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/get":            {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/organizations/list":           {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/get":              {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/memberships/list":             {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/grants/get":                   {false, "internal read route; no go-api twin; writes no policy body"},
+	"POST /internal/v1/grants/list":                  {false, "internal read route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/state":          {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/organizations/rename":         {false, "internal provisioning route; no go-api twin; writes no policy body"},
 	"POST /internal/v1/service-accounts/create":      {false, "internal provisioning route; no go-api twin; writes no policy body"},
@@ -104,7 +112,7 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, probeSigner(cfg), mustLimits(t))
+	routes, err := sessionRoutes(cfg, logger, pool, schema, probeSigner(cfg), mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}

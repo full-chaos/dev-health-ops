@@ -46,8 +46,7 @@ func run(args []string, stdout, flagErrOutput io.Writer, lookup func(string) (st
 	dir := fs.String("dir", "", "target directory; the private key goes under private/, the JWKS under public/")
 	keyID := fs.String("key-id", defaultKeyID, "key id (kid) of the JWKS entry; defaults to "+envelopemint.KeyIDEnvVar+" when set")
 	skip := fs.Bool("skip-existing", false, "exit 0 and change nothing when a complete, matching key set already exists (for a step that runs on every start); a partial or mismatching set still fails")
-	if err := fs.Parse(args); err != nil {
-		err = cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(fs, flagErrOutput, args); err != nil {
 		return cli.ExitForVerbError(err), err
 	}
 	if strings.TrimSpace(*dir) == "" {

@@ -33,6 +33,17 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+    # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
+    #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
+    #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
+    #    (the access-token issuer), mounts secretName/secretKey read-only at /run/workload, and renders no AUTH_SESSION_ISSUE_TOKEN.
+    #    The Secret holds the bootstrap credential of the api workload (auth-migrate workloads bootstrap-create); the operator makes it.
+    #    auth-service needs AUTH_WORKLOAD_BOOTSTRAP=true and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (the api workload's prn_ id) in
+    #    authService.extraEnv. goApi.extraEnv cannot set the three names while this is on.
+    workloadBootstrap:
+      enabled: false
+      secretName: ""
+      secretKey: api.bootstrap
   # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
   #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization
@@ -207,9 +218,17 @@ authService:
   #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
+  # -- Enforcement switch, per action namespace and service. goApi lists the namespaces whose routes the policy
+  #    decision point decides instead of go-api's legacy guard, rendered as GO_API_AUTHZ_ENFORCE (one comma list).
+  #    Empty renders nothing: every namespace is off. Dark: turning a namespace on is its own decision, after the shadow
+  #    harness shows no mismatch and the decision point holds a per-caller limit. Needs go-api to reach auth-service
+  #    (phase 2 or higher) and the workload credential inputs go-api's startup names. Rollback: remove the name from
+  #    the list and roll go-api; no policy data changes. goApi.extraEnv cannot set the variable.
+  enforce:
+    goApi: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. true is refused at every phase until
-  #    CHAOS-12678 re-homes SSO JIT at users owned (phase 4): go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true needs users owned (authService.phase 4
+  #    with usersOwnedStage=owned): below it go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -275,6 +294,20 @@ authService:
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
   #    the API port.
   operatorPort: 8096
+  # -- The internal listener (CHAOS-12661, --internal-http-addr): the service-to-service routes alone
+  #    (POST /internal/v1/token/exchange, /v1/authorize and /v1/authorize:batch), for the policy enforcement
+  #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
+  #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
+  #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
+  #    pods of the listed peers on this port and nothing else. The API port, its Service and its policy do not
+  #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
+  internal:
+    enabled: false
+    # -- A whole number from 1 to 65535, not port or operatorPort.
+    port: 8097
+    # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
+    #    once; at least one while enabled.
+    peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
     #    pin `repository@sha256:<digest>` (immutable release artifact).
@@ -780,6 +813,9 @@ queryApi:
   #    its own embedded SDL and an operator-supplied value can only disagree
   #    with the binary.
   extraEnv: []
+  # -- Extra pod volumes and query-api container mounts (for example a projected serviceAccountToken), added after the envelope-jwks volume and mount. Empty adds nothing.
+  extraVolumes: []
+  extraVolumeMounts: []
   # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /
   #    {secretRef: {name: ...}} entries), same shape as goWorkers.extraEnvFrom.
   #    Empty by default: this container inherits NOTHING from the platform Secret/
@@ -1266,6 +1302,8 @@ web:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # -- Extra web env ({name, value} or {name, valueFrom}). CHAOS-12928: AUTH_SSO_ENABLED on ("true"/"1", or by
+  #    valueFrom) fails the render unless AUTH_ACCESS_TOKEN_CLASS is the literal value eddsa (web.env sets neither name).
   extraEnv: []
   # -- CHAOS-6188: mount extra volumes into web in every environment (e.g. the
   #    Secret volume carrying the ACR web-assertion Ed25519 signing key).

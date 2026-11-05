@@ -78,8 +78,8 @@ func run(args []string, stdout, flagErrOutput io.Writer) error {
 	fs.SetOutput(flagErrOutput)
 	org := fs.String("org", "", "org id to mint the envelope for")
 	keyFile := fs.String("key-file", "", "path to a PEM file holding the Ed25519 private key (PKCS#8, \"PRIVATE KEY\" block); defaults to the file named by "+envelopemint.PrivateKeyFileEnvVar+", else (deprecated) the raw "+envelopemint.PrivateKeyEnvVar+" environment variable; the file must be mode 0600 or stricter, not a symlink, at most 16 KiB")
-	if err := fs.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(fs, flagErrOutput, args); err != nil {
+		return err
 	}
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("-org is required")

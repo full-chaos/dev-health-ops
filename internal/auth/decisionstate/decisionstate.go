@@ -1,7 +1,9 @@
 // Package decisionstate reads the policy decision point's state: one READ ONLY
-// REPEATABLE READ transaction per authorize call, over the auth schema and
-// go-api's public users and memberships, so every read of the call sees one
-// snapshot.
+// REPEATABLE READ transaction per authorize call, so every read of the call sees
+// one snapshot. The decision inputs are go-api's public users, organizations and
+// memberships (D6651: public.* is the authority, the auth.principals,
+// auth.organizations and auth.memberships rows are copies and are not read), and
+// the auth schema's own sessions, resource grants and platform role assignments.
 package decisionstate
 
 import (
@@ -33,13 +35,13 @@ import (
 // ErrStore wraps every failed read. The error text never carries a value.
 var ErrStore = errors.New("decisionstate: state unavailable")
 
-// The principal kinds with a decision rule: a user (public.users holds user
-// principals only) and a service account (its auth.service_accounts row).
-// Every other kind denies until a leaf names its rule.
-const (
-	principalKindUser           = "user"
-	principalKindServiceAccount = "service_account"
-)
+// principalKindServiceAccount is the only non-user principal kind with a decision rule: its auth.service_accounts row.
+// A user is the principal that has a public.users row (D6651); every other kind denies until a leaf names its rule.
+const principalKindServiceAccount = "service_account"
+
+// principalKindUser is the auth copy's kind of a user. A principal whose copy names another kind is not a user, whatever
+// its id has in public.users.
+const principalKindUser = "user"
 
 // Config builds a Reader.
 type Config struct {
@@ -153,12 +155,14 @@ FROM ` + sessions + ` s WHERE s.id = $1`
 }
 
 // Actor reads the real actor of a delegated session now, in the decision
-// transaction: an active user principal whose public.users row is active, and
-// the platform roles it holds. A principal that is no user is the zero state.
+// transaction: whether its public.users row is active, and the platform roles it
+// holds. A principal with no public.users row (a workload, a service account) is
+// the zero state.
 func (t *txReader) Actor(ctx context.Context, actor uuid.UUID) (authapi.ActorState, error) {
-	kind, enabled, found, err := t.principalRow(ctx, actor)
-	if err != nil || !found || kind != principalKindUser {
+	if kind, _, found, err := t.principalRow(ctx, actor); err != nil {
 		return authapi.ActorState{}, err
+	} else if found && kind != principalKindUser {
+		return authapi.ActorState{}, nil
 	}
 	user, found, err := t.r.users.StateOn(ctx, t.tx, actor)
 	if err != nil {
@@ -172,7 +176,7 @@ func (t *txReader) Actor(ctx context.Context, actor uuid.UUID) (authapi.ActorSta
 		return authapi.ActorState{}, storeErr("platform role", err)
 	}
 	return authapi.ActorState{
-		Active:         enabled && user.IsActive,
+		Active:         user.IsActive,
 		CanImpersonate: held.Allows(session.ImpersonateAction),
 		Owner:          held.IsOwner(),
 	}, nil
@@ -205,7 +209,7 @@ func (t *txReader) Snapshot(ctx context.Context, principal uuid.UUID, orgID stri
 // Unfed reads what no feed event covers (go-api writes public.users and public.memberships without an outbox event), for
 // the decision cache key. The users row is read through PGUsers.StateOn, as the snapshot reads it; its platform role
 // counts only while auth does not own the platform roles: owned, the role comes from auth's assignments, which the feed
-// covers. A public membership row with a NULL role is no row, as effective() reads it.
+// covers. A public membership row with a NULL role is no row, as membership.EffectiveOn reads it.
 func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string) (authapi.UnfedState, error) {
 	u := authapi.UnfedState{NowUnixNano: t.now}
 	user, found, err := t.r.users.StateOn(ctx, t.tx, principal)
@@ -233,10 +237,12 @@ func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string)
 	return u, nil
 }
 
-// StateVersion is a digest of (table, id, xmin) of every row a decision of the pair depends on, in the transaction's
-// snapshot: the principal, the organization, the pair's membership row, every grant row of the pair, and the principal's
-// platform role assignments while auth owns them. Any committed insert, update or delete of one of them is a new
-// digest, with or without an outbox event; VACUUM FREEZE keeps xmin.
+// StateVersion is a digest of every row a decision of the pair depends on, in the transaction's snapshot: the principal's
+// public.users row, the organization's public.organizations row, the pair's public.memberships row (each by the values a
+// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, the organization's repository identity rows while the pair holds an id-bearing grant, and
+// the principal's platform role assignments while auth owns them (by xmin). The auth copies of the first three are not
+// hashed: a write of a copy does not move the version. A committed insert, delete, or change of a value a decision reads
+// is a new digest, with or without an outbox event; VACUUM FREEZE keeps it.
 func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID string) (string, error) {
 	org, err := uuid.Parse(orgID)
 	read := orgID != "" && err == nil && org.String() == orgID
@@ -252,7 +258,7 @@ func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID 
 	var found []stateRow
 	for rows.Next() {
 		var r stateRow
-		if err := rows.Scan(&r.table, &r.id, &r.xmin); err != nil {
+		if err := rows.Scan(&r.table, &r.id, &r.ver); err != nil {
 			return "", storeErr("state version", err)
 		}
 		found = append(found, r)
@@ -263,17 +269,19 @@ func (t *txReader) StateVersion(ctx context.Context, principal uuid.UUID, orgID 
 	return stateDigest(found), nil
 }
 
-// stateRow is one row version: its table, id and xmin.
-type stateRow struct{ table, id, xmin string }
+// stateRow is one row version: its table, id and version (xmin for an auth table; for a public table the decision-relevant
+// values, since the runtime role has column grants there and xmin is not readable through them).
+type stateRow struct{ table, id, ver string }
 
 // stateQuery reads the row versions of the pair: $1 is the principal, $2 the organization when org is set.
 func stateQuery(schema string, org, owned bool) string {
-	parts := []string{`SELECT 'principals', id::text, xmin::text FROM ` + schema + `.principals WHERE id = $1`}
+	parts := []string{`SELECT 'public.users', id::text, COALESCE(is_active, false)::text || '/' || COALESCE(is_superuser, false)::text FROM public.users WHERE id = $1`}
 	if org {
 		parts = append(parts,
-			`SELECT 'organizations', id::text, xmin::text FROM `+schema+`.organizations WHERE id = $2`,
-			`SELECT 'memberships', id::text, xmin::text FROM `+schema+`.memberships WHERE organization_id = $2 AND principal_id = $1`,
-			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`)
+			`SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
+			`SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
+			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+			`SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM `+schema+`.repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`)
 	}
 	if owned {
 		parts = append(parts, `SELECT 'platform_role_assignments', id::text, xmin::text FROM `+schema+`.platform_role_assignments WHERE principal_id = $1`)
@@ -285,7 +293,7 @@ func stateQuery(schema string, org, owned bool) string {
 func stateDigest(rows []stateRow) string {
 	lines := make([]string, len(rows))
 	for i, r := range rows {
-		lines[i] = r.table + "\x00" + r.id + "\x00" + r.xmin
+		lines[i] = r.table + "\x00" + r.id + "\x00" + r.ver
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
@@ -332,12 +340,10 @@ func principalDependencies(principal uuid.UUID) []decisioncache.Dependency {
 	}
 }
 
-// organizationDependencies are the organization, the auth membership row (when one exists) and each grant row read.
-func organizationDependencies(org uuid.UUID, membershipID *uuid.UUID, grants []uuid.UUID) []decisioncache.Dependency {
+// organizationDependencies are the organization and each grant row read. The membership has no row dependency: the
+// decision reads no auth membership row, so it rests on the membership set tag and the state version.
+func organizationDependencies(org uuid.UUID, grants []uuid.UUID) []decisioncache.Dependency {
 	deps := []decisioncache.Dependency{{AggregateType: "organization", AggregateID: provisioning.WireID("organization", org.String())}}
-	if membershipID != nil {
-		deps = append(deps, decisioncache.Dependency{AggregateType: "membership", AggregateID: provisioning.WireID("membership", membershipID.String())})
-	}
 	for _, g := range grants {
 		deps = append(deps, decisioncache.Dependency{AggregateType: "resource_grant", AggregateID: provisioning.WireID("resource_grant", g.String())})
 	}
@@ -382,32 +388,21 @@ func snapshotOut(s *snapshot, collect bool) authorization.GrantSnapshot {
 	return s
 }
 
-// principalRow reads the principal's kind and whether it is not disabled.
-func (t *txReader) principalRow(ctx context.Context, principal uuid.UUID) (kind string, enabled, found bool, err error) {
-	err = t.tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+t.table("principals")+` WHERE id = $1`, principal).Scan(&kind, &enabled)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		return "", false, false, nil
-	case err != nil:
-		return "", false, false, storeErr("principal", err)
-	}
-	return kind, enabled, true, nil
-}
-
-// principal reads the principal's kind and disable mark, then, for a user,
-// go-api's users row. A user is active only when both say so.
+// principal decides by kind first: a service account has a rule of its own (auth-native), any other kind that is not a
+// user stays unknown, even when its id has a public.users row. Otherwise (a user, or no auth copy yet) the principal is its
+// public.users row: active when is_active, suspended when not, unknown when there is no row.
 func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapshot) error {
 	kind, enabled, found, err := t.principalRow(ctx, principal)
-	if err != nil || !found {
+	if err != nil {
 		return err
 	}
-	if t.r.collect {
-		s.deps = append(s.deps, principalDependencies(principal)...)
-	}
-	if kind == principalKindServiceAccount {
-		return t.serviceAccount(ctx, principal, enabled, s)
-	}
-	if kind != principalKindUser {
+	if found && kind != principalKindUser {
+		if t.r.collect {
+			s.deps = append(s.deps, principalDependencies(principal)...)
+		}
+		if kind == principalKindServiceAccount {
+			return t.serviceAccount(ctx, principal, enabled, s)
+		}
 		return nil
 	}
 	user, found, err := t.r.users.StateOn(ctx, t.tx, principal)
@@ -417,7 +412,10 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 	if !found {
 		return nil
 	}
-	if enabled && user.IsActive {
+	if t.r.collect {
+		s.deps = append(s.deps, principalDependencies(principal)...)
+	}
+	if user.IsActive {
 		s.principal = authorization.StatusActive
 	} else {
 		s.principal = authorization.StatusSuspended
@@ -426,6 +424,19 @@ func (t *txReader) principal(ctx context.Context, principal uuid.UUID, s *snapsh
 		s.platformRole = rule.PlatformAdmin
 	}
 	return nil
+}
+
+// principalRow reads the kind and the disabled mark of the principal's auth row (found is false with none). Only the kind
+// of a user's copy is used; the disabled mark is read for a service account.
+func (t *txReader) principalRow(ctx context.Context, principal uuid.UUID) (kind string, enabled, found bool, err error) {
+	err = t.tx.QueryRow(ctx, `SELECT kind, disabled_at IS NULL FROM `+t.table("principals")+` WHERE id = $1`, principal).Scan(&kind, &enabled)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", false, false, nil
+	case err != nil:
+		return "", false, false, storeErr("principal", err)
+	}
+	return kind, enabled, true, nil
 }
 
 // serviceAccount reads the account row of a service-account principal. With
@@ -448,12 +459,11 @@ func (t *txReader) serviceAccount(ctx context.Context, principal uuid.UUID, enab
 	return nil
 }
 
-// organization reads the organization's status, the effective membership (a
-// user's only: a service account has none) and every grant row of the pair,
-// in any state.
+// organization reads the organization's status (public.organizations), the effective membership (public.memberships; a
+// user's only: a service account has none) and every grant row of the pair, in any state.
 func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s *snapshot) error {
 	var active bool
-	err := t.tx.QueryRow(ctx, `SELECT disabled_at IS NULL FROM `+t.table("organizations")+` WHERE id = $1`, org).Scan(&active)
+	err := t.tx.QueryRow(ctx, `SELECT COALESCE(is_active, false) FROM public.organizations WHERE id = $1`, org).Scan(&active)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		s.orgStatus = authorization.StatusUnknown
@@ -464,14 +474,12 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 	default:
 		s.orgStatus = authorization.StatusSuspended
 	}
-	var membershipID *uuid.UUID
 	if s.account == nil {
-		var err error
-		if membershipID, err = t.membership(ctx, principal, org, s); err != nil {
+		if err := t.membership(ctx, principal, org, s); err != nil {
 			return err
 		}
 	}
-	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
+	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, coalesce(resource_repo_id, ''), expires_at, revoked_at IS NOT NULL
 FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id = $2`, principal, org)
 	if err != nil {
 		return storeErr("grants", err)
@@ -484,7 +492,7 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 			g       authorization.Grant
 			expires *time.Time
 		)
-		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &expires, &g.Revoked); err != nil {
+		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &g.RepoID, &expires, &g.Revoked); err != nil {
 			return storeErr("grants", err)
 		}
 		grantIDs = append(grantIDs, id)
@@ -498,34 +506,54 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 		return storeErr("grants", err)
 	}
 	if t.r.collect {
-		s.deps = append(s.deps, organizationDependencies(org, membershipID, grantIDs)...)
+		s.deps = append(s.deps, organizationDependencies(org, grantIDs)...)
+	}
+	for _, g := range s.grants {
+		if g.RepoID != "" {
+			return t.repositoryIdentities(ctx, org, s)
+		}
 	}
 	return nil
 }
 
-// membership reads the effective membership of the pair and, for the decision
-// cache, the id of its auth row.
-func (t *txReader) membership(ctx context.Context, principal, org uuid.UUID, s *snapshot) (*uuid.UUID, error) {
-	m, err := membership.EffectiveOn(ctx, t.tx, t.r.schema, org, principal)
+// repositoryIdentities reads the organization's path to id map, only for a pair that holds a grant with a repository id.
+// A path with more than one row maps to no id: a new repository took a path before the sync moved the old row.
+func (t *txReader) repositoryIdentities(ctx context.Context, org uuid.UUID, s *snapshot) error {
+	rows, err := t.tx.Query(ctx, `SELECT provider || ':' || provider_repo_id, current_path FROM `+t.table("repository_identities")+
+		` WHERE organization_id = $1`, org)
 	if err != nil {
-		return nil, storeErr("membership", err)
+		return storeErr("repository identities", err)
 	}
-	var membershipID *uuid.UUID
-	if t.r.collect {
-		var id uuid.UUID
-		err := t.tx.QueryRow(ctx, `SELECT id FROM `+t.table("memberships")+` WHERE organization_id = $1 AND principal_id = $2`, org, principal).Scan(&id)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-		case err != nil:
-			return nil, storeErr("membership id", err)
-		default:
-			membershipID = &id
+	defer rows.Close()
+	s.repoIDs, s.repoPaths = map[string]string{}, map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return storeErr("repository identities", err)
 		}
+		s.repoPaths[id] = path
+		if _, dup := s.repoIDs[path]; dup {
+			s.repoIDs[path] = ""
+			continue
+		}
+		s.repoIDs[path] = id
+	}
+	if err := rows.Err(); err != nil {
+		return storeErr("repository identities", err)
+	}
+	return nil
+}
+
+// membership reads the effective membership of the pair from public.memberships.
+func (t *txReader) membership(ctx context.Context, principal, org uuid.UUID, s *snapshot) error {
+	m, err := membership.EffectiveOn(ctx, t.tx, org, principal)
+	if err != nil {
+		return storeErr("membership", err)
 	}
 	if m.Found {
 		s.membership = &authorization.Membership{OrgID: s.org, Role: m.Role, Status: authorization.ParseStatus(string(m.Status))}
 	}
-	return membershipID, nil
+	return nil
 }
 
 // snapshot is one (principal, organization) state. It holds no connection:
@@ -537,6 +565,10 @@ type snapshot struct {
 	orgStatus    authorization.Status
 	membership   *authorization.Membership
 	grants       []authorization.Grant
+	// repoIDs maps a live repository path of the organization to its id; nil unless a grant holds an id.
+	repoIDs map[string]string
+	// repoPaths maps an id to its path.
+	repoPaths map[string]string
 	// account is the service-account row of a service-account principal.
 	account *authorization.ServiceAccount
 	now     int64
@@ -568,6 +600,25 @@ func (s *snapshot) Grants(orgID string) ([]authorization.Grant, error) {
 		return nil, nil
 	}
 	return s.grants, nil
+}
+
+func (s *snapshot) RepositoryID(orgID, path string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	id := s.repoIDs[path]
+	return id, id != ""
+}
+
+func (s *snapshot) PathForID(orgID, id string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	path, ok := s.repoPaths[id]
+	if !ok || s.repoIDs[path] == "" {
+		return "", false
+	}
+	return path, true
 }
 
 func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {

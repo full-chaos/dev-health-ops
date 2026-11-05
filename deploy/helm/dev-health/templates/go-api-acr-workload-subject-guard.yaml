@@ -1,0 +1,12 @@
+{{- /* CHAOS-12402: AUTH_ACR_WORKLOAD_SUBJECT is the `sub` of a workload token, which is the session wire form: "prn_" and
+the 22 base64url characters of the 16-byte principal id. A UUID-text form starts go-api and never matches a token, and
+go-api does not refuse to start on it (D6465), so this render check is the deploy-time refusal. A value read from a
+Secret or ConfigMap (valueFrom) is not readable here and is left to go-api's ERROR line and gauge. Runs on every render
+and renders nothing. */ -}}
+{{- range .Values.goApi.extraEnv }}
+{{- if and (eq (upper (trim (toString .name))) "AUTH_ACR_WORKLOAD_SUBJECT") (hasKey . "value") }}
+{{- if not (regexMatch "^prn_[A-Za-z0-9_-]{22}$" (trim (toString .value))) }}
+{{- fail "goApi.extraEnv AUTH_ACR_WORKLOAD_SUBJECT must be the session wire form of the principal id (prn_ and 22 base64url characters); the UUID text form never matches a workload token" }}
+{{- end }}
+{{- end }}
+{{- end }}

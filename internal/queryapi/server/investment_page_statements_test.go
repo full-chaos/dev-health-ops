@@ -45,8 +45,8 @@ func (client *pageStatements) Query(_ context.Context, statement string, _ []dhc
 		// key, mean, total, known
 		kind, row = statementQualityByGroup, []any{"feature_delivery", 0.8, uint64(12), uint64(9)}
 	case strings.Contains(statement, "quality_known_count"):
-		// total, known, mean, stddev, high, moderate, low, very low, unknown
-		kind, row = statementQualityStats, []any{uint64(40), uint64(30), 0.7, 0.1, uint64(10), uint64(12), uint64(6), uint64(2), uint64(10), uint64(0)}
+		// total, known, mean, stddev, high, moderate, low, very low, unknown, uncategorized, sized
+		kind, row = statementQualityStats, []any{uint64(40), uint64(30), 0.7, 0.1, uint64(10), uint64(12), uint64(6), uint64(2), uint64(10), uint64(0), uint64(0)}
 	case strings.Contains(statement, "AS dimension_value"):
 		// key, value
 		kind, row = statementBreakdown, []any{"feature_delivery", 25.0}

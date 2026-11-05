@@ -89,7 +89,8 @@ var azCorpusExclusions = map[string]azExclusion{
 	"membership-active-uppercase":       azStatusNotRepresentable,
 	"principal-status-uppercase-active": azStatusNotRepresentable,
 
-	"repo-plain-snapshot-has-no-grants": azPlainSnapshotUnreachable,
+	"repo-plain-snapshot-has-no-grants":  azPlainSnapshotUnreachable,
+	"org-filtered-plain-snapshot-denies": azPlainSnapshotUnreachable,
 
 	"cross-org-membership-row-for-other-org": azMembershipOrgIsTheKey,
 	"repo-membership-org-mismatch":           azMembershipOrgIsTheKey,
@@ -127,6 +128,7 @@ type azGrant struct {
 	Role         string  `json:"role"`
 	ResourceKind string  `json:"resource_kind"`
 	ResourceKey  string  `json:"resource_key"`
+	RepoID       string  `json:"resource_repo_id"`
 	ExpiresAt    *string `json:"expires_at"`
 	Revoked      bool    `json:"revoked"`
 }
@@ -167,6 +169,8 @@ type azExpect struct {
 	PolicyRevision int    `json:"policy_revision"`
 	// WireReasonCode, when a row carries it, is compared instead of Reason.
 	WireReasonCode *string `json:"wire_reason_code"`
+	// Obligations is the decision's obligations in wire form, or null.
+	Obligations json.RawMessage `json:"obligations"`
 }
 
 type azVector struct {
@@ -253,9 +257,6 @@ var (
 	azPrincipalStatuses    = []string{"active", "suspended"}
 	azOrganizationStatuses = []string{"active", "suspended"}
 	azMembershipStatuses   = []string{"active", "invited", "suspended", "removed"}
-	// auth.memberships.role is closed (migration 0019); an active membership is
-	// go-api's public row, whose role column takes any text.
-	azAuthMembershipRoles = []string{"viewer", "member", "admin", "owner"}
 	// auth.resource_grants.role_key references auth.roles; the replay seeds
 	// platform_admin there (a role the catalog scopes to the platform).
 	azGrantRoles = []string{"viewer", "member", "admin", "platform_admin"}
@@ -303,14 +304,8 @@ func azBlocker(v azVector) (azExclusion, error) {
 		if !slices.Contains(azMembershipStatuses, m.Status) {
 			return azStatusNotRepresentable, nil
 		}
-		if m.Status == "active" {
-			continue
-		}
-		if !slices.Contains(azAuthMembershipRoles, m.Role) {
-			return "", fmt.Errorf("membership %s: role %q has no auth row form", key, m.Role)
-		}
-		if _, ok := s.Organizations[key]; !ok {
-			return "", fmt.Errorf("membership %s: an auth row needs the organization projected", key)
+		if m.Status != "active" {
+			return azStatusNotRepresentable, nil
 		}
 	}
 	for i, g := range s.Grants {

@@ -280,10 +280,26 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) err
 	return &DenyError{Reason: decision.Reason()}
 }
 
+// AuthorizeDelegated is Authorize for a delegated (impersonation) session's bearer, which the PDP judges as its target
+// user. In enforce mode a row whose action is not a read (policycatalog Action.ReadOnly) is refused before any PDP
+// call: a delegated bearer only reads. Off and shadow never deny.
+func (g *Gate) AuthorizeDelegated(ctx context.Context, profile, bearer, orgID string) error {
+	if g != nil && g.mode == ModeEnforce {
+		if action, known := g.actions[profile]; known {
+			if a, err := policycatalog.Default().Action(action); err != nil || !a.ReadOnly() {
+				g.count(ctx, ModeEnforce, ResultDeny, action)
+				return &DenyError{Reason: pep.ReasonImpersonationDenied}
+			}
+		}
+	}
+	return g.Authorize(ctx, profile, bearer, orgID)
+}
+
 // runsOrgWide reports whether an allow's obligations leave query-api's organization-wide reads as they are: the
-// tenant scope is the asked organization, no repository allowlist (an empty one included), no redaction class, no
-// minimum assurance, no step-up, and the repository scope is organization (an action the catalog marks "none" has no
-// repository member). query-api applies no obligation, so an allow that carries any other one is refused.
+// tenant scope is the asked organization, no repository allowlist (an empty one included), no redaction class, a
+// minimum assurance of aal1 at most (every accepted session bearer is aal1; no factor gives more), no step-up, and the
+// repository scope is organization (an action the catalog marks "none" has no repository member). Any other
+// obligation is one query-api does not carry out, so an allow that carries it is refused.
 func runsOrgWide(o pep.Obligations, org, action string) bool {
 	if tenant, ok := o.TenantScope(); !ok || tenant != org {
 		return false
@@ -291,7 +307,7 @@ func runsOrgWide(o pep.Obligations, org, action string) bool {
 	if o.RepositoryRestricted() || len(o.Redaction()) > 0 || o.StepUpRequired() {
 		return false
 	}
-	if _, has := o.MinimumAssurance(); has {
+	if level, has := o.MinimumAssurance(); has && level != pep.AssuranceAAL1 {
 		return false
 	}
 	if o.RepositoryScopeOrganization() {

@@ -425,7 +425,7 @@ func TestVenueOracleCredentialRepos(t *testing.T) {
 	pythonResponses := golden.Python(t, venue, requests)
 	pythonProvider := strings.Split(golden.InspectRows(t, "python provider requests"), "\n")
 	failuresChecked := 0
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-repos-orgless.go-pin.json", SHA256: credentialReposOrglessPinSHA256, Ruling: orglessSuperuserRuling})
+	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-repos-orgless.go-pin.json", SHA256: credentialReposOrglessPinSHA256, Ruling: credentialOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden:      golden,
 		Normalize:   reduceProviderFailure,

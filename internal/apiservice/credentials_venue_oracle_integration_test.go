@@ -264,7 +264,7 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := credentialRequests(seed, venue.Tokens)
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-admin-orgless.go-pin.json", SHA256: credentialAdminOrglessPinSHA256, Ruling: orglessSuperuserRuling})
+	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-admin-orgless.go-pin.json", SHA256: credentialAdminOrglessPinSHA256, Ruling: credentialOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{
 		Golden:      golden,
 		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return credentialAdminOrglessRetired[request.Name] }, Pin: orglessPin}},
@@ -338,8 +338,8 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 		return strings.Join(lines, "\n")
 	}
 	goRendered := renderPlane(planes[1])
-	// orglessSuperuserRuling: the org-less superuser's create and delete in org B do not happen on Go, so its rows are pinned.
-	golden.RetireRows(t, "python integration_credentials rows decrypted", orglessSuperuserRuling)
+	// credentialOrglessRuling: the org-less superuser's create and delete in org B do not happen on Go, so its rows are pinned.
+	golden.RetireRows(t, "python integration_credentials rows decrypted", credentialOrglessRuling)
 	if goRendered == "" {
 		t.Error("integration_credentials rows are empty after the writes")
 	}
@@ -353,7 +353,10 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 // membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190).
 var credentialOrglessSuperusers = []string{"superuser"}
 
-// credentialAdminOrglessRetired are the requests orglessSuperuserRuling retired.
+// credentialOrglessRuling is orglessSuperuserRuling at the AdminOrg credentials routes.
+const credentialOrglessRuling = orglessSuperuserRuling + " (api/policy/guard.go:183-186, AdminOrg)"
+
+// credentialAdminOrglessRetired are the requests credentialOrglessRuling retired.
 var credentialAdminOrglessRetired = map[string]bool{"list: other org sees its own": true, "create: same name in another org is separate": true,
 	"delete: other org admin sees only its own row": true, "list: other org after its delete": true}
 

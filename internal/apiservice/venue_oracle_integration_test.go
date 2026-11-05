@@ -68,7 +68,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
 	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgclaim.go-pin.json", SHA256: protectedOrgClaimPinSHA256, Ruling: orgClaimRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgless.go-pin.json", SHA256: protectedOrglessPinSHA256, Ruling: orglessSuperuserRuling})
+	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgless.go-pin.json", SHA256: protectedOrglessPinSHA256, Ruling: protectedOrglessRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -595,9 +595,12 @@ const orgClaimRuling = "EdDSA access path needs a live membership for the org cl
 // stranger org in X-Org-Id.
 const publicRowRuling = "a public row verifies no bearer, so OrgScope (policy/scope.go:128) sees an anonymous caller and does not check X-Org-Id; the row serves no org data and the telemetry POST is the anonymous stream; prod behaves so today"
 
-// orglessSuperuserRuling retires the Python answer of a request by a superuser seed minted with no org claim
-// (protectedOrglessSuperusers): the route reads the token's own org, and there is none.
-const orglessSuperuserRuling = "org-less superuser token (auth-service login mints no org claim for a non-member, auth/authapi/login.go:184-190): the route reads the token org and there is none"
+// orglessSuperuserRuling retires the Python answer of a request by a superuser seed minted with no org claim: the
+// route needs a token org and refuses. Each use names its route's refusal site.
+const orglessSuperuserRuling = "org-less superuser token (auth-service login mints no org claim for a non-member, auth/authapi/login.go:184-190): the route needs a token org, none -> refusal"
+
+// protectedOrglessRuling is orglessSuperuserRuling at /me and the telemetry report.
+const protectedOrglessRuling = orglessSuperuserRuling + " (api/orgs/orgs.go:111-114 for /me, api/telemetry/telemetry.go:109-111 for /report)"
 
 // protectedOrgClaimRetired are the requests orgClaimRuling retired.
 var protectedOrgClaimRetired = map[string]bool{"ent: bad org claim": true}
@@ -606,7 +609,7 @@ var protectedOrgClaimRetired = map[string]bool{"ent: bad org claim": true}
 var protectedPublicRetired = map[string]bool{"probe: GET /health stranger org": true, "probe: GET /ready stranger org": true,
 	"probe: GET /health/workers stranger org": true, "pt: stranger org header": true}
 
-// protectedOrglessRetired are the requests orglessSuperuserRuling retired.
+// protectedOrglessRetired are the requests protectedOrglessRuling retired.
 var protectedOrglessRetired = map[string]bool{"me: superuser": true, "me: superuser X-Org-Id any": true, "report: superuser no org": true}
 
 const (

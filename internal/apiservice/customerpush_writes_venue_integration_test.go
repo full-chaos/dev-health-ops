@@ -304,7 +304,7 @@ func TestVenueOracleCustomerPushWrites(t *testing.T) {
 	python := golden.Python(t, venue, requests)
 	normalize := customerPushNormalizer(seeded, start)
 	var goMinted []string
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-writes-orgless.go-pin.json", SHA256: customerPushWritesOrglessPinSHA256, Ruling: orglessSuperuserRuling})
+	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-writes-orgless.go-pin.json", SHA256: customerPushWritesOrglessPinSHA256, Ruling: customerPushOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden:      golden,
 		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return request.Name == "create: superuser x-org" }, Pin: orglessPin}},

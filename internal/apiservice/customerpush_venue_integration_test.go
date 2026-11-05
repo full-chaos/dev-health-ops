@@ -221,7 +221,7 @@ func TestVenueOracleCustomerPushReads(t *testing.T) {
 	requests := customerPushRequests(seed, venue.Tokens)
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads.go-pin.json", SHA256: customerPushReadsPinSHA256, Ruling: customerPushReadsRuling})
 	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgclaim.go-pin.json", SHA256: customerPushReadsOrgClaimPinSHA256, Ruling: orgClaimRuling})
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgless.go-pin.json", SHA256: customerPushReadsOrglessPinSHA256, Ruling: orglessSuperuserRuling})
+	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/customer-push-reads-orgless.go-pin.json", SHA256: customerPushReadsOrglessPinSHA256, Ruling: customerPushOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{Golden: golden, Retire: retiredCustomerPushReadsRequest, Pin: pin,
 		Retirements: []venueoracle.Retirement{
 			{Match: func(request venueoracle.Request) bool { return request.Name == "bad org claim" }, Pin: claimPin},
@@ -251,8 +251,10 @@ func retiredCustomerPushReadsRequest(request venueoracle.Request) bool {
 // no membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190).
 var customerPushOrglessSuperusers = []string{"superuser"}
 
-// customerPushReadsOrglessRetired are the reads by the org-less superuser seed that orglessSuperuserRuling retired: the
-// customer-push gate reads the token's own org (customerpush/gate.go:23-26), and there is none.
+// customerPushOrglessRuling is orglessSuperuserRuling at the customer-push gate, which reads the token's own org.
+const customerPushOrglessRuling = orglessSuperuserRuling + " (apiservice/customerpush/gate.go:23-26)"
+
+// customerPushReadsOrglessRetired are the reads by the org-less superuser seed that customerPushOrglessRuling retired.
 var customerPushReadsOrglessRetired = map[string]bool{"superuser own org": true, "superuser x-org team": true}
 
 const (

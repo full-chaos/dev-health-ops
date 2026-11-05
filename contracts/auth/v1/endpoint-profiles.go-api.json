@@ -573,7 +573,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -1254,7 +1254,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -1325,7 +1325,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4068,7 +4068,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "settings.read",
+      "action": "settings.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4137,7 +4137,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "settings.read",
+      "action": "settings.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4277,7 +4277,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4348,7 +4348,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4419,7 +4419,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4490,7 +4490,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4561,7 +4561,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4632,7 +4632,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4703,7 +4703,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4774,7 +4774,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4845,7 +4845,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4916,7 +4916,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "teams.read",
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -4985,7 +4985,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": "teams.read",
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -5054,7 +5054,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -5125,7 +5125,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -8583,7 +8583,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -9998,7 +9998,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -10414,7 +10414,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -10767,7 +10767,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -10838,7 +10838,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.read",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -10909,7 +10909,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -11756,7 +11756,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -11827,7 +11827,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -11898,7 +11898,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -11969,7 +11969,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -12109,7 +12109,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -12180,7 +12180,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -12252,7 +12252,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -12323,7 +12323,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -12394,7 +12394,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "teams.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"
@@ -15625,7 +15625,7 @@
       "access_token_validation": {
         "legacy_hs256": true
       },
-      "action": null,
+      "action": "integrations.write",
       "class_disambiguator": {
         "kind": "jwt_header_alg",
         "name": "EdDSA"

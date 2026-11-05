@@ -84,7 +84,18 @@ type Scope struct {
 	logger       *slog.Logger
 	rows         func(profile string) (BearerRow, bool)
 	authenticate func(ctx context.Context, token string) (*User, error)
+	// refuseLegacy is RefuseLegacyImpersonation.
+	refuseLegacy bool
 }
+
+// RefuseLegacyImpersonation sets whether Impersonation refuses the legacy
+// impersonation caller (the admin's own bearer beside a live go-api session
+// row) on every route but the session's status and stop. Call it once,
+// before the Scope serves.
+func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
+
+// RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
+func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
 
 // NewScope builds the middlewares over auth.
 func NewScope(auth *Authenticator, logger *slog.Logger) *Scope {

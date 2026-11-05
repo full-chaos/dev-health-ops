@@ -461,7 +461,7 @@ func configureWith(
 	}
 	var scope []func(http.Handler) http.Handler
 	if deps.Pool != nil {
-		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, logger)
+		protected, err := newProtection(cfg, deps.Pool, deps.PlatformRolesOwned, authProxy, logger)
 		if err != nil {
 			closeComponents(depComponents)
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
@@ -703,7 +703,7 @@ type protection struct {
 // newProtection builds the principal service. The api verifies the access
 // token the Python api mints, so with a database it needs the same key:
 // JWT_SECRET_KEY is required, and a missing or short key stops startup.
-func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
+func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, proxy AuthProxyConfig, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
 	}

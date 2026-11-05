@@ -58,7 +58,7 @@ func TestDeactivationBound_UserOrgMembership_PDP_DenyAtOnce(t *testing.T) {
 func TestDeactivationBound_PDP_StoredAllowEndsAtTheCacheBound(t *testing.T) {
 	c := newCacheFixture(t)
 	c.ask()
-	c.advance(29*time.Second)
+	c.advance(29 * time.Second)
 	if !c.ask().Allowed || c.state.snapReads != 1 {
 		t.Fatalf("inside the bound the stored allow was not served (%d reads)", c.state.snapReads)
 	}

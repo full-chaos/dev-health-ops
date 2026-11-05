@@ -42,7 +42,13 @@ var forChecksUsers = map[string]bool{
 }
 
 // settingReads are the functions that read one settings row by name.
-var settingReads = map[string]bool{"settingByKeyOn": true, "settingText": true}
+var settingReads = map[string]bool{"settingByKeyOn": true, "settingText": true, "settingRowForWrite": true}
+
+// rowForWriteUsers are the only callers of the unguarded row read: the write.
+var rowForWriteUsers = map[string]bool{
+	"internal/apiservice/admin.upsertSetting":   true,
+	"internal/apiservice/admin.settingByKeyOn": true,
+}
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -165,6 +171,9 @@ func TestEveryBYOKeyReadGoesThroughTheAccessor(t *testing.T) {
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "ForChecks" && !forChecksUsers[owner] {
 					t.Errorf("%s takes the stored key whatever its binding (ForChecks); a reader takes Served", owner)
+				}
+				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "settingRowForWrite" && !rowForWriteUsers[owner] {
+					t.Errorf("%s reads a row through the write's unguarded read", owner)
 				}
 				return true
 			})

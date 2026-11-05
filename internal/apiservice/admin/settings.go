@@ -85,11 +85,17 @@ func (s pgStore) settingByKey(ctx context.Context, orgID, category, key string) 
 }
 
 // settingByKeyOn reads one settings row over db (the pool or an open
-// transaction).
+// transaction). A BYO api_key row is read through scopeKey only.
 func settingByKeyOn(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
 	if category == llmCategory && isLLMKeyRow(key) {
 		return nil, errLLMKeyRowNeedsAccessor
 	}
+	return settingRowForWrite(ctx, db, orgID, category, key)
+}
+
+// settingRowForWrite is the row a write replaces, any key: upsertSetting reads
+// it to compare and overwrite, never to serve its value.
+func settingRowForWrite(ctx context.Context, db pgExecer, orgID, category, key string) (*setting, error) {
 	var row setting
 	err := db.QueryRow(ctx,
 		`SELECT id, key, value, is_encrypted, description FROM settings WHERE org_id = $1 AND category = $2 AND key = $3`,
@@ -248,7 +254,7 @@ func (h *handlers) upsertSetting(ctx context.Context, db pgExecer, orgID, catego
 		text := revealSecret(sealed)
 		stored = &text
 	}
-	existing, err := settingByKeyOn(ctx, db, orgID, category, key)
+	existing, err := settingRowForWrite(ctx, db, orgID, category, key)
 	if err != nil {
 		return nil, err
 	}

@@ -222,3 +222,31 @@ func TestADirectKeyRowReadIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// writeDB records the writes of upsertSetting over an empty table.
+type writeDB struct{ execs *[]string }
+
+func (db writeDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	*db.execs = append(*db.execs, sql)
+	return pgconn.CommandTag{}, nil
+}
+func (db writeDB) QueryRow(context.Context, string, ...any) pgx.Row { return absentRow{} }
+
+type absentRow struct{}
+
+func (absentRow) Scan(...any) error { return pgx.ErrNoRows }
+
+// The write of a key row is not a read: upsertSetting stores api_key rows
+// whatever the accessor guard refuses to readers.
+func TestTheWriteOfAKeyRowIsNotRefused(t *testing.T) {
+	var execs []string
+	value := "placeholder-key-value"
+	for _, key := range []string{"api_key", "purpose:explain:api_key"} {
+		if _, err := (&handlers{store: pgStore{}}).upsertSetting(context.Background(), writeDB{&execs}, "org", llmCategory, key, &value, false, nil); err != nil {
+			t.Fatalf("%s: upsert refused: %v", key, err)
+		}
+	}
+	if len(execs) != 2 || !strings.Contains(execs[0], "INSERT INTO settings") {
+		t.Fatalf("writes=%q", execs)
+	}
+}

@@ -218,6 +218,36 @@ func composeAuthHardened(g *guard) {
 	g.expect(str(r.services["auth-issuer"]["user"]) == "1001:1001", "auth-issuer runs as %q, want 1001:1001 (the owner of the 0600 key file)", str(r.services["auth-issuer"]["user"]))
 }
 
+// A root container with only CHOWN has no CAP_FOWNER: chmod of a path owned by another uid is refused.
+func composeAuthChownThenChmod(g *guard) {
+	r := composeAuth(g)
+	for n, s := range r.services {
+		if !equal(strs(s["cap_add"]), []string{"CHOWN"}) || !equal(strs(s["cap_drop"]), []string{"ALL"}) || !strings.HasPrefix(str(s["user"]), "0:") {
+			continue
+		}
+		for _, cmd := range strs(s["command"]) {
+			given := map[string]bool{}
+			for _, seg := range regexp.MustCompile(`;|&&|\|\|`).Split(cmd, -1) {
+				f := strings.Fields(strings.Trim(strings.TrimSpace(seg), "{} "))
+				if len(f) < 2 {
+					continue
+				}
+				switch f[0] {
+				case "chown":
+					root := f[1] == "0:0" || f[1] == "0"
+					for _, p := range f[2:] {
+						given[p] = !root
+					}
+				case "chmod":
+					for _, p := range f[2:] {
+						g.expect(!given[p], "%s runs chmod on %s after a chown of it to a non-root uid; CHOWN alone has no CAP_FOWNER (chown 0:0 first)", n, p)
+					}
+				}
+			}
+		}
+	}
+}
+
 func composeAuthStartOrder(g *guard) {
 	r := composeAuth(g)
 	done, healthy := "service_completed_successfully", "service_healthy"
@@ -360,6 +390,7 @@ var composeAuthChecks = []check{
 	{"the_bootstrap_credential_is_written_once_for_the_reader_uid", composeAuthBootstrap},
 	{"the_auth_images_are_pinned_and_a_missing_pin_fails_the_render", composeAuthImagesPinned},
 	{"the_auth_services_are_hardened_and_keys_are_files", composeAuthHardened},
+	{"a_chown_only_root_init_never_chmods_a_path_it_gave_away", composeAuthChownThenChmod},
 	{"the_auth_start_order_is_the_compose_yml_order", composeAuthStartOrder},
 	{"auth_service_mints_eddsa_and_the_verifiers_and_session_wiring_follow", composeAuthEddsaWiring},
 	{"the_readme_holds_the_auth_venue_procedure", composeAuthReadme},

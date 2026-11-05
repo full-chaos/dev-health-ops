@@ -3,7 +3,7 @@
 # go-api in the proof needs to be private to its project: no fixed container_name, no published
 # host port, and no attachment to the `planes` network (its fixed subnet is host-global).
 #
-# The auth proxy flags are ON here and nowhere else. compose.yml and the chart keep them OFF.
+# compose.yml turns AUTH_PROXY_SESSIONS on for go-api since CHAOS-13107; the other proxy flags are ON here only.
 # The AUTH_PROXY_* names are D1's. Sign-up (credentials) stays on go-api until D3.
 services:
   valkey:

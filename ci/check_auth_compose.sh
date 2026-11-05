@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Executed proof for the Auth Control Plane Compose wiring (CHAOS-4886).
 #
-# Brings up the dormant `auth` profile of compose.yml from images built from
+# Brings up the Auth Control Plane services of compose.yml (part of the default
+# stack since CHAOS-13107; `--profile auth` is kept and selects nothing more) from images built from
 # THIS tree, proves both binaries start clean, and proves the rollback leaves
 # the rest of the stack alone:
 #
@@ -14,9 +15,10 @@
 #      the schema at the embedded head.
 #   4. The runtime login is not a superuser and owns nothing in the auth schema.
 #   5. The signing key is mode 0400 and uid 65532 in its volume.
-#   6. Rollback: the four auth services are stopped and removed; the postgres
+#   6. Rollback: the auth services are stopped and removed; the postgres
 #      service stays healthy, no auth container is left, and the default
-#      (profile-less) service list names no auth service.
+#      (profile-less) service list names auth-service (CHAOS-13107: go-api's
+#      sessions are auth-service's, so the default stack starts it).
 #
 # Every step prints what it measured. The project is private to this run
 # (-p) and is removed with its volumes on exit. CI only: compose.yml gives
@@ -182,8 +184,10 @@ printf 'auth-service networks: %s\n' "${nets}"
 [ "${nets}" = "${PROJECT}_auth_plane " ] || die "auth-service is on '${nets}', want only ${PROJECT}_auth_plane"
 members="$(docker network inspect "${PROJECT}_auth_plane" --format '{{range .Containers}}{{.Name}} {{end}}' | tr ' ' '\n' | grep -v '^$' | sort | tr '\n' ' ')"
 printf 'auth_plane members: %s\n' "${members}"
-expected="$(compose --profile auth ps -q auth-service postgres | xargs docker inspect --format '{{.Name}}' | tr -d '/' | sort | tr '\n' ' ')"
-[ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service and postgres: ${members} (want ${expected})"
+# CHAOS-13107: valkey joins auth_plane (the rate-limit store of auth-service's session routes). go-api and
+# auth-issuer join it too, but this proof does not start them.
+expected="$(compose --profile auth ps -q auth-service postgres valkey | xargs docker inspect --format '{{.Name}}' | tr -d '/' | sort | tr '\n' ' ')"
+[ "${members}" = "${expected}" ] || die "auth_plane has members other than auth-service, postgres and valkey: ${members} (want ${expected})"
 
 printf 'step 4d: no auth service is on the default network\n'
 compose --profile auth config --format json | jq -er '
@@ -224,10 +228,10 @@ printf 'auth containers left: %s\n' "${left}"
 pg_health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose ps -q postgres)")"
 printf 'postgres health after rollback: %s\n' "${pg_health}"
 [ "${pg_health}" = "healthy" ] || die "postgres is ${pg_health} after rollback, want healthy"
-if compose config --services | grep -E '^auth-' >/dev/null; then
-  die "the default (profile-less) service list names an auth service"
+if ! compose config --services | grep -Fx auth-service >/dev/null; then
+  die "the default (profile-less) service list does not name auth-service: go-api's sessions need it (CHAOS-13107)"
 fi
-printf 'default service list names no auth service\n'
+printf 'default service list names auth-service\n'
 
 assert_project_prefixed
 printf 'AUTH COMPOSE PROOF PASSED\n'

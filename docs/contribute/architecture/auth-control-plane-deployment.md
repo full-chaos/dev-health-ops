@@ -35,14 +35,17 @@ images (`docker-images.yml`). Pin by digest outside local use.
 
 ## Compose (local and self-hosted)
 
-The services are behind the `auth` profile of the repository `compose.yml`, so a
-plain `docker compose up` starts none of them.
+Since CHAOS-13107 the services are part of the default stack of the repository
+`compose.yml`: go-api's sessions are auth-service's, so a plain `docker compose up`
+starts them. `--profile auth` still works and selects nothing more. The local
+issuer, the session keys and go-api's session credential are in
+[Evaluate locally](../../operate/install/local-evaluation.md).
 
 ```bash
-docker compose --profile auth up --build --wait auth-service
+docker compose up --build --wait auth-service
 ```
 
-That runs seven services in order:
+That runs these services in order:
 
 | Service | Job |
 | --- | --- |
@@ -59,8 +62,9 @@ Things that are easy to get wrong:
 - **Network.** `auth-provision`, `auth-migrate`, `auth-grants`, `auth-fence-init` and `auth-service` join only
   the `auth_plane` network, which `postgres` also joins; `auth-keys-init` needs
   no network at all (`network_mode: none`, it only writes a file into its
-  volume). None of them can reach any other stack service. The only effect on the
-  default stack is that `postgres` has two networks instead of one.
+  volume). Since CHAOS-13107 `valkey` (auth-service's rate-limit store), go-api
+  (it calls the session issue route) and `auth-issuer` (it forwards the
+  discovery document and the JWKS) join `auth_plane` too.
 - **DSNs are keyword form** (`host=postgres port=5432 user=... password='...'`).
   A URI would need every reserved character of the password percent-encoded,
   which Compose cannot do. Any password works except one containing a single
@@ -82,7 +86,8 @@ curl -fsS http://127.0.0.1:8096/readyz        # {"status":"ok"}
 docker compose --profile auth run --rm --no-deps auth-migrate --check
 ```
 
-Roll it back (nothing else depends on it):
+Roll it back (go-api and query-api depend on it since CHAOS-13107: stop them
+first):
 
 ```bash
 docker compose --profile auth rm --stop --force \

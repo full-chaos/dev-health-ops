@@ -91,8 +91,9 @@ func TestComposeWorkloadBootstrapOneShots(t *testing.T) {
 			t.Errorf("compose.yml has no service %s", name)
 			continue
 		}
-		if !reflect.DeepEqual(svc.Profiles, []string{"auth"}) {
-			t.Errorf("%s profiles = %v, want [auth]: it must not start with the default stack", name, svc.Profiles)
+		// CHAOS-13107: the auth services are part of the default stack, as go-api's sessions are auth-service's.
+		if len(svc.Profiles) != 0 {
+			t.Errorf("%s profiles = %v, want none: it starts with the default stack, as auth-service does", name, svc.Profiles)
 		}
 		if !svc.ReadOnly || !reflect.DeepEqual(svc.CapDrop, []string{"ALL"}) || !reflect.DeepEqual(svc.SecurityOpt, []string{"no-new-privileges:true"}) {
 			t.Errorf("%s is not hardened (read_only %v, cap_drop %v, security_opt %v)", name, svc.ReadOnly, svc.CapDrop, svc.SecurityOpt)
@@ -193,8 +194,10 @@ func TestComposeWorkloadBootstrapMounts(t *testing.T) {
 	}
 	issuerGo, _ := envString(t, c.Services["go-api"], "AUTH_WORKLOAD_ISSUER")
 	issuerAuth, _ := envString(t, c.Services["auth-service"], "AUTH_TOKEN_ISSUER_URL")
-	if issuerGo != "${AUTH_TOKEN_ISSUER_URL:-}" || issuerAuth != "${AUTH_TOKEN_ISSUER_URL:-}" {
-		t.Errorf("issuer: go-api %q, auth-service %q; both must read ${AUTH_TOKEN_ISSUER_URL:-}: a token carries the issuer it was signed under", issuerGo, issuerAuth)
+	// CHAOS-13107: the local issuer (auth-issuer) is the default; an operator value still reaches both.
+	const issuer = "${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}"
+	if issuerGo != issuer || issuerAuth != issuer {
+		t.Errorf("issuer: go-api %q, auth-service %q; both must read %s: a token carries the issuer it was signed under", issuerGo, issuerAuth, issuer)
 	}
 	// go-api selectors stay out of compose.yml: unset is the default, session_compat.
 	for _, name := range []string{"AUTH_SESSION_ISSUE_CREDENTIAL", "AUTH_PROVISIONING_CREDENTIAL"} {
@@ -230,15 +233,19 @@ func authServiceLoad(t *testing.T, set map[string]string) error {
 	return err
 }
 
-// With nothing set auth-service's compose environment loads and the exchange is off; the bootstrap switch on without
-// an issuer is refused, so a switch alone never opens an exchange.
-func TestComposeWorkloadBootstrapIsOffByDefaultAndNeedsAnIssuer(t *testing.T) {
+// With nothing set auth-service's compose environment loads and the bootstrap switch is off. CHAOS-13107: the issuer
+// has a compose default now (the eddsa class needs one), so the switch on loads with the default issuer and with an
+// operator's issuer; a blank issuer is no longer a compose value (${VAR:-default} turns blank into the default).
+func TestComposeWorkloadBootstrapIsOffByDefault(t *testing.T) {
+	c := readComposeFile(t, "compose.yml")
+	if v, _ := envString(t, c.Services["auth-service"], "AUTH_WORKLOAD_BOOTSTRAP"); expandDefaults(v, nil) != "false" {
+		t.Errorf("auth-service AUTH_WORKLOAD_BOOTSTRAP resolves to %q by default, want false", expandDefaults(v, nil))
+	}
 	if err := authServiceLoad(t, nil); err != nil {
 		t.Fatalf("auth-service's default compose environment is refused: %v", err)
 	}
-	err := authServiceLoad(t, map[string]string{"AUTH_WORKLOAD_BOOTSTRAP": "true"})
-	if err == nil || !strings.Contains(err.Error(), "AUTH_WORKLOAD_BOOTSTRAP=true needs AUTH_TOKEN_ISSUER_URL") {
-		t.Fatalf("the bootstrap switch without an issuer is not refused for it: %v", err)
+	if err := authServiceLoad(t, map[string]string{"AUTH_WORKLOAD_BOOTSTRAP": "true"}); err != nil {
+		t.Fatalf("the bootstrap switch with the default issuer is refused: %v", err)
 	}
 	if err := authServiceLoad(t, map[string]string{"AUTH_WORKLOAD_BOOTSTRAP": "true", "AUTH_TOKEN_ISSUER_URL": "https://auth.example.test"}); err != nil {
 		t.Fatalf("the bootstrap switch with an issuer is refused: %v", err)

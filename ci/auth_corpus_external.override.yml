@@ -64,6 +64,9 @@ services:
       - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
   auth-service:
     ports: !override ["127.0.0.1::8096"]
+  # CHAOS-13107: the local token issuer is a dependency of go-api; its fixed loopback port 8443 is host-global.
+  auth-issuer:
+    ports: !reset []
   # The corpus provider stub (docker/providerstub.Dockerfile; corpus only, never a release image): answers the provider
   # requests of the social-login row from ci/auth_corpus_stub and records every request on its recorder port. Its
   # certificate and CA are made at run time by ci/auth_corpus_external.sh.

@@ -767,6 +767,10 @@ services:
       # deploy/go-workers/compose-go-workers.yml overlay forwarded this.
       RIVER_COORDINATOR_DATABASE_ROLE: ${RIVER_COORDINATOR_DATABASE_ROLE:-devhealth_coordinator}
       RIVER_COORDINATOR_DATABASE_PASSWORD: ${RIVER_COORDINATOR_DATABASE_PASSWORD:-devhealth_coordinator}
+      # CHAOS-13107: go-api's AUTH_PROXY_SESSIONS. The api manifest follows it
+      # (auth-service writes refresh_tokens, go-api only revokes), and go-api's
+      # /readyz refuses a login that does not hold exactly that manifest.
+      AUTH_PROXY_SESSIONS: "true"
       # The two plane logins that go-river-provision creates get their table
       # privileges HERE: `dho migrate river` applies the api manifest to
       # API_DATABASE_ROLE (unset: devhealth_api) and applies the query-api
@@ -778,10 +782,6 @@ services:
       # QUERY_API_DATABASE_ROLE).
       API_DATABASE_ROLE: ${API_DATABASE_ROLE:-devhealth_api}
       QUERY_API_DATABASE_ROLE: ${QUERY_API_DATABASE_ROLE:-devhealth_query_api}
-      # CHAOS-13107: go-api's AUTH_PROXY_SESSIONS. The api manifest follows it
-      # (auth-service writes refresh_tokens, go-api only revokes), and go-api's
-      # /readyz refuses a login that does not hold exactly that manifest.
-      AUTH_PROXY_SESSIONS: "true"
     depends_on:
       go-river-provision:
         condition: service_completed_successfully
@@ -1833,7 +1833,7 @@ services:
   # address). Published on loopback port 8443 only, the port of the issuer URL, for a host tool such as the web dev
   # server that verifies the token: docs/operate/install/local-evaluation.md. The image is the router's.
   auth-issuer:
-    image: ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e
+    image: "ghcr.io/nginx/nginx-unprivileged:1.30-alpine@sha256:ed04ec1ff34502c339ee5c3ae3f855442398edc1d05591e2b98981dcbbd20b1e"
     restart: unless-stopped
     read_only: true
     user: "101:101"

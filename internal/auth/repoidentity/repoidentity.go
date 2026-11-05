@@ -188,10 +188,18 @@ func (s PGSink) Apply(ctx context.Context, org uuid.UUID, repos []Repo) (OrgResu
 	orgText := org.String()
 	err := audit.Commit(ctx, s.Pool, s.Schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			// The commit guard counts a row when its BEFORE INSERT trigger fires, also when ON CONFLICT then does
+			// nothing. So a changed path is an UPDATE of the matched row, and the INSERT proposes only missing rows:
+			// a replay with the same input writes no row and no audit row.
+			if _, err := tx.Exec(ctx, `UPDATE `+q+`.repository_identities t SET current_path = u.c, updated_at = now()
+FROM unnest($2::text[], $3::text[], $4::text[]) AS u(p, i, c)
+WHERE t.organization_id = $1 AND t.provider = u.p AND t.provider_repo_id = u.i AND t.current_path IS DISTINCT FROM u.c`, org, providers, ids, paths); err != nil {
+				return err
+			}
 			if _, err := tx.Exec(ctx, `INSERT INTO `+q+`.repository_identities (organization_id, provider, provider_repo_id, current_path)
-SELECT $1, t.p, t.i, t.c FROM unnest($2::text[], $3::text[], $4::text[]) AS t(p, i, c)
-ON CONFLICT (organization_id, provider, provider_repo_id) DO UPDATE SET current_path = EXCLUDED.current_path, updated_at = now()
-WHERE `+q+`.repository_identities.current_path IS DISTINCT FROM EXCLUDED.current_path`, org, providers, ids, paths); err != nil {
+SELECT $1, u.p, u.i, u.c FROM unnest($2::text[], $3::text[], $4::text[]) AS u(p, i, c)
+WHERE NOT EXISTS (SELECT 1 FROM `+q+`.repository_identities r WHERE r.organization_id = $1 AND r.provider = u.p AND r.provider_repo_id = u.i)
+ON CONFLICT (organization_id, provider, provider_repo_id) DO NOTHING`, org, providers, ids, paths); err != nil {
 				return err
 			}
 			if _, err := tx.Exec(ctx, `DELETE FROM `+q+`.repository_identities WHERE organization_id = $1

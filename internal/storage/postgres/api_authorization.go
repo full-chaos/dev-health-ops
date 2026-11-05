@@ -130,7 +130,8 @@ func apiPosture() RolePosture {
 			// CHAOS-6304 (admin user routes) is the first route area over
 			// this principal to WRITE the users row itself: user CRUD and
 			// password changes. Widened in place, per the one-entry rule
-			// above.
+			// above. APIPostureFor narrows INSERT and UPDATE to columns while
+			// the platform roles are owned (no is_superuser write).
 			{"users", true, true, true},
 			// CHAOS-6305 (admin org routes) is the first route area to
 			// WRITE memberships: add_member, update_member_role,
@@ -364,18 +365,57 @@ func apiPosture() RolePosture {
 // check read the same flag, so the REVOKE follows it and a rollback is the
 // flag off plus a migrate run.
 func APIPosture(sessionsOwnedByAuth bool) RolePosture {
+	return APIPostureFor(sessionsOwnedByAuth, false)
+}
+
+// APIPostureFor is APIPosture with the platform roles switch
+// (AUTH_PLATFORM_ROLES_OWNED, CHAOS-10993). While auth-service owns the
+// platform roles, public.users.is_superuser is a frozen copy: the api role
+// writes no is_superuser. A column REVOKE does not narrow a table-wide grant,
+// so INSERT and UPDATE on users move to the columns go-api's writers name
+// (usersInsertColumnsWhileOwned, usersUpdateColumnsWhileOwned); SELECT and
+// DELETE stay table-wide. The River migration grants and go-api's readiness
+// check read the same switch, so a rollback is the switch off plus a migrate
+// run.
+func APIPostureFor(sessionsOwnedByAuth, platformRolesOwned bool) RolePosture {
 	posture := apiPosture()
-	if !sessionsOwnedByAuth {
+	if sessionsOwnedByAuth {
+		for i := range posture.RequiredTables {
+			if posture.RequiredTables[i].TableName == "refresh_tokens" {
+				posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
+			}
+		}
+		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	}
+	if !platformRolesOwned {
 		return posture
 	}
 	for i := range posture.RequiredTables {
-		if posture.RequiredTables[i].TableName == "refresh_tokens" {
-			posture.RequiredTables[i] = TablePrivilege{"refresh_tokens", false, false, true}
+		if posture.RequiredTables[i].TableName == "users" {
+			posture.RequiredTables[i] = TablePrivilege{"users", false, false, true}
 		}
 	}
-	posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"refresh_tokens", "revoked_at", "UPDATE"})
+	for _, column := range usersInsertColumnsWhileOwned {
+		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"users", column, "INSERT"})
+	}
+	for _, column := range usersUpdateColumnsWhileOwned {
+		posture.ColumnScoped = append(posture.ColumnScoped, ColumnPrivilege{"users", column, "UPDATE"})
+	}
 	return posture
 }
+
+// usersInsertColumnsWhileOwned and usersUpdateColumnsWhileOwned are the
+// public.users columns go-api's writers name, less is_superuser (least
+// privilege). TestAPIPostureUsersColumnsCoverTheDDL classifies every column of
+// the table and TestGoAPIUsersWritesStayWithinTheOwnedGrant every go-api users
+// statement, so a new column or a new write needs a decision here.
+var (
+	usersInsertColumnsWhileOwned = []string{"id", "email", "username", "password_hash", "full_name", "avatar_url", "auth_provider",
+		"auth_provider_id", "sso_provider_id", "is_active", "is_verified", "token_version", "last_login_at", "created_at", "updated_at",
+		"saml_nameid_format", "saml_sp_name_qualifier"}
+	usersUpdateColumnsWhileOwned = []string{"email", "username", "password_hash", "full_name", "avatar_url", "is_active", "is_verified",
+		"token_version", "last_login_at", "updated_at", "saml_nameid_format", "saml_sp_name_qualifier"}
+)
 
 // CheckAPIAuthorization is the dho api Service's readiness check: it binds
 // the active login to the declared api role and proves it holds exactly
@@ -388,5 +428,10 @@ func APIPosture(sessionsOwnedByAuth bool) RolePosture {
 // apiservice/service.go) once that package exists; this function has no
 // dependency on it and can be called, and tested, standing alone.
 func CheckAPIAuthorization(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth bool) error {
-	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPosture(sessionsOwnedByAuth))
+	return CheckAPIAuthorizationFor(ctx, pool, expectedRole, riverSchema, sessionsOwnedByAuth, false)
+}
+
+// CheckAPIAuthorizationFor is CheckAPIAuthorization over APIPostureFor.
+func CheckAPIAuthorizationFor(ctx context.Context, pool *pgxpool.Pool, expectedRole, riverSchema string, sessionsOwnedByAuth, platformRolesOwned bool) error {
+	return CheckRolePosture(ctx, pool, expectedRole, riverSchema, APIPostureFor(sessionsOwnedByAuth, platformRolesOwned))
 }

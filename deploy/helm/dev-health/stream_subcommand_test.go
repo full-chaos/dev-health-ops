@@ -3,7 +3,6 @@ package devhealth_test
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -57,7 +56,7 @@ func renderStreamGroup(t *testing.T, image, profile, extra string) (string, erro
 	if err := os.WriteFile(values, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	output, err := exec.Command("helm", "template", "stream-subcommand-test", ".", "-f", values).CombinedOutput()
+	output, err := helmCommand("template", "stream-subcommand-test", ".", "-f", values).CombinedOutput()
 	return string(output), err
 }
 

@@ -616,11 +616,11 @@ func (s *Store) ResolveKey(ctx context.Context, digest [sha256.Size]byte, now ti
 	var row keyRow
 	err := s.pool.QueryRow(ctx, `SELECT c.id, c.credential_class, c.domain_owner, c.revoked_at IS NOT NULL, c.expires_at,
 c.audiences::text[], c.scopes::text[], c.principal_id, sa.organization_id, p.kind, sa.status <> 'active', p.disabled_at IS NOT NULL,
-o.disabled_at IS NOT NULL, COALESCE(r.revision, 0)
+(o.id IS NULL OR NOT o.is_active), COALESCE(r.revision, 0)
 FROM `+s.q+`.credential_registry c
 JOIN `+s.q+`.service_accounts sa ON sa.principal_id = c.principal_id
 JOIN `+s.q+`.principals p ON p.id = c.principal_id
-JOIN `+s.q+`.organizations o ON o.id = sa.organization_id
+LEFT JOIN public.organizations o ON o.id = sa.organization_id
 LEFT JOIN `+s.q+`.aggregate_revisions r ON r.aggregate_type = 'service_account' AND r.aggregate_id = 'prn_' || c.principal_id::text
 WHERE c.secret_hash = $1`, digest[:]).Scan(&row.id, &row.class, &row.domainOwner, &row.revoked, &row.expiresAt, &row.audiences, &row.scopes,
 		&row.principal, &row.org, &row.kind, &row.accountDisabled, &row.principalDisabled, &row.orgSuspended, &row.revision)

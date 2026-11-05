@@ -40,7 +40,7 @@ func TestWorkloadVerifierBuiltForDevHealthAPIAudience(t *testing.T) {
 	}
 	keys := authverify.StaticKeys{"k1": pub}
 	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: acrWorkloadSubject})
-	workload, err := buildACRWorkload(lookup, keys)
+	workload, err := buildACRWorkload(lookup, keys, nil)
 	if err != nil || workload == nil {
 		t.Fatalf("workload %v err %v", workload, err)
 	}
@@ -70,7 +70,7 @@ func TestBuildACRWorkloadIsOffUnlessIssuerAndSubjectAreSet(t *testing.T) {
 		"no key source": {map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: acrWorkloadSubject}, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
-			workload, err := buildACRWorkload(acrWorkloadLookup(tc.env), tc.keys)
+			workload, err := buildACRWorkload(acrWorkloadLookup(tc.env), tc.keys, nil)
 			if workload != nil || err != nil {
 				t.Fatalf("workload %v err %v, want the path off", workload, err)
 			}
@@ -81,7 +81,7 @@ func TestBuildACRWorkloadIsOffUnlessIssuerAndSubjectAreSet(t *testing.T) {
 func TestBuildACRWorkloadRefusesASubjectThatIsNotAPrincipalID(t *testing.T) {
 	for _, subject := range []string{"acr-api", "ses_AAAAAAAAAAAAAAAAAAAAAA", "prn_" + string(make([]byte, 300))} {
 		lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: subject})
-		if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}); err == nil || workload != nil {
+		if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil); err == nil || workload != nil {
 			t.Fatalf("subject %.12q accepted", subject)
 		}
 	}
@@ -96,7 +96,7 @@ func TestBuildACRWorkloadNamesTheVariableNeverTheValue(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: subject})
-			workload, err := buildACRWorkload(lookup, authverify.StaticKeys{})
+			workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil)
 			if err == nil || workload != nil {
 				t.Fatalf("subject %q accepted", subject)
 			}
@@ -106,7 +106,7 @@ func TestBuildACRWorkloadNamesTheVariableNeverTheValue(t *testing.T) {
 		})
 	}
 	lookup := acrWorkloadLookup(map[string]string{envAccessTokenIssuer: acrWorkloadIssuer, envACRWorkloadSubject: "prn_" + strings.Repeat("A", 64)})
-	if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}); err != nil || workload == nil {
+	if workload, err := buildACRWorkload(lookup, authverify.StaticKeys{}, nil); err != nil || workload == nil {
 		t.Fatalf("a 64 character suffix: %v %v", workload, err)
 	}
 }

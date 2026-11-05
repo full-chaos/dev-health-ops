@@ -44,6 +44,11 @@ type InputError struct {
 
 func (e *InputError) Error() string { return e.text }
 
+// NewInputError returns an InputError that names variable, for a caller that checks an input of its own.
+func NewInputError(variable, text string) *InputError {
+	return &InputError{Variable: variable, text: text}
+}
+
 // ParseOrigin reads raw as a bare http(s) origin: a scheme and a host, no credentials, path, query or fragment.
 func ParseOrigin(raw string) (*url.URL, bool) {
 	upstream, err := url.Parse(raw)
@@ -60,6 +65,10 @@ func ParseOrigin(raw string) (*url.URL, bool) {
 func NewClient(upstream *url.URL, timeout time.Duration, lookup func(string) (string, bool), asks []Ask) (*workloadtoken.Client, error) {
 	parts := make([]string, 0, len(asks))
 	for _, ask := range asks {
+		if ask.Selector == "" {
+			parts = append(parts, ask.Flag)
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s is on and %s=%s", ask.Flag, ask.Selector, CredentialWorkload))
 	}
 	fail := func(variable, format string, args ...any) (*workloadtoken.Client, error) {

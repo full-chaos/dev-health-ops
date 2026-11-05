@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/externalpush"
@@ -56,7 +58,7 @@ func TestBackfillDryRunCountsTokensWithNoAggregateAndWritesNothing(t *testing.T)
 	outboxBefore, revBefore := env.outboxAndRevisions(t, ctx)
 
 	rep := env.backfill(t, ctx, false)
-	if rep.Candidates != 3 || rep.SourceBound != 2 || rep.OrganizationWide != 1 || rep.Written != 0 {
+	if rep.Candidates != 4 || rep.SourceBound != 3 || rep.OrganizationWide != 1 || rep.Written != 0 || rep.Skipped != 0 {
 		t.Fatalf("report = %+v", rep)
 	}
 	if o, r := env.outboxAndRevisions(t, ctx); o != outboxBefore || r != revBefore {
@@ -73,7 +75,7 @@ func TestBackfillApplyWritesCreatedRevisionOneThenARerunWritesNothing(t *testing
 	alreadyBefore := env.outbox(t, ctx, already)
 
 	rep := env.backfill(t, ctx, true)
-	if rep.Candidates != 3 || rep.Written != 3 || rep.Failed != 0 {
+	if rep.Candidates != 4 || rep.Written != 3 || rep.Skipped != 1 || rep.Failed != 0 {
 		t.Fatalf("report = %+v", rep)
 	}
 	for _, id := range []uuid.UUID{src1, src2, orgWide} {
@@ -93,7 +95,7 @@ func TestBackfillApplyWritesCreatedRevisionOneThenARerunWritesNothing(t *testing
 
 	outboxBefore, revBefore := env.outboxAndRevisions(t, ctx)
 	again := env.backfill(t, ctx, true)
-	if again.Candidates != 0 || again.Written != 0 {
+	if again.Candidates != 4 || again.Skipped != 4 || again.Written != 0 || again.Failed != 0 {
 		t.Fatalf("rerun report = %+v", again)
 	}
 	if o, r := env.outboxAndRevisions(t, ctx); o != outboxBefore || r != revBefore {
@@ -281,7 +283,7 @@ func TestBackfillCommitsEachTokenAloneSoAFailureLeavesTheRestWritten(t *testing.
 	if _, err := env.pool.Exec(ctx, `DROP TRIGGER refuse_victim ON auth.auth_outbox_events`); err != nil {
 		t.Fatal(err)
 	}
-	if rep := env.backfill(t, ctx, true); rep.Written != 1 || rep.Failed != 0 {
+	if rep := env.backfill(t, ctx, true); rep.Written != 1 || rep.Skipped != 2 || rep.Failed != 0 {
 		t.Fatalf("rerun report = %+v", rep)
 	}
 	if got := env.outbox(t, ctx, victim.String()); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
@@ -334,5 +336,76 @@ func TestBackfillWaitsForTheRowLockThenSkipsAToken(t *testing.T) {
 	}
 	if got := env.outbox(t, ctx, id.String()); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
 		t.Fatalf("events: %+v", got)
+	}
+}
+
+// apiLikePool is a pool whose sessions run as a role that holds what the prod
+// API login holds for this verb: the token table and EXECUTE on the writer
+// function, and no privilege on any auth table.
+func (e *lifecycleEnv) apiLikePool(t *testing.T, ctx context.Context) *pgxpool.Pool {
+	t.Helper()
+	role := "cp_api_like_" + strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	for _, stmt := range []string{
+		`CREATE ROLE ` + role + ` NOLOGIN`,
+		`GRANT USAGE ON SCHEMA public TO ` + role,
+		`GRANT SELECT, UPDATE ON external_ingest_tokens TO ` + role,
+		`GRANT USAGE ON SCHEMA auth TO ` + role,
+		`GRANT EXECUTE ON FUNCTION auth.append_external_push_lifecycle_event(text, text, jsonb, jsonb) TO ` + role,
+	} {
+		if _, err := e.pool.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	config := e.pool.Config()
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, `SET ROLE `+role)
+		return err
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func TestBackfillRunsAsAnAPILikeRoleThatCannotReadTheAuthSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	env := newLifecycleEnv(t, ctx, true)
+	legacy := []uuid.UUID{env.legacyToken(t, ctx), env.legacyToken(t, ctx), env.legacyOrgToken(t, ctx)}
+	already := env.createToken(t)
+	api := env.apiLikePool(t, ctx)
+	var n int
+	if err := api.QueryRow(ctx, `SELECT count(*) FROM auth.aggregate_revisions`).Scan(&n); err == nil {
+		t.Fatal("the API-like role can read auth.aggregate_revisions: the cell proves nothing")
+	}
+	outboxBefore, revBefore := env.outboxAndRevisions(t, ctx)
+	dry, err := BackfillLifecycle(ctx, api, "auth", false, 2)
+	if err != nil || dry.Candidates != 4 || dry.Written != 0 {
+		t.Fatalf("dry run = %+v, %v", dry, err)
+	}
+	if o, r := env.outboxAndRevisions(t, ctx); o != outboxBefore || r != revBefore {
+		t.Fatalf("a dry run wrote: outbox %d->%d revisions %d->%d", outboxBefore, o, revBefore, r)
+	}
+	first, err := BackfillLifecycle(ctx, api, "auth", true, 2)
+	if err != nil || first.Candidates != 4 || first.Written != 3 || first.Skipped != 1 || first.Failed != 0 {
+		t.Fatalf("first run = %+v, %v", first, err)
+	}
+	for _, id := range legacy {
+		if got := env.outbox(t, ctx, id.String()); len(got) != 1 || got[0] != (outboxRow{externalpush.Created, 1}) {
+			t.Fatalf("%s events: %+v", id, got)
+		}
+	}
+	if got := env.outbox(t, ctx, already); len(got) != 1 {
+		t.Fatalf("the token that had an aggregate changed: %+v", got)
+	}
+	outboxBefore, revBefore = env.outboxAndRevisions(t, ctx)
+	second, err := BackfillLifecycle(ctx, api, "auth", true, 2)
+	if err != nil || second.Candidates != 4 || second.Skipped != 4 || second.Written != 0 || second.Failed != 0 {
+		t.Fatalf("second run = %+v, %v", second, err)
+	}
+	if o, r := env.outboxAndRevisions(t, ctx); o != outboxBefore || r != revBefore {
+		t.Fatalf("the second run wrote: outbox %d->%d revisions %d->%d", outboxBefore, o, revBefore, r)
 	}
 }

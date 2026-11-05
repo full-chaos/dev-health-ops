@@ -13,6 +13,7 @@ import (
 // A domain-owned row (acr, push) holds a public fingerprint and no verifier, so no
 // path may authenticate against one. A new reader needs a ruling and a place here.
 var credentialRegistryReaders = map[string]string{
+	"internal/auth/orgdeprovision/keys.go":          "the deprovisioned organization's live keys by the service-account key class, to revoke them (pm answers-12680-1 Q1 (b)); no authentication",
 	"internal/auth/workload/bootstrap.go":           "ResolveBootstrap: by a 32-byte digest, a domain row holds 8 bytes; the caller checks BootstrapClass",
 	"internal/auth/workload/enable.go":              "counts liveBootstrap rows of a workload principal; no authentication",
 	"internal/auth/workload/bootstrap_lifecycle.go": "bootstrap lifecycle verbs, by class or liveBootstrap; no authentication",

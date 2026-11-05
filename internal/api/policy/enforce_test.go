@@ -373,6 +373,7 @@ func TestEnforcementCounterLabelSetsAreClosed(t *testing.T) {
 var enforceObligationKinds = map[string]map[string]any{
 	"tenant_scope":         {"tenant_scope": strangerOrg},
 	"repository_allowlist": {"repository_allowlist": []any{"acme/widget"}},
+	"repository_scope":     {"repository_scope": "organization"},
 	"redaction":            {"redaction": []any{"personal_identifiers"}},
 	"minimum_assurance":    {"minimum_assurance": "aal2"},
 	"step_up":              {"step_up": true},
@@ -562,6 +563,13 @@ func TestTheCarriedOutRuleThroughTheGuard(t *testing.T) {
 		{"carried-out set plus step up", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}, "step_up": true}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
 		{"tenant scope carried out, repository allowlist on a route not flagged", map[string]any{"tenant_scope": ownOrg, "repository_allowlist": []any{"acme/widget"}}, nil, "GET", "/api/v1/admin/teams", false},
 		{"repository allowlist carried out, tenant scope another organization", map[string]any{"tenant_scope": strangerOrg, "repository_allowlist": []any{"acme/widget"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"repository scope organization on a route with no repository dimension", map[string]any{"repository_scope": "organization"}, []string{teamsRead}, "GET", "/api/v1/admin/teams", true},
+		{"repository scope organization on a route not flagged", map[string]any{"repository_scope": "organization"}, []string{"POST /api/v1/admin/teams"}, "GET", "/api/v1/admin/teams", false},
+		{"repository scope organization, flagged route, tenant scope is the request organization", map[string]any{"repository_scope": "organization", "tenant_scope": ownOrg}, []string{teamsRead}, "GET", "/api/v1/admin/teams", true},
+		{"repository scope organization, flagged route, tenant scope another organization", map[string]any{"repository_scope": "organization", "tenant_scope": strangerOrg}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"repository scope organization, tenant scope carried out, route not flagged", map[string]any{"repository_scope": "organization", "tenant_scope": ownOrg}, nil, "GET", "/api/v1/admin/teams", false},
+		{"repository scope organization plus redaction on a flagged route", map[string]any{"repository_scope": "organization", "tenant_scope": ownOrg, "redaction": []any{"personal_identifiers"}}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
+		{"repository scope organization plus step up on a flagged route", map[string]any{"repository_scope": "organization", "tenant_scope": ownOrg, "step_up": true}, []string{teamsRead}, "GET", "/api/v1/admin/teams", false},
 	}
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {

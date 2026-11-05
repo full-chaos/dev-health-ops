@@ -41,10 +41,12 @@ var (
 	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
 )
 
-const (
-	classUnresolved  = "unresolved"
-	classIntentional = "intentional"
+// classUnresolved stays on its own line: the shadow alert rule guard matches this exact text.
+const classUnresolved = "unresolved"
 
+const classIntentional = "intentional"
+
+const (
 	resultMatch    = "match"
 	resultMismatch = "mismatch"
 	resultError    = "error"

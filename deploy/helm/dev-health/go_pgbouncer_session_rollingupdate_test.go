@@ -66,7 +66,7 @@ func TestSessionRollingUpdateUnsetRendersByteEqual(t *testing.T) {
 	}
 	for name, args := range map[string][]string{"default": goldenRenderArgs, "prod-like": goldenProdArgs} {
 		render := func(dir string) string {
-			cmd := exec.Command("helm", append([]string{"template", "a", "."}, args...)...)
+			cmd := helmCommand(append([]string{"template", "a", "."}, args...)...)
 			cmd.Dir = dir
 			out, err := cmd.CombinedOutput()
 			if err != nil {

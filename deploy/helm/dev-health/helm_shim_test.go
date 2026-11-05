@@ -52,7 +52,7 @@ func TestWebBackendURLIsRequired(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm is not installed")
 	}
-	cmd := exec.Command("helm", "template", "t", ".")
+	cmd := helmCommand("template", "t", ".")
 	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -61,12 +61,12 @@ func TestWebBackendURLIsRequired(t *testing.T) {
 	if !strings.Contains(string(out), "web.env.BACKEND_URL is required whenever web.enabled=true (CHAOS-8310)") {
 		t.Fatalf("the refusal does not name the key: %.400s", out)
 	}
-	cmd = exec.Command("helm", "template", "t", ".", "--set", "web.enabled=false")
+	cmd = helmCommand("template", "t", ".", "--set", "web.enabled=false")
 	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("web.enabled=false must render without a BACKEND_URL: %v\n%.400s", err, out)
 	}
-	cmd = exec.Command("helm", "template", "t", ".", "--set", "web.env.BACKEND_URL=http://explicit.example:9000", "--set", "web.authSecret.secretName=web-auth-placeholder")
+	cmd = helmCommand("template", "t", ".", "--set", "web.env.BACKEND_URL=http://explicit.example:9000", "--set", "web.authSecret.secretName=web-auth-placeholder")
 	cmd.Env = append(os.Environ(), "HELM_SHIM_OFF=1")
 	out, err = cmd.CombinedOutput()
 	if err != nil {

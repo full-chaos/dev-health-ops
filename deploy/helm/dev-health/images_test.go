@@ -65,7 +65,7 @@ func collectImages(node interface{}, out *[]string) {
 
 func renderChartDefaults(t *testing.T) []byte {
 	t.Helper()
-	cmd := exec.Command("helm", "template", "dev-health-images-test", ".")
+	cmd := helmCommand("template", "dev-health-images-test", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("helm template failed: %v\n%s", err, out)

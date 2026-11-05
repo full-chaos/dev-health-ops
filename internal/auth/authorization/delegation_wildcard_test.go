@@ -34,9 +34,9 @@ func TestDelegation_ConcreteRepositoryKeyIsUnchangedByTheWildcardRule(t *testing
 	}
 }
 
-func TestDelegation_NonDelegatedWildcardRequestIsUnchanged(t *testing.T) {
+func TestDelegation_NonDelegatedWildcardRequestIsRefused(t *testing.T) {
 	got := plantedEvaluator().Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("*")))
-	if !got.Allowed || got.Obligations != nil || got.Audit != nil {
+	if got.Allowed || got.Reason != ReasonInvalidRequest || got.Obligations != nil || got.Audit != nil {
 		t.Fatalf("%+v", got)
 	}
 }

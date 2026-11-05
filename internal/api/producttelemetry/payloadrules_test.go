@@ -256,6 +256,7 @@ func TestEveryWebEventPayloadPasses(t *testing.T) {
 		"session_started":       `{"entryRoutePattern":"/"}`,
 		"session_ended":         `{"durationMs":123456.5,"pagesViewed":4,"interactions":17}`,
 		"client_error":          `{"boundary":"route","digest":"2103915434","errorClass":"TypeError","routePattern":"` + pattern + `"}`,
+		"ask_dev_interacted":    `{"action":"terminal","surface":"panel","terminal":"limited","turnCount":3}`,
 	}
 	if len(payloads) != len(eventNames) {
 		t.Fatalf("%d fixtures for %d event names", len(payloads), len(eventNames))

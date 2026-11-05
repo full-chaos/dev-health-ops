@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile"
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushreconcile/pagereader"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -81,7 +82,7 @@ func TestC22iWorkerShapedLoginReadsTheDomainPageAndNoSecretColumn(t *testing.T) 
 	var all []string
 	after := uuid.Nil
 	for {
-		pair, err := ReadDomainPage(ctx, worker, ident, after, 2)
+		pair, err := pagereader.ReadDomainPage(ctx, worker, ident, after, 2)
 		if err != nil {
 			t.Fatalf("ReadDomainPage as the worker login: %v", err)
 		}
@@ -108,14 +109,14 @@ func TestC23iPageSnapshotIsConsistentAcrossTheTwoReads(t *testing.T) {
 	worker := workerPool(t, ctx, env)
 	ident, _ := authschema.NewValidatedIdentifier("auth")
 	gate := &revokeBetween{pool: worker, owner: env.pool}
-	pair, err := ReadDomainPage(ctx, gate, ident, uuid.Nil, 10)
+	pair, err := pagereader.ReadDomainPage(ctx, gate, ident, uuid.Nil, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(pair.Tokens) != 1 || pair.Tokens[0].Revoked {
 		t.Fatalf("the page saw the concurrent revoke: %+v", pair.Tokens)
 	}
-	again, err := ReadDomainPage(ctx, worker, ident, uuid.Nil, 10)
+	again, err := pagereader.ReadDomainPage(ctx, worker, ident, uuid.Nil, 10)
 	if err != nil || len(again.Tokens) != 1 || !again.Tokens[0].Revoked {
 		t.Fatalf("a later page does not see the revoke: %+v %v", again.Tokens, err)
 	}

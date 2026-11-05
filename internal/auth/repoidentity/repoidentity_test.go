@@ -25,10 +25,13 @@ type fakeSource struct {
 func (f fakeSource) Repos(context.Context) ([]Repo, error) { return f.repos, f.err }
 
 type fakeSink struct {
-	got  map[uuid.UUID][]Repo
-	fail map[uuid.UUID]bool
-	res  OrgResult
+	existing []uuid.UUID
+	got      map[uuid.UUID][]Repo
+	fail     map[uuid.UUID]bool
+	res      OrgResult
 }
+
+func (f *fakeSink) OrgsWithIdentities(context.Context) ([]uuid.UUID, error) { return f.existing, nil }
 
 func (f *fakeSink) Apply(_ context.Context, org uuid.UUID, repos []Repo) (OrgResult, error) {
 	if f.fail[org] {
@@ -113,4 +116,27 @@ func TestRunCapsListedUnresolvedIDs(t *testing.T) {
 func TestSyncAuditRowMatchesTheWireSchema(t *testing.T) {
 	org := orgA
 	auditwire.MustValidate(t, audit.AuditEvent{EventType: "auth.repository_identity.synced", Outcome: audit.OutcomeAllowed, OrganizationID: &org})
+}
+
+func TestRunAppliesAnEmptySetToAnOrgWithIdentitiesAndNoSourceRows(t *testing.T) {
+	a, b := uuid.MustParse(orgA), uuid.MustParse(orgB)
+	sink := &fakeSink{existing: []uuid.UUID{a, b}}
+	rep, err := Run(context.Background(), fakeSource{repos: []Repo{{orgB, "github", "2", "acme/b"}}}, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := sink.got[a]
+	if !ok || len(got) != 0 {
+		t.Errorf("org a (identities, no source rows) was not applied an empty set: %v %v", ok, got)
+	}
+	if len(sink.got[b]) != 1 || rep.Orgs != 2 {
+		t.Errorf("org b %v, orgs %d", sink.got[b], rep.Orgs)
+	}
+	sink = &fakeSink{existing: []uuid.UUID{a}}
+	if _, err := Run(context.Background(), fakeSource{}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sink.got[a]; !ok {
+		t.Error("an empty source left the identities of org a")
+	}
 }

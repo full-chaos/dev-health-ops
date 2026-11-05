@@ -1991,7 +1991,7 @@ services:
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
     - type: bind
-      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/deploy/compose/acr-db-init.sh
+      source: ${ACR_DB_INIT_SCRIPT:?ACR_DB_INIT_SCRIPT is required (a line of the pins file ci/bigboy/images.env, kept in _records/images.env; acr-db-init-fetch.sh writes the script there at the pinned acr commit)}
       target: /usr/local/bin/acr-db-init
       read_only: true
   acr-db-init:
@@ -2027,7 +2027,7 @@ services:
     secrets: [acr_postgres_password, acr_runtime_db_password, acr_migration_db_password]
     volumes:
     - type: bind
-      source: ${ACR_VENUE_DIR:-/home/ubuntu/devhealth/dev-health-acr-mcp}/deploy/compose/acr-db-init.sh
+      source: ${ACR_DB_INIT_SCRIPT:?ACR_DB_INIT_SCRIPT is required (a line of the pins file ci/bigboy/images.env, kept in _records/images.env; acr-db-init-fetch.sh writes the script there at the pinned acr commit)}
       target: /usr/local/bin/acr-db-init
       read_only: true
   acr-migrate:

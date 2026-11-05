@@ -41,6 +41,13 @@ var forChecksUsers = map[string]bool{
 	"internal/apiservice/admin.bindDefaultKey":      true,
 }
 
+// ruleUsers are the two entry points of the accessor, the only callers of the
+// one binding rule (KeyBound): the row path and the loader's bulk path.
+var ruleUsers = map[string]bool{
+	"internal/llmorgsettings.ReadScopeKey": true,
+	"internal/llmorgsettings.unboundKeys":  true,
+}
+
 // settingReads are the functions that read one settings row by name.
 var settingReads = map[string]bool{"settingByKeyOn": true, "settingText": true, "settingRowForWrite": true}
 
@@ -171,6 +178,9 @@ func TestEveryBYOKeyReadGoesThroughTheAccessor(t *testing.T) {
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "ForChecks" && !forChecksUsers[owner] {
 					t.Errorf("%s takes the stored key whatever its binding (ForChecks); a reader takes Served", owner)
+				}
+				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "KeyBound" && !ruleUsers[owner] {
+					t.Errorf("%s applies the binding rule itself; only ReadScopeKey and the loader's binding do", owner)
 				}
 				if call, ok := n.(*ast.CallExpr); ok && callName(call) == "settingRowForWrite" && !rowForWriteUsers[owner] {
 					t.Errorf("%s reads a row through the write's unguarded read", owner)

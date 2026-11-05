@@ -685,3 +685,27 @@ func TestBarrierAllowlistClearsAFinishedJobWhateverItsShell(t *testing.T) {
 		})
 	}
 }
+
+// A running pod whose row or container the scan cannot split is never cleared, even with an entry pinned to the hash of its
+// command+args: an argument that holds the scan's own separators (`|`, `@@`, `<<c>>`) makes the parse ambiguous. Fail closed,
+// as without an allowlist; only a finished Job's row is cleared that way (pinned by the row hash).
+func TestBarrierAllowlistNeverClearsARunningPodItCannotSplit(t *testing.T) {
+	for _, sep := range []string{"|", "@@", "<<c>>"} {
+		for _, where := range []string{"command", "args"} {
+			t.Run(sep+" in "+where, func(t *testing.T) {
+				c := acrInit("printf 'a" + sep + "b'")
+				if where == "args" {
+					c = map[string]any{"name": "prepare-entitlement-token", "image": acrInitImage, "command": bwStrs("sh", "-c"), "args": bwStrs("printf 'a" + sep + "b'")}
+				}
+				w := prodWorld(prodParts{acr: true})
+				for i, p := range w.otherPods {
+					w.otherPods[i] = acrPod(p.(map[string]any)["metadata"].(map[string]any)["name"].(string), "acr", c)
+				}
+				r := runBarrier(t, w.files(), allowFile(t, pinnedEntries(t, map[string]string{acrKey: ctrHash(c)}, "dev-health-acr")), "up-go-api")
+				if bwPassed(r) || r.rc == 0 || clearedLine.MatchString(r.stdout) || !strings.Contains(r.stderr, "allowlist-unused "+acrKey) {
+					t.Fatalf("rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+				}
+			})
+		}
+	}
+}

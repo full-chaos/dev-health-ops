@@ -36,7 +36,8 @@
 # Job active 0, succeeded 1 or more, completionTime set; every image of the row equals the entry; its shell text is not checked
 # against the scan rules, the hash pins it: a finished Job cannot run again, D6710) and `shell -c` of one container of a
 # Deployment's pod (owner chain pod -> ReplicaSet -> Deployment; name and full image with digest equal). Never cleared: any other
-# reason, a mention of dho or of users with admin (any case), a pod labelled go-api or auth-service, a CronJob. A clear prints
+# reason, a mention of dho or of users with admin (any case), a pod labelled go-api or auth-service, a CronJob, and a running pod
+# whose row or container the scan cannot split (an argument that holds `|`, `@@` or `<<c>>`: the parse is ambiguous). A clear prints
 # `cleared-by-allowlist <key> object=<name>` on stdout. A malformed file STOPs before any kubectl call; an entry that matches
 # nothing STOPs (`allowlist-unused <key>`): the namespace changed since the review. The go-api and auth-service checks never read it.
 set -uo pipefail

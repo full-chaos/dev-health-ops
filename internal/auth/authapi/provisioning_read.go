@@ -87,8 +87,10 @@ type ReadDeps struct {
 	Workload *SessionIssueWorkload
 }
 
-// ReadRoutes returns the versioned read routes for the internal listener only: ProvisioningRoutes never returns them, so the
-// public listener cannot serve them. A route is returned only when its store is wired and its endpoint-profile row exists.
+// ReadRoutes returns the versioned read routes. auth-service has no separate internal listener: they share the API listener, so
+// the isolation is the token class (a session issuer credential or the go-api workload token) and the per-route scope or subject
+// check, not the listener. ProvisioningRoutes never returns them. A route is returned only when its store is wired and its
+// endpoint-profile row exists.
 func ReadRoutes(deps ReadDeps) ([]httpapi.Route, error) {
 	if deps.Credentials == nil {
 		return nil, errors.New("authapi: the read routes need credentials")

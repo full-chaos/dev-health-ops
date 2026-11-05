@@ -108,7 +108,11 @@ func CheckClassSelector(profile map[string]any, registry map[string]RegistryClas
 			owners = append(owners, id)
 		}
 	}
-	if err := checkBodyClassesApart(bodyMarkers); err != nil {
+	onlyField := ""
+	if kind == bodyFieldKind {
+		onlyField = name
+	}
+	if err := checkBodyClassesApart(bodyMarkers, onlyField); err != nil {
 		return err
 	}
 	if kind == bodyFieldKind {
@@ -161,12 +165,14 @@ func bodyMarkersOf(id string, class RegistryClass) ([]ClassMarker, error) {
 // prefix may hold dots, so a jwt overlaps every prefix: jwt and prefix:<v> on
 // one field are refused. An opaque:<v> value holds no dot, so it is disjoint
 // from a jwt (two dots) and is told apart from other prefixes by <v> alone.
-func checkBodyClassesApart(classes []bodyCarried) error {
+// A non-empty onlyField limits the comparison to that field: a body_field
+// selector reads that field alone, so other fields do not pick a class.
+func checkBodyClassesApart(classes []bodyCarried, onlyField string) error {
 	for i, a := range classes {
 		for _, b := range classes[i+1:] {
 			for _, ma := range a.markers {
 				for _, mb := range b.markers {
-					if ma.Name == mb.Name && shapesOverlap(ma.Shape, mb.Shape) {
+					if ma.Name == mb.Name && (onlyField == "" || ma.Name == onlyField) && shapesOverlap(ma.Shape, mb.Shape) {
 						return fmt.Errorf("body classes %q and %q both carry body field %s in a shape (%s, %s) that does not tell them apart", a.id, b.id, ma.Name, ma.Shape, mb.Shape)
 					}
 				}

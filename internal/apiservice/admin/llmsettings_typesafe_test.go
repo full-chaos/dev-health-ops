@@ -49,8 +49,11 @@ func TestTypeSafeIsSavableOnlyAsTheCategorizeOverrideWithAListedModelAndNoBaseUR
 		"other provider, row":    {"anthropic", "", false, "m", nil, ""},
 		"jev model, other prov.": {"openai", cat, true, "jev-latest", nil, ""},
 	} {
-		if got := code(decisionProviderRefusal(tc.provider, tc.purpose, tc.hasPurpose, tc.model, tc.baseURL)); got != tc.want {
+		if got := code(decisionProviderRefusal(tc.provider, tc.purpose, tc.hasPurpose, tc.model, tc.baseURL, tc.baseURL != nil)); got != tc.want {
 			t.Errorf("%s: refusal %q, want %q", name, got, tc.want)
 		}
+	}
+	if got := code(decisionProviderRefusal("typesafe", cat, true, "jev-1.13.0", nil, true)); got != "invalid_base_url" {
+		t.Errorf("categorize, base_url key with a null value: refusal %q, want invalid_base_url", got)
 	}
 }

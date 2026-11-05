@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -189,9 +190,9 @@ func clefRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose boo
 // typeSafeRefusal is the PUT rule of the typesafe provider (an org's own
 // TypeSafe jev key). Like clef it is a SystemOne decision model, so only the
 // categorize override may name it. The model must be on the closed list and
-// the request may carry no base_url field at all, not even an empty one: the
-// endpoint is fixed in code.
-func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURL *string) *llmRefusal {
+// the body may hold no base_url key at all, whatever its value (null too): the
+// endpoint is fixed in code. baseURLKey is bodyHasKeyFold(body, "base_url").
+func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURLKey bool) *llmRefusal {
 	if llmorgsettings.NormalizeProvider(provider) != llmorgsettings.ProviderTypeSafe {
 		return nil
 	}
@@ -203,7 +204,7 @@ func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose
 		return newLLMRefusal(http.StatusBadRequest, "error", llmorgsettings.CodeCategorizeBYOModelUnsupported, "feature", byoLLMFeature,
 			"message", "model must be jev-1.13.0")
 	}
-	if baseURL != nil {
+	if baseURLKey {
 		return newLLMRefusal(http.StatusBadRequest, "error", "invalid_base_url", "feature", byoLLMFeature,
 			"message", "TypeSafe takes no base_url: its endpoint is fixed")
 	}
@@ -212,9 +213,21 @@ func typeSafeRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose
 
 // decisionProviderRefusal is the PUT rule of the two decision providers, clef
 // and typesafe; nil for every other provider.
-func decisionProviderRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURL *string) *llmRefusal {
+func decisionProviderRefusal(provider string, purpose llmorgsettings.Purpose, hasPurpose bool, model string, baseURL *string, baseURLKey bool) *llmRefusal {
 	if refusal := clefRefusal(provider, purpose, hasPurpose, model, baseURL); refusal != nil {
 		return refusal
 	}
-	return typeSafeRefusal(provider, purpose, hasPurpose, model, baseURL)
+	return typeSafeRefusal(provider, purpose, hasPurpose, model, baseURLKey)
+}
+
+// bodyHasKeyFold is whether the decoded body object holds a key equal to name
+// under Unicode case folding. It reads keys, not values: a null value counts,
+// and a case variant the field read ignores counts too.
+func bodyHasKeyFold(object *pyjson.Object, name string) bool {
+	for _, key := range object.Keys() {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }

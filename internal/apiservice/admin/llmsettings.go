@@ -313,6 +313,7 @@ func llmDetail(status int, w http.ResponseWriter, pairs ...string) {
 type llmPut struct {
 	provider                   *string
 	model, apiKey, baseURL     *string
+	baseURLKey                 bool
 	concurrency, budgetLimitMu *big.Int
 	purposeRaw                 *string
 	purposeModel               string
@@ -334,6 +335,7 @@ func readLLMPut(errs *pybody.Errors, object *pyjson.Object) llmPut {
 	if v, present := errs.OptionalString(object, "base_url", 0, 0); present {
 		put.baseURL = &v
 	}
+	put.baseURLKey = bodyHasKeyFold(object, "base_url")
 	if v, present := errs.OptionalString(object, "purpose", 0, 0); present {
 		put.purposeRaw = &v
 		if v != "" {
@@ -359,6 +361,7 @@ func readLLMPut(errs *pybody.Errors, object *pyjson.Object) llmPut {
 func (put llmPut) purposeUpsert(purpose llmorgsettings.Purpose) llmPurposeUpsert {
 	return llmPurposeUpsert{
 		purpose: purpose, provider: *put.provider, model: put.purposeModel, apiKey: put.apiKey, baseURL: put.baseURL,
+		baseURLKey: put.baseURLKey,
 	}
 }
 
@@ -498,7 +501,7 @@ func byoProviderNeedsModel(in llmUpsert) bool {
 // transaction that a refusal or a failed response rolls back. The route and the
 // operator verb both run it.
 func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil); refusal != nil {
+	if refusal := decisionProviderRefusal(in.provider, "", false, "", nil, false); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""

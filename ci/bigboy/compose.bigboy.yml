@@ -145,6 +145,13 @@ networks:
     driver: bridge
   acr_auth_workload:
     driver: bridge
+# The env of the auth one-shots (CHAOS-12976); auth-migrate and auth-grants add AUTH_SESSION_READER_ROLES (CHAOS-12978).
+x-auth-migration-env: &auth-migration-env
+  AUTH_DATABASE_SCHEMA: auth
+  AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=devhealth_auth_migrator password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+  AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
+  AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator
+  AUTH_USERS_OWNED: 'false'
 services:
   bugsink:
     container_name: bugsink
@@ -229,6 +236,11 @@ services:
     environment:
     - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
     - AUTH_ACR_WORKLOAD_SUBJECT=${AUTH_ACR_WORKLOAD_SUBJECT:-}
+    - AUTH_PROXY_SESSIONS=true
+    - AUTH_PROXY_URL=http://auth-service:8095
+    - AUTH_SESSION_ISSUE_CREDENTIAL=workload
+    - AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap
+    - AUTH_WORKLOAD_ISSUER=https://auth.bigboy.internal:8443
     - CORS_ALLOWED_ORIGINS=http://localhost:3000
     - DEV_HEALTH_API_INTERNAL_ADDR=:8091
     - LICENSE_PRIVATE_KEY=${LICENSE_PRIVATE_KEY:-}
@@ -260,6 +272,10 @@ services:
       read_only: true
       bind:
         create_host_path: false
+    - type: volume
+      source: go_api_workload_bootstrap
+      target: /run/workload
+      read_only: true
   go-contractcheck:
     build:
       context: ${DEV_HEALTH_OPS_ROOT:-./ops}
@@ -1519,6 +1535,8 @@ services:
     entrypoint:
     - /usr/local/bin/dho
     environment:
+    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
+    - AUTH_PROXY_SESSIONS=true
     - CLICKHOUSE_URI=clickhouse://${CLICKHOUSE_USER:-ch}:${CLICKHOUSE_PASSWORD:-ch}@clickhouse:9000/${CLICKHOUSE_DB:-default}
     - GO_API_ENVELOPE_AUDIENCE=${GO_API_ENVELOPE_AUDIENCE:-query-api}
     - GO_API_ENVELOPE_ISSUER=${GO_API_ENVELOPE_ISSUER:-dev-health-ops-edge}
@@ -1562,6 +1580,7 @@ services:
     - QUERY_API_MCP_ALLOWED_CIDRS=10.199.79.0/28
     - QUERY_API_MCP_BOUNDARY=allowed-cidrs
     - SETTINGS_ENCRYPTION_KEY=${SETTINGS_ENCRYPTION_KEY}
+    - SSL_CERT_DIR=/run/auth-issuer-ca
     image: '${BIGBOY_DHO_IMAGE:?BIGBOY_DHO_IMAGE is the image pin: pass --env-file _records/images.env}'
     labels:
       logging.service.name: dev-health-query-api
@@ -1584,6 +1603,12 @@ services:
       source: ./.go-api-dev/envelope-jwks.json
       target: /secrets/envelope-jwks.json
       type: bind
+    - type: bind
+      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/ca
+      target: /run/auth-issuer-ca
+      read_only: true
+      bind:
+        create_host_path: false
   riverui:
     depends_on:
       go-worker-migrate:
@@ -1799,6 +1824,8 @@ services:
     - ACR_WEB_ASSERTION_ISSUER=dev-health-web
     - ACR_WEB_ASSERTION_KEY_FILE=/secrets/web-assertion.key
     - ACR_WEB_ASSERTION_KID=acr-dev-web
+    - AUTH_ACCESS_TOKEN_CLASS=eddsa
+    - AUTH_ACCESS_TOKEN_ISSUER=https://auth.bigboy.internal:8443
     - AUTH_SECRET=${AUTH_SECRET:-dev-secret-change-in-development}
     - BACKEND_URL=http://traefik:3000
     - HIDE_MIGRATED_CHILD_CONFIGS=true
@@ -1807,6 +1834,7 @@ services:
     - NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS=${NEXT_PUBLIC_USE_GRAPHQL_ANALYTICS:-true}
     - NEXT_TELEMETRY_DISABLED=1
     - NODE_ENV=production
+    - NODE_EXTRA_CA_CERTS=/run/auth-issuer-ca/issuer.pem
     - REDIS_URL=redis://valkey:6379/0
     - SENTRY_DSN=${SENTRY_DSN:-http://2ef3e827508b4275b8c85bc8171906a7@bugsink:8000/1}
     - AUTH_URL=https://www.commanderkeen.dev
@@ -1841,6 +1869,12 @@ services:
       source: ./.acr-dev/web-assertion.key
       target: /secrets/web-assertion.key
       type: bind
+    - type: bind
+      source: ${BIGBOY_AUTH_ISSUER_TLS_DIR:-/var/lib/oci-cache/mcp-venue/auth-issuer-tls}/ca
+      target: /run/auth-issuer-ca
+      read_only: true
+      bind:
+        create_host_path: false
   web-smoke:
     command:
     - smoke
@@ -2272,6 +2306,25 @@ services:
     - type: volume
       source: auth_signing_keys
       target: /var/lib/dev-health/envelope-keys
+  # The session successor key of auth-service (AUTH_SESSION_SUCCESSOR_KEY_FILE): 32 random bytes, base64url without padding, made once in
+  # the venue into a 0600 file of uid 65532 in the volume auth_session_keys (--skip-existing form: an existing file is kept). Never in
+  # compose text, env or logs. CHAOS-12978.
+  auth-session-keys-init:
+    cap_add: [CHOWN]
+    cap_drop: [ALL]
+    command: ['f=/run/auth/session/successor-key; [ -s "$$f" ] || { umask 077; head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n" > "$$f"; }; chown 65532:65532 /run/auth/session "$$f"; chmod 0700 /run/auth/session; chmod 0600 "$$f"']
+    entrypoint: [/bin/sh, -eu, -c]
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    network_mode: none
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    user: '0:0'
+    volumes:
+    - type: volume
+      source: auth_session_keys
+      target: /run/auth/session
   auth-provision:
     cap_drop: [ALL]
     command:
@@ -2345,12 +2398,9 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-    environment: &auth-migration-env
-      AUTH_DATABASE_SCHEMA: auth
-      AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=devhealth_auth_migrator password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
-      AUTH_RUNTIME_DATABASE_ROLE: devhealth_auth
-      AUTH_SCHEMA_OWNER_ROLE: devhealth_auth_migrator
-      AUTH_USERS_OWNED: 'false'
+    environment:
+      <<: *auth-migration-env
+      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
     image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       auth_plane: null
@@ -2368,7 +2418,9 @@ services:
         condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
-    environment: *auth-migration-env
+    environment:
+      <<: *auth-migration-env
+      AUTH_SESSION_READER_ROLES: devhealth_api,devhealth_query_api
     image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
     networks:
       auth_plane: null
@@ -2451,6 +2503,48 @@ services:
     - type: volume
       source: acr_workload_bootstrap
       target: /run/workload
+  # The bootstrap credential of the workload api (go-api), the session issue credential of go-api (AUTH_SESSION_ISSUE_CREDENTIAL=workload):
+  # written once into the volume go_api_workload_bootstrap (0600, uid 65532: the uid go-api runs as); go-api mounts it read-only,
+  # auth-service never mounts it. The prn_ id of the api workload goes into AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (ops/.env) and
+  # auth-service is recreated (README "auth venue"), as AUTH_ACR_WORKLOAD_SUBJECT is for acr-api. CHAOS-12978, the shape of ops compose.yml.
+  go-api-workload-volume:
+    cap_add: [CHOWN]
+    cap_drop: [ALL]
+    command: ['[ "$$(stat -c %u:%a /run/workload)" = 65532:700 ] || { chmod 0700 /run/workload && chown 65532:65532 /run/workload; }']
+    entrypoint: [/bin/sh, -eu, -c]
+    image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
+    network_mode: none
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    user: '0:0'
+    volumes:
+    - type: volume
+      source: go_api_workload_bootstrap
+      target: /run/workload
+  go-api-workload-bootstrap:
+    cap_drop: [ALL]
+    command: [workloads, bootstrap-create, -workload, api, -out, /run/workload/api.bootstrap, -apply]
+    depends_on:
+      auth-workload-seed:
+        condition: service_completed_successfully
+      go-api-workload-volume:
+        condition: service_completed_successfully
+    environment: *auth-migration-env
+    image: '${BIGBOY_AUTH_MIGRATE_IMAGE:?BIGBOY_AUTH_MIGRATE_IMAGE is the image pin: pass --env-file _records/images.env}'
+    networks:
+      auth_plane: null
+    profiles: [auth]
+    read_only: true
+    restart: 'no'
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    user: 65532:65532
+    volumes:
+    - type: volume
+      source: go_api_workload_bootstrap
+      target: /run/workload
   # The workload-token exchange runs with the Compose bootstrap credential subject (AUTH_WORKLOAD_BOOTSTRAP); AUTH_WORKLOAD_EXCHANGE
   # (the Kubernetes TokenReview subject) stays off: there is no cluster. The API listener :8095 is reached by acr-api
   # (acr_auth_workload) and by auth-issuer (auth_plane); no port is published.
@@ -2463,12 +2557,19 @@ services:
         condition: service_completed_successfully
       auth-keys-init:
         condition: service_completed_successfully
+      auth-session-keys-init:
+        condition: service_completed_successfully
     environment:
+      AUTH_ACCESS_TOKEN_CLASS: eddsa
       AUTH_DATABASE_SCHEMA: auth
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
+      AUTH_JWT_AUDIENCE: dev-health-api
+      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       AUTH_SERVICE_HTTP_ADDR: :8095
       AUTH_SERVICE_OPERATOR_HTTP_ADDR: :8096
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
+      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
+      AUTH_SESSION_SUCCESSOR_KEY_FILE: /run/auth/session/successor-key
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: auth-signing-bigboy
       AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
@@ -2485,6 +2586,7 @@ services:
     networks:
       acr_auth_workload: null
       auth_plane: null
+      dev-health: null
     profiles: [auth]
     read_only: true
     restart: unless-stopped
@@ -2498,6 +2600,10 @@ services:
       read_only: true
       volume:
         subpath: private
+    - type: volume
+      source: auth_session_keys
+      target: /run/auth/session
+      read_only: true
   # The https origin of the issuer, as prod's issuer host (deploy values.prod.yaml, CHAOS-12359): exactly the two public
   # documents of auth-service, nothing else. go-api's JWKS client dials https only, so the issuer cannot be auth-service's plain
   # listener. The TLS pair is a host test pair under BIGBOY_AUTH_ISSUER_TLS_DIR (README "auth venue"); go-api trusts its ca/
@@ -2565,7 +2671,11 @@ volumes:
     driver: local
   auth_signing_keys:
     driver: local
+  auth_session_keys:
+    driver: local
   acr_workload_bootstrap:
+    driver: local
+  go_api_workload_bootstrap:
     driver: local
 secrets:
   acr_postgres_password:

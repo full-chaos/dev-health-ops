@@ -5,110 +5,233 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"testing"
+	"go/types"
+	"path/filepath"
+	"sort"
+	"strings"
 )
 
-// delegates names the one function that returns the IdentityBySubject result to its callers instead of reading
-// ServiceProvider itself; each of its callers is held to the same rule.
-var delegates = map[string]string{"../identity/social/service.go": "lookup"}
+// Guarantee: each call of IdentityBySubject (and of a named delegate) binds its principal to a fresh variable, and the
+// same lexical function then reads that variable's ServiceProvider field, builds a ServiceProvider struct key from it,
+// or passes it to signInTo. Refused, never followed: a result that is discarded, returned, forwarded, stored, copied,
+// address-taken, reassigned, shadowed or captured by a func literal, and any method value or method expression of the
+// lookup. spAllowlist is the only escape.
 
-func readsServiceProvider(n ast.Node) []token.Pos {
-	var at []token.Pos
-	ast.Inspect(n, func(n ast.Node) bool {
-		switch v := n.(type) {
-		case *ast.SelectorExpr:
-			if v.Sel.Name == "ServiceProvider" {
-				at = append(at, v.Pos())
-			}
-		case *ast.KeyValueExpr:
-			if k, ok := v.Key.(*ast.Ident); ok && k.Name == "ServiceProvider" {
-				at = append(at, v.Pos())
-			}
-		case *ast.CallExpr:
-			if f, ok := v.Fun.(*ast.Ident); ok && f.Name == "signInTo" {
-				at = append(at, v.Pos())
-			}
-		}
-		return true
-	})
-	return at
+type spAllow struct{ file, fn, reason string }
+
+var spAllowlist = []spAllow{
+	{"identity/social/service.go", "lookup", "returns the IdentityBySubject result to its callers; each caller is held to the same rule"},
 }
 
-func gapsFor(fset *token.FileSet, file *ast.File, callee string, skipFunc string) (gaps []string) {
-	for _, d := range file.Decls {
-		fn, ok := d.(*ast.FuncDecl)
-		if !ok || fn.Body == nil || fn.Name.Name == skipFunc {
-			continue
+const spLookupName = "IdentityBySubject"
+
+type spResult struct {
+	gaps    []string
+	files   map[string]bool
+	allowed map[int]bool
+}
+
+func spEnclosingFunc(parent map[ast.Node]ast.Node, n ast.Node) ast.Node {
+	for p := parent[n]; p != nil; p = parent[p] {
+		switch p.(type) {
+		case *ast.FuncDecl, *ast.FuncLit:
+			return p
 		}
-		reads := readsServiceProvider(fn.Body)
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
+	}
+	return nil
+}
+
+func spIsBlank(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "_"
+}
+
+func spWritten(parent map[ast.Node]ast.Node, n ast.Node) bool {
+	switch p := parent[n].(type) {
+	case *ast.AssignStmt:
+		for _, l := range p.Lhs {
+			if l == n {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != callee {
+		}
+	case *ast.IncDecStmt:
+		return true
+	}
+	return false
+}
+
+func spUnderServiceProviderKey(parent map[ast.Node]ast.Node, n ast.Node) bool {
+	for c := n; parent[c] != nil; c = parent[c] {
+		if _, ok := parent[c].(ast.Stmt); ok {
+			return false
+		}
+		if kv, ok := parent[c].(*ast.KeyValueExpr); ok && kv.Value == c {
+			if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "ServiceProvider" {
 				return true
 			}
-			for _, r := range reads {
-				if r > call.End() {
-					return true
-				}
+		}
+	}
+	return false
+}
+
+// spUse classifies one use of a lookup's principal variable: a recognized check, a harmless read, or a refusal.
+func spUse(parent map[ast.Node]ast.Node, info *types.Info, u *ast.Ident) (checks bool, refusal string) {
+	switch p := parent[u].(type) {
+	case *ast.AssignStmt:
+		if spWritten(parent, u) {
+			return false, "is assigned again"
+		}
+		return false, "is copied"
+	case *ast.SelectorExpr:
+		if p.X != u {
+			return false, "escapes"
+		}
+		if spWritten(parent, p) {
+			return false, "is written"
+		}
+		if p.Sel.Name == "ServiceProvider" || spUnderServiceProviderKey(parent, p) {
+			return true, ""
+		}
+		return false, ""
+	case *ast.CallExpr:
+		if f, ok := p.Fun.(*ast.Ident); ok && len(p.Args) == 1 && p.Args[0] == u {
+			if sf, ok := info.Uses[f].(*types.Func); ok && sf.Name() == "signInTo" {
+				return true, ""
 			}
-			gaps = append(gaps, fmt.Sprintf("%s: %s in %s has no ServiceProvider read after it", fset.Position(call.Pos()), callee, fn.Name.Name))
+		}
+		return false, "is passed on"
+	}
+	return false, "escapes"
+}
+
+func spCheck(fset *token.FileSet, files []*ast.File, info *types.Info) spResult {
+	res := spResult{files: map[string]bool{}, allowed: map[int]bool{}}
+	parent := map[ast.Node]ast.Node{}
+	for _, f := range files {
+		var stack []ast.Node
+		ast.Inspect(f, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			if len(stack) > 0 {
+				parent[n] = stack[len(stack)-1]
+			}
+			stack = append(stack, n)
 			return true
 		})
 	}
-	return gaps
+	exempt := map[ast.Node]bool{}
+	tracked := map[types.Object]bool{}
+	for _, f := range files {
+		name := filepath.ToSlash(fset.Position(f.Pos()).Filename)
+		for _, d := range f.Decls {
+			fn, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			for i, a := range spAllowlist {
+				if strings.HasSuffix(name, a.file) && fn.Name.Name == a.fn {
+					exempt[fn] = true
+					tracked[info.Defs[fn.Name]] = true
+					res.allowed[i] = true
+				}
+			}
+		}
+	}
+	uses := map[types.Object][]*ast.Ident{}
+	for id, obj := range info.Uses {
+		uses[obj] = append(uses[obj], id)
+	}
+	gap := func(n ast.Node, format string, args ...any) {
+		res.gaps = append(res.gaps, fmt.Sprintf("%s: %s", fset.Position(n.Pos()), fmt.Sprintf(format, args...)))
+	}
+	for id, obj := range info.Uses {
+		if f, ok := obj.(*types.Func); !ok || (f.Name() != spLookupName && !tracked[obj]) {
+			continue
+		}
+		res.files[filepath.ToSlash(fset.Position(id.Pos()).Filename)] = true
+		var ref ast.Expr = id
+		if sel, ok := parent[id].(*ast.SelectorExpr); ok && sel.Sel == id {
+			ref = sel
+			if s := info.Selections[sel]; s != nil && s.Kind() == types.MethodExpr {
+				gap(sel, "%s is used as a method expression", id.Name)
+				continue
+			}
+		}
+		call, ok := parent[ref].(*ast.CallExpr)
+		if !ok || call.Fun != ref {
+			gap(ref, "%s is used as a value, not called: the guard cannot follow its result", id.Name)
+			continue
+		}
+		fn := spEnclosingFunc(parent, call)
+		if exempt[fn] {
+			continue
+		}
+		var lhs ast.Expr
+		switch p := parent[call].(type) {
+		case *ast.AssignStmt:
+			if len(p.Rhs) != 1 {
+				gap(call, "%s call shares its assignment with other values", id.Name)
+				continue
+			}
+			lhs = p.Lhs[0]
+		case *ast.ValueSpec:
+			if len(p.Values) != 1 {
+				gap(call, "%s call shares its declaration with other values", id.Name)
+				continue
+			}
+			lhs = p.Names[0]
+		default:
+			gap(call, "%s result is discarded, returned or forwarded: only a fresh variable is followed", id.Name)
+			continue
+		}
+		if spIsBlank(lhs) {
+			gap(call, "%s principal is discarded", id.Name)
+			continue
+		}
+		def, ok := lhs.(*ast.Ident)
+		if !ok {
+			gap(call, "%s principal is stored, not bound to a fresh variable", id.Name)
+			continue
+		}
+		v := info.Defs[def]
+		if v == nil {
+			gap(call, "%s principal is assigned to an existing variable", id.Name)
+			continue
+		}
+		credited := false
+		for _, u := range uses[v] {
+			if spEnclosingFunc(parent, u) != fn {
+				gap(u, "%s principal %s is captured by a func literal", id.Name, u.Name)
+				continue
+			}
+			checks, refusal := spUse(parent, info, u)
+			if refusal != "" {
+				gap(u, "%s principal %s %s", id.Name, u.Name, refusal)
+			}
+			credited = credited || checks
+		}
+		if !credited {
+			gap(call, "%s principal %s has no ServiceProvider check of its own", id.Name, def.Name)
+		}
+	}
+	sort.Strings(res.gaps)
+	return res
 }
 
-// callSiteGaps lists each IdentityBySubject call in src that no ServiceProvider read follows in its function.
 func callSiteGaps(path string, src string) []string {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, src, 0)
 	if err != nil {
-		return []string{err.Error()}
+		return []string{"typecheck: " + err.Error()}
 	}
-	if d, ok := delegates[path]; ok {
-		return append(gapsFor(fset, file, "IdentityBySubject", d), gapsFor(fset, file, d, d)...)
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	var errs []string
+	conf := types.Config{Error: func(err error) { errs = append(errs, err.Error()) }}
+	_, _ = conf.Check("p", fset, []*ast.File{file}, info)
+	if len(errs) > 0 {
+		return []string{"typecheck: " + strings.Join(errs, "; ")}
 	}
-	return gapsFor(fset, file, "IdentityBySubject", "")
-}
-
-func TestCallSiteGapsFindsALookupWithNoLaterServiceProviderRead(t *testing.T) {
-	const head = "package p\nfunc f(s S) (Q, error) {\n"
-	cases := []struct {
-		name string
-		src  string
-		gaps int
-	}{
-		{"read after call", head + "p, _, _ := s.IdentityBySubject(1)\nreturn Q{ServiceProvider: p.ServiceProvider}, nil\n}\n", 0},
-		{"selector read after call", head + "p, _, _ := s.IdentityBySubject(1)\nif p.ServiceProvider {\nreturn Q{}, nil\n}\nreturn Q{}, nil\n}\n", 0},
-		{"no read at all", head + "p, _, _ := s.IdentityBySubject(1)\nreturn Q{ID: p.ID}, nil\n}\n", 1},
-		{"read only before the call", head + "x := T{ServiceProvider: true}\n_ = x\np, _, _ := s.IdentityBySubject(1)\nreturn Q{ID: p.ID}, nil\n}\n", 1},
-		{"second lookup in same file without read", head + "p, _, _ := s.IdentityBySubject(1)\nreturn Q{ServiceProvider: p.ServiceProvider}, nil\n}\nfunc g(s S) Q {\np, _, _ := s.IdentityBySubject(2)\nreturn Q{ID: p.ID}\n}\n", 1},
-		{"two lookups one read after the first only", head + "p, _, _ := s.IdentityBySubject(1)\nq := Q{ServiceProvider: p.ServiceProvider}\nr, _, _ := s.IdentityBySubject(2)\nreturn Q{ID: r.ID}, nil\n}\n", 1},
-		{"comment and string do not count", head + "p, _, _ := s.IdentityBySubject(1)\n// ServiceProvider\n_ = \"ServiceProvider\"\nreturn Q{ID: p.ID}, nil\n}\n", 1},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := callSiteGaps("x.go", tc.src); len(got) != tc.gaps {
-				t.Fatalf("gaps = %v, want %d", got, tc.gaps)
-			}
-		})
-	}
-}
-
-func TestCallSiteGapsHoldsTheDelegateCallersToTheSameRule(t *testing.T) {
-	const path = "../identity/social/service.go"
-	const lookup = "package p\nfunc (s S) lookup() (Q, bool, error) {\nreturn s.store.IdentityBySubject(1)\n}\n"
-	if got := callSiteGaps(path, lookup+"func (s S) ok() error {\np, _, _ := s.lookup()\nreturn signInTo(p)\n}\n"); len(got) != 0 {
-		t.Fatalf("gaps = %v, want none", got)
-	}
-	if got := callSiteGaps(path, lookup+"func (s S) bad() error {\np, _, _ := s.lookup()\n_ = p\nreturn nil\n}\n"); len(got) != 1 {
-		t.Fatalf("gaps = %v, want 1", got)
-	}
-	if got := callSiteGaps("../other.go", lookup); len(got) != 1 {
-		t.Fatalf("gaps = %v, want 1 outside the delegate path", got)
-	}
+	return spCheck(fset, []*ast.File{file}, info).gaps
 }

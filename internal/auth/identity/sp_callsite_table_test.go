@@ -119,6 +119,10 @@ func spTable() []spCell {
 	cells = append(cells, spCells("assigned to an existing variable", "var p Q\np, _, _ = LOOKUP\n_ = p.ServiceProvider", true, true)...)
 	cells = append(cells, spCells("assigned inside a func literal to an outer variable", "var p Q\nfunc() {\np, _, _ = LOOKUP\n}()\n_ = p.ServiceProvider", true, true)...)
 
+	cells = append(cells, spCells("no check at all", "p, _, _ := LOOKUP\n_ = p.ID", true, true)...)
+	cells = append(cells, spCells("check only before the call", "o := Q{}\n_ = o.ServiceProvider\np, _, _ := LOOKUP\n_ = p.ID", true, true)...)
+	cells = append(cells, spCells("comment and string do not count", "p, _, _ := LOOKUP\n// ServiceProvider\n_ = \"ServiceProvider\"\n_ = p.ID", true, true)...)
+
 	for _, c := range spChecks {
 		cells = append(cells, spCells("checked by "+c.name, "p, _, _ := LOOKUP\n_ = p.ID\n"+c.mk("p"), false, true)...)
 	}
@@ -150,6 +154,9 @@ func TestCallSiteGuardTable(t *testing.T) {
 			}
 			if tc.wantGaps && len(gaps) == 0 {
 				t.Fatalf("the guard passed a shape it must refuse:\n%s", tc.src)
+			}
+			for _, g := range gaps {
+				t.Logf("refused: %s", g)
 			}
 			if !tc.wantGaps && len(gaps) != 0 {
 				t.Fatalf("the guard refused a shape it must pass: %v\n%s", gaps, tc.src)

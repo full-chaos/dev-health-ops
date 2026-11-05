@@ -49,7 +49,7 @@ func loginSessionRoutes(t *testing.T, cfg authconfig.Config, limits *authapi.Lim
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, limits)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, limits, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRuntimeLoginKeyOnMountsRealHandler(t *testing.T) {
 }
 
 func TestRuntimeSessionDisabledMountsOnlyTheRefreshLogoutValidateSwitchOrgStubs(t *testing.T) {
-	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil)
+	routes, err := sessionRoutes(authconfig.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, authschema.ValidatedIdentifier{}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestUnthrottledSetOfTheFullRouteSetIsExactlyTheStubs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+			session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

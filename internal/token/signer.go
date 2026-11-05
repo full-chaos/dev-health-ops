@@ -26,6 +26,7 @@ var probeMessage = []byte("dev-health auth-service signing probe")
 // Signer signs compact JWS tokens (EdDSA) with custody's active key.
 type Signer struct {
 	custody keystore.Custody
+	states  *KeyStates
 }
 
 // FileReads is the key-file reader custody shares (see keystore.FileReads).
@@ -51,7 +52,7 @@ type FileConfig struct {
 
 // NewFileSigner returns a Signer over file custody.
 func NewFileSigner(config FileConfig) *Signer {
-	return &Signer{custody: fileCustody(config)}
+	return &Signer{custody: fileCustody(config), states: config.States}
 }
 
 func fileCustody(config FileConfig) keystore.Custody {
@@ -87,6 +88,18 @@ func CustodyKeys(ctx context.Context, config FileConfig) ([]Key, error) {
 // KeySet reads and validates the current key set.
 func (s *Signer) KeySet(ctx context.Context) (KeySet, error) {
 	return LoadKeySet(ctx, s.custody)
+}
+
+// Compromised reports, from memory only, whether this process has latched kid
+// or public compromised, in custody or in the durable key states. It does no
+// I/O, so a request path may call it.
+func (s *Signer) Compromised(kid string, public ed25519.PublicKey) bool {
+	if latched, ok := s.custody.(interface {
+		Compromised(string, ed25519.PublicKey) bool
+	}); ok && latched.Compromised(kid, public) {
+		return true
+	}
+	return s.states != nil && s.states.compromised(kid, public)
 }
 
 type header struct {

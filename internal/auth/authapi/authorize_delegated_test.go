@@ -98,6 +98,7 @@ func (h *authorizeHandlerFixture) org1(action string) map[string]any {
 // (no organization, no actor, bad amr) is delegation_invalid for every action,
 // never a 503 and never the plain user.
 func TestAuthorizeIncompleteDelegatedRowDeniesEveryCatalogAction(t *testing.T) {
+	t.Parallel()
 	org := uuid.New()
 	for name, s := range map[string]DecisionSession{
 		"only delegated_from_session_id": {HasDelegatedFrom: true, OrganizationID: &org, AMR: []string{"pwd"}},

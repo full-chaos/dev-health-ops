@@ -262,6 +262,13 @@ func (s *KeyStates) latch(keys []keystore.Key, rows []KeyStateRow) {
 	}
 }
 
+// compromised reports, from memory only, whether kid or public is latched.
+func (s *KeyStates) compromised(kid string, public ed25519.PublicKey) bool {
+	s.latchMu.Lock()
+	defer s.latchMu.Unlock()
+	return s.deniedKids[kid] || (len(public) > 0 && s.deniedPublics[string(public)])
+}
+
 // applyKeyStates gives custody's keys their effective states. With no rows
 // the custody states stand (a deployment that has not adopted the rotation
 // state machine). Otherwise the rows are authoritative: a key with no row is

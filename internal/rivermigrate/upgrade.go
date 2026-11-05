@@ -3,7 +3,6 @@ package rivermigrate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -134,11 +133,8 @@ func runSteps(ctx context.Context, env cli.Env, build func(river bool) []upgrade
 	flags.SetOutput(env.Stderr)
 	flags.Usage = func() { fmt.Fprint(env.Stderr, upgradeUsage) }
 	river := flags.Bool("river", false, "also run `migrate river --apply-and-check` after the PostgreSQL step, when MIGRATION_DATABASE_URI is configured")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

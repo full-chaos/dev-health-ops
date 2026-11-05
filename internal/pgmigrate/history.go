@@ -164,11 +164,8 @@ func history(_ context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	verbose := flags.Bool("verbose", false, "not supported: the Alembic script details are not carried in dho")
 	flags.BoolVar(verbose, "v", false, "not supported: the Alembic script details are not carried in dho")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

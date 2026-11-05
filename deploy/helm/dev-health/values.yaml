@@ -54,6 +54,13 @@ goApi:
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true
+  # -- CHAOS-12914: the second goApi.authProxy key. impersonation=true renders AUTH_PROXY_IMPERSONATION=true: go-api starts
+  #    and ends the admin impersonation session at auth-service (a delegated session, 15 minutes, no refresh). Needs
+  #    authService.phase 2 or higher (sessions owned by auth-service): the render refuses it below. Do not turn it on before
+  #    the web change that swaps the browser session to the delegated token (CHAOS-12913) is live. Absent or false renders
+  #    nothing (docs/reference/auth/configuration.md).
+  #    authProxy:
+  #      impersonation: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.

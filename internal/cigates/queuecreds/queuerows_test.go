@@ -300,18 +300,21 @@ var (
 // them; the value is guarded because Decode refused anything credential-shaped.
 type outputException struct {
 	values []string
-	reason string
+	// origins are the declared types a queue-row value of this output may come from: the value's origin is its Go
+	// type (a decoded envelope, a typed request, the type parameter of the typed args), not the text of the expression.
+	origins []string
+	reason  string
 }
 
 var decodedRowFieldOutputs = map[string]outputException{
-	"internal/jobruntime/adapter.go#logStart":                                {[]string{"envelope.CorrelationID"}, "envelope field after jobcontract.Decode"},
-	"internal/jobruntime/adapter.go#NewAdapter":                              {[]string{"args.Kind()"}, "the typed argument type's registered kind name, not a queue row value"},
-	"internal/jobruntime/adapter.go#execute":                                 {[]string{"envelope.CorrelationID"}, "envelope correlation id on the handler logger, after jobcontract.Decode"},
-	"internal/jobruntime/adapter.go#logFinish":                               {[]string{"attributes"}, "the finish-line attributes hold the envelope correlation id, after jobcontract.Decode"},
-	"internal/jobruntime/adapter.go#startJobSpan":                            {[]string{"envelope.CorrelationID"}, "envelope correlation id as a span attribute, after jobcontract.Decode"},
-	"internal/workersctl/trigger_investment.go#writeManualInvestmentTrigger": {[]string{"generation"}, "the generation string is built by the same command from the canonical organization id, parsed dates and a hashed rerun tag; it is not read from a queue row"},
-	"internal/workersctl/trigger_workgraph.go#writeManualWorkgraphTrigger":   {[]string{"generation"}, "the generation string is built by the same command from the canonical organization id and parsed dates; it is not read from a queue row"},
-	"internal/workersctl/trigger_workgraph.go#rollbackTriggerTx":             {[]string{"args"}, "a local slice named args that holds slog attributes the caller built from request id, organization id and generation; not queue row arguments"},
+	"internal/jobruntime/adapter.go#logStart":                                {[]string{"envelope.CorrelationID"}, []string{"jobcontract.Envelope"}, "envelope field after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#NewAdapter":                              {[]string{"args.Kind()"}, []string{"typeparam ContractArgs"}, "the typed argument type's registered kind name, not a queue row value"},
+	"internal/jobruntime/adapter.go#execute":                                 {[]string{"envelope.CorrelationID"}, []string{"jobcontract.Envelope"}, "envelope correlation id on the handler logger, after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#logFinish":                               {[]string{"attributes"}, []string{"jobcontract.Envelope"}, "the finish-line attributes hold the envelope correlation id, after jobcontract.Decode"},
+	"internal/jobruntime/adapter.go#startJobSpan":                            {[]string{"attributes"}, []string{"jobcontract.Envelope"}, "envelope correlation id as a span attribute, after jobcontract.Decode"},
+	"internal/workersctl/trigger_investment.go#writeManualInvestmentTrigger": {[]string{"generation"}, []string{"workgraph.Request"}, "the generation string is built by the same command from the canonical organization id, parsed dates and a hashed rerun tag; it is not read from a queue row"},
+	"internal/workersctl/trigger_workgraph.go#writeManualWorkgraphTrigger":   {[]string{"generation"}, []string{"workgraph.Request"}, "the generation string is built by the same command from the canonical organization id and parsed dates; it is not read from a queue row"},
+	"internal/workersctl/trigger_workgraph.go#rollbackTriggerTx":             {[]string{"args"}, []string{"slog.Attr"}, "a local slice named args that holds slog attributes the caller built from request id, organization id and generation; not queue row arguments"},
 }
 
 // A queue row's dedupe key, idempotency key, correlation id or arguments must

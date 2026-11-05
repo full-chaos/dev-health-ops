@@ -45,6 +45,7 @@ case "$*" in
   *" logs "*" auth-service"*)
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
+  *" config --format json"*) printf '%s\n' "${FAKE_COMPOSE_CONFIG:-{\"services\":{}}}" ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
@@ -63,7 +64,8 @@ case "$1" in
   test)
     case "$*" in
       *" -c "*) ;;
-      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `" ;;
+      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `"
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded" ;;
     esac
     case "$*" in
       *" -c "*)
@@ -1317,6 +1319,43 @@ func TestAuthCorpusRefusedForceSocialLeavesNoTemporaryDirectory(t *testing.T) {
 			entries, readErr := os.ReadDir(tmp)
 			if readErr != nil || len(entries) != 0 {
 				t.Errorf("the refused run left %d entries in its TMPDIR (%v)", len(entries), readErr)
+			}
+		})
+	}
+}
+
+// CHAOS-13107: compose.yml can route go-api's sessions through auth-service. On leg go-api the script reads go-api's
+// AUTH_PROXY_SESSIONS as compose renders it for the leg and hands the corpus the sessions aggregate when it is "true",
+// so the corpus classifies auth-service's session answers (authrows) instead of comparing them as go-api's own.
+func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, want string
+	}{
+		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}}}}`, "sessions"},
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, ""},
+		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, ""},
+		{"no environment", `{"services":{"go-api":{}}}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeDocker(t)
+			fake.withCurl(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+			cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + tc.config)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("leg go-api failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(fake.calls(t), " config --format json") {
+				t.Errorf("leg go-api never read go-api's environment from the rendered compose config; calls:\n%s", fake.calls(t))
+			}
+			raw, err := os.ReadFile(fake.record + ".forwarded")
+			if err != nil {
+				t.Fatalf("the corpus test never ran: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(raw)); got != tc.want {
+				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_FORWARDED=%q, want %q", got, tc.want)
 			}
 		})
 	}

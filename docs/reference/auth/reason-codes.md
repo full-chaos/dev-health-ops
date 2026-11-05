@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-reason-codes
-summary: The closed reason codes of an authorization decision (24 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
+summary: The closed reason codes of an authorization decision (25 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -24,7 +24,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 
 ## Wire reason codes
 
-`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 24 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
+`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 25 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
 
 `allowed` must agree with the code. Exactly three codes mean an allow. Every other code means a deny. A decision where `allowed` and the code disagree is invalid.
 

@@ -58,6 +58,7 @@ var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 // exception is a caller the decision point cannot judge (a legacy HS256 token, a delegated session, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
+// Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
 	rows    map[string]ShadowRow
@@ -203,14 +204,14 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 }
 
 // obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope
-// is carried out when it is the request's organization; a repository allowlist only on a route with no repository
-// dimension; redaction, minimum assurance and step-up never. An allow with one obligation not carried out is no
-// verdict: it is neither served nor a deny.
+// is carried out when it is the request's organization; a repository allowlist or the organization repository
+// scope only on a route with no repository dimension; redaction, minimum assurance and step-up never. An allow with
+// one obligation not carried out is no verdict: it is neither served nor a deny.
 func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension bool) bool {
 	if tenant, ok := o.TenantScope(); ok && tenant != request.OrganizationID {
 		return false
 	}
-	if o.RepositoryRestricted() && !noRepositoryDimension {
+	if (o.RepositoryRestricted() || o.RepositoryScopeOrganization()) && !noRepositoryDimension {
 		return false
 	}
 	if _, ok := o.MinimumAssurance(); ok {

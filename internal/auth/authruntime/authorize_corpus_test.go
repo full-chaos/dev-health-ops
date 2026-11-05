@@ -89,7 +89,8 @@ var azCorpusExclusions = map[string]azExclusion{
 	"membership-active-uppercase":       azStatusNotRepresentable,
 	"principal-status-uppercase-active": azStatusNotRepresentable,
 
-	"repo-plain-snapshot-has-no-grants": azPlainSnapshotUnreachable,
+	"repo-plain-snapshot-has-no-grants":  azPlainSnapshotUnreachable,
+	"org-filtered-plain-snapshot-denies": azPlainSnapshotUnreachable,
 
 	"cross-org-membership-row-for-other-org": azMembershipOrgIsTheKey,
 	"repo-membership-org-mismatch":           azMembershipOrgIsTheKey,
@@ -168,6 +169,8 @@ type azExpect struct {
 	PolicyRevision int    `json:"policy_revision"`
 	// WireReasonCode, when a row carries it, is compared instead of Reason.
 	WireReasonCode *string `json:"wire_reason_code"`
+	// Obligations is the decision's obligations in wire form, or null.
+	Obligations json.RawMessage `json:"obligations"`
 }
 
 type azVector struct {

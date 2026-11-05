@@ -18,8 +18,8 @@
 # S8 flip back 4 to 3: D1 (stage goApi, grants kept), barrier down-auth, D2 (phase 3)
 # S9 the sign-in through go-api again: same accounts, no new account, no identity conflict
 #
-# What is NOT here (pm 2026-11-02): an account that auth-service provisions through its sign-in join under owned. AUTH_SSO_JIT renders only
-# from phase 5, so it belongs to the orgs-owned flip (CHAOS-10998). Nothing here sets AUTH_SSO_JIT.
+# What is NOT a step here: an account that auth-service provisions through its sign-in join under owned. The JIT values layer (U3 plus the
+# ssoJit switch) exists and --print-plan renders it, but no step of the run applies it; every other layer sets no AUTH_SSO_JIT.
 #
 # The identity provider is the test stub internal/testsupport/idpstub (SAML mode), built and imported into the k3s containerd by the lead.
 # Scope (pm 2026-11-02, answers-11620-1.md amendment): SAML only. go-api dials an OIDC issuer only at a global address
@@ -197,6 +197,7 @@ layer() {
     REC) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=goApi --set authService.backfill.enabled=true
       --set authService.backfill.verb=users-reconcile --set authService.backfill.dryRun=true --set "authService.backfill.runId=fb-reconcile-${RUN_TOKEN}") ;;
     U3) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=owned) ;;
+    JIT) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=owned --set authService.ssoJit=true) ;;
     D1) LAYER=(--set authService.phase=4 --set authService.loginStage= --set authService.usersOwnedStage=goApi "${ack[@]}") ;;
     D2) LAYER=(--set authService.phase=3 --set authService.loginStage=goApi "${ack[@]}") ;;
     *) die "unknown layer $1" ;;
@@ -276,6 +277,11 @@ print_plan() {
     if grep -q 'AUTH_SSO_JIT' <<<"${all}"; then die "plan: ${name} renders AUTH_SSO_JIT"; fi
   done
   pass "plan: no step renders AUTH_SSO_JIT"
+  expect_env JIT auth-service.yaml AUTH_SSO_JIT true "JIT"
+  expect_env JIT auth-service.yaml AUTH_USERS_OWNED true "JIT"
+  expect_env JIT go-api-deployment.yaml AUTH_USERS_OWNED true "JIT"
+  expect_env JIT go-api-deployment.yaml AUTH_SSO_JIT "" "JIT"
+  pass "plan: the JIT layer renders AUTH_SSO_JIT on auth-service only, with both users switches on"
   rm -rf "${work}"
 }
 

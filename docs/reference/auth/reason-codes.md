@@ -1,6 +1,6 @@
 ---
 page_id: ref-auth-reason-codes
-summary: The closed reason codes of an authorization decision (23 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
+summary: The closed reason codes of an authorization decision (24 wire values) and the closed local reasons a client gives when it could not get a decision, with the check that produces each wire value.
 content_type: reference
 owner: engineering
 source_of_truth:
@@ -24,7 +24,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 
 ## Wire reason codes
 
-`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 23 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
+`decision_reason_code` in `contracts/auth/v1/vocabulary/reason-codes.json` lists 24 values. The schema enum of `authorization_decision.v1` equals the list, and a test holds both equal. A value is added only with the change of the producer that emits it.
 
 `allowed` must agree with the code. Exactly three codes mean an allow. Every other code means a deny. A decision where `allowed` and the code disagree is invalid.
 
@@ -33,7 +33,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `allowed_by_role` | yes | An organization or platform action: the principal's role holds the action. |
 | `allowed_by_membership_default` | yes | A repository action: the principal is an active member with no grant row, and the membership role holds the action. |
 | `allowed_by_repository_grant` | yes | A repository action: a live grant of the organization, for this repository or `*`, holds the action. |
-| `invalid_request` | no | The request does not normalize, or the evaluator has no usable snapshot or catalog. |
+| `invalid_request` | no | The request does not normalize, a repository request names `*`, or the evaluator has no usable snapshot or catalog. |
 | `unknown_action` | no | The action is not in the [policy catalog](policy-catalog.md), or has an unknown scope. |
 | `resource_mismatch` | no | The request's resource type is not the resource kind of the action. |
 | `principal_inactive` | no | The principal is not active. |
@@ -50,6 +50,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `repository_unresolved` | no | A grant holds a repository id, and the live path of the request has no row in the organization's repository identities, so no id can be compared. The next provider sync resolves it. |
 | `grant_expired` | no | A matching grant is past its expiry. |
 | `grant_revoked` | no | A matching grant is revoked. |
+| `repository_allowlist_too_large` | no | An organization action that reads repository-bound data: the principal can read more than 256 repositories by live grants, more than an allowlist holds. The list is never truncated. |
 | `workload_audience_denied` | no | A workload principal's token audience is not one its registration lists. |
 | `workload_action_denied` | no | A workload principal's registration does not list the action. |
 | `impersonation_denied` | no | A delegated session: the chain has more than one actor, the request is a platform action, the action is not in the actor's permitted actions, the action is not allowed under impersonation (unless the actor is a platform owner), or a repository request is organization-wide (`*`). |

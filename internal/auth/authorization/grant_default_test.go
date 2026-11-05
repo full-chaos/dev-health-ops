@@ -19,7 +19,7 @@ func defaultAllowed(t *testing.T, name string, d Decision, now int64) {
 func TestMembershipDefault_NoRowsAllows(t *testing.T) {
 	e := plantedEvaluator()
 	defaultAllowed(t, "no rows", e.Evaluate(repoRequest("acme/api"), repoSnapshot("member")), nowNano)
-	defaultAllowed(t, "no rows, org wide key", e.Evaluate(repoRequest("*"), repoSnapshot("viewer")), nowNano)
+	wantDeny(t, "no rows, org wide key", e.Evaluate(repoRequest("*"), repoSnapshot("viewer")), ReasonInvalidRequest)
 }
 
 func TestMembershipDefault_OwnerReadsAsAdmin(t *testing.T) {

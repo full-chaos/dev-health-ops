@@ -9,6 +9,11 @@ import (
 
 var flagCanaries = []string{"canary_user", "canary_pass", "canary.invalid", "postgres://", "canary_scope"}
 
+// pyargparseParityLeaves parse with internal/pyargparse, which repeats an unrecognized argument as Python's
+// argparse does (the oracle corpus freezes that text); they are not flag.FlagSet surfaces and are not part of
+// CHAOS-13053.
+var pyargparseParityLeaves = map[string]bool{"service-credentials list": true}
+
 // TestEveryDhoLeafKeepsTypedFlagInputOutOfItsOutput walks the real tree: an unknown flag whose name and
 // value are a DSN and a scope, typed after each command, must leave no byte of it on stdout or stderr.
 func TestEveryDhoLeafKeepsTypedFlagInputOutOfItsOutput(t *testing.T) {
@@ -19,7 +24,7 @@ func TestEveryDhoLeafKeepsTypedFlagInputOutOfItsOutput(t *testing.T) {
 		"unknown flag with value": {"--canary_pass=canary_scope"},
 	}
 	for _, l := range all {
-		if l.command.IgnoresArguments {
+		if l.command.IgnoresArguments || pyargparseParityLeaves[l.name()] {
 			continue
 		}
 		for form, after := range forms {

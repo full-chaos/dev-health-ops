@@ -101,11 +101,8 @@ func runVerb(ctx context.Context, env cli.Env) int {
 	org := flags.String("org", "", "assert the configuration's organization")
 	noWait := flags.Bool("no-wait", false, "print the occurrence id without waiting for the plan")
 	waitSeconds := flags.Int("wait-seconds", int(DefaultWait/time.Second), "how long to wait for the plan")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

@@ -52,6 +52,7 @@ internal/auth/policycatalog
 internal/auth/publicaudit
 internal/auth/publicread
 internal/auth/pushlifecycle
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/restorefence

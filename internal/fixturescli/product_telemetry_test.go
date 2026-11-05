@@ -33,7 +33,7 @@ func TestProductTelemetryRefusesBeforeTouchingClickHouse(t *testing.T) {
 		exit int
 		want string
 	}{
-		"an unknown flag":         {configured, []string{"--nope"}, cli.ExitUsage, "flag provided but not defined"},
+		"an unknown flag":         {configured, []string{"--nope"}, cli.ExitUsage, "unknown flag"},
 		"a positional":            {configured, []string{"extra"}, cli.ExitUsage, "positional arguments are not accepted"},
 		"a seed that is no int":   {configured, []string{"--seed", "abc"}, cli.ExitUsage, "--seed must be an integer"},
 		"a days that is no int":   {configured, []string{"--days", "x"}, cli.ExitUsage, "invalid value"},

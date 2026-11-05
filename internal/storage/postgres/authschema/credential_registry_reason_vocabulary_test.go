@@ -13,7 +13,7 @@ import (
 // file and the CHECK together must also need a deliberate edit here
 // (CHAOS-10194). A value enters with the producer that emits it and its own
 // migration.
-var approvedRevokedReasons = []string{"compromised", "domain_revoked", "owner_request"}
+var approvedRevokedReasons = []string{"compromised", "domain_revoked", "org_deprovisioned", "owner_request"}
 
 // TestRevokedReasonCheckEqualsTheVocabularyFile: the newest migration that
 // defines credential_registry_revoked_reason_code closes revoked_reason to the

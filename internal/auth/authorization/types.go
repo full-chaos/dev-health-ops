@@ -72,7 +72,6 @@ const (
 	ReasonOrganizationInactive Reason = "organization_inactive"
 	ReasonNoMembership         Reason = "no_membership"
 	ReasonOrgMismatch          Reason = "org_mismatch"
-	ReasonMembershipInactive   Reason = "membership_inactive"
 	ReasonPlatformRoleAbsent   Reason = "platform_role_absent"
 	ReasonRoleUnknown          Reason = "role_unknown"
 	ReasonRoleScopeMismatch    Reason = "role_scope_mismatch"
@@ -100,7 +99,7 @@ func AllReasons() []Reason {
 	return []Reason{
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
-		ReasonMembershipInactive, ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
+		ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
 		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,

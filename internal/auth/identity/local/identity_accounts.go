@@ -99,9 +99,11 @@ func (a IdentityAccounts) ProvisionLocal(ctx context.Context, req ProvisionLocal
 
 // ProvisionLocalDecoy provisions a throwaway address in a rehearsal (audit.WithRehearsal): the same statements, the
 // outbox events and the audit rows of a real sign-up, rolled back. A refusal the real sign-up also swallows is not an error.
+// The address is internal, on a special-use domain: the store keeps it as given (identity.WithDecoyAddress), without
+// the register validator; every statement after that check is the real sign-up's.
 func (a IdentityAccounts) ProvisionLocalDecoy(ctx context.Context, req ProvisionLocalRequest) error {
 	req.Email = "rehearsal-" + uuid.NewString() + "@example.invalid"
-	_, err := a.ProvisionLocal(audit.WithRehearsal(ctx), req)
+	_, err := a.ProvisionLocal(identity.WithDecoyAddress(audit.WithRehearsal(ctx)), req)
 	if errors.Is(err, identity.ErrEmailTaken) || errors.Is(err, identity.ErrOrganizationSlugCollision) {
 		return nil
 	}

@@ -280,6 +280,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
 			OrgState:           deps.OrgState,
+			Delegator:          deps.Delegator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -439,6 +440,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
+	deps.Delegator = impersonationDelegator(ctx, authProxy, deps.SessionIssuer, logger)
 	orgClient, err := orgLifecycleClient(authProxy, envsecrets.ProcessLookup, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
@@ -480,7 +482,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)

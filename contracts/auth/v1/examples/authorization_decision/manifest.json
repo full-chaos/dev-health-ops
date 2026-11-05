@@ -54,10 +54,6 @@
       "why": "A deny for a membership of another organization."
     },
     {
-      "file": "decision-valid-reason-membership-inactive.json",
-      "why": "A deny for a membership that is not active."
-    },
-    {
       "file": "decision-valid-reason-role-unknown.json",
       "why": "A deny for a role outside the catalog."
     },

@@ -32,12 +32,30 @@ func TestDefaultRegistryIsTheFiveSeededWorkloads(t *testing.T) {
 	}
 	for _, s := range specs {
 		switch s.Name {
-		case "web", "query-api", "auth-service":
+		case "query-api", "auth-service":
 			if len(s.Audiences) != 0 {
 				t.Errorf("%q is a registry identity and holds no workload audience, got %v", s.Name, s.Audiences)
 			}
 		}
 	}
+}
+
+// web is a PEP: its workload token is for auth-service alone (the authorize routes), with no action.
+func TestTheWebWorkloadCarriesTheAuthServiceAudienceAlone(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name != "web" {
+			continue
+		}
+		if !reflect.DeepEqual(s.Audiences, []string{"auth-service"}) || len(s.AllowedActions) != 0 {
+			t.Fatalf("web row = audiences %v, actions %v; want [auth-service] and none", s.Audiences, s.AllowedActions)
+		}
+		return
+	}
+	t.Fatal("no web row")
 }
 
 func TestDefaultRegistryEveryRowHasAnOwner(t *testing.T) {

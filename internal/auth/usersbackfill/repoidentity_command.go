@@ -40,6 +40,11 @@ func (s chRepoSource) Repos(ctx context.Context) ([]repoidentity.Repo, error) {
 	return out, rows.Err()
 }
 
+// fixedRepos is a Source over rows already read.
+type fixedRepos []repoidentity.Repo
+
+func (f fixedRepos) Repos(context.Context) ([]repoidentity.Repo, error) { return f, nil }
+
 func runRepoIdentities(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho auth repo-identities-sync", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
@@ -68,12 +73,17 @@ func runRepoIdentities(ctx context.Context, env cli.Env) int {
 		return cli.ExitFailure
 	}
 	defer conn.Close()
+	repos, err := chRepoSource{conn: conn}.Repos(ctx)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "repo-identities-sync: could not read the repositories: %v\n", boundary.Redact(err))
+		return cli.ExitFailure
+	}
 	pool, schema, code := connectFn(ctx, env, "repo-identities-sync")
 	if code != cli.ExitOK {
 		return code
 	}
 	defer pool.Close()
-	rep, err := repoidentity.Run(ctx, chRepoSource{conn: conn}, repoidentity.PGSink{Pool: pool, Schema: schema})
+	rep, err := repoidentity.Run(ctx, fixedRepos(repos), repoidentity.PGSink{Pool: pool, Schema: schema})
 	for _, line := range rep.Lines() {
 		fmt.Fprintln(env.Stdout, line)
 	}

@@ -193,8 +193,8 @@ func TestSeamAllowlistOnACutOverRoute(t *testing.T) {
 // of its profiles is a row.
 func TestSeamOnlyTheNarrowedRowsCarryAnAllowlist(t *testing.T) {
 	g := New(Config{Mode: ModeOff})
-	if len(g.carriesAllowlist) != 11 {
-		t.Fatalf("cut-over registry holds %d profiles, want the 11 rows of the 8 narrowed classes", len(g.carriesAllowlist))
+	if len(g.carriesAllowlist) != 15 {
+		t.Fatalf("cut-over registry holds %d profiles, want the 15 rows of the 11 narrowed classes", len(g.carriesAllowlist))
 	}
 	for profile := range g.carriesAllowlist {
 		if _, known := g.actions[profile]; !known {

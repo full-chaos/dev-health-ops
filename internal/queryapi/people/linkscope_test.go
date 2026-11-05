@@ -112,7 +112,10 @@ func TestDrilldownIssuesWithoutACeilingCarryNoLink(t *testing.T) {
 		if strings.Contains(query, "link_repo_ids") || strings.Contains(query, "ceiling_ids") {
 			t.Fatalf("an unrestricted statement carries a link or ceiling:\n%s", query)
 		}
-		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+		if strings.Contains(query, "FROM work_item_cycle_times") {
+			return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+		}
+		return &pairRowScanner{}, nil
 	}}
 	reader, err := NewReader(client)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
 )
 
@@ -151,7 +152,7 @@ func TestIssueLinkedRepoNamesAreTheCallingOrgsForASharedKey(t *testing.T) {
             INSERT INTO work_graph_issue_pr (org_id, repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced)
             VALUES (?, ?, 'org-b-only-wi', 2, 1.0, 'native', 'test', now64(3))`,
 		f.OrgB, f.RepoID)
-	got, err := fetchLinkedRepoNames(ctx, client, f.OrgA, []string{"shared-wi", "unlinked-wi", "org-b-only-wi"})
+	got, err := fetchLinkedRepoNames(ctx, client, f.OrgA, []string{"shared-wi", "unlinked-wi", "org-b-only-wi"}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("fetchLinkedRepoNames: %v", err)
 	}

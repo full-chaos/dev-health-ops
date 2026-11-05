@@ -191,12 +191,19 @@ func newPeopleDrilldownIssuesHandler(reader *people.Reader) http.HandlerFunc {
 			cursorPtr = &cursorTime
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "people_drilldown_issues", org, err)
+			return
+		}
+
 		resp, err := people.BuildDrilldownIssuesResponse(r.Context(), reader, org, people.DrilldownIssuesParams{
 			PersonID:  personID,
 			RangeDays: rangeDays,
 			Limit:     limit,
 			Cursor:    cursorPtr,
 			Now:       time.Now().UTC(),
+			Ceiling:   ceiling,
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {

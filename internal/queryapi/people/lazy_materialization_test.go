@@ -42,7 +42,7 @@ func TestFetchPersonIssuesSendsLazyMaterializationOff(t *testing.T) {
 		return &issuesRowScanner{}, nil
 	}}
 
-	_, err := fetchPersonIssues(context.Background(), client, []string{"alice"}, day(2026, 8, 1), day(2026, 9, 1), 50, nil, "org-1")
+	_, err := fetchPersonIssues(context.Background(), client, []string{"alice"}, day(2026, 8, 1), day(2026, 9, 1), 50, nil, "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("fetchPersonIssues error: %v", err)
 	}

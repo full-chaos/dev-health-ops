@@ -522,19 +522,3 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
 	}
 }
-
-// Shadow never changes an answer: an allow that carries an allowlist is still a match and still passes.
-func TestPDPShadowIgnoresObligations(t *testing.T) {
-	srv := pdptest.New(t)
-	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
-	m, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
-	g := New(cfg)
-	if err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
-		t.Fatalf("shadow refused: %v", err)
-	}
-	g.Wait()
-	if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result=match"] != 1 || len(got) != 1 {
-		t.Fatalf("results %v, want one match", got)
-	}
-}

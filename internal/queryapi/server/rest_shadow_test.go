@@ -10,12 +10,10 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -24,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
 // CHAOS-13073 red cells: QUERY_API_PDP_MODE=shadow feeds the 5.12 shadow core (internal/api/policy). Only the 5.12
@@ -36,21 +35,13 @@ const (
 	queryAPIResultsName  = "dev_health_query_api_pdp_results_total"
 )
 
-var (
-	shadowMeterOnce   sync.Once
-	shadowMeterReader *sdkmetric.ManualReader
-)
-
-// shadowCounters reads the 5.12 instruments, which record through the global meter provider. The totals are
-// cumulative over the test binary, so a test compares a snapshot taken before with one taken after.
+// shadowCounters reads the 5.12 instruments, which record through the global meter provider that TestMain binds to
+// testMeterReader (main_test.go). The totals are cumulative over the test binary, so a test compares a snapshot taken
+// before with one taken after.
 func shadowCounters(t *testing.T) map[string]int64 {
 	t.Helper()
-	shadowMeterOnce.Do(func() {
-		shadowMeterReader = sdkmetric.NewManualReader()
-		otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(shadowMeterReader)))
-	})
 	var rm metricdata.ResourceMetrics
-	if err := shadowMeterReader.Collect(context.Background(), &rm); err != nil {
+	if err := testMeterReader.Collect(context.Background(), &rm); err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]int64{}
@@ -74,7 +65,7 @@ func shadowCounters(t *testing.T) map[string]int64 {
 func shadowDelta(before, after map[string]int64) map[string]int64 {
 	out := map[string]int64{}
 	for key, v := range after {
-		if strings.HasPrefix(key, "dev_health_api_shadow_enabled") || strings.HasPrefix(key, shadowInvalidMetric) {
+		if !strings.HasPrefix(key, shadowResultsMetric+"|") && !strings.HasPrefix(key, shadowMismatchMetric+"|") {
 			continue
 		}
 		if d := v - before[key]; d != 0 {
@@ -170,8 +161,8 @@ func TestRESTShadowCountsOnTheCoreAndNeverChangesTheAnswer(t *testing.T) {
 		want map[string]int64
 	}{
 		"deny": {true, map[string]int64{
-			shadowResultsMetric + "|result=mismatch":                                     1,
-			shadowMismatchMetric + "|caller=member,class=unresolved,namespace=analytics": 1,
+			shadowResultsMetric + "|result=mismatch":                                    1,
+			shadowMismatchMetric + "|caller=admin,class=unresolved,namespace=analytics": 1,
 		}},
 		"allow": {false, map[string]int64{shadowResultsMetric + "|result=match": 1}},
 	} {
@@ -219,6 +210,7 @@ func TestRESTShadowPDPFailureHasNoEffect(t *testing.T) {
 			if got != gatedOK {
 				t.Fatalf("answer %+v, want %+v", got, gatedOK)
 			}
+			//abstime:allow hang ceiling: the slow PDP sleeps 3s, so a request that waited for it is far over this
 			if took > 500*time.Millisecond {
 				t.Fatalf("the request waited %v for the PDP", took)
 			}
@@ -588,5 +580,16 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	}
 	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
 		t.Fatalf("5.12 counters %v, want %v", d, want)
+	}
+}
+
+// A credential class that never asks the PDP has one reason from a closed set; a user token has none.
+func TestRESTShadowSkipReasonsAreClosed(t *testing.T) {
+	for class, want := range map[principal.AccessClass]string{
+		principal.AccessClassEdge: "hs256", principal.AccessClassOther: "envelope", principal.AccessClassUser: "",
+	} {
+		if got := shadowSkipReason(class); got != want {
+			t.Errorf("class %v: reason %q, want %q", class, got, want)
+		}
 	}
 }

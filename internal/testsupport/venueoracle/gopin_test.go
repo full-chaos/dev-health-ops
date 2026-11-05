@@ -142,3 +142,56 @@ func TestDiffRetiringPinPicksTheRulingThatNamesTheRequest(t *testing.T) {
 		t.Errorf("a Retirement without Retire: pin %v, want the second", got)
 	}
 }
+
+func TestFinishPinsWritesEveryRecordingPinAndNeverPasses(t *testing.T) {
+	dir := t.TempDir()
+	first, err := openGoPin(GoPinSpec{Path: filepath.Join(dir, "first.json"), Ruling: "r1"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := openGoPin(GoPinSpec{Path: filepath.Join(dir, "second.json"), Ruling: "r2"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.check("a", "200 {}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.check("b", "401 x"); err != nil {
+		t.Fatal(err)
+	}
+	err = finishPins([]*GoPin{first, second})
+	if !errors.Is(err, errGoPinRecorded) {
+		t.Fatalf("finishPins = %v, want a recorded error", err)
+	}
+	for _, name := range []string{"first.json", "second.json"} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr != nil {
+			t.Errorf("%s not written: %v", name, statErr)
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("finishPins error %q does not name %s", err, name)
+		}
+	}
+}
+
+func TestFinishPinsPassesOnlyWhenEveryPinPasses(t *testing.T) {
+	path, digest := writePinFile(t, pinFileText)
+	good, err := openGoPin(GoPinSpec{Path: path, SHA256: digest, Ruling: "r"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range [][2]string{{"a", "200 {}"}, {"b", "409 x"}} {
+		if err := good.check(check[0], check[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unchecked, err := openGoPin(GoPinSpec{Path: path, SHA256: digest, Ruling: "r"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := finishPins([]*GoPin{good}); err != nil {
+		t.Fatalf("finishPins of a checked pin = %v, want nil", err)
+	}
+	if err := finishPins([]*GoPin{good, unchecked}); err == nil || !strings.Contains(err.Error(), "never checked") {
+		t.Fatalf("finishPins with an unchecked pin = %v, want its error", err)
+	}
+}

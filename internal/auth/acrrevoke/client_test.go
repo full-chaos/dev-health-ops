@@ -328,3 +328,40 @@ func TestNewWithoutAnHTTPClientUsesTheGuardedClient(t *testing.T) {
 		t.Fatalf("client = %+v", c.http)
 	}
 }
+
+// cancelAfterExchange cancels the context as the revoke request starts, so the finished exchange never sees it.
+type cancelAfterExchange struct {
+	next   http.RoundTripper
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterExchange) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Path != tokenPath {
+		c.cancel()
+	}
+	return c.next.RoundTrip(r)
+}
+
+// A context cancelled after the exchange stops the revoke itself, and the error still unwraps to the context error.
+func TestRevokeCancelledAfterTheExchangeUnwrapsToTheContextError(t *testing.T) {
+	f := newFake(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	base, _ := url.Parse(f.srv.URL)
+	endpoint, _ := url.Parse(f.srv.URL + tokenPath)
+	client, err := New(Config{BaseURL: base, TokenEndpoint: endpoint, SubjectTokenFile: subjectFile(t),
+		HTTPClient: &http.Client{Transport: cancelAfterExchange{next: f.srv.Client().Transport, cancel: cancel}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Revoke(ctx, orgOne, credOne, ActorUser, actorOne)
+	var failure *Error
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &failure) || failure.Kind != acrlisting.KindTransport {
+		t.Fatalf("err = %#v", err)
+	}
+	for _, c := range f.snapshot() {
+		if c.path != tokenPath {
+			t.Fatalf("the revoke reached acr: %+v", c)
+		}
+	}
+}

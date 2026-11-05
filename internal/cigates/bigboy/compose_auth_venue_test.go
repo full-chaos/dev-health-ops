@@ -304,6 +304,10 @@ func composeAuthEddsaWiring(g *guard) {
 	g.expect(strings.Contains(strings.Join(strs(r.services["go-api-workload-volume"]["command"]), " "), "= 65532:700 ]"), "go-api-workload-volume does not give /run/workload to 65532 mode 700")
 	_, subjectSet := mp(r.services["auth-service"]["environment"])["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"]
 	g.expect(subjectSet, "auth-service has no AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: it refuses every go-api workload token")
+	const subjectProbe = "prn_probeprobeprobeprobe0"
+	withSubject := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=" + subjectProbe + "\n"})
+	authEnv := mp(withSubject.services["auth-service"]["environment"])
+	g.expect(str(authEnv["AUTH_AUTHORIZE_CALLER_SUBJECTS"]) == subjectProbe && str(authEnv["AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"]) == subjectProbe, "auth-service AUTH_AUTHORIZE_CALLER_SUBJECTS is not the go-api workload subject of AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: its /v1/authorize refuses go-api")
 	const probe = "probe-jwt-key-not-a-secret-0123456789abcdef"
 	withKey := composeMust(g, composeIn{profiles: []string{"auth"}, opsEnv: "JWT_SECRET_KEY=" + probe + "\n"})
 	got := str(mp(withKey.services["auth-service"]["environment"])["AUTH_JWT_SECRET_KEY"])
@@ -454,6 +458,8 @@ func TestComposeAuthVenuePlanted(t *testing.T) {
 			check: composeAuthEddsaWiring, want: "mounts go_api_workload_bootstrap"},
 		{name: "auth-service without the api workload subject", mutate: mut(composeFile, "      AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT"},
+		{name: "auth-service without the authorize caller subjects", mutate: mut(composeFile, "      AUTH_AUTHORIZE_CALLER_SUBJECTS: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}\n", ""),
+			check: composeAuthEddsaWiring, want: "AUTH_AUTHORIZE_CALLER_SUBJECTS"},
 		{name: "auth-service jwt key dropped", mutate: mut(composeFile, "      AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY}\n", ""),
 			check: composeAuthEddsaWiring, want: "AUTH_JWT_SECRET_KEY"},
 		{name: "readme loses the bootstrap step", copy: readme, mutate: mut("ci/bigboy/README.md", "run --rm acr-workload-bootstrap", "up -d acr-workload-bootstrap"),

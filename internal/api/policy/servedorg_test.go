@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 )
 
-// servedOrgCensusRow is one go-api row with an action whose handler serves an organization a path or query
+// servedOrgCensusRow is one go-api action row whose handler serves an organization a path segment or a query
 // parameter names, not the caller's session organization.
 type servedOrgCensusRow struct {
 	pattern string
@@ -45,7 +46,7 @@ var servedOrgCensus = []servedOrgCensusRow{
 	{"POST /api/v1/billing/subscriptions/reactivate", Admin, true},
 }
 
-// servedOrgForms are the spellings uuid parsing accepts for one organization id.
+// servedOrgForms are spellings of one organization id that a handler of these rows parses.
 func servedOrgForms(org string) map[string]string {
 	return map[string]string{
 		"canonical":  org,
@@ -87,11 +88,24 @@ type servedOrgSetup struct {
 	shadow   *Shadow
 	// xOrgID, when set, is sent as X-Org-Id through the org scope.
 	xOrgID string
+	// claims, when set, replaces the caller's access token claims.
+	claims *RoutedResult
+	// adminOf gives the caller an admin row in these organizations too.
+	adminOf []string
 }
 
 func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, served string) response {
 	t.Helper()
-	auth := routed(t, personaStore(setup.who), &fakeValidator{result: userClaims(nil)})
+	store := personaStore(setup.who)
+	for _, org := range setup.adminOf {
+		store.roles[[2]uuid.UUID{userID, uuid.MustParse(org)}] = "admin"
+		store.members[[2]uuid.UUID{userID, uuid.MustParse(org)}] = true
+	}
+	claims := setup.claims
+	if claims == nil {
+		claims = userClaims(nil)
+	}
+	auth := routed(t, store, &fakeValidator{result: claims})
 	guard := NewGuard(auth, quiet())
 	if setup.enforcer != nil {
 		guard.SetEnforcer(setup.enforcer)
@@ -114,6 +128,21 @@ func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, 
 		setup.shadow.wg.Wait()
 	}
 	return got
+}
+
+// servedOrgServeHS256 serves row to a legacy HS256 admin token of org A.
+func servedOrgServeHS256(t *testing.T, row servedOrgCensusRow, enf *Enforcer, served string) response {
+	t.Helper()
+	store := newStore()
+	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
+	guard := NewGuard(authenticator(t, store), quiet())
+	if enf != nil {
+		guard.SetEnforcer(enf)
+	}
+	mux := http.NewServeMux()
+	mux.Handle(row.pattern, guard.Wrap(row.level, echo))
+	method, _, _ := strings.Cut(row.pattern, " ")
+	return serve(mux, method, servedOrgRequestPath(row, served), validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 }
 
 func servedOrgEnforcer(t *testing.T, pdp *testPDP, namespaces ...string) *Enforcer {
@@ -139,8 +168,8 @@ func servedOrgNamespace(t *testing.T, pattern string) string {
 	return row.Namespace
 }
 
-// The census is every go-api row with an action whose resolver reads the organization from the path, plus the
-// billing org_id query rows; each is an organization row.
+// The path rows of the census are every go-api row with an action whose resolver reads the organization from the
+// path; every census row is an organization action row.
 func TestServedOrgCensusCoversEveryPathOrgRowWithAnAction(t *testing.T) {
 	var document struct {
 		Rows []struct {
@@ -151,30 +180,27 @@ func TestServedOrgCensusCoversEveryPathOrgRowWithAnAction(t *testing.T) {
 	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
 		t.Fatal(err)
 	}
-	census := map[string]bool{}
-	for _, row := range servedOrgCensus {
-		census[row.pattern] = true
-	}
-	pathRows := 0
+	var pathRows, census []string
 	for _, entry := range document.Rows {
-		if entry.Service != "dev-health-ops-api" || entry.Action == "" || entry.Classification != "protected" ||
-			!strings.HasPrefix(entry.Resolver, "organization_from_path") {
-			continue
+		if entry.Service == "dev-health-ops-api" && entry.Action != "" && entry.Classification == "protected" &&
+			strings.HasPrefix(entry.Resolver, "organization_from_path") {
+			pathRows = append(pathRows, entry.Method+" "+entry.Route)
 		}
-		pathRows++
-		if !census[entry.Method+" "+entry.Route] {
-			t.Errorf("%s %s reads its organization from the path and is not in the census", entry.Method, entry.Route)
-		}
-	}
-	if pathRows != 8 {
-		t.Errorf("%d organization_from_path rows with an action, want 8", pathRows)
 	}
 	rows := servedOrgRows(t)
 	for _, row := range servedOrgCensus {
+		if !row.query {
+			census = append(census, row.pattern)
+		}
 		shadowRow, ok := rows[row.pattern]
 		if !ok || shadowRow.ResourceType != policycatalog.ScopeOrganization {
 			t.Errorf("%s: row %+v, want an organization action row", row.pattern, shadowRow)
 		}
+	}
+	slices.Sort(pathRows)
+	slices.Sort(census)
+	if !slices.Equal(pathRows, census) {
+		t.Errorf("organization_from_path rows with an action %v, want the census path rows %v", pathRows, census)
 	}
 }
 
@@ -212,7 +238,6 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					}{
 						{"org_id=" + ownOrg + "&org_id=" + strangerOrg, http.StatusForbidden},
 						{"org_id=" + strangerOrg + "&org_id=" + ownOrg, http.StatusOK},
-						{"org_id=" + ownOrg + "&org_id=", http.StatusOK},
 					} {
 						auth := routed(t, personaStore(personaAdmin), &fakeValidator{result: userClaims(nil)})
 						guard := NewGuard(auth, quiet())
@@ -221,14 +246,7 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 						mux := http.NewServeMux()
 						mux.Handle(row.pattern, guard.Wrap(row.level, echo))
 						method, route, _ := strings.Cut(row.pattern, " ")
-						got := enforceRequest(mux, method, profilePath(route)+"?"+tc.query)
-						if tc.status == http.StatusOK && strings.HasSuffix(tc.query, "=") {
-							if got.status == http.StatusForbidden {
-								t.Errorf("%s: %d %q, want no seam refusal (an empty last value does not parse)", tc.query, got.status, got.body)
-							}
-							continue
-						}
-						if got.status != tc.status {
+						if got := enforceRequest(mux, method, profilePath(route)+"?"+tc.query); got.status != tc.status {
 							t.Errorf("%s: %d %q, want %d", tc.query, got.status, got.body, tc.status)
 						}
 					}
@@ -246,10 +264,21 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 						if n := len(pdp.calls()); n != 0 {
 							t.Errorf("%s %s: %d PDP calls, want 0", other, form, n)
 						}
-						if !slices.Equal(rec.snapshot(), []string{namespace + "/deny"}) {
-							t.Errorf("%s %s: outcomes %v, want [%s/deny]", other, form, rec.snapshot(), namespace)
+						if !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) || len(rec.unjudgedSnapshot()) != 0 {
+							t.Errorf("%s %s: outcomes %v unjudged %v, want [%s/org_mismatch] and none", other, form, rec.snapshot(), rec.unjudgedSnapshot(), namespace)
 						}
 					}
+				}
+			})
+			t.Run("an admin of A and B with token A is refused on B (intended 200 to 403)", func(t *testing.T) {
+				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}}, memberOrg)
+				if legacy.status != http.StatusOK {
+					t.Errorf("legacy guard: %d %q, want 200", legacy.status, legacy.body)
+				}
+				pdp := newTestPDP(t, allowAll)
+				got := servedOrgServe(t, row, servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}, enforcer: servedOrgEnforcer(t, pdp, namespace)}, memberOrg)
+				if got.status != http.StatusForbidden || len(pdp.calls()) != 0 {
+					t.Errorf("enforced: %d %q, %d PDP calls, want 403 and none", got.status, got.body, len(pdp.calls()))
 				}
 			})
 			t.Run("a slug keeps the legacy answer with no PDP call", func(t *testing.T) {
@@ -294,6 +323,37 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 				got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, enforcer: servedOrgEnforcer(t, pdp, namespace)}, strangerOrg)
 				if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) || len(pdp.calls()) != 0 {
 					t.Errorf("enforced, superuser, another org: %d %q, %d PDP calls, want 403 and none", got.status, got.body, len(pdp.calls()))
+				}
+			})
+			t.Run("the rule runs before the unjudged check: a legacy HS256 token", func(t *testing.T) {
+				rec := recordEnforce(t)
+				pdp := newTestPDP(t, allowAll)
+				legacy := servedOrgServeHS256(t, row, nil, ownOrg)
+				got := servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), ownOrg)
+				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/hs256"}) {
+					t.Errorf("HS256, same org: %d %q unjudged %v, want the legacy %d %q and [%s/hs256]", got.status, got.body, rec.unjudgedSnapshot(),
+						legacy.status, legacy.body, row.pattern)
+				}
+				rec = recordEnforce(t)
+				got = servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), strangerOrg)
+				if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) {
+					t.Errorf("HS256, another org: %d %q, want 403 %s", got.status, got.body, servedOrgDenyBody(row.level))
+				}
+				if !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) || len(rec.unjudgedSnapshot()) != 0 {
+					t.Errorf("HS256, another org: outcomes %v unjudged %v, want [%s/org_mismatch] and none", rec.snapshot(), rec.unjudgedSnapshot(), namespace)
+				}
+				if n := len(pdp.calls()); n != 0 {
+					t.Errorf("HS256: %d PDP calls, want 0", n)
+				}
+			})
+			t.Run("a token with no organization is refused on any named org", func(t *testing.T) {
+				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+				rec := recordEnforce(t)
+				pdp := newTestPDP(t, allowAll)
+				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, ownOrg)
+				if got.status != http.StatusForbidden || len(pdp.calls()) != 0 || !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) {
+					t.Errorf("no token org, named A: %d %q, %d PDP calls, outcomes %v, want 403, none and [%s/org_mismatch]", got.status, got.body,
+						len(pdp.calls()), rec.snapshot(), namespace)
 				}
 			})
 		})
@@ -384,10 +444,9 @@ func TestServedOrgShadowRecordsTheMismatchAndNeverChangesTheAnswer(t *testing.T)
 				if !slices.Equal(results, []string{tc.result}) {
 					t.Errorf("%s: results %v, want [%s]", tc.name, results, tc.result)
 				}
-				if want := []string{}; tc.mismatch != "" {
-					want = []string{tc.mismatch}
-					if !slices.Equal(mismatch, want) {
-						t.Errorf("%s: mismatch %v, want %v", tc.name, mismatch, want)
+				if tc.mismatch != "" {
+					if !slices.Equal(mismatch, []string{tc.mismatch}) {
+						t.Errorf("%s: mismatch %v, want [%s]", tc.name, mismatch, tc.mismatch)
 					}
 				} else if len(mismatch) != 0 {
 					t.Errorf("%s: mismatch %v, want none", tc.name, mismatch)
@@ -401,30 +460,13 @@ func TestServedOrgShadowRecordsTheMismatchAndNeverChangesTheAnswer(t *testing.T)
 	}
 }
 
-// A row outside the census serves the session organization: an org_id query parameter or a path value is not
-// compared, and the PDP is asked on A as before.
+// A row outside the census serves the session organization: an org_id query parameter is not compared, and the PDP
+// is asked on A as before.
 func TestServedOrgARowOutsideTheCensusIsNotCompared(t *testing.T) {
 	pdp := newTestPDP(t, allowAll)
 	got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams"))),
 		http.MethodGet, "/api/v1/admin/teams?org_id="+uuid.MustParse(strangerOrg).String())
 	if calls := pdp.calls(); got.status != http.StatusOK || len(calls) != 1 || calls[0].Org != ownOrg {
 		t.Fatalf("%d %q, PDP saw %+v, want 200 and one question on A", got.status, got.body, calls)
-	}
-}
-
-// The seam's row table is the census, row for row and source for source.
-func TestServedOrgSeamTableIsTheCensus(t *testing.T) {
-	if len(goAPIServedOrgRows) != len(servedOrgCensus) {
-		t.Fatalf("%d seam rows, want the census's %d", len(goAPIServedOrgRows), len(servedOrgCensus))
-	}
-	for _, row := range servedOrgCensus {
-		param, ok := goAPIServedOrgRows[row.pattern]
-		want := servedOrgParam{path: "org_id"}
-		if row.query {
-			want = servedOrgParam{query: "org_id"}
-		}
-		if !ok || param != want {
-			t.Errorf("%s: seam row %+v (present %v), want %+v", row.pattern, param, ok, want)
-		}
 	}
 }

@@ -27,7 +27,7 @@ func restoreFenceMigration(t *testing.T) string {
 	return ""
 }
 
-// The auth schema has no SECURITY DEFINER function, with ONE named exception:
+// The auth schema has no SECURITY DEFINER function, with TWO named exceptions. The first is
 // append_external_push_lifecycle_event (migration 0044, CHAOS-10895, ruled by
 // the Auth Control Plane design authority). go-api's login may not write the
 // guarded outbox tables, and the commit guard is a setting any role can set, so
@@ -39,12 +39,18 @@ func restoreFenceMigration(t *testing.T) string {
 // (CHAOS-12358) or add its terminal-event guard (CHAOS-12332), each of which must restate SECURITY DEFINER and the pinned search_path
 // because CREATE OR REPLACE swaps both. The runtime role reads the timeline
 // itself, so no function lends the owner's authority to another role.
+//
+// The second is append_repository_identity_event (migration 0056, CHAOS-13057, acp ruling on CHAOS-13034 Q-A): the
+// worker's door to the outbox for repository identities, built the same way (its own NOLOGIN owner with exactly the
+// outbox and revision privileges, EXECUTE revoked from PUBLIC, the posture row functionWriterViolations). One
+// migration declares it.
 func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
 	migrations, err := Migrations()
 	if err != nil {
 		t.Fatal(err)
 	}
 	const creatingMigration = "aggregate_revisions_external_push_credential"
+	const repoIdentityMigration = "repository_identity_outbox"
 	replacingMigrations := map[string]bool{"external_push_lifecycle_binding": true, "external_push_terminal_guard": true}
 	for _, m := range migrations {
 		sql := strings.ToUpper(code(m.SQL))
@@ -57,6 +63,14 @@ func TestTheLineageHasNoSecurityDefinerFunction(t *testing.T) {
 				!strings.Contains(sql, "REVOKE ALL ON FUNCTION") || !strings.Contains(sql, "FROM PUBLIC") {
 				t.Errorf("migration %04d_%s must declare exactly the one %s function and revoke EXECUTE from PUBLIC",
 					m.Version, m.Name, PushLifecycleFunction)
+			}
+		case m.Name == repoIdentityMigration:
+			if count != 1 || strings.Count(sql, "CREATE FUNCTION") != 1 || strings.Count(sql, "CREATE OR REPLACE FUNCTION") != 0 ||
+				!strings.Contains(sql, strings.ToUpper(RepoIdentityFunction)) ||
+				!strings.Contains(sql, "SET SEARCH_PATH = %1$I, PG_TEMP") ||
+				!strings.Contains(sql, "REVOKE ALL ON FUNCTION") || !strings.Contains(sql, "FROM PUBLIC") {
+				t.Errorf("migration %04d_%s must declare exactly the one %s function with its pinned search_path and revoke EXECUTE from PUBLIC",
+					m.Version, m.Name, RepoIdentityFunction)
 			}
 		case replacingMigrations[m.Name]:
 			if count != 1 || strings.Count(sql, "CREATE OR REPLACE FUNCTION") != 1 || strings.Count(sql, "CREATE FUNCTION") != 0 ||

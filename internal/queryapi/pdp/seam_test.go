@@ -297,3 +297,41 @@ func TestSeamRegistersTheCellGauges(t *testing.T) {
 		t.Fatalf("enforcement gauges %v", got)
 	}
 }
+
+// An action the catalog marks repository_scope none (GET /buildinfo, org.read) carries no repository member: the
+// tenant alone is the scope, served as Organization. An allowlist on it is still not carried out.
+func TestSeamRepositoryScopeNoneAction(t *testing.T) {
+	const profile = "GET /buildinfo"
+	for name, tc := range map[string]struct {
+		edit func(*pepfake.Rule)
+		pass bool
+	}{
+		"tenant only": {func(r *pepfake.Rule) { r.Action, r.RepositoryScope = "org.read", "" }, true},
+		"allowlist on it": {func(r *pepfake.Rule) {
+			r.Action, r.RepositoryScope, r.RepositoryAllowlist = "org.read", "", []string{"acme/widgets"}
+		}, false},
+		"tenant other org":    {func(r *pepfake.Rule) { r.Action, r.RepositoryScope, r.TenantScope = "org.read", "", "other-org" }, false},
+		"filtered, no member": {func(r *pepfake.Rule) { r.RepositoryScope = "" }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, cfg := newMeter(t)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepfake.New(allowRule(tc.edit)), cells("analytics,org")
+			p := profile
+			if name == "filtered, no member" {
+				p = testProfile
+			}
+			scope, err := New(cfg).Authorize(context.Background(), p, testBearer, seamOrg)
+			if !tc.pass {
+				var denied *DenyError
+				if !errors.As(err, &denied) || !denied.Local {
+					t.Fatalf("answered %#v, want a local DenyError", err)
+				}
+				wantNoScope(t, scope)
+				return
+			}
+			if err != nil || scope.Kind() != pepgate.KindOrganization {
+				t.Fatalf("answered %v kind %v, want Organization", err, scope.Kind())
+			}
+		})
+	}
+}

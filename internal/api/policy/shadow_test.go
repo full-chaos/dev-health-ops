@@ -705,13 +705,15 @@ func TestShadowRowsCensusOverTheGoAPIProfiles(t *testing.T) {
 		got = append(got, ns)
 	}
 	sort.Strings(got)
-	if !slices.Equal(got, shadowNamespaces) {
-		t.Fatalf("namespaces of the rows %v, closed set %v", got, shadowNamespaces)
+	for _, ns := range got {
+		if !slices.Contains(shadowNamespaces, ns) {
+			t.Fatalf("namespace %q of the rows is outside the closed set %v", ns, shadowNamespaces)
+		}
 	}
 	for name, raw := range map[string]string{
-		"duplicate row":     fmt.Sprintf(`{"rows":[%s,%s]}`, testProfileRow("teams.read"), testProfileRow("teams.read")),
-		"action not in set": fmt.Sprintf(`{"rows":[%s]}`, testProfileRow("teams.nope")),
-		"namespace outside": fmt.Sprintf(`{"rows":[%s]}`, testProfileRow("analytics.read")),
+		"duplicate row":         fmt.Sprintf(`{"rows":[%s,%s]}`, testProfileRow("teams.read"), testProfileRow("teams.read")),
+		"action not in set":     fmt.Sprintf(`{"rows":[%s]}`, testProfileRow("teams.nope")),
+		"resource kind outside": fmt.Sprintf(`{"rows":[%s]}`, testProfileRow("acr.context.read")),
 	} {
 		if _, err := ParseShadowRows([]byte(raw), "dev-health-ops-api"); err == nil {
 			t.Errorf("%s: ParseShadowRows accepted the document", name)

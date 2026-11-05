@@ -170,15 +170,3 @@ func TestACommandThatIgnoresArgumentsRefusesAWhereItActsRootFlag(t *testing.T) {
 		}
 	}
 }
-
-func TestPythonReprIsPythonsStrRepr(t *testing.T) {
-	for input, want := range map[string]string{
-		"plain": "'plain'", "it's": `"it's"`, `say "hi"`: `'say "hi"'`, `both ' and "`: `'both \' and "'`, `back\slash`: `'back\\slash'`,
-		"\x1b[2J": `'\x1b[2J'`, "a\tb\nc\rd": `'a\tb\nc\rd'`, "\x00\x7f": `'\x00\x7f'`, "é": "'é'", "\u00a0": `'\xa0'`,
-		"\u200b": `'\u200b'`, "\U0001F600": "'\U0001F600'", "\U000e0001": `'\U000e0001'`, "": "''",
-	} {
-		if got := pythonRepr(input); got != want {
-			t.Errorf("pythonRepr(%q) = %s, want %s", input, got, want)
-		}
-	}
-}

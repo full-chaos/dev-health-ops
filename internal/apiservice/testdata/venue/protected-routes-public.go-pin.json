@@ -1,0 +1,6 @@
+{
+  "probe: GET /health stranger org": "200 {\"status\":\"ok\",\"services\":{\"postgres\":\"ok\",\"clickhouse\":\"ok\",\"redis\":\"ok\",\"rate_limiter\":\"redis\"}}",
+  "probe: GET /health/workers stranger org": "503 {\"status\":\"down\",\"services\":{\"go_worker:ops\":\"ok\",\"go_worker:sync\":\"absent\",\"go_worker:heavy\":\"absent\",\"celery\":\"<ruled>\"}}",
+  "probe: GET /ready stranger org": "200 {\"status\":\"ready\"}",
+  "pt: stranger org header": "202 {\"ingestion_id\":\"<ruled>\",\"status\":\"accepted\",\"items_received\":0,\"items_dropped\":1,\"stream\":\"product-telemetry:anonymous:events\"}"
+}

@@ -23,8 +23,8 @@ type servedOrgCensusRow struct {
 	query   bool
 }
 
-// servedOrgCensus is census-13123-v1.tsv: the 8 organization_from_path rows with an action and the 9 billing rows
-// whose handler reads an org_id query parameter (resolveOrg, internal/api/billing/subscriptions.go:47).
+// servedOrgCensus is every go-api action row whose handler serves another organization than the session's: the 8
+// organization_from_path rows and the 9 billing rows whose handler reads an org_id query parameter (resolveOrg).
 var servedOrgCensus = []servedOrgCensusRow{
 	{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false},
 	{"POST /api/v1/admin/orgs/{org_id}/members", Admin, false},

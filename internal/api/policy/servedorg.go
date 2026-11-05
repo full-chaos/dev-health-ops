@@ -13,7 +13,9 @@ type servedOrgParam struct {
 }
 
 // goAPIServedOrgRows are the go-api action rows whose handler serves an organization a path or query parameter
-// names (census-13123): the organization_from_path rows and the billing rows that read org_id (resolveOrg).
+// names: the organization_from_path rows and the billing rows whose handler reads an org_id query parameter
+// (resolveOrg). The profile still names those billing rows organization_from_session, so this table, not the
+// resolver, is their source.
 var goAPIServedOrgRows = map[string]servedOrgParam{
 	"GET /api/v1/admin/orgs/{org_id}/members":              {path: "org_id"},
 	"POST /api/v1/admin/orgs/{org_id}/members":             {path: "org_id"},

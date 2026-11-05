@@ -209,3 +209,45 @@ func TestRESTOrganizationScopeIsTodaysReadOnEveryClass(t *testing.T) {
 		})
 	}
 }
+
+// restOrgPostCases are the POST handlers that sit beside the GET handlers above: each reads its organization in its
+// own code, so each gets its own no-scope cell.
+func restOrgPostCases() []restOrgCase {
+	post := func(class, target string, handler func(*testing.T, *teamScopeReachClient) http.HandlerFunc) restOrgCase {
+		return restOrgCase{class, http.MethodPost, target, "{}", nil, handler}
+	}
+	return []restOrgCase{
+		post("sankey_post", "/api/v1/sankey", func(_ *testing.T, c *teamScopeReachClient) http.HandlerFunc { return newSankeyPostHandler(c) }),
+		post("home_post", "/api/v1/home", func(_ *testing.T, c *teamScopeReachClient) http.HandlerFunc { return newHomePostHandler(c, nil) }),
+		post("opportunities_post", "/api/v1/opportunities", func(_ *testing.T, c *teamScopeReachClient) http.HandlerFunc { return newOpportunitiesPostHandler(c) }),
+		post("investment_post", "/api/v1/investment", func(t *testing.T, c *teamScopeReachClient) http.HandlerFunc {
+			return newInvestmentPostHandler(restNeed(investment.NewReader(c)))
+		}),
+		post("drilldown_prs_post", "/api/v1/drilldown/prs", func(t *testing.T, c *teamScopeReachClient) http.HandlerFunc {
+			return newDrilldownPRsPostHandler(restNeed(drilldown.NewReader(c)))
+		}),
+		post("drilldown_issues_post", "/api/v1/drilldown/issues", func(t *testing.T, c *teamScopeReachClient) http.HandlerFunc {
+			return newDrilldownIssuesPostHandler(restNeed(drilldown.NewReader(c)))
+		}),
+		post("work_units_post", "/api/v1/work-units", func(t *testing.T, c *teamScopeReachClient) http.HandlerFunc {
+			return newWorkUnitsPostHandler(restNeed(investmentexplain.NewReader(c)))
+		}),
+		post("explain_post", "/api/v1/explain", func(t *testing.T, c *teamScopeReachClient) http.HandlerFunc {
+			return newExplainPostHandler(restNeed(explain.NewReader(c)))
+		}),
+	}
+}
+
+func TestRESTPostHandlersNoOrganizationInScopeIs503BeforeAnyStatement(t *testing.T) {
+	for _, tc := range restOrgPostCases() {
+		t.Run(tc.class, func(t *testing.T) {
+			got := tc.run(t, authctx.Claims{OrgID: restScopeClaimsOrg})
+			if got.status != http.StatusServiceUnavailable || !strings.Contains(got.body, "Authorization unavailable") {
+				t.Fatalf("no scope answered %d %q, want 503 Authorization unavailable", got.status, got.body)
+			}
+			if len(got.statements) != 0 {
+				t.Fatalf("no scope ran %d statement(s) before the refusal:\n%v", len(got.statements), got.statements)
+			}
+		})
+	}
+}

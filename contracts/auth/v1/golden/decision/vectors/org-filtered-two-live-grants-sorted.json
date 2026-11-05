@@ -1,0 +1,64 @@
+{
+  "expect": {
+    "allowed": true,
+    "cache_class": "",
+    "expires_in_seconds": null,
+    "obligations": {
+      "repository_allowlist": [
+        "acme/api",
+        "acme/web"
+      ],
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 13,
+    "reason": "allowed_by_role",
+    "wire_reason_code": "allowed_by_role"
+  },
+  "id": "org-filtered-two-live-grants-sorted",
+  "layer": "pdp",
+  "request": {
+    "action": "analytics.read",
+    "organization_id": "org-a",
+    "resource_key": "",
+    "resource_kind": "organization"
+  },
+  "state": {
+    "catalog": "embedded",
+    "clock": "2027-01-15T08:00:00Z",
+    "grants": [
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/web",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/api",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      }
+    ],
+    "grants_error": false,
+    "memberships": {
+      "org-a": {
+        "org_id": "org-a",
+        "role": "member",
+        "status": "active"
+      }
+    },
+    "organizations": {
+      "org-a": "active"
+    },
+    "platform_role": "",
+    "principal_status": "active",
+    "service_accounts": {},
+    "snapshot": "grant",
+    "workload": null
+  },
+  "why": "two live grants: the allowlist is their keys, sorted and unique."
+}

@@ -19,13 +19,7 @@ func (g *Guard) observeShadow(r *http.Request, user *User, bearer string, legacy
 }
 
 func shadowCallerKind(user *User) string {
-	switch {
-	case user.Holds(ActionAdminOrgs):
-		return ShadowCallerSuperuser
-	case user.Role == "owner" || user.Role == "admin":
-		return ShadowCallerAdmin
-	}
-	return ShadowCallerMember
+	return ShadowCaller(user.Holds(ActionAdminOrgs), user.Role)
 }
 
 // ShadowEnabled reports whether a shadow is installed beside the guard.

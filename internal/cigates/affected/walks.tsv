@@ -59,6 +59,7 @@ internal/auth/contracts	acr_embedded_schema_test.go	contracts/auth/v1/examples/a
 internal/auth/contracts	anchor_ranges_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	audit_producer_census_test.go	internal	tree	*
 internal/auth/contracts	authorization_goldens_test.go	unexpressed	-	-
+internal/auth/contracts	credential_class_retired_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	credential_class_service_account_token_test.go	contracts/auth/v1	dir	*
 internal/auth/contracts	credential_goldens_test.go	unexpressed	-	-
 internal/auth/contracts	decision_golden_shape_test.go	contracts/auth/v1/golden/decision	tree	*

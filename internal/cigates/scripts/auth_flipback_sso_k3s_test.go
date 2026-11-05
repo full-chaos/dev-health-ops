@@ -86,7 +86,7 @@ func fbRun(t *testing.T, env []string, args ...string) (cmdResult, string) {
 	path := strings.Replace(shimBasePath(), "PATH=", "PATH="+dir+":", 1)
 	for _, a := range args {
 		if a == "--print-plan" { // the plan renders the chart with the real helm and touches no cluster
-			path = shimBasePath()
+			path = shimBasePathWith(t, "", "helm")
 		}
 	}
 	base := []string{path, "STUB_LOG=" + log, "AUTH_FB_KUBECONFIG=" + kubeconfig, "AUTH_FB_WORK=" + work}

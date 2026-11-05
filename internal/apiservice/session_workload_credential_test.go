@@ -344,6 +344,38 @@ func TestWorkloadSessionSelectorSendsOnlyTheWorkloadToken(t *testing.T) {
 	}
 }
 
+// The rehearsal and chart values set AUTH_SESSION_ISSUE_TOKEN to a placeholder that is no credential (the chart still renders
+// the key as a required secretKeyRef): with selector workload every issue succeeds and carries the workload token alone.
+func TestWorkloadSessionSelectorIgnoresThePlaceholderSessionToken(t *testing.T) {
+	const placeholder = "unused-go-api-signs-in-with-its-workload-token"
+	s := newCredServer(t)
+	token := s.tokenAnswer(t)
+	env := workloadEnv(t, map[string]string{EnvAuthSessionIssueCredential: "workload", sessionissue.EnvToken: placeholder})
+	cfg := sessionsOn(t, s.URL)
+	_, session, err := newCredentials(cfg, issueEnv(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := sessionIssuer(cfg, issueEnv(env), session)
+	if err != nil {
+		t.Fatalf("workload mode with the placeholder token: %v", err)
+	}
+	s.issueAll(t, issuer)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.issue) != len(issueFixtures()) {
+		t.Fatalf("%d issue requests, want %d", len(s.issue), len(issueFixtures()))
+	}
+	for i, r := range s.issue {
+		if len(r.auth) != 1 || r.auth[0] != "Bearer "+token {
+			t.Errorf("request %d: Authorization is not exactly the workload token", i)
+		}
+		if strings.Contains(r.dump, placeholder) {
+			t.Errorf("request %d carries the placeholder", i)
+		}
+	}
+}
+
 // A failed exchange: every issue fails and nothing reaches the issue route.
 func TestWorkloadSessionSelectorExchangeFailureSendsNothing(t *testing.T) {
 	s := newCredServer(t)

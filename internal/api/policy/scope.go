@@ -330,6 +330,27 @@ func (s *Scope) useTokenOrg(w http.ResponseWriter, r *http.Request, user *User) 
 	return true
 }
 
+// CheckTokenOrg refuses a user whose token names an org the user no longer
+// holds a membership row in: a token keeps its org_id claim after the member
+// is removed (the removal does not move token_version). Holders of the
+// admin.orgs platform action and tokens without an org pass. A failed read is
+// that error, never a pass. It reads Membership, as the user access token
+// path does (accessTokenUser).
+func (a *Authenticator) CheckTokenOrg(ctx context.Context, user *User) error {
+	if user.OrgID == "" || user.Holds(ActionAdminOrgs) {
+		return nil
+	}
+	_, member, err := a.Membership(ctx, user.UserID, user.OrgID)
+	if err != nil {
+		return err
+	}
+	if !member {
+		a.logger.WarnContext(ctx, "api access token for an org the user is not a member of", slog.String("user_id", user.UserID))
+		return errRejected
+	}
+	return nil
+}
+
 // tokenOrgStanding is a caller's standing in its token's own org.
 type tokenOrgStanding int
 

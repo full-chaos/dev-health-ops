@@ -14,14 +14,18 @@ import (
 )
 
 // fakeUsers is a policy.Store whose users row is whatever the test sets.
-// Only UserState is used by the edge verifier; the other two methods fail the
-// test's expectation of "never read" by returning an error.
+// UserState and Membership are read by the edge verifier; ActiveImpersonation
+// fails the test's expectation of "never read" by returning an error.
 type fakeUsers struct {
 	state policy.UserState
 	found bool
 	err   error
 	calls int
 	last  uuid.UUID
+
+	notMember   bool
+	memberErr   error
+	memberCalls int
 }
 
 func (f *fakeUsers) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
@@ -31,7 +35,11 @@ func (f *fakeUsers) UserState(_ context.Context, id uuid.UUID) (policy.UserState
 }
 
 func (f *fakeUsers) Membership(context.Context, uuid.UUID, uuid.UUID) (string, bool, error) {
-	return "", false, errors.New("fakeUsers: Membership must not be read by the edge verifier")
+	f.memberCalls++
+	if f.memberErr != nil {
+		return "", false, f.memberErr
+	}
+	return "admin", !f.notMember, nil
 }
 
 func (f *fakeUsers) OrgMembership(ctx context.Context, user, org uuid.UUID) (string, bool, bool, error) {
@@ -67,7 +75,7 @@ func verifyWithUsers(t *testing.T, users policy.Store, mutate func(map[string]an
 	if err != nil {
 		t.Fatalf("NewEdgeVerifier: %v", err)
 	}
-	claims := validEdgeClaims("org-42")
+	claims := validEdgeClaims("22222222-2222-2222-2222-222222222222")
 	if mutate != nil {
 		mutate(claims)
 	}
@@ -82,8 +90,8 @@ func TestEdgeVerifier_ServesActiveUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify: unexpected error: %v", err)
 	}
-	if claims.OrgID != "org-42" {
-		t.Fatalf("OrgID = %q, want org-42", claims.OrgID)
+	if claims.OrgID != "22222222-2222-2222-2222-222222222222" {
+		t.Fatalf("OrgID = %q, want 22222222-2222-2222-2222-222222222222", claims.OrgID)
 	}
 	if users.calls != 1 || users.last.String() != "11111111-1111-1111-1111-111111111111" {
 		t.Fatalf("UserState calls = %d for %s, want 1 for the token's sub", users.calls, users.last)
@@ -234,10 +242,44 @@ func TestEdgeVerifier_OrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 	})
 	t.Run("token with an org is served", func(t *testing.T) {
 		claims, err := verifyWithUsers(t, activeUserStore(), nil)
-		if err != nil || claims.OrgID != "org-42" {
+		if err != nil || claims.OrgID != "22222222-2222-2222-2222-222222222222" {
 			t.Fatalf("claims=%+v err=%v", claims, err)
 		}
 	})
 }
 
 func (fakeUsers) ReadsPlatformRoles() bool { return false }
+
+func TestEdgeVerifier_RefusesTokenOrgWithoutMembership(t *testing.T) {
+	const org = "22222222-2222-2222-2222-222222222222"
+	t.Run("removed member is a refusal", func(t *testing.T) {
+		users := &fakeUsers{state: policy.UserState{IsActive: true}, found: true, notMember: true}
+		claims, err := verifyWithUsers(t, users, nil)
+		if claims != nil || !policy.IsRefusal(err) {
+			t.Fatalf("claims=%+v err=%v, want a refusal", claims, err)
+		}
+		if users.memberCalls != 1 {
+			t.Fatalf("membership reads = %d, want 1", users.memberCalls)
+		}
+	})
+	t.Run("failed read is not a pass and not a refusal", func(t *testing.T) {
+		users := &fakeUsers{state: policy.UserState{IsActive: true}, found: true, memberErr: errors.Join(policy.ErrUnavailable, errors.New("down"))}
+		claims, err := verifyWithUsers(t, users, nil)
+		if claims != nil || !errors.Is(err, policy.ErrUnavailable) || policy.IsRefusal(err) {
+			t.Fatalf("claims=%+v err=%v, want the store error", claims, err)
+		}
+	})
+	t.Run("superuser is served on a non-member org", func(t *testing.T) {
+		users := &fakeUsers{state: policy.UserState{IsActive: true, IsSuperuser: true}, found: true, notMember: true}
+		claims, err := verifyWithUsers(t, users, nil)
+		if err != nil || claims.OrgID != org {
+			t.Fatalf("claims=%+v err=%v, want served in %s", claims, err, org)
+		}
+	})
+	t.Run("member is served", func(t *testing.T) {
+		claims, err := verifyWithUsers(t, activeUserStore(), nil)
+		if err != nil || claims.OrgID != org {
+			t.Fatalf("claims=%+v err=%v", claims, err)
+		}
+	})
+}

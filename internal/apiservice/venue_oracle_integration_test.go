@@ -65,7 +65,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b1dc4f7ff6f2456c9fd6df675cec53ea8aa7fb1da7af3c7f66c3f66cf07003e0", Ruling: protectedRoutesPinRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "90fa8ecb637e04601a3a0b7c98cd331077a11f89398a2f95581e47e2e087eb04", Ruling: protectedRoutesPinRuling})
 	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgclaim.go-pin.json", SHA256: protectedOrgClaimPinSHA256, Ruling: orgClaimRuling})
 	publicPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-public.go-pin.json", SHA256: protectedPublicPinSHA256, Ruling: publicRowRuling})
 	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes-orgless.go-pin.json", SHA256: protectedOrglessPinSHA256, Ruling: protectedOrglessRuling})
@@ -498,7 +498,7 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 // the pin shows any change in Go's answers.
 const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
 
-// productTelemetryRuling retired the Python reference of nine product-telemetry
+// productTelemetryRuling retired the Python reference of ten product-telemetry
 // intake requests: the intake now bounds payload keys and string values, drops
 // only the event that breaks a rule, and bounds the org hash that names the
 // stream key (CHAOS-10945; stricter than Python, D6129). The rule tests in
@@ -520,6 +520,7 @@ var retiredProductTelemetryRequests = map[string]bool{
 	"pt: lone surrogate org hash":       true,
 	"pt: lone surrogate org hash snake": true,
 	"pt: paired surrogate org hash":     true,
+	"pt: wrong types":                   true,
 }
 
 // retiredProtectedRequest reports a request whose Python reference a ruling

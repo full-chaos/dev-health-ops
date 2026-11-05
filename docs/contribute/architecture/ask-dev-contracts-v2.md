@@ -9,7 +9,8 @@ source_of_truth:
   - Amendment TRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
   - Amendment PRD v2 -- Ask Dev Wave 3.1 (Linear, project Ask Dev)
 applicability: current
-lifecycle: active
+lifecycle: deprecated
+deprecated_by: /admin/ask-dev/
 ---
 
 # Ask Dev v2 contracts (Wave 3.1)
@@ -24,7 +25,10 @@ those are separate Wave 3.1 issues (CHAOS-3292, CHAOS-3295, CHAOS-3297,
 CHAOS-3301) that consume these contracts.
 {: .fc-page-lede }
 
-> **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed.
+!!! warning "Deprecated: records a removed surface"
+    **Status:** Deprecated. This page records the design of the Python Ask Dev surface (`/api/v1/dev`), which the Go api does not serve. Ask Dev now runs in the Ask Dev service and is called by the browser, and it is not turned on in production today.
+    **Affected versions:** the removed Python surface only. **Review date:** none; the page stays as a record of the design.
+    **Replacement:** [Turn on Ask Dev](../../admin/ask-dev/index.md) and [Ask a question and read the answer](../../use/ask-dev/index.md).
 
 v1 (`dev_answer.v1` / `DevMessageRequest`) was left untouched when v2 was
 written, and its `contracts/ask-dev/v1` tree (removed with the Python api) has since been deleted. v2 lived

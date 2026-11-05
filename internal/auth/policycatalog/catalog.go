@@ -34,6 +34,11 @@ const (
 	// exercise the action (G-51, ACP-ADR-10).
 	ImpersonationDenied  = "denied"
 	ImpersonationAllowed = "allowed"
+
+	// RepositoryScopeFiltered marks an action that reads repository-bound data: an allow carries the repositories
+	// the principal may read as an obligation. RepositoryScopeNone is the value of an action that does not.
+	RepositoryScopeFiltered = "filtered"
+	RepositoryScopeNone     = "none"
 )
 
 type Action struct {
@@ -44,6 +49,8 @@ type Action struct {
 	CacheClass   string
 	// Impersonation is ImpersonationDenied or ImpersonationAllowed.
 	Impersonation string
+	// RepositoryScope is RepositoryScopeFiltered or RepositoryScopeNone.
+	RepositoryScope string
 }
 
 type Role struct {
@@ -74,6 +81,8 @@ type actionsFile struct {
 		RiskClass     string `json:"risk_class"`
 		CacheClass    string `json:"cache_class"`
 		Impersonation string `json:"impersonation"`
+		// RepositoryScope is optional: an absent member is RepositoryScopeNone.
+		RepositoryScope string `json:"repository_scope"`
 	} `json:"actions"`
 }
 
@@ -196,8 +205,16 @@ func Load(actionsJSON, rolesJSON []byte) (*Catalog, error) {
 		if a.Impersonation != ImpersonationDenied && a.Impersonation != ImpersonationAllowed {
 			return nil, invalid("action %q has a missing or unknown impersonation", a.Action)
 		}
+		repoScope := a.RepositoryScope
+		switch repoScope {
+		case "":
+			repoScope = RepositoryScopeNone
+		case RepositoryScopeFiltered, RepositoryScopeNone:
+		default:
+			return nil, invalid("action %q has an unknown repository_scope", a.Action)
+		}
 		act := Action{ID: a.Action, Scope: a.Scope, ResourceKind: a.ResourceKind, RiskClass: a.RiskClass, CacheClass: a.CacheClass,
-			Impersonation: a.Impersonation}
+			Impersonation: a.Impersonation, RepositoryScope: repoScope}
 		c.byAct[a.Action] = act
 		c.actions = append(c.actions, act)
 	}

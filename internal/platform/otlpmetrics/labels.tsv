@@ -37,6 +37,7 @@ devhealth_acr_llm_config_requests_total	outcome	code: internal/apiservice/acr/ll
 devhealth_acr_svc_acr_compat_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_accepted_total	route	code: internal/apiservice/acr/workloadauth.go
 devhealth_acr_workload_refused_total	reason,route	code: internal/apiservice/acr/workloadauth.go
+devhealth_api_auth_proxy_impersonation_config_invalid		code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiservice/authproxy.go
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
@@ -71,6 +72,8 @@ devhealth_auth_decision_cache_lookups_total	result	code: internal/auth/authapi/a
 devhealth_auth_decision_cache_puts_total	result	code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_decision_cache_entries		code: internal/auth/authapi/authorize_cache.go
 devhealth_auth_outbox_publisher_enabled		code: internal/audit/outboxloop.go
+devhealth_auth_push_reconcile_drift	class	code: internal/auth/pushreconcile/reconcilejob/gauge.go
+devhealth_auth_push_reconcile_runs_total	outcome	code: internal/auth/pushreconcile/reconcilejob/probe.go
 dev_health_categorize_byo_optin_unreadable_total	reason	code: internal/jobs/investment/categorizebyo.go
 dev_health_generation_repair_failures_total	step	code: internal/jobs/metrics/daily/generation_repair_metrics.go
 dev_health_generation_repair_partial_total		code: internal/jobs/metrics/daily/generation_repair_metrics.go

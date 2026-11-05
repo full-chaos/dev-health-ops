@@ -6787,6 +6787,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
+	gqlHandler.Use(graphQLShadow())
 	gqlHandler.Use(graph.OperationOrgGuard{})
 	gqlHandler.AroundResponses(recordErrorCount)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
@@ -6934,6 +6935,13 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 			claims = authenticated
 		}
+		var shadowSubject *graph.ShadowSubject
+		if edge {
+			if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
+				subject := graphQLShadowSubject(token)
+				shadowSubject = &subject
+			}
+		}
 
 		var query string
 		switch {
@@ -7048,7 +7056,11 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 
 		// The raw body rides along so a resolver can read a JSON variable in the
 		// order the client wrote its keys (see graph.WithRequestBody).
-		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(r.Context(), claims), bodyBytes))
+		requestCtx := r.Context()
+		if shadowSubject != nil {
+			requestCtx = graph.WithShadowSubject(requestCtx, *shadowSubject)
+		}
+		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(requestCtx, claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		if edge {
 			// What the Python edge forwarded: a POST of this JSON body, with

@@ -69,12 +69,13 @@ func TestGatedPlaneShadowHoldsTheGraphQLRows(t *testing.T) {
 	if shadow == nil {
 		t.Fatal("the plane's gate has no shadow")
 	}
+	before := shadowCounters(t)
 	shadow.Observe(context.Background(), policy.ShadowObservation{Pattern: "Query.home", Bearer: "aaaa.bbbb.cccc-dddd-eeee-ffff", OrgID: "org-1",
 		Caller: policy.ShadowCallerMember, UserAccessToken: true, LegacyAllowed: true})
 	gate.Wait()
-	reqs := srv.Requests()
-	if len(reqs) != 1 || reqs[0].Action != "analytics.read" {
-		t.Fatalf("PDP calls %+v, want one analytics.read", reqs)
+	// The row is known to the shadow, so it asks; the workload exchange of this fixture has no token endpoint, so the ask has no verdict.
+	if got := shadowDelta(before, shadowCounters(t)); len(got) != 1 || got[shadowResultsMetric+"|reason=none,result=error"] != 1 {
+		t.Fatalf("5.12 counters %v, want one result=error for a known row", got)
 	}
 }
 

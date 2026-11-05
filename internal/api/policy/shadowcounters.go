@@ -41,7 +41,7 @@ func newShadowMismatchAdder(meter metric.Meter) shadowMismatchAdder {
 
 func newShadowResultAdder(meter metric.Meter) shadowResultAdder {
 	resultCounter, err := meter.Int64Counter(shadowResultMetric,
-		metric.WithDescription("Shadow PDP calls by result (match, mismatch, error, dropped, skipped) and skip reason (none, hs256, envelope)"))
+		metric.WithDescription("Shadow PDP calls by result (match, mismatch, error, dropped, skipped) and skip reason (none, hs256, envelope, no_user_bearer, cap, unmapped, op_refused)"))
 	if err != nil {
 		return func(context.Context, string, string) {}
 	}

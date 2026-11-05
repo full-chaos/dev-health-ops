@@ -12,6 +12,7 @@ import (
 // The state route takes the go-api workload token beside the session issuer credential: the answer is the one the
 // credential gets, the workload principal and its jti are the caller, no credential check and no compat count run.
 func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.reactivate.status, f.reactivate.revision = org.StatusSuspended, 5
 	header, _ := f.w.mint("workload+jwt", nil)
@@ -39,6 +40,7 @@ func TestOrgStateAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 
 // The session issuer credential keeps working on the route; it never reads the key set and the compat counter counts it.
 func TestOrgStateKeepsTheServiceCredentialBesideTheWorkloadPath(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	if got := f.post(stateRoute, f.stateBody(), nil); got.Code != http.StatusOK {
 		t.Fatalf("state with the service credential: %d %s", got.Code, got.Body)
@@ -55,18 +57,24 @@ func TestOrgStateKeepsTheServiceCredentialBesideTheWorkloadPath(t *testing.T) {
 // with no store read; a key-set outage is 503; with the path off a workload token is the same 401.
 func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 	for name, build := range issuePreKeyRefusals() {
-		f := newProvWorkloadFixture(t)
-		expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 || f.w.keys.reads != 0 {
-			t.Fatalf("%s: read before the verdict", name)
-		}
+		t.Run("pre-key "+name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 || f.w.keys.reads != 0 {
+				t.Fatalf("%s: read before the verdict", name)
+			}
+		})
 	}
 	for name, build := range issueVerifierRefusals() {
-		f := newProvWorkloadFixture(t)
-		expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 {
-			t.Fatalf("%s: a refused token reached a store", name)
-		}
+		t.Run("verifier "+name, func(t *testing.T) {
+			t.Parallel()
+			f := newProvWorkloadFixture(t)
+			expectRefusal(t, f.post(stateRoute, f.stateBody(), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if len(f.creds.scopes) != 0 || f.reactivate.gets != 0 {
+				t.Fatalf("%s: a refused token reached a store", name)
+			}
+		})
 	}
 	f := newProvWorkloadFixture(t)
 	f.w.keys.err = errors.New("custody down")
@@ -86,6 +94,7 @@ func TestOrgStateRefusesWrongWorkloadCredentials(t *testing.T) {
 
 // With a workload token the route answers an unknown organization 404 and a body that is not one organization_id 400.
 func TestOrgStateWorkloadBodyAndNotFound(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.reactivate.getErr = org.ErrNotFound
 	header, _ := f.w.mint("workload+jwt", nil)

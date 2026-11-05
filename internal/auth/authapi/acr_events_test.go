@@ -165,6 +165,7 @@ func TestAcrEventsRouteHasNoRowInTheEmbeddedDocument(t *testing.T) {
 // Every other class, and a wrong audience or subject, is refused from the
 // bearer's text or the unverified payload: no key, no row, no body, no store.
 func TestAcrEventsRefuseEveryOtherCallerBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	refusals := issuePreKeyRefusals()
 	refusals["compat service credential"] = func(*workloadIssueFixture) map[string]string {
 		return bearerOf("svc_authsess_" + strings.Repeat("A", 43))
@@ -182,6 +183,7 @@ func TestAcrEventsRefuseEveryOtherCallerBeforeAnyRead(t *testing.T) {
 }
 
 func TestAcrEventsRefuseATokenTheVerifierRefuses(t *testing.T) {
+	t.Parallel()
 	for name, build := range issueVerifierRefusals() {
 		a := newAcrEventsFixture(t, acrEventRows(workloadTokenClass))
 		response, body := a.post(build(a.workloadIssueFixture), acrEventBody("cred_exampleaaaaaaaaaa", 1, "active"))
@@ -231,6 +233,7 @@ func TestAcrEventsAnswer503WhenTheWorkloadReadFails(t *testing.T) {
 }
 
 func TestAcrEventsRefuseABadBodyBeforeTheStore(t *testing.T) {
+	t.Parallel()
 	valid := acrEventBody("cred_exampleaaaaaaaaaa", 1, "active")
 	for name, body := range map[string]string{
 		"not json":          `{`,
@@ -256,6 +259,7 @@ func TestAcrEventsRefuseABadBodyBeforeTheStore(t *testing.T) {
 
 // Every rejected example of the contract is refused, so no secret member gets in.
 func TestAcrEventsRefuseEveryRejectedExample(t *testing.T) {
+	t.Parallel()
 	names, err := filepath.Glob(filepath.Join(repoRoot(t), "contracts/auth/v1/examples/acr-credential-lifecycle-event/*.json"))
 	if err != nil || len(names) < 10 {
 		t.Fatalf("examples: %d, %v", len(names), err)
@@ -307,6 +311,7 @@ func TestAcrEventsHandTheEngineTheEventAndTheDigestOfThePostedBytes(t *testing.T
 // Every outcome the engine can return has one answer, and no outcome falls
 // through to 204.
 func TestAcrEventsAnswerEachOutcome(t *testing.T) {
+	t.Parallel()
 	want := map[outboxprojection.Class]struct {
 		status int
 		reason string

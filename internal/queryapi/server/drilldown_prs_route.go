@@ -278,6 +278,13 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit: 50,
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
 		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -414,6 +421,13 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			WhatRepos:  whatRepos,
 			Limit:      limit,
 		}
+
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {

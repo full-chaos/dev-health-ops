@@ -167,6 +167,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		TeamScopeBindings:  opts.TeamScopeBindings,
 		Limit:              limit,
 		WorkUnitID:         opts.WorkUnitID,
+		Ceiling:            opts.Ceiling,
 	})
 	if err != nil {
 		return nil, err
@@ -187,11 +188,24 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		rows = filtered
 	}
 
+	// The quote text of a unit that touches a repository outside the ceiling is never read nor served.
+	var omitQuotes map[string]bool
+	if opts.IncludeText {
+		unitIDs := make([]string, 0, len(rows))
+		for _, row := range rows {
+			unitIDs = append(unitIDs, row.WorkUnitID)
+		}
+		var err error
+		if omitQuotes, err = reader.FetchUnitsTouchingOtherRepos(ctx, opts.OrgID, unitIDs, opts.Ceiling); err != nil {
+			return nil, err
+		}
+	}
+
 	var unitRuns []WorkUnitRunPair
 	if opts.IncludeText {
 		for _, row := range rows {
 			runID := derefString(row.CategorizationRunID)
-			if row.WorkUnitID != "" && runID != "" {
+			if row.WorkUnitID != "" && runID != "" && !omitQuotes[row.WorkUnitID] {
 				unitRuns = append(unitRuns, WorkUnitRunPair{WorkUnitID: row.WorkUnitID, RunID: runID})
 			}
 		}
@@ -238,7 +252,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				return err
 			}
 		}
-		sourceTitles = reader.quoteSourceTitles(groupCtx, opts.OrgID, quoteRows)
+		sourceTitles = reader.quoteSourceTitles(groupCtx, opts.OrgID, quoteRows, opts.Ceiling)
 		return nil
 	})
 	group.Go(func() error {
@@ -267,7 +281,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 	quotesByUnit := map[string][]WorkUnitInvestmentQuoteRow{}
 	for _, quote := range quoteRows {
-		if quote.WorkUnitID == "" {
+		if quote.WorkUnitID == "" || omitQuotes[quote.WorkUnitID] {
 			continue
 		}
 		quotesByUnit[quote.WorkUnitID] = append(quotesByUnit[quote.WorkUnitID], quote)

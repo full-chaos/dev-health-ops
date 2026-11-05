@@ -474,6 +474,15 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
+		// An allowlist caller reads the allowed repositories only, and neither reads nor fills the explanation cache,
+		// whose answers are built over every repository (CHAOS-13090).
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment_explain", org, err)
+			return
+		}
+		opts.Ceiling, opts.BypassCache = ceiling, ceiling.Restricted()
+
 		// A provider Python genuinely supports but this Go port cannot
 		// construct a client for (investmentexplain.
 		// ResolveUnsupportedProviderKind's own doc comment) must answer

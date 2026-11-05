@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-go/readers"
+
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"strings"
@@ -38,6 +39,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // ErrUnavailable is returned when the reader is constructed without a
@@ -128,8 +130,10 @@ type BreakdownFilters struct {
 	// each repository's effort by the share of it the teams hold (teamscope.RepoShare, CHAOS-9413, D5988):
 	// TeamScopeCondition only says WHICH repositories are in, so without them a co-owner would read the whole of a
 	// repository it owns a fraction of. Empty = no team scope = weight 1.
-	TeamIDs       []string
-	TeamAsOf      time.Time
+	TeamIDs  []string
+	TeamAsOf time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling       teamscope.Ceiling
 	Themes        []string
 	Subcategories []string
 	// DatedByEnd dates a unit by its END day (to_ts in [start, end)) instead of by the overlap
@@ -206,7 +210,7 @@ func (f BreakdownFilters) scopeClause() (filterSQL string, bindings []dhclickhou
 	if explicitCondition != "" {
 		explicitSQL = " AND " + explicitCondition
 	}
-	filterSQL, bindings = teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
+	filterSQL, bindings = teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings, f.Ceiling, "repo_id")
 	return filterSQL, bindings
 }
 
@@ -622,4 +626,12 @@ func (f BreakdownFilters) teamShare(scopeSQL string) (expr string, bindings []dh
 
 func (f BreakdownFilters) scoped(scopeSQL string) bool {
 	return strings.TrimSpace(scopeSQL) != "" && strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")) != "1 = 0"
+}
+
+// ResolveCeiling is the repository ceiling of a decision scope (CHAOS-13090): one matcher statement for an allowlist.
+func (reader *Reader) ResolveCeiling(ctx context.Context, scope pepgate.Scope) (teamscope.Ceiling, error) {
+	if reader == nil || reader.client == nil {
+		return teamscope.Ceiling{}, ErrUnavailable
+	}
+	return teamscope.ResolveCeiling(ctx, reader.client, scope)
 }

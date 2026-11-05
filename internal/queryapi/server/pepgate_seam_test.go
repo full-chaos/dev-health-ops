@@ -204,7 +204,8 @@ func namespaceOf(action string) string {
 }
 
 // P1, P4, P5, P7, P8, P9, P11, P12 on every namespace: a refusal answers before the handler, so no read runs. P4 is the
-// F-A form: an allow with repository_allowlist [] on a route not cut over is 503, never the org-wide read.
+// F-A form: an allow with repository_allowlist [] on a route not cut over is 503, never the org-wide read. Since
+// CHAOS-13090 the N routes are cut over (they serve the allowlist: rest_ceiling_test.go), so P4 and P5 run on M routes.
 func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -225,7 +226,11 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 		{"P11 enforce, cell off", pdp.ModeEnforce, nil, false, gatedUnavailable, true},
 	}
 	for _, route := range seamRoutes() {
+		kind, _ := pdp.ClassKind(route.name)
 		for _, tc := range cases {
+			if kind == pdp.KindNarrowable && strings.HasPrefix(tc.name, "P4 ") || kind == pdp.KindNarrowable && strings.HasPrefix(tc.name, "P5 ") {
+				continue
+			}
 			t.Run(route.name+"/"+tc.name, func(t *testing.T) {
 				s := newSeamStack(t, route)
 				var rules []pepfake.Rule

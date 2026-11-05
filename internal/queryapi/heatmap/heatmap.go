@@ -216,6 +216,8 @@ type Params struct {
 	// RepoRefs; within one dimension the values are a set, across dimensions they AND.
 	TeamIDs  []string
 	RepoRefs []string
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // BuildResponse ports build_heatmap_response (services/heatmap.py:
@@ -347,9 +349,14 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 
 	case "active_hours":
-		activeRows, err := fetchIndividualActiveHours(ctx, client, startTS, endTS, identities, orgID)
+		activeRows, err := fetchIndividualActiveHours(ctx, client, startTS, endTS, identities, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
+		}
+		if params.Ceiling.Restricted() && len(activeRows) == 0 {
+			// A person with no commit in an allowed repository answers as a person that does not exist: the
+			// identity lookup is org-wide, so the answer must not tell the two apart (acp Q4).
+			return nil, notFound("Individual not found")
 		}
 		rows = individualActiveHoursToMetricRows(activeRows)
 
@@ -357,7 +364,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			hour, weekday, valid := parseHourWeekday(params.X, params.Y)
 			if valid {
 				limit := clampLimit(params.Limit, 1, 200)
-				evidenceRows, err := fetchIndividualActiveEvidence(ctx, client, startTS, endTS, weekday, hour, identities, limit, orgID)
+				evidenceRows, err := fetchIndividualActiveEvidence(ctx, client, startTS, endTS, weekday, hour, identities, limit, orgID, params.Ceiling)
 				if err != nil {
 					return nil, err
 				}

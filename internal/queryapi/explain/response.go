@@ -97,7 +97,7 @@ func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope stri
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 		}
 
-		filterSQL, bindings = teamscope.NarrowRepoScope(len(repoRefs) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
+		filterSQL, bindings = teamscope.NarrowRepoScope(len(repoRefs) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), "repo_id")
 		return filterSQL, bindings, nil
 	}
 	return "", nil, nil

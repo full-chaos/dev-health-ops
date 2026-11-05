@@ -23,6 +23,9 @@ import (
 	"fmt"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse read capability this package needs.
@@ -100,4 +103,12 @@ func NewReader(client QueryClient) (*Reader, error) {
 		return nil, ErrUnavailable
 	}
 	return &Reader{client: client}, nil
+}
+
+// ResolveCeiling is the repository ceiling of a decision scope (CHAOS-13090): one matcher statement for an allowlist.
+func (r *Reader) ResolveCeiling(ctx context.Context, scope pepgate.Scope) (teamscope.Ceiling, error) {
+	if r == nil || r.client == nil {
+		return teamscope.Ceiling{}, ErrUnavailable
+	}
+	return teamscope.ResolveCeiling(ctx, r.client, scope)
 }

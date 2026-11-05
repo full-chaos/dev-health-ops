@@ -170,3 +170,55 @@ func TestRepoTerm(t *testing.T) {
 		t.Fatalf("with ids: %q %v", sql, b)
 	}
 }
+
+func restricted(t *testing.T, ids ...string) Ceiling {
+	t.Helper()
+	rows, keys := map[string][]string{}, []string{}
+	for i, id := range ids {
+		key := "acme/r" + string(rune('a'+i))
+		rows[key], keys = []string{id}, append(keys, key)
+	}
+	ceiling, _ := resolve(t, rows, keys...)
+	return ceiling
+}
+
+// NarrowRepoScope with no ceiling is today's fragment; a ceiling ANDs in as one more membership test on the column,
+// over the named repositories and the team scope, and never replaces either.
+func TestNarrowRepoScopeCeiling(t *testing.T) {
+	team, teamBindings := RepoCondition("org-1", "repo_id", []string{"team-x"}, asOf)
+	named := " AND repo_id IN {scope_ids:Array(String)}"
+	namedBindings := []dhclickhouse.Binding{{Name: "scope_ids", Value: []string{"n1"}}}
+	one := restricted(t, "id-1")
+
+	if sql, b := NarrowRepoScope(false, "", nil, "", nil, NoCeiling(), "repo_id"); sql != "" || b != nil {
+		t.Fatalf("no ceiling, no scope: %q %v", sql, b)
+	}
+	if sql, b := NarrowRepoScope(false, "", nil, "", nil, one, "repo_id"); sql != " AND repo_id IN {ceiling_ids:Array(String)}" || len(b) != 1 {
+		t.Fatalf("ceiling alone: %q %v", sql, b)
+	}
+	if sql, b := NarrowRepoScope(true, named, namedBindings, "", nil, one, "repo_id"); sql != " AND repo_id IN {scope_ids:Array(String)} AND repo_id IN {ceiling_ids:Array(String)}" || len(b) != 2 {
+		t.Fatalf("ceiling and named: %q %v", sql, b)
+	}
+	sql, b := NarrowRepoScope(false, "", nil, team, teamBindings, one, "repo_id")
+	if !strings.HasPrefix(sql, " AND (repo_id IN {ceiling_ids:Array(String)} AND ") || !strings.Contains(sql, "toUUIDOrNull") || strings.Contains(sql, "{ceiling_ids:Array(String)} OR ") || len(b) != 1+len(teamBindings) {
+		t.Fatalf("ceiling and team over a UUID column: %q", sql)
+	}
+	textTeam, _ := RepoCondition("org-1", "toString(repo_id)", []string{"team-x"}, asOf)
+	sql, _ = NarrowRepoScope(false, "", nil, textTeam, nil, one, "toString(repo_id)")
+	if !strings.HasPrefix(sql, " AND (toString(repo_id) IN {ceiling_ids:Array(String)} AND toString(repo_id) IN (") || strings.Contains(sql, "toUUIDOrNull") {
+		t.Fatalf("a text column compares as text on every side: %q", sql)
+	}
+	none := restricted(t)
+	for name, got := range map[string]string{
+		"restricted, no ids":               first(NarrowRepoScope(false, "", nil, "", nil, none, "repo_id")),
+		"restricted, no ids, team":         first(NarrowRepoScope(false, "", nil, team, teamBindings, none, "repo_id")),
+		"named but nothing resolved":       first(NarrowRepoScope(true, "", nil, "", nil, one, "repo_id")),
+		"named, nothing resolved, ceiling": first(NarrowRepoScope(true, "", nil, team, teamBindings, one, "repo_id")),
+	} {
+		if got != " AND 1 = 0" {
+			t.Fatalf("%s: %q, want nothing", name, got)
+		}
+	}
+}
+
+func first(sql string, _ []dhclickhouse.Binding) string { return sql }

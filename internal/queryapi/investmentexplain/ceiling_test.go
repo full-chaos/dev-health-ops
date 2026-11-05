@@ -89,6 +89,8 @@ func (c *recordingClient) Query(ctx context.Context, statement string, bindings 
 			rows = append(rows, []any{id})
 		}
 		return &fixtureRowScanner{rows: rows}, nil
+	case strings.Contains(statement, "FROM git_pull_requests"):
+		return &fixtureRowScanner{}, nil
 	case c.quotes != nil && strings.Contains(statement, "FROM work_unit_investment_quotes"):
 		return &fixtureRowScanner{rows: c.quotes}, nil
 	}

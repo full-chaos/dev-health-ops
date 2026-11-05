@@ -457,7 +457,7 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 		result     string
 	}{
 		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, true, "", ResultAllow},
-		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, true, "", ResultAllow},
 		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},

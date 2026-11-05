@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -287,7 +288,9 @@ func TestRESTShadowDoesNotObserveA401(t *testing.T) {
 	srv := pdptest.New(t)
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	before := shadowCounters(t)
-	for name, token := range map[string]string{"no header": "", "bad token": "not-a-token"} {
+	good := g.userToken()
+	tampered := good[:len(good)-4] + "AAAA"
+	for name, token := range map[string]string{"no header": "", "bad token": "not-a-token", "tampered user token": tampered} {
 		if got, _ := g.get(token); got.Status != http.StatusUnauthorized {
 			t.Fatalf("%s: status %d, want 401", name, got.Status)
 		}
@@ -387,6 +390,24 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 	}
 }
 
+// 2i on the route: a user token that carries an actor (a delegated session) is skipped, with no PDP call.
+func TestRESTShadowDelegatedUserTokenIsSkipped(t *testing.T) {
+	srv := pdptest.New(t)
+	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
+	before := shadowCounters(t)
+	actor := wirePrincipal(uuid.MustParse("22222222-2222-4222-8222-222222222222"))
+	if got, _ := g.get(g.minter.mint(ecUser, map[string]any{"act": map[string]any{"sub": actor}}, nil)); got != gatedOK {
+		t.Fatalf("answer %+v, want %+v", got, gatedOK)
+	}
+	want := map[string]int64{shadowResultsMetric + "|result=skipped": 1}
+	if d := settle(t, before, want); fmt.Sprint(d) != fmt.Sprint(want) {
+		t.Fatalf("5.12 counters %v, want %v", d, want)
+	}
+	if n := len(srv.Requests()); n != 0 {
+		t.Fatalf("PDP asked %d times for a delegated session", n)
+	}
+}
+
 // 2j: the in-flight bound: a second call while the first is blocked is dropped, and the answer is unchanged.
 func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	release := make(chan struct{})
@@ -400,7 +421,12 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	if got, _ := g.get(g.userToken()); got != gatedOK {
 		t.Fatalf("first: %+v", got)
 	}
-	<-started
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the first call never reached the decider")
+	}
 	if got, _ := g.get(g.userToken()); got != gatedOK {
 		t.Fatalf("second: %+v", got)
 	}

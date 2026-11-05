@@ -333,6 +333,8 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	*.go
+internal/llmorgsettings	keyreaders_census_test.go	cmd	tree	*.go
+internal/llmorgsettings	keyreaders_census_test.go	internal	tree	*.go
 internal/loadharness	pdp_profiles_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*

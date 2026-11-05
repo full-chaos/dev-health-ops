@@ -47,6 +47,7 @@ There are two sets that must not be mixed. A wire reason code is a verdict of th
 | `role_lacks_action` | no | The role does not hold the action. |
 | `grant_absent` | no | A repository action where a service account or a missing grant snapshot has no grant rows. |
 | `repository_not_granted` | no | Grant rows exist, and none covers the repository with a role that holds the action. |
+| `repository_unresolved` | no | A grant holds a repository id, and the live path of the request has no row in the organization's repository identities, so no id can be compared. The next provider sync resolves it. |
 | `grant_expired` | no | A matching grant is past its expiry. |
 | `grant_revoked` | no | A matching grant is revoked. |
 | `workload_audience_denied` | no | A workload principal's token audience is not one its registration lists. |
@@ -58,7 +59,7 @@ The order of the checks decides which code a request gets when several apply. Th
 
 ### State failures are not decisions
 
-The decision core has 26 reasons. Two of them, `clock_unavailable` and `grant_read_failed`, mean the decision point could not read the state it needs. They are never a wire reason code. The call answers 503 with an `error.v1` document (`authorizeStateFailures` in `internal/auth/authapi/authorize_wire.go`). A client treats a 503 as a local deny.
+The decision core has 27 reasons. Two of them, `clock_unavailable` and `grant_read_failed`, mean the decision point could not read the state it needs. They are never a wire reason code. The call answers 503 with an `error.v1` document (`authorizeStateFailures` in `internal/auth/authapi/authorize_wire.go`). A client treats a 503 as a local deny.
 
 ## Local reasons of the Go client
 

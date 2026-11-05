@@ -1,0 +1,1 @@
+authService.sso.keys.encryptionKey (SETTINGS_ENCRYPTION_KEY): the key name in authService.sso.secretName is empty or not a valid Secret key

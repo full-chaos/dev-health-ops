@@ -255,7 +255,7 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"link routes below 2":     {phaseArgs(1, "--set", "authService.socialLinkRoutes=true"), "authService.socialLinkRoutes needs authService.phase >= 2"},
 		"oidc on no secret":       {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true needs authService.sso.secretName"},
 		"saml on no secret":       {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true needs authService.sso.secretName"},
-		"oidc on below 2":         {phaseArgs(1, "--set", "authService.sso.oidc=true", "--set", "authService.sso.secretName=a-sso"), "authService.sso.oidc=true needs authService.phase >= 2"},
+		"oidc on below 2":         {phaseArgs(1, "--set", "authService.sso.oidc=true", "--set", "authService.sso.secretName=a-sso"), "authService.sso.oidc=true needs go-api to reach auth-service: authService.phase >= 2"},
 	}
 	for _, key := range []string{"authService.enabled", "authService.usersOwned", "authService.orgsOwned"} {
 		for _, value := range []string{"true", "false"} {
@@ -337,6 +337,8 @@ func fakeSecret(t *testing.T, ref string) string {
 		return "svc_fake_session_issuer_token"
 	case key == "AUTH_VALKEY_URI":
 		return "redis://auth:pw@valkey:6379/1"
+	case key == "AUTH_SSO_STATE_KEY":
+		return strings.Repeat("s", 40)
 	case key == "SETTINGS_ENCRYPTION_KEY":
 		return base64.URLEncoding.EncodeToString([]byte(strings.Repeat("e", 32)))
 	case key == "APP_BASE_URL":

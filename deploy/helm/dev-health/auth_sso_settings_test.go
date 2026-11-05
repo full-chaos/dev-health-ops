@@ -92,8 +92,12 @@ func TestSSOCompleteSetRendersSecretRefsAndProxyFlags(t *testing.T) {
 					t.Fatalf("%s rendered %d times; want once", want, len(got))
 				}
 				ref := at(got[0], "valueFrom", "secretKeyRef")
-				if _, literal := got[0]["value"]; literal || ref == nil || at(ref, "name") != "a-sso" || at(ref, "optional") != nil {
-					t.Errorf("%s must be a required secretKeyRef of a-sso with no value: %v", want, got[0])
+				wantOptional := any(nil)
+				if want == "SETTINGS_ENCRYPTION_SALT" {
+					wantOptional = true // an absent salt key means go-api's built-in default salt
+				}
+				if _, literal := got[0]["value"]; literal || ref == nil || at(ref, "name") != "a-sso" || at(ref, "optional") != wantOptional {
+					t.Errorf("%s must be a secretKeyRef of a-sso with no value (optional=%v): %v", want, wantOptional, got[0])
 				}
 			}
 			for _, absent := range []string{"AUTH_SSO_STATE_KEY"} {
@@ -197,7 +201,7 @@ func TestSSOAppBaseURLHasOneSource(t *testing.T) {
 	})
 }
 
-// The IdP is reached through the auth-service egress rule, value-driven and rendered only with a switch on.
+// The IdP is reached through the auth-service egress rule, value-driven and rendered only with a switch on (the policy stays on from phase 2).
 func TestSSOEgress(t *testing.T) {
 	_, out, err := renderAuth(t, phaseArgs(2, "--set", "authService.sso.secretName=a-sso", "--set", "authService.sso.saml=true")...)
 	if err == nil || !strings.Contains(out, "authService.networkPolicy.egress.sso.to") {
@@ -211,15 +215,12 @@ func TestSSOEgress(t *testing.T) {
 	if policy == nil || !strings.Contains(fmt.Sprint(at(policy, "spec", "egress")), "idp-egress") {
 		t.Errorf("no egress rule for the IdP peers: %v", at(policy, "spec", "egress"))
 	}
-	if _, out, err := renderAuth(t, phaseArgs(2, append(ssoSets([]string{"saml"}), "--set", "authService.networkPolicy.enabled=false", "--set-json", "authService.networkPolicy.egress.sso.to=[]")...)...); err != nil {
-		t.Errorf("policy off needs no peers: %v\n%.300s", err, out)
-	}
 }
 
 // The four names have one source, the chart values.
 func TestSSOExtraEnvCannotSetTheSettings(t *testing.T) {
 	for _, name := range []string{"AUTH_SSO_STATE_KEY", "APP_BASE_URL", "SETTINGS_ENCRYPTION_KEY", "SETTINGS_ENCRYPTION_SALT"} {
-		_, out, err := renderAuth(t, phaseArgs(2, "--set-json", fmt.Sprintf(`authService.extraEnv=[{"name":%q,"valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`, name))...)
+		_, out, err := renderAuth(t, phaseArgs(2, ssoSets([]string{"oidc"}, "--set-json", fmt.Sprintf(`authService.extraEnv=[{"name":%q,"valueFrom":{"secretKeyRef":{"name":"x","key":"y"}}}]`, name))...)...)
 		if err == nil || !strings.Contains(out, "authService.extraEnv must not set "+name) {
 			t.Errorf("%s: rendered or wrong refusal: err=%v out=%.300s", name, err, out)
 		}

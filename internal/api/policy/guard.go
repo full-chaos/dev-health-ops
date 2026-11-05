@@ -318,8 +318,9 @@ const msgImpersonationDenied = "Not allowed in an impersonation session"
 const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
 
 // RefuseImpersonatingCaller returns next behind the impersonation write
-// refusal (403) for a caller whose go-api HS256 bearer belongs to an admin
-// with an active impersonation session. It is for a route the scope layers
+// refusal (403) for a caller whose bearer, authenticated as the route's row
+// does (HS256 and user access token), belongs to an admin with an active
+// impersonation session. It is for a route the scope layers
 // skip, so it reads the session itself. A bearer go-api cannot verify
 // (auth-service's) or a user who may not impersonate passes through. A failed
 // lookup refuses the request (fail closed, like Scope.Impersonation).
@@ -330,7 +331,7 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		user, err := g.auth.AuthenticateLegacy(r.Context(), token)
+		user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 		if isRefusal(err) || (err == nil && !user.Holds(ActionAdminImpersonate)) {
 			next.ServeHTTP(w, r)
 			return

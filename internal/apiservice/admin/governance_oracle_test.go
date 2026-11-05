@@ -447,10 +447,13 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/governance.go-pin.json", SHA256: governancePinSHA256, Ruling: governanceRuling})
 	var createdLedger createdByLedger
 	users := map[string]uuid.UUID{"ent": adminEnt, "comm": adminComm, "ovr": adminOvr, "tier": adminTier, "bogus": adminBogus, "none": adminNoLicense}
+	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/governance.go-pin.json", governanceOrgClaimPinSHA256,
+		"audit list superuser with org")
 	receipt := venueoracle.Diff(t, goBase, compared, pythonCompared, venueoracle.DiffOptions{
-		Golden: golden,
-		Retire: retiredGovernanceRequest,
-		Pin:    pin,
+		Golden:      golden,
+		Retire:      retiredGovernanceRequest,
+		Pin:         pin,
+		Retirements: []venueoracle.Retirement{claimRetirement},
 		NormalizePython: func(request venueoracle.Request, body string) string {
 			if request.Name != "stats superuser" {
 				return body
@@ -513,7 +516,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 		},
 	})
 	t.Log(receipt)
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	createdLedger.verifyThenReset(t, ctx, venue.AdminURI(t, venue.GoDB), "org_ip_allowlist")
 
 	compare := func(name, query string) {

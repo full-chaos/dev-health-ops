@@ -240,14 +240,14 @@ type argState struct {
 	backfillGiven bool
 }
 
-func typeError(spec *pyargparse.Spec, value string) *pyargparse.Error {
+func typeError(spec *pyargparse.Spec) *pyargparse.Error {
 	name := spec.Strs[len(spec.Strs)-1]
 	kinds := map[string]string{
 		"project_id": "int", "batch_size": "int", "max_concurrent": "int", "max_repos": "int",
 		"max_commits_per_repo": "int", "backfill": "int", "rate_limit_delay": "float",
 		"since": "date", "before": "date", "day": "date", "date": "date",
 	}
-	return &pyargparse.Error{Msg: fmt.Sprintf("argument %s: invalid %s value: %q", name, kinds[spec.Dest], value)}
+	return &pyargparse.Error{Msg: fmt.Sprintf("argument %s: invalid %s value", name, kinds[spec.Dest])}
 }
 
 func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargparse.Error {
@@ -255,11 +255,11 @@ func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargpa
 		switch spec.Dest {
 		case "project_id", "batch_size", "max_concurrent", "max_repos", "max_commits_per_repo":
 			if _, ok := pyInt(value); !ok {
-				return typeError(spec, value)
+				return typeError(spec)
 			}
 		case "backfill":
 			if _, ok := pyInt(value); !ok {
-				return typeError(spec, value)
+				return typeError(spec)
 			}
 			// Any explicit --backfill conflicts with --since, even one equal
 			// to the default (argparse 3.14: the value is a fresh object).
@@ -269,11 +269,11 @@ func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargpa
 			}
 		case "rate_limit_delay":
 			if _, ok := pyFloat(value); !ok {
-				return typeError(spec, value)
+				return typeError(spec)
 			}
 		case "since":
 			if _, ok := pyDate(value); !ok {
-				return typeError(spec, value)
+				return typeError(spec)
 			}
 			state.sinceGiven = true
 			if state.backfillGiven {
@@ -281,7 +281,7 @@ func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargpa
 			}
 		case "before", "day", "date":
 			if _, ok := pyDate(value); !ok {
-				return typeError(spec, value)
+				return typeError(spec)
 			}
 		case "provider":
 			for _, p := range providers {
@@ -289,7 +289,7 @@ func convert(state *argState) func(spec *pyargparse.Spec, value string) *pyargpa
 					return nil
 				}
 			}
-			return &pyargparse.Error{Msg: fmt.Sprintf("argument --provider: invalid choice: %q (choose from local, github, gitlab, synthetic)", value)}
+			return &pyargparse.Error{Msg: fmt.Sprintf("argument --provider: invalid choice (choose from local, github, gitlab, synthetic)")}
 		}
 		return nil
 	}
@@ -313,7 +313,7 @@ func BuildPlan(target string, args []string, in Inputs) (plan Plan, help bool, e
 		return Plan{}, false, usageRefusal("argparse", "the following arguments are required: --provider")
 	}
 	if len(parsed.Unrecognized) > 0 {
-		return Plan{}, false, usageRefusal("argparse", "unrecognized arguments: %s", strings.Join(parsed.Unrecognized, " "))
+		return Plan{}, false, usageRefusal("argparse", "%s", pyargparse.UnrecognizedMessage(len(parsed.Unrecognized)))
 	}
 	v := parsed.Values
 

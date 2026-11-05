@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -177,6 +178,16 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 			_ = component.Shutdown(context.Background())
 		}
 	})
+	// The harness serves the API handler without lifecycle.Run, so it starts the
+	// JWKS document itself: in production Run starts it, with its first read,
+	// before the API listener.
+	for _, component := range components {
+		if document, ok := component.(*authapi.JWKSDocument); ok {
+			if err := document.Start(ctx); err != nil {
+				t.Fatalf("start %s: %v", document.Name(), err)
+			}
+		}
+	}
 	var apiHandler http.Handler
 	for _, component := range components {
 		if announced, ok := component.(announcedListener); ok {

@@ -24,7 +24,7 @@ import (
 
 var productTelemetryNames = map[string]struct{}{
 	"page_viewed": {}, "feature_viewed": {}, "filter_changed": {}, "chart_interacted": {},
-	"navigation_interacted": {}, "guide_opened": {}, "session_started": {}, "session_ended": {}, "client_error": {},
+	"navigation_interacted": {}, "guide_opened": {}, "session_started": {}, "session_ended": {}, "client_error": {}, "ask_dev_interacted": {},
 }
 
 var blockedProductPayloadKeys = map[string]struct{}{

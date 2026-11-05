@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -786,5 +787,54 @@ func TestSelectorGateRefusesABodyFieldSelectorTheClassDoesNotHold(t *testing.T) 
 				t.Fatal("gate accepted a body_field selector that one accepted class does not hold")
 			}
 		})
+	}
+}
+
+func twoFieldBodyRegistry(alternateA, alternateB string) map[string]RegistryClass {
+	return syntheticRegistry(
+		RegistryClass{ClassID: "user_access_token", Markers: []ClassMarker{{Kind: "jwt_header_alg", Name: "EdDSA"}}},
+		RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", "jwt"), bodyMarker("alternate", alternateA)}},
+		RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", "opaque:selected_"), bodyMarker("alternate", alternateB)}},
+	)
+}
+
+func TestSelectorGateAcceptsClassesDisjointOnTheSelectedFieldThatOverlapOnAnother(t *testing.T) {
+	if err := CheckClassSelector(bodySelectorProfile(t), twoFieldBodyRegistry("jwt", "jwt")); err != nil {
+		t.Fatalf("gate refused classes disjoint on the selected body field: %v", err)
+	}
+}
+
+func TestSelectorGateRefusesAnOverlapOnTheSelectedFieldWhateverTheOtherFieldHolds(t *testing.T) {
+	for name, pair := range map[string][2]string{
+		"jwt and prefix":             {"jwt", "prefix:x"},
+		"prefix nested in prefix":    {"prefix:ab", "prefix:a"},
+		"prefix nested, other order": {"prefix:a", "prefix:ab"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			registry := syntheticRegistry(
+				RegistryClass{ClassID: "ops_refresh_token", Markers: []ClassMarker{bodyMarker("refresh_token", pair[0]), bodyMarker("alternate", "opaque:one")}},
+				RegistryClass{ClassID: "refresh_credential", Markers: []ClassMarker{bodyMarker("refresh_token", pair[1]), bodyMarker("alternate", "opaque:two")}},
+			)
+			err := CheckClassSelector(bodySelectorProfile(t), registry)
+			if err == nil {
+				t.Fatal("gate accepted an overlap on the selected body field")
+			}
+			want := fmt.Sprintf("body classes %q and %q both carry body field refresh_token in a shape (%s, %s) that does not tell them apart", "ops_refresh_token", "refresh_credential", pair[0], pair[1])
+			if err.Error() != want {
+				t.Fatalf("error = %q, want %q", err, want)
+			}
+		})
+	}
+}
+
+func TestSelectorGateKeepsComparingEveryBodyFieldForANonBodySelector(t *testing.T) {
+	profile := multiClassProfile(t, []any{"user_access_token", "ops_refresh_token", "refresh_credential"}, "jwt_header_alg", "EdDSA")
+	err := CheckClassSelector(profile, twoFieldBodyRegistry("jwt", "jwt"))
+	if err == nil {
+		t.Fatal("gate accepted two body classes that overlap on a body field under a head selector")
+	}
+	want := `body classes "ops_refresh_token" and "refresh_credential" both carry body field alternate in a shape (jwt, jwt) that does not tell them apart`
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
 	}
 }

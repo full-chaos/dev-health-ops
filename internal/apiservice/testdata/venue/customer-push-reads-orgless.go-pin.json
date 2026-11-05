@@ -1,0 +1,4 @@
+{
+  "superuser own org": "404 {\"detail\":\"Organization not found\"}",
+  "superuser x-org team": "404 {\"detail\":\"Organization not found\"}"
+}

@@ -1,5 +1,6 @@
 contracts/auth/v1
 contracts/auth/v1/vocabulary
+internal/api/acrcredentials
 internal/api/apimetrics
 internal/api/audit
 internal/api/authmail
@@ -41,12 +42,15 @@ internal/api/telemetry
 internal/api/usersowned
 internal/api/webhookintake
 internal/apiservice
+internal/apiservice/accessrouting
 internal/apiservice/acr
 internal/apiservice/admin
 internal/apiservice/customerpush
 internal/audit
 internal/auth/accessverify
 internal/auth/acraudience
+internal/auth/acrlisting
+internal/auth/acrrevoke
 internal/auth/clientaddr
 internal/auth/contracts/externalpush
 internal/auth/contracts/provisioning
@@ -154,6 +158,7 @@ internal/teamid
 internal/teamkeytables
 internal/teamprovider
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/proxycapture

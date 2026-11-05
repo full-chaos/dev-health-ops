@@ -19,8 +19,8 @@ const keyClass = "service_account_key"
 
 // keyRevokedReason is the credential_registry.revoked_reason of a key a
 // deprovision ends: the column holds the closed credential vocabulary, and the
-// organization that owns the key asked for its end.
-const keyRevokedReason = "owner_request"
+// deprovision of the owning organization ended it, not an operator's request.
+const keyRevokedReason = "org_deprovisioned"
 
 // EventKeyRevoked is the audit event of one service-account key a deprovision
 // revokes, the one serviceaccount.RevokeKey writes.

@@ -5,10 +5,14 @@
 #     net, os/exec ...), and hold no go statement, channel, select, timer goroutine, t.Parallel, dot import, cgo or non-Go source,
 #     go:linkname, plugin import, or function converted to an interface or passed to a call outside racescope's pureCallees. Proven by
 #     internal/cigates/racescope, which fails when a listed package gains one (CHAOS-11413, acp trivially sound rule).
+#   class render-guard, witness -: a package of racescope's closed renderGuardPackages (D6694, CHAOS-13051): its tests only exec helm to
+#     render the chart and check the output, no product code is under test, and the race detector costs ~18 GiB RSS there (the 16 GB hosted
+#     runner dies). It is NOT judged by the concurrency scan; adding a row of this class needs a change of that pinned list too.
 # A package leaves this file as soon as it needs a -race run. internal/providersync, internal/cigates/testshard and
 # internal/testsupport/goldenscan/treegate stay in -race (treegate imports goldenscan, whose CheckTree starts worker goroutines).
 cmd/strip-agent-attribution	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
 internal/auth/emaildomain	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
+internal/cigates/chartgates	render-guard	-	chart-render guard tests exec helm only; race run measured 18.3 GiB RSS, 13 min, kills the hosted runner (D6694); no product concurrency under test
 internal/jobs/metrics/checkedcast	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
 internal/jobs/metrics/complexity/pycc	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses
 internal/jobs/metrics/deploymentstatus	none	-	imports nothing from this module; allowlisted stdlib only; no goroutine, selector or function-to-interface the scan refuses

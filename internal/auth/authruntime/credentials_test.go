@@ -219,7 +219,7 @@ func TestOnlyTheSixNotOwnedCredentialRoutesAreUnthrottled(t *testing.T) {
 	}
 	for name, owned := range map[string]string{"unset": "", "false": "false", "true": "true"} {
 		cfg := credentialConfig(t, owned)
-		session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t))
+		session, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

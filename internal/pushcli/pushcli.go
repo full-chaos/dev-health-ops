@@ -12,7 +12,6 @@
 package pushcli
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 
@@ -55,11 +54,8 @@ func Command() cli.Command {
 // positionals may be interleaved. ok false means the exit code in code.
 func parseArgs(flags *flag.FlagSet, env cli.Env, args []string) (positional []string, code int, ok bool) {
 	for {
-		if err := flags.Parse(args); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				return nil, exitOK, false
-			}
-			return nil, exitUsage, false
+		if code, ok := cli.ParseFlags(flags, env.Stderr, args); !ok {
+			return nil, code, false
 		}
 		if flags.NArg() == 0 {
 			return positional, 0, true

@@ -99,7 +99,7 @@ func newOAuthFixture(t *testing.T, f *fixture, edit func(*OAuthDeps)) *oauthFixt
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	store := &oauthStoreFake{}
-	deps := OAuthDeps{Store: store, Registry: oauthRegistry(t), Limits: limits, Keys: signer, IssuerURL: oauthIssuer,
+	deps := OAuthDeps{Store: store, Registry: oauthRegistry(t), Limits: limits, JWKS: documentOf(signer), IssuerURL: oauthIssuer,
 		WebOrigin: oauthWeb, ResourceACRAPI: oauthAPI, ResourceACRMCP: oauthMCP,
 		Session: Deps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer, Logger: logger}}
 	if edit != nil {
@@ -599,7 +599,7 @@ func TestOAuthRoutesMountOnlyWithEveryRowAndTheirBodyPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 	signer, _, _ := fileSigner(t)
-	deps := OAuthDeps{Store: &oauthStoreFake{}, Registry: oauthRegistry(t), Limits: limits, Keys: signer, IssuerURL: oauthIssuer,
+	deps := OAuthDeps{Store: &oauthStoreFake{}, Registry: oauthRegistry(t), Limits: limits, JWKS: documentOf(signer), IssuerURL: oauthIssuer,
 		Session: Deps{Sessions: f.sessions, Users: f.users, Issuer: f.issuer}}
 	if routes, err := OAuthRoutes(deps); err != nil || routes != nil {
 		t.Fatalf("the embedded document mounted %d routes, %v", len(routes), err)

@@ -43,10 +43,14 @@ func useKeyStates(t *testing.T, source token.KeyStateSource) {
 func wellKnownHandler(t *testing.T, issuer string) http.Handler {
 	t.Helper()
 	useKeyStates(t, staticKeyStates(nil))
-	return wellKnownStack(t, issuer, t.TempDir())
+	handler, start := wellKnownStack(t, issuer, t.TempDir())
+	start()
+	return handler
 }
 
-func wellKnownStack(t *testing.T, issuer, dir string) http.Handler {
+// wellKnownStack returns the API handler and the start of the JWKS document:
+// the document reads the key set when the lifecycle starts it.
+func wellKnownStack(t *testing.T, issuer, dir string) (http.Handler, func()) {
 	t.Helper()
 	for _, name := range []string{"retired.pem", "retiring.pem", "active.pem"} {
 		writeSigningKey(t, dir, name)
@@ -81,15 +85,21 @@ func wellKnownStack(t *testing.T, issuer, dir string) http.Handler {
 			_ = component.Shutdown(context.Background())
 		}
 	})
+	start := func() {
+		t.Helper()
+		if err := components[indexOf(t, components, "auth-jwks-document")].Start(context.Background()); err != nil {
+			t.Fatalf("start the JWKS document: %v", err)
+		}
+	}
 	for _, component := range components {
 		if announced, ok := component.(announcedListener); ok {
 			if server, ok := announced.listener.(*httpapi.Server); ok {
-				return server.Handler()
+				return server.Handler(), start
 			}
 		}
 	}
 	t.Fatal("configure built no API listener")
-	return nil
+	return nil, nil
 }
 
 func wellKnownGet(handler http.Handler, method, path string) *httptest.ResponseRecorder {
@@ -167,7 +177,7 @@ func TestProductionStackPublishesTheDurableKeyStates(t *testing.T) {
 	dir := t.TempDir()
 	states := &mutableKeyStates{}
 	useKeyStates(t, states)
-	handler := wellKnownStack(t, wellKnownTestIssuer, dir)
+	handler, start := wellKnownStack(t, wellKnownTestIssuer, dir)
 	custody, err := token.CustodyKeys(context.Background(), token.FileConfig{KeySetPath: filepath.Join(dir, "keyset.json")})
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +190,7 @@ func TestProductionStackPublishesTheDurableKeyStates(t *testing.T) {
 		{KeyID: "auth-active", State: token.StateActive, PublicKey: public["auth-active"].PublicKey},
 		{KeyID: "auth-retiring", State: token.StateCompromised, PublicKey: public["auth-retiring"].PublicKey},
 	})
+	start()
 	jwks := wellKnownGet(handler, http.MethodGet, "/.well-known/jwks.json")
 	body := jwks.Body.String()
 	if jwks.Code != http.StatusOK || !strings.Contains(body, "auth-active") || strings.Contains(body, "auth-retiring") || strings.Contains(body, "auth-retired") {

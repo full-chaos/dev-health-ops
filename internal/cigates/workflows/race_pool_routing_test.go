@@ -49,8 +49,8 @@ func TestRaceLegsRouteToThePoolOnlyOnPushToMainOfThisRepo(t *testing.T) {
 		t.Fatalf("CI_RACE_RUNNER must appear only in the guard and the value, got: %s", runsOn)
 	}
 	timeout, _ := leg["timeout-minutes"].(string)
-	if !strings.HasPrefix(timeout, "${{ ("+racePoolTerm+") && ") || !strings.HasSuffix(timeout, " && 45 || (github.event_name == 'merge_group' && 45 || 30) }}") {
-		t.Fatalf("timeout-minutes must be 45 on the pool path and on merge_group, 30 otherwise, got: %s", timeout)
+	if !strings.HasPrefix(timeout, "${{ ("+racePoolTerm+") && ") || !strings.HasSuffix(timeout, " && 45 || (github.event_name == 'merge_group' && 45 || 45) }}") {
+		t.Fatalf("timeout-minutes must be 45 on the pool path, on merge_group and on pull requests (CHAOS-13036), got: %s", timeout)
 	}
 }
 
@@ -252,7 +252,7 @@ func TestOnlyTheSixRaceLegsCarryThePoolFlag(t *testing.T) {
 	}
 }
 
-const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'15m'"
+const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'30m'"
 
 func raceTimeoutExpr(term, pool, other string) string {
 	return "${{ (" + term + ") && " + pool + " || (github.event_name == 'merge_group' && " + pool + " || " + other + ") }}"

@@ -76,6 +76,11 @@ var gapCells = []gapCell{
 	{"N2-clean-method-on-the-receiver-type-shares-a-name", pathAdapter, "type src struct{}\ntype rowsrc struct{}\nfunc (src) load(decoded jobcontract.Envelope) jobcontract.Envelope { return decoded }\nfunc (rowsrc) load(row Row) jobcontract.Envelope { return jobcontract.Envelope{CorrelationID: row.DedupeKey} }\nfunc execute(s src, decoded jobcontract.Envelope) { envelope := s.load(decoded); slog.Info(\"x\", \"k\", envelope.CorrelationID) }\n", false},
 	{"N2-method-on-the-receiver-type-builds-from-a-row", pathAdapter, "type src struct{}\ntype rowsrc struct{}\nfunc (src) load(decoded jobcontract.Envelope) jobcontract.Envelope { return decoded }\nfunc (rowsrc) load(row Row) jobcontract.Envelope { return jobcontract.Envelope{CorrelationID: row.DedupeKey} }\nfunc execute(s rowsrc, row Row) { envelope := s.load(row); slog.Info(\"x\", \"k\", envelope.CorrelationID) }\n", true},
 
+	{"N3-clean-local-closure-shadows-a-package-function", pathOutbox, "func emit(v string) { slog.Info(\"x\", \"k\", v) }\nfunc f(row Row) { emit := func(string) {}; emit(row.DedupeKey) }\n", false},
+	{"N4-clean-plain-call-reaches-the-function-not-the-method", pathOutbox, "type A struct{}\nfunc (A) emit(v string) { slog.Info(\"x\", \"k\", v) }\nfunc emit(v string) {}\nfunc f(row Row) { emit(row.DedupeKey) }\n", false},
+	{"N5-method-on-a-package-level-variable", pathOutbox, "type A struct{}\nvar g A\nfunc (A) emit(v string) { slog.Info(\"x\", \"k\", v) }\nfunc f(row Row) { g.emit(row.DedupeKey) }\n", true},
+	{"N6-clean-selector-call-reaches-the-method-not-the-function", pathOutbox, "type A struct{}\nfunc (A) emit(v string) {}\nfunc emit(v string) { slog.Info(\"x\", \"k\", v) }\nfunc f(x Thing, row Row) { x.emit(row.DedupeKey) }\n", false},
+
 	// A copy of the guarded value keeps the guard; a different value drops it.
 	{"A1-clean-alias-copy-after-the-guard", pathOutbox, "func f(row Row) { k := row.DedupeKey; if credshape.AnyCredentialShaped(k) { return }; alias := k; slog.Info(\"x\", \"k\", alias) }\n", false},
 	{"A2-clean-copy-of-a-copy", pathOutbox, "func f(row Row) { k := row.DedupeKey; if credshape.AnyCredentialShaped(k) { return }; a := k; b := a; slog.Info(\"x\", \"k\", b) }\n", false},

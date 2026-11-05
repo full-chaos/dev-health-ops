@@ -7,6 +7,14 @@
 //
 // It is proven against the real argparse by the live oracles of its users
 // (internal/synccli, internal/cli); anything it cannot express is listed there.
+//
+// One deliberate divergence from Python's argparse: an error never repeats what
+// the operator typed. Python quotes the argument ("unrecognized arguments: X",
+// "invalid choice: 'X'", "ignored explicit argument 'X'"), but a command line can
+// carry a DSN or a token as a positional or as an unknown option, and an error
+// goes to terminals, CI logs and tickets. The text keeps argparse's wording
+// without the value: "unrecognized arguments (N)" gives the count, and the
+// other errors name only the option strings the parser itself defines.
 package pyargparse
 
 import (
@@ -14,6 +22,12 @@ import (
 	"regexp"
 	"strings"
 )
+
+// UnrecognizedMessage is the one text for arguments the parser does not take. It states how many there
+// were and never what they were.
+func UnrecognizedMessage(count int) string {
+	return fmt.Sprintf("unrecognized arguments (%d)", count)
+}
 
 // Kind is what an option takes.
 type Kind int
@@ -43,8 +57,9 @@ type Parsed struct {
 	Values map[string]string
 	Flags  map[string]bool
 	Help   bool
-	// Unrecognized holds arguments argparse would report ("unrecognized
-	// arguments: ..."), which parse_args turns into exit 2.
+	// Unrecognized holds arguments argparse would report as unrecognized, which
+	// parse_args turns into exit 2. Callers report only their number
+	// (UnrecognizedMessage), never the arguments.
 	Unrecognized []string
 	// Rest is, for ParseRoot, the arguments from the first positional on (the
 	// subcommand and everything after it).
@@ -113,7 +128,7 @@ func (p *Parser) classify(arg string) (*optionMatch, *Error) {
 		for i, m := range matches {
 			names[i] = m.optionStr
 		}
-		return &optionMatch{optionStr: arg, ambiguous: &Error{fmt.Sprintf("ambiguous option: %s could match %s", arg, strings.Join(names, ", "))}}, nil
+		return &optionMatch{optionStr: arg, ambiguous: &Error{fmt.Sprintf("ambiguous option: could match %s", strings.Join(names, ", "))}}, nil
 	}
 	if len(matches) == 1 {
 		return &matches[0], nil
@@ -247,7 +262,7 @@ func (p *Parser) parse(args []string, act func(spec *Spec, value string) *Error,
 			return nil, m.ambiguous
 		}
 		if root && m.spec == nil {
-			return nil, &Error{fmt.Sprintf("unrecognized arguments: %s", args[i])}
+			return nil, &Error{UnrecognizedMessage(1)}
 		}
 		if args[i] == "--" || m == nil {
 			// A positional (or `--` / anything after it): this Parser has no
@@ -315,7 +330,7 @@ func (p *Parser) consumeOptional(
 			// short options (-hx), exactly as argparse chains them. An equals
 			// sign or a leading dash inside the tail is an error.
 			if sep != "" || strings.HasPrefix(*explicit, "-") {
-				return 0, &Error{fmt.Sprintf("argument %s: ignored explicit argument %q", optionStr, *explicit)}
+				return 0, &Error{fmt.Sprintf("argument %s: ignored explicit argument", optionStr)}
 			}
 			actions = append(actions, pending{spec, ""})
 			runes := []rune(*explicit)
@@ -341,7 +356,7 @@ func (p *Parser) consumeOptional(
 			}
 			continue
 		}
-		return 0, &Error{fmt.Sprintf("argument %s: ignored explicit argument %q", optionStr, *explicit)}
+		return 0, &Error{fmt.Sprintf("argument %s: ignored explicit argument", optionStr)}
 	}
 	for _, a := range actions {
 		if err := act(a.spec, a.value); err != nil {

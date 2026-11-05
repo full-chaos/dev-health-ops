@@ -100,7 +100,7 @@ func parseCredentialArgs(verb string, args []string) (credentialArgs, *pyargpars
 		switch spec.Dest {
 		case "service":
 			if !slices.Contains(admin.ServiceNames(), value) {
-				return &pyargparse.Error{Msg: fmt.Sprintf("argument --service: invalid choice: %s (choose from %s)", pythonparity.StrRepr(value), quotedList(admin.ServiceNames()))}
+				return &pyargparse.Error{Msg: fmt.Sprintf("argument --service: invalid choice (choose from %s)", quotedList(admin.ServiceNames()))}
 			}
 			out.service = value
 		case "scope":
@@ -114,7 +114,7 @@ func parseCredentialArgs(verb string, args []string) (credentialArgs, *pyargpars
 		case "overlap_seconds":
 			number, err := pythonparity.ParseInt(value)
 			if err != nil {
-				return &pyargparse.Error{Msg: fmt.Sprintf("argument --overlap-seconds: invalid int value: %s", pythonparity.StrRepr(value))}
+				return &pyargparse.Error{Msg: "argument --overlap-seconds: invalid int value"}
 			}
 			out.overlap, out.overlapValue = value, number
 		case "db":
@@ -151,7 +151,7 @@ func parseCredentialArgs(verb string, args []string) (credentialArgs, *pyargpars
 		return credentialArgs{}, &pyargparse.Error{Msg: "the following arguments are required: " + strings.Join(missing, ", ")}
 	}
 	if len(parsed.Unrecognized) > 0 {
-		return credentialArgs{}, &pyargparse.Error{Msg: "unrecognized arguments: " + strings.Join(parsed.Unrecognized, " ")}
+		return credentialArgs{}, &pyargparse.Error{Msg: pyargparse.UnrecognizedMessage(len(parsed.Unrecognized))}
 	}
 	if positional != nil {
 		out.credentialID, out.hasID = *positional, true

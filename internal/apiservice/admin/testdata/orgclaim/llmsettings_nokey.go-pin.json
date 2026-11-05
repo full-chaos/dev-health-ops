@@ -1,0 +1,9 @@
+{
+  "W delete org missing": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "W delete org not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "W put 422 beats org check": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "W put org missing": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "W put org not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "get org id not a uuid": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}",
+  "get org missing": "401 {\"detail\":{\"message\":\"Invalid or expired token\"}}"
+}

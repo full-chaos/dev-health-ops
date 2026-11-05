@@ -250,7 +250,7 @@ func TestImpersonationRunsForAUserToken(t *testing.T) {
 }
 
 // TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator: the non-test RouteAccess calls
-// in the module are go-api's construction (internal/apiservice), query-api's
+// in the module are go-api's construction (internal/apiservice and its accessrouting package), query-api's
 // (its REST edge verifier and its /query and /graphql authenticator, built
 // only with AUTH_ACCESS_TOKEN_ISSUER set) and auth-service's validate
 // compatibility route (internal/auth/authapi, which answers EdDSA tokens through
@@ -297,6 +297,7 @@ func TestOnlyGoAPIAndQueryAPIRouteAnAuthenticator(t *testing.T) {
 	}
 	sort.Strings(sites)
 	want := []string{
+		"internal/apiservice/accessrouting/accessrouting.go",
 		"internal/apiservice/service.go",
 		"internal/auth/authapi/compat_validate.go",
 		"internal/queryapi/principal/edge_access.go",

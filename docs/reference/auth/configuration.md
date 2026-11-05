@@ -44,6 +44,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--health-check-timeout` | `AUTH_SERVICE_HEALTH_CHECK_TIMEOUT` | `2s` | 50ms to 30s. Per-check bound for each required readiness check. |
 | `--http-addr` | `AUTH_SERVICE_HTTP_ADDR` | `:8095` | `host:port`. The API listener. It mounts the session routes only when both session secrets below are set, and no route otherwise. |
 | `--operator-http-addr` | `AUTH_SERVICE_OPERATOR_HTTP_ADDR` | `:8096` | `host:port`. `/healthz`, `/readyz`, `/metrics`. Must differ from the API address. |
+| `--internal-http-addr` | `AUTH_SERVICE_INTERNAL_HTTP_ADDR` | unset (off) | `host:port`. The [internal listener](#internal-listener). Must differ from the API and operator addresses (port `0` aside). |
 | `--request-timeout` | `AUTH_SERVICE_REQUEST_TIMEOUT` | `10s` | 100ms to 5m. Per-request handler deadline. |
 | `--max-body-bytes` | `AUTH_SERVICE_MAX_BODY_BYTES` | `1048576` | 1024 to 33554432. |
 | `--rate-limit` | `AUTH_SERVICE_RATE_LIMIT_PER_SECOND` | `20` | 0.01 to 100000, per route bucket. |
@@ -74,7 +75,7 @@ and `/readyz` fails closed, naming the check. See the
 | `--push-projection` | `AUTH_PUSH_PROJECTION` | `off` | `on` runs the External Push projection reader on this replica: it reads the `external_push_credential` rows of the auth outbox and projects each into an `external_source` principal (one per organization and source), a `credential_registry` row and the projected state. `off` runs none. Only `on` and `off` (any case) are values. Mounts no route. Readiness check `push_projection_reader`. |
 | `--social-link-routes` | `AUTH_SOCIAL_LINK_ROUTES` | `false` | `true` mounts the bearer-only social link and unlink routes (`POST /v1/identities/social`, `DELETE /v1/identities/social/{id}`; see [identity linking](identity-linking.md)); any other value than `true` or `false` fails startup, and `true` needs the session secrets. |
 | `--membership-routes` | `AUTH_MEMBERSHIP_ROUTES` | `false` | `true` mounts the internal membership, invite and organization deprovision routes (see [provisioning routes](#provisioning-routes)); any other value than `true` or `false` fails startup, and `true` needs the session secrets and both invite keys. |
-| `--sso-jit` | `AUTH_SSO_JIT` | `false` | `true` lets a federated sign-in join a known account to the provider's organization and create a new account. A provider row must allow it too (`auto_provision_users`), and it needs `AUTH_USERS_OWNED`. The chart renders it from `authService.ssoJit` and refuses `true` at every phase until CHAOS-12678 re-homes SSO JIT at users owned (phase 4). |
+| `--sso-jit` | `AUTH_SSO_JIT` | `false` | `true` lets a federated sign-in join a known account to the provider's organization and create a new account. A provider row must allow it too (`auto_provision_users`), and it needs `AUTH_USERS_OWNED`. The chart renders it from `authService.ssoJit` and refuses `true` unless users are owned (`authService.phase` 4 with `usersOwnedStage=owned`). |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET` or `AUTH_INVITE_TOKEN_SECRET_FILE` | unset | Signing key of new invite tokens: go-api's link signing key (`LINK_TOKEN_SECRET`, else its `JWT_SECRET_KEY` chain), so a token either side minted is accepted by both. Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; startup names the missing variable only. |
 | (none, secret) | `AUTH_INVITE_TOKEN_SECRET_PREVIOUS` or `AUTH_INVITE_TOKEN_SECRET_PREVIOUS_FILE` | unset | Retired invite key: accepted, never used to sign (go-api's `LINK_TOKEN_SECRET_PREVIOUS`). Required while `AUTH_MEMBERSHIP_ROUTES` is `true`; with no retired key, set it to the signing key. A token is checked against the signing key, this key, then `AUTH_JWT_SECRET_KEY`, as go-api checks its links. |
 | (none, secret) | `AUTH_SSO_STATE_KEY` or `AUTH_SSO_STATE_KEY_FILE` | unset | Key the OIDC and OAuth state is derived from. The OIDC routes mount only when this, `APP_BASE_URL` and `SETTINGS_ENCRYPTION_KEY` are all set. The chart renders it by `secretKeyRef` from `authService.sso.secretName` (key `authService.sso.keys.stateKey`) while `authService.sso.oidc` is on. |
@@ -215,6 +216,19 @@ exchange reads is in the [workload registry](workload-registry.md). The reasons 
 - Each decision is logged at Info with `decision_id`, `allowed` and `reason_code` only.
 - A decision on an action the policy catalog classes high risk (`risk_class` `high`), allow or deny, writes one `auth.authorize.high_risk_decided` audit row before the answer is served. One call writes all its rows in one transaction. The row has the user principal as actor, the caller's workload principal and token id as `caller_principal_id` and `workload_jti`, and the closed attributes `decision_id`, `decision_reason_code`, `action_key`, `resource_type` and `policy_revision`, plus `resource_id` for a repository key. It holds no token, session id, request text or organization text the decision did not find. If the rows cannot be written the whole call is 503 `store_unavailable`, for an allow and for a deny. A low-risk decision and a decision on an action outside the catalog write no row.
 
+### Internal listener
+
+With `AUTH_SERVICE_INTERNAL_HTTP_ADDR` set, auth-service opens a third listener for the policy enforcement points (PEPs). Unset, there is no such listener.
+
+- It serves `POST /internal/v1/token/exchange`, `POST /v1/authorize` and `POST /v1/authorize:batch` alone, each only while it is mounted (see [workload token exchange](#workload-token-exchange) and [authorize routes](#authorize-routes)). Every other path is 404 there, the operator paths too.
+- It trusts no proxy. `AUTH_SERVICE_TRUSTED_PROXIES` is the API listener's alone: here the client address is always the TCP peer, `X-Forwarded-For` is not read, and a caller's `X-Request-ID` is logged as `untrusted`.
+- A caller is identified by its own token: the exchange by its ServiceAccount token, the authorize routes by its workload token and `AUTH_AUTHORIZE_CALLER_SUBJECTS`. The refusals are the same as on the API listener.
+- The request timeout, the body bound and the rate limits are the API listener's settings. Each route has its own bucket on each listener of each replica.
+- Its access lines and request metrics carry `listener` `internal`.
+- The API listener does not change: it serves the same routes as without the internal listener.
+
+The chart renders it from `authService.internal` (off by default): the arg, a Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits only the pods of `authService.internal.peers` (`web`, `query-api`, `go-api`) on `authService.internal.port` (default `8097`).
+
 ## auth-migrate
 
 | Flag | Environment | Rule |
@@ -284,6 +298,6 @@ warning per attempt. See
 - `internal/auth/authconfig/config.go`: constants (defaults and bounds), `Load`, `signingKey`, `validateKeyID`, `validateIdentifier`.
 - `internal/auth/authconfig/options.go`: the option registry (flags, environment names, secret marker).
 - `internal/platform/secrets/source.go`: `Resolve` (mutual exclusion, newline trim, error wording).
-- `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`.
+- `internal/auth/authruntime/runtime.go`: `--version`, `--healthcheck`, `internalServerOptions` (the internal listener).
 - `cmd/auth-migrate/main.go`: environment names, `--check`, `runBudget`.
 - `internal/auth/authconfig/workload.go`: `workloadExchange` (the exchange settings, defaults and bounds), `HTTPSOrigin`.

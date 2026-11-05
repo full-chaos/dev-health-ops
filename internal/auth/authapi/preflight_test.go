@@ -160,6 +160,7 @@ func withClock(t *testing.T, issuer *Issuer) *fakeClock {
 }
 
 func TestIssueRefusalsBeforePreflightKeepTheirCodes(t *testing.T) {
+	t.Parallel()
 	stranger := uuid.New()
 	for name, tc := range map[string]struct {
 		mutate func(*compatFixture)

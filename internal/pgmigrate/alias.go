@@ -2,7 +2,6 @@ package pgmigrate
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"strings"
@@ -102,11 +101,8 @@ func statusText(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	flags := flag.NewFlagSet("dho migrate status", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	check := flags.Bool("check", false, "exit 1 if a required migration is pending, 0 if the application schema is current; read-only")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

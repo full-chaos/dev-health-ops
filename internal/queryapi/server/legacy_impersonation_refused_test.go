@@ -172,7 +172,7 @@ func TestGraphQLServesTheDelegatedBearerWithTheSwitchOn(t *testing.T) {
 
 // TestGraphQLLegacyRefusalLeavesEveryOtherAnswer: a superuser with no live row,
 // a plain member, and a failed row read answer byte-equal with the switch on
-// and unset (the read failure is main's 500 in both).
+// and unset (the read failure is the policy scope's 503 in both).
 func TestGraphQLLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -187,7 +187,7 @@ func TestGraphQLLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 	}{
 		"superuser, no live row": {func() *accessStore { return legacyStore(nil, nil) }, legacyTokens(t, minter), http.StatusOK},
 		"plain member":           {newAccessStore, member, http.StatusOK},
-		"row read fails":         {func() *accessStore { return legacyStore(nil, errors.New("session store timeout")) }, legacyTokens(t, minter), http.StatusInternalServerError},
+		"row read fails":         {func() *accessStore { return legacyStore(nil, errors.New("session store timeout")) }, legacyTokens(t, minter), http.StatusServiceUnavailable},
 	}
 	for name, tc := range cases {
 		for signing, token := range tc.tokens {

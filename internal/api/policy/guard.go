@@ -152,8 +152,8 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:
@@ -191,12 +191,20 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
 			}
-			if r.Pattern != stopImpersonationPattern && ImpersonationFrom(r.Context()) != nil {
-				g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
-					slog.String("path", r.Pattern), slog.String("action", gt.action))
-				g.observeShadow(r, caller, bearer, false)
-				WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
-				return
+			if r.Pattern != stopImpersonationPattern {
+				session, err := g.sessionRow(r, user.ID)
+				if err != nil {
+					// The session state is unknown: the shadow is not asked.
+					g.writeSessionRowFailure(w, r, err)
+					return
+				}
+				if session != nil {
+					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
+						slog.String("path", r.Pattern), slog.String("action", gt.action))
+					g.observeShadowAs(r, caller, bearer, false, true)
+					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+					return
+				}
 			}
 		}
 		g.observeShadow(r, caller, bearer, true)
@@ -321,9 +329,10 @@ const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
 // refusal (403) for a caller whose bearer, authenticated as the route's row
 // does (HS256 and user access token), belongs to an admin with an active
 // impersonation session. It is for a route the scope layers
-// skip, so it reads the session itself. A bearer go-api cannot verify
-// (auth-service's) or a user who may not impersonate passes through. A failed
-// lookup refuses the request (fail closed, like Scope.Impersonation).
+// skip, so it reads the session itself. It follows the live row, not the
+// caller's admin.impersonate. A bearer go-api cannot verify (auth-service's)
+// passes through. A failed read (users row or session) answers 503 and does
+// not forward (fail closed).
 func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := BearerToken(r.Header.Get("Authorization"))
@@ -332,7 +341,7 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 			return
 		}
 		user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
-		if isRefusal(err) || (err == nil && !user.Holds(ActionAdminImpersonate)) {
+		if isRefusal(err) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -344,7 +353,7 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 		case err != nil:
 			g.logger.ErrorContext(r.Context(), "api guard: impersonation lookup failed; refusing the request",
 				slog.Bool("unavailable", isUnavailable(err)), slog.Any("error", err))
-			writeCallerLookupFailure(w, err)
+			WriteAuthFailure(w, "", ErrUnavailable)
 		case session != nil:
 			g.logger.WarnContext(r.Context(), "api guard: route refused in an impersonation session",
 				slog.String("path", r.URL.Path), slog.String("admin_user_id", session.AdminUserID.String()))

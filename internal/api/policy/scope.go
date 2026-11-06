@@ -212,12 +212,12 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 	return role, member, err
 }
 
-// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets in whose users
-// row says superuser, an active session makes the target's org the request's org, sets the
+// Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets in who holds
+// admin.impersonate, an active session makes the target's org the request's org, sets the
 // impersonation context, and stamps X-Impersonating / X-Impersonated-User-Id on the response;
-// with RefuseLegacyImpersonation on, it refuses the request with 403 instead, but on
-// legacySessionRoutes. A session lookup failure refuses the request with the generic 500,
-// like the other authorization lookups (fail closed, logged).
+// with RefuseLegacyImpersonation on, it refuses a live row with 403 instead, but on
+// legacySessionRoutes (a non-holder's row is read on writes only). The row is kept for the
+// Guard refusals (Guard.sessionRow). A session lookup failure is 503 (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || !user.Holds(ActionAdminImpersonate) {
+		if user == nil || (!user.Holds(ActionAdminImpersonate) && (readMethod(r.Method) || !s.refusesLegacyCaller(r))) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -247,11 +247,12 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
 				slog.String("path", r.Pattern), slog.String("admin_user_id", user.UserID),
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
-			WriteInternal(w)
+			WriteAuthFailure(w, "", ErrUnavailable)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionRowKey{}, rowRead{session: session})
 		if session == nil {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 		if s.refusesLegacyCaller(r) {
@@ -260,7 +261,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)
 			return
 		}
-		ctx := context.WithValue(r.Context(), orgIDKey, session.TargetOrgID.String())
+		ctx = context.WithValue(ctx, orgIDKey, session.TargetOrgID.String())
 		ctx = context.WithValue(ctx, impersonationKey, session)
 		header := w.Header()
 		header.Add("X-Impersonating", "true")

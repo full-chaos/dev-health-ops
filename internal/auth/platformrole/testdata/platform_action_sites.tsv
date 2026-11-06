@@ -16,9 +16,9 @@ internal/api/billing/refunds.go	handlers.getRefund	admin.billing	handler
 internal/api/billing/refunds.go	handlers.listRefunds	admin.billing	handler
 internal/api/billing/routes.go	Routes	admin.billing	route
 internal/api/billing/subscriptions.go	handlers.resolveOrg	admin.billing	handler
+internal/api/billing/subscriptions.go	handlers.servedOrgWriteRefusal	admin.billing	handler
 internal/api/orgs/orgs.go	handlers.entitlements	admin.billing	7
 internal/api/policy/guard.go	Guard.currentUser	admin.orgs	4
-internal/api/policy/guard.go	Guard.RefuseImpersonatingCaller	admin.impersonate	carry
 internal/api/policy/principal.go	User.IsAdmin	admin.orgs	1
 internal/api/policy/scope.go	Authenticator.CheckTokenOrg	admin.orgs	4
 internal/api/policy/scope.go	EffectiveOrgID	admin.impersonate	4

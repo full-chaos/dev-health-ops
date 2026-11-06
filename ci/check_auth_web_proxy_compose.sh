@@ -239,8 +239,10 @@ printf 'auth.refresh_credentials rows: %s, still live: %s\n' "${creds}" "${live}
 [ "${revoked}" = "${sessions}" ] || die "the logout left ${sessions} session(s) of which ${revoked} are revoked"
 [ "${after}" = "${before}" ] || die "go-api wrote public.refresh_tokens (${before} -> ${after}): its own handlers served a call"
 
-printf 'step 5: flags OFF in the default stack\n'
-if grep -E '^\s*AUTH_PROXY_(SESSIONS|LOCAL_LOGIN|CREDENTIALS|SOCIAL|OIDC|SAML)\s*[:=]\s*"?(true|1|on)' "${ROOT}/compose.yml"; then
-  die "compose.yml turns an auth proxy flag on"
+printf 'step 5: OIDC and SAML proxy flags OFF in the default stack\n'
+# Since CHAOS-13107 compose.yml forwards production's set (sessions, local login, credentials, social); OIDC and SAML stay
+# off there, the same rule as internal/cigates/webproxyproof TestAuthProxyFlagsAreOffOutsideTheProofOverrides.
+if grep -E '^\s*AUTH_PROXY_(OIDC|SAML)\s*[:=]\s*"?(true|1|on)' "${ROOT}/compose.yml"; then
+  die "compose.yml turns the OIDC or SAML auth proxy flag on"
 fi
 printf 'OK\n'

@@ -19,16 +19,25 @@ func TestZeroScopeIsNoScope(t *testing.T) {
 	}
 }
 
-// An empty organization builds no scope, whatever the constructor.
+// An empty organization builds no scope for an enforced decision (organization, allowlist).
 func TestEmptyOrganizationIsNoScope(t *testing.T) {
 	for name, s := range map[string]Scope{
-		"legacy":       Legacy(""),
 		"organization": Organization(""),
 		"allowlist":    Allowlist("", []string{"acme/a"}),
 	} {
 		if _, ok := s.OrgID(); ok || !s.Restricted() || s.Kind() != KindNone {
 			t.Errorf("%s(\"\") = kind %v restricted %v, want no scope", name, s.Kind(), s.Restricted())
 		}
+	}
+}
+
+// Product rule 1 (D6773): a legacy request with no org (a platform admin) keeps today's path: a Legacy scope that
+// reads the empty org, unrestricted, as the claims organization did.
+func TestEmptyOrganizationLegacyKeepsTodaysPath(t *testing.T) {
+	s := Legacy("")
+	if org, ok := s.OrgID(); !ok || org != "" || s.Restricted() || s.Kind() != KindLegacy || s.RepoKeys() != nil {
+		t.Fatalf("Legacy(\"\") = org (%q, %v) kind %v restricted %v keys %v, want the legacy scope of the empty org",
+			org, ok, s.Kind(), s.Restricted(), s.RepoKeys())
 	}
 }
 

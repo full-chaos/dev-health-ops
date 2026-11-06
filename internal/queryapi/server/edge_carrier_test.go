@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -166,7 +167,7 @@ func TestEdgeCarrier_AcceptedMemberIsServedAndScoped(t *testing.T) {
 	if len(*seen) != 1 {
 		t.Fatalf("resolver ran %d times, want 1", len(*seen))
 	}
-	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", IsSuperuser: false, ImpersonationActive: false}
+	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", IsSuperuser: false, ImpersonationActive: false, Scope: pepgate.Legacy(ecOrg.String())}
 	if (*seen)[0] != want {
 		t.Fatalf("claims = %+v, want %+v", (*seen)[0], want)
 	}
@@ -319,7 +320,7 @@ func TestEdgeCarrier_SessionOfAUserTheRowSaysIsNotASuperuserIsIgnored(t *testing
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", isSuperuser: true, tokenVersion: 5})
 
 	rec := ecPost(handler, token)
-	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin"}
+	want := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
 	if rec.Code != http.StatusOK || len(*seen) != 1 || (*seen)[0] != want {
 		t.Fatalf("got %d claims=%v, want 200 and exactly %+v", rec.Code, *seen, want)
 	}

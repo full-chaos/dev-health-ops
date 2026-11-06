@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -60,6 +61,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 			return authctx.Claims{}, false
 		}
 		internalidentity.RecordOutcome("headers", "accepted")
+		claims.Scope = pepgate.Legacy(claims.OrgID)
 		return claims, true
 	}
 
@@ -85,7 +87,8 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		return authctx.Claims{}, false
 	}
 	internalidentity.RecordOutcome("envelope", "accepted")
-	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}, true
+	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive,
+		Scope: pepgate.Legacy(claims.OrgID)}, true
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263
@@ -293,7 +296,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 
 	internalidentity.RecordOutcome("edge", "accepted")
 	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
-		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform}, edgeAccepted
+		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform, Scope: pepgate.Legacy(orgID)}, edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an

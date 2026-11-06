@@ -12,9 +12,11 @@ import (
 	"net/http/httptest"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-go/pep"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
@@ -34,7 +36,8 @@ import (
 
 // Product rule 1 (chris, D6773): a platform admin needs no org membership row, and with no org every token class
 // gets the answer the legacy path gives. rule1NoOrgGolden is what main (0bf51eb9) answers on each REST handler for a
-// superuser with no org, recorded there by this test: status, body and a digest of every statement with its bindings.
+// superuser with no org, recorded there by this test over rule1Client: status, body and a digest of every statement
+// with its bindings.
 const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"items\":[]}",
 "digest":"884760750f97cf60",
 "statements":1,
@@ -67,13 +70,13 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"edge token routed | investment":{"body":"{\"detail\":\"Data unavailable\"}",
+"edge token routed | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
-"status":503},
-"edge token routed | investment_explain":{"body":"{\"error\": \"Streaming error\", \"detail\": \"An internal error has occurred.\"}{\"error\": \"Streaming error\", \"detail\": \"An internal streaming error occurred.\"}",
-"digest":"45e7fbf84ac40e47",
-"statements":2,
+"status":200},
+"edge token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"digest":"4a41f4fd2e5d84be",
+"statements":4,
 "status":200},
 "edge token routed | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
@@ -151,13 +154,13 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"edge token | investment":{"body":"{\"detail\":\"Data unavailable\"}",
+"edge token | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
-"status":503},
-"edge token | investment_explain":{"body":"{\"error\": \"Streaming error\", \"detail\": \"An internal error has occurred.\"}{\"error\": \"Streaming error\", \"detail\": \"An internal streaming error occurred.\"}",
-"digest":"45e7fbf84ac40e47",
-"statements":2,
+"status":200},
+"edge token | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"digest":"4a41f4fd2e5d84be",
+"statements":4,
 "status":200},
 "edge token | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
@@ -235,13 +238,13 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"envelope | investment":{"body":"{\"detail\":\"Data unavailable\"}",
+"envelope | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
-"status":503},
-"envelope | investment_explain":{"body":"{\"error\": \"Streaming error\", \"detail\": \"An internal error has occurred.\"}{\"error\": \"Streaming error\", \"detail\": \"An internal streaming error occurred.\"}",
-"digest":"45e7fbf84ac40e47",
-"statements":2,
+"status":200},
+"envelope | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"digest":"4a41f4fd2e5d84be",
+"statements":4,
 "status":200},
 "envelope | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
@@ -319,13 +322,13 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"user access token routed | investment":{"body":"{\"detail\":\"Data unavailable\"}",
+"user access token routed | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
-"status":503},
-"user access token routed | investment_explain":{"body":"{\"error\": \"Streaming error\", \"detail\": \"An internal error has occurred.\"}{\"error\": \"Streaming error\", \"detail\": \"An internal streaming error occurred.\"}",
-"digest":"45e7fbf84ac40e47",
-"statements":2,
+"status":200},
+"user access token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"digest":"4a41f4fd2e5d84be",
+"statements":4,
 "status":200},
 "user access token routed | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
@@ -403,13 +406,13 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"user access token routed, PDP shadow, cell off | investment":{"body":"{\"detail\":\"Data unavailable\"}",
+"user access token routed, PDP shadow, cell off | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
-"status":503},
-"user access token routed, PDP shadow, cell off | investment_explain":{"body":"{\"error\": \"Streaming error\", \"detail\": \"An internal error has occurred.\"}{\"error\": \"Streaming error\", \"detail\": \"An internal streaming error occurred.\"}",
-"digest":"45e7fbf84ac40e47",
-"statements":2,
+"status":200},
+"user access token routed, PDP shadow, cell off | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"digest":"4a41f4fd2e5d84be",
+"statements":4,
 "status":200},
 "user access token routed, PDP shadow, cell off | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
@@ -456,10 +459,84 @@ const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"it
 "statements":1,
 "status":200}}`
 
+// rule1Client records every statement and answers as an empty ClickHouse does: no rows, except the two
+// system-catalog probes (they echo their bound names, so the routes go on) and the aggregate statements with no
+// GROUP BY, which answer one row of zero values. It is this cell's own, so a change to another test's fake moves
+// no row here.
+type rule1Client struct {
+	mu         sync.Mutex
+	statements []string
+	bindings   [][]dhclickhouse.Binding
+}
+
+func (c *rule1Client) Query(_ context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.mu.Lock()
+	c.statements = append(c.statements, statement)
+	c.bindings = append(c.bindings, bindings)
+	c.mu.Unlock()
+	switch {
+	case strings.Contains(statement, "FROM system.tables"):
+		return &rule1Rows{values: append(rule1BindingStrings(bindings, "table"), rule1BindingStrings(bindings, "tables")...)}, nil
+	case strings.Contains(statement, "FROM system.columns"):
+		return &rule1Rows{values: append(rule1BindingStrings(bindings, "column"), rule1BindingStrings(bindings, "columns")...)}, nil
+	case strings.Contains(statement, "AS sized_units") || strings.Contains(statement, "toString(max(computed_at))"):
+		return &rule1Rows{zeroRow: true}, nil
+	}
+	return &rule1Rows{}, nil
+}
+
+func rule1BindingStrings(bindings []dhclickhouse.Binding, name string) []string {
+	for _, binding := range bindings {
+		if binding.Name != name {
+			continue
+		}
+		switch value := binding.Value.(type) {
+		case string:
+			return []string{value}
+		case []string:
+			return value
+		}
+	}
+	return nil
+}
+
+// rule1Rows answers values one per row into the first string column, or (zeroRow) one row that leaves every column
+// at its zero value.
+type rule1Rows struct {
+	values  []string
+	zeroRow bool
+	index   int
+}
+
+func (r *rule1Rows) Next() bool {
+	limit := len(r.values)
+	if r.zeroRow {
+		limit = 1
+	}
+	if r.index >= limit {
+		return false
+	}
+	r.index++
+	return true
+}
+
+func (r *rule1Rows) Scan(dest ...any) error {
+	if r.zeroRow || len(dest) == 0 {
+		return nil
+	}
+	if target, ok := dest[0].(*string); ok {
+		*target = r.values[r.index-1]
+	}
+	return nil
+}
+
+func (r *rule1Rows) Err() error   { return nil }
+func (r *rule1Rows) Close() error { return nil }
+
 type rule1Route struct {
 	class, method, query, body string
 	pathValues                 map[string]string
-	handler                    func(*teamScopeReachClient) http.HandlerFunc
+	handler                    func(*rule1Client) http.HandlerFunc
 }
 
 func rule1Need[T any](value T, err error) T {
@@ -473,53 +550,53 @@ func rule1Routes() []rule1Route {
 	dates := "start_date=2026-01-01&end_date=2026-01-15"
 	person := map[string]string{"person_id": "person-1"}
 	return []rule1Route{
-		{"quadrant", http.MethodGet, "type=wip_throughput&" + dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newQuadrantWorkHandler(c) }},
-		{"heatmap", http.MethodGet, "type=temporal_load&metric=review_wait_density&range_days=30", "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newHeatmapWorkHandler(c) }},
-		{"sankey", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newSankeyGetHandler(c) }},
-		{"home", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newHomeGetHandler(c, nil) }},
-		{"opportunities", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newOpportunitiesGetHandler(c) }},
-		{"filteroptions", http.MethodGet, "", "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newFilterOptionsWorkHandler(c) }},
-		{"investment", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"quadrant", http.MethodGet, "type=wip_throughput&" + dates, "", nil, func(c *rule1Client) http.HandlerFunc { return newQuadrantWorkHandler(c) }},
+		{"heatmap", http.MethodGet, "type=temporal_load&metric=review_wait_density&range_days=30", "", nil, func(c *rule1Client) http.HandlerFunc { return newHeatmapWorkHandler(c) }},
+		{"sankey", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc { return newSankeyGetHandler(c) }},
+		{"home", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc { return newHomeGetHandler(c, nil) }},
+		{"opportunities", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc { return newOpportunitiesGetHandler(c) }},
+		{"filteroptions", http.MethodGet, "", "", nil, func(c *rule1Client) http.HandlerFunc { return newFilterOptionsWorkHandler(c) }},
+		{"investment", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newInvestmentGetHandler(rule1Need(investment.NewReader(c)))
 		}},
-		{"investment_sunburst", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"investment_sunburst", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newInvestmentSunburstGetHandler(rule1Need(investment.NewReader(c)))
 		}},
-		{"investment_explain", http.MethodPost, "llm_provider=mock&" + dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"investment_explain", http.MethodPost, "llm_provider=mock&" + dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newInvestmentExplainWorkHandler(rule1Need(investmentexplain.NewReader(c)), nil, nil, nil, testPlatformGate{})
 		}},
-		{"drilldown_prs", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"drilldown_prs", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newDrilldownPRsGetHandler(rule1Need(drilldown.NewReader(c)))
 		}},
-		{"drilldown_issues", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"drilldown_issues", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newDrilldownIssuesGetHandler(rule1Need(drilldown.NewReader(c)))
 		}},
-		{"work_units", http.MethodGet, dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"work_units", http.MethodGet, dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newWorkUnitsGetHandler(rule1Need(investmentexplain.NewReader(c)))
 		}},
-		{"work_unit_explain", http.MethodPost, "llm_provider=mock&" + dates, "", map[string]string{"work_unit_id": "wu-1"}, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"work_unit_explain", http.MethodPost, "llm_provider=mock&" + dates, "", map[string]string{"work_unit_id": "wu-1"}, func(c *rule1Client) http.HandlerFunc {
 			return newWorkUnitExplainHandler(rule1Need(investmentexplain.NewReader(c)), nil, nil, nil, testPlatformGate{})
 		}},
-		{"people", http.MethodGet, "q=ali", "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"people", http.MethodGet, "q=ali", "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newPeopleSearchHandler(rule1Need(people.NewReader(c)))
 		}},
-		{"people_summary", http.MethodGet, dates, "", person, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"people_summary", http.MethodGet, dates, "", person, func(c *rule1Client) http.HandlerFunc {
 			return newPeopleSummaryHandler(rule1Need(people.NewReader(c)))
 		}},
-		{"people_metric", http.MethodGet, "metric=churn&" + dates, "", person, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"people_metric", http.MethodGet, "metric=churn&" + dates, "", person, func(c *rule1Client) http.HandlerFunc {
 			return newPeopleMetricHandler(rule1Need(people.NewReader(c)))
 		}},
-		{"people_drilldown_prs", http.MethodGet, dates, "", person, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"people_drilldown_prs", http.MethodGet, dates, "", person, func(c *rule1Client) http.HandlerFunc {
 			return newPeopleDrilldownPRsHandler(rule1Need(people.NewReader(c)))
 		}},
-		{"people_drilldown_issues", http.MethodGet, dates, "", person, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"people_drilldown_issues", http.MethodGet, dates, "", person, func(c *rule1Client) http.HandlerFunc {
 			return newPeopleDrilldownIssuesHandler(rule1Need(people.NewReader(c)))
 		}},
-		{"explain", http.MethodGet, "metric=" + explain.MetricNames()[0] + "&" + dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"explain", http.MethodGet, "metric=" + explain.MetricNames()[0] + "&" + dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			return newExplainGetHandler(rule1Need(explain.NewReader(c)))
 		}},
-		{"flame", http.MethodGet, "entity_type=issue&entity_id=abc", "", nil, func(c *teamScopeReachClient) http.HandlerFunc { return newFlameWorkHandler(c) }},
-		{"flame_aggregated", http.MethodGet, "mode=throughput&" + dates, "", nil, func(c *teamScopeReachClient) http.HandlerFunc {
+		{"flame", http.MethodGet, "entity_type=issue&entity_id=abc", "", nil, func(c *rule1Client) http.HandlerFunc { return newFlameWorkHandler(c) }},
+		{"flame_aggregated", http.MethodGet, "mode=throughput&" + dates, "", nil, func(c *rule1Client) http.HandlerFunc {
 			var client aggflame.QueryClient = c
 			return newFlameAggregatedWorkHandler(client)
 		}},
@@ -583,7 +660,7 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	if class.routed {
 		setup = testAccess(m.keys, nil, accessTestNow)
 	}
-	client := &teamScopeReachClient{}
+	client := &rule1Client{}
 	handler := route.handler(client)
 	f := newRESTFixtureServing(t, store, setup, true, func(w http.ResponseWriter, r *http.Request) {
 		for name, value := range route.pathValues {

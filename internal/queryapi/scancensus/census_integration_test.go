@@ -539,8 +539,8 @@ internal/queryapi/compoundingrisk/read.go|repoTrend|*time.Time,**float64|8972796
 internal/queryapi/datahealth/connectors.go|Connectors|*string,*string,*[]byte,**time.Time,**bool,**string,*[]byte,**time.Time,**int32,**time.Time,**time.Time,*[]byte,**string|d9838116a756|not-describable
 internal/queryapi/datahealth/coverage.go|MetricLineage|**time.Time,*uint64|61037e7ece4e|not-describable
 internal/queryapi/datahealth/sourcehealth.go|SourceHealth|*string,**string,*bool,**time.Time,*bool,*string,*[]byte,**time.Time,**bool,*bool,**time.Time,**string,*bool,**time.Time,**time.Time,**string,**string|dabf0d087730|not-describable
-internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|6e4dfa5717bf|not-describable
-internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|75f4f440a0f6|not-describable
+internal/queryapi/drilldown/issues.go|BuildIssuesResponse|*string,*string,*string,**string,**string,**float64,**float64,**time.Time,**time.Time|eb95c45fac41|not-describable
+internal/queryapi/drilldown/issues.go|buildBlockedIssuesResponse|*string,*string,**string,**string,*uint64|457e77e6ca55|not-describable
 internal/queryapi/explain/metrics.go|fetchChangeFailureView|[]any|74d73326912d|variadic-destinations
 internal/queryapi/explain/metrics.go|fetchMetricContributors|*string,**float64|09e3a4863c03|spliced-select-list
 internal/queryapi/explain/metrics.go|fetchMetricDriverDelta|*string,**float64,*uint8,*uint8,**float64|ed3ed30df2f7|not-describable

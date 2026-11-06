@@ -122,10 +122,14 @@ func LocalReasons() []pep.Reason {
 }
 
 // allowlistRefusal is the reason of an allowlist decision on a route that does not carry it, and the route's class.
+// A mixed GraphQL root (mixedRoots) is refused as unsupported too; its class is its root key.
 func allowlistRefusal(profile string) (pep.Reason, string) {
 	class, known := routeClassOf[profile]
 	if known && routeClassKind[class] == KindMixed {
 		return ReasonAllowlistRouteUnsupported, class
+	}
+	if mixedRoots[profile] {
+		return ReasonAllowlistRouteUnsupported, profile
 	}
 	return ReasonNotCarriedOut, class
 }

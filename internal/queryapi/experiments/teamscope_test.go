@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // recordingCH answers every read with no rows and keeps the statements.
@@ -70,7 +71,7 @@ func TestResolve_UnknownTeamNarrowsTheReadsAndNeverWidensToTheOrg(t *testing.T) 
 	org := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputOrg}}
 
 	scoped := &recordingCH{}
-	got := Resolve(context.Background(), NewBuilder(home.QueryClient(scoped)), "org-1", team, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
+	got := Resolve(context.Background(), NewBuilder(home.QueryClient(scoped), pepgate.Legacy("org-1")), "org-1", team, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
 	if !got.DerivedFromOpportunities || len(got.Items) != 1 || got.Items[0].OpportunityID != "opp-0" {
 		t.Fatalf("unknown team answer = %+v", got)
 	}
@@ -79,7 +80,7 @@ func TestResolve_UnknownTeamNarrowsTheReadsAndNeverWidensToTheOrg(t *testing.T) 
 	}
 
 	unscoped := &recordingCH{}
-	Resolve(context.Background(), NewBuilder(home.QueryClient(unscoped)), "org-1", org, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
+	Resolve(context.Background(), NewBuilder(home.QueryClient(unscoped), pepgate.Legacy("org-1")), "org-1", org, time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC))
 	if unscoped.countWith("team_repo_ownership") != 0 {
 		t.Fatal("the org scope must not read team ownership")
 	}

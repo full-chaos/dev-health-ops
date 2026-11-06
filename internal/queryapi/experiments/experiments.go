@@ -25,6 +25,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const (
@@ -35,9 +37,19 @@ const (
 // Builder builds the opportunity cards for an org and filter.
 type Builder func(ctx context.Context, orgID string, f home.Filters, now time.Time) (*opportunities.Response, error)
 
-// NewBuilder returns the production builder over a ClickHouse client.
-func NewBuilder(client home.QueryClient) Builder {
+// NewBuilder returns the production builder over a ClickHouse client for a root decided with scope. An allowlist
+// scope is a repository ceiling, resolved once and held to every read of the build, as REST opportunities holds it
+// (CHAOS-13162); a failed resolution fails the build, never an answer over more repositories. Every other scope
+// (Legacy, Organization, and none from an ingress that sets none) is today's build.
+func NewBuilder(client home.QueryClient, scope pepgate.Scope) Builder {
 	return func(ctx context.Context, orgID string, f home.Filters, now time.Time) (*opportunities.Response, error) {
+		if scope.Kind() == pepgate.KindAllowlist {
+			ceiling, err := teamscope.ResolveCeiling(ctx, client, scope)
+			if err != nil {
+				return nil, err
+			}
+			f.Ceiling = ceiling
+		}
 		return opportunities.BuildResponse(ctx, client, orgID, f, now)
 	}
 }

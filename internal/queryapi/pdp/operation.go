@@ -64,8 +64,15 @@ const (
 
 // rootCutOver is the GraphQL cut-over registry: the root keys whose resolvers narrow every read to a scope's
 // repository allowlist. An allowlist decision on an operation with an enforced root not listed is not carried out
-// (503). Empty until the resolvers take the ceiling.
-var rootCutOver = map[string]bool{}
+// (503). Query.experiments is the REST opportunities build, which holds every read to the ceiling (CHAOS-13086,
+// CHAOS-13162).
+var rootCutOver = map[string]bool{"Query.experiments": true}
+
+// mixedRoots are the GraphQL roots a ruling keeps out of the registry for good: some read has no repository column
+// and the answer cannot say what it leaves out, so an allowlist decision on them is refused with
+// allowlist_route_unsupported, never narrowed. Query.home: D6743 option B on CHAOS-6155 (CHAOS-13162); REST
+// /api/v1/home serves the allowlist with its Go-only markers, which the GraphQL schema does not have.
+var mixedRoots = map[string]bool{"Query.home": true}
 
 // RootEnforced reports whether a root of action is decided for a caller of class: the cell of the action's namespace
 // is on in the caller's cell set. An unknown class is decided when either set has the cell on.

@@ -1363,7 +1363,8 @@ func (r *queryResolver) Experiments(ctx context.Context, orgID string, filters *
 		finish("denied", attribute.String("denial_reason", "org_mismatch_or_absent"))
 		return nil, err
 	}
-	result := experiments.Resolve(spanCtx, experiments.NewBuilder(r.ClickHouse), orgID, filters, time.Now().UTC())
+	claims, _ := authctx.FromContext(ctx)
+	result := experiments.Resolve(spanCtx, experiments.NewBuilder(r.ClickHouse, claims.Scope), orgID, filters, time.Now().UTC())
 	if result.DerivedFromOpportunities {
 		finish("ok")
 	} else {

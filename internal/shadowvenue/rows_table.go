@@ -1,4 +1,8 @@
-# The venue driver's row table: one go-api shadow row per line (row = PLAN-10851-2 section 2 number), or a control cell (C<n>).
+package shadowvenue
+
+// DefaultRows is the row table of the go-api shadow rows at this commit, plus the control cells. It is Go source, not a
+// data file, so a change to it runs the Go workflow.
+var DefaultRows = []byte(`# The venue driver's row table: one go-api shadow row per line (row = PLAN-10851-2 section 2 number), or a control cell (C<n>).
 # Columns: row method route org destructive ext principal expect path body. org = a principals-file org label;
 # placeholders in path and body: {org} {org:<label>} {user:<principal>} {uuid:<kind>} {name:<kind>} {missing}.
 # ext names the outside service a legacy-allowed request can reach; the driver sends it only with -allow-external <ext>.
@@ -69,3 +73,4 @@ C2	GET	/api/v1/admin/teams	A	no	-	member-A	mismatch	/api/v1/admin/teams	-
 62	PATCH	/api/v1/admin/teams/{team_id}	A	no	-	-	match	/api/v1/admin/teams/{uuid:team}	{}
 63	GET	/api/v1/billing/entitlements/{org_id}	A	no	-	-	match	/api/v1/billing/entitlements/{org}	-
 64	GET	/api/v1/licensing/entitlements/{org_id}	A	no	-	-	match	/api/v1/licensing/entitlements/{org}	-
+`)

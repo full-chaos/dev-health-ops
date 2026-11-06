@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,5 +66,34 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	if code := run(context.Background(), []string{"plan", "-principals", principals, "-throwaway-org", "A"}, &out, &errOut); code != exitUsage {
 		t.Fatalf("throwaway org A: %d", code)
+	}
+}
+
+// The driver's client answers a redirect itself (CheckRedirect returns http.ErrUseLastResponse): the other origin
+// sees no request and no bearer, and the transport has no environment proxy.
+func TestTheDriverClientNeverFollowsARedirect(t *testing.T) {
+	var seen int
+	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { seen++ }))
+	defer other.Close()
+	venue := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/stolen", http.StatusTemporaryRedirect)
+	}))
+	defer venue.Close()
+	client := newClient()
+	if err := client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("CheckRedirect = %v, want http.ErrUseLastResponse", err)
+	}
+	if transport, ok := client.Transport.(*http.Transport); !ok || transport.Proxy != nil {
+		t.Fatalf("the transport %T reads an environment proxy", client.Transport)
+	}
+	req, _ := http.NewRequest(http.MethodGet, venue.URL+"/api/v1/admin/teams", nil)
+	req.Header.Set("Authorization", "Bearer venue-token")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusTemporaryRedirect || seen != 0 {
+		t.Fatalf("status %d, other origin saw %d requests", resp.StatusCode, seen)
 	}
 }

@@ -98,7 +98,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		return exitUsage
 	}
 	defer file.Close()
-	driver := &shadowvenue.Driver{Base: origin, Client: &http.Client{Timeout: 30 * time.Second, Transport: httpguard.Transport(), CheckRedirect: noRedirect}, Gap: *gap}
+	driver := &shadowvenue.Driver{Base: origin, Client: newClient(), Gap: *gap}
 	tokens := map[string]string{}
 	for _, s := range plan.Slots {
 		if s.Gap() || tokens[s.Principal] != "" {
@@ -123,6 +123,12 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 	}
 	fmt.Fprintf(stdout, "drive: done %s, slots in %s\n", time.Now().UTC().Format(time.RFC3339), *out)
 	return exitOK
+}
+
+// newClient sends on the no-proxy outbound transport and never follows a redirect: a bearer reaches only the venue
+// origin.
+func newClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second, Transport: httpguard.Transport(), CheckRedirect: noRedirect}
 }
 
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

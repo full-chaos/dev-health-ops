@@ -9,7 +9,6 @@
 package shadowvenue
 
 import (
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,11 +19,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 )
-
-// DefaultRows is the row table of the go-api shadow rows at this commit, plus the control cells.
-//
-//go:embed rows.tsv
-var DefaultRows []byte
 
 const rowsHeader = "row\tmethod\troute\torg\tdestructive\text\tprincipal\texpect\tpath\tbody"
 

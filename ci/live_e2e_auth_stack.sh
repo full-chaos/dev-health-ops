@@ -7,7 +7,7 @@
 #   bash ci/live_e2e_auth_stack.sh up STATE_DIR            needs migrated Postgres (superuser in PG* variables), Valkey,
 #                                                          JWT_SECRET_KEY (the value go-api runs with), DHO_BIN
 #   bash ci/live_e2e_auth_stack.sh with-env SIDE STATE_DIR -- CMD [ARG...]   run CMD with the environment of SIDE
-#   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE
+#   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
@@ -45,7 +45,17 @@ dsn() {
   printf "host=%s port=%s user=%s password='%s' dbname=%s sslmode=disable" "${PGHOST_USE}" "${PGPORT_USE}" "$1" "$2" "${PGDATABASE_USE}"
 }
 
+# print_env SIDE STATE: the printable environment of SIDE, every secret value redacted. Nothing secret travels through it;
+# with_env takes the real values from raw_env.
 print_env() {
+  raw_env "$1" "$2" | awk '
+    { k = substr($0, 1, index($0, "=") - 1) }
+    k == "AUTH_JWT_SECRET_KEY" || k == "AUTH_SESSION_SUCCESSOR_KEY" || k == "AUTH_LOGIN_LOCKOUT_KEY" { print k "=<redacted>"; next }
+    k == "AUTH_DATABASE_URI" { sub(/password=\047[^\047]*\047/, "password=\047<redacted>\047") }
+    { print }'
+}
+
+raw_env() {
   local side="$1" state="$2"
   case "${side}" in
     go-api)
@@ -92,7 +102,7 @@ print_env() {
   esac
 }
 
-# with_env SIDE STATE -- CMD...: export the lines of print_env, then exec CMD. A value is taken whole (no shell parsing).
+# with_env SIDE STATE -- CMD...: export the lines of raw_env, then exec CMD. A value is taken whole (no shell parsing).
 with_env() {
   local side="$1" state="$2" line
   shift 2
@@ -101,7 +111,7 @@ with_env() {
   [ "$#" -gt 0 ] || die "with-env needs a command"
   while IFS= read -r line; do
     export "${line%%=*}=${line#*=}"
-  done < <(print_env "${side}" "${state}")
+  done < <(raw_env "${side}" "${state}")
   exec "$@"
 }
 
@@ -224,15 +234,16 @@ up() {
 # service credential, and at least one exists.
 assert_audit() {
   STATE="$1"
-  local row workload service
+  local row total workload service
   row="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" psql -v ON_ERROR_STOP=1 -At -F ' ' -c \
-    "SELECT count(*) FILTER (WHERE attributes ? 'workload_jti'), count(*) FILTER (WHERE attributes ? 'credential_id') \
+    "SELECT count(*), count(*) FILTER (WHERE attributes ? 'workload_jti'), count(*) FILTER (WHERE attributes ? 'credential_id') \
        FROM ${SCHEMA}.security_audit_events WHERE event_type = 'auth.session.issued' AND attributes->>'source' = 'go-api-delegated'")"
-  workload="${row% *}"
-  service="${row#* }"
-  printf 'delegated session issues: workload=%s service_credential=%s\n' "${workload}" "${service}"
+  read -r total workload service <<<"${row}"
+  [[ "${total}" =~ ^[0-9]+$ && "${workload}" =~ ^[0-9]+$ && "${service}" =~ ^[0-9]+$ ]] || die "the audit query returned no counts"
+  printf 'delegated session issues: total=%s workload=%s service_credential=%s\n' "${total}" "${workload}" "${service}"
   [ "${workload}" -ge 1 ] || die "no delegated session issue used the workload credential"
   [ "${service}" -eq 0 ] || die "a delegated session issue used a service credential"
+  [ "${workload}" -eq "${total}" ] || die "a delegated session issue has no workload marker"
 }
 
 down() {

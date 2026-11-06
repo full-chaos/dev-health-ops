@@ -114,7 +114,7 @@ Before rollout:
 5. verify runtime role grants and River schema compatibility;
 6. start or roll application processes only after migration succeeds.
 
-The canonical incident cutover records no production downgrade to the legacy incident writer/reader after the new ordering contract is admitted. Rollback must use the compatible bridge and current schema rather than reintroducing an old binary that cannot understand the contract.
+Once the new incident ordering contract is admitted, no production downgrade to the legacy incident writer/reader is allowed. Rollback must use the compatible bridge and current schema rather than reintroducing an old binary that cannot understand the contract.
 
 ## Connection budgets
 
@@ -148,7 +148,7 @@ and moves with its latest activity; the retention worker consumes that exact
 timestamp and must not apply a second horizon. The zero-day path removes
 content as soon as a request terminalizes. A daily bounded cleanup at 05:30 UTC
 is staged to repair expired rows with `FOR UPDATE SKIP LOCKED` batches and is
-replay-safe after the v3 producer compatibility cutover.
+replay-safe with the v3 producer compatibility contract.
 
 Migration `0069` adds the `(org_id, user_id, started_at)` and
 `(org_id, started_at)` run indexes used by the serialized per-user and

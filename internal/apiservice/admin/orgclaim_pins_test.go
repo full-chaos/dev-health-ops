@@ -4,7 +4,6 @@ package admin_test
 
 // The Go pins of orgClaimRuling, by test (testdata/orgclaim).
 const (
-	governanceOrgClaimPinSHA256        = "08e3b2ff30ee2094764b0526843ce1f82729225794c40184faaa41e607a57f45"
 	llmSettingsStatusOrgClaimPinSHA256 = "195b0bba23aa3d30069abe859336fa2e9cdb50dee1625a3c7a22cba9573d72dc"
 	pagerDutyBindingsOrgClaimPinSHA256 = "9d6319a7dde62fc04332307187128be7a3a622ccce5a6b949c1fc796fc4bd0fd"
 

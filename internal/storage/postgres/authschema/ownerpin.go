@@ -33,7 +33,8 @@ func (o Options) validateSchemaOwnerRole() error {
 }
 
 // schemaObjectsNotOwnedSQL counts, by kind, the objects of the schema ($1) owned by a role other than $2, except the
-// append function ($4) when the push lifecycle writer role ($3) owns it. It reads
+// append function ($4) when the push lifecycle writer role ($3) owns it, and the repository identity append function
+// ($6) when the repository identity writer role ($5) owns it. It reads
 // every catalog an owner can differ on: relations, routines, types, collations, statistics, text search objects,
 // operators, operator classes and families, conversions and the schema itself. An index, a TOAST table, an array
 // type and a table's row type follow their table, so they are not read.
@@ -47,6 +48,7 @@ SELECT kind, count(*) FROM (
   SELECT CASE p.prokind WHEN 'p' THEN 'procedure' WHEN 'a' THEN 'aggregate' ELSE 'function' END, p.proowner
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = $1
     AND NOT (p.proname = $4 AND p.proowner IS NOT DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = NULLIF($3, '')))
+    AND NOT (p.proname = $6 AND p.proowner IS NOT DISTINCT FROM (SELECT oid FROM pg_roles WHERE rolname = NULLIF($5, '')))
   UNION ALL
   SELECT CASE t.typtype WHEN 'd' THEN 'domain' ELSE 'type' END, t.typowner
   FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -63,7 +65,7 @@ SELECT kind, count(*) FROM (
 ) objs `
 
 // schemaObjectsNotOwnedSQL counts the objects of the schema owned by a role other than $2; schemaObjectsOwnedSQL counts
-// those $2 owns. Both take the same four arguments (schema, role, writer, append function name).
+// those $2 owns. Both take the same six arguments (schema, role, then each writer with its append function name).
 const schemaObjectsNotOwnedSQL = schemaObjectsUnion + `WHERE o <> (SELECT oid FROM pg_roles WHERE rolname = $2) GROUP BY kind ORDER BY kind`
 
 const schemaObjectsOwnedSQL = schemaObjectsUnion + `WHERE o = (SELECT oid FROM pg_roles WHERE rolname = $2) GROUP BY kind ORDER BY kind`
@@ -95,7 +97,7 @@ func verifySchemaOwnerPin(ctx context.Context, conn *pgx.Conn, options Options) 
 			ErrSchemaOwnerPin, options.SchemaOwnerRole, strings.Join(attributes, ", "))
 	}
 	rows, err := conn.Query(ctx, schemaObjectsNotOwnedSQL, options.Schema, options.SchemaOwnerRole,
-		options.PushLifecycleWriterRole, PushLifecycleFunction)
+		options.PushLifecycleWriterRole, PushLifecycleFunction, options.RepoIdentityWriterRole, RepoIdentityFunction)
 	if err != nil {
 		return fmt.Errorf("%w: reading the owners of the schema's objects", ErrMigrationFailed)
 	}

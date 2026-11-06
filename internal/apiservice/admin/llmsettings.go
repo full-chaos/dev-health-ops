@@ -420,7 +420,7 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 		policy.WriteModel(w, http.StatusOK, out, nil)
 		return
 	}
-	if budgetLimitMu != nil && user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
+	if _, delegated := user.ActorChain(); budgetLimitMu != nil && delegated {
 		llmDetail(http.StatusForbidden, w,
 			"error", "impersonated_write_forbidden",
 			"message", "BYO LLM budget changes are unavailable while impersonating")

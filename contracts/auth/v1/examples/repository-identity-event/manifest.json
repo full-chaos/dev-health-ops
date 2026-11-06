@@ -1,0 +1,165 @@
+{
+  "description": "Golden corpus for repository-identity-event.v1; the single inventory read by the Go and ajv runners. reject_by_client documents are schema-valid and refused by ParseRepositoryIdentityEvent on the raw token or by a rule a schema cannot state (the key and the aggregate id must agree with the payload; an instant must be a real date).",
+  "accept": [
+    {
+      "file": "valid-observed.json",
+      "why": "A GitHub repository at revision 1, the form the 0057 function writes (microsecond UTC instants)."
+    },
+    {
+      "file": "valid-renamed-gitlab-nested-path.json",
+      "why": "A GitLab rename: a later revision of the same provider id with a nested path and a second-precision instant."
+    },
+    {
+      "file": "valid-revision-at-maximum.json",
+      "why": "The largest revision the wire carries (2^53-1)."
+    }
+  ],
+  "reject": [
+    {
+      "file": "invalid-top-level-unknown-member.json",
+      "expect_instance_location": "/",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed envelope."
+    },
+    {
+      "file": "invalid-aggregate-type-other.json",
+      "expect_instance_location": "/aggregate_type",
+      "expect_keyword": "const",
+      "why": "One aggregate type."
+    },
+    {
+      "file": "invalid-event-type-removed.json",
+      "expect_instance_location": "/event_type",
+      "expect_keyword": "const",
+      "why": "One event kind; removal is not an event of this surface."
+    },
+    {
+      "file": "invalid-aggregate-id-uppercase-uuid.json",
+      "expect_instance_location": "/aggregate_id",
+      "expect_keyword": "pattern",
+      "why": "The organization part is a lowercase uuid."
+    },
+    {
+      "file": "invalid-idempotency-key-shape.json",
+      "expect_instance_location": "/idempotency_key",
+      "expect_keyword": "pattern",
+      "why": "The key carries the aggregate type, the aggregate id and the revision."
+    },
+    {
+      "file": "invalid-payload-unknown-member.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed payload."
+    },
+    {
+      "file": "invalid-organization-id-absent.json",
+      "expect_instance_location": "/payload",
+      "expect_keyword": "required",
+      "why": "The organization is required."
+    },
+    {
+      "file": "invalid-organization-id-prefixed.json",
+      "expect_instance_location": "/payload/organization_id",
+      "expect_keyword": "pattern",
+      "why": "The organization is the auth.organizations uuid, not a prefixed public id."
+    },
+    {
+      "file": "invalid-revision-zero.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "minimum",
+      "why": "Revisions start at 1."
+    },
+    {
+      "file": "invalid-revision-string.json",
+      "expect_instance_location": "/payload/revision",
+      "expect_keyword": "type",
+      "why": "The revision is a JSON integer."
+    },
+    {
+      "file": "invalid-change-unknown-member.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "additionalProperties",
+      "why": "Closed change: only the identity, no other repository metadata."
+    },
+    {
+      "file": "invalid-change-path-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "The full state is required: an event without the path is not a state transfer."
+    },
+    {
+      "file": "invalid-change-observed-at-absent.json",
+      "expect_instance_location": "/payload/change",
+      "expect_keyword": "required",
+      "why": "observed_at orders two observations of one repository."
+    },
+    {
+      "file": "invalid-provider-uppercase.json",
+      "expect_instance_location": "/payload/change/provider",
+      "expect_keyword": "pattern",
+      "why": "The provider name is lowercase."
+    },
+    {
+      "file": "invalid-provider-repo-id-not-numeric.json",
+      "expect_instance_location": "/payload/change/provider_repo_id",
+      "expect_keyword": "pattern",
+      "why": "The provider id is the numeric stable id, never a path or a node id."
+    },
+    {
+      "file": "invalid-provider-repo-id-number.json",
+      "expect_instance_location": "/payload/change/provider_repo_id",
+      "expect_keyword": "type",
+      "why": "The provider id is text, so a 20-digit id keeps every digit."
+    },
+    {
+      "file": "invalid-path-uppercase.json",
+      "expect_instance_location": "/payload/change/path",
+      "expect_keyword": "pattern",
+      "why": "The path is a canonical (lowercase) repository key."
+    },
+    {
+      "file": "invalid-path-too-long.json",
+      "expect_instance_location": "/payload/change/path",
+      "expect_keyword": "maxLength",
+      "why": "The 0056 bound: 255 bytes."
+    }
+  ],
+  "reject_by_client": [
+    {
+      "file": "client-rejected-idempotency-key-revision-mismatch.json",
+      "why": "The key names revision 3, the payload says 1."
+    },
+    {
+      "file": "client-rejected-idempotency-key-other-aggregate.json",
+      "why": "The key names another repository."
+    },
+    {
+      "file": "client-rejected-aggregate-id-other-repository.json",
+      "why": "The aggregate names provider id 987654321, the change says 123456789."
+    },
+    {
+      "file": "client-rejected-aggregate-id-other-organization.json",
+      "why": "The aggregate names another organization than the payload."
+    },
+    {
+      "file": "client-rejected-aggregate-id-other-provider.json",
+      "why": "The aggregate names gitlab, the change says github."
+    },
+    {
+      "file": "client-rejected-observed-at-impossible-date.json",
+      "why": "February 30 matches the pattern and is no instant."
+    },
+    {
+      "file": "client-rejected-created-at-impossible-date.json",
+      "why": "February 30 matches the pattern and is no instant."
+    },
+    {
+      "file": "client-rejected-revision-decimal-form.json",
+      "why": "An integral value in decimal form is refused on the raw token."
+    },
+    {
+      "file": "client-rejected-revision-exponent-form.json",
+      "why": "An integral value in exponent form is refused on the raw token."
+    }
+  ]
+}

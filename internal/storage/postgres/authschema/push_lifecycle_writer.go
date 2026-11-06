@@ -68,7 +68,60 @@ func (o Options) validatePushLifecycle(migrationRole string) error {
 	return nil
 }
 
-// applyPushLifecycleWriter hands the function to the writer role and sets the
+// functionWriter is one NOLOGIN role that owns exactly one SECURITY DEFINER append function of the auth schema, the
+// logins that may execute it, and the role's complete table and sequence privilege sets.
+type functionWriter struct {
+	label     string
+	err       error
+	role      string
+	callers   []string
+	function  string
+	signature string
+	tables    map[string][]string
+	sequences map[string][]string
+}
+
+func (o Options) pushWriter() functionWriter {
+	return functionWriter{
+		label: "push lifecycle", err: ErrPushLifecycleWriter, role: o.PushLifecycleWriterRole, callers: o.PushLifecycleCallerRoles,
+		function: PushLifecycleFunction, signature: PushLifecycleFunctionSignature, tables: pushWriterTables, sequences: pushWriterSequences,
+	}
+}
+
+func (o Options) repoIdentityWriter() functionWriter {
+	return functionWriter{
+		label: "repository identity", err: ErrRepoIdentityWriter, role: o.RepoIdentityWriterRole, callers: o.RepoIdentityCallerRoles,
+		function: RepoIdentityFunction, signature: RepoIdentityFunctionSignature, tables: repoIdentityWriterTables, sequences: repoIdentityWriterSequences,
+	}
+}
+
+// functionWriters are every function writer, in a fixed order.
+func (o Options) functionWriters() []functionWriter {
+	return []functionWriter{o.pushWriter(), o.repoIdentityWriter()}
+}
+
+func applyFunctionWriters(ctx context.Context, conn pooledConn, options Options, logger *slog.Logger) error {
+	for _, w := range options.functionWriters() {
+		if err := applyFunctionWriter(ctx, conn, options, w, logger); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func functionWritersViolations(ctx context.Context, conn pooledConn, options Options) ([]Violation, error) {
+	var out []Violation
+	for _, w := range options.functionWriters() {
+		violations, err := functionWriterViolations(ctx, conn, options, w)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, violations...)
+	}
+	return out, nil
+}
+
+// applyFunctionWriter hands the function to the writer role and sets the
 // exact grants of the writer and of the callers, in ONE transaction.
 //
 // ALTER FUNCTION OWNER needs two things PostgreSQL will not waive: the
@@ -77,9 +130,9 @@ func (o Options) validatePushLifecycle(migrationRole string) error {
 // the schema. The writer gets CREATE inside this transaction and loses it
 // before the commit, so no committed state shows it and the writer owns
 // exactly this function (a posture check proves both afterwards).
-func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Options, logger *slog.Logger) error {
-	if options.PushLifecycleWriterRole == "" {
-		logger.InfoContext(ctx, "push lifecycle writer role not configured; the append function stays unexecutable",
+func applyFunctionWriter(ctx context.Context, conn pooledConn, options Options, w functionWriter, logger *slog.Logger) error {
+	if w.role == "" {
+		logger.InfoContext(ctx, w.label+" writer role not configured; the append function stays unexecutable",
 			"schema", options.Schema)
 		return nil
 	}
@@ -87,28 +140,28 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	if err != nil {
 		return err
 	}
-	writerID, err := NewValidatedIdentifier(options.PushLifecycleWriterRole)
+	writerID, err := NewValidatedIdentifier(w.role)
 	if err != nil {
 		return err
 	}
 	schema, writer := quoteIdentifier(schemaID), quoteIdentifier(writerID)
-	function := schema + "." + PushLifecycleFunction + PushLifecycleFunctionSignature
+	function := schema + "." + w.function + w.signature
 
 	var canLogin, isMember bool
 	err = conn.QueryRow(ctx, `SELECT r.rolcanlogin, pg_has_role(current_user, r.oid, 'USAGE')
-		FROM pg_roles r WHERE r.rolname = $1`, options.PushLifecycleWriterRole).Scan(&canLogin, &isMember)
+		FROM pg_roles r WHERE r.rolname = $1`, w.role).Scan(&canLogin, &isMember)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("%w: role %q does not exist; create it first (CREATE ROLE %s NOLOGIN) and GRANT it to the migration role, "+
 			"as a privileged step before this migration (docs: auth control plane deployment)",
-			ErrPushLifecycleWriter, options.PushLifecycleWriterRole, options.PushLifecycleWriterRole)
+			w.err, w.role, w.role)
 	case err != nil:
-		return fmt.Errorf("%w: reading the push lifecycle writer role", ErrMigrationFailed)
+		return fmt.Errorf("%w: reading the %s writer role", ErrMigrationFailed, w.label)
 	case canLogin:
-		return fmt.Errorf("%w: role %q can log in; it must be NOLOGIN", ErrPushLifecycleWriter, options.PushLifecycleWriterRole)
+		return fmt.Errorf("%w: role %q can log in; it must be NOLOGIN", w.err, w.role)
 	case !isMember:
 		return fmt.Errorf("%w: the migration role is not a member of %q; GRANT %s TO the migration role as a privileged step before this migration",
-			ErrPushLifecycleWriter, options.PushLifecycleWriterRole, options.PushLifecycleWriterRole)
+			w.err, w.role, w.role)
 	}
 
 	statements := []string{
@@ -119,21 +172,21 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 		fmt.Sprintf(`REVOKE ALL ON ALL TABLES IN SCHEMA %s FROM %s`, schema, writer),
 		fmt.Sprintf(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA %s FROM %s`, schema, writer),
 	}
-	for _, table := range sortedKeys(pushWriterTables) {
+	for _, table := range sortedKeys(w.tables) {
 		tableID, err := NewValidatedIdentifier(table)
 		if err != nil {
 			return err
 		}
 		statements = append(statements, fmt.Sprintf(`GRANT %s ON %s.%s TO %s`,
-			strings.Join(pushWriterTables[table], ", "), schema, quoteIdentifier(tableID), writer))
+			strings.Join(w.tables[table], ", "), schema, quoteIdentifier(tableID), writer))
 	}
-	for _, sequence := range sortedKeys(pushWriterSequences) {
+	for _, sequence := range sortedKeys(w.sequences) {
 		sequenceID, err := NewValidatedIdentifier(sequence)
 		if err != nil {
 			return err
 		}
 		statements = append(statements, fmt.Sprintf(`GRANT %s ON SEQUENCE %s.%s TO %s`,
-			strings.Join(pushWriterSequences[sequence], ", "), schema, quoteIdentifier(sequenceID), writer))
+			strings.Join(w.sequences[sequence], ", "), schema, quoteIdentifier(sequenceID), writer))
 	}
 
 	// EXECUTE: the callers and nobody else. PUBLIC, the runtime role and every
@@ -144,7 +197,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 	statements = nil
 	statements = append(statements, fmt.Sprintf(`REVOKE ALL ON FUNCTION %s FROM PUBLIC`, function))
 	executors := map[string]bool{}
-	for _, caller := range options.PushLifecycleCallerRoles {
+	for _, caller := range w.callers {
 		executors[caller] = true
 	}
 	for _, other := range append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.ProjectionReaderRoles...) {
@@ -157,7 +210,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 		}
 		statements = append(statements, fmt.Sprintf(`REVOKE ALL ON FUNCTION %s FROM %s`, function, quoteIdentifier(otherID)))
 	}
-	for _, caller := range options.PushLifecycleCallerRoles {
+	for _, caller := range w.callers {
 		callerID, err := NewValidatedIdentifier(caller)
 		if err != nil {
 			return err
@@ -170,7 +223,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 
 	tx, err := conn.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: beginning the push lifecycle writer transaction", ErrMigrationFailed)
+		return fmt.Errorf("%w: beginning the %s writer transaction", ErrMigrationFailed, w.label)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := aclguard.Lock(ctx, tx); err != nil {
@@ -181,7 +234,7 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 			return fmt.Errorf("%w: %s: %v", ErrMigrationFailed, statement, redactPGError(err))
 		}
 	}
-	undeclared, err := undeclaredExecuteGrantees(ctx, tx, function, options.PushLifecycleCallerRoles)
+	undeclared, err := undeclaredExecuteGrantees(ctx, tx, function, w.callers)
 	if err != nil {
 		return err
 	}
@@ -197,10 +250,10 @@ func applyPushLifecycleWriter(ctx context.Context, conn pooledConn, options Opti
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("%w: committing the push lifecycle writer grants", ErrMigrationFailed)
+		return fmt.Errorf("%w: committing the %s writer grants", ErrMigrationFailed, w.label)
 	}
-	logger.InfoContext(ctx, "applied push lifecycle writer grants", "schema", options.Schema,
-		"writer_role", options.PushLifecycleWriterRole, "callers", len(options.PushLifecycleCallerRoles))
+	logger.InfoContext(ctx, "applied "+w.label+" writer grants", "schema", options.Schema,
+		"writer_role", w.role, "callers", len(w.callers))
 	return nil
 }
 
@@ -258,30 +311,37 @@ func sortedKeys(m map[string][]string) []string {
 // schema, and CREATE nowhere; and EXECUTE on the function must be held by
 // exactly the callers. Any other grant to the role fails the run.
 func pushWriterViolations(ctx context.Context, conn pooledConn, options Options) ([]Violation, error) {
-	if options.PushLifecycleWriterRole == "" {
+	return functionWriterViolations(ctx, conn, options, options.pushWriter())
+}
+
+// functionWriterViolations is the closed-world check of one function writer role (pushWriterViolations names the
+// rules).
+func functionWriterViolations(ctx context.Context, conn pooledConn, options Options, w functionWriter) ([]Violation, error) {
+	if w.role == "" {
 		return nil, nil
 	}
 	var violations []Violation
 	add := func(kind, schema, object, privilege, detail string) {
 		violations = append(violations, Violation{Kind: kind, Schema: schema, Object: object, Privilege: privilege, Detail: detail})
 	}
-	writer := options.PushLifecycleWriterRole
+	writer := w.role
+	label := w.label
 
 	var login, super, createdb, createrole, replication, bypass bool
 	if err := conn.QueryRow(ctx, `SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls
 		FROM pg_roles WHERE rolname = $1`, writer).Scan(&login, &super, &createdb, &createrole, &replication, &bypass); err != nil {
-		return nil, fmt.Errorf("%w: reading the push lifecycle writer role", ErrMigrationFailed)
+		return nil, fmt.Errorf("%w: reading the %s writer role", ErrMigrationFailed, label)
 	}
 	for attribute, set := range map[string]bool{"LOGIN": login, "SUPERUSER": super, "CREATEDB": createdb, "CREATEROLE": createrole, "REPLICATION": replication, "BYPASSRLS": bypass} {
 		if set {
-			add("role", "", writer, attribute, "the push lifecycle writer role must be NOLOGIN with no attribute")
+			add("role", "", writer, attribute, "the "+label+" writer role must be NOLOGIN with no attribute")
 		}
 	}
 
 	rows, err := conn.Query(ctx, `SELECT parent.rolname FROM pg_auth_members m
 		JOIN pg_roles member ON member.oid = m.member JOIN pg_roles parent ON parent.oid = m.roleid WHERE member.rolname = $1`, writer)
 	if err != nil {
-		return nil, fmt.Errorf("%w: reading the push lifecycle writer memberships", ErrMigrationFailed)
+		return nil, fmt.Errorf("%w: reading the %s writer memberships", ErrMigrationFailed, label)
 	}
 	for rows.Next() {
 		var parent string
@@ -289,7 +349,7 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 			rows.Close()
 			return nil, fmt.Errorf("%w: reading a membership", ErrMigrationFailed)
 		}
-		add("membership", "", writer, "MEMBER", "the push lifecycle writer role is a member of "+parent)
+		add("membership", "", writer, "MEMBER", "the "+label+" writer role is a member of "+parent)
 	}
 	rows.Close()
 
@@ -306,20 +366,20 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 			return nil, fmt.Errorf("%w: reading an owned function", ErrMigrationFailed)
 		}
 		owned++
-		if schema != options.Schema || name != PushLifecycleFunction {
-			add("function", schema, name+"()", "OWNER", "the push lifecycle writer role owns a function other than the append function")
+		if schema != options.Schema || name != w.function {
+			add("function", schema, name+"()", "OWNER", "the "+label+" writer role owns a function other than the append function")
 		}
 	}
 	rows.Close()
 	if owned == 0 {
-		add("function", options.Schema, PushLifecycleFunction+"()", "OWNER", "the push lifecycle writer role does not own the append function")
+		add("function", options.Schema, w.function+"()", "OWNER", "the "+label+" writer role does not own the append function")
 	}
 	var ownedRelations int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM pg_class c JOIN pg_roles o ON o.oid = c.relowner WHERE o.rolname = $1`, writer).Scan(&ownedRelations); err != nil {
 		return nil, fmt.Errorf("%w: reading the relations the writer owns", ErrMigrationFailed)
 	}
 	if ownedRelations > 0 {
-		add("relation", "", writer, "OWNER", fmt.Sprintf("the push lifecycle writer role owns %d relation(s)", ownedRelations))
+		add("relation", "", writer, "OWNER", fmt.Sprintf("the "+label+" writer role owns %d relation(s)", ownedRelations))
 	}
 
 	rows, err = conn.Query(ctx, `SELECT n.nspname, c.relname, c.relkind::text, priv
@@ -337,14 +397,14 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 			rows.Close()
 			return nil, fmt.Errorf("%w: reading a privilege", ErrMigrationFailed)
 		}
-		allowed := pushWriterTables
+		allowed := w.tables
 		if kind == "S" {
-			allowed = pushWriterSequences
+			allowed = w.sequences
 		}
 		if schema == options.Schema && listContains(allowed[name], privilege) {
 			continue
 		}
-		add("relation", schema, name, privilege, "the push lifecycle writer role holds a privilege outside its declared set")
+		add("relation", schema, name, privilege, "the "+label+" writer role holds a privilege outside its declared set")
 	}
 	rows.Close()
 
@@ -366,7 +426,7 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 		if schema == "public" && privilege == "USAGE" {
 			continue
 		}
-		add("schema", schema, schema, privilege, "the push lifecycle writer role holds a schema privilege outside its declared set")
+		add("schema", schema, schema, privilege, "the "+label+" writer role holds a schema privilege outside its declared set")
 	}
 	rows.Close()
 
@@ -375,33 +435,33 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 		return nil, fmt.Errorf("%w: reading the writer's database privilege", ErrMigrationFailed)
 	}
 	if databaseCreate {
-		add("database", "", "current_database()", "CREATE", "the push lifecycle writer role can create schemas")
+		add("database", "", "current_database()", "CREATE", "the "+label+" writer role can create schemas")
 	}
 
 	holders := map[string]bool{}
-	for _, caller := range options.PushLifecycleCallerRoles {
+	for _, caller := range w.callers {
 		holders[caller] = true
 	}
-	function := quoteIdentifierRaw(options.Schema) + "." + PushLifecycleFunction + PushLifecycleFunctionSignature
+	function := quoteIdentifierRaw(options.Schema) + "." + w.function + w.signature
 	var public bool
 	if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
 		WHERE p.oid = $1::regprocedure AND a.grantee = 0 AND a.privilege_type = 'EXECUTE')`, function).Scan(&public); err != nil {
 		return nil, fmt.Errorf("%w: reading the append function's grants", ErrMigrationFailed)
 	}
 	if public {
-		add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", "PUBLIC can execute the append function")
+		add("function", options.Schema, w.function+"()", "EXECUTE", "PUBLIC can execute the append function")
 	}
-	undeclared, err := undeclaredExecuteGrantees(ctx, conn, function, options.PushLifecycleCallerRoles)
+	undeclared, err := undeclaredExecuteGrantees(ctx, conn, function, w.callers)
 	if err != nil {
 		return nil, err
 	}
 	for _, grant := range undeclared {
 		role := grant.role
-		add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", role+" holds a direct EXECUTE grant on the append function and is not a caller")
+		add("function", options.Schema, w.function+"()", "EXECUTE", role+" holds a direct EXECUTE grant on the append function and is not a caller")
 	}
 	rows, err = conn.Query(ctx, `SELECT r.rolname, has_function_privilege(r.oid, $1::regprocedure, 'EXECUTE')
 		FROM pg_roles r WHERE r.rolname = ANY($2) AND r.rolname <> $3`,
-		function, append(append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.ProjectionReaderRoles...), options.PushLifecycleCallerRoles...), writer)
+		function, append(append(append(append([]string{options.RuntimeRole}, options.SessionReaderRoles...), options.ProjectionReaderRoles...), options.PushLifecycleCallerRoles...), options.RepoIdentityCallerRoles...), writer)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading who can execute the append function", ErrMigrationFailed)
 	}
@@ -414,9 +474,9 @@ func pushWriterViolations(ctx context.Context, conn pooledConn, options Options)
 		}
 		switch {
 		case can && !holders[role]:
-			add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", role+" can execute the append function and is not a caller")
+			add("function", options.Schema, w.function+"()", "EXECUTE", role+" can execute the append function and is not a caller")
 		case !can && holders[role]:
-			add("function", options.Schema, PushLifecycleFunction+"()", "EXECUTE", role+" is a caller and cannot execute the append function")
+			add("function", options.Schema, w.function+"()", "EXECUTE", role+" is a caller and cannot execute the append function")
 		}
 	}
 	rows.Close()

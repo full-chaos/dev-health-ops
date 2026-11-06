@@ -345,6 +345,30 @@ type Response struct {
 	// One value for the whole answer. GraphQL and REST serve it after the frozen
 	// fields; the Python response model does not carry it.
 	FilterEmptyReason *string `json:"-"`
+	// OmittedSignals (CHAOS-13086) names the signal panels a caller held to a repository ceiling is not served, and
+	// why. Empty for a caller with no ceiling: its answer is today's, byte for byte.
+	OmittedSignals []OmittedSignal `json:"-"`
+}
+
+// OmittedSignal says one signal panel was left out of an answer, and the reason.
+type OmittedSignal struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
+// ReasonNotScopedToRepositories is the reason of a signal panel whose rows carry no repository.
+const ReasonNotScopedToRepositories = "not scoped to repositories"
+
+// omittedSignals are the panels a caller held to a repository ceiling is not served: recommendations (keyed by team)
+// and the team rows of the compounding risk panel (its repository rows are served inside the ceiling).
+func omittedSignals(f Filters) []OmittedSignal {
+	if !f.Ceiling.Restricted() {
+		return nil
+	}
+	return []OmittedSignal{
+		{Kind: "recommendations", Reason: ReasonNotScopedToRepositories},
+		{Kind: "compounding_risk_team", Reason: ReasonNotScopedToRepositories},
+	}
 }
 
 // Tile is one entry of HomeResponse.tiles (services/home.py:1187-1208) --

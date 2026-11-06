@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	testProfile = "GET /api/v1/home"
+	testProfile = "GET /api/v1/sankey"
 	testAction  = "analytics.read"
 	testOrg     = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
 	// testBearer stands for a user access token: the PDP resolves it, the gate never reads it.

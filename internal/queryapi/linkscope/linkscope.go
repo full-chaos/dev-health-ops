@@ -18,12 +18,17 @@ const BindingLinkRepoIDs = "link_repo_ids"
 // linked to the ceiling's repositories. An unrestricted ceiling returns ("", nil): the statement stays today's. A
 // restricted ceiling with no repository returns " AND 1 = 0". The statement that embeds it must bind org_id.
 func ItemCondition(ceiling teamscope.Ceiling, column string) (string, []dhclickhouse.Binding) {
-	switch ids := ceiling.IDs(); {
-	case !ceiling.Restricted():
+	if !ceiling.Restricted() {
 		return "", nil
-	case len(ids) == 0:
-		return " AND 1 = 0", nil
-	default:
-		return " AND " + column + " IN " + linkeditems.Subquery, []dhclickhouse.Binding{{Name: BindingLinkRepoIDs, Value: ids}}
 	}
+	return ItemConditionIDs(ceiling.IDs(), column)
+}
+
+// ItemConditionIDs is the condition of an explicit repository id list, already held to a ceiling by the caller: no id
+// returns " AND 1 = 0".
+func ItemConditionIDs(ids []string, column string) (string, []dhclickhouse.Binding) {
+	if len(ids) == 0 {
+		return " AND 1 = 0", nil
+	}
+	return " AND " + column + " IN " + linkeditems.Subquery, []dhclickhouse.Binding{{Name: BindingLinkRepoIDs, Value: ids}}
 }

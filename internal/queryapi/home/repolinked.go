@@ -152,10 +152,15 @@ func (loader *repoLinkedLoader) load(ctx context.Context) (*repoLinkedView, erro
 
 func (loader *repoLinkedLoader) read(ctx context.Context) (*repoLinkedView, error) {
 	view := &repoLinkedView{state: repoLinkLinked}
-	ids, err := resolveRepoIDs(ctx, loader.client, repoLinkedRepoRefs(loader.f), loader.orgID)
+	// With a team scope the filters AND (D5844, decided with CHAOS-9098): only the named
+	// repositories the team HOLDS (team_repo_ownership, the rule the repository-keyed
+	// metrics use) are in the view; a repository the team does not hold has no data,
+	// whatever item is linked to it and attributed to the team (CHAOS-9191). A ceiling
+	// (CHAOS-13086) ANDs with both: a repository outside it is never in the view.
+	ids, err := linkedRepoIDs(ctx, loader.client, loader.f, loader.orgID, loader.asOf)
 	if err != nil {
-		// A bound hit while resolving the named repositories degrades the four
-		// metrics only, as a bound hit in the linked read does (D5863).
+		// A bound hit while resolving the repositories degrades the four metrics only, as a
+		// bound hit in the linked read does (D5863).
 		if reason := repoLinkBoundHit(err); reason != "" {
 			slog.Warn("home: repository resolution for the repo-linked read hit a bound",
 				"operation", "home.repo_linked_resolve", "org_id", loader.orgID, "state", reason,
@@ -163,20 +168,6 @@ func (loader *repoLinkedLoader) read(ctx context.Context) (*repoLinkedView, erro
 			return &repoLinkedView{state: reason}, nil
 		}
 		return nil, err
-	}
-	// With a team scope the filters AND (D5844, decided with CHAOS-9098): only the named
-	// repositories the team HOLDS (team_repo_ownership, the rule the repository-keyed
-	// metrics use) are in the view; a repository the team does not hold has no data,
-	// whatever item is linked to it and attributed to the team (CHAOS-9191).
-	if loader.f.Scope.Level == "team" {
-		held, err := teamscope.HeldRepoIDs(ctx, loader.client, loader.orgID, ids, loader.f.Scope.IDs, loader.asOf)
-		if err != nil {
-			if reason := repoLinkBoundHit(err); reason != "" {
-				return &repoLinkedView{state: reason}, nil
-			}
-			return nil, err
-		}
-		ids = held
 	}
 	loader.repoIDs = ids
 	if len(ids) == 0 {
@@ -280,7 +271,13 @@ GROUP BY work_item_id`,
 // them there, and the items that are in more than one repository's view (linked
 // to pull requests of more than one repository, whichever repositories).
 func (loader *repoLinkedLoader) readBasis(ctx context.Context, budget string, view *repoLinkedView) error {
-	rows, err := loader.client.Query(ctx, basisQuery()+budget, loader.bindings())
+	basis := basisQuery()
+	if loader.f.Ceiling.Restricted() {
+		// An item linked to a repository outside the ceiling is not "in more than one repository's view" of this
+		// caller: only the repositories of the view count (CHAOS-13086).
+		basis = strings.Replace(basis, "uniqExact(repo_id) > 1", "uniqExactIf(repo_id, repo_id IN {link_repo_ids:Array(UUID)}) > 1", 1)
+	}
+	rows, err := loader.client.Query(ctx, basis+budget, loader.bindings())
 	if err != nil {
 		return fmt.Errorf("home: repo-linked basis: %w", err)
 	}
@@ -316,6 +313,12 @@ func (loader *repoLinkedLoader) readBasis(ctx context.Context, budget string, vi
 // readCoverage is the organization's items in the window and how many of them
 // have a link to any repository: an item with no link is in no repository's view.
 func (loader *repoLinkedLoader) readCoverage(ctx context.Context, budget string, view *repoLinkedView) error {
+	// A ceiling holds the count to the items linked to the repositories of the view: the organization's whole
+	// count would tell a caller how many items live in repositories it may not read (CHAOS-13086).
+	itemScope := ""
+	if loader.f.Ceiling.Restricted() {
+		itemScope = "\n    AND work_item_id IN " + linkeditems.Subquery
+	}
 	rows, err := loader.client.Query(ctx, `
 SELECT toInt64(count()), toInt64(countIf(work_item_id IN (
     SELECT work_item_id FROM work_graph_issue_pr FINAL WHERE org_id = {org_id:String})))
@@ -324,7 +327,7 @@ FROM (
   FROM work_items FINAL
   WHERE org_id = {org_id:String}
     AND created_at < toDateTime64({win_end:Date}, 3, 'UTC')
-    AND (status != 'done' OR completed_at >= toDateTime64({win_start:Date}, 3, 'UTC'))
+    AND (status != 'done' OR completed_at >= toDateTime64({win_start:Date}, 3, 'UTC'))`+itemScope+`
   GROUP BY provider, work_item_id
 )`+budget, loader.bindings())
 	if err != nil {

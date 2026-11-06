@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
@@ -67,6 +68,9 @@ type homeRESTResponse struct {
 	// request names matched nothing (repository_not_in_team, repository_not_found);
 	// null when it names none and whenever something matched.
 	FilterEmptyReason *string `json:"filter_empty_reason"`
+	// OmittedSignals (CHAOS-13086, Go-only, last, absent when empty): the signal panels a caller held to a repository
+	// ceiling is not served, with the reason. A caller with no ceiling gets no such key.
+	OmittedSignals []home.OmittedSignal `json:"omitted_signals,omitempty"`
 }
 
 // homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
@@ -127,6 +131,7 @@ func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 		LimitingFactor:        resp.LimitingFactor,
 		DataConfidence:        resp.DataConfidence,
 		FilterEmptyReason:     resp.FilterEmptyReason,
+		OmittedSignals:        resp.OmittedSignals,
 	}
 }
 
@@ -294,6 +299,13 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 			f.Time.EndDate = &endDate
 		}
 
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "home", org, err)
+			return
+		}
+		f.Ceiling = ceiling
+
 		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, org, f, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
@@ -371,6 +383,13 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 
 		filtersMap, _ := legacyJSON(filtersValue).(map[string]any)
 		f := homeFiltersFromMap(filtersMap)
+
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "home", org, err)
+			return
+		}
+		f.Ceiling = ceiling
 
 		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, org, f, time.Now().UTC())
 		if err != nil {

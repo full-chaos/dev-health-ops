@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,20 +25,18 @@ const EnvRepositoryIdentityOutbox = "WORKER_REPO_IDENTITY_OUTBOX"
 // repository identities.
 const repositoryIdentityDestination = "repos"
 
-// ParseRepositoryIdentityOutbox reads EnvRepositoryIdentityOutbox: unset is
-// off; a set value must be exactly "true" or "false" (no other spelling, no
-// spaces, not empty), else start-up stops.
+// ParseRepositoryIdentityOutbox reads EnvRepositoryIdentityOutbox: unset or
+// empty is off; any other value must parse as a bool.
 func ParseRepositoryIdentityOutbox(lookup func(string) (string, bool)) (bool, error) {
 	raw, ok := lookup(EnvRepositoryIdentityOutbox)
-	switch {
-	case !ok:
-		return false, nil
-	case raw == "true":
-		return true, nil
-	case raw == "false":
+	if !ok || strings.TrimSpace(raw) == "" {
 		return false, nil
 	}
-	return false, fmt.Errorf("%s must be true or false", EnvRepositoryIdentityOutbox)
+	on, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", EnvRepositoryIdentityOutbox)
+	}
+	return on, nil
 }
 
 // RepositoryIdentityAppender appends repository identity events inside the

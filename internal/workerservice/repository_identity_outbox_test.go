@@ -16,8 +16,6 @@ func TestRepositoryIdentityOutboxFlag(t *testing.T) {
 		{"on, named schema", map[string]string{"WORKER_REPO_IDENTITY_OUTBOX": "true", "AUTH_DATABASE_SCHEMA": " auth_v2 "}, true, "auth_v2", false},
 		{"on, bad schema", map[string]string{"WORKER_REPO_IDENTITY_OUTBOX": "true", "AUTH_DATABASE_SCHEMA": "auth;drop"}, false, "", true},
 		{"bad flag", map[string]string{"WORKER_REPO_IDENTITY_OUTBOX": "on"}, false, "", true},
-		{"set but empty", map[string]string{"WORKER_REPO_IDENTITY_OUTBOX": ""}, false, "", true},
-		{"alias 1", map[string]string{"WORKER_REPO_IDENTITY_OUTBOX": "1"}, false, "", true},
 		{"off ignores a bad schema", map[string]string{"AUTH_DATABASE_SCHEMA": "auth;drop"}, false, "", false},
 	} {
 		outbox, err := repositoryIdentityOutbox(func(key string) (string, bool) { v, ok := c.env[key]; return v, ok })

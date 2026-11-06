@@ -11,9 +11,9 @@
 //     be frozen as the other venue goldens are, and the replay below compares
 //     the same answers and rows. python_golden.json keeps the answers that last live
 //     run recorded;
-//   - the golden replay (internal/api/session TestSessionRoutesMatchGolden),
-//     where only the Go route set runs, against Postgres/ClickHouse/Valkey
-//     containers, and every answer and row is compared with that golden.
+//   - the corpus against an external target (internal/api/session
+//     TestSessionCorpusExternalTarget), through its URL and stores only:
+//     the former in-process golden replay went with go-api's local token mint.
 //
 // Both runners go through RunTarget (target.go): the corpus reaches the server by base URL and its
 // stores by URI, so go-api in process and an external go-api or auth-service run the same steps. Quirks

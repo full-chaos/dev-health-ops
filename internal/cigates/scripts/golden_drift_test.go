@@ -102,7 +102,6 @@ func TestGoldenDriftRegistryMatchesRealTests(t *testing.T) {
 		"TestFinalizeSyntheticWritesTheFrozenPythonRows":          false,
 		"TestOrgsBackfillInsertsThenRerunChangesNothing":          false,
 		"TestReconcileAfterBackfillIsZeroDiffAndSeesPlantedDrift": false,
-		"TestSessionRoutesMatchGolden":                            false,
 	}
 	funcRe := regexp.MustCompile(`(?m)^func (Test\w+)\(t \*testing\.T\)`)
 	rows := 0

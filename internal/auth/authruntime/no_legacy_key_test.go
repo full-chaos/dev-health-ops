@@ -78,7 +78,14 @@ func TestEdDSASessionRoutesBuildAndServeWithoutTheLegacyKey(t *testing.T) {
 		}
 	}
 	grant := authapi.Grant{PrincipalID: uuid.New(), SessionID: uuid.New()}
-	eddsa, err := issuer.Access(grant)
+	if _, err := issuer.Access(grant); err != nil {
+		t.Fatalf("the production issuer mints no access token without the legacy key: %v", err)
+	}
+	minter, err := authapi.NewEdDSAIssuer("", cfg.Session.AccessIssuer, authapi.AccessTokenAudience, signer, accessCheckIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eddsa, err := minter.Access(grant)
 	if err != nil {
 		t.Fatal(err)
 	}

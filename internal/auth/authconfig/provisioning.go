@@ -49,7 +49,7 @@ func (c Config) InviteAcceptSecrets() []string {
 // provisioning reads the routes switch and, when it is on, both invite keys.
 // A missing key is named by its variable only, never by a value. The routes
 // mount with the session routes, so they need the session secrets.
-func provisioning(lookup secrets.LookupEnv, sessionEnabled bool) (Provisioning, error) {
+func provisioning(lookup secrets.LookupEnv, session SessionTokens) (Provisioning, error) {
 	routes, err := strictBool(lookup, EnvMembershipRoutes)
 	if err != nil {
 		return Provisioning{}, err
@@ -65,9 +65,8 @@ func provisioning(lookup secrets.LookupEnv, sessionEnabled bool) (Provisioning, 
 	if !routes {
 		return Provisioning{}, nil
 	}
-	if !sessionEnabled {
-		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s and %s)",
-			EnvMembershipRoutes, EnvAccessTokenSecret, EnvSessionSuccessorKey)
+	if !session.Enabled {
+		return Provisioning{}, fmt.Errorf("%s needs the session secrets (%s)", EnvMembershipRoutes, sessionSecretNames(session.AccessClass))
 	}
 	for _, need := range []struct {
 		name string

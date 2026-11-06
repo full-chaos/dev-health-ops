@@ -78,14 +78,18 @@ WHERE day >= {start_day:Date} AND day < {end_day:Date}
 // true when the window holds at least one stored (non-NULL) value for the
 // column; value is then a measurement (a stored 0 included). When false the
 // value is a 0 placeholder, not a measured zero (CHAOS-9044).
-func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) (value float64, hasData bool, err error) {
-	query := fmt.Sprintf(personMetricValueQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table), settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string, scope readScope) (value float64, hasData bool, err error) {
+	if scope.recomputed(table) {
+		return scope.recomputedValue(ctx, column, aggregator, identities, startDay, endDay)
+	}
+	term, termBindings := scope.termFor(table)
+	query := fmt.Sprintf(personMetricValueQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table)+term, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	}
+	}, termBindings...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return 0, false, fmt.Errorf("people: fetch_person_metric_value query: %w", err)
@@ -142,14 +146,18 @@ ORDER BY day
 // fetchPersonMetricSeries ports fetch_person_metric_series (queries/
 // people.py:115-142): one (day, value) row per day with any data in
 // range.
-func fetchPersonMetricSeries(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) ([]personMetricTimeseriesRow, error) {
-	query := fmt.Sprintf(personMetricSeriesQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table), settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+func fetchPersonMetricSeries(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string, scope readScope) ([]personMetricTimeseriesRow, error) {
+	if scope.recomputed(table) {
+		return scope.recomputedSeries(ctx, column, aggregator, identities, startDay, endDay)
+	}
+	term, termBindings := scope.termFor(table)
+	query := fmt.Sprintf(personMetricSeriesQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table)+term, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	}
+	}, termBindings...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_metric_series query: %w", err)
@@ -202,21 +210,22 @@ LIMIT {limit_n:UInt64}
 // build_person_metric_response call site overrides it.
 const breakdownLimit = 12
 
-func fetchPersonBreakdown(ctx context.Context, client QueryClient, cfg personBreakdownConfig, identities []string, startDay, endDay time.Time, orgID string) ([]personBreakdownRow, error) {
+func fetchPersonBreakdown(ctx context.Context, client QueryClient, cfg personBreakdownConfig, identities []string, startDay, endDay time.Time, orgID string, scope readScope) ([]personBreakdownRow, error) {
 	joinClause := cfg.JoinClause
 	if joinClause != "" {
 		joinClause = strings.TrimSpace(joinClause)
 	}
+	term, termBindings := scope.termFor(cfg.Table)
 	query := fmt.Sprintf(personBreakdownQuery,
 		cfg.GroupExpr, cfg.Aggregator, cfg.Column, dedupTable(cfg.Table), joinClause,
-		cfg.IdentityColumn, cfg.ExtraWhere+liveWhere(cfg.Table), cfg.GroupExpr, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+		cfg.IdentityColumn, cfg.ExtraWhere+liveWhere(cfg.Table)+term, cfg.GroupExpr, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "limit_n", Value: breakdownLimit},
 		{Name: "org_id", Value: orgID},
-	}
+	}, termBindings...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_breakdown query: %w", err)

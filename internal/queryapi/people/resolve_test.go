@@ -42,7 +42,7 @@ func TestResolveIdentityContextFoundNoAliasEntry(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		return &scalarStringScanner{values: []string{"alice@example.com"}}, nil
 	}}
-	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "person-1", "org-1")
+	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "person-1", "org-1", readScope{})
 	if err != nil {
 		t.Fatalf("resolveIdentityContext: %v", err)
 	}
@@ -72,7 +72,7 @@ identities:
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		return &scalarStringScanner{values: []string{"github:bjones"}}, nil
 	}}
-	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "person-1", "org-1")
+	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "person-1", "org-1", readScope{})
 	if err != nil {
 		t.Fatalf("resolveIdentityContext: %v", err)
 	}
@@ -104,7 +104,7 @@ identities:
 		return &scalarStringScanner{}, nil
 	}}
 	personID := quadrant.PersonIDForIdentity("carol@example.com")
-	canonical, aliases, err := resolveIdentityContext(context.Background(), client, personID, "org-1")
+	canonical, aliases, err := resolveIdentityContext(context.Background(), client, personID, "org-1", readScope{})
 	if err != nil {
 		t.Fatalf("resolveIdentityContext: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestResolveIdentityContextNotFoundAtAll(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		return &scalarStringScanner{}, nil
 	}}
-	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "no-such-person", "org-1")
+	canonical, aliases, err := resolveIdentityContext(context.Background(), client, "no-such-person", "org-1", readScope{})
 	if err != nil {
 		t.Fatalf("resolveIdentityContext: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestResolvePersonIdentityReadsBothTablesFinalWithOrgIDInsideEachBranch(t *t
 		captured = query
 		return &scalarStringScanner{}, nil
 	}}
-	if _, err := resolvePersonIdentity(context.Background(), client, "person-1", "org-1"); err != nil {
+	if _, err := resolvePersonIdentity(context.Background(), client, "person-1", "org-1", readScope{}); err != nil {
 		t.Fatalf("resolvePersonIdentity: %v", err)
 	}
 	if strings.Contains(captured, "LIMIT 1 BY") {

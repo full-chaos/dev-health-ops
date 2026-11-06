@@ -9,11 +9,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"log/slog"
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkeditems"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
 // Axis is the wire shape of QuadrantAxis (schemas.py:508-511).
@@ -85,6 +89,9 @@ type Response struct {
 	// teamscope.ClassifyEmptyFilter.
 	RepoFilterApplied *bool   `json:"repo_filter_applied" pyjson:"nullable"`
 	FilterEmptyReason *string `json:"filter_empty_reason" pyjson:"nullable"`
+	// OmittedSignals (CHAOS-13087, Go-only, last, absent when empty) names what a caller held to a repository ceiling is
+	// not served, and why. A caller with no ceiling gets no such key.
+	OmittedSignals []linkscope.OmittedSignal `json:"omitted_signals,omitempty"`
 }
 
 // RequestError carries an HTTP status the way Python's HTTPException does,
@@ -117,6 +124,9 @@ type Params struct {
 	// id or a name. Neither applies to the person grain.
 	TeamIDs  []string
 	RepoRefs []string
+	// Ceiling is the repositories the caller may read (CHAOS-13087), set by the route from the decision scope and never
+	// by the request. The zero value reads every repository: today's answer, byte for byte.
+	Ceiling teamscope.Ceiling
 }
 
 // normalizeScope ports _normalize_scope (quadrant.py:306-309).
@@ -288,7 +298,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	// table's own identity column. No team lookup, no membership cohort.
 	var personIdentities []string
 	if scope == "person" {
-		personIdentities, err = resolveIdentityVariants(ctx, client, params.ScopeID, orgID)
+		personIdentities, err = resolveIdentityVariants(ctx, client, params.ScopeID, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
 		}
@@ -302,8 +312,21 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		return nil, err
 	}
 
+	// Under a ceiling the per-person work-item metrics are recomputed from the items linked to its repositories: the
+	// daily table that holds them has no item and no repository.
+	var userDaily *linkeditems.UserDaily
+	if scope == "person" && params.Ceiling.Restricted() {
+		userDaily = linkeditems.NewUserDaily(linkeditems.Loader{
+			Client: client, OrgID: orgID, RepoIDs: params.Ceiling.IDs(),
+			WindowStart: startDay, WindowEnd: endDay, Budget: linkeditems.UserBudget,
+		})
+	}
 	fetch := func(spec MetricSpec, bucket string) ([]metricRow, error) {
 		if scope == "team" && selected.linked != nil && len(selected.linked.repoIDs) == 0 {
+			return nil, nil
+		}
+		// The wip of a repository reads the work scope that carries the repository's name, not the items linked to it.
+		if scope == "repo" && params.Ceiling.Restricted() && spec.Metric == "wip" {
 			return nil, nil
 		}
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
@@ -320,7 +343,15 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			return fetchLinkedTeamMetric(ctx, client, selected.linked, spec.Metric, startDay, endDay, bucket, orgID, selected.teams)
 		}
 		if scope == "person" {
-			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", personIdentityScope(spec, personIdentities))
+			if userDaily != nil && isWorkItemUserSpec(spec) {
+				return fetchLinkedUserMetric(ctx, userDaily, spec, startDay, endDay, bucket, personIdentities)
+			}
+			identityScope := personIdentityScope(spec, personIdentities)
+			if params.Ceiling.Restricted() {
+				term, bindings := params.Ceiling.RepoTerm("toString(m.repo_id)")
+				identityScope = joinScopes(identityScope, extraScope{SQL: term, Bindings: bindings})
+			}
+			return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", identityScope)
 		}
 		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, "", selected.scope)
 	}
@@ -482,7 +513,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	}
 	if scope == "team" {
 		var err error
-		if points, err = withCatalogTeams(ctx, client, orgID, selected.teams, points, startDay, endDay, evidenceLink(definition.EvidenceMetric)); err != nil {
+		if points, err = withCatalogTeams(ctx, client, orgID, selected.teams, points, startDay, endDay, evidenceLink(definition.EvidenceMetric), !params.Ceiling.Restricted()); err != nil {
 			return nil, err
 		}
 	}
@@ -499,6 +530,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		Annotations:       []Annotation{},
 		RepoFilterApplied: selected.repoFilterApplied,
 		FilterEmptyReason: selected.emptyReason,
+		OmittedSignals:    omittedSignals(params.Ceiling, scope, xSpec, ySpec),
 	}, nil
 }
 
@@ -511,4 +543,21 @@ func AsRequestError(err error) (*RequestError, bool) {
 		return reqErr, true
 	}
 	return nil, false
+}
+
+// omittedSignals are the parts of an answer a caller held to a repository ceiling is not served (CHAOS-13087): the wip
+// of a repository, which reads a work scope and no link, and the points of teams with no work in the window, which
+// would list every team of the organization.
+func omittedSignals(ceiling teamscope.Ceiling, scope string, x, y MetricSpec) []linkscope.OmittedSignal {
+	if !ceiling.Restricted() {
+		return nil
+	}
+	var out []linkscope.OmittedSignal
+	if scope == "repo" && (x.Metric == "wip" || y.Metric == "wip") {
+		out = append(out, linkscope.OmittedSignal{Kind: "wip", Reason: linkscope.ReasonNotScopedToRepositories})
+	}
+	if scope == "team" {
+		out = append(out, linkscope.OmittedSignal{Kind: "idle_teams", Reason: linkscope.ReasonNotScopedToRepositories})
+	}
+	return out
 }

@@ -30,6 +30,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -214,11 +217,11 @@ func identityVariants(identity string, aliases []string) []string {
 // raw identity strings that refer to the same person, via a ClickHouse
 // lookup plus the (in-practice-empty, see package doc comment) alias
 // config.
-func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, orgID string) ([]string, error) {
+func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, orgID string, ceiling teamscope.Ceiling) ([]string, error) {
 	aliases := loadIdentityAliases()
 	reverse := buildReverseAliasMap(aliases)
 
-	identity, err := resolvePersonIdentity(ctx, client, personID, orgID)
+	identity, err := resolvePersonIdentity(ctx, client, personID, orgID, ceiling)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +244,10 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 		return identityVariants(canonical, aliasList), nil
 	}
 
+	if ceiling.Restricted() {
+		// A person who no allowed repository names is unknown: the alias file is not evidence of one.
+		return []string{}, nil
+	}
 	for canonical, aliasList := range aliases {
 		if PersonIDForIdentity(canonical) == personID {
 			return identityVariants(canonical, aliasList), nil
@@ -278,7 +285,24 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 // "identities" CTE is referenced exactly once (in the outer FROM), so
 // inlining it as an ordinary derived-table subquery is a purely
 // mechanical, semantically identical rewrite.
-func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
+func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string, ceiling teamscope.Ceiling) (string, error) {
+	codeTerm, codeBindings := ceiling.RepoTerm("toString(user_metrics_daily.repo_id)")
+	workArm := fmt.Sprintf(`SELECT user_identity AS identity
+            FROM work_item_user_metrics_daily FINAL
+            WHERE user_identity != ''
+              AND org_id = {org_id:String}
+              AND %s`, liverow.Predicate("work_item_user_metrics_daily", ""))
+	var workBindings []dhclickhouse.Binding
+	if ceiling.Restricted() {
+		// The person is known by the assignee of an item linked to an allowed repository, never by the user daily
+		// table, which holds no item and no repository.
+		var workTerm string
+		workTerm, workBindings = linkscope.ItemCondition(ceiling, "work_item_id")
+		workArm = `SELECT assignee AS identity
+            FROM work_item_cycle_times FINAL
+            WHERE assignee != ''
+              AND org_id = {org_id:String}` + workTerm
+	}
 	query := fmt.Sprintf(`
         SELECT
             identity AS identity_id
@@ -287,23 +311,19 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
               AND org_id = {org_id:String}
-              AND %[1]s
+              AND %[1]s%[3]s
 
             UNION DISTINCT
 
-            SELECT user_identity AS identity
-            FROM work_item_user_metrics_daily FINAL
-            WHERE user_identity != ''
-              AND org_id = {org_id:String}
-              AND %[2]s
+            %[2]s
         ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
-    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""))
-	bindings := []dhclickhouse.Binding{
+    `, liverow.Predicate("user_metrics_daily", ""), workArm, codeTerm)
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "person_id", Value: personID},
-	}
+	}, append(codeBindings, workBindings...)...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return "", fmt.Errorf("quadrant: resolve_person_identity query: %w", err)

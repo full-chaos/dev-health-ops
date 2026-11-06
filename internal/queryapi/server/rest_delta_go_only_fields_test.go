@@ -120,7 +120,7 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 	})
 
 	// The rest of each response is the frozen shape, field for field, followed by
-	// the declared Go-only tail (none for people): only the element type of Deltas differs.
+	// the declared Go-only tail: only the element type of Deltas differs.
 	sameButDeltas := func(production, legacy reflect.Type, tail []fieldShape) {
 		t.Helper()
 		prod, leg := fieldShapes(production), fieldShapes(legacy)
@@ -150,7 +150,9 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 		{"OmittedSignals", "[]home.OmittedSignal", `json:"omitted_signals,omitempty"`},
 		{"NarrowedCounts", "[]home.NarrowedCount", `json:"narrowed_counts,omitempty"`},
 	})
-	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}), nil)
+	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}), []fieldShape{
+		{"NarrowedCounts", "[]linkscope.NarrowedCount", `json:"narrowed_counts,omitempty"`},
+	})
 }
 
 // homeDeltaGoOnlyKeys are the keys of a REST Home delta that the frozen Python

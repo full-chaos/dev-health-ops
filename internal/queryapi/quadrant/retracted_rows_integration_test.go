@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
 )
 
@@ -20,7 +21,7 @@ func TestAPersonWhoseNewestRowsAreRetractionsDoesNotResolve(t *testing.T) {
 	crossorg.SeedRetractedPeople(ctx, t, admin, f, time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC))
 	for name, want := range map[string]bool{"alice": true, "bob": false, "carol": true} {
 		sum := md5.Sum([]byte(name + "@example.com"))
-		identity, err := resolvePersonIdentity(ctx, client, hex.EncodeToString(sum[:]), f.OrgA)
+		identity, err := resolvePersonIdentity(ctx, client, hex.EncodeToString(sum[:]), f.OrgA, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatal(err)
 		}

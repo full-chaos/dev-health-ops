@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -153,4 +154,81 @@ func bucketStart(bucket string, day, startDay time.Time) time.Time {
 		return time.Date(day.Year(), day.Month(), 1, 0, 0, 0, 0, time.UTC)
 	}
 	return day.AddDate(0, 0, -int(day.Weekday()))
+}
+
+// isWorkItemUserSpec says the spec reads work_item_user_metrics_daily, the per-person aggregate that holds no item and
+// no repository.
+func isWorkItemUserSpec(spec MetricSpec) bool {
+	return strings.HasPrefix(spec.Table, "work_item_user_metrics_daily")
+}
+
+// fetchLinkedUserMetric reads one per-person work-item metric (throughput, cycle_time, wip) of the items linked to the
+// ceiling's repositories, aggregated as fetchQuadrantMetricIn aggregates work_item_user_metrics_daily: throughput the
+// sum of items_completed, cycle_time the mean of the rows that hold a p50, wip the mean of wip_count_end_of_day, of
+// the rows of the person's identities in a bucket (CHAOS-13087).
+func fetchLinkedUserMetric(ctx context.Context, rows *linkeditems.UserDaily, spec MetricSpec, startDay, endDay time.Time, bucket string, identities []string) ([]metricRow, error) {
+	byDay, err := rows.Rows(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("quadrant: linked work items: %w", err)
+	}
+	wanted := map[string]bool{}
+	for _, identity := range identities {
+		wanted[identity] = true
+	}
+	type key struct {
+		bucket   time.Time
+		identity string
+	}
+	type sum struct {
+		total float64
+		count int
+	}
+	sums := map[key]*sum{}
+	for day, dayRows := range byDay {
+		if day.Before(startDay) || !day.Before(endDay) {
+			continue
+		}
+		for _, row := range dayRows {
+			if !wanted[row.UserIdentity] {
+				continue
+			}
+			var value float64
+			switch spec.Metric {
+			case "throughput":
+				value = float64(row.ItemsCompleted)
+			case "cycle_time":
+				if row.CycleTimeP50Hours == nil {
+					continue
+				}
+				value = *row.CycleTimeP50Hours
+			case "wip":
+				value = float64(row.WIPCountEndOfDay)
+			default:
+				return nil, fmt.Errorf("quadrant: unsupported linked user metric: %s", spec.Metric)
+			}
+			k := key{bucketStart(bucket, day, startDay), row.UserIdentity}
+			entry := sums[k]
+			if entry == nil {
+				entry = &sum{}
+				sums[k] = entry
+			}
+			entry.total += value
+			entry.count++
+		}
+	}
+	out := make([]metricRow, 0, len(sums))
+	for k, entry := range sums {
+		value := entry.total
+		if spec.Metric != "throughput" {
+			value = entry.total / float64(entry.count)
+		}
+		out = append(out, metricRow{Bucket: k.bucket, EntityID: k.identity, EntityLabel: k.identity, Value: value})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Bucket.Equal(out[j].Bucket) {
+			return out[i].Bucket.Before(out[j].Bucket)
+		}
+		return out[i].EntityID < out[j].EntityID
+	})
+	return out, nil
 }

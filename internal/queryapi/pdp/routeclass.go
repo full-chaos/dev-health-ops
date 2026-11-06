@@ -24,10 +24,10 @@ var routeClassKind = map[string]string{
 	"work_unit_explain": KindNarrowable, "people_drilldown_prs": KindNarrowable,
 	"drilldown_issues": KindNarrowable, "people_drilldown_issues": KindNarrowable, "flame": KindNarrowable,
 	"home": KindNarrowable, "opportunities": KindNarrowable,
+	"quadrant": KindNarrowable, "people": KindNarrowable, "people_summary": KindNarrowable, "people_metric": KindNarrowable,
 
-	"quadrant": KindMixed, "sankey": KindMixed,
-	"filteroptions": KindMixed, "people": KindMixed, "people_summary": KindMixed,
-	"people_metric": KindMixed, "explain": KindMixed,
+	"sankey":        KindMixed,
+	"filteroptions": KindMixed, "explain": KindMixed,
 	"flame_aggregated": KindMixed,
 }
 
@@ -73,6 +73,7 @@ var allowlistNarrowed = map[string]bool{
 	"drilldown_prs": true, "work_units": true, "work_unit_explain": true, "people_drilldown_prs": true,
 	"drilldown_issues": true, "people_drilldown_issues": true, "flame": true,
 	"home": true, "opportunities": true,
+	"quadrant": true, "people": true, "people_summary": true, "people_metric": true,
 }
 
 // allowlistCutOver is the cut-over registry: the row profiles ("METHOD /route") whose class is narrowed. An

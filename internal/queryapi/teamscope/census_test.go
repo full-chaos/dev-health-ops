@@ -20,7 +20,6 @@ import (
 var noCeilingSites = []string{
 	"internal/queryapi/explain/response.go",
 	"internal/queryapi/heatmap/scopefilter.go",
-	"internal/queryapi/quadrant/selection.go",
 	"internal/queryapi/sankey/scopefilter.go",
 }
 

@@ -44,7 +44,24 @@ import (
 // CTE is referenced exactly once (in the outer FROM), so inlining it as
 // an ordinary derived-table subquery is a purely mechanical, semantically
 // identical rewrite.
-func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
+func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string, scope readScope) (string, error) {
+	codeTerm, codeBindings := scope.termFor("user_metrics_daily")
+	workArm := fmt.Sprintf(`SELECT user_identity AS identity
+            FROM work_item_user_metrics_daily FINAL
+            WHERE user_identity != ''
+              AND org_id = {org_id:String}
+              AND %s`, liverow.Predicate("work_item_user_metrics_daily", ""))
+	var workBindings []dhclickhouse.Binding
+	if scope.restricted() {
+		// The person is known by the assignee of an item linked to an allowed repository, never by the user daily
+		// table, which holds no item and no repository.
+		var workTerm string
+		workTerm, workBindings = scope.itemTerm()
+		workArm = `SELECT assignee AS identity
+            FROM work_item_cycle_times FINAL
+            WHERE assignee != ''
+              AND org_id = {org_id:String}` + workTerm
+	}
 	query := fmt.Sprintf(`
         SELECT
             identity AS identity_id
@@ -53,24 +70,20 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
               AND org_id = {org_id:String}
-              AND %[1]s
+              AND %[1]s%[4]s
 
             UNION DISTINCT
 
-            SELECT user_identity AS identity
-            FROM work_item_user_metrics_daily FINAL
-            WHERE user_identity != ''
-              AND org_id = {org_id:String}
-              AND %[2]s
+            %[2]s
         ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
         %[3]s
-    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""), settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+    `, liverow.Predicate("user_metrics_daily", ""), workArm, settingsMaxExecutionTime(), codeTerm)
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "person_id", Value: personID},
-	}
+	}, append(codeBindings, workBindings...)...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return "", fmt.Errorf("people: resolve_person_identity query: %w", err)
@@ -96,11 +109,11 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
 // with a nil alias list means no identity was found for person_id --
 // callers translate that into the 404 "Person not found" build_person_
 // summary_response/build_person_metric_response raise.
-func resolveIdentityContext(ctx context.Context, client QueryClient, personID, orgID string) (canonical string, aliasList []string, err error) {
+func resolveIdentityContext(ctx context.Context, client QueryClient, personID, orgID string, scope readScope) (canonical string, aliasList []string, err error) {
 	aliases := loadIdentityAliases()
 	reverse := buildReverseAliasMap(aliases)
 
-	identity, err := resolvePersonIdentity(ctx, client, personID, orgID)
+	identity, err := resolvePersonIdentity(ctx, client, personID, orgID, scope)
 	if err != nil {
 		return "", nil, err
 	}
@@ -123,6 +136,10 @@ func resolveIdentityContext(ctx context.Context, client QueryClient, personID, o
 		return canon, list, nil
 	}
 
+	if scope.restricted() {
+		// A person who no allowed repository names is unknown: the alias file is not evidence of one.
+		return "", nil, nil
+	}
 	for canon, list := range aliases {
 		if quadrant.PersonIDForIdentity(canon) == personID {
 			return canon, append([]string(nil), list...), nil

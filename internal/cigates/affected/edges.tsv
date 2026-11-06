@@ -52,6 +52,7 @@ internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedreject	ci_script_helpers_test.go	unexpressed
+internal/cigates/bigboy	acr_db_init_fetch_test.go	unexpressed
 internal/cigates/bigboy	cigate_build_test.go	unexpressed
 internal/cigates/bigboy	compose_ch_users_test.go	unexpressed
 internal/cigates/bigboy	compose_one_file_test.go	unexpressed
@@ -206,6 +207,7 @@ internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
+internal/queryapi/pepgate	census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed
 internal/queryapi/scancensus	census_test.go	internal/queryapi/...
 internal/queryapi/scancensus	census_test.go	internal/storage/...

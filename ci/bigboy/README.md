@@ -74,6 +74,7 @@ docker compose -p dev-health --project-directory "$BIGBOY_ROOT" --env-file ops/.
   -f ops/ci/bigboy/compose.bigboy.yml --profile acr up -d --no-deps --no-build <service>
 ```
 
+- `acr-db-init` and `acr-db-acl` run `acr-db-init.sh` of the acr commit in `ci/bigboy/acr-db-init.pin` (ops `ci/bigboy/images.env` `BIGBOY_ACR_COMMIT`, the acr of the acr-api pin). Before any compose command that names them, and after every acr repin, run `bash ops/ci/bigboy/acr-db-init-fetch.sh`: it fetches the file at that commit, refuses a sha256 other than the pin's, and writes it to the path `ACR_DB_INIT_SCRIPT` of the pins file (`/var/lib/oci-cache/mcp-venue/acr-db-init/acr-db-init.sh`). A host's `_records/images.env` must hold the `ACR_DB_INIT_SCRIPT` and `BIGBOY_ACR_COMMIT` lines, or compose fails and names the variable. An acr repin updates the pin file (both lines) and `BIGBOY_ACR_COMMIT` together; a gate test compares the two commits.
 - `--profile acr` holds every acr service. `--profile acr-venue` holds only what must exist before acr-api: `acr-postgres`, `acr-db-init`
   (roles), `acr-migrate` and `acr-db-acl` (grants). Pass both when you want to name no service.
   Services do not clash with the dev-health ones: the database and the graph are `acr-postgres` and `acr-falkordb`, answering to the

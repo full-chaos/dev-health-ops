@@ -337,6 +337,8 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	*.go
+internal/llmorgsettings	keyreaders_census_test.go	cmd	tree	*.go
+internal/llmorgsettings	keyreaders_census_test.go	internal	tree	*.go
 internal/loadharness	pdp_profiles_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
@@ -411,6 +413,7 @@ internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/provide
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/scheduler/sync	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncdispatchruntime	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncreconciler	dir	*
+internal/queryapi/graph	field_precheck_parity_test.go	internal/queryapi/graph	dir	*
 internal/queryapi/graph	not_implemented_allowlist_test.go	internal/queryapi/graph/testdata/not_implemented	dir	*
 internal/queryapi/graph	root_class_census_test.go	unexpressed	-	-
 internal/queryapi/graph/model	sdl_nullability_gate_test.go	unexpressed	-	-
@@ -430,6 +433,7 @@ internal/queryapi/server	edge_users_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_action_fields_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_rows_test.go	unexpressed	-	-
 internal/queryapi/server	endpoint_profile_same_line_test.go	unexpressed	-	-
+internal/queryapi/server	graphql_shadow_test.go	unexpressed	-	-
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	*.go
 internal/queryapi/server	internal_auth_test.go	unexpressed	-	-
 internal/queryapi/server	investment_scope_pin_wiring_test.go	unexpressed	-	-

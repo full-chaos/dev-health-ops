@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -85,14 +84,70 @@ func TestALiveRowWithAdminImpersonateStillActsAsTheTarget(t *testing.T) {
 	}
 }
 
-// A failed row read fails closed for a caller without admin.impersonate too, as it does for a holder.
+// A failed row read fails closed for a caller without admin.impersonate too, as it does for a holder: 503, the
+// dependency failure, before the route.
 func TestARowReadFailureWithoutAdminImpersonateFailsClosed(t *testing.T) {
 	store, handler, token := sessionStateRig(t, billingOnly(), true)
 	store.errSession = errors.New("store down")
 	for _, call := range []struct{ method, path string }{{http.MethodGet, "/read"}, {http.MethodPost, "/write"}} {
 		got := serve(handler, call.method, call.path, map[string]string{"Authorization": "Bearer " + token})
-		if got.status != http.StatusInternalServerError || strings.Contains(got.body, "org=") {
-			t.Fatalf("%s %s: %d %q, want the 500 before the route", call.method, call.path, got.status, got.body)
+		if got.status != http.StatusServiceUnavailable || got.body != `{"detail":"Database temporarily unavailable"}` {
+			t.Fatalf("%s %s: %d %q, want the 503 before the route", call.method, call.path, got.status, got.body)
+		}
+	}
+}
+
+// platformRig is the caller behind Principal, OrgScope and Impersonation, with a platform write and a platform read
+// of admin.orgs (not a billing action) behind WrapPlatform; reached counts the handler runs.
+func platformRig(t *testing.T, platform *rule.Platform, live bool) (http.Handler, string, *int) {
+	t.Helper()
+	store := newStore()
+	store.users[userID] = UserState{IsActive: true, IsSuperuser: true, Platform: platform}
+	store.roles[[2]uuid.UUID{userID, uuid.MustParse(ownOrg)}] = "admin"
+	if live {
+		store.sessions[userID] = &Impersonation{ID: uuid.New(), AdminUserID: userID, TargetUserID: targetUserID,
+			TargetOrgID: targetOrgID, TargetRole: "admin", ExpiresAt: time.Now().Add(time.Hour)}
+	}
+	auth := authenticator(t, store)
+	scope := NewScope(auth, quiet())
+	guard := NewGuard(auth, quiet())
+	reached := 0
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { reached++; _, _ = io.WriteString(w, "reached") })
+	mux := http.NewServeMux()
+	mux.Handle("POST /platform/orgs", guard.WrapPlatform(rule.ActionAdminOrgs, handler))
+	mux.Handle("GET /platform/orgs", guard.WrapPlatform(rule.ActionAdminOrgs, handler))
+	token := sign(t, claims(func(c jwt.MapClaims) { c["is_superuser"] = true; c["role"] = "admin" }))
+	return scope.Principal(scope.OrgScope(scope.Impersonation(mux))), token, &reached
+}
+
+// CHAOS-13143 (acp): the platform gate refuses on the live row too. A caller whose admin.impersonate was revoked while
+// the row is live, and who holds the route's action, gets the session 403 on a platform write and a platform read;
+// the handler does not run.
+func TestPlatformRoutesRefuseALiveRowWithoutAdminImpersonate(t *testing.T) {
+	orgsAndBilling := rule.PlatformOf(rule.ActionAdminOrgs, rule.ActionAdminBilling)
+	cases := []struct {
+		name     string
+		platform *rule.Platform
+		live     bool
+		status   int
+		body     string
+	}{
+		{"admin.impersonate revoked, live row", &orgsAndBilling, true, http.StatusForbidden, `{"detail":"Not allowed in an impersonation session"}`},
+		{"admin.impersonate holder, live row (unchanged)", nil, true, http.StatusForbidden, `{"detail":"Not allowed in an impersonation session"}`},
+		{"admin.impersonate revoked, no row (the normal guard)", &orgsAndBilling, false, http.StatusOK, "reached"},
+	}
+	for _, c := range cases {
+		for _, method := range []string{http.MethodPost, http.MethodGet} {
+			t.Run(c.name+"/"+method, func(t *testing.T) {
+				handler, token, reached := platformRig(t, c.platform, c.live)
+				got := serve(handler, method, "/platform/orgs", map[string]string{"Authorization": "Bearer " + token})
+				if got.status != c.status || got.body != c.body {
+					t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+				}
+				if want := c.status == http.StatusOK; (*reached == 1) != want {
+					t.Fatalf("handler runs %d, want reached=%v", *reached, want)
+				}
+			})
 		}
 	}
 }

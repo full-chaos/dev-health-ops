@@ -164,3 +164,36 @@ func TestBillingReadsOfARevokedCallerWithALiveRowKeepTheirAnswer(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-13143 (acp): pull-stripe's platform gate refuses on the live row too, whatever admin.impersonate says; with
+// no row the platform gate answers as today (here the handler runs and the rig's missing pool answers).
+func TestPullStripeRefusesALiveRowAfterAdminImpersonateIsRevoked(t *testing.T) {
+	pull := billingCall{"pull-stripe", http.MethodPost, prefix + "/plans/pull-stripe", ""}
+	for _, c := range []struct {
+		name    string
+		revoked bool
+		live    bool
+		refused bool
+	}{
+		{"admin.impersonate revoked, live row", true, true, true},
+		{"admin.impersonate holder, live row (unchanged)", false, true, true},
+		{"admin.impersonate revoked, no row", true, false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newRouteRig(t)
+			var p impersonator
+			if c.revoked {
+				p = rig.revokedImpersonator(t, c.live)
+			} else {
+				p = rig.impersonator(t, nil, "admin", c.live, false)
+			}
+			status, body, calls := rig.send(t, pull, p.bearer, nil)
+			if refused := status == http.StatusForbidden && body == impersonationRefusalBody; refused != c.refused || len(calls) != 0 {
+				t.Errorf("answer %d %s, %d Stripe call(s); want refused=%v, none", status, body, len(calls), c.refused)
+			}
+			if !c.refused && status != http.StatusInternalServerError {
+				t.Errorf("answer %d %s; want the handler's 500 (no pool)", status, body)
+			}
+		})
+	}
+}

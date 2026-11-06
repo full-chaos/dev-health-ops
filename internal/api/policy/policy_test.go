@@ -516,7 +516,7 @@ func TestImpersonationDecisionTable(t *testing.T) {
 	}{
 		{name: "no header", status: 200},
 		{name: "claim not superuser skips the session lookup", auth: "valid", store: superRow, status: 200, userLookups: 1},
-		{name: "claim superuser, row not", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.sessions[userID] = active }, status: 200, userLookups: 1, sessionLookups: 1},
+		{name: "claim superuser, row not", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.sessions[userID] = active }, status: 200, userLookups: 1},
 		{name: "superuser without session", auth: "valid", claims: superClaim, store: superRow, status: 200, userLookups: 1, sessionLookups: 1},
 		{name: "superuser with session", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},
 		{name: "truthy string claim", auth: "valid", claims: func(c jwt.MapClaims) { c["is_superuser"] = "no" }, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},

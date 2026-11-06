@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/auth/pushevent"
 	"github.com/full-chaos/dev-health-ops/internal/auth/repoidentityevent"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -201,6 +202,34 @@ func TestParseRepositoryIdentityOutbox(t *testing.T) {
 		on, err := ParseRepositoryIdentityOutbox(func(string) (string, bool) { return c.value, c.set })
 		if on != c.on || (err != nil) != c.err {
 			t.Fatalf("%q set=%v: on=%v err=%v", c.value, c.set, on, err)
+		}
+	}
+}
+
+// TestRepositoryIdentityOutboxParsesLikeThePushLifecycleSwitch: the switch is parsed exactly as AUTH_PUSH_LIFECYCLE_EVENTS
+// (pushevent.ParsePushLifecycleEvents): unset or empty is off, strconv.ParseBool values, any other value a start error.
+func TestRepositoryIdentityOutboxParsesLikeThePushLifecycleSwitch(t *testing.T) {
+	type cell struct {
+		value string
+		set   bool
+	}
+	cells := []cell{{"", false}}
+	for _, v := range []string{"", "  ", "1", "0", "t", "f", "TRUE", "False", " true ", "false ", "true", "false", "yes", "on", "2"} {
+		cells = append(cells, cell{v, true})
+	}
+	for _, c := range cells {
+		lookup := func(want string) func(string) (string, bool) {
+			return func(key string) (string, bool) {
+				if key != want {
+					return "", false
+				}
+				return c.value, c.set
+			}
+		}
+		on, err := ParseRepositoryIdentityOutbox(lookup(EnvRepositoryIdentityOutbox))
+		pushOn, pushErr := pushevent.ParsePushLifecycleEvents(lookup(pushevent.EnvPushLifecycleEvents))
+		if on != pushOn || (err != nil) != (pushErr != nil) {
+			t.Fatalf("%q set=%v: repository identity on=%v err=%v; push lifecycle on=%v err=%v", c.value, c.set, on, err, pushOn, pushErr)
 		}
 	}
 }

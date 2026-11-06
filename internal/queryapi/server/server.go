@@ -429,6 +429,7 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	// The live users-row store behind every edge-verified REST route below
 	// (CHAOS-6290): PGStore over the /query route's ONE registry pool, not a
 	// pool of its own; an error (edge secret set, no pool) refuses to start.
+	warnUnusedEdgeSecret(getenv, slog.Default())
 	edgeUsers, err := newEdgeUserStore(getenv, registryPool)
 	if err != nil {
 		log.Printf("query-api: build edge users store: %v", err)

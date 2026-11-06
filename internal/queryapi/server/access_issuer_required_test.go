@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -33,6 +34,23 @@ func TestQueryAPIIssuerRequiredOnlyWithAUserTokenPath(t *testing.T) {
 		}
 		if edge, err := buildEdgeVerifierFromEnv(edgeSettings(env), nil); err != nil || edge != nil {
 			t.Errorf("%s: edge verifier %v err %v, want none (HS256 retired)", name, edge != nil, err)
+		}
+	}
+}
+
+// Word 9: a leftover GO_API_EDGE_JWT_SECRET is one WARN naming it, never a refused start; unset, no line.
+func TestQueryAPIUnusedEdgeSecretIsOneWarn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env   map[string]string
+		lines int
+	}{"set": {map[string]string{edgeJWTSecretEnvVar: edgeTestSecret}, 1}, "unset": {nil, 0}} {
+		var out strings.Builder
+		warnUnusedEdgeSecret(edgeSettings(tc.env), slog.New(slog.NewTextHandler(&out, nil)))
+		if got := strings.Count(out.String(), "level=WARN"); got != tc.lines || (tc.lines == 1 && !strings.Contains(out.String(), "GO_API_EDGE_JWT_SECRET is set but unused (HS256 retired)")) {
+			t.Errorf("%s: %d WARN lines %q, want %d", name, got, out.String(), tc.lines)
+		}
+		if strings.Contains(out.String(), edgeTestSecret) {
+			t.Errorf("%s: the secret value is in the log", name)
 		}
 	}
 }

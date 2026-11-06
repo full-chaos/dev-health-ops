@@ -28,8 +28,10 @@ const (
 )
 
 // buildAccessVerify constructs the profile-routed access-token validator over
-// the FULL go-api endpoint-profile row table. AUTH_ACCESS_TOKEN_ISSUER unset:
-// no capability (nil), and go-api's access-token path is unchanged.
+// the FULL go-api endpoint-profile row table. It is go-api's only access-token
+// verifier (the HS256 class is retired), so with protected routes (auth, i.e.
+// API_DATABASE_URI set) AUTH_ACCESS_TOKEN_ISSUER is required; with none, an
+// unset issuer builds nothing (nil).
 //
 // It also returns the JWKS client it built, so the workload verifier of the
 // internal acr routes reads the same keys (nil when the issuer is unset).
@@ -37,6 +39,9 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 	issuer, _ := lookup(envAccessTokenIssuer)
 	issuer = strings.TrimSpace(issuer)
 	if issuer == "" {
+		if auth != nil {
+			return nil, nil, fmt.Errorf("%s is required by dho api when API_DATABASE_URI is set: it is the only access-token verifier", envAccessTokenIssuer)
+		}
 		return nil, nil, nil
 	}
 	keys, err := authverify.NewJWKSClient(authverify.JWKSClientConfig{Issuer: issuer})

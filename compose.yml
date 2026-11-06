@@ -1446,6 +1446,11 @@ services:
           WHERE :'writer' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'writer') \gexec
         SELECT format('GRANT %I TO %I', :'writer', :'mrole')
           WHERE :'writer' <> '' AND NOT pg_has_role(:'mrole', :'writer', 'MEMBER') \gexec
+        \getenv ridwriter AUTH_REPO_IDENTITY_WRITER_ROLE
+        SELECT format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', :'ridwriter')
+          WHERE :'ridwriter' <> '' AND NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'ridwriter') \gexec
+        SELECT format('GRANT %I TO %I', :'ridwriter', :'mrole')
+          WHERE :'ridwriter' <> '' AND NOT pg_has_role(:'mrole', :'ridwriter', 'MEMBER') \gexec
         SQL
     environment:
       PGHOST: postgres
@@ -1462,6 +1467,9 @@ services:
       # function, created here (with the migration login a member of it, the one
       # thing ALTER FUNCTION OWNER needs) only when named. Empty creates nothing.
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
+      # CHAOS-13057: the NOLOGIN role that owns the repository identity append
+      # function, created the same way only when named. Empty creates nothing.
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -1530,6 +1538,8 @@ services:
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
+      AUTH_REPO_IDENTITY_CALLER_ROLES: ${AUTH_REPO_IDENTITY_CALLER_ROLES:-}
       AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
       # CHAOS-13107: the plane logins that read auth-service's sessions
       # (go-api and query-api run with AUTH_PROXY_SESSIONS on). go-river-provision
@@ -1568,6 +1578,8 @@ services:
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
+      AUTH_REPO_IDENTITY_WRITER_ROLE: ${AUTH_REPO_IDENTITY_WRITER_ROLE:-}
+      AUTH_REPO_IDENTITY_CALLER_ROLES: ${AUTH_REPO_IDENTITY_CALLER_ROLES:-}
       AUTH_SCHEMA_OWNER_ROLE: ${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator}
       # CHAOS-13107: the plane logins that read auth-service's sessions
       # (go-api and query-api run with AUTH_PROXY_SESSIONS on). go-river-provision

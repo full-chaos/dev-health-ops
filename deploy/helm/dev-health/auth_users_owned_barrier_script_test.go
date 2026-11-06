@@ -140,6 +140,7 @@ type bworld struct {
 	goPods, authPods, otherPods []any
 	jobs, cronJobs              []any
 	statefulSets                []any
+	otherRS                     []any
 }
 
 const (
@@ -260,6 +261,7 @@ func (w *bworld) files() map[string]string {
 		"jobs.all.json":            bwList(w.jobs),
 		"cronjobs.all.json":        bwList(w.cronJobs),
 		"statefulsets.all.json":    bwList(w.statefulSets),
+		"rs.all.json":              bwList(append(append(append([]any{}, w.goRS...), w.authRS...), w.otherRS...)),
 	}
 }
 

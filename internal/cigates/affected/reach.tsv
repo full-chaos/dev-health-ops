@@ -2,6 +2,7 @@
 ci/tools/gotestfuncs	main.go	*
 cmd/auth-migrate	bootstrap.go	cmd/auth-migrate
 cmd/auth-migrate	restorefence.go	cmd/auth-migrate
+cmd/cigate	main.go	cmd/cigate
 cmd/dev-health-migration-matrix	main.go	cmd/dev-health-migration-matrix
 cmd/dev-health-provider-fixture	main.go	cmd/dev-health-provider-fixture
 cmd/dev-health-provider-normalized-fixture	main.go	cmd/dev-health-provider-normalized-fixture
@@ -156,6 +157,7 @@ internal/auth/contracts	contracts.go	internal/auth/pushreconcile/pagereader
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/projectionreader
 internal/auth/contracts	contracts.go	internal/auth/pushreconcile/reconcilejob
 internal/auth/contracts	contracts.go	internal/auth/repoidentity
+internal/auth/contracts	contracts.go	internal/auth/repoidentityprojection
 internal/auth/contracts	contracts.go	internal/auth/restorefence
 internal/auth/contracts	contracts.go	internal/auth/revisionfeed
 internal/auth/contracts	contracts.go	internal/auth/serviceaccount
@@ -207,6 +209,7 @@ internal/auth/keystore	open_unix.go	internal/auth/decisionstate
 internal/auth/keystore	open_unix.go	internal/auth/keyrotation
 internal/auth/keystore	open_unix.go	internal/auth/keystore
 internal/auth/keystore	open_unix.go	internal/auth/lockorder
+internal/auth/keystore	open_unix.go	internal/auth/repoidentityprojection
 internal/auth/keystore	open_unix.go	internal/auth/workloadexchange
 internal/auth/keystore	open_unix.go	internal/cigates/chartgates
 internal/auth/keystore	open_unix.go	internal/queryapi/server
@@ -403,6 +406,7 @@ internal/envelopemint	keygen.go	internal/auth/outboxprojection
 internal/envelopemint	keygen.go	internal/auth/passwordpolicy
 internal/envelopemint	keygen.go	internal/auth/platformrole
 internal/envelopemint	keygen.go	internal/auth/pushprojection
+internal/envelopemint	keygen.go	internal/auth/repoidentityprojection
 internal/envelopemint	keygen.go	internal/auth/serviceaccount
 internal/envelopemint	keygen.go	internal/auth/session
 internal/envelopemint	keygen.go	internal/auth/usersbackfill

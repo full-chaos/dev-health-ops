@@ -22,6 +22,8 @@ const (
 	enforceOutcomeErrorDeny = "error_deny"
 	// enforceOutcomeImpersonationRefused: a caller with a live go-api impersonation row, refused before any call.
 	enforceOutcomeImpersonationRefused = "impersonation_refused"
+	// enforceOutcomeOrgMismatch: a served organization that is not the token's, refused before any call.
+	enforceOutcomeOrgMismatch = "org_mismatch"
 
 	enforceDefaultTimeout = 2 * time.Second
 	enforceRetryAfter     = "5"
@@ -54,7 +56,8 @@ type EnforceConfig struct {
 var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 
 // enforceOutcomes is the closed outcome set of the decision counter.
-var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceOutcomeErrorDeny, enforceOutcomeImpersonationRefused}
+var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceOutcomeErrorDeny, enforceOutcomeImpersonationRefused,
+	enforceOutcomeOrgMismatch}
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,
@@ -139,6 +142,8 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// served: the organization a path or query parameter names for the handler to serve (servedOrgOf).
+	served servedOrg
 }
 
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
@@ -158,6 +163,13 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
+	}
+	// The handler must serve the organization the decision point judges; this holds for an unjudged caller too.
+	if o.served.against(o.orgID) == servedOrgOther {
+		countEnforce(ctx, row.Namespace, enforceOutcomeOrgMismatch)
+		e.logger.WarnContext(ctx, "api enforcement: the request names an organization that is not the token organization, the route is refused",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceDeny
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {
@@ -204,12 +216,13 @@ func (e *Enforcer) ask(ctx context.Context, request pep.Request) (decision pep.D
 }
 
 // unjudgedReason says why the decision point cannot judge a request, or "" when it can. A token that is not a user
-// access token comes first: nothing else can be said of it.
+// access token comes first: nothing else can be said of it. A served organization that parses as no UUID is no_org:
+// its handler refuses it.
 func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	switch {
 	case o.bearer == "" || !o.userAccessToken:
 		return enforceUnjudgedHS256
-	case row.ResourceType == policycatalog.ScopeOrganization && org == "":
+	case row.ResourceType == policycatalog.ScopeOrganization && org == "", o.served.against(org) == servedOrgUnparsed:
 		return enforceUnjudgedNoOrg
 	}
 	return ""
@@ -249,7 +262,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enfor
 	}
 	ctx := r.Context()
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil})
+		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {

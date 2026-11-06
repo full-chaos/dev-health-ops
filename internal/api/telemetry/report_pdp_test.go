@@ -8,14 +8,54 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 )
 
 const reportBearer = "aaaa.bbbb.cccc-dddd-eeee-ffff"
+
+// denyingFake allows what its rules allow and answers every other request with the decision point's deny. pepfake
+// alone answers an unmatched request with a local no_decision, which go-api must treat as no verdict (503), so a deny
+// case built on it would pass through the no-verdict path.
+type denyingFake struct {
+	rules *pepfake.Fake
+	deny  pep.Decision
+}
+
+func newDenyingFake(t *testing.T, rules ...pepfake.Rule) denyingFake {
+	t.Helper()
+	pdp := pdptest.New(t)
+	pdp.Deny("platform_role_absent")
+	client, err := pep.New(pep.Config{BaseURL: pdp.URL, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: "dev-health-ops-api", Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := client.Decide(context.Background(), pep.Request{PrincipalReference: reportBearer, Action: rule.ActionAdminTelemetry, ResourceType: "platform", ResourceKey: "platform"})
+	if deny.Allowed() || deny.Local() {
+		t.Fatalf("the test decision point's deny: allowed=%v local=%v reason=%s", deny.Allowed(), deny.Local(), deny.Reason())
+	}
+	return denyingFake{rules: pepfake.New(rules...), deny: deny}
+}
+
+func (f denyingFake) Decide(ctx context.Context, req pep.Request) pep.Decision {
+	if d := f.rules.Decide(ctx, req); d.Allowed() || d.Reason() != pep.ReasonNoDecision {
+		return d
+	}
+	return f.deny
+}
+
+func (f denyingFake) DecideBatch(ctx context.Context, reqs []pep.Request) []pep.Decision {
+	out := make([]pep.Decision, len(reqs))
+	for i, req := range reqs {
+		out[i] = f.Decide(ctx, req)
+	}
+	return out
+}
 
 // With the admin cell on, the instance-wide report is served by the decision point's admin.telemetry, not by
 // go-api's own flag; an impersonating caller is refused before any question; no verdict is a 503.
@@ -37,7 +77,7 @@ func TestPDPAction_ReportIsTheDecisionPointsAdminTelemetry(t *testing.T) {
 		{"pdp allows, impersonating", []pepfake.Rule{allow}, true, true, 403},
 		{"no verdict", []pepfake.Rule{bad}, true, false, 503},
 	} {
-		ctx := policy.WithPlatformDecider(context.Background(), pepfake.New(c.rules...), reportBearer)
+		ctx := policy.WithPlatformDecider(context.Background(), newDenyingFake(t, c.rules...), reportBearer)
 		if c.impersonating {
 			ctx = policy.WithImpersonation(ctx, &policy.Impersonation{ID: uuid.New(), AdminUserID: uuid.New(), TargetUserID: uuid.New(),
 				TargetOrgID: uuid.New(), TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)})

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
@@ -13,13 +14,53 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 )
 
 const pdpBearer = "aaaa.bbbb.cccc-dddd-eeee-ffff"
 
+// denyingFake allows what its rules allow and answers every other request with the decision point's deny. pepfake
+// alone answers an unmatched request with a local no_decision, which go-api must treat as no verdict (503), so a deny
+// case built on it would pass through the no-verdict path.
+type denyingFake struct {
+	rules *pepfake.Fake
+	deny  pep.Decision
+}
+
+func newDenyingFake(t *testing.T, rules ...pepfake.Rule) denyingFake {
+	t.Helper()
+	pdp := pdptest.New(t)
+	pdp.Deny("platform_role_absent")
+	client, err := pep.New(pep.Config{BaseURL: pdp.URL, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: "dev-health-ops-api", Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := client.Decide(context.Background(), pep.Request{PrincipalReference: pdpBearer, Action: rule.ActionAdminUsers, ResourceType: "platform", ResourceKey: "platform"})
+	if deny.Allowed() || deny.Local() {
+		t.Fatalf("the test decision point's deny: allowed=%v local=%v reason=%s", deny.Allowed(), deny.Local(), deny.Reason())
+	}
+	return denyingFake{rules: pepfake.New(rules...), deny: deny}
+}
+
+func (f denyingFake) Decide(ctx context.Context, req pep.Request) pep.Decision {
+	if d := f.rules.Decide(ctx, req); d.Allowed() || d.Reason() != pep.ReasonNoDecision {
+		return d
+	}
+	return f.deny
+}
+
+func (f denyingFake) DecideBatch(ctx context.Context, reqs []pep.Request) []pep.Decision {
+	out := make([]pep.Decision, len(reqs))
+	for i, req := range reqs {
+		out[i] = f.Decide(ctx, req)
+	}
+	return out
+}
+
 // pdpCtx is a request context with the admin cell on: platform questions go to a decision point that allows exactly
-// the named actions; "bogus" makes every question a local (no verdict) decision.
-func pdpCtx(actions ...string) context.Context {
+// the named actions and denies the rest; "bogus" makes every question a local (no verdict) decision.
+func pdpCtx(t *testing.T, actions ...string) context.Context {
+	t.Helper()
 	var rules []pepfake.Rule
 	for _, action := range actions {
 		r := pepfake.Rule{PrincipalReference: pdpBearer, Action: action, ResourceType: "platform", ResourceKey: "platform"}
@@ -31,8 +72,7 @@ func pdpCtx(actions ...string) context.Context {
 		}
 		rules = append(rules, r)
 	}
-	var decider pep.Decider = pepfake.New(rules...)
-	return policy.WithPlatformDecider(context.Background(), decider, pdpBearer)
+	return policy.WithPlatformDecider(context.Background(), newDenyingFake(t, rules...), pdpBearer)
 }
 
 // pdpCase is one answer of the decision point against go-api's own flag: the decision point wins.
@@ -42,6 +82,15 @@ type pdpCase struct {
 	superuser bool
 	want      bool
 	status    int
+}
+
+// statusWrong reports a status the case must not answer: its own status when it names one, else the no-verdict 503
+// (a deny or an allow is a verdict).
+func (c pdpCase) statusWrong(code int) bool {
+	if c.status != 0 {
+		return code != c.status
+	}
+	return code == http.StatusServiceUnavailable
 }
 
 func pdpCases(action string) []pdpCase {
@@ -59,8 +108,8 @@ func TestPDPAction_UserInScopeIsTheDecisionPointsAdminUsers(t *testing.T) {
 	for _, c := range pdpCases(rule.ActionAdminUsers) {
 		w := httptest.NewRecorder()
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser}
-		got := newHandlers(t).ensureUserInScope(pdpCtx(c.allowed...), w, user, uuid.New(), uuid.New())
-		if got != c.want || (c.status != 0 && w.Code != c.status) {
+		got := newHandlers(t).ensureUserInScope(pdpCtx(t, c.allowed...), w, user, uuid.New(), uuid.New())
+		if got != c.want || c.statusWrong(w.Code) {
 			t.Errorf("%s: in scope = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
@@ -72,7 +121,7 @@ func TestPDPAction_OrgAdminAccessHasNoPlatformBypass(t *testing.T) {
 	for _, c := range pdpCases(rule.ActionAdminOrgs) {
 		w := httptest.NewRecorder()
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser}
-		if got := newHandlers(t).ensureOrgAdminAccess(pdpCtx(c.allowed...), w, user, uuid.New()); got || w.Code != http.StatusForbidden {
+		if got := newHandlers(t).ensureOrgAdminAccess(pdpCtx(t, c.allowed...), w, user, uuid.New()); got || w.Code != http.StatusForbidden {
 			t.Errorf("%s: access = %v (status %d), want false and 403", c.name, got, w.Code)
 		}
 	}
@@ -84,8 +133,8 @@ func TestPDPAction_NoOrgContextIsTheDecisionPointsAdminUsers(t *testing.T) {
 	for _, c := range pdpCases(rule.ActionAdminUsers) {
 		w := httptest.NewRecorder()
 		user := &policy.User{IsSuperuser: c.superuser}
-		_, got := orgIDForNonSuperuser(pdpCtx(c.allowed...), w, user)
-		if got != c.want || (c.status != 0 && w.Code != c.status) {
+		_, got := orgIDForNonSuperuser(pdpCtx(t, c.allowed...), w, user)
+		if got != c.want || c.statusWrong(w.Code) {
 			t.Errorf("%s: served = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
@@ -98,8 +147,8 @@ func TestPDPAction_PlatformCreateIsTheDecisionPointsAdminUsers(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/users", nil)
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser}
-		org, got := newHandlers(t).createUserOrg(pdpCtx(c.allowed...), w, r, user)
-		if got != c.want || (got && org != uuid.Nil) || (c.status != 0 && w.Code != c.status) {
+		org, got := newHandlers(t).createUserOrg(pdpCtx(t, c.allowed...), w, r, user)
+		if got != c.want || (got && org != uuid.Nil) || c.statusWrong(w.Code) {
 			t.Errorf("%s: org %s ok %v (status %d), want ok %v", c.name, org, got, w.Code, c.want)
 		}
 	}
@@ -112,8 +161,8 @@ func TestPDPAction_ListAllUsersIsTheDecisionPointsAdminUsers(t *testing.T) {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/users", nil)
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser}
-		h.listUsers(w, r.WithContext(policy.WithUser(pdpCtx(c.allowed...), user)))
-		if got := *reads > 0; got != c.want || (c.status != 0 && w.Code != c.status) {
+		h.listUsers(w, r.WithContext(policy.WithUser(pdpCtx(t, c.allowed...), user)))
+		if got := *reads > 0; got != c.want || c.statusWrong(w.Code) {
 			t.Errorf("%s: store reached = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
@@ -135,7 +184,7 @@ func TestPDPAction_ImpersonationStatusIsTheDecisionPointsAdminImpersonate(t *tes
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodGet, "/impersonate/status", nil)
 		user := &policy.User{ID: uuid.New(), UserID: "not-a-uuid", IsSuperuser: c.superuser}
-		newHandlers(t).impersonationStatus(w, r.WithContext(policy.WithUser(pdpCtx(c.allowed...), user)))
+		newHandlers(t).impersonationStatus(w, r.WithContext(policy.WithUser(pdpCtx(t, c.allowed...), user)))
 		if w.Code != c.status || !strings.Contains(w.Body.String(), c.body) {
 			t.Errorf("%s: %d %q, want %d %q", c.name, w.Code, w.Body.String(), c.status, c.body)
 		}
@@ -144,7 +193,7 @@ func TestPDPAction_ImpersonationStatusIsTheDecisionPointsAdminImpersonate(t *tes
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/impersonate/status", nil)
 	user := &policy.User{ID: uuid.New(), UserID: "not-a-uuid"}
-	newHandlers(t).impersonationStatus(w, r.WithContext(policy.WithUser(pdpCtx(rule.ActionAdminImpersonate), user)))
+	newHandlers(t).impersonationStatus(w, r.WithContext(policy.WithUser(pdpCtx(t, rule.ActionAdminImpersonate), user)))
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("pdp allows, flag off: %d %q, want the lookup's 400", w.Code, w.Body.String())
 	}

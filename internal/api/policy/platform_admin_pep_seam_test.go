@@ -44,6 +44,39 @@ func (c *countingDecider) counts() (singles, batches int) {
 	return len(c.singles), len(c.batches)
 }
 
+// denyingFake allows what its rules allow and answers every other request with the decision point's deny. pepfake
+// alone answers an unmatched request with a local no_decision, which go-api must treat as no verdict (503), so a deny
+// cell built on it would pass through the no-verdict path.
+type denyingFake struct {
+	rules *pepfake.Fake
+	deny  pep.Decision
+}
+
+func newDenyingFake(t *testing.T, rules ...pepfake.Rule) denyingFake {
+	t.Helper()
+	deny := newTestPDP(t, denyWith("platform_role_absent")).client(t).Decide(context.Background(),
+		pep.Request{PrincipalReference: shadowBearer, Action: rule.ActionAdminOrgs, ResourceType: "platform", ResourceKey: shadowPlatformKey})
+	if deny.Allowed() || deny.Local() {
+		t.Fatalf("the test decision point's deny: allowed=%v local=%v reason=%s", deny.Allowed(), deny.Local(), deny.Reason())
+	}
+	return denyingFake{rules: pepfake.New(rules...), deny: deny}
+}
+
+func (f denyingFake) Decide(ctx context.Context, req pep.Request) pep.Decision {
+	if d := f.rules.Decide(ctx, req); d.Allowed() || d.Reason() != pep.ReasonNoDecision {
+		return d
+	}
+	return f.deny
+}
+
+func (f denyingFake) DecideBatch(ctx context.Context, reqs []pep.Request) []pep.Decision {
+	out := make([]pep.Decision, len(reqs))
+	for i, req := range reqs {
+		out[i] = f.Decide(ctx, req)
+	}
+	return out
+}
+
 type panicDecider struct{}
 
 func (panicDecider) Decide(context.Context, pep.Request) pep.Decision { panic("pdp") }
@@ -144,7 +177,7 @@ func TestAdminOrRowsAskOneBatchAndKeepThePlatformAnswer(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rec := recordEnforce(t)
-			decider := &countingDecider{inner: pepfake.New(c.rules...)}
+			decider := &countingDecider{inner: newDenyingFake(t, c.rules...)}
 			got := seamServe(seamHandler(t, legacyStore(c.superuser, c.role), c.claims, seamEnforcer(t, decider, adminUsersRows(t), "admin")), http.MethodGet, "/api/v1/admin/users")
 			if got.status != c.status || !strings.Contains(got.body, c.body) {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
@@ -216,7 +249,7 @@ func TestHoldsPlatformAsksThePDPWithTheAdminCellOn(t *testing.T) {
 		body      string
 	}{
 		{"pdp allows, flag off", pepfake.New(platformRule(rule.ActionAdminTelemetry)), false, 200, "platform=true bypass=false"},
-		{"pdp denies, flag on", pepfake.New(), true, 200, "platform=false bypass=false"},
+		{"pdp denies, flag on", newDenyingFake(t), true, 200, "platform=false bypass=false"},
 		{"no verdict", panicDecider{}, true, 503, ""},
 		{"allow with an obligation", pepfake.New(pepfake.Rule{PrincipalReference: shadowBearer, Action: rule.ActionAdminTelemetry, ResourceType: "platform",
 			ResourceKey: shadowPlatformKey, TenantScope: ownOrg}), false, 503, ""},

@@ -9,12 +9,14 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/llmbudget"
 )
 
-// clefSender is the systemOneSender of an org's clef account: the SystemOne
-// request body goes to the account as it is (no prompt translation: clef speaks
-// SystemOne), under the org's budget guard when it has one.
+// clefSender is the systemOneSender of an org's clef or TypeSafe account: the
+// SystemOne request body goes to the account as it is (no prompt translation:
+// both speak SystemOne), under the org's budget guard when it has one.
 type clefSender struct {
 	client *categorize.TypeSafeClient
 	guard  *llmbudget.Guard
+	// keyPrefix starts the idempotency key of each reservation: "clef:" or "typesafe:".
+	keyPrefix string
 }
 
 var _ systemOneSender = clefSender{}
@@ -44,7 +46,7 @@ func (sender clefSender) PostSystemOneDetailed(ctx context.Context, body []byte)
 	sent := false
 	// A byte is at most one token, so the body length bounds the input the
 	// reservation prices; the output is not charged for clef.
-	call := llmbudget.Call{IdempotencyKey: "clef:" + uuid.NewString(), MaxInputTokens: int64(len(body))}
+	call := llmbudget.Call{IdempotencyKey: sender.keyPrefix + uuid.NewString(), MaxInputTokens: int64(len(body))}
 	err := sender.guard.Run(ctx, call, func(ctx context.Context) (llmbudget.Usage, error) {
 		posted, err := sender.client.PostSystemOneDetailed(ctx, body)
 		if err != nil {

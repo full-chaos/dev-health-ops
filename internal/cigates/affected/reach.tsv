@@ -176,6 +176,7 @@ internal/auth/contracts	contracts.go	internal/platform/logging
 internal/auth/contracts	contracts.go	internal/pushlifecyclecli
 internal/auth/contracts	contracts.go	internal/queryapi/server
 internal/auth/contracts	contracts.go	internal/storage/postgres/authschema
+internal/auth/contracts	contracts.go	internal/testsupport/authrows
 internal/auth/contracts	contracts.go	internal/testsupport/usertokens
 internal/auth/contracts	contracts.go	internal/workerservice
 internal/auth/contracts	endpoint_auth_profile_selector_gate.go	internal/apiservice
@@ -323,6 +324,7 @@ internal/cigates/docstools	validate_inventory_review.go	internal/cigates/docstoo
 internal/cigates/docstools	validatedsite.go	cmd/cigate
 internal/cigates/docstools	validatedsite.go	internal/cigates/docstools
 internal/cigates/emitscan	scan.go	internal/cigates/emitscan
+internal/cigates/exceptionledger	ledger.go	internal/cigates/exceptionledger
 internal/cigates/frozengoldens	reads.go	internal/cigates/frozengoldens
 internal/cigates/livee2e	cli.go	cmd/cigate
 internal/cigates/livee2e	cli.go	internal/cigates/livee2e
@@ -976,6 +978,7 @@ internal/testsupport/venueoracle	golden_walk.go	internal/syncbudget
 internal/testsupport/venueoracle	golden_walk.go	internal/synccli
 internal/testsupport/venueoracle	golden_walk.go	internal/synccoverage
 internal/testsupport/venueoracle	golden_walk.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/authrows
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	golden_walk.go	internal/testsupport/sessionscenario
@@ -1088,6 +1091,7 @@ internal/testsupport/venueoracle	opened.go	internal/syncbudget
 internal/testsupport/venueoracle	opened.go	internal/synccli
 internal/testsupport/venueoracle	opened.go	internal/synccoverage
 internal/testsupport/venueoracle	opened.go	internal/syncdispatchruntime
+internal/testsupport/venueoracle	opened.go	internal/testsupport/authrows
 internal/testsupport/venueoracle	opened.go	internal/testsupport/corpusmatrix
 internal/testsupport/venueoracle	opened.go	internal/testsupport/programoracle
 internal/testsupport/venueoracle	opened.go	internal/testsupport/sessionscenario

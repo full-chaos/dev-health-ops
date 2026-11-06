@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/producttelemetry"
 )
 
@@ -151,12 +152,13 @@ func TestImpersonatedSessionIsNotAPlatformAdmin(t *testing.T) {
 	}
 }
 
-// capturedLog is the default slog logger's output for the length of a test.
+// capturedLog is the default slog logger's output for the length of a test, through the process logger dho
+// installs (logging.NewJSON at INFO, with its redactor), so a field the redactor would hide fails the cell.
 func capturedLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buffer bytes.Buffer
 	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buffer, nil)))
+	slog.SetDefault(logging.NewJSON(&buffer, slog.LevelInfo))
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	return &buffer
 }

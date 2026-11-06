@@ -163,7 +163,7 @@ default); a `SET`-only membership fails the migration with a permission error.
 
 ### Provider id copy events: the writer role and the roll order (CHAOS-13057)
 
-Migration 0056 adds `append_repository_identity_event`, the provider sync's only door to the auth outbox
+Migration 0057 adds `append_repository_identity_event`, the provider sync's only door to the auth outbox
 for its id copy events. It runs as a `NOLOGIN` writer role of its own (`AUTH_REPO_IDENTITY_WRITER_ROLE`,
 production `devhealth_auth_repo_identity_writer`) that holds exactly `INSERT` on `auth_outbox_events`,
 `USAGE` on its sequence and `SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions`, and no privilege on the
@@ -188,7 +188,8 @@ Roll order, each step before the next; every switch is off until its step:
    repo-metadata sync then appends one event per repository with a provider id, in the effect ledger's
    transaction, through the function of `AUTH_DATABASE_SCHEMA` (default `auth`). A row without a provider id
    (local git, External Push) gives none. The switch on before step 2 fails every repo-metadata unit (the
-   commit refuses without the function) rather than losing an event; turning it off again is the rollback.
+   commit refuses without the function) rather than losing an event, and the worker logs
+   `repository_identity_outbox_not_ready` once at start; turning it off again is the rollback.
 
 ### The migration login owns the auth schema and is not a superuser
 

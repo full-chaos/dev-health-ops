@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// The shapes of migration 0055 (repository_identities) and of the append function.
+// The shapes of migration 0056 (repository_identities) and of the 0057 append function.
 var (
 	providerShape = regexp.MustCompile(`^[a-z]{1,16}$`)
 	idShape       = regexp.MustCompile(`^[0-9]{1,20}$`)

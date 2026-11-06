@@ -73,6 +73,7 @@ internal/auth/requestid
 internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/authzenforce
 internal/backfillrun
 internal/chmigrate

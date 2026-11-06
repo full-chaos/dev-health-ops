@@ -495,7 +495,7 @@ validator and the writer; the event is a closed projection of lifecycle state.
 
 `repository-identity-event.v1` is one repository a provider sync observed. The
 worker appends it to the auth outbox through `append_repository_identity_event`
-(migration 0056), in the transaction that records the repository effect as
+(migration 0057), in the transaction that records the repository effect as
 committed; the auth service upserts `auth.repository_identities` from it.
 
 * **State transfer, one kind.** `repository_identity.observed` carries the full

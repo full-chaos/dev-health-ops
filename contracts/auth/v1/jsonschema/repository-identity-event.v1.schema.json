@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fullchaos.dev/contracts/auth/v1/jsonschema/repository-identity-event.v1.schema.json",
   "title": "Repository identity event (v1 wire format)",
-  "description": "One repository a provider sync observed, as the Auth Control Plane receives it from the auth outbox. The provider sync (the worker) is the producer: it appends one event per synced repository that has a provider id, in the transaction that records the repository effect as committed, through the auth schema function append_repository_identity_event (migration 0056). The auth service is the consumer: it upserts auth.repository_identities, the copy of the provider ids (D6651; ClickHouse repos stays the source).\n\nSTATE TRANSFER. The event carries the full current state of one repository (provider, provider id, live path, observed_at), so an add and a rename are the same event kind. Removal and transfer out of an organization are not events of this surface.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE (the aggregate is one repository of one organization), never global. The `idempotency_key` must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, and `aggregate_id` must equal payload.organization_id + \"/\" + change.provider + \"/\" + change.provider_repo_id; the clients enforce both. Consumer rule: an event whose revision is at or below the revision the stored row was written from is decided and changes nothing; a larger revision replaces the stored state (no gap rule: each event carries the whole state). The consumer also keeps the newer observed_at: an event observed before the stored row is not applied.\n\n`revision` is an integer token in 1..2^53-1; a decimal- or exponent-form token is refused by the clients on the raw token.",
+  "description": "One repository a provider sync observed, as the Auth Control Plane receives it from the auth outbox. The provider sync (the worker) is the producer: it appends one event per synced repository that has a provider id, in the transaction that records the repository effect as committed, through the auth schema function append_repository_identity_event (migration 0057). The auth service is the consumer: it upserts auth.repository_identities, the copy of the provider ids (D6651; ClickHouse repos stays the source).\n\nSTATE TRANSFER. The event carries the full current state of one repository (provider, provider id, live path, observed_at), so an add and a rename are the same event kind. Removal and transfer out of an organization are not events of this surface.\n\nTHE IDEMPOTENCY KEY IS (aggregate_type, aggregate_id, revision), and `revision` is PER AGGREGATE (the aggregate is one repository of one organization), never global. The `idempotency_key` must equal aggregate_type + \":\" + aggregate_id + \":\" + payload.revision, and `aggregate_id` must equal payload.organization_id + \"/\" + change.provider + \"/\" + change.provider_repo_id; the clients enforce both. Consumer rule: an event whose revision is at or below the revision the stored row was written from is decided and changes nothing; a larger revision replaces the stored state (no gap rule: each event carries the whole state). The consumer also keeps the newer observed_at: an event observed before the stored row is not applied.\n\n`revision` is an integer token in 1..2^53-1; a decimal- or exponent-form token is refused by the clients on the raw token.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -71,7 +71,7 @@
             "provider": {
               "type": "string",
               "pattern": "^[a-z]{1,16}$",
-              "description": "The provider name (github, gitlab), the 0055 shape of repository_identities.provider."
+              "description": "The provider name (github, gitlab), the 0056 shape of repository_identities.provider."
             },
             "provider_repo_id": {
               "type": "string",
@@ -82,7 +82,7 @@
               "type": "string",
               "maxLength": 255,
               "pattern": "^[a-z0-9][a-z0-9._/-]*$",
-              "description": "The live path as a canonical repository key (lowercase), the 0055 shape of repository_identities.current_path."
+              "description": "The live path as a canonical repository key (lowercase), the 0056 shape of repository_identities.current_path."
             },
             "observed_at": {
               "type": "string",

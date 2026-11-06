@@ -77,6 +77,7 @@ internal/auth/sessionevent
 internal/auth/sessionid
 internal/auth/sessionrule
 internal/auth/signedtoken
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cli

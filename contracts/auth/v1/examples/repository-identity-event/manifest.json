@@ -3,7 +3,7 @@
   "accept": [
     {
       "file": "valid-observed.json",
-      "why": "A GitHub repository at revision 1, the form the 0056 function writes (microsecond UTC instants)."
+      "why": "A GitHub repository at revision 1, the form the 0057 function writes (microsecond UTC instants)."
     },
     {
       "file": "valid-renamed-gitlab-nested-path.json",
@@ -121,7 +121,7 @@
       "file": "invalid-path-too-long.json",
       "expect_instance_location": "/payload/change/path",
       "expect_keyword": "maxLength",
-      "why": "The 0055 bound: 255 bytes."
+      "why": "The 0056 bound: 255 bytes."
     }
   ],
   "reject_by_client": [

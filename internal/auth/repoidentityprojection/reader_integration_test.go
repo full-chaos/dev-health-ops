@@ -112,7 +112,7 @@ func (e *env) org(t *testing.T) uuid.UUID {
 	return id
 }
 
-// observe appends one event through the 0056 function in its own committed transaction, as the producer does.
+// observe appends one event through the 0057 function in its own committed transaction, as the producer does.
 func (e *env) observe(t *testing.T, org uuid.UUID, provider, id, path string, at time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -415,7 +415,7 @@ func markOutboxPublished(t *testing.T, e *env) {
 	armed(t, e, `UPDATE auth.auth_outbox_events SET published_at = now() - interval '30 days' WHERE published_at IS NULL`)
 }
 
-// The 0056 function's rows, read as the wire envelope, parse under repository-identity-event.v1: the producer writes
+// The 0057 function's rows, read as the wire envelope, parse under repository-identity-event.v1: the producer writes
 // the contract, microsecond instants and the 20-digit id bound included.
 func TestTheAppendFunctionWritesTheContract(t *testing.T) {
 	e := newEnv(t)

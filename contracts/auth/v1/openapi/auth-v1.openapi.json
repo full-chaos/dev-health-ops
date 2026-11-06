@@ -1012,6 +1012,532 @@
           }
         }
       }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "operationId": "oauthAuthorize",
+        "summary": "Start an OAuth 2.1 authorization request (RFC 6749 section 4.1.1)",
+        "description": "Pre-session: the route accepts no credential. It checks the client registry, the exact redirect_uri, PKCE S256 and the RFC 8707 resource, writes one request row and redirects the browser to web's consent page with the request id only. After the redirect is proven, an error goes to it as error, state and iss (RFC 9207). Unreachable from outside while go-api's AUTH_PROXY_OAUTH is off.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "response_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To web's consent page with request_id, or to the client's exact redirect with error, state and iss",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "the next URL"
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "no-store"
+              }
+            }
+          },
+          "400": {
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or the route's own error.v1 refusal with reason malformed before the redirect is proven (an unknown client, a metadata client, an inexact redirect, an unset web origin or resource): no Location. The body is one of the two, never both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "oauthDecide",
+        "summary": "Describe, approve or deny an authorization request, from web's server side",
+        "description": "Under the web session's access token. A form body: action describe binds the request to the bearer's web session once and returns the client and the consent anti-CSRF token; approve or deny needs the same session and principal and that token, and answers the redirect web sends the browser to.",
+        "security": [
+          {
+            "opsAccessToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "request_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "describe",
+                      "approve",
+                      "deny"
+                    ]
+                  },
+                  "request_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "csrf_token": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "describe: the client and the anti-CSRF token; approve or deny: the redirect",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "client_id",
+                        "client_name",
+                        "client_class",
+                        "first_party",
+                        "resource",
+                        "audience",
+                        "scope",
+                        "csrf_token"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "client_id": {
+                          "type": "string"
+                        },
+                        "client_name": {
+                          "type": "string"
+                        },
+                        "client_class": {
+                          "type": "string",
+                          "enum": [
+                            "browser",
+                            "mcp"
+                          ]
+                        },
+                        "first_party": {
+                          "type": "boolean"
+                        },
+                        "resource": {
+                          "type": "string"
+                        },
+                        "audience": {
+                          "type": "string",
+                          "enum": [
+                            "acr-api",
+                            "acr-mcp"
+                          ]
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": [
+                            "acr:api",
+                            "acr:mcp"
+                          ]
+                        },
+                        "csrf_token": {
+                          "type": "string",
+                          "description": "the consent anti-CSRF token (oauth_consent_csrf_token), returned once"
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "redirect_to"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "redirect_to": {
+                          "type": "string",
+                          "description": "the client's exact redirect with code (oauth_authorization_code), state and iss, or error access_denied, state and iss"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Either the request body could not be read (a transport failure within the size limit), answered by the transport before the route in its own error envelope, transport-error.v1; or the route's own error.v1 refusal with reason malformed: a body that is not one closed form, a request bound to another session, a wrong or spent anti-CSRF token, an expired or a decided request. The body is one of the two, never both.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TransportError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "error.v1 with an auth-outcome.v1 reason code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "error.v1: an org-less web session, or a principal on the actor side of an impersonation, at approve",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: a store or key failure (retry_after_seconds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-authorization-server/oauth": {
+      "get": {
+        "operationId": "getOAuthAuthorizationServerMetadata",
+        "summary": "The RFC 8414 authorization server metadata",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "oauth-authorization-server.v1: the RFC 8414 document of the pinned issuer AUTH_TOKEN_ISSUER_URL, cacheable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAuthorizationServer"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/.well-known/openid-configuration": {
+      "get": {
+        "operationId": "getOAuthIssuerOpenIdConfiguration",
+        "summary": "The issuer discovery document, at the OAuth issuer path",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "discovery.v1: issuer, jwks_uri and signing algorithms, cacheable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Discovery"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/.well-known/jwks.json": {
+      "get": {
+        "operationId": "getOAuthIssuerJwks",
+        "summary": "The published token verification keys, at the OAuth issuer path",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "jwks.v1: the public signing keys, cacheable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Jwks"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "public, max-age bounded below the key-rotation overlap"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "strong validator of the document"
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the document; no body."
+          },
+          "429": {
+            "description": "The route's rate bucket is spent; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1), with Retry-After.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "error.v1: no key material is available (retry_after_seconds); never cached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request body could not be read (a transport failure within the size limit); answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over the configured limit; answered by the transport before the route, in its own error envelope, transport-error.v1 (not error.v1).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransportError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

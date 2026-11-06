@@ -2,6 +2,8 @@ contracts/auth/v1
 contracts/auth/v1/vocabulary
 contracts/graphql/v1
 internal/aftercommit
+internal/api/authprovision
+internal/api/clientip
 internal/api/externalurl
 internal/api/licensing
 internal/api/policy
@@ -10,6 +12,7 @@ internal/api/pyheaders
 internal/api/pyjson
 internal/api/pytime
 internal/api/registerorg
+internal/api/sessionissue
 internal/apiservice/accessrouting
 internal/audit
 internal/auth/accessverify
@@ -64,6 +67,7 @@ internal/auth/sessionid
 internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
+internal/auth/workloadinput
 internal/authzenforce
 internal/backfillrun
 internal/cacheinvalidation
@@ -185,6 +189,8 @@ internal/queryapi/meta
 internal/queryapi/newestrow
 internal/queryapi/operatingreview
 internal/queryapi/opportunities
+internal/queryapi/pdp
+internal/queryapi/pdp/pdptest
 internal/queryapi/people
 internal/queryapi/principal
 internal/queryapi/producttelemetry

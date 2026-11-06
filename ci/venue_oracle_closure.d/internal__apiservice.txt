@@ -88,6 +88,7 @@ internal/auth/sessionrule
 internal/auth/signedtoken
 internal/auth/workload
 internal/auth/workloadexchange
+internal/auth/workloadinput
 internal/authzenforce
 internal/chmigrate
 internal/cigates/bigboyrender

@@ -127,7 +127,7 @@ func repoIdentityRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) []r
 	return out
 }
 
-// TestRepositoryIdentityAppendIsTheWorkersOnlyDoor: the worker login appends events through the 0056 function only,
+// TestRepositoryIdentityAppendIsTheWorkersOnlyDoor: the worker login appends events through the 0057 function only,
 // the function fixes the revision, key and payload, refuses every malformed member, and nobody else can call it.
 func TestRepositoryIdentityAppendIsTheWorkersOnlyDoor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

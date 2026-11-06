@@ -15,7 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// TestRepoIdentityWriterProvisioningAndPosture: with the privileged step done, a non-superuser migrator hands the 0056
+// TestRepoIdentityWriterProvisioningAndPosture: with the privileged step done, a non-superuser migrator hands the 0057
 // function to its own writer role, EXECUTE reaches the worker login only, the writer holds nothing on
 // repository_identities, and a planted drift (a table grant, an extra EXECUTE, a foreign owner) is a posture
 // violation.

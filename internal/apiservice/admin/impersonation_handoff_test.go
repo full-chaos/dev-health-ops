@@ -27,6 +27,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
+// wantConsumeLua is the consume script as the fake runs it: any other script text is an unknown script.
+const wantConsumeLua = `if redis.call('GET', KEYS[1]) == ARGV[1] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0`
+
 // fakeValkey is a loopback RESP server with the commands of the handoff record: SET (NX, EX), EVAL of the consume
 // script only, GET, DEL. One mutex runs each command whole, as Valkey's one thread does. Its clock decides expiry.
 type fakeValkey struct {
@@ -192,7 +198,7 @@ func (f *fakeValkey) answer(args []string) string {
 		f.entries[args[1]] = fakeEntry{value: args[2], expires: expires}
 		return "+OK\r\n"
 	case "EVAL":
-		if len(args) != 5 || args[1] != handoffConsumeLua || args[2] != "1" {
+		if len(args) != 5 || args[1] != wantConsumeLua || args[2] != "1" {
 			return "-ERR unknown script\r\n"
 		}
 		if e, ok := live(args[3]); ok && e.value == args[4] {
@@ -490,7 +496,7 @@ func TestHandoffStoreCommandsAreSetAndEvalOnly(t *testing.T) {
 	key := handoffKeyPrefix + id
 	want := [][]string{
 		{"SET", key, c.admin.String(), "NX", "EX", "150"},
-		{"EVAL", handoffConsumeLua, "1", key, c.admin.String()},
+		{"EVAL", wantConsumeLua, "1", key, c.admin.String()},
 	}
 	if got := f.commands(); !slices.EqualFunc(got, want, slices.Equal[[]string]) {
 		t.Fatalf("store commands %q, want %q", got, want)

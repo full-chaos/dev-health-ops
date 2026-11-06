@@ -296,6 +296,17 @@ func (g *Gate) anyCellOn() bool {
 	return false
 }
 
+// Enforced reports whether the 5.17 cell of the action of row profile ("METHOD /route") is on: the PDP decision is
+// then the answer, and there is no legacy decision for a shadow to compare. A nil gate and an unknown row are false.
+func (g *Gate) Enforced(profile string) bool {
+	if g == nil {
+		return false
+	}
+	action, known := g.actions[profile]
+	namespace, _, _ := strings.Cut(action, ".")
+	return known && g.cells.On(namespace)
+}
+
 // Shadow is the 5.12 shadow core a shadow-mode gate holds; nil in every other mode, and in shadow mode when a knob is
 // bad. The REST authentication hooks call its Observe with the legacy answer.
 func (g *Gate) Shadow() *policy.Shadow {

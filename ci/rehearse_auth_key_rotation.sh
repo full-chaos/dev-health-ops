@@ -64,8 +64,9 @@ if [ "${PRINT_PLAN}" = 1 ]; then
     'stage smoke:    up (postgres, clickhouse, valkey, migrate chain, auth-service, go-api, issuer-tls); register + verify one user;' \
     '                login; token header kid is a; JWKS (https, rehearsal CA) lists a; go-api /api/v1/auth/me accepts the token.' \
     'S1 planned:     adopt; stage b; register b (pending, published); activate b refused before 300 s with the remaining seconds,' \
-    '                allowed after; overlap: a-token still accepted by go-api, b-token accepted, no non-2xx on the probe;' \
-    '                rollback a (a active), rollback b (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS.' \
+    '                allowed after; overlap: a-token still accepted by go-api and served by query-api, b-token accepted by both,' \
+    '                the probe asks both every 0.5 s: no go-api non-2xx, no query-api 401/000/5xx; rollback a (a active), rollback b' \
+    '                (b active); retire a refused before 4200 s, allowed after; a leaves the JWKS; the b-token after it on both.' \
     'S2 compromise:  stage c and d, register both (published 300 s+); sessions under b; compromise b -successor c: b leaves the JWKS' \
     '                and is denied, c signs, the sessions of b are revoked (refresh refused), a session of a and the session of c still' \
     '                refresh; every verb on b refused; a manifest that names b active changes nothing.' \
@@ -315,12 +316,12 @@ login_signs_by() { # login_signs_by KID: wait out the key-state refresh (15 s), 
   sleep $((KEY_STATE_REFRESH + 5))
   login_user && kid_is "${L_ACCESS}" "$1"
 }
-probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: GET /api/v1/auth/me every 0.5 s
+probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: go-api GET /api/v1/auth/me and query-api GET /api/v1/filters/options every 0.5 s
   local tok="$1" out="$2" end=$((SECONDS + $3)) n=0
   : >"${out}"
   while [ "${SECONDS}" -lt "${end}" ]; do
     n=$((n + 1))
-    printf '%d %s\n' "${n}" "$(api_code "${tok}" /api/v1/auth/me)" >>"${out}"
+    printf '%d %s %s\n' "${n}" "$(api_code "${tok}" /api/v1/auth/me)" "$(query_code "${tok}")" >>"${out}"
     sleep 0.5
   done
 }
@@ -604,6 +605,8 @@ check s1-a-retiring eq "$(key_state a)" retiring
 check s1-new-token-signed-by-b login_signs_by b
 check s1-go-api-accepts-b me_accepts "${L_ACCESS}"
 check s1-a-token-still-accepted-in-overlap me_accepts "${TOK_A2}"
+check s1-query-api-serves-b query_serves "${L_ACCESS}"
+check s1-query-api-serves-the-a-token-in-overlap query_serves "${TOK_A2}"
 check s1-a-and-b-both-published wait_jwks_kids "a b" 60
 wait "${PROBE_PID}" || true
 PROBE_PID=""
@@ -662,6 +665,8 @@ rec_line "note: every token a signed has expired by the retire floor, so the a-t
 keys_cmd rollback -kid a
 check s1-retired-a-would-return-only-as-pending out_has "a: retired -> pending"
 check s1-b-signs-after-retire login_signs_by b
+check s1-go-api-accepts-b-after-retire me_accepts "${L_ACCESS}"
+check s1-query-api-serves-b-after-retire query_serves "${L_ACCESS}"
 write_manifest b:active c:pending d:pending
 stage_keys b.pem c.pem d.pem
 

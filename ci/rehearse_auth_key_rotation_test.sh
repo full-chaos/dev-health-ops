@@ -122,5 +122,43 @@ rc=0
 out="$(REHEARSAL_RUN_ID=12345 REHEARSAL_DIR="${T}/rid2" REHEARSAL_IMAGES_ENV="${T}/tag.env" run bash "${SCRIPT}" --stage smoke 2>&1)" || rc=$?
 if [ "${rc}" = 1 ] && grep -q 'not a registry digest reference' <<<"${out}" && ! grep -q 'REHEARSAL_RUN_ID' <<<"${out}"; then ok numeric-run-id-passes-the-check; else bad "numeric-run-id-passes-the-check (rc ${rc})"; fi
 
+# The S1 overlap probe asks go-api AND query-api on every tick, and the overlap check judges both: a query-api miss planted on
+# one tick (go-api still 200) must fail the check the script names on the s1-no-downtime line.
+probe_fn="$(sed -n '/^probe_bg() {/,/^}/p' "${SCRIPT}")"
+overlap_pred="$(awk '$1 == "check" && $2 == "s1-no-downtime-for-the-a-token" {print $3; exit}' "${SCRIPT}")"
+overlap_run() { # overlap_run MISS_TICK -> the overlap predicate's rc over a probe file from the script's own probe_bg
+  # query_code runs in a command substitution, so its tick count lives in a file.
+  local probe
+  probe="$(cat <<EOS
+source "${ROOT}/ci/lib/auth_rotation_probe.sh"
+sleep() { SECONDS=\$((SECONDS + 1)); }
+api_code() { printf 200; }
+query_code() { echo x >>"${T}/qn.$1"; if [ "\$(wc -l <"${T}/qn.$1")" -eq "$1" ]; then printf 503; else printf 200; fi; }
+${probe_fn}
+probe_bg tok "${T}/overlap.$1" 6
+${overlap_pred} "${T}/overlap.$1"
+EOS
+)"
+  bash -c "${probe}" >/dev/null 2>&1
+}
+if [ -n "${probe_fn}" ] && [ -n "${overlap_pred}" ]; then
+  if overlap_run 0; then ok s1-overlap-probe-passes-when-both-serve; else bad s1-overlap-probe-passes-when-both-serve; fi
+  if overlap_run 3; then bad s1-overlap-probe-catches-a-query-api-miss; else ok s1-overlap-probe-catches-a-query-api-miss; fi
+else
+  bad s1-overlap-probe-catches-a-query-api-miss
+fi
+
+# Every ops verifier of the new key is asked in the overlap and again after a retires: go-api and query-api, each with the
+# a-token in the overlap and the b-token after the activate and after the retire.
+# shellcheck disable=SC2016
+for cell in 's1-query-api-serves-the-a-token-in-overlap query_serves "${TOK_A2}"' \
+  's1-query-api-serves-b query_serves "${L_ACCESS}"' \
+  's1-go-api-accepts-b-after-retire me_accepts "${L_ACCESS}"' \
+  's1-query-api-serves-b-after-retire query_serves "${L_ACCESS}"'; do
+  if grep -qxF -- "check ${cell}" "${SCRIPT}"; then ok "${cell%% *}-is-checked"; else bad "${cell%% *}-is-checked"; fi
+done
+# The after-retire cells judge the token of the login that b signed after the retire, not an older one.
+if awk '/^check s1-b-signs-after-retire / {s=NR} /^check s1-go-api-accepts-b-after-retire / {g=NR} /^check s1-query-api-serves-b-after-retire / {q=NR} END {exit !(s && g > s && q > s)}' "${SCRIPT}"; then ok after-retire-cells-follow-the-b-login; else bad after-retire-cells-follow-the-b-login; fi
+
 if [ ! -s "${FAKE_LOG}" ]; then ok no-docker-call-before-the-checks; else bad no-docker-call-before-the-checks; fi
 exit "${failed}"

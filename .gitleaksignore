@@ -15,3 +15,7 @@ internal/auth/workloadexchange/service_account_key_test.go:generic-api-key:30
 # The same two findings sit in earlier commits of this branch on the same lines, so the rows are the commit-less file:rule:line form.
 internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:25
 internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:155
+# test-fake key constants, not secrets: the org TypeSafe key fixtures of the categorize unit cells; they sit in an earlier commit of this branch on the same lines (commit-less form).
+internal/jobs/investment/categorize/orgtypesafeclient_test.go:generic-api-key:13
+internal/llmorgsettings/typesafe_config_test.go:generic-api-key:11
+internal/jobs/investment/typesafebyo_test.go:generic-api-key:24

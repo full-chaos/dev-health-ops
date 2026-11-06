@@ -233,7 +233,9 @@ internal/cigates/weightsfiles	support_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_corpus_external_behaviour_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	*.go
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
+internal/cigates/workflows	auth_proxy_local_login_compose_test.go	ci	dir	*
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
+internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
 internal/cigates/workflows	registry_retry_test.go	unexpressed	-	-
@@ -296,6 +298,7 @@ internal/jobs/investment	providerselection_census_test.go	scripts	tree	*
 internal/jobs/investment	providerselection_census_test.go	src	tree	*
 internal/jobs/investment	shadowexecutor_test.go	cmd	tree	*
 internal/jobs/investment	shadowexecutor_test.go	internal	tree	*
+internal/jobs/investment	typesafebyo_test.go	internal/jobs/investment	dir	*
 internal/jobs/investment/categorize	org_egress_guard_test.go	internal/jobs/investment/categorize	dir	*
 internal/jobs/investment/categorize/decision	adapter_test.go	cmd	tree	*
 internal/jobs/investment/categorize/decision	adapter_test.go	internal	tree	*
@@ -408,6 +411,7 @@ internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/schedul
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncdispatchruntime	dir	*
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncreconciler	dir	*
 internal/queryapi/graph	not_implemented_allowlist_test.go	internal/queryapi/graph/testdata/not_implemented	dir	*
+internal/queryapi/graph	root_class_census_test.go	unexpressed	-	-
 internal/queryapi/graph/model	sdl_nullability_gate_test.go	unexpressed	-	-
 internal/queryapi/home	import_boundary_test.go	unexpressed	-	-
 internal/queryapi/investmentexplain	cache_key_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*

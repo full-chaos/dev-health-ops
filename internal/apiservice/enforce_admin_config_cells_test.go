@@ -696,10 +696,12 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 	}
 }
 
-// D6773 (chris 2026-11-06): a platform admin never needs a membership row, for every token class. With a user access
-// token and no membership row in the token org, it must be admitted on every row, on or off, as the legacy token is.
-// Today the authenticator refuses it with 401 before the guard: a known defect that CHAOS-13206 fixes.
-func TestAdminConfigCellsPlatformAdminWithoutMembershipRowIsAdmitted(t *testing.T) {
+// D6773 (chris 2026-11-06, 13:12Z): a platform admin never needs a membership row, and every token class gives the
+// same answer as the legacy path today, not stricter and not wider. With a user access token and no membership row
+// in the token org, each row must answer exactly what the legacy (HS256) token of the same caller gets for the same
+// request, on or off. Today the authenticator refuses it with 401 before the guard: a known defect that
+// CHAOS-13206 fixes.
+func TestAdminConfigCellsPlatformAdminWithoutMembershipRowAnswersAsLegacy(t *testing.T) {
 	t.Skip("known defect, D6773, CHAOS-13206")
 	pdp := newCellPDP(t)
 	for _, on := range []bool{false, true} {
@@ -710,10 +712,12 @@ func TestAdminConfigCellsPlatformAdminWithoutMembershipRowIsAdmitted(t *testing.
 		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
 		callers := cellCallers(minter)
 		pdp.register(callers)
+		legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
 		for _, key := range sortedAdminConfigKeys() {
+			want := cellDo(handler, key, legacy, nil)
 			got := cellDo(handler, key, callers["platform admin + no membership"].token, nil)
-			if isGuardRefusal(got) {
-				t.Errorf("on=%v %s: %d %s, want admitted (D6773)", on, key, got.status, got.body)
+			if got.status != want.status || got.body != want.body {
+				t.Errorf("on=%v %s: %d %s, want the legacy answer %d %s (D6773)", on, key, got.status, got.body, want.status, want.body)
 			}
 		}
 	}

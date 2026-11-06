@@ -231,7 +231,7 @@ func userFromClaims(claims jwt.MapClaims) (*User, error) {
 		// authenticate_access_token does not catch.
 		return nil, errClaimType
 	}
-	user := &User{UserID: sub, Role: "member"}
+	user := &User{UserID: sub, Role: nonMemberRole}
 	user.Email, _ = claims["email"].(string)
 	user.OrgID, _ = claims["org_id"].(string)
 	if role, present := claims["role"]; present {

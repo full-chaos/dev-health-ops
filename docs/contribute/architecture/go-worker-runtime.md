@@ -104,7 +104,7 @@ Two files grant privileges, and they run in an order that makes only one of
 them authoritative.
 
 1. `dho migrate roles` (the Go leg that replaced the psql script
-   `scripts/worker/provision_river_roles.sql` in Compose, CHAOS-6904) creates the
+   `scripts/worker/provision_river_roles.sql` in Compose) creates the
    roles and bootstraps them (CONNECT, USAGE on `public`, no TEMPORARY/CREATE).
    It runs as the `go-river-provision` step, on the Go operator image.
 2. `internal/storage/river/migrate.go` then **REVOKEs ALL** privileges on the
@@ -129,10 +129,10 @@ repair, the kernel's observe side, and the observer stay on the domain pool.
 Getting this wrong produces SQLSTATE **42501**, and it produces it *only* under
 the production role split:
 
-* The CHAOS-4005 unreclaimable sweep was constructed on the domain pool but
+* The unreclaimable sweep was constructed on the domain pool but
   read `worker_job_routes`, which is coordinator-exclusive. Every pass returned
   42501 from the moment it deployed, at the reconciler's one-second poll
-  cadence — roughly 86,400 aborted transactions a day (CHAOS-4035).
+  cadence — roughly 86,400 aborted transactions a day.
 * It shipped because its tests ran as a superuser. A superuser connection holds
   every privilege, so a wrong-pool statement succeeds in the test and fails in
   production. **Integration tests for a pool-sensitive path must use real,
@@ -196,7 +196,7 @@ three pools, which is why its composition comment at `:217-223` exists.
 
 The sweep is the row that has already gone wrong: it is built on the domain
 pool while its first statement reads coordinator-exclusive
-`worker_job_routes` (CHAOS-4035). Until that is fixed, this row is a known
+`worker_job_routes`. Until that is fixed, this row is a known
 defect rather than a pattern to copy.
 
 **`dho scheduler`** (service identity `dev-health-scheduler`) — the contrast with the worker is the point.
@@ -267,7 +267,7 @@ be false.
 ### A renewer that gives up says so
 
 Neither renewer surrenders on a single failed tick -- cancelling a handler on
-the first database blip terminalized two-hour jobs (CHAOS-3866). But when
+the first database blip terminalized two-hour jobs. But when
 renewal does stop for good, it must be loud, because a handler still working
 under a lapsed lease is exactly the window in which `Begin`'s
 running-with-expired-lease branch hands the same job to a duplicate.
@@ -321,11 +321,11 @@ still in the future (`internal/jobruntime/idempotency_postgres.go:121,132`),
 and the adapter turns that into a duplicate success with no error
 (`internal/jobruntime/adapter.go:403`) — **before** the handler is invoked. If
 the previous attempt died without releasing the lease, the next retry is ACKed
-as already-done and the job is deleted (CHAOS-3998).
+as already-done and the job is deleted.
 
 That is why re-arming an outbox row alone is not enough: the re-armed job hits
 this short-circuit unless the `worker_job_runs` row is reconciled in the same
-work. The settled constraint, from CHAOS-3991, is one sentence: **success may
+work. The settled constraint is one sentence: **success may
 never be recorded on a claim conflict.**
 
 ## Chunked provider walks: continuations and resume cursors
@@ -382,12 +382,12 @@ This is narrower than "any replay". Recovery from an ALREADY-PREPARED chunk
 does not inflate: committed effects are skipped and a `writing` effect is
 inspected by readback first (`internal/providersync/effect_committer.go`). The
 exposure is specific to re-collection, which re-anchoring makes more frequent.
-Pre-existing either way; tracked as CHAOS-4187.
+Pre-existing either way.
 
 Two alternatives are ruled out. **Clamping** the index to the end of the page
 silently drops whatever moved off it — data loss reported as progress.
 **Failing** costs the unit one of its five attempts, which is what made busy
-repositories terminalize after a deploy while quiet ones completed (CHAOS-4177).
+repositories terminalize after a deploy while quiet ones completed.
 
 `ErrChunkCheckpointConflict` stays, and is reserved for state that really is
 corrupt or impossible: a cursor that does not decode, a checkpoint that fails
@@ -399,8 +399,8 @@ whose pages moved is none of those.
 The same judgement governs unreadable provider payloads. **Partial**
 unreadability — one artifact whose archive will not open, whose bytes could
 never be downloaded at all (the artifact-download redirect carried no
-Location header, CHAOS-4191), or whose body exceeds the download size bound
-(`artifact_oversized`, CHAOS-4315) — is skipped and recorded; the rest of the
+Location header), or whose body exceeds the download size bound
+(`artifact_oversized`) — is skipped and recorded; the rest of the
 walk is real data and nothing is lost. The size-bound case stays a
 **chunked-route-only** skip: the non-chunked oracle route (production-dead
 for cicd/tests, kept only as the comparison implementation) still treats a
@@ -408,8 +408,8 @@ size-bound breach as terminal, the same as the in-archive `archive_bounds` /
 `report_cap` bounds below; only the chunked production path changed.
 
 Whether that skip also **withholds the watermark** was reclassified twice.
-CHAOS-4315 first split it on a DETERMINISTIC vs TRANSIENT theory — the same
-rule CHAOS-4142 established for the per-run item cap (see "Two alternatives
+It was first split on a DETERMINISTIC vs TRANSIENT theory — the same
+rule used for the per-run item cap (see "Two alternatives
 are ruled out" above), reapplied one level down at artifact granularity:
 `artifact_oversized` advances (the same bytes are the same size on every
 future re-walk, so withholding recovers nothing and only pins the window
@@ -419,8 +419,7 @@ theory that each is a property of ONE download ATTEMPT — a redirect, a
 connection, the bytes actually received THIS time — so a later re-walk might
 genuinely observe the same artifact differently.
 
-**CHAOS-4394 (2026-08-28) found that theory does not survive its own prod
-evidence.** Nine days after CHAOS-4315 shipped, `sync_watermarks` for
+**Production evidence (2026-08-28) showed that theory does not survive.** Nine days after it shipped, `sync_watermarks` for
 ops/acr/web was STILL pinned at 2026-08-19 — the SAME artifacts recurring as
 `artifact_unavailable` and `unreadable_archive` on every hourly attempt,
 identically, not intermittently. Whatever theoretical transience the
@@ -438,7 +437,7 @@ would have recovered in full.
 
 Because a watermark-advancing window still permanently loses that one
 artifact's reports, every `report_member` skip (all three causes, extended
-from `artifact_oversized`-only by CHAOS-4394) gets a durable per-artifact
+from `artifact_oversized`-only) gets a durable per-artifact
 marker (`GitHubTestsSkippedArtifact`: run id, artifact id, cause, and —
 for `artifact_oversized` only — observed size and cap) alongside the
 closed-vocabulary count — bounded at `githubTestsMaxSkippedArtifactRecords`
@@ -452,7 +451,7 @@ and retry it with a bounded backfill (`POST
 `sync_watermarks`, see [ingestion-and-backfills](../../operate/run/ingestion-and-backfills.md))
 scoped to the affected repo and the marker's run window.
 
-`dev_health_cicd_partial_success_total{reason}` (CHAOS-4394) counts, at
+`dev_health_cicd_partial_success_total{reason}` counts, at
 unit-completion time, every cicd/tests unit that advanced its watermark while
 still carrying incomplete evidence — the UNIT-level view of "success, but with
 a durable, recorded gap", distinct from the per-artifact
@@ -469,10 +468,10 @@ precedent this file already follows elsewhere.
 is a systematic route condition, such as a proxy or auth edge answering every
 request with an error document. It cannot improve by being retried, so it
 fails the unit with its own durable cause rather than report a success that
-ingested nothing (CHAOS-4185).
+ingested nothing.
 
 The gate has three deliberate guards against turning it into a new false
-failure, closing the three defects an earlier, reverted CHAOS-4177 attempt
+failure, closing the three defects an earlier, reverted attempt
 shipped:
 
 - **A sample floor.** Totality only fires once the walk has observed at
@@ -513,7 +512,7 @@ came back shorter than the index, so walking from there would process nothing.
 A page RESHUFFLED to the same length still satisfies the index and is walked
 from it: an ordinal cursor cannot distinguish "same items, moved" from
 "different items, same count". That case is silent and undetectable here, and
-is closed only by anchoring on item identity (CHAOS-4182).
+is closed only by anchoring on item identity.
 
 The re-anchor counter is therefore a **lower bound** on page movement, not a
 measure of it.
@@ -539,7 +538,7 @@ like an ingestion fault rather than a deploy artifact.
 The end-state is a cursor anchored on the provider's own stable identity for an
 item — a workflow run id rather than its position — so a resume is exact whenever
 the anchor is still on the page, and degrades to the re-anchor above when it is
-not. Tracked as CHAOS-4182.
+not.
 
 ## Outbox rows and delivery generations
 
@@ -590,10 +589,10 @@ None covers another's ground.
 | River rescuer | River maintenance, on the elected leader | A job still present in `running` past `max(RescueStuckJobsAfter, kind timeout)` |
 | Lease repair | `internal/syncreconciler/lease_repair.go` | A sync unit `running` with an expired lease |
 | Terminal delivery repair | `internal/joboutbox/terminal_delivery_repair.go` | A `sync.provider_unit` delivery that ended terminal with work unfinished |
-| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease and no recent worker heartbeat, whose pair the capability matrix declines (no outbox row, no attempts) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent (CHAOS-4097), whether or not a handler ran it before (CHAOS-6890) |
-| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished (CHAOS-3997), **or** a `sync.provider_unit` row whose delivery died in transport while the unit holds no lease, whether or not a handler ran it before (CHAOS-6890) |
-| Ready-finalizer backstop | `internal/syncreconciler/ready_finalize_repair.go` | A `finalize_sync_run` outbox row stuck `dispatched` because River's delivery ended **completed** (or its row was reaped) while the run itself never reached a terminal status and every unit is finished (CHAOS-5456) |
-| Orphaned-unit repair | `internal/syncreconciler/orphaned_unit_repair.go` | A `sync.provider_unit` unit stuck `dispatching` whose `worker_job_outbox` row is terminal (`delivered`) and whose River job **completed** or was reaped — recovered by minting a NEW outbox row under a reclaim key, never by re-arming the terminal one (CHAOS-5453) |
+| Unreclaimable sweep | `internal/syncreconciler/unreclaimable_sweep.go` | A sync unit stuck in `dispatching` with no lease and no recent worker heartbeat, whose pair the capability matrix declines (no outbox row, no attempts) **or** whose River delivery is provably dead *and* whose outbox delivery budget is spent, whether or not a handler ran it before |
+| Strand repair | `internal/joboutbox/strand_repair.go` | A daily-metrics or work-graph outbox row whose delivery ended terminal while the domain row proves the work never finished, **or** a `sync.provider_unit` row whose delivery died in transport while the unit holds no lease, whether or not a handler ran it before |
+| Ready-finalizer backstop | `internal/syncreconciler/ready_finalize_repair.go` | A `finalize_sync_run` outbox row stuck `dispatched` because River's delivery ended **completed** (or its row was reaped) while the run itself never reached a terminal status and every unit is finished |
+| Orphaned-unit repair | `internal/syncreconciler/orphaned_unit_repair.go` | A `sync.provider_unit` unit stuck `dispatching` whose `worker_job_outbox` row is terminal (`delivered`) and whose River job **completed** or was reaped — recovered by minting a NEW outbox row under a reclaim key, never by re-arming the terminal one |
 
 Four of those seven can select the same provider unit, so their predicates are
 disjoint **by construction** rather than by ordering — they run in different
@@ -607,7 +606,7 @@ sweep and the strand repair's provider-unit shape take `cancelled` at any
 attempt count, or `discarded` only once `attempt >= max_attempts`. A discarded
 job with attempts remaining therefore belongs to the terminal-delivery repair,
 which can still mint a replacement delivery, and neither other seam may
-terminalize or rearm it out from under that recovery (CHAOS-4097).
+terminalize or rearm it out from under that recovery.
 
 The second split separates the two seams that share those states, and it is
 **not** by River state — they select the same ones deliberately. It is
@@ -656,25 +655,24 @@ permanent and silent — the materializer selects the run every pass, writes
 nothing, and reports success. Run `115e6246` sat in that state for over a day.
 The fix is on the queue side, where River's own state IS readable, and its
 write is bounded by the coordinator's readiness verdict; it does not weaken the
-materializer's guard. CHAOS-4359 originally proposed replacing that guard with
-an `EXISTS` re-check of the readiness predicate, mirroring the CHAOS-4357
-discovery fix; that half was dispositioned as superseded with an executed
+materializer's guard. Replacing that guard with
+an `EXISTS` re-check of the readiness predicate, mirroring the discovery fix, was considered; that half was dispositioned as superseded with an executed
 proof, because readiness is true for the whole life of a healthy finalize
 delivery, so a coordinator-side re-arm double-delivers — and, deleting the
 clause on a live fixture, re-arms `aedd0504`'s generation-4 row that the fence
 below exists to keep out. The guard is now pinned by
 `TestMaterializerRedispatchesStaleUnitsExactlyOnce`'s "a River-dispatched
 finalize row is never re-armed by the materializer" subtest so it cannot be
-removed as dead weight. CHAOS-4359's OTHER half — the `dispatch_sync_run`
+removed as dead weight. The OTHER half — the `dispatch_sync_run`
 guard's missing `planned` disjunct — was a real gap and is fixed. Every pass emits
 `syncreconciler.ready_finalize_pass` with its counters spelled out **including
 the zeros**, which is what makes "this backstop ran and found nothing"
 distinguishable from "this backstop was never reached" — the exact
-indistinguishability that made CHAOS-5456 expensive to find.
+indistinguishability that made it expensive to find.
 
 One run stays deliberately outside this seam. `aedd0504`'s outbox row carries
 dispatched generation 4 against a current generation of 2, so the route fence
-excludes it and its audited recovery belongs to CHAOS-5462. `1410329c` — the
+excludes it and its audited recovery is not yet implemented. `1410329c` — the
 provider-unit strand with a reaped River row — is the seventh seam's ground,
 below.
 
@@ -695,8 +693,8 @@ admits exactly two River verdicts, and neither is reachable by any of them:
 are already separated between themselves by `attempt_count`; a third claimant
 layered on top of that split is how the overlap documented above arose in the
 first place. The strand repair and the sweep used to require
-`sync_run_units.attempts = 0` ("no handler ever claimed it"); CHAOS-6890 removed
-that guard from both (CHAOS-5453 remedy 2). Prod unit `22488b42` had attempts 4,
+`sync_run_units.attempts = 0` ("no handler ever claimed it"); that guard was removed
+from both. Prod unit `22488b42` had attempts 4,
 a worker heartbeat 33 hours old and no lease, and its `delivered` row's River job
 was `discarded` 5/5 (budget-contention deferrals burn River attempts without
 bumping the unit's own counter): every path refused it, the dispatcher reclaimed
@@ -756,9 +754,9 @@ or deleted job never becomes live again.
 re-stamps `updated_at` on every redispatch pass, and for this population every
 one of those passes is a no-op that put no delivery in front of the unit — run
 `1410329c` reached 1,344 of them. An `updated_at` gate would be held open
-forever by the very loop this seam exists to break. CHAOS-5453 remedy 3 names a
-durable `last_progress_at` column as the real fix; this is the interim it also
-names, and it needs no migration.
+forever by the very loop this seam exists to break. A
+durable `last_progress_at` column is the real fix; this is the interim,
+and it needs no migration.
 
 **A residual this seam creates.** Both sibling provider-unit queries bind the
 key with equality (`outbox.dedupe_key = 'sync.provider_unit:' || unit.id::text`),
@@ -769,7 +767,7 @@ data — the sweep, the only destroy path, reads the base key alone and requires
 cancelled or budget-spent discarded job there, which this seam's population never
 has — and the refusal is counted on every pass line rather than filtered away.
 The fix is to widen both sibling bindings from `=` to a key prefix, which belongs
-with CHAOS-5453 remedy 2 (widening the sweep's `attempts = 0` guard): the same
+with widening the sweep's `attempts = 0` guard: the same
 family of query, changed once, with its own guard matrix.
 
 **The delivery must be provably THIS row's own.** A `river_job_id` is refused
@@ -799,9 +797,9 @@ predicates rest on: `daily_metrics_partitions` carries **no** `org_id` column �
 a partition's organization is reachable only through its `run_id` foreign key,
 so the partition shape binds the envelope's organization against `run.org_id`
 on the run join. The first cut invented that column in its test DDL and shipped
-a query production could not parse (CHAOS-4041).
+a query production could not parse.
 
-**How the surveys reach the outbox (CHAOS-8421).** The outbox is bound to its
+**How the surveys reach the outbox.** The outbox is bound to its
 domain row through `args #>> '{domain,id}'`, and `worker_job_outbox` has no
 index on that expression. On that binding alone every candidate domain row cost
 one sequential scan of the whole outbox: a stack with 34 runs awaiting
@@ -889,9 +887,9 @@ Every deploy shape in this repo sets it for `dev-health-reconciler`: the Helm
 values and the root `.env.example` carry `SYNC_UNRECLAIMABLE_SWEEP=active`,
 while `compose.yml` carries
 `--unreclaimable-sweep=${SYNC_UNRECLAIMABLE_SWEEP:-active}` in `command:` —
-CHAOS-4020's contract for that surface is that only credentials render
+The contract for that surface is that only credentials render
 through `environment:`, so the flag is where a reader (and `docker compose
-config`) can see it (CHAOS-6950 deleted the other Compose, Swarm and raw
+config`) can see it (the other Compose, Swarm and raw
 Kubernetes shapes). The interpolated default keeps the operator override
 either form would give. `ParseSweepMode("")` still answers `shadow` so a binary
 run with no configuration at all cannot destroy work, but nothing ships in that
@@ -904,7 +902,7 @@ in shadow *by accident*, and the observability half had nothing acting on it:
 sync run `115e6246`'s 17 stranded units were selected and reported every second
 for thirteen hours and never terminalized. The assertion `active` encodes ("no
 Celery consumer serves provider units for this deployment") is also now
-unconditionally true — CHAOS-3092 deleted that compute outright — so there is no
+unconditionally true — that compute was deleted outright — so there is no
 deployment for which it could be false.
 
 The reconciler logs the resolved mode once at startup
@@ -918,7 +916,7 @@ were indistinguishable.
 mitigation for a broken sweep and it is also a trap: a merged fix looks deployed
 while the override is still in place. **Reactivating is a deploy step, not a
 merge step** — remove the override and confirm the sweep reports its
-would-terminalize selection before considering `active` (CHAOS-4035).
+would-terminalize selection before considering `active`.
 
 ### One deadline per stage, not one deadline for the whole pipeline
 
@@ -926,13 +924,13 @@ The reconciler mutation pipeline (`internal/syncreconciler.MutationPipeline.Step
 composed at `dependencies.go:250-323`) runs six stages every tick — lease
 repair, the unreclaimable sweep, terminal delivery repair, the materializer,
 the kernel (which also runs the publish closure inline), and the observer.
-Before CHAOS-4239 all six shared **one** flat `context.WithTimeout` applied to
+Previously all six shared **one** flat `context.WithTimeout` applied to
 the whole `Step` call (`syncreconciler.Loop.step`'s `ObservationTimeout`,
 2s by default) — so any one stage running long starved its siblings of
 whatever time it left, and `Loop`'s `Errors()` channel treated the resulting
 deadline as fatal to the **whole process**: `internal/platform/lifecycle`'s
 component model tears every other running component down with it. A slow
-terminal-delivery-repair join (CHAOS-4092) or cold-start latency in any other
+terminal-delivery-repair join or cold-start latency in any other
 stage reliably crash-looped the reconciler and, worse, re-relayed outbox work
 on every restart cycle.
 
@@ -957,7 +955,7 @@ The fix is structural, not a bigger number:
   `sync_reconciler_stage_duration_seconds{stage}`) — visible on its own,
   whether or not it changes the tick's overall outcome.
 * The materializer emits `syncreconciler.materializer_pass` on **every** pass
-  (CHAOS-4359), carrying `dispatch` / `finalize` / `discovery` /
+, carrying `dispatch` / `finalize` / `discovery` /
   `discovery_rearmed` / `post_sync` with the zeros included, plus `ran`,
   `failed_step` and `sqlstate`. Same contract, and the same reason, as
   `ready_finalize_pass` and `orphaned_unit_pass`: a stage that ran and found
@@ -965,15 +963,14 @@ The fix is structural, not a bigger number:
   none of this before — the four affected-row counts were computed, returned on
   `MaterializerResult`, and dropped by the pipeline, so a dispatch wakeup being
   re-armed (or silently not being re-armed) was invisible at every level, which
-  is how CHAOS-4359's `planned` gap stranded five runs unobserved for eleven
+  is how a `planned` gap once stranded five runs unobserved for eleven
   days. The counts are published after `Materializer.Step` commits its own
   transaction, so none of them can describe rolled-back work. `dispatch` is an
   affected-row total including fresh inserts, **not** a re-arm count;
-  `discovery_rearmed` is the only narrow recovery count today (CHAOS-4357
-  round 2) and the dispatch equivalent is a CHAOS-4359 follow-up.
-* The CHAOS-4097 runaway report (`syncreconciler.dispatch_wakeup_attempts_exceeded`,
+  `discovery_rearmed` is the only narrow recovery count today and the dispatch equivalent is a follow-up.
+* The runaway report (`syncreconciler.dispatch_wakeup_attempts_exceeded`,
   ERROR) is emitted on **transition** into the over-threshold set and then on a
-  growing interval — not once per tick (CHAOS-5470). It is a pure read of a
+  growing interval — not once per tick. It is a pure read of a
   durable column, so a permanently stuck row used to produce one ERROR per
   second forever; `sync_run 1410329c` ran that way at `attempts=1344` for days,
   and a signal that never stops is the same as no signal. The line now carries
@@ -997,7 +994,7 @@ The fix is structural, not a bigger number:
   are not evidence a row cleared), with a six-hour TTL as the backstop and a
   hard tracking cap past which a row is emitted rather than swallowed. No write
   changed: `runawayDispatchAttempts` still decides nothing, and backoff plus a
-  terminal quarantine state remain CHAOS-5470 phase 2.
+  terminal quarantine state remain open work.
 * Critically, **the process no longer dies for this**. `Loop.run` only tears
   the process down for an error class it cannot self-heal from; a stage
   degrading (wrapped in `syncreconciler.ErrDegradedStage`, produced only when
@@ -1021,11 +1018,11 @@ uninvolved; the message names it because every stepper shares the error.
 
 That collapse hid the 42501 above for the whole window between deploy and
 diagnosis, and root-causing it required correlating Go logs against the
-PostgreSQL server log by hand (CHAOS-4036). The same shape exists one layer
+PostgreSQL server log by hand. The same shape exists one layer
 down, where `errIdempotencyUnavailable`
 (`internal/jobruntime/idempotency_postgres.go:30`) covers at least nine
 distinct conditions and surfaces as `dev-health job failed [idempotency]`
-(CHAOS-4028).
+.
 
 Keeping connection material out of an error is correct. Discarding the SQLSTATE
 and the statement identity is not: a 42501 is a provisioning defect an operator
@@ -1037,7 +1034,7 @@ privilege gap without leaking a DSN.
 ### What no seam covers
 
 A unit that was never published has no lease to expire, no delivery to repair,
-and no job to rescue. Nothing reaches it. That is the class CHAOS-3990
+and no job to rescue. Nothing reaches it. That is the class of failure
 named — units claimed, flipped to `dispatching`, and then never published
 because the runtime had the dataset disabled — and it is why the unreclaimable
 sweep exists as a distinct seam rather than an extension of lease repair.
@@ -1059,7 +1056,7 @@ That distinction has exactly four consumers, and none of them route:
 
 | Consumer | What it does with the group label |
 | --- | --- |
-| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health (CHAOS-3942) | the chart's `goWorkers.expectedWorkerGroups` value (rendered as `EXPECTED_WORKER_GROUPS`) (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`internal/reconcilerservice/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
+| `worker_instances` presence / `EXPECTED_WORKER_GROUPS` health | the chart's `goWorkers.expectedWorkerGroups` value (rendered as `EXPECTED_WORKER_GROUPS`) (`heavy,ops,sync,sync-provider`) tells `/health/workers` which presence rows to expect before it flips from Celery-authoritative to Go-authoritative. It deliberately excludes `reconciler`/`scheduler`/`stream-*`: those run a separate role with their own `/healthz` and never register `worker_instances` presence. An earlier reconciler cut misread this variable as a *rollback-safety* declaration (`internal/reconcilerservice/dependencies.go`, the `buildUnreclaimableSweep` doc comment) — wrong, because the variable's own contract excludes the reconciler and because rollback safety already rests on the durable `worker_job_routes` row, not on an env list. |
 | `workerctl workers status` grouping | `internal/workersctl/main.go`'s `manifestQueueStatusSource.Status` keys live presence rows by `WorkerPresenceSummary.WorkerGroup` and cross-checks each group's queue set against the deployment manifest (`slices.Equal(summary.Queues, queues)`) — a display and consistency check, not a dispatch decision. |
 | `joboperator` drain-and-mutation targeting | `internal/joboperator/service.go`'s `Queues`, `Drain`, and `Undrain` all take a `group string` and validate it with `isValidWorkerGroup` before acting. An operator drains *a group* (a named, deployed set of replicas) — the group answers "which replicas do I signal," never "which queue does this job kind go to." |
 | Log labels | `Config.LogAttrs` (`internal/platform/config/config.go:764-767`) emits `worker_group` as a `slog` attribute alongside `queue_workers`, purely so a log line can be filtered to one deployed group. |
@@ -1077,7 +1074,7 @@ its queue) simply never sees that work. Group names could be renamed,
 merged, or split without touching a single handler; only a `--queues` change
 does that.
 
-This is the exact confusion CHAOS-4044 exists to close: a worker-group name
+This is the exact confusion this section exists to close: a worker-group name
 carries no routing information whatsoever, in either direction. If you need
 to know what a group *runs*, read its `--queues`/`--queue-concurrency` flags
 (`deploy/go-workers/deployment.json`, or the rendered `args:` in
@@ -1085,8 +1082,7 @@ to know what a group *runs*, read its `--queues`/`--queue-concurrency` flags
 
 ## Two planes, not a route-flag plane: what runs vs. where it's served
 
-**RATIFIED 2026-08-21** (CHAOS-4054 decision record, *Go Worker Runtime
-Migration* project): there are exactly two planes, and a route env-var plane
+**RATIFIED 2026-08-21** (decision record): there are exactly two planes, and a route env-var plane
 is not one of them.
 
 | Plane | Answers | Authority |
@@ -1101,8 +1097,8 @@ shipped functionality behind an environment flag. The ~40
 a database table, not kept as a break-glass switch. They no longer exist on
 any surface: not in the Go binary's config, not in the Python producer, not
 in `compose.yml`, `.env.example`, the go-workers overlay, or Helm. (Root
-`compose.yml` no longer defines any Celery service at all -- CHAOS-5589
-deleted the celery-legacy fleet outright.) Two Go
+`compose.yml` no longer defines any Celery service at all -- the celery-legacy fleet was
+deleted outright.) Two Go
 tests enforce that and will fail CI if any of it comes back:
 `TestNoRouteEnablementVariableIsReadAnywhere` walks `internal/`, `cmd/` and
 `src/dev_health_ops/` for a `WORKER_*_ENABLED` read, and
@@ -1118,9 +1114,9 @@ in a tracked service file. Do not document any third.
 The Go fleet serves **10** River queues, listed in the process table above.
 The Celery fleet declared **23** — Redis lists, not PostgreSQL rows, a
 different transport entirely. **Every Python celery worker service has been
-stopped in production since 2026-08-19** (CHAOS-4026), and CHAOS-5589
-deleted the service definitions outright from every compose surface (R146:
-Celery transport is not a rollback target; CHAOS-6950 later deleted the
+stopped in production since 2026-08-19**, and the
+service definitions were deleted outright from every compose surface (Celery
+transport is not a rollback target; the
 production Compose file and the Swarm stack altogether). The table below is now a purely
 curated historical record (see the next section), kept for the
 `route`/`rollback_route` values still recorded per kind in
@@ -1141,18 +1137,17 @@ it isn't `go_default`, so a reader does not have to infer canary-ness from
 the fleet-wide retirement date.
 
 **A second known gap, not fixed by this page:** `deploy/go-workers/README.md`'s
-"CHAOS-3052 deployment runbook" section and `deploy/go-workers/deployment.json`'s
+"deployment runbook" section and `deploy/go-workers/deployment.json`'s
 checked-in `deployment_state: coexistence_disabled` / zero-`desired_replicas`
-defaults describe the pre-cutover additive coexistence procedure (the state
+defaults describe the pre-migration additive coexistence procedure (the state
 before `CUTOVER-RUNBOOK.md`'s Phase 1 runs) and have not been updated to
-reflect the completed 2026-08-19 cutover. A reader who opens that README
+reflect the completed 2026-08-19 retirement of Celery. A reader who opens that README
 first will see "Go-only is not production-authorized" and "both queues and
 all provider routes remain Celery-owned," which reads as a flat contradiction
 of this page. It is a documentation-currency gap in that file, not a
 disagreement about what actually happened — this page and `AGENTS.md`'s CLI
-quickref both already treat CHAOS-4026 (2026-08-21) as settled. Fixing that
-README/manifest staleness is tracked as follow-up in CHAOS-4075, not done in
-this change.
+quickref both already treat the 2026-08-21 Celery retirement as settled. Fixing that
+README/manifest staleness is follow-up work.
 
 The two vocabularies share only four names — `metrics`, `reports`, `sync`,
 `webhooks` — and the overlap is coincidental, not a contract. `-Q` on a Go
@@ -1169,7 +1164,7 @@ Queue selection and concurrency are per-process flags. What a worker
 longer a second, environment-only surface alongside it: the 40
 `WORKER_*_ENABLED` provider route switches — which the Python planner also
 read, so that producer and consumer could disagree about what to plan versus
-what to serve — are deleted (CHAOS-4054). Two hand-maintained copies of that
+what to serve — are deleted. Two hand-maintained copies of that
 mapping is what stranded 54 units in production; the replacement is not a
 better-shared mapping but the removal of the second plane entirely. What a
 pair is *capable* of is the checked-in capability matrix
@@ -1185,8 +1180,8 @@ attempts), and `contracts/jobs/v1/migration-state.json` (per-kind rollout
 `state`/`route`/`rollback_route` — the actual authority on whether a given
 *kind*, not just its queue, has cleared canary) are the live producers. The
 Celery side of the table is now a purely hand-curated historical record
-(`CELERY_CORRESPONDENCE`, cited inline): CHAOS-5589 deleted the Celery `-Q`
-service definitions outright from every compose surface, so there is no
+(`CELERY_CORRESPONDENCE`, cited inline): the Celery `-Q`
+service definitions were deleted outright from every compose surface, so there is no
 longer a producer file to derive or cross-check it against. The table below
 is rendered by `cigate docs gen-queue-mapping`; the generator still
 asserts every Go process and every registered kind is accounted for, and
@@ -1200,20 +1195,20 @@ changing any of the source files.
 | Go process (binary) | Go queue | Job kind(s) | Timeout(s) | Max attempts | Historical Celery queue(s) | Historical Celery consumer(s) | Plane / route status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `heavy` (`dho`) | `investment` | `investment.materialize` | 7200 | 3 | — | — | Go-native -- no Celery predecessor<br>`investment.materialize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dho`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.work_item_attribution` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_finalize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_partition`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.capacity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.complexity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.dora`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.work_item_attribution`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dho`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`report.execute_on_demand`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`report.execute_scheduled`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `heavy` (`dho`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue.<br>`workgraph.build`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `metrics` | `metrics.daily_dispatch`<br>`metrics.daily_finalize`<br>`metrics.daily_partition`<br>`metrics.remaining.capacity`<br>`metrics.remaining.complexity`<br>`metrics.remaining.dora`<br>`metrics.remaining.membership_backfill`<br>`metrics.remaining.recommendations`<br>`metrics.remaining.release_impact`<br>`metrics.remaining.work_item_attribution` | 300-7200 | 3-5 | `metrics`, `backfill` | `worker-heavy` | Celery dormant since 2026-08-19; Go/River live<br>backfill's family (metrics.remaining.membership_backfill) rides this queue, not a dedicated Go 'backfill' queue.<br>`metrics.daily_dispatch`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_finalize`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.daily_partition`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.capacity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.complexity`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.dora`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.membership_backfill`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.recommendations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.release_impact`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`metrics.remaining.work_item_attribution`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `reports` | `report.execute_on_demand`<br>`report.execute_scheduled` | 900 | 3 | `reports` | `worker` | Celery dormant since 2026-08-19; Go/River live<br>`report.execute_on_demand`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`report.execute_scheduled`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `heavy` (`dho`) | `workgraph` | `workgraph.build` | 3600 | 4 | `default` | `worker` | Celery dormant since 2026-08-19; Go/River live<br>work_graph_tasks.py routed through the shared 'default' catch-all, not a dedicated queue.<br>`workgraph.build`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `ops` (`dho`) | `coverage` | `system.sync_coverage_refresh` | 900 | 3 | — | — | Go-native -- no Celery predecessor<br>`system.sync_coverage_refresh`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dho`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue.<br>`system.heartbeat`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dho`) | `retention` | `system.llm_budget_stale_reservations`<br>`system.retention_cleanup` | 60-300 | 2-3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired under CHAOS-4026, e.g. ask-dev-retention-sweep)<br>`system.llm_budget_stale_reservations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `ops` (`dho`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `heartbeat` | `system.heartbeat` | 30 | 1 | `default` | `worker` | Celery dormant since 2026-08-19; Go/River live<br>system_ops.phone_home_heartbeat routed through 'default', not a dedicated queue.<br>`system.heartbeat`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `retention` | `system.llm_budget_stale_reservations`<br>`system.retention_cleanup` | 60-300 | 2-3 | — | `beat` | Go-native consolidated sweep; historical retention work was several discrete Beat-scheduled tasks (retired, e.g. ask-dev-retention-sweep)<br>`system.llm_budget_stale_reservations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.retention_cleanup`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `ops` (`dho`) | `webhooks` | `operational.billing_notification`<br>`operational.webhook_delivery` | 120-900 | 4 | `webhooks` | `worker` | Celery dormant since 2026-08-19; Go/River live<br>`operational.billing_notification`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`operational.webhook_delivery`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 | `reconciler` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Control loop, not a River queue -- no -Q for this process. |
-| `scheduler` (`dho`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21 (CHAOS-4026); Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
-| `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
-| `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19 (CHAOS-4026); Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `scheduler` (`dho`) | `—` | — | — | — | `scheduler` | `beat` | Celery Beat retired 2026-08-21; Go scheduler is sole production owner<br>Control loop, not a River queue -- no -Q for this process. |
+| `stream-external` (`dho`) | `—` | — | — | — | `external-ingest` | `worker-external-ingest` | Celery dormant since 2026-08-19; Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
+| `stream-ingest` (`dho`) | `—` | — | — | — | `ingest` | `worker-ingest` | Celery dormant since 2026-08-19; Go stream runner live<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
 | `stream-pagerduty` (`dho`) | `—` | — | — | — | — | — | Go-native -- no Celery predecessor<br>Valkey stream consumer, not a River queue -- no -Q for this process. |
-| `sync` (`dho`) | `sync` | `sync.external_push_expiry_sweep`<br>`sync.provider_oauth_revocations`<br>`sync.team_autoimport`<br>`sync.team_repo_ownership_derivation` | 300-900 | 2-3 | `sync` | `worker` | Celery dormant since 2026-08-19 (CHAOS-4026); Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.external_push_expiry_sweep`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.provider_oauth_revocations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_autoimport`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_repo_ownership_derivation`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
-| `sync-provider` (`dho`) | `sync_provider` | `sync.provider_unit`<br>`system.dimension_fold` | 120-900 | 2-5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19 (CHAOS-4026); Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: CHAOS-4054 deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- CHAOS-4027, parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.dimension_fold`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `sync` (`dho`) | `sync` | `sync.external_push_expiry_sweep`<br>`sync.provider_oauth_revocations`<br>`sync.team_autoimport`<br>`sync.team_repo_ownership_derivation` | 300-900 | 2-3 | `sync` | `worker` | Celery dormant since 2026-08-19; Go/River live. Historically also the shared fallback queue for all providers with PROVIDER_SYNC_QUEUES_ENABLED off.<br>`sync.external_push_expiry_sweep`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.provider_oauth_revocations`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_autoimport`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`sync.team_repo_ownership_derivation`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
+| `sync-provider` (`dho`) | `sync_provider` | `sync.provider_unit`<br>`system.dimension_fold` | 120-900 | 2-5 | `sync.github`, `sync.gitlab`, `sync.linear`, `sync.jira`, `sync.launchdarkly`, `sync.github.light`, `sync.github.medium`, `sync.github.heavy`, `sync.gitlab.light`, `sync.gitlab.medium`, `sync.gitlab.heavy`, `sync.jira.medium`, `sync.linear.medium` | `worker`, `worker-heavy` | Celery fleet-wide dormant since 2026-08-19; Go/River live. This queue's one kind (`sync.provider_unit`) was still `canary` per-kind for a time after the fleet-wide Celery retirement -- its own migration has since completed too (see below). Enablement is -Q topology plus the user's own sync config: the route-flag removal deleted the provider/dataset WORKER_*_ENABLED switch plane outright, so a shipped route is always executable and nothing hides it behind an environment flag.<br>The per-provider cost-class split (light/medium/heavy) has no Go equivalent yet -- parked. All cost classes collapse onto the single sync_provider queue in Go.<br>`sync.provider_unit`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json)<br>`system.dimension_fold`: state=`celery_removed` ⚠, route=`river`, rollback_route=`none` (migration-state.json) |
 
 Celery queues carrying no work reachable through a Go queue at all (telemetry, not routed work):
 
@@ -1222,19 +1217,19 @@ Celery queues carrying no work reachable through a Go queue at all (telemetry, n
 | `monitoring` | queue-depth telemetry; superseded by native worker_jobs_available / worker_job_oldest_age_seconds / worker_execution_saturation_ratio metrics, not a queue |
 <!-- END GENERATED QUEUE MAP -->
 
-### `metrics.daily_partition`'s native-family dispatch: pre_bridge vs post_bridge phases (CHAOS-4276, CHAOS-4278)
+### `metrics.daily_partition`'s native-family dispatch: pre_bridge vs post_bridge phases
 
-`metrics.daily_partition` (`internal/jobs/metrics/daily/daily.go` `PartitionHandler.Work`) fans out ~24 per-repo/day metric families, cutting them over from the Python compatibility bridge one at a time (`families.json`'s `"port": "go"`). Since CHAOS-4276 (`team_wellbeing`, `repo_user_commit`) the dispatch order per partition was: run every registered native Go family (`SetNativeFamilies`, `PartitionHandler.computeNativeFamilies`) → call the Python compatibility bridge with a skip-list naming whichever natives just succeeded.
+`metrics.daily_partition` (`internal/jobs/metrics/daily/daily.go` `PartitionHandler.Work`) fans out ~24 per-repo/day metric families, cutting them over from the Python compatibility bridge one at a time (`families.json`'s `"port": "go"`). The dispatch order per partition was: run every registered native Go family (`SetNativeFamilies`, `PartitionHandler.computeNativeFamilies`) → call the Python compatibility bridge with a skip-list naming whichever natives just succeeded.
 
-CHAOS-4278 (`work_item_state`) added a SECOND phase, because it broke that assumption: its native executor reads `work_item_team_attributions`, a table the STILL-PYTHON `work_item_attribution` family writes fresh inside the SAME partition's bridge call. Running `work_item_state` in the original (now `pre_bridge`) phase meant its Go read happened BEFORE that write -- a codex review round caught this as a same-partition staleness bug, not merely the already-disclosed "coverage caveat" of the read-not-recompute design (see the [Python↔Go live-path ledger](../../reference/runtime/python-go-live-path-ledger.md)'s Metrics family section).
+A SECOND phase exists for `work_item_state`, because it broke that assumption: its native executor reads `work_item_team_attributions`, a table the STILL-PYTHON `work_item_attribution` family writes fresh inside the SAME partition's bridge call. Running `work_item_state` in the original (now `pre_bridge`) phase meant its Go read happened BEFORE that write -- a codex review round caught this as a same-partition staleness bug, not merely the already-disclosed "coverage caveat" of the read-not-recompute design (see the [Python↔Go live-path ledger](../../reference/runtime/python-go-live-path-ledger.md)'s Metrics family section).
 
 The fix is additive, not a rewrite of the existing dispatch: `families.json` gained an optional `"phase"` field (`"pre_bridge"`, the default when omitted -- every existing family needs no edit; `"post_bridge"` -- new). `PartitionHandler` gained `SetPostBridgeNativeFamilies` (`internal/workerservice/daily.go` registers `work_item_state` there, not in the `SetNativeFamilies` map) and `computePostBridgeNativeFamilies`. `Work`'s dispatch is now: pre_bridge natives run → their names, PLUS every registered post_bridge family name UNCONDITIONALLY, are excluded from the bridge call (`skipFamiliesForBridge`) → the bridge runs (computing `work_item_attribution` among whatever else was not skipped) → post_bridge natives run, now against fresh data.
 
 **Fail-open asymmetry, by design:** a `pre_bridge` family's runtime failure still has the bridge as a fallback (it was never told to skip that family). A `post_bridge` family's runtime failure does NOT -- the bridge was already told to skip it (skipFamiliesForBridge cannot know in advance that the later post_bridge run will fail), so a `post_bridge` failure means zero rows for that family this partition, surfaced only via the same `DailyMetricsNativeFamilyOutcomeRefused` telemetry every native-family refusal already uses.
 
-**This phase is temporary per family it's declared for**, not a permanent second tier: `families.json`'s `"phase_note"` on `work_item_state` says so explicitly -- once CHAOS-4283 ports `work_item_attribution` to a native Go executor, that executor can simply run BEFORE `work_item_state` within the ordinary `pre_bridge` phase (in-process sequencing, no cross-phase call needed), and `work_item_state` moves back to `pre_bridge` (or drops the field).
+**This phase is temporary per family it's declared for**, not a permanent second tier: `families.json`'s `"phase_note"` on `work_item_state` says so explicitly -- once a later change ports `work_item_attribution` to a native Go executor, that executor can simply run BEFORE `work_item_state` within the ordinary `pre_bridge` phase (in-process sequencing, no cross-phase call needed), and `work_item_state` moves back to `pre_bridge` (or drops the field).
 
-### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: retired, not fixed (CHAOS-4243)
+### `metrics.remaining.extra_metrics` / `metrics.remaining.team_metrics`: retired, not fixed
 
 Both kinds were registered handlers (`internal/workerservice/daily.go`) with
 zero producer anywhere — the fixed-schedule fanout (`internal/scheduler/fixed
@@ -1243,18 +1238,18 @@ post-sync scope switch (`internal/workerservice/sync_dispatch.go`'s
 `postSyncRemainingScope`) both skipped them, so no partition was ever
 enqueued in either environment.
 
-CHAOS-4243 investigated wiring a fixed-schedule entry for each (matching
+Wiring a fixed-schedule entry for each (matching
 `complexity_daily_fanout`/`release_impact_daily_fanout`/
 `recommendations_daily_fanout`/`membership_backfill_daily_fanout`'s pattern)
 and rejected it: `daily_metrics_fanout`'s then-existing Python compatibility
-bridge (deleted 2026-09-07 by CHAOS-3092 PR-A; this paragraph records the state
-at the time of the CHAOS-4243 ruling, not today's)
+bridge (deleted 2026-09-07; this paragraph records the state
+at the time of the decision, not today's)
 (`daily.HTTPCompatibilityExecutor` →
 `/internal/worker/daily-metrics/v1/execute` → `_run_daily_direct` →
 `run_daily_metrics_job`,
 `ops/src/dev_health_ops/metrics/job_daily.py:729-1446`, removed with the Python api) already computes and
 writes every table both families targeted — `compute_team_wellbeing_metrics_daily`
-(team_metrics_daily; CHAOS-5311 has since deleted this function and its call
+(team_metrics_daily; this function has since been deleted and its call
 site outright, team_metrics_daily is now written exclusively by the native
 Go executor, TeamWellbeingExecutor -- this historical analysis is unaffected
 since the bridge covered every table listed here at the TIME of this ruling),
@@ -1276,8 +1271,8 @@ ruling for every table either retired family would have written** —
 `compute_release_confidence`/`quality_drag`/`pipeline_stability`,
 `run_benchmarking_for_day` (benchmarking_rollups), and, on the finalize call,
 `compute_ic_metrics_daily`/`compute_ic_landscape_rolling` still are. Team
-metrics is the one exception: CHAOS-5311 deleted `compute_team_wellbeing_
-metrics_daily` outright, so `team_metrics_daily` is now written exclusively
+metrics is the one exception: `compute_team_wellbeing_
+metrics_daily` was deleted outright, so `team_metrics_daily` is now written exclusively
 by the native Go `TeamWellbeingExecutor`, not by this fanout at all.
 
 Leaving the two kinds registered-but-unreachable was judged itself the
@@ -1297,9 +1292,9 @@ changed in how `daily_metrics_fanout` reaches those tables — the two
 
 ## The native sync-dispatch coordinator pathway
 
-CHAOS-4175 ported the last of three sync-dispatch families
-(`finalize_sync_run`, `run_sync_reference_discovery`, `dispatch_sync_run`) off
-the HTTP compatibility bridge onto native Go. This is the full pathway a
+The last of three sync-dispatch families
+(`finalize_sync_run`, `run_sync_reference_discovery`, `dispatch_sync_run`) runs
+native Go, off the HTTP compatibility bridge. This is the full pathway a
 scheduled sync now runs end to end, one hop per process/pool boundary. Every
 node is tagged with the database role it actually executes as — **domain**,
 **queue** (queue-control), or **coordinator** — using the same three-role
@@ -1335,7 +1330,7 @@ flowchart TD
 
   subgraph WUNIT["dev-health-worker — provider-unit job execution"]
     JIRA["Jira incidents: PostgresIncidentEntitlement.Require re-check<br/>before fetch + at the ClickHouse write boundary<br/>[domain]"]
-    PD["PagerDuty (every dataset): the SAME PostgresIncidentEntitlement.Require<br/>re-check at the same two seams (CHAOS-4219)<br/>[domain]"]
+    PD["PagerDuty (every dataset): the SAME PostgresIncidentEntitlement.Require<br/>re-check at the same two seams<br/>[domain]"]
     ARMFIN["Unit terminal path arms the finalize wakeup:<br/>sync_dispatch_outbox(kind=finalize_sync_run)<br/>[domain]"]
   end
 
@@ -1348,7 +1343,7 @@ flowchart TD
     TERM["Terminalize sync_runs / sync_run_units;<br/>observeTerminalSyncRun updates backfill_jobs / job_runs<br/>[domain]"]
     COV["invalidateSyncCoverageForIntegration: advisory xact lock,<br/>then UPDATE sync_coverage_projections SET invalidated_at,<br/>updated_at (both now(), as the Python ORM update does)<br/>(once-only branch, inside the finalizing tx)<br/>[domain]"]
     COMMIT["tx.Commit"]
-    EPOCH["invalidateCoverageCache (CHAOS-4226): INCR + EXPIRE<br/>cache_epoch:org:{org_id} via VALKEY_URI (DB 1), 5s bound,<br/>AFTER commit, once-only branch only; failure is logged +<br/>counted, never fails the committed finalize<br/>[external — Valkey, no Postgres role]"]
+    EPOCH["invalidateCoverageCache: INCR + EXPIRE<br/>cache_epoch:org:{org_id} via VALKEY_URI (DB 1), 5s bound,<br/>AFTER commit, once-only branch only; failure is logged +<br/>counted, never fails the committed finalize<br/>[external — Valkey, no Postgres role]"]
     CNT["emitted_total{provider}++ always;<br/>consumed_total{provider}++ only on Valkey ACK<br/>(devhealth_sync_coverage_cache_invalidations_*)"]
   end
 
@@ -1407,8 +1402,7 @@ other two sites in `internal/syncdispatchruntime/native_dispatch_sync_run_servic
 `NativeDispatchSyncRunService` and `NativeFinalizeSyncRunService` DO run
 entirely on the **domain** pool — `dev-health-worker` never opens a
 coordinator pool at all, which is exactly why `DispatchGuard`'s `tier_limits`
-read had to be dual-granted rather than left coordinator-only (CHAOS-4175;
-see the dual-grant table list in `domainPosture()`'s doc comment).
+read had to be dual-granted rather than left coordinator-only (see the dual-grant table list in `domainPosture()`'s doc comment).
 
 **Two former gaps this diagram once stated explicitly rather than glossing
 over, both kept here as their closure records, matching
@@ -1416,14 +1410,14 @@ this page's own convention of naming a known gap in place rather than
 smoothing it into the happy path (see, elsewhere on this page, the
 `worker_job_routes`/sweep defect under [Which pool every component is
 constructed on](#which-pool-every-component-is-constructed-on) and the
-CHAOS-4054/CHAOS-4075 documentation-currency gap under [Queue
+documentation-currency gap under [Queue
 topology](#queue-topology)):**
 
-- **PagerDuty execution-time canonical-incident re-check (closed, CHAOS-4219).**
+- **PagerDuty execution-time canonical-incident re-check (closed).**
   Jira's unit execution re-verifies entitlement at two points before trusting
   the feature gate Dispatch read earlier in the same pass; PagerDuty units
-  formerly had no equivalent call, an asymmetry that mattered once CHAOS-4209
-  ruled the Dispatch gate non-locking. Both providers now share ONE
+  formerly had no equivalent call, an asymmetry that mattered once
+  the Dispatch gate became non-locking. Both providers now share ONE
   implementation, `internal/providersync/incident_entitlement.go`
   (`PostgresIncidentEntitlement.Require`, non-locking, called through
   `requireIncidentEntitlement`), at the same two seams: every PagerDuty route
@@ -1437,7 +1431,7 @@ topology](#queue-topology)):**
   worker refuses to construct any PagerDuty executor without the entitlement
   (`internal/workerservice/provider_sync.go`, `errWorkerDependencyUnavailable`),
   the same fail-closed posture Jira incidents already had.
-- **Estimate against actual (CHAOS-8831).** The dispatch pass writes the estimates a
+- **Estimate against actual.** The dispatch pass writes the estimates a
   unit is admitted on to `result.observations.budget_estimate`. The execution of a
   complete route counts every wire request of every client the unit uses in a
   `providerfoundation.RequestLedger` carried in its context, per (route family,
@@ -1455,7 +1449,7 @@ topology](#queue-topology)):**
   `sync_provider_unit.budget_comparison` at Info, and for each underestimated row
   `sync_provider_unit.budget_underestimated` at Warn and
   `dev_health_provider_budget_underestimate_total{provider,dataset,dimension}`.
-- **The finalize → cache hop (CHAOS-4226, closed).** Before CHAOS-4226 the
+- **The finalize → cache hop (closed).** Previously the
   native finalize's only invalidation was the Postgres one
   (`invalidateSyncCoverageForIntegration`, `native_finalize_sync_run.go`),
   so the home dashboard's Valkey-backed `TTLCache` served pre-finalize
@@ -1496,7 +1490,7 @@ topology](#queue-topology)):**
   **Scope:** only the epoch-scoped caches (`HOME_CACHE`, `EXPLAIN_CACHE`)
   react; the GraphQL `CachedDataLoader` entries
   (`api/graphql/loaders/base.py`, `make_cache_key` + `mget`, 300 s TTL) are
-  not epoch-aware and stay TTL-only — a follow-up, not part of CHAOS-4226.
+  not epoch-aware and stay TTL-only — a follow-up, not part of this change.
 
 ## Deployment couplings
 
@@ -1519,7 +1513,7 @@ table, including on an already-initialised volume.
 
 Provisioning (`go-river-provision`, `dho migrate roles`) and the River migration
 run from the **Go operator image** (`DEV_HEALTH_GO_OPERATOR_IMAGE`; the chart's
-provision-roles Job runs `dho migrate roles` on it since CHAOS-6951). The posture assertions that check those grants ship in
+provision-roles Job runs `dho migrate roles` on it). The posture assertions that check those grants ship in
 the **Go worker image**, the dho image (`DEV_HEALTH_GO_DHO_IMAGE`).
 
 **A posture change requires both images to be bumped in the same deploy.** Bump
@@ -1529,14 +1523,14 @@ that does not declare them. Either way the fleet refuses to start, which is the
 safe direction — but it is a deploy-time cause with a startup-time symptom, and
 the two look unrelated.
 
-### A posture-manifest change is a lockstep migrate + worker deploy (CHAOS-5437)
+### A posture-manifest change is a lockstep migrate + worker deploy
 
 A change to any runtime role's declared posture manifest (`domainPosture` /
 `queuePosture` / `coordinatorPosture` in
 `internal/storage/postgres/domain_authorization.go`) is a stricter version of
 "two images have to move together" above: it is not enough for the *right*
 images to eventually run, they have to be *lockstep with the migrate that
-last ran*. On 2026-09-07, `#2361`/`165eed2e91` widened a grant and its
+last ran*. On 2026-09-07, commit `165eed2e91` widened a grant and its
 matching manifest entry in one commit. `go-worker-migrate`
 (`cmd/dev-health-worker-migrate`, the `go-river-migrate` Compose service) ran
 from a current image and applied the wider grant; `go-worker-heavy`,
@@ -1578,10 +1572,10 @@ the old one.
 
 Both 2026-08-20 production incidents ran through this path. In one, a pooler
 recreate seventeen seconds after the last successful claim left every worker
-unable to claim for two hours (CHAOS-4029). In the other, two pgbouncers served
+unable to claim for two hours. In the other, two pgbouncers served
 a cached negative lookup for about three minutes, which was long enough to burn
 a `max_attempts = 3` job's entire retry budget and discard it permanently
-(CHAOS-4023).
+.
 
 Two structural facts follow, and both are open:
 
@@ -1627,7 +1621,7 @@ The refusal is deliberate and correct: the frozen contracts name
 authoritative semantic table yet, and treating the envelope UUID as domain truth
 would make retry unsafe. What is not correct is that an operator learns it only
 after configuring a DSN, minting a credential, and getting the flag order right
-(CHAOS-4030).
+.
 
 **There is currently no supported path to re-drive a stranded job**, which is
 why a repair loop cannot delegate to the operator retry path and has to own its
@@ -1650,64 +1644,3 @@ Job arguments carry a versioned envelope
 report text, and raw webhook bodies are referenced by identifier, never copied
 into the queue. Removing, renaming, or changing the meaning of a field requires
 a new contract version; adding an optional field does not.
-
-## Sources
-
-- CHAOS-3990 — planner dispatches units the runtime has disabled; they strand
-  with no lease, no job, and no reaper
-- CHAOS-3991 — a claim conflict reported as success deleted the job that would
-  have reclaimed the lease
-- CHAOS-3997 — reclaim sweep for runs stranded with an expired lease and no live
-  job; its review established the delivery generation and the disproven lease
-  proxy
-- CHAOS-3998 — a live idempotency lease is ACKed as duplicate success without
-  running the handler
-- CHAOS-4005 / PR #1830 — unreclaimable-dispatching sweep, its guards, and its
-  mode as the deployment declaration
-- CHAOS-4020 / PR #1832 — worker CLI, flag-over-environment precedence, and the
-  two fleets' queue vocabularies
-- CHAOS-4023 — infrastructure unavailability consuming a job's retry budget
-- CHAOS-4025 — a dead worker's in-flight job is invisible until the rescue
-  horizon
-- CHAOS-4028 — nine distinct idempotency failures collapsed into one error
-- CHAOS-4029 — workers reported healthy for two hours while unable to execute
-- CHAOS-4030 — `workerctl` advertises verbs that are unconditionally refused
-- CHAOS-4035 — the sweep read a coordinator-exclusive table on the domain pool
-- CHAOS-4036 — one package-wide error string hiding the actual SQLSTATE
-- CHAOS-4041 / PR #1836 — the strand repair queried a partitions column that
-  exists only in its hand-written test schema, not in production
-- CHAOS-4026 (2026-08-21) — Celery retired fleet-wide; every Python celery
-  worker/beat service stopped in production, Go-owned cadences proven to be
-  the sole executor
-- CHAOS-4044 — worker-group semantics and the Celery-to-River queue mapping
-  documented for the first time; see [Worker-group semantics](#worker-group-semantics-identity-only-never-routing)
-  and [the generated queue mapping](#the-celery-to-river-queue-mapping-generated)
-- CHAOS-4054 — two-plane route architecture ratified and implemented: intent
-  (sync config) and serving (`-Q` topology) are the only two planes. Steps 1-3
-  deleted the `WORKER_*_ENABLED` route env-var surface end to end and made
-  capability always-on; step 4 deleted the Celery-presence dispatch plane that
-  sat underneath it (`provider_unit_transport.py`, `celery_consumers.py`, and
-  the `UnitTransport.{CELERY,UNROUTABLE,DEFER}` vocabulary), so a provider unit
-  is either staged in the durable `sync.provider_unit` outbox for River or
-  terminalized as `feature_disabled` — there is no second runtime to fall
-  through to. See [Two planes, not a route-flag plane](#two-planes-not-a-route-flag-plane-what-runs-vs-where-its-served)
-- CHAOS-4175 — the last of the three sync-dispatch families
-  (`dispatch_sync_run`) ported off the HTTP compatibility bridge to native Go;
-  the fold-in of its own domain-role privilege proof found `tier_limits` was
-  never granted to the domain role at all, the fifth such gap this family of
-  ports has surfaced. See [The native sync-dispatch coordinator
-  pathway](#the-native-sync-dispatch-coordinator-pathway)
-- CHAOS-4219 — PagerDuty units have no execution-time canonical-incident
-  re-check, unlike Jira's two-site re-verification; a bounded, accepted
-  staleness window with no backstop today. See [The native sync-dispatch
-  coordinator pathway](#the-native-sync-dispatch-coordinator-pathway)
-- CHAOS-4226 (closed) — the native finalize now bumps the per-org cache
-  epoch in Valkey after commit and the home/explain read path folds it
-  into its key; `emitted - consumed` on
-  `devhealth_sync_coverage_cache_invalidations_*_total` is the alert. Left
-  as ticket candidates, not changed here: `workers/metrics_daily.py`
-  passes `org_id=""` to `_invalidate_metrics_cache` (no org to bump), and
-  `core/cache_invalidation.py`'s `publish_invalidation_event` /
-  `subscribe_to_invalidation_events` pub/sub pair has no caller. See [The
-  native sync-dispatch coordinator
-  pathway](#the-native-sync-dispatch-coordinator-pathway)

@@ -1,6 +1,6 @@
 ---
 page_id: con-auth-control-plane-adrs
-summary: The eleven ADRs TRD section 26 requires before Auth Control Plane cutover, plus one proposed by the threat model, ratified Accepted on 2026-09-02 (CHAOS-3270) — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the Wave 0 inventory that constrains it.
+summary: The eleven ADRs TRD section 26 requires before the Auth Control Plane becomes the issuer, plus one proposed by the threat model, ratified Accepted on 2026-09-02 — each stating its decision, what it supersedes, what it deliberately leaves open, and the anchored evidence from the inventory that constrains it.
 content_type: architecture
 owner: engineering
 source_of_truth:
@@ -13,11 +13,10 @@ applicability: current
 lifecycle: active
 ---
 
-# Auth Control Plane ADRs (Wave 0 drafts)
+# Auth Control Plane ADRs
 
-TRD §26 requires eleven ADRs before cutover. All twelve — the eleven plus
-ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass recorded
-in [CHAOS-3270's "Wave 0 ratification pass" comment](https://linear.app/fullchaos/issue/CHAOS-3270/epic-build-the-dev-health-auth-control-plane),
+TRD §26 requires eleven ADRs before the Auth Control Plane becomes the issuer. All twelve — the eleven plus
+ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass,
 over the [decision sheet](auth-control-plane-decision-sheet.md), which carries
 the recommendation, the alternatives considered, and the risk for each.
 {: .fc-page-lede }
@@ -33,7 +32,7 @@ the recommendation, the alternatives considered, and the risk for each.
 
     Guardrail references (`G-n`) are to *Engineering Guardrails — Go-native Dev
     Health Auth Control Plane*. Where an ADR cites a `file:line`, that anchor was
-    read during Wave 0; where it cites nothing, the ADR says so and names the gap.
+    read during the inventory; where it cites nothing, the ADR says so and names the gap.
 
 !!! success "The inventory contract these ADRs build on is enforced"
     `ci/check_endpoint_profiles.py` (removed with the Python api) (`0a7ff7ccd`) and acr's Go equivalent are
@@ -53,21 +52,21 @@ the recommendation, the alternatives considered, and the risk for each.
 
 | ID | Title | Status | Blocks |
 |---|---|---|---|
-| ACP-ADR-01 | Go dependency selection for the auth service | Accepted | Wave 1 |
-| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Accepted | Wave 1, Wave 3 |
-| ACP-ADR-03 | Access, refresh, and workload token TTLs | Accepted | Wave 3 |
-| ACP-ADR-04 | Auth schema ownership and aggregate transition | Accepted | Wave 4 |
-| ACP-ADR-05 | Policy representation and revision strategy | Accepted | Wave 5 |
-| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Accepted | Wave 8 |
-| ACP-ADR-07 | Entitlement snapshot and event contract | Accepted | Wave 5 |
-| ACP-ADR-08 | ACR lifecycle projection boundary | Accepted | Wave 9 |
-| ACP-ADR-09 | External Push lifecycle projection boundary | Accepted | Wave 9 |
-| ACP-ADR-10 | MFA and step-up requirements | Accepted | Wave 2 |
-| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Accepted | Wave 4 |
-| ACP-ADR-12 | A single authentication seam for `query-api` | Accepted | Wave 6 |
-| ACP-ADR-13 | ACP as the OAuth 2.1 authorization server for the browser and MCP clients | Accepted | Ask Dev (CHAOS-12082) |
+| ACP-ADR-01 | Go dependency selection for the auth service | Accepted | — |
+| ACP-ADR-02 | Signing-key custody and the production KMS adapter | Accepted | — |
+| ACP-ADR-03 | Access, refresh, and workload token TTLs | Accepted | — |
+| ACP-ADR-04 | Auth schema ownership and aggregate transition | Accepted | — |
+| ACP-ADR-05 | Policy representation and revision strategy | Accepted | — |
+| ACP-ADR-06 | Compose bootstrap and Kubernetes federation | Accepted | — |
+| ACP-ADR-07 | Entitlement snapshot and event contract | Accepted | — |
+| ACP-ADR-08 | ACR lifecycle projection boundary | Accepted | — |
+| ACP-ADR-09 | External Push lifecycle projection boundary | Accepted | — |
+| ACP-ADR-10 | MFA and step-up requirements | Accepted | — |
+| ACP-ADR-11 | SCIM and enterprise deprovisioning scope | Accepted | — |
+| ACP-ADR-12 | A single authentication seam for `query-api` | Accepted | — |
+| ACP-ADR-13 | ACP as the OAuth 2.1 authorization server for the browser and MCP clients | Accepted | Ask Dev |
 
-ACP-ADR-12 is **not** one of TRD §26's eleven. It is proposed by the Wave 0
+ACP-ADR-12 is **not** one of TRD §26's eleven. It is proposed by the
 threat model (§2.9) because the migration removes a control that exists today
 and replaces it with per-site discipline. Ratify or reject it alongside the
 others; rejecting it is a legitimate outcome, but doing so silently is not.
@@ -76,7 +75,7 @@ others; rejecting it is a legitimate outcome, but doing so silently is not.
 
 ## ACP-ADR-01 — Go dependency selection for the auth service
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.1 · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
 
 ### Context
 
@@ -110,7 +109,7 @@ at the tag its consumer pins.
 
 ### Decision
 
-Select, and record here as pinned versions at Wave 1 start:
+Select, and record here as pinned versions at the start of the build:
 
 1. **JOSE/JWT: `github.com/golang-jwt/jwt/v5`**, with
    `internal/queryapi/principal/verifier.go` promoted to the **canonical
@@ -120,7 +119,7 @@ Select, and record here as pinned versions at Wave 1 start:
    Its `Ed25519JWKSVerifier` is Ed25519-only by design, which matches the
    asymmetric algorithm decision below.
 3. **Router:** `net/http` with `http.ServeMux` and explicit method-and-path
-   registration. No third-party router in Wave 1. Rationale: TRD §6 requires
+   registration. No third-party router. Rationale: TRD §6 requires
    strict route/method registration, and `query-api` already runs on plain
    `ServeMux`.
 4. **Algorithm: Ed25519/EdDSA for every asymmetric platform token.** Not RS256.
@@ -129,8 +128,8 @@ Select, and record here as pinned versions at Wave 1 start:
 5. **PostgreSQL:** `pgx/v5` (already in use: query-api's server package builds a
    `pgxpool.Pool`). Migrations continue through the repository's existing
    alembic-owned schema until ADR-04 transfers ownership.
-6. **OAuth/OIDC, SAML, and password hashing: DEFERRED to a named Wave 1
-   addendum.** No candidate for these three was evaluated in Wave 0, and this
+6. **OAuth/OIDC, SAML, and password hashing: DEFERRED to a named
+   addendum.** No candidate for these three was evaluated, and this
    ADR does not invent one. The current Python implementations
    (`api/sso.py:796-812` signxml SAML signature; `:1017-1044` PyJWKClient OIDC
    `id_token` with an algorithm allowlist) are both **confirmed fail-closed**
@@ -151,16 +150,16 @@ in-wave.
 
 ## ACP-ADR-01 Addendum — OAuth/OIDC client, SAML, and password-hashing library selection
 
-**Status:** Accepted, 2026-09-02 (ratified: chris, 14:26 PT, "accept") · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** ACP-ADR-01's deferred item 6 (TRD §26.1) · **Guardrails:** G-13, G-73, plus the ADR's "standard library first" rule
 
 ### Context
 
-ACP-ADR-01 pinned four of six Wave 1 dependencies and explicitly deferred the
+ACP-ADR-01 pinned four of six dependencies and explicitly deferred the
 other three — OAuth 2.0/OIDC client, SAML, and password hashing — because no
-candidate for any of them was evaluated in Wave 0. This addendum makes that
+candidate for any of them was evaluated. This addendum makes that
 selection. Docs only: the versions below are the recorded decision, not yet a
 `go.mod` change — pinning happens with the `internal/identity` implementation
-work (Wave 2), per TRD §26's own sequencing.
+work, per TRD §26's own sequencing.
 
 Two dependencies are already present in the platform's Go module graph, which
 lowers the marginal supply-chain cost of promoting them to direct, reviewed
@@ -215,10 +214,10 @@ pick, same as ADR-01 itself found for the router.
 **Considered and rejected as primary:** `golang.org/x/crypto/argon2`
 (Argon2id) via a thin encoding wrapper such as `github.com/alexedwards/argon2id`.
 Argon2id is the current OWASP-recommended default and is memory-hard where
-bcrypt is not — a real advantage. It is rejected as the Wave 1 pick, not
+bcrypt is not — a real advantage. It is rejected as the first pick, not
 because it is worse, but because adopting it now means carrying two live hash
 formats (legacy bcrypt plus new Argon2id) and a rehash-on-login migration path
-for a property no Wave 1 acceptance criterion needs; bcrypt with an explicit,
+for a property no acceptance criterion needs; bcrypt with an explicit,
 generous cost factor is adequate for this migration wave. **This is not a
 silent deferral:** Argon2id is named here as the recommended target for a
 follow-up hashing-scheme ADR once password-hash algorithm versioning (the same
@@ -235,14 +234,14 @@ decisions are unchanged.
 Whether the OIDC/SAML client code lives in `dev-health-go` (versioned,
 divergent pins across ops/acr) or an ops-local package — the same tension
 ACP-ADR-01 left open for the JWT verifier, and the same answer should govern
-both. Also open: timing of the follow-up Argon2id ADR, a Wave 2+ candidate,
+both. Also open: timing of the follow-up Argon2id ADR, a later candidate,
 not committed here.
 
 ---
 
 ## ACP-ADR-02 — Signing-key custody and the production KMS adapter
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.2 · **Guardrails:** G-11, G-12, G-16, G-17, G-18, G-19, G-62
 
 ### Context
 
@@ -287,7 +286,7 @@ Two facts constrain this decision more than any preference:
 5. **Every key gets a `kid` and a JWKS entry from day one**, including any
    compatibility issuer, so that G-18 overlap and G-19 bounded-refresh are
    representable before they are needed.
-6. **Rotation runbooks are a Wave 1 deliverable, planned and emergency
+6. **Rotation runbooks are a required deliverable, planned and emergency
    separately**, per G-18 and G-62. A compromised key is never re-enabled by a
    rollback.
 
@@ -301,14 +300,14 @@ stated and every deployment currently relies on.
 Which KMS. No cloud or vendor commitment is made here, only that the adapter
 boundary exists and that the file-based path is a first-class supported
 deployment, not a development shortcut. **Declared gap:** no rotation runbook
-for `JWT_SECRET_KEY` or `GO_API_ENVELOPE_PRIVATE_KEY` was found in Wave 0's
-read set.
+for `JWT_SECRET_KEY` or `GO_API_ENVELOPE_PRIVATE_KEY` was found in the
+inventory's read set.
 
 ---
 
 ## ACP-ADR-03 — Access, refresh, and workload token TTLs
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.3 · **Guardrails:** G-14, G-15, G-30, G-31, G-57, G-60
 
 ### Context
 
@@ -358,13 +357,13 @@ closed rather than open.
 
 Whether the 10-minute access token is reachable without a refresh-storm problem
 at current session volumes. **Declared gap:** no measurement of refresh rate at
-60 minutes was taken in Wave 0, so the 10-minute figure is TRD's target adopted
-on principle, not on load evidence. G-74 load tests precede cutover and are the
+60 minutes was taken at ratification, so the 10-minute figure is TRD's target adopted
+on principle, not on load evidence. G-74 load tests precede the switch and are the
 place this gets falsified.
 
 ### Amendment, 2026-11-01 (W3 D3)
 
-- The declared gap is closed. The G-74 runs (2026-10-25, bigboy throwaway compose, acp-accepted) refreshed at 1x and 6x
+- The declared gap is closed. The G-74 runs (2026-10-25, throwaway compose) refreshed at 1x and 6x
   the 60-minute rate: p95 7.4 ms and 6.8 ms, no errors, the SLO held, and auth-service CPU went from 4.7% to 18.9%
   (docs/operate/plan/auth-service-capacity.md). The 10-minute target is now backed by load evidence.
 - 60 minutes is no longer tied to HS256 compatibility. It is the access-token.v1 ceiling, and the EdDSA access token
@@ -379,7 +378,7 @@ Note, 2026-11-02: the capacity rule above, "refresh demand = active sessions / l
 
 ## ACP-ADR-04 — Auth schema ownership and aggregate transition
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.4 · **Guardrails:** G-9, G-24, G-53, G-55, G-58, G-63, G-64
 
 ### Context
 
@@ -394,7 +393,7 @@ migration. G-64 forbids an undocumented direct-table fallback after transfer.
 ### Decision
 
 1. **A separate schema with a separate database role**, not a separate database
-   cluster, for Wave 1. This keeps transactional outbox writes (G-53) in one
+   cluster. This keeps transactional outbox writes (G-53) in one
    transaction with the state change, which a cross-cluster split would break.
 2. **`auth-migrate` is a separate binary and the runtime never auto-migrates**
    (TRD §20). The runtime role owns no DDL.
@@ -418,14 +417,14 @@ Nothing. Extends TRD §9 with an order and a rollback unit.
 
 Whether the auth schema lives in the same PostgreSQL instance as the Ops
 application schema in production. Also open: whether the ops alembic lineage
-gains the auth schema or a second lineage is created. **Both are Wave 1
+gains the auth schema or a second lineage is created. **Both are build-time
 decisions and both are noted as unresolved rather than assumed.**
 
 ---
 
 ## ACP-ADR-05 — Policy representation and revision strategy
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.5 · **Guardrails:** G-26, G-27, G-24, G-29, G-31
 
 ### Context
 
@@ -436,7 +435,7 @@ status checks, delegation restrictions, entitlement predicates, and risk/cache
 classes — and explicitly excludes tenant-authored policy code from the first
 engine.
 
-The Wave 0 inventory found that per-route action, resource, and entitlement were
+The inventory found that per-route action, resource, and entitlement were
 **not derivable** for all 59 GraphQL resolvers (context-level auth is anchored;
 per-field scoping was not re-derived) and that roughly 17 of billing's ~20
 routes were classified by family pattern with a gaps note. So the action
@@ -469,7 +468,7 @@ vocabulary cannot be generated from the inventory alone.
 
 ### Supersedes
 
-The static Python role-permission map, once Wave 5 shadow-mode mismatch reaches
+The static Python role-permission map, once shadow-mode mismatch reaches
 zero. Not before.
 
 ### Leaves open
@@ -482,11 +481,11 @@ contract — not the engine — the stable interface.
 
 ## ACP-ADR-06 — Compose bootstrap and Kubernetes federation
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.6 · **Guardrails:** G-33, G-34, G-36, G-37, G-59
 
 ### Context
 
-Wave 0 established the workload-identity ground truth:
+The inventory established the workload-identity ground truth:
 
 * `acr_workload_identity_exchange` is validated by
   `authverify.KubernetesTokenReviewValidator` via a **live Kubernetes
@@ -512,9 +511,9 @@ Wave 0 established the workload-identity ground truth:
    (G-33), each with exact audiences and an allowlisted action set (G-34). No
    universal internal credential — the platform's most repeated anti-pattern.
 4. **`svc_worker_*` is retired, not migrated.** It has no consumer. The CI gate
-   must not encode a validator that nothing reaches, and Wave 8 should remove
-   the mint path rather than build an exchange for a class with no caller.
-   Retirement still follows G-63's evidence rule. Implemented by CHAOS-10044: `service-credentials create` and `rotate` refuse `worker-operator`; `list` and `revoke` keep working on stored rows.
+   must not encode a validator that nothing reaches, and the mint path should be removed
+   rather than building an exchange for a class with no caller.
+   Retirement still follows G-63's evidence rule. `service-credentials create` and `rotate` refuse `worker-operator`; `list` and `revoke` keep working on stored rows.
 5. **Infrastructure identity stays independent** (G-37). A workload token does
    not replace least-privilege database roles, TLS, or network policy — and per
    the threat model §1.1, the private-network boundary is a real control that
@@ -526,15 +525,15 @@ Any plan to give `svc_worker_*` a resource-route validator.
 
 ### Leaves open
 
-Whether `svc_acr_*` migrates to workload exchange in Wave 8 or waits for
+Whether `svc_acr_*` migrates to workload exchange or waits for
 ADR-08's projection boundary. **Declared gap:** the acr-side outbound
-`svc_acr_*` caller was not traced in Wave 0.
+`svc_acr_*` caller was not traced.
 
 ---
 
 ## ACP-ADR-07 — Entitlement snapshot and event contract
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.7 · **Guardrails:** G-6, G-9, G-14, G-45, G-59
 
 ### Context
 
@@ -576,13 +575,13 @@ is recorded as such.
 
 The snapshot's refresh mechanism — event-driven from billing versus pull with a
 bounded TTL. Both satisfy the guardrails; the choice is an availability
-trade-off that Wave 5 should measure rather than assume.
+trade-off that should be measured rather than assume.
 
 ---
 
 ## ACP-ADR-08 — ACR lifecycle projection boundary
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02); **amended 2026-10-31 by ACP-ADR-13** (points 1 and 3, see "Amendment" below) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02); **amended 2026-10-31 by ACP-ADR-13** (points 1 and 3, see "Amendment" below) · **Decides:** TRD §26.8 · **Guardrails:** G-40, G-41, G-42, G-43, G-44, G-9
 
 ### Context
 
@@ -615,13 +614,13 @@ avoid breaking ACR while giving the control plane visibility into it".
    and packet identifiers never bypass authorization, and unknown, malformed,
    foreign, deleted, and unauthorized handles remain non-disclosing.
 5. **ACR's single-dispatch pattern is promoted to the platform requirement** for
-   the CHAOS-3271-class fix in ops. Ops has 59 surfaces where a foreign
+   the equivalent fix in ops. Ops has 59 surfaces where a foreign
    validator observes the credential first; ACR has zero, on a harder protocol.
    The fix is not novel design work — it is porting a working implementation.
 
 ### Amendment (2026-10-31, ACP-ADR-13)
 
-chris ruled Option A on CHAOS-12082: ACP becomes the OAuth 2.1 authorization
+The decision (Option A): ACP becomes the OAuth 2.1 authorization
 server for the Ask Dev browser client and for MCP clients, and ACR validates
 ACP-issued access tokens. The decisions above change in two places only.
 
@@ -660,7 +659,7 @@ ACR; it moves no validator out of it.)
 ### Leaves open
 
 **Declared gap:** ACR's issued credentials were not backfilled into the
-inventory's `issued_credential` field in Wave 0 — device flow and `oauth/token`
+inventory's `issued_credential` field — device flow and `oauth/token`
 are obvious candidates, and "obvious" is a family pattern, which this inventory
 does not record as fact. Also open: acr's storage-table lifecycle model.
 
@@ -668,7 +667,7 @@ does not record as fact. Also open: acr's storage-table lifecycle model.
 
 ## ACP-ADR-09 — External Push lifecycle projection boundary
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.9 · **Guardrails:** G-46, G-47, G-48, G-9
 
 ### Context
 
@@ -680,7 +679,7 @@ wave came close to making, and refused:
   `require_matching_source`), and deliberately diverges to 503 where the legacy
   router returns 202. Nothing observed shows it skipping a check.
 * **Legacy ingest** treats unset configuration as auth-disabled
-  (`api/ingest/auth.py:98-105`) — G-47's named violation, tracked as CHAOS-4720,
+  (`api/ingest/auth.py:98-105`) — G-47's named violation,
   private-network-only per the threat model §1.1, with **zero external producers
   observed in a 30-day window** across 10.5M prod spans.
 
@@ -689,7 +688,7 @@ is a permissive `Annotated[dict, Depends(...)]` at `api/ingest/auth.py:151` and
 a fail-closed dataclass with `org_id` and `scopes` at
 `api/external_ingest/auth.py:65`.
 
-**Retired (CHAOS-11813):** the six legacy ingest routes are gone and answer 404. The text below is the record of the decision when it was made. See [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md).
+**Retired:** the six legacy ingest routes are gone and answer 404. The text below is the record of the decision when it was made. See [Legacy ingest retirement](../../operate/runbooks/legacy-ingest-retirement.md).
 
 ### Decision
 
@@ -720,13 +719,13 @@ Nothing. Records the ingest boundary the inventory established.
 
 The remove-versus-retain decision on the six legacy routes. **Declared gap:**
 whether the legacy HMAC path bounds replay with a timestamp or nonce was not
-traced in Wave 0.
+traced.
 
 ---
 
 ## ACP-ADR-10 — MFA and step-up requirements
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.10 · **Guardrails:** G-29, G-30, G-51, G-52
 
 ### Context
 
@@ -748,7 +747,7 @@ a layout guard or by path middleware (§2.5).
 
 ### Decision
 
-1. **Wave 2 ships the assurance *vocabulary and enforcement path*, not an MFA
+1. **Only the assurance *vocabulary and enforcement path* ships, not an MFA
    factor.** `assurance` is carried in the principal, decisions may return a
    step-up obligation, and PEPs must enforce an unmet obligation as a denial
    (G-29). This makes the contract complete before a factor exists.
@@ -757,7 +756,7 @@ a layout guard or by path middleware (§2.5).
    step-up, and it is written down so the absence is a decision rather than an
    oversight.
 3. **MFA factor selection (TOTP, WebAuthn, or both) is deferred to a named
-   post-Wave-2 addendum**, gated on a product decision about self-hosted
+   later addendum**, gated on a product decision about self-hosted
    deployments that may have no second channel.
 4. **Enterprise SSO does not substitute for MFA.** An assertion from an identity
    provider carries whatever assurance that provider asserts; the platform
@@ -766,7 +765,7 @@ a layout guard or by path middleware (§2.5).
 ### Supersedes
 
 The implicit position that MFA is out of scope because it does not exist. It is
-in scope as a contract in Wave 2 and as a factor later.
+in scope as a contract now and as a factor later.
 
 ### Leaves open
 
@@ -778,7 +777,7 @@ separately satisfiable requirement.
 
 ## ACP-ADR-11 — SCIM and enterprise deprovisioning scope
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** TRD §26.11 · **Guardrails:** G-24, G-53, G-54, G-55, G-58, G-68
 
 ### Context
 
@@ -793,10 +792,10 @@ deletion and PII cleanup happen later under retention policy.
 
 ### Decision
 
-1. **SCIM 2.0 is deferred beyond Wave 4** and is not a prerequisite for any
+1. **SCIM 2.0 is deferred** and is not a prerequisite for any
    authority transfer. It is a provisioning *transport*; the aggregates it would
-   drive are the ones Wave 4 transfers, so it must follow rather than lead.
-2. **Wave 4 ships the deprovisioning *semantics* SCIM would need**: revisioned
+   drive are the ones that transfer, so it must follow rather than lead.
+2. **The deprovisioning *semantics* SCIM would need ship first**: revisioned
    membership and principal status (G-24), transactional outbox events (G-53),
    idempotent consumers keyed by aggregate and revision (G-54), deny-then-clean
    ordering (G-55), and monotonic revocation that no retry, rollback, stale
@@ -818,15 +817,15 @@ Nothing.
 ### Leaves open
 
 Whether SCIM ships at all, and for which identity providers. This ADR's position
-is that the decision costs nothing to defer **provided** Wave 4 ships the
-semantics above — and that shipping SCIM before them would create a second
+is that the decision costs nothing to defer **provided** the
+semantics above ship — and that shipping SCIM before them would create a second
 provisioning authority, violating G-9.
 
 ---
 
 ## ACP-ADR-12 — A single authentication seam for `query-api`
 
-**Status:** Accepted, 2026-09-02 (ratified: CHAOS-3270, "Wave 0 ratification pass" comment, 2026-09-02) · **Decides:** nothing in TRD §26 — **raised by the Wave 0 threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
+**Status:** Accepted, 2026-09-02 (ratified 2026-09-02) · **Decides:** nothing in TRD §26 — **raised by the threat model §2.9** · **Guardrails:** G-1, G-3, G-4, G-8, G-69
 
 ### Context
 
@@ -837,7 +836,7 @@ reached unauthenticated, and a resolver author cannot forget the check because
 there is no per-resolver check to forget.
 
 That chokepoint is governed by `GRAPHQL_AUTH_REQUIRED`, which is **enforced by
-default; verified unset on prod 2026-09-01** (CHAOS-4743 tracks making the
+default; verified unset on prod 2026-09-01** (making the
 setting observable — a startup log line and a gauge — so its state is visible
 rather than inferred). The property this ADR relies on is therefore the
 deployed one, not merely the coded one.
@@ -851,7 +850,7 @@ each of the 10 re-implements `authctx.FromContext(ctx)` + `claims.OrgID == ""`
 All ten are correct today. The risk is the arrangement, not the code: as the
 remaining 40 resolvers land, an omitted check produces a resolver that is simply
 unauthenticated, and **no test, gate, type error, or compiler diagnostic
-notices**. This is the CHAOS-3271 shape — a missing chokepoint compensated for
+notices**. This is the same shape — a missing chokepoint compensated for
 by per-site discipline — reappearing inside the migration that exists to
 eliminate it.
 
@@ -880,7 +879,7 @@ author.
    argument is added to the SDL only where a superuser cross-org query is an
    intended, profiled capability, and such an operation carries a current-state
    check rather than a claim comparison (threat model §3.2, G-30).
-4. **A gate proves the seam fires.** Following the Wave 0 precedent, the test
+4. **A gate proves the seam fires.** Following the existing precedent, the test
    seeds a resolver with no hand-rolled check and asserts it is **still**
    rejected. A seam whose failure path never executes is indistinguishable from
    one that cannot fire (G-69), which is exactly how the per-resolver
@@ -906,15 +905,15 @@ possibility, not a decision.
 
 ## ACP-ADR-13 — ACP as the OAuth 2.1 authorization server for the browser and MCP clients
 
-**Status:** Accepted, 2026-10-31 (chris ruling on CHAOS-12082: Option A; the CLI device flow stays on ACR in the first cut) · **Decides:** who issues the Ask Dev browser and MCP user credentials · **Amends:** ACP-ADR-08 points 1 and 3 · **Guardrails:** G-9, G-43
+**Status:** Accepted, 2026-10-31 (Option A; the CLI device flow stays on ACR in the first cut) · **Decides:** who issues the Ask Dev browser and MCP user credentials · **Amends:** ACP-ADR-08 points 1 and 3 · **Guardrails:** G-9, G-43
 
 ### Context
 
-Until this ruling, the Ask Dev browser client and third-party MCP clients got
+Until this decision, the Ask Dev browser client and third-party MCP clients got
 user credentials from ACR's own OAuth 2.1 server: opaque `fcacr_` rows
-(rulings D6524 and D6525 on CHAOS-12069: "no new token, no new audience"). That
+("no new token, no new audience"). That
 left two user-credential authorities, ACP for the web session and ACR for Ask
-Dev clients, with two revocation paths. chris's condition on the direct-to-ACR
+Dev clients, with two revocation paths. The condition on the direct-to-ACR
 design ("MCP will need to go through that too") asked for one.
 
 At the time of this ADR, auth-service mints one access-token class per
@@ -927,7 +926,7 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
 1. **ACP is the OAuth 2.1 authorization server for the Ask Dev browser client
    and for MCP clients.** Authorization code with PKCE S256, resource
    indicators (RFC 8707) that map to the token's `aud`, rotating refresh
-   tokens, and revocation (RFC 7009). D6524 and D6525 are reversed for these
+   tokens, and revocation (RFC 7009). That earlier rule is reversed for these
    clients.
 2. **Two new audiences, `acr-api` and `acr-mcp`,** one scope each. Only ACR
    accepts them, each service its own one: acr-api accepts `acr-api` only, and
@@ -937,8 +936,8 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
    The web login token class does not change: there is no `eddsa` switch of web
    tokens for this.
 4. **One key set.** The ACR-audience tokens are signed with the auth-service
-   key set and issuer that the workload path uses (ACP-ADR-02 custody; CHAOS-12061
-   sets the prod issuer). No second key set and no second issuer. The issuer is
+   key set and issuer that the workload path uses (ACP-ADR-02 custody; the prod issuer is
+   set in configuration). No second key set and no second issuer. The issuer is
    configured independently of the web token class: the web login token stays
    `hs256_compat` while the shared issuer is set.
 5. **Each MCP client gets its own ACP session at authorize.** It never shares
@@ -981,13 +980,13 @@ auth reaches it through go-api's `/api/v1/auth/*` proxy.
     the platform verifiers (go-api, query-api and auth-service) refuse that audience
     (ACP-ADR-08 amendment, condition 1). acr-mcp gets no platform workload
     credential either (G-43).
-11. **The public surface is designed before it is built** (CHAOS-12247): the
+11. **The public surface is designed before it is built**: the
     route (a go-api proxy aggregate, or a dedicated host), the issuer URL,
     rate limits, CORS, and the SSRF guards of client-ID metadata fetches.
 
 ### Supersedes
 
-D6524 and D6525 (CHAOS-12069) for the browser and MCP clients. For MCP OAuth
+The earlier rule for the browser and MCP clients. For MCP OAuth
 clients, decision 5(a) of the direct-to-ACR design ("row-only" MCP
 credentials) is superseded too: the client's own ACP session and grant replace
 the `fcacr_` row as the credential authority, and the live per-call check
@@ -997,9 +996,9 @@ retire only after a dual-accept window.
 
 ### Leaves open
 
-- The public route and the issuer URL (CHAOS-12247).
+- The public route and the issuer URL.
 - The hop contract's mechanism (decision 10): existing hop material (the
-  acr-mcp hop of CHAOS-12094) is evaluated first, in the public-surface design.
+  acr-mcp hop) is evaluated first, in the public-surface design.
 - The MCP client session's idle and absolute lifetimes (decision 5).
 - The length of the dual-accept window (at least the longest remaining
   `fcacr_` row life).
@@ -1017,4 +1016,4 @@ retire only after a dual-accept window.
   ratification.
 * [Credential classes](../../reference/auth/credential-classes.md)
 * [Endpoint authentication profiles](../../reference/auth/endpoint-profiles.md)
-* [Auth Control Plane architecture and Wave 1 documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each Wave 1 surface.
+* [Auth Control Plane architecture and documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each surface.

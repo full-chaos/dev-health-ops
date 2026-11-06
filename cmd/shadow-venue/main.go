@@ -21,6 +21,7 @@ import (
 	"time"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/shadowvenue"
 )
 
@@ -97,7 +98,7 @@ func planOrDrive(ctx context.Context, step string, args []string, stdout, stderr
 		return exitUsage
 	}
 	defer file.Close()
-	driver := &shadowvenue.Driver{Base: origin, Client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: noRedirect}, Gap: *gap}
+	driver := &shadowvenue.Driver{Base: origin, Client: &http.Client{Timeout: 30 * time.Second, Transport: httpguard.Transport(), CheckRedirect: noRedirect}, Gap: *gap}
 	tokens := map[string]string{}
 	for _, s := range plan.Slots {
 		if s.Gap() || tokens[s.Principal] != "" {

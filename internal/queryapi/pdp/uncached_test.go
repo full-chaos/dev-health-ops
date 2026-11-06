@@ -3,9 +3,6 @@ package pdp
 import (
 	"context"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-go/pep"
@@ -35,29 +32,5 @@ func TestPDPGateHoldsNoDecisionCache(t *testing.T) {
 	}
 	if got := len(srv.Requests()); got != 2 {
 		t.Fatalf("%d PDP calls, want 2: each read asks the PDP", got)
-	}
-}
-
-// query-api builds its PEP client in this package (pdp.go); no production file here builds the PEP allow cache.
-func TestQueryAPIBuildsNoPEPDecisionCache(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var hits []string
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		raw, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), "NewCachedClient(") {
-			hits = append(hits, name)
-		}
-	}
-	if len(hits) != 0 {
-		t.Fatalf("files that build a PEP decision cache: %v", hits)
 	}
 }

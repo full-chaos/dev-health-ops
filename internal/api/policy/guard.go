@@ -333,6 +333,6 @@ const ImpersonationHandoffConsumePattern = "POST /api/v1/admin/impersonate/hando
 // liveRowExemptPatterns are the platform routes that stay reachable while the
 // caller's impersonation row is live. Every live-row refusal reads this set
 // through liveRowExempt.
-var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true}
+var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
 
 func liveRowExempt(pattern string) bool { return liveRowExemptPatterns[pattern] }

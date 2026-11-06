@@ -65,6 +65,7 @@ func newFakeValkey(t *testing.T) (*fakeValkey, valkeygo.Client) {
 		t.Fatal(err)
 	}
 	options.DisableCache = true
+	options.ForceSingleClient = true
 	options.Dialer.Timeout = 2 * time.Second
 	client, err := valkeygo.NewClient(options)
 	if err != nil {

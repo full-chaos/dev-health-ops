@@ -130,6 +130,7 @@ func Routes(deps Deps) []httpapi.Route {
 		store:           store,
 		audit:           auditWriter,
 		cache:           cache,
+		handoffs:        valkeyHandoffs{client: deps.Valkey},
 		guard:           deps.Guard,
 		logger:          logger,
 		clickHouseDSN:   deps.ClickHouseDSN,

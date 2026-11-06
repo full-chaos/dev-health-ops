@@ -69,24 +69,27 @@ func legacyImpersonationRefused(ctx context.Context) bool {
 }
 
 // graphQLEdgeReads is /graphql's read test for the read limit of the legacy
-// impersonation refusal (policy.Scope.RefuseLegacyImpersonationReading): a
-// request reads when its document is one query operation, by the document's
-// AST (digest.DocumentKind), for GET and POST alike. A body is read within
-// limit and handed on whole; a document that cannot be read or parsed, or is
-// not one query, is not a read.
+// impersonation refusal (policy.Scope.RefuseLegacyImpersonationReading). GET,
+// HEAD and OPTIONS read, by the method as go-api tells them (the dispatch
+// refuses a mutation over GET). A POST reads when its document is one query
+// operation, by the document's AST (digest.DocumentKind): its body is read
+// within limit and handed on whole, and a body or document that cannot be
+// read or parsed, or is not one query, is not a read. Other methods do not read.
 func graphQLEdgeReads(limit int) func(r *http.Request) bool {
 	return func(r *http.Request) bool {
-		var text string
-		if r.Method == http.MethodGet {
-			text = lastParam(parseQueryString(r.URL.RawQuery), "query")
-		} else {
-			body, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
-			r.Body = handedOnBody{Reader: io.MultiReader(bytes.NewReader(body), r.Body), Closer: r.Body}
-			if err != nil || len(body) > limit {
-				return false
-			}
-			text, _ = graphQLEdgePOSTDocument(r, body)
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			return true
+		case http.MethodPost:
+		default:
+			return false
 		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+		r.Body = handedOnBody{Reader: io.MultiReader(bytes.NewReader(body), r.Body), Closer: r.Body}
+		if err != nil || len(body) > limit {
+			return false
+		}
+		text, _ := graphQLEdgePOSTDocument(r, body)
 		kind, err := digest.DocumentKind(text)
 		return err == nil && kind == digest.KindQuery
 	}

@@ -285,8 +285,8 @@ func servedAsItself(t *testing.T, label string, got legacyAnswer, s *behaviourSt
 
 // TestGraphQLRevokedHolderIsRefusedByOperationType: with the switch on, a caller that no longer holds
 // admin.impersonate beside a live row is refused on a mutation document (the read limit) and served as itself on a
-// query document, by the document's operation type (its AST), not the HTTP method: GET and POST alike. A query whose
-// row read fails answers as the GET of that query.
+// query document. A POST goes by the document's operation type (its AST), not its method; a GET reads by its method,
+// as before (a mutation over GET is the dispatch's 400). A query whose row read fails answers as the GET of that query.
 func TestGraphQLRevokedHolderIsRefusedByOperationType(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -314,6 +314,14 @@ func TestGraphQLRevokedHolderIsRefusedByOperationType(t *testing.T) {
 			t.Run(signing+" "+method+" mutation, live row", func(t *testing.T) {
 				on := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), true)
 				got := legacyGraphQLDocument(on, method, token, legacyMutationDocument)
+				if method == http.MethodGet {
+					// GET reads by its method, as before: the dispatch refuses the mutation over GET, byte-equal to unset.
+					unset := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), false)
+					if was := legacyGraphQLDocument(unset, method, token, legacyMutationDocument); got.Status != http.StatusBadRequest || !got.equal(was) || len(*on.seen) != 0 {
+						t.Fatalf("switch on %+v, unset %+v; want both the 400 mutation-over-GET refusal, byte-equal, no run", got, was)
+					}
+					return
+				}
 				if got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
 					t.Fatalf("switch on: got %d %s, resolver ran %d; want 403 %s and no run", got.Status, got.Body, len(*on.seen), legacyRefusalBody)
 				}

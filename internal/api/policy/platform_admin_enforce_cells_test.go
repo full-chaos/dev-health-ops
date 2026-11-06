@@ -40,6 +40,7 @@ var platformAdminRoutes = map[string]platformAdminRoute{
 	"GET /api/v1/admin/platform/stats":                                   {rule.ActionAdminStats, false},
 	"POST /api/v1/admin/impersonate":                                     {rule.ActionAdminImpersonate, true},
 	"POST /api/v1/admin/impersonate/stop":                                {rule.ActionAdminImpersonate, false},
+	"POST /api/v1/admin/impersonate/handoff/consume":                     {rule.ActionAdminImpersonate, true},
 }
 
 // platformAdminGapRoutes are the platform-admin rows whose profile row names no action yet, with the guard level they
@@ -267,7 +268,8 @@ func TestPlatformAdminRowsTakeThePDPVerdict(t *testing.T) {
 }
 
 // A live go-api impersonation row is refused on every platform-admin row before any decision point call (12735,
-// D6714: platform actions stay refused); the stop route alone asks the decision point, as the admin.
+// D6714: platform actions stay refused); the live-row exempt routes (stop, handoff consume) alone ask the decision
+// point, as the admin.
 func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 	for pattern := range platformAdminRoutes {
 		t.Run(pattern, func(t *testing.T) {
@@ -275,9 +277,9 @@ func TestPlatformAdminRowsRefuseImpersonationExceptStop(t *testing.T) {
 			pdp := newTestPDP(t, allowAll)
 			h := impersonating(cellHandler(t, legacyStore(true, "admin"), userClaims(nil), productionEnforcer(t, pdp, "admin")))
 			got := serveCell(h, pattern, cellBearer())
-			if pattern == "POST "+stopImpersonationRoute {
+			if liveRowExempt(pattern) {
 				if got.status != http.StatusOK || len(pdp.calls()) != 1 || !slices.Equal(rec.snapshot(), []string{"admin/allow"}) {
-					t.Fatalf("stop while impersonating: %d %q, %d PDP calls, counted %v; want 200, 1, [admin/allow]", got.status, got.body, len(pdp.calls()), rec.snapshot())
+					t.Fatalf("exempt row while impersonating: %d %q, %d PDP calls, counted %v; want 200, 1, [admin/allow]", got.status, got.body, len(pdp.calls()), rec.snapshot())
 				}
 				return
 			}

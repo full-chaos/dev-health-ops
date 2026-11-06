@@ -159,6 +159,7 @@ func Routes(deps Deps) []httpapi.Route {
 func (h *handlers) routes() []httpapi.Route {
 	var out []httpapi.Route
 	out = append(out, h.impersonationRoutes()...)
+	out = append(out, h.handoffRoutes()...)
 	out = append(out, h.userRoutes()...)
 	out = append(out, h.orgRoutes()...)
 	out = append(out, h.governanceRoutes()...)

@@ -82,6 +82,7 @@ func run(ctx context.Context, env cli.Env) int {
 	flags.SetOutput(env.Stderr)
 	dryRun := flags.Bool("dry-run", false, "read and report; write nothing")
 	batch := flags.Int("batch", 500, "users read per page")
+	insertOnly := flags.Bool("insert-only", false, "create the auth users that are missing and never change an existing one (compose's auth-users-backfill, where auth-service owns users)")
 	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
 		return code
 	}
@@ -101,6 +102,7 @@ func run(ctx context.Context, env cli.Env) int {
 		fmt.Fprintf(env.Stderr, "users-backfill: %s must be true or false\n", platformrole.OwnedEnv)
 		return cli.ExitFailure
 	}
+	opts.InsertOnly = *insertOnly
 	pool, schema, code := connectFn(ctx, env, "users-backfill")
 	if code != cli.ExitOK {
 		return code

@@ -95,6 +95,10 @@ type Claims struct {
 	Extra map[string]any
 	// Subject, when set, replaces the wire sub (a refusal cell's malformed subject).
 	Subject string
+	// SessionID, when set, is the token's session (an auth-service session the test made) instead of a new one.
+	SessionID *uuid.UUID
+	// NoSession mints a token without sid (a refusal cell): no session is remembered.
+	NoSession bool
 }
 
 // PrincipalID is the wire form of a user id in a token's sub and act.sub.
@@ -115,11 +119,20 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 	if lifetime == 0 {
 		lifetime = Lifetime
 	}
+	if c.NoSession && c.SessionID != nil {
+		return "", errors.New("edtokens: a token without a session names no session")
+	}
 	sid := uuid.New()
+	if c.SessionID != nil {
+		sid = *c.SessionID
+	}
 	claims := map[string]any{
 		"iss": IssuerURL, "aud": Audience, "sub": PrincipalID(c.UserID), "principal_type": "human",
 		"sid": sessionid.Wire(sid), "jti": strings.ReplaceAll(uuid.NewString(), "-", ""),
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(lifetime).Unix(), "scope": "api:access",
+	}
+	if c.NoSession {
+		delete(claims, "sid")
 	}
 	if c.OrgID != "" {
 		claims["org_id"] = c.OrgID
@@ -144,9 +157,11 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 		return "", err
 	}
 	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
-	i.mu.Lock()
-	i.sessions[sid] = session{principal: c.UserID, tokenVersion: c.TokenVersion, expiresAt: now.Add(lifetime)}
-	i.mu.Unlock()
+	if !c.NoSession {
+		i.mu.Lock()
+		i.sessions[sid] = session{principal: c.UserID, tokenVersion: c.TokenVersion, expiresAt: now.Add(lifetime)}
+		i.mu.Unlock()
+	}
 	return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(i.priv, []byte(signing))), nil
 }
 

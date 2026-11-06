@@ -234,8 +234,9 @@ type stack struct {
 	// openWindows starts a fresh window on every rate limit.
 	openWindows func()
 	server      *httptest.Server
-	signer      *edgetoken.Signer
-	specs       map[string]map[string]any
+	// access mints the routed user access tokens (EdDSA) the stack's Authenticator verifies.
+	access *edtokens.Issuer
+	specs  map[string]map[string]any
 }
 
 func startStack(t *testing.T, ctx context.Context) stack {
@@ -271,12 +272,12 @@ func startStackWithMailAndIssuer(t *testing.T, ctx context.Context, mail authmai
 func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
 	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner) stack {
 	t.Helper()
-	return startStackRouted(t, ctx, mail, issuer, routePool, provision, nil)
+	return startStackRouted(t, ctx, mail, issuer, routePool, provision, edtokens.New(t))
 }
 
-// startStackRouted is startStackProvisioned; with access set, the stack is routed as production's go-api is:
-// the endpoint-profile row of the served route is in the request context before the scope, and the
-// Authenticator verifies only access's routed user access tokens (EdDSA).
+// startStackRouted is startStackProvisioned with access as the token issuer. The stack is routed as
+// production's go-api is: the endpoint-profile row of the served route is in the request context before the
+// scope, and the Authenticator verifies only access's routed user access tokens (EdDSA).
 func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, issuer sessionissue.Issuer,
 	routePool func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, uri string) *pgxpool.Pool, provision authprovision.Provisioner,
 	access *edtokens.Issuer) stack {
@@ -344,12 +345,7 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 	if routePool != nil {
 		routesPool = routePool(t, ctx, pool, pg.URI)
 	}
-	var auth *policy.Authenticator
-	if access != nil {
-		auth = access.Authenticator(t, policy.PGStore{Pool: routesPool}, logger)
-	} else if auth, err = policy.NewAuthenticator(policy.PGStore{Pool: routesPool}, logger); err != nil {
-		t.Fatal(err)
-	}
+	auth := access.Authenticator(t, policy.PGStore{Pool: routesPool}, logger)
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
 	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
@@ -360,17 +356,13 @@ func startStackRouted(t *testing.T, ctx context.Context, mail authmail.Config, i
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	scope := policy.NewScope(auth, logger)
-	handler := scope.Principal(scope.OrgScope(scope.Impersonation(mux)))
-	if access != nil {
-		templates, err := httpapi.NewRouteTemplates(routes)
-		if err != nil {
-			t.Fatal(err)
-		}
-		handler = policy.RouteProfiles(templates.Match)(handler)
+	templates, err := httpapi.NewRouteTemplates(routes)
+	if err != nil {
+		t.Fatal(err)
 	}
-	server := httptest.NewServer(handler)
+	server := httptest.NewServer(policy.RouteProfiles(templates.Match)(scope.Principal(scope.OrgScope(scope.Impersonation(mux)))))
 	t.Cleanup(server.Close)
-	return stack{pool: pool, pg: pg, server: server, signer: signer, specs: specs,
+	return stack{pool: pool, pg: pg, server: server, access: access, specs: specs,
 		openWindows: func() { limiterOffset.Add(int64(16 * time.Minute)) }}
 }
 

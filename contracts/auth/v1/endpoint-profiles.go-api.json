@@ -1,7 +1,86 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
-  "rewritten_anchors": [],
+  "rewritten_anchors": [
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 88,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans\", Handler: readsOnly(g, body(policy.Authenticated, h.createPlan))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans\", Handler: body(policy.Authenticated, h.createPlan)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 98,
+      "now": "\t\t{Method: http.MethodPut, Pattern: prefix + \"/plans/{plan_id}\", Handler: readsOnly(g, body(policy.Authenticated, h.updatePlan))},",
+      "was": "\t\t{Method: http.MethodPut, Pattern: prefix + \"/plans/{plan_id}\", Handler: body(policy.Authenticated, h.updatePlan)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 99,
+      "now": "\t\t{Method: http.MethodDelete, Pattern: prefix + \"/plans/{plan_id}\", Handler: readsOnly(g, wrap(policy.Authenticated, h.deletePlan))},",
+      "was": "\t\t{Method: http.MethodDelete, Pattern: prefix + \"/plans/{plan_id}\", Handler: wrap(policy.Authenticated, h.deletePlan)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 100,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans/{plan_id}/sync-stripe\", Allow: http.MethodPost, Handler: readsOnly(g, wrap(policy.Authenticated, h.syncPlan))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/plans/{plan_id}/sync-stripe\", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.syncPlan)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 103,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/invoices/{invoice_id}/void\", Allow: http.MethodPost, Handler: readsOnly(g, wrap(policy.Admin, h.voidInvoice))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/invoices/{invoice_id}/void\", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.voidInvoice)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 104,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/refunds\", Allow: http.MethodPost, Handler: readsOnly(g, body(policy.Authenticated, h.createRefund))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/refunds\", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.createRefund)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 109,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/checkout\", Allow: http.MethodPost, Handler: readsOnly(g, body(policy.Authenticated, h.checkout))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/checkout\", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.checkout)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 110,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/portal\", Allow: http.MethodPost, Handler: readsOnly(g, wrap(policy.Authenticated, h.portal))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/portal\", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.portal)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 115,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/change-plan\", Allow: http.MethodPost, Handler: readsOnly(g, body(policy.Admin, h.changePlan))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/change-plan\", Allow: http.MethodPost, Handler: body(policy.Admin, h.changePlan)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 116,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/cancel\", Allow: http.MethodPost, Handler: readsOnly(g, body(policy.Admin, h.cancelSubscription))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/cancel\", Allow: http.MethodPost, Handler: body(policy.Admin, h.cancelSubscription)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 117,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/reactivate\", Allow: http.MethodPost, Handler: readsOnly(g, wrap(policy.Admin, h.reactivateSubscription))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/subscriptions/reactivate\", Allow: http.MethodPost, Handler: wrap(policy.Admin, h.reactivateSubscription)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 120,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/audit/{audit_id}/resolve\", Allow: http.MethodPost, Handler: readsOnly(g, body(policy.Authenticated, h.resolveAudit))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/audit/{audit_id}/resolve\", Allow: http.MethodPost, Handler: body(policy.Authenticated, h.resolveAudit)},"
+    },
+    {
+      "file": "internal/api/billing/routes.go",
+      "line": 121,
+      "now": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/reconcile\", Allow: http.MethodPost, Handler: readsOnly(g, wrap(policy.Authenticated, h.reconcile))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: prefix + \"/reconcile\", Allow: http.MethodPost, Handler: wrap(policy.Authenticated, h.reconcile)},"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [
@@ -13960,7 +14039,7 @@
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:109, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
+        "action: every organization role may call the route today (policy.Authenticated at its registration, no role check in the handler internal/api/billing/checkout.go:121); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api @api]",
@@ -14353,7 +14432,7 @@
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:110, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
+        "action: every organization role may call the route today (policy.Authenticated at its registration, no role check in the handler internal/api/billing/checkout.go:253); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/portal [dev-health-ops-api @api]",

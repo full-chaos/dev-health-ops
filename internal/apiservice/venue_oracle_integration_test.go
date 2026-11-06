@@ -594,10 +594,6 @@ const orgClaimRuling = "EdDSA access path needs a live membership for the org cl
 // stranger org in X-Org-Id.
 const publicRowRuling = "a public row verifies no bearer, so OrgScope (policy/scope.go:128) sees an anonymous caller and does not check X-Org-Id; the row serves no org data and the telemetry POST is the anonymous stream; prod behaves so today"
 
-// orglessSuperuserRuling retires the Python answer of a request by a superuser seed minted with no org claim: the
-// route needs a token org and refuses. Each use names its route's refusal site.
-const orglessSuperuserRuling = "org-less superuser token (auth-service login mints no org claim for a non-member, auth/authapi/login.go:184-190): the route needs a token org, none -> refusal"
-
 // protectedOrgClaimRetired are the requests orgClaimRuling retired.
 var protectedOrgClaimRetired = map[string]bool{"ent: bad org claim": true}
 

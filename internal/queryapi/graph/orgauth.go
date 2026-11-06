@@ -7,6 +7,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // requireOwnOrg admits a request only when the request identity carries
@@ -52,4 +53,11 @@ func servedOrg(claims authctx.Claims) string {
 		return org
 	}
 	return claims.OrgID
+}
+
+// rootCeiling is the repository ceiling of the root field's scope (CHAOS-13161): the repositories of an allowlist
+// decision; none for Legacy and an organization-wide allow. A root that carries it reads only those repositories.
+func rootCeiling(ctx context.Context, client teamscope.RowQuerier) (teamscope.Ceiling, error) {
+	claims, _ := authctx.FromContext(ctx)
+	return teamscope.ResolveCeiling(ctx, client, claims.Scope)
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // openStates are the alert states that count as open. They drive the
@@ -44,12 +45,17 @@ func lowerAll[T ~string](in []T) []string {
 }
 
 // buildFilter returns the WHERE clause for the security_alerts (sa) and
-// repos (r) aliases. The org predicate is always present. openOnly wins
-// over an explicit state list; empty lists and an empty search apply no
-// predicate.
-func buildFilter(orgID string, f *model.SecurityAlertFilterInput) filterClause {
+// repos (r) aliases. The org predicate is always present, and so is the
+// repository ceiling of an allowlist decision (CHAOS-13161); the zero
+// ceiling adds nothing. openOnly wins over an explicit state list; empty
+// lists and an empty search apply no predicate.
+func buildFilter(orgID string, f *model.SecurityAlertFilterInput, ceiling teamscope.Ceiling) filterClause {
 	clauses := []string{"r.org_id = {org_id:String}", "sa.org_id = {org_id:String}"}
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
+	if term, ceilingBindings := ceiling.RepoTerm("toString(sa.repo_id)"); term != "" {
+		clauses = append(clauses, strings.TrimPrefix(term, " AND "))
+		bindings = append(bindings, ceilingBindings...)
+	}
 	if f != nil {
 		if f.OpenOnly {
 			clauses = append(clauses, "sa.state IN {open_states:Array(String)}")

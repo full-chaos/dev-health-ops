@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func pinWindowToday(t *testing.T, ts string) {
@@ -22,7 +24,7 @@ func untilBound(t *testing.T, until, now string) string {
 	pinWindowToday(t, now)
 	client := &fakeClient{responses: []*fakeRowScanner{{}}}
 	if _, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-10-15T00:00:00Z"), mustTime(t, until), nil, nil); err != nil {
+		mustTime(t, "2026-10-15T00:00:00Z"), mustTime(t, until), nil, nil, teamscope.NoCeiling()); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	for _, b := range client.bindings[0] {

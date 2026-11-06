@@ -8,6 +8,8 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // fakeRow is one scripted row for fakeRowScanner, whose values are copied
@@ -106,7 +108,7 @@ func TestResolve_HappyPath(t *testing.T) {
 		errs: []error{nil, nil},
 	}
 
-	result, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000)
+	result, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -164,7 +166,7 @@ func TestResolve_ArchivedAtPopulatedWhenPresent(t *testing.T) {
 		errs: []error{nil, nil},
 	}
 
-	result, err := Resolve(context.Background(), client, "org-1", nil, nil, true, 1000)
+	result, err := Resolve(context.Background(), client, "org-1", nil, nil, true, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -187,7 +189,7 @@ func TestResolve_MissingTableDegradesInsteadOfErroring(t *testing.T) {
 		errs:      []error{unknownTableErr("feature_flag")},
 	}
 
-	result, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000)
+	result, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve returned an error instead of degrading: %v", err)
 	}
@@ -210,7 +212,7 @@ func TestResolve_MissingDifferentTablePropagatesError(t *testing.T) {
 		errs:      []error{unknownTableErr("some_other_table")},
 	}
 
-	_, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000)
+	_, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected an error for a different missing table, got nil")
 	}
@@ -221,7 +223,7 @@ func TestResolve_NonMissingTableErrorPropagates(t *testing.T) {
 		responses: []*fakeRowScanner{nil},
 		errs:      []error{errors.New("boom")},
 	}
-	_, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000)
+	_, err := Resolve(context.Background(), client, "org-1", nil, nil, false, 1000, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected error to propagate")
 	}
@@ -260,7 +262,7 @@ func TestResolve_FiltersAndLimitBindWhenProvided(t *testing.T) {
 	}
 	provider := "github"
 	project := "proj-x"
-	if _, err := Resolve(context.Background(), client, "org-1", &provider, &project, false, 5); err != nil {
+	if _, err := Resolve(context.Background(), client, "org-1", &provider, &project, false, 5, teamscope.NoCeiling()); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(client.statements) != 2 {

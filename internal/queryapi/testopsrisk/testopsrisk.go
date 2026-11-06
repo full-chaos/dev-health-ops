@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -18,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
@@ -157,8 +159,14 @@ LEFT JOIN (
 ORDER BY latest.confidence_score ASC
 LIMIT 50`, latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
 
-func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
-	rs, err := client.Query(ctx, dailyQuery, bindings)
+// withCeiling holds every testops table read of query to a repository ceiling (CHAOS-13161): term follows each
+// read's window predicate; the zero ceiling's empty term leaves query as it is.
+func withCeiling(query, term string) string {
+	return strings.ReplaceAll(query, "AND day <= {end:Date}", "AND day <= {end:Date}"+term)
+}
+
+func readDaily(ctx context.Context, client QueryClient, term string, bindings []clickhouse.Binding) ([]dailyRow, error) {
+	rs, err := client.Query(ctx, withCeiling(dailyQuery, term), bindings)
 	if err != nil {
 		return nil, fmt.Errorf("testopsrisk: daily query: %w", err)
 	}
@@ -183,8 +191,8 @@ func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Bi
 	return out, nil
 }
 
-func readQuadrant(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]model.TestOpsRiskQuadrantPoint, error) {
-	rs, err := client.Query(ctx, quadrantQuery, bindings)
+func readQuadrant(ctx context.Context, client QueryClient, term string, bindings []clickhouse.Binding) ([]model.TestOpsRiskQuadrantPoint, error) {
+	rs, err := client.Query(ctx, withCeiling(quadrantQuery, term), bindings)
 	if err != nil {
 		return nil, fmt.Errorf("testopsrisk: quadrant query: %w", err)
 	}
@@ -262,7 +270,7 @@ func orZero(v *float64) float64 {
 }
 
 // Resolve answers testopsRisk for the org over the inclusive date range.
-func Resolve(ctx context.Context, client QueryClient, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error) {
+func Resolve(ctx context.Context, client QueryClient, orgID string, input model.TestOpsRiskInput, ceiling teamscope.Ceiling) (*model.TestOpsRiskResult, error) {
 	if client == nil {
 		return nil, errors.New("testopsrisk: clickhouse client is required")
 	}
@@ -271,11 +279,13 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, input model.
 		{Name: "start", Value: input.StartDate.Time().Format(dateLayout)},
 		{Name: "end", Value: input.EndDate.Time().Format(dateLayout)},
 	}
-	rows, err := readDaily(ctx, client, bindings)
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	bindings = append(bindings, ceilingBindings...)
+	rows, err := readDaily(ctx, client, term, bindings)
 	if err != nil {
 		return nil, err
 	}
-	quadrant, err := readQuadrant(ctx, client, bindings)
+	quadrant, err := readQuadrant(ctx, client, term, bindings)
 	if err != nil {
 		return nil, err
 	}

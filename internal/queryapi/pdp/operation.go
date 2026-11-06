@@ -64,8 +64,17 @@ const (
 
 // rootCutOver is the GraphQL cut-over registry: the root keys whose resolvers narrow every read to a scope's
 // repository allowlist. An allowlist decision on an operation with an enforced root not listed is not carried out
-// (503). Empty until the resolvers take the ceiling.
-var rootCutOver = map[string]bool{}
+// (503). Listed (CHAOS-13161): the eight roots whose every read is keyed by repository (class N of the root census).
+var rootCutOver = map[string]bool{
+	"Query.complexityTimeseries": true,
+	"Query.featureFlagEvents":    true,
+	"Query.featureFlags":         true,
+	"Query.hotspots":             true,
+	"Query.pr":                   true,
+	"Query.securityAlerts":       true,
+	"Query.securityOverview":     true,
+	"Query.testopsRisk":          true,
+}
 
 // RootEnforced reports whether a root of action is decided for a caller of class: the cell of the action's namespace
 // is on in the caller's cell set. An unknown class is decided when either set has the cell on.

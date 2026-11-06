@@ -45,6 +45,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -192,7 +193,7 @@ type repoTimeseriesRow struct {
 // {limit_n:UInt32}. Neither branch appends a LIMIT to the outer query --
 // this is a deliberate, verified difference from fetchFileTimeseries
 // below (see that function's doc comment).
-func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, granularity model.TimeGranularity) ([]repoTimeseriesRow, error) {
+func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, granularity model.TimeGranularity, ceiling teamscope.Ceiling) ([]repoTimeseriesRow, error) {
 	dayExpr := "day"
 	computedExpr := "computed_at"
 	if granularity == model.TimeGranularityWeek {
@@ -219,6 +220,11 @@ func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
 		{Name: "since_day", Value: sinceDay},
 		{Name: "until_day", Value: untilDay},
 	}
+	// A repository ceiling (CHAOS-13161) holds the read, and the top-repository pick below, to the allowed
+	// repositories; the zero ceiling adds nothing.
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	query += term
+	bindings = append(bindings, ceilingBindings...)
 
 	if len(repoIDs) > 0 {
 		bounded := boundRepoIDs(repoIDs, limit)
@@ -235,7 +241,7 @@ func fetchRepoTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
                   FROM repo_complexity_daily
                   WHERE org_id = {org_id:String}
                     AND day >= {since_day:Date}
-                    AND day <= {until_day:Date}
+                    AND day <= {until_day:Date}` + term + `
                   GROUP BY repo_id
                   ORDER BY latest_complexity DESC NULLS LAST, repo_id
                   LIMIT {limit_n:UInt32}
@@ -291,7 +297,7 @@ type fileTimeseriesRow struct {
 // Python, not a ClickHouse bind parameter) -- reproduced the same way
 // here since limit is always an internally-computed int, never
 // user-supplied SQL text.
-func fetchFileTimeseries(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, granularity model.TimeGranularity) ([]fileTimeseriesRow, error) {
+func fetchFileTimeseries(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, granularity model.TimeGranularity, ceiling teamscope.Ceiling) ([]fileTimeseriesRow, error) {
 	dayExpr := "as_of_day"
 	computedExpr := "computed_at"
 	if granularity == model.TimeGranularityWeek {
@@ -318,6 +324,11 @@ func fetchFileTimeseries(ctx context.Context, client QueryClient, orgID, sinceDa
 		{Name: "since_day", Value: sinceDay},
 		{Name: "until_day", Value: untilDay},
 	}
+	// A repository ceiling (CHAOS-13161) holds the read, and the top-repository pick below, to the allowed
+	// repositories; the zero ceiling adds nothing.
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	query += term
+	bindings = append(bindings, ceilingBindings...)
 
 	if len(repoIDs) > 0 {
 		bounded := boundRepoIDs(repoIDs, limit)
@@ -432,7 +443,7 @@ func distinctRepoIDs(repoIDs []string) []string {
 // this port reproduces it by construction, taking only one org parameter
 // and never looking at a caller-supplied org id at all. limit is clamped
 // internally, same as Python -- callers must not pre-clamp.
-func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, granularity model.TimeGranularity, scope model.ComplexityScope, repoIDs []string, limit *int) (*model.ComplexityTimeseriesResult, error) {
+func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, granularity model.TimeGranularity, scope model.ComplexityScope, repoIDs []string, limit *int, ceiling teamscope.Ceiling) (*model.ComplexityTimeseriesResult, error) {
 	if client == nil {
 		return nil, errors.New("complexitytimeseries: clickhouse client is required")
 	}
@@ -451,7 +462,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 
 	switch scope {
 	case model.ComplexityScopeFile:
-		rows, err := fetchFileTimeseries(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit, granularity)
+		rows, err := fetchFileTimeseries(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit, granularity, ceiling)
 		if err != nil {
 			return nil, err
 		}
@@ -472,7 +483,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 			})
 		}
 	default: // REPO -- the schema/Python default and the only other valid value.
-		rows, err := fetchRepoTimeseries(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit, granularity)
+		rows, err := fetchRepoTimeseries(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit, granularity, ceiling)
 		if err != nil {
 			return nil, err
 		}

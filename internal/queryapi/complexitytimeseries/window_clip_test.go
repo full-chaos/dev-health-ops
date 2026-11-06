@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func pinWindowToday(t *testing.T, ts string) {
@@ -25,7 +26,7 @@ func untilBound(t *testing.T, until string, now string) (string, int) {
 	client := &fakeClient{responses: []*fakeRowScanner{{}, {}, {}}}
 	if _, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-10-15T00:00:00Z"), mustDay(t, until),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil); err != nil {
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling()); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(client.bindings) == 0 {

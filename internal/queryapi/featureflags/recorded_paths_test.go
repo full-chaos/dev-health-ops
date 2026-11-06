@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedpaths"
 )
 
@@ -109,9 +110,9 @@ func TestRecordedErrorTextDecidesDegradedOrRaised(t *testing.T) {
 		client := &goldenClient{rows: tc.Rows, total: tc.Total, errs: blanked, kind: tc.Kind}
 		var gotErr error
 		if tc.Kind == "flags" {
-			_, gotErr = Resolve(context.Background(), client, "org-1", strPtr(tc.Args, "provider"), strPtr(tc.Args, "project"), tc.Args["include_archived"].(bool), int(tc.Args["limit"].(float64)))
+			_, gotErr = Resolve(context.Background(), client, "org-1", strPtr(tc.Args, "provider"), strPtr(tc.Args, "project"), tc.Args["include_archived"].(bool), int(tc.Args["limit"].(float64)), teamscope.NoCeiling())
 		} else {
-			_, gotErr = ResolveEvents(context.Background(), client, "org-1", strPtr(tc.Args, "flag_key"), strPtr(tc.Args, "environment"), int(tc.Args["limit"].(float64)))
+			_, gotErr = ResolveEvents(context.Background(), client, "org-1", strPtr(tc.Args, "flag_key"), strPtr(tc.Args, "environment"), int(tc.Args["limit"].(float64)), teamscope.NoCeiling())
 		}
 		if gotErr == nil {
 			t.Errorf("case %q: Python degraded on this recorded error text, and the Go resolver still degrades with the text blanked: the text is not read", tc.Name)

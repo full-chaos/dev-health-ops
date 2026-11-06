@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/hotspots"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/reviewedges"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
@@ -118,7 +119,7 @@ func TestDailyFamilyTablesCollapseCopiesWithoutChangingReaderRows(t *testing.T) 
 			limit := 1000
 			result, err := hotspots.Resolve(ctx, client, "org-a",
 				time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
-				time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC), nil, &limit)
+				time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC), nil, &limit, teamscope.NoCeiling())
 			if err != nil {
 				t.Fatalf("hotspots.Resolve: %v", err)
 			}

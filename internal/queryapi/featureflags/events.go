@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // EventNotMaterializedReason mirrors Python's
@@ -61,9 +62,13 @@ func degradedEventsResult(reason string) *model.FeatureFlagEventsResult {
 // building where_clauses/params once and reusing them for both
 // statements, the same discipline flagWhere already follows for
 // featureFlags.
-func eventWhere(orgID string, flagKey, environment *string) (string, []clickhouse.Binding) {
+// A repository ceiling (CHAOS-13161) holds both statements to the allowed repositories; the zero ceiling adds nothing.
+func eventWhere(orgID string, flagKey, environment *string, ceiling teamscope.Ceiling) (string, []clickhouse.Binding) {
 	clause := "org_id = {org_id:String}"
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	clause += term
+	bindings = append(bindings, ceilingBindings...)
 	if flagKey != nil {
 		clause += " AND flag_key = {flag_key:String}"
 		bindings = append(bindings, clickhouse.Binding{Name: "flag_key", Value: *flagKey})
@@ -81,12 +86,12 @@ func eventWhere(orgID string, flagKey, environment *string) (string, []clickhous
 // deliberately does NOT receive the clamped limit binding: it counts
 // every row matching the WHERE clause, not just the ones the row query
 // returns.
-func ResolveEvents(ctx context.Context, client QueryClient, orgID string, flagKey, environment *string, limit int) (*model.FeatureFlagEventsResult, error) {
+func ResolveEvents(ctx context.Context, client QueryClient, orgID string, flagKey, environment *string, limit int, ceiling teamscope.Ceiling) (*model.FeatureFlagEventsResult, error) {
 	if client == nil {
 		return nil, errors.New("featureflags: clickhouse client is required")
 	}
 
-	whereClause, bindings := eventWhere(orgID, flagKey, environment)
+	whereClause, bindings := eventWhere(orgID, flagKey, environment, ceiling)
 
 	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit_n", Value: clampLimit(limit)})
 

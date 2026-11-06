@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // fakeRowScanner is one scripted response, whose values are copied into a
@@ -200,7 +201,7 @@ func TestResolve_RepoScope_HappyPath(t *testing.T) {
 
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-31T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -242,7 +243,7 @@ func TestResolve_RepoScope_LabelFallback(t *testing.T) {
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestResolve_RepoScope_EmptyResultSkipsLabelLookup(t *testing.T) {
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -283,7 +284,7 @@ func TestResolve_RepoScope_RepoIDsFilterBindsAndBoundsToLimit(t *testing.T) {
 	repoIDs := []string{"r1", "r2", "r3"}
 	_, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, repoIDs, &limit)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, repoIDs, &limit, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -310,7 +311,7 @@ func TestResolve_RepoScope_NoRepoIDsUsesDefaultSubqueryLimit(t *testing.T) {
 	}
 	_, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -350,7 +351,7 @@ func TestResolve_RepoScope_NullMetricPropagatesAsNil(t *testing.T) {
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -373,7 +374,7 @@ func TestResolve_FileScope_HappyPath(t *testing.T) {
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-31T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeFile, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeFile, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestResolve_FileScope_LimitIsInterpolatedIntoQueryText(t *testing.T) {
 	limit := 7
 	_, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeFile, nil, &limit)
+		model.TimeGranularityDay, model.ComplexityScopeFile, nil, &limit, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -429,7 +430,7 @@ func TestResolve_FileScope_NullMetricPropagatesAsNil(t *testing.T) {
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeFile, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeFile, nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -445,7 +446,7 @@ func TestResolve_FileScope_NullMetricPropagatesAsNil(t *testing.T) {
 func TestResolve_NilClientErrors(t *testing.T) {
 	_, err := Resolve(context.Background(), nil, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected an error for a nil client")
 	}
@@ -457,7 +458,7 @@ func TestResolve_ErrorPropagatesNoDegradedPath(t *testing.T) {
 	}
 	_, err := Resolve(context.Background(), client, "org-1",
 		mustDay(t, "2026-08-01T00:00:00Z"), mustDay(t, "2026-08-01T23:59:59Z"),
-		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil)
+		model.TimeGranularityDay, model.ComplexityScopeRepo, nil, nil, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected the ClickHouse error to propagate (no degraded path for this operation)")
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const topReposLimit = 10
@@ -19,11 +20,11 @@ const topReposLimit = 10
 // the open-alert severity breakdown, the ten repos with the most open
 // alerts, and a 30-day opened/fixed trend. All four read the same
 // filtered alert set.
-func ResolveOverview(ctx context.Context, client QueryClient, orgID string, filters *model.SecurityAlertFilterInput) (*model.SecurityOverview, error) {
+func ResolveOverview(ctx context.Context, client QueryClient, orgID string, filters *model.SecurityAlertFilterInput, ceiling teamscope.Ceiling) (*model.SecurityOverview, error) {
 	if client == nil {
 		return nil, errors.New("security: clickhouse client is required")
 	}
-	f := buildFilter(orgID, filters)
+	f := buildFilter(orgID, filters, ceiling)
 	withOpen := append(append([]clickhouse.Binding{}, f.bindings...),
 		clickhouse.Binding{Name: "open_states_agg", Value: openStates})
 

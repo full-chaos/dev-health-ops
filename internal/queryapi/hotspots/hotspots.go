@@ -86,6 +86,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -213,8 +214,8 @@ type hotspotRow struct {
 // hotspots_backfill_inversion_integration_test.go for the INVERSION
 // (CHAOS-5447). Reducing the key to `computed_at` fails both; swapping it
 // to `(computed_at, day)` fails only the second.
-func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
-	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit))
+func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int, ceiling teamscope.Ceiling) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, ceiling, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit))
 }
 
 // MaxRepoTopRows caps the per-repository top-file read at the same bound as
@@ -226,11 +227,11 @@ const MaxRepoTopRows = MaxRepoIDsBound
 // and differs only in the tail: the same ordering, then LIMIT 1 BY repo_id.
 // It is NOT bound by the row limit, so a repository whose files all rank
 // below the row cut still gets its own top file.
-func fetchRepoTopRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string) ([]hotspotRow, error) {
-	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT 1 BY repo_id\nLIMIT %d", MaxRepoTopRows))
+func fetchRepoTopRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, ceiling teamscope.Ceiling) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, ceiling, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT 1 BY repo_id\nLIMIT %d", MaxRepoTopRows))
 }
 
-func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, tail string) ([]hotspotRow, error) {
+func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, ceiling teamscope.Ceiling, tail string) ([]hotspotRow, error) {
 	query := `
         SELECT
             repo_id,
@@ -259,6 +260,10 @@ func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
 		{Name: "since_day", Value: sinceDay},
 		{Name: "until_day", Value: untilDay},
 	}
+	// A repository ceiling (CHAOS-13161) holds the read to the allowed repositories; the zero ceiling adds nothing.
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	query += term
+	bindings = append(bindings, ceilingBindings...)
 
 	if len(repoIDs) > 0 {
 		bounded := boundRepoIDs(repoIDs)
@@ -356,7 +361,7 @@ func distinctRepoIDs(repoIDs []string) []string {
 // reviewedges.Resolve document, reproduced here by construction (only
 // one org parameter, never a caller-supplied org id). limit is clamped
 // internally, same as Python -- callers must not pre-clamp.
-func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, repoIDs []string, limit *int) (*model.HotspotsResult, error) {
+func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, untilUtc time.Time, repoIDs []string, limit *int, ceiling teamscope.Ceiling) (*model.HotspotsResult, error) {
 	if client == nil {
 		return nil, errors.New("hotspots: clickhouse client is required")
 	}
@@ -368,7 +373,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 		return nil, err
 	}
 
-	rawRows, err := fetchHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit)
+	rawRows, err := fetchHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, effLimit, ceiling)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +429,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 	// has no value (never a zero).
 	reposOut := []model.RepoHotspot{}
 	if len(rawRows) > 0 {
-		topRows, err := fetchRepoTopRows(ctx, client, orgID, sinceDay, untilDay, repoIDs)
+		topRows, err := fetchRepoTopRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, ceiling)
 		if err != nil {
 			return nil, err
 		}

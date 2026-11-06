@@ -64,6 +64,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -166,7 +167,7 @@ func TestFetchHotspotRows_BackfilledOlderDayDoesNotWinOverTheLatestDay(t *testin
 	}
 	defer func() { _ = client.Close() }()
 
-	rows, err := fetchHotspotRows(ctx, client, backfillOrgID, backfillSinceDay, backfillUntilDay, nil, 50)
+	rows, err := fetchHotspotRows(ctx, client, backfillOrgID, backfillSinceDay, backfillUntilDay, nil, 50, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("fetchHotspotRows: %v", err)
 	}

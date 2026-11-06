@@ -10,6 +10,7 @@ import (
 // serves the credentials routes only while it owns users, so every service that reads AUTH_USERS_OWNED defaults it on,
 // as production's phase 4: one pass-through, one default, for all of them. A proof that keeps users unowned pins its own
 // value in its override (ci/auth_webproof_compose.override.yml, ci/auth_corpus_external.acp.override.yml).
+// Prod readback 2026-11-06 (acp, read-only): auth-service and go-api both run AUTH_USERS_OWNED=true.
 func TestComposeUsersOwnedDefaultsOnForEveryReader(t *testing.T) {
 	var file composeKeyFile
 	if err := yaml.Unmarshal(readCompose(t, "compose.yml"), &file); err != nil {

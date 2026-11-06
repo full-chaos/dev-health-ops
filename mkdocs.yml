@@ -6,6 +6,8 @@ site_url: https://docs.fullchaos.dev
 # edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  go-migration-matrix.md
 site_dir: .build/docs
 
 theme:
@@ -296,8 +298,6 @@ nav:
       - Deprecations: reference/deprecations/index.md
       - Runtime:
           - reference/runtime/index.md
-          - Python↔Go live-path ledger: reference/runtime/python-go-live-path-ledger.md
-          - Go migration matrix: go-migration-matrix.md
   - Contribute:
       - contribute/index.md
       - Get started:

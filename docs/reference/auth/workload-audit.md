@@ -14,7 +14,7 @@ lifecycle: active
 
 # Workload audit
 
-This page records the audit of every workload row (CHAOS-11257, 2026-11-02). It is a dated record, not a
+This page records the audit of every workload row. It is a dated record, not a
 live list: the registry is [`workload-registry.json`](https://github.com/full-chaos/dev-health-ops/blob/main/contracts/auth/v1/vocabulary/workload-registry.json)
 and the [workload registry page](workload-registry.md). The production rows were read once, read-only, with the
 read script `prod-read-11257-1.sh` (sha256 `860226d0c2ba6968435cf54e5bf230471b765d4aaca6b942c1e21c5c70a6adfa`).
@@ -55,8 +55,8 @@ Prod holds no bootstrap credential row: the bootstrap subject is for Compose and
 
 | Workload | Rotation | Recovery | Proof today | Missing |
 | --- | --- | --- | --- | --- |
-| `api` | The kubelet refreshes the projected token; go-api reads the file at every exchange ([federation runbook](../../operate/runbooks/auth-workload-kubernetes-federation.md), "The file is read again for every exchange"). A binding is changed with `rebind`. | `rebind` after a ServiceAccount is recreated, `binding-disable`, `binding-enable`, `enable`, `disable` ([bootstrap runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md), "Rebind a recreated ServiceAccount", "Disable or enable one binding", "Enable a disabled workload"). The restore fence disables the rows (`internal/auth/restorefence/specs.go`, rows `auth.workload_bindings`, `auth.workloads`). | `internal/auth/workload/rebind_integration_test.go:17` (rebind), `:63` (refusals), `:131` (disable stops every binding); `enable_integration_test.go:151`, `:204`. | The live drill CHAOS-11237 (go-api, Backlog). Until it is done the row is PARTIAL. |
-| `acr-api` | No credential in prod yet. The client is off (`acr/deploy/helm/acr/values.yaml`, `authWorkloadClient.enabled: false`) and the row has no binding. The same verbs as `api` apply once it is bound. | Same verbs as `api`. | The registry row and the verbs are tested as for `api`. | A binding and the live drill CHAOS-11238 (Backlog). PARTIAL. |
+| `api` | The kubelet refreshes the projected token; go-api reads the file at every exchange ([federation runbook](../../operate/runbooks/auth-workload-kubernetes-federation.md), "The file is read again for every exchange"). A binding is changed with `rebind`. | `rebind` after a ServiceAccount is recreated, `binding-disable`, `binding-enable`, `enable`, `disable` ([bootstrap runbook](../../operate/runbooks/auth-workload-bootstrap-credential.md), "Rebind a recreated ServiceAccount", "Disable or enable one binding", "Enable a disabled workload"). The restore fence disables the rows (`internal/auth/restorefence/specs.go`, rows `auth.workload_bindings`, `auth.workloads`). | `internal/auth/workload/rebind_integration_test.go:17` (rebind), `:63` (refusals), `:131` (disable stops every binding); `enable_integration_test.go:151`, `:204`. | The live drill (go-api), not done. Until it is done the row is PARTIAL. |
+| `acr-api` | No credential in prod yet. The client is off (`acr/deploy/helm/acr/values.yaml`, `authWorkloadClient.enabled: false`) and the row has no binding. The same verbs as `api` apply once it is bound. | Same verbs as `api`. | The registry row and the verbs are tested as for `api`. | A binding and the live drill, not done. PARTIAL. |
 | `web` | `auth-migrate workload-assertion-key-set` (new active key, `-retire-previous-after` up to 24 h) and `workload-assertion-key-list` (`cmd/auth-migrate/assertionkey.go`). | Set a new active key; a retired key never returns (migration 0039 trigger). | `assertion_keys_integration_test.go:111` (rotation), `:146` (overlap bound), `:204` (retired is terminal, one active key); production has one key and one `assertion_key_set` audit event. | At the audit: no runbook named the verbs, and no drill. Now: the [web assertion key rotation runbook](../../operate/runbooks/auth-workload-assertion-key-rotation.md) names the verbs and the recovery, and the live rotation drill on ACR ran (web pull request 1794, `DRILL-11236-5.log`). The production key has not been rotated, and the verbs' database leg is tested in hosted CI only. PARTIAL. |
 | `auth-service`, `query-api` | None: no audience, no binding, no credential. | A re-run of `auth-migrate workloads seed` restores the row (`seed` is idempotent). `enable` clears a disable. | `internal/auth/workload/store_integration_test.go` (seed), `enable_integration_test.go:151`. | None. |
 
@@ -84,7 +84,7 @@ server (`acr/migrations/postgres/0030_workload_token_exchange.sql`, `0070_worklo
 ## Summary
 
 - Rows audited: 5 registry rows plus the ACR binding table (0 rows).
-- PASS 0, N/A 2 (`auth-service`, `query-api`: identity only), PARTIAL 2 (`api`, `acr-api`; drills CHAOS-11237 and CHAOS-11238 pending), GAP 2 (`web`
+- PASS 0, N/A 2 (`auth-service`, `query-api`: identity only), PARTIAL 2 (`api`, `acr-api`; drills pending), GAP 2 (`web`
   assertion key runbook; ACR binding table procedure). Both GAP rows moved to PARTIAL: see the update below.
 - Actions removed: 0 (none exist). Owners: derived from the component at the audit; the registry contract now holds an owner.
 - Follow-up: one ticket covered the owner field, the web assertion-key runbook and the ACR binding-table procedure.

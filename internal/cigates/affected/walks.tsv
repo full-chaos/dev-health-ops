@@ -165,6 +165,7 @@ internal/cigates/docs	docs_helpers_test.go	unexpressed	-	-
 internal/cigates/docs	parity_test.go	internal/cigates/docs	dir	*
 internal/cigates/docsprepare	docsprepare.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub.go	unexpressed	-	-
+internal/cigates/docstools	dc_pub_exclude_test.go	unexpressed	-	-
 internal/cigates/docstools	dc_pub_test.go	unexpressed	-	*.md
 internal/cigates/docstools	dc_pub_test.go	unexpressed	-	-
 internal/cigates/docstools	dc_pyhelp.go	unexpressed	-	-

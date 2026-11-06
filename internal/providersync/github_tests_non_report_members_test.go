@@ -39,8 +39,8 @@ func TestGitHubTestsNonReportMembersAreCountedNotIncomplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rows.NonReportJSON != 2 || rows.NonReportOther != 1 || rows.ReportsParsed != 1 {
-		t.Fatalf("json=%d other=%d parsed=%d, want 2/1/1", rows.NonReportJSON, rows.NonReportOther, rows.ReportsParsed)
+	if rows.NonReportJSON != 2 || rows.NonReportOther != 2 || rows.ReportsParsed != 1 {
+		t.Fatalf("json=%d other=%d parsed=%d, want 2/2/1 (notes.txt and dir/)", rows.NonReportJSON, rows.NonReportOther, rows.ReportsParsed)
 	}
 	if incomplete, optional := rows.optionalIncomplete(); len(incomplete) != 0 || !optional {
 		t.Fatalf("incomplete=%v optional=%v, want none: non-report members are not an incomplete cause", incomplete, optional)
@@ -48,21 +48,21 @@ func TestGitHubTestsNonReportMembersAreCountedNotIncomplete(t *testing.T) {
 
 	swapDefaultLogger(t, logging.NewJSON(&buf, slog.LevelInfo))
 	client := &providerfoundation.HTTPClient{Provider: "github", Metrics: providerfoundation.NewMetrics()}
-	recordGitHubTestsNonReportMembers(client, Claim{Provider: "github", Dataset: "cicd"}, "acme/api", "9", rows)
+	recordGitHubTestsNonReportMembers(client, Claim{Provider: "github", Dataset: "cicd"}, rows)
 	var out bytes.Buffer
 	if err := client.Metrics.WritePrometheus(&out); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
 		`dev_health_provider_non_report_members_skipped_total{provider="github",dataset="cicd",class="json"} 2`,
-		`dev_health_provider_non_report_members_skipped_total{provider="github",dataset="cicd",class="other"} 1`,
+		`dev_health_provider_non_report_members_skipped_total{provider="github",dataset="cicd",class="other"} 2`,
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q in:\n%s", want, out.String())
 		}
 	}
 	log := buf.String()
-	for _, want := range []string{`"skipped_json":2`, `"skipped_other":1`, `"reports_parsed":1`} {
+	for _, want := range []string{`"skipped_json":2`, `"skipped_other":2`, `"reports_parsed":1`} {
 		if !strings.Contains(log, want) {
 			t.Fatalf("missing %s in log: %s", want, log)
 		}

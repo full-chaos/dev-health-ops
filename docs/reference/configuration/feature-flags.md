@@ -32,7 +32,7 @@ For each supported feature, generate or verify:
 
 ## Canonical incident ingestion
 
-`canonical_incident_ingestion` is enabled by default for every license tier after the canonical cutover. The global feature decision remains a kill switch, and an organization may carry an explicit false override.
+`canonical_incident_ingestion` is enabled by default for every license tier. The global feature decision remains a kill switch, and an organization may carry an explicit false override.
 
 When disabled, the system blocks new canonical incident webhook enqueue, processing, and writes. Status, inspection, disconnect, credential deletion, binding revocation, and secret cleanup remain available so operators can recover safely.
 
@@ -60,7 +60,7 @@ Ask Dev has five independent feature decisions:
 | `platform_model_fallback` | A platform admin grant: an organization with no saved BYO LLM may draw the platform LLM for ACR AI features (together with `acr_service_model`). Published as the boolean `platform_model_fallback` in the acr entitlement response | Opened only by an active organization override (the superuser feature-overrides route); never by tier, never by a license override, never auto-granted; an expired override closes it; reads `false` when the feature row is not registered yet (`dho admin features seed` registers it) |
 
 No gate grants any of the others. Enabling `ask_dev` does not enable contextual
-entrypoints, enable Wave 3.1 interpretation, expose BYO LLM settings, or expose
+entrypoints, enable interpretation, expose BYO LLM settings, or expose
 Context Fabric Validation, and enabling any of those gates does not make base
 Ask Dev available. The `ask_dev`, `ask_dev_contextual_entrypoints`, and
 `ask_dev_wave_3_1` registry rows are globally
@@ -80,7 +80,7 @@ them; it never infers the contextual decision from `ask_dev`.
 feature registry, seeded by Alembic revision `0073`). Every tier stays denied
 until an organization or license override grants it, and the row is preserved on
 rollback because those overrides may reference it. With the decision off, a run
-behaves exactly as it did before Wave 3.1. Evaluating the decision fails closed — a storage error
+behaves exactly as it did before interpretation existed. Evaluating the decision fails closed — a storage error
 leaves it off rather than admitting an unreviewed path.
 
 Do not infer Ask Dev access from a paid plan. Bundling it into all paid plans is

@@ -24,7 +24,7 @@ For platform authority, which is a different thing, see [Platform administrator]
 
 ## Which table decides
 
-`public.users`, `public.organizations` and `public.memberships` are the authoritative records (D6651). The `auth`
+`public.users`, `public.organizations` and `public.memberships` are the authoritative records. The `auth`
 schema keeps copies of the shared columns so that its own tables can point at them. A copy never decides an access
 question.
 

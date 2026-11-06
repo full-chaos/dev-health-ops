@@ -48,7 +48,7 @@ The closed list is `contracts/auth/v1/vocabulary/roles.v1.json`.
 
 The chart renders the switch from `authService.platformRolesOwned`, and it needs users owned. The flip and its rollback
 are in [Auth platform roles flip and rollback](../../operate/runbooks/auth-platform-roles-flip-and-rollback.md). While the switch is off, `dho auth platform-role-grant` and `platform-role-revoke`
-refuse. The public user record is the authority for who the user is (D6651). The platform role assignment is
+refuse. The public user record is the authority for who the user is. The platform role assignment is
 auth-native data.
 
 ## Impersonation

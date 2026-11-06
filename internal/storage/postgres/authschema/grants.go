@@ -129,6 +129,9 @@ func RuntimePosture() []TablePrivilege {
 		{Table: "projection_cursor", Select: true, Insert: true, Update: true},
 		{Table: "projection_retry", Select: true, Insert: true, Update: true, Delete: true},
 
+		// Repository identities (0055): the copy of the provider repository ids; written only inside audit.Commit.
+		{Table: "repository_identities", Select: true, Insert: true, Update: true, Delete: true},
+
 		// Restore fence (0035): the runtime only reads which timelines are fenced.
 		{Table: "restore_fence_state", Select: true},
 	}

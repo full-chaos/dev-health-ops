@@ -74,7 +74,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 	schemaDigest := digest.Schema(schemav1.SDL)
 
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
-		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey,
+		Golden: golden, Root: root, JWTKey: edgeOracleJWTKey, LegacyHS256Tokens: true,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
 	operatingReviewFixtureHasNoRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB))

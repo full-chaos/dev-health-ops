@@ -23,8 +23,10 @@ internal/api/restcore
 internal/api/sessionissue
 internal/api/standinkey
 internal/api/usersowned
+internal/apiservice/accessrouting
 internal/apiservice/admin
 internal/audit
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/clientaddr
 internal/auth/contracts/externalpush
@@ -73,6 +75,7 @@ internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/health
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
@@ -95,6 +98,7 @@ internal/storage/roleacl
 internal/syncdispatchruntime/synclog
 internal/testsupport/chschema
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/fakepg
 internal/testsupport/moduleroot
 internal/testsupport/pgseed

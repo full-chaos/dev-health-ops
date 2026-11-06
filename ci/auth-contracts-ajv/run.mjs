@@ -216,6 +216,7 @@ const APPROVED_DECISION = [
   "grant_absent",
   "repository_allowlist_too_large",
   "repository_not_granted",
+  "repository_unresolved",
   "platform_role_absent",
   "allowed_by_membership_default",
   "allowed_by_role",

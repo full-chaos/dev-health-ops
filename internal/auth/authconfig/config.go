@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/clientaddr"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/platform/netaddr"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -57,6 +58,7 @@ const (
 	EnvHealthCheckTimeout      = "AUTH_SERVICE_HEALTH_CHECK_TIMEOUT"
 	EnvAPIAddress              = "AUTH_SERVICE_HTTP_ADDR"
 	EnvOperatorAddress         = "AUTH_SERVICE_OPERATOR_HTTP_ADDR"
+	EnvInternalAddress         = "AUTH_SERVICE_INTERNAL_HTTP_ADDR"
 	EnvRequestTimeout          = "AUTH_SERVICE_REQUEST_TIMEOUT"
 	EnvMaxBodyBytes            = "AUTH_SERVICE_MAX_BODY_BYTES"
 	EnvRateLimitPerSecond      = "AUTH_SERVICE_RATE_LIMIT_PER_SECOND"
@@ -131,6 +133,8 @@ const (
 	EnvRevisionFeed = "AUTH_REVISION_FEED"
 	// EnvPushProjection is the External Push projection switch (on or off, default off).
 	EnvPushProjection = "AUTH_PUSH_PROJECTION"
+	// EnvRepoIdentityProjection is the repository identity projection switch (on or off, default off).
+	EnvRepoIdentityProjection = "AUTH_REPO_IDENTITY_PROJECTION"
 	// EnvSocialLinkRoutes ("true" or "false", default false) mounts the
 	// bearer-only social link and unlink routes; it needs the session secrets.
 	EnvSocialLinkRoutes = "AUTH_SOCIAL_LINK_ROUTES"
@@ -226,6 +230,9 @@ type Config struct {
 
 	APIAddress      string
 	OperatorAddress string
+	// InternalAddress is EnvInternalAddress, "" when the internal listener is off. That listener serves the
+	// service-to-service routes alone and trusts no forwarded client address.
+	InternalAddress string
 	RequestTimeout  time.Duration
 	MaxBodyBytes    int64
 	RateLimit       RateLimit
@@ -284,6 +291,10 @@ type Config struct {
 	// PushProjection is AUTH_PUSH_PROJECTION=on: this replica runs the External Push projection reader (it reads the
 	// external_push_credential rows of the auth outbox and projects them). Mounts no route.
 	PushProjection bool
+	// RepoIdentityProjection is AUTH_REPO_IDENTITY_PROJECTION=on: this replica runs the repository identity projection
+	// reader (it reads the repository_identity rows of the auth outbox and upserts repository_identities). Mounts no
+	// route.
+	RepoIdentityProjection bool
 
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED, parsed by
 	// rule.OwnedFromLookup: the sign-in state reads is_superuser from
@@ -380,6 +391,7 @@ func (c Config) SafeAttrs() []slog.Attr {
 		slog.String("health_check_timeout", c.HealthCheckTimeout.String()),
 		slog.String("api_address", c.APIAddress),
 		slog.String("operator_address", c.OperatorAddress),
+		slog.String("internal_address", c.InternalAddress),
 		slog.String("request_timeout", c.RequestTimeout.String()),
 		slog.Int64("max_body_bytes", c.MaxBodyBytes),
 		slog.Float64("rate_limit_per_second", c.RateLimit.PerSecond),
@@ -469,6 +481,17 @@ func Load(spec Spec) (Config, error) {
 		return Config{}, fmt.Errorf(
 			"%s and %s must not be the same address", EnvAPIAddress, EnvOperatorAddress,
 		)
+	}
+	if internal := strings.TrimSpace(valueOf(lookup, EnvInternalAddress)); internal != "" {
+		if cfg.InternalAddress, err = address(lookup, EnvInternalAddress, ""); err != nil {
+			return Config{}, err
+		}
+		// Port 0 is exempt, since each such bind gets its own port.
+		if netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.APIAddress) || netaddr.ListenAddressesOverlap(cfg.InternalAddress, cfg.OperatorAddress) {
+			return Config{}, fmt.Errorf(
+				"%s must not be the same address as %s or %s", EnvInternalAddress, EnvAPIAddress, EnvOperatorAddress,
+			)
+		}
 	}
 	if cfg.RequestTimeout, err = duration(
 		lookup, EnvRequestTimeout, defaultRequestTimeout, minRequestTimeout, maxRequestTimeout,
@@ -630,7 +653,10 @@ func Load(spec Spec) (Config, error) {
 	if cfg.RevisionFeed, err = revisionFeed(lookup); err != nil {
 		return Config{}, err
 	}
-	if cfg.PushProjection, err = pushProjection(lookup); err != nil {
+	if cfg.PushProjection, err = onOff(lookup, EnvPushProjection); err != nil {
+		return Config{}, err
+	}
+	if cfg.RepoIdentityProjection, err = onOff(lookup, EnvRepoIdentityProjection); err != nil {
 		return Config{}, err
 	}
 	if cfg.ValkeyURI, err = valkeySetting(lookup, cfg.LimitedRoutesMounted()); err != nil {
@@ -654,16 +680,16 @@ func revisionFeed(lookup secrets.LookupEnv) (bool, error) {
 	return false, fmt.Errorf("%s must be on or off", EnvRevisionFeed)
 }
 
-// pushProjection reads AUTH_PUSH_PROJECTION: unset or empty is off; only on and off (any case) are values. The refusal
-// does not quote the value.
-func pushProjection(lookup secrets.LookupEnv) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, EnvPushProjection))) {
+// onOff reads a projection switch (AUTH_PUSH_PROJECTION, AUTH_REPO_IDENTITY_PROJECTION): unset or empty is off; only
+// on and off (any case) are values. The refusal does not quote the value.
+func onOff(lookup secrets.LookupEnv, name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(valueOf(lookup, name))) {
 	case "", "off":
 		return false, nil
 	case "on":
 		return true, nil
 	}
-	return false, fmt.Errorf("%s must be on or off", EnvPushProjection)
+	return false, fmt.Errorf("%s must be on or off", name)
 }
 
 // LimitedRoutesMounted reports whether a route that counts in the shared

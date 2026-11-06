@@ -373,6 +373,29 @@ func composeACROldDefaults(g *guard) {
 	g.expect(got == "false", "acr-projector %s=%q without the env-file line, want the old default false", key, got)
 }
 
+func composeACRDBInitScriptIsPinned(g *guard) {
+	r := composeACR(g)
+	pins := composeEnvFile(g.read(composePins))
+	want := pins["ACR_DB_INIT_SCRIPT"]
+	g.expect(strings.HasPrefix(want, "/var/lib/oci-cache/mcp-venue/") && strings.HasSuffix(want, ".sh"), "images.env ACR_DB_INIT_SCRIPT=%q is not a script path under /var/lib/oci-cache/mcp-venue/", want)
+	for _, n := range []string{"acr-db-init", "acr-db-acl"} {
+		var src []string
+		for _, v := range list(r.services[n]["volumes"]) {
+			if str(at(v, "target")) == "/usr/local/bin/acr-db-init" {
+				src = append(src, str(at(v, "source")))
+			}
+		}
+		g.expect(len(src) == 1 && src[0] == want, "%s mounts the script from %v, want only the ACR_DB_INIT_SCRIPT path %q (no hand-kept checkout)", n, src, want)
+	}
+	if strings.Contains(g.read(composeFile), "ACR_VENUE_DIR") {
+		g.failf("%s still names ACR_VENUE_DIR", composeFile)
+	}
+	pin := composeEnvFile(g.read("ci/bigboy/acr-db-init.pin"))
+	g.expect(regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pins["BIGBOY_ACR_COMMIT"]), "images.env BIGBOY_ACR_COMMIT=%q is not a 40-hex acr commit", pins["BIGBOY_ACR_COMMIT"])
+	g.expect(pin["ACR_DB_INIT_COMMIT"] == pins["BIGBOY_ACR_COMMIT"], "acr-db-init.pin commit %q != images.env BIGBOY_ACR_COMMIT %q", pin["ACR_DB_INIT_COMMIT"], pins["BIGBOY_ACR_COMMIT"])
+	g.expect(regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(pin["ACR_DB_INIT_SHA256"]), "acr-db-init.pin sha256 %q is not 64 hex", pin["ACR_DB_INIT_SHA256"])
+}
+
 var composeACRChecks = []check{
 	{"the_default_stack_does_not_start_an_acr_service", composeACRDefaultStack},
 	{"each_acr_profile_renders_alone_and_adds_only_acr_services", composeACRProfilesAddOnlyACR},
@@ -388,6 +411,7 @@ var composeACRChecks = []check{
 	{"the_removed_org_llm_config_source_is_not_passed_and_no_file_sets_it", composeACROrgLLMSourceIsGone},
 	{"the_switch_procedure_removes_the_old_containers_and_keeps_the_data", composeACRSwitchProcedure},
 	{"the_acr_settings_keep_the_old_defaults_where_the_cutover_changes_the_env", composeACROldDefaults},
+	{"the_acr_db_init_script_is_the_one_of_the_pinned_acr_commit", composeACRDBInitScriptIsPinned},
 }
 
 func TestComposeACRVenueReal(t *testing.T) { runReal(t, composeACRChecks...) }
@@ -433,6 +457,10 @@ func TestComposeACRVenuePlanted(t *testing.T) {
 			check: composeACRSecretsAreFiles, want: "secret acr_runtime_dsn"},
 		{name: "dsn value inline", mutate: mut(composeFile, "ACR_POSTGRES_MIGRATION_DSN_FILE: /run/secrets/acr_migration_dsn", "ACR_POSTGRES_MIGRATION_DSN: postgres://acr:pw@postgres/acr"),
 			check: composeACRSecretsAreFiles, want: "credential in a URL"},
+		{name: "acr-db-acl mounts a hand-kept checkout", mutate: mut(composeFile, "${ACR_DB_INIT_SCRIPT:?ACR_DB_INIT_SCRIPT is required (a line of the pins file ci/bigboy/images.env, kept in _records/images.env; acr-db-init-fetch.sh writes the script there at the pinned acr commit)}", "/home/ubuntu/devhealth/dev-health-acr-mcp/deploy/compose/acr-db-init.sh"),
+			check: composeACRDBInitScriptIsPinned, want: "mounts the script from"},
+		{name: "pin file drifts from images.env", copy: append([]string{"ci/bigboy/acr-db-init.pin"}, composeFiles...), mutate: mut("ci/bigboy/acr-db-init.pin", "ACR_DB_INIT_COMMIT=d168fa95", "ACR_DB_INIT_COMMIT=0000000"),
+			check: composeACRDBInitScriptIsPinned, want: "!= images.env BIGBOY_ACR_COMMIT"},
 		{name: "migrate runs the mcp image", mutate: mut(composeFile, "    image: ${BIGBOY_ACR_API_IMAGE:?", "    image: ${BIGBOY_ACR_MCP_IMAGE:?"),
 			check: composeACRImagesPinned, want: "acr-migrate renders image"},
 		{name: "falkordb pin has a default", mutate: mut(composeFile, "${BIGBOY_ACR_FALKORDB_IMAGE:?BIGBOY_ACR_FALKORDB_IMAGE is required", "${BIGBOY_ACR_FALKORDB_IMAGE:-falkordb/falkordb:latest"),

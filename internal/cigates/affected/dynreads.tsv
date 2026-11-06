@@ -3,6 +3,7 @@ ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
 cmd/cigate	docs_prepare_refusals_test.go
+cmd/cigate	main.go
 cmd/cigate	main_test.go
 cmd/dev-health-migration-matrix	contract_test.go
 cmd/dev-health-migration-matrix	main.go
@@ -245,6 +246,7 @@ internal/cigates/docstools	validate_inventory_review.go
 internal/cigates/docstools	validate_inventory_review_cases_test.go
 internal/cigates/docstools	validatedsite.go
 internal/cigates/emitscan	scan.go
+internal/cigates/exceptionledger	ledger.go
 internal/cigates/frozengoldens	exemption_test.go
 internal/cigates/frozengoldens	frozengoldens_test.go
 internal/cigates/frozengoldens	reads.go
@@ -316,6 +318,7 @@ internal/cigates/workflows	auth_corpus_external_behaviour_test.go
 internal/cigates/workflows	auth_corpus_external_retry_test.go
 internal/cigates/workflows	auth_corpus_external_test.go
 internal/cigates/workflows	auth_corpus_queue_test.go
+internal/cigates/workflows	auth_proxy_local_login_compose_test.go
 internal/cigates/workflows	chart_started_filter_test.go
 internal/cigates/workflows	chart_started_selector_test.go
 internal/cigates/workflows	ci_script_helpers_test.go
@@ -513,6 +516,7 @@ internal/queryapi/drilldown	golden_test.go
 internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
 internal/queryapi/graph	field_action_map_test.go
+internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go
@@ -524,6 +528,7 @@ internal/queryapi/investmentexplain	repofilter_golden_test.go
 internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
+internal/queryapi/pepgate	census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -579,6 +584,7 @@ internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
+internal/queryapi/server	rest_scope_census_test.go
 internal/queryapi/server	result_row_bound_census_test.go
 internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go

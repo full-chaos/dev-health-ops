@@ -3,7 +3,7 @@
 //	cigate governance [flags]            PR test-evidence / risk-notes gate
 //	cigate plan-verdict [flags]          NONE / AFFECTED / FULL plan of a change set
 //	cigate plan-reads [flags]            guard of the declared-read table of the plan
-//	cigate govulncheck                   gate govulncheck JSON on stdin
+//	cigate govulncheck [--exceptions F]  gate govulncheck JSON on stdin
 //	cigate scope-candidates <module>     auth scope candidates from go list JSON on stdin
 //	cigate metrics-proof [flags]         metrics.daily executed-proof readback against ClickHouse
 //	cigate bigboy <verb> [args]          bigboy cut helpers: render-ch-users, grants-compare, pg-posture, bump-swap-values
@@ -53,7 +53,22 @@ func run(args []string) int {
 	case "plan-reads":
 		return affected.PlanReads(args[1:], os.Stdout, os.Stderr)
 	case "govulncheck":
-		return cigates.AuthGovulncheck(os.Stdin, os.Stdout, os.Stderr)
+		var exceptions []cigates.VulnException
+		if len(args) == 3 && args[1] == "--exceptions" {
+			f, err := os.Open(args[2])
+			if err == nil {
+				exceptions, err = cigates.ReadVulnExceptions(f)
+				f.Close()
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "auth govulncheck: exceptions file: %v\n", err)
+				return 1
+			}
+		} else if len(args) != 1 {
+			fmt.Fprintln(os.Stderr, "usage: cigate govulncheck [--exceptions FILE]")
+			return 2
+		}
+		return cigates.AuthGovulncheck(os.Stdin, exceptions, os.Stdout, os.Stderr)
 	case "docs-build":
 		return docsbuild.Run(args[1:], os.Stdout, os.Stderr)
 	case "docs-prepare":

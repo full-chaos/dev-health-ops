@@ -203,6 +203,9 @@ func (stub *byoStub) build() *orgCategorizeBYO {
 			stub.guarded++
 			return provider
 		},
+		newTypeSafe: func(cfg categorize.OrgTypeSafeClientConfig) (*categorize.TypeSafeClient, error) {
+			return newTypeSafeTestClient(cfg, &clefNetwork{reply: typeSafeAnswers(cfg.Model)}, testLogger())
+		},
 	}
 }
 
@@ -229,8 +232,8 @@ func TestAnOptedInOrgWithoutAUsableOwnModelIsRefusedWithAClosedCode(t *testing.T
 			cfg: llmorgsettings.OrgConfig{Provider: "openai", APIKey: secrets.NewHidden("sk-org-test")}}, "model_required"},
 		"mock provider": {&byoStub{decision: llmorgsettings.Decision{Kind: llmorgsettings.Own}, found: true,
 			cfg: llmorgsettings.OrgConfig{Provider: "mock", Model: "m"}}, "unknown_provider"},
-		"typesafe provider": {&byoStub{decision: llmorgsettings.Decision{Kind: llmorgsettings.Own}, found: true,
-			cfg: llmorgsettings.OrgConfig{Provider: "typesafe", Model: "m"}}, "unknown_provider"},
+		"typesafe provider, unlisted model": {&byoStub{decision: llmorgsettings.Decision{Kind: llmorgsettings.Own}, found: true,
+			cfg: llmorgsettings.OrgConfig{Provider: "typesafe", Model: "m"}}, llmorgsettings.CodeCategorizeBYOModelUnsupported},
 		"provider build error": {&byoStub{decision: llmorgsettings.Decision{Kind: llmorgsettings.Own}, found: true, cfg: usableOrgConfig(),
 			providerErr: errors.New("bad key sk-org-test at https://models.example.invalid/v1")}, llmorgsettings.CodeCategorizeBYOUnavailable},
 	} {

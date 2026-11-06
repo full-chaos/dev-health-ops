@@ -42,6 +42,8 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_legacy_link_accepted_total	purpose,service	code: internal/api/authmail/legacy.go
+devhealth_auth_legacy_logout_accepted_total	class,service	code: internal/auth/accessverify/logout.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go

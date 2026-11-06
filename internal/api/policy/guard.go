@@ -152,8 +152,8 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:

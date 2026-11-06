@@ -132,6 +132,9 @@ const (
 	enforceNoDecisionPoint
 	// enforceImpersonationRefused: the caller has a live go-api impersonation row. The route is refused with a 403.
 	enforceImpersonationRefused
+	// enforceSessionRowUnavailable: the caller's go-api impersonation row could not be read. The route is refused with
+	// the dependency failure 503.
+	enforceSessionRowUnavailable
 )
 
 // enforceObservation is what the guard tells the Enforcer about one authenticated request. It holds values only.
@@ -144,6 +147,18 @@ type enforceObservation struct {
 	impersonating bool
 	// served: the organization a path or query parameter names for the handler to serve (servedOrgOf).
 	served servedOrg
+}
+
+// decides reports whether the decision point decides pattern: its row is enforced and a decision point is configured.
+func (e *Enforcer) decides(pattern string) (namespace string, ok bool) {
+	if e == nil || e.unconfigured {
+		return "", false
+	}
+	row, ok := e.rows[pattern]
+	if !ok || !e.sw.On(row.Namespace) {
+		return "", false
+	}
+	return row.Namespace, true
 }
 
 func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerdict {
@@ -256,13 +271,30 @@ type pdpHooks struct {
 func (g *Guard) SetEnforcer(e *Enforcer) { g.pdp.enforcer = e }
 
 // enforceVerdict asks the Enforcer about one authenticated request.
-func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enforceVerdict {
+func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platform bool) enforceVerdict {
 	if g.pdp.enforcer == nil {
 		return enforceNotCovered
 	}
 	ctx := r.Context()
+	impersonating := ImpersonationFrom(ctx) != nil
+	// The session context is set for a holder of admin.impersonate only. On an enforced write or platform row the live
+	// row decides for any caller, as the guard's own refusals do (Guard.sessionRow): a caller whose admin.impersonate
+	// was revoked while its row is live is refused too. A read of any other row reads no row (the read limit).
+	if namespace, enforced := g.pdp.enforcer.decides(r.Pattern); enforced && !impersonating && r.Pattern != stopImpersonationPattern &&
+		(platform || !readMethod(r.Method)) {
+		session, err := g.sessionRow(r, user.ID)
+		if err != nil {
+			countEnforce(ctx, namespace, enforceOutcomeErrorDeny)
+			g.logger.ErrorContext(ctx, "api enforcement: impersonation row lookup failed; refusing the request",
+				slog.String("route", r.Pattern), slog.String("namespace", namespace), slog.Bool("unavailable", isUnavailable(err)),
+				slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
+			g.observeShadow(r, user, bearer, false)
+			return enforceSessionRowUnavailable
+		}
+		impersonating = session != nil
+	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
+		userAccessToken: user.accessToken, impersonating: impersonating, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {
@@ -284,6 +316,9 @@ func writeEnforceRefusal(w http.ResponseWriter, level Authz, verdict enforceVerd
 		return
 	case enforceImpersonationRefused:
 		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+		return
+	case enforceSessionRowUnavailable:
+		WriteAuthFailure(w, "", ErrUnavailable)
 		return
 	}
 	WriteDetail(w, http.StatusForbidden, enforceDenyDetail(level), nil)

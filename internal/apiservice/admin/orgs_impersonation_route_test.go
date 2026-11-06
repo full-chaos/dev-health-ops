@@ -52,7 +52,7 @@ func serveOrgWrite(t *testing.T, active bool, method, path, body string) (status
 		t.Fatal(err)
 	}
 	touchedFlag := new(bool)
-	h := &handlers{store: pgStore{Pool: touchedDB{touchedFlag}}, guard: policy.NewGuard(auth, logger), logger: logger}
+	h := &handlers{store: pgStore{Pool: touchedDB{touchedFlag}}, guard: policy.NewGuard(auth, logger), logger: logger, invites: InviteConfig{LinkSecret: key}}
 	mux := http.NewServeMux()
 	for _, route := range append(h.orgRoutes(), h.impersonationRoutes()...) {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)

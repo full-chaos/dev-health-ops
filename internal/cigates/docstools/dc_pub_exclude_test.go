@@ -10,6 +10,7 @@ import (
 )
 
 var excludedFromTheSite = []string{
+	"contribute/architecture/go-api-wave-0-proof-infrastructure.md",
 	"go-migration-matrix.md",
 }
 

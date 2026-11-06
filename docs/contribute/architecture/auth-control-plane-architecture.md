@@ -86,9 +86,8 @@ this page.
 | Go build, release and security gate reference | [Go gates](auth-control-plane-go-gates.md) |
 | Initial service SLO and readiness reference | [Readiness and SLO reference](../../reference/auth/readiness-and-slo.md) |
 
-The decisions behind all of it are in the [ADRs](auth-control-plane-adrs.md),
-the [decision sheet](auth-control-plane-decision-sheet.md) and the
-[threat model](auth-control-plane-threat-model.md).
+The decisions behind all of it are in the [ADRs](auth-control-plane-adrs.md)
+and the [threat model](auth-control-plane-threat-model.md).
 
 ## Verified against
 

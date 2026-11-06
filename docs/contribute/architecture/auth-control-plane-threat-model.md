@@ -108,6 +108,4 @@ observable in production.
   — the ops inventory rows and how they were discovered.
 * [Auth Control Plane ADRs](auth-control-plane-adrs.md) — the eleven Proposed
   ADRs the threat model is an input to.
-* [Auth Control Plane decision sheet](auth-control-plane-decision-sheet.md) —
-  one-pass ratification: recommendation, alternatives, and risk per ADR.
 * [Auth Control Plane architecture and documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each surface.

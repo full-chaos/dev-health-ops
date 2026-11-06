@@ -18,9 +18,7 @@ Every Go integration suite in dev-health-ops needs a real datastore. There are
 three places it can come from, and picking the wrong one produces a green run
 that proves nothing.
 
-The companion runbook,
-[Lane isolation on a kiac cluster](lane-isolation-kiac.md), covers how an isolated
-cluster is built; this page covers only **where a given suite should run**.
+This page covers only **where a given suite should run**.
 
 ## The three targets
 

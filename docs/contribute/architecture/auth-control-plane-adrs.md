@@ -16,9 +16,7 @@ lifecycle: active
 # Auth Control Plane ADRs
 
 TRD §26 requires eleven ADRs before the Auth Control Plane becomes the issuer. All twelve — the eleven plus
-ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass,
-over the [decision sheet](auth-control-plane-decision-sheet.md), which carries
-the recommendation, the alternatives considered, and the risk for each.
+ACP-ADR-12 — are **Accepted**, ratified 2026-09-02 in a single pass.
 {: .fc-page-lede }
 
 > **Note:** The Python api paths and tools that this page names (`src/dev_health_ops/api/...`, `ci/check_endpoint_profiles.py`, `contracts/auth/v1/endpoint-profiles.ops.json`) were removed with the Python api. This page is a record of the design as ratified.
@@ -1011,9 +1009,6 @@ retire only after a dual-accept window.
 * Auth Control Plane threat model — the seven threat classes and the anchored
   evidence these ADRs answer. Maintained in the Auth Control Plane project in
   Linear, not in this repository.
-* [Auth Control Plane decision sheet](auth-control-plane-decision-sheet.md) —
-  recommendation, alternatives considered, and risk per ADR, for one-pass
-  ratification.
 * [Credential classes](../../reference/auth/credential-classes.md)
 * [Endpoint authentication profiles](../../reference/auth/endpoint-profiles.md)
 * [Auth Control Plane architecture and documentation](auth-control-plane-architecture.md) — what was built from these decisions, with a page for each surface.

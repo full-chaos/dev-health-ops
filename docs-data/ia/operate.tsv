@@ -54,6 +54,7 @@ op-rb-backup	op-runbooks	/operate/runbooks/backup-or-restore-failure/	Backup or 
 op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runbook	true	public	planned	false
 op-rb-prod-k3s	op-runbooks	/operate/runbooks/prod-k3s-deploy-and-operate/	Prod k3s deploy and operate	runbook	true	public	active	false
 op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api bootstrap on prod k3s	runbook	true	public	active	false
+op-rb-go-api-tools-image	op-runbooks	/operate/runbooks/go-api-tools-image/	Go API tools image	runbook	true	public	active	false
 op-rb-auth-sessions-flip	op-runbooks	/operate/runbooks/auth-sessions-flip-and-rollback/	Auth sessions flip and rollback	runbook	true	public	active	false
 op-rb-auth-shadow-triage	op-runbooks	/operate/runbooks/auth-shadow-pdp-triage/	Auth shadow PDP triage	runbook	true	public	active	false
 op-rb-auth-pdp-outage-rollback	op-runbooks	/operate/runbooks/auth-pdp-outage-and-rollback/	Auth PDP outage and rollback	runbook	true	public	active	false

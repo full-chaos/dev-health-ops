@@ -1431,13 +1431,15 @@ func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T)
 				t.Errorf("no %q in the calls:\n%s", want, calls)
 			}
 		}
-		seeded, backfill := strings.Index(calls, "SEEDED"), strings.Index(calls, "users-backfill")
+		seeded, backfill := strings.Index(calls, "SEEDED"), strings.Index(calls, "run --rm --no-deps auth-users-backfill")
 		flipped := strings.Index(calls, "FLIPPED")
 		if backfill < 0 || seeded > backfill || backfill > flipped {
 			t.Errorf("users-backfill must run after the seed and before the hand-off; calls:\n%s", calls)
 		}
-		if !strings.Contains(calls, "-e AUTH_USERS_OWNED=false") {
-			t.Errorf("users-backfill ran without AUTH_USERS_OWNED=false for its one command; calls:\n%s", calls)
+		// CHAOS-13107: the copy is compose.yml's own one-shot (AUTH_USERS_OWNED=false for that run only), not an
+		// ad-hoc run of migrate with the flag on the command line.
+		if !strings.Contains(calls, "run --rm --no-deps auth-users-backfill") || strings.Contains(calls, "migrate auth users-backfill") {
+			t.Errorf("the seeded users were not copied by the auth-users-backfill one-shot; calls:\n%s", calls)
 		}
 		if _, statErr := os.Stat(fake.record + ".owned"); statErr != nil {
 			t.Error("auth-service was not recreated after the backfill")

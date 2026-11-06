@@ -149,3 +149,20 @@ func AccessTokenUnvalued(body string) (string, bool) {
 	}
 	return body[:start] + unvaluedAccessToken + body[end:], true
 }
+
+// SignInBodies is the pair of bodies the runner compares for one step on a sessions leg: the golden's projected
+// answer and the target's, each ruled difference classified (GoldenResponseBody, TargetResponseBody). On a sign-in
+// step whose access token the leg compares unvalued (goBlanked names AccessTokenPattern), both bodies carry the one
+// place holder in its place and unvalued is true: the runner then reports Golden.Unvalued(AccessTokenPattern).
+func SignInBodies(step, golden, target string, goBlanked map[string]string) (pyBody, goBody string, unvalued bool) {
+	pyBody, goBody = GoldenResponseBody(step, golden), TargetResponseBody(target, goBlanked)
+	if _, ok := AccessTokenUser(step); !ok || goBlanked[AccessTokenPattern] == "" {
+		return pyBody, goBody, false
+	}
+	pyUnvalued, pyOK := AccessTokenUnvalued(pyBody)
+	goUnvalued, goOK := AccessTokenUnvalued(goBody)
+	if !pyOK || !goOK {
+		return pyBody, goBody, false
+	}
+	return pyUnvalued, goUnvalued, true
+}

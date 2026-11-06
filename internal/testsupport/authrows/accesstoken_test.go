@@ -186,3 +186,50 @@ func TestAccessTokenUnvaluedComparesTheMemberAndNotItsValue(t *testing.T) {
 		}
 	}
 }
+
+// sessionsAccessLeg is the GoldenSpec.GoBlanked of a sessions leg (TestAuthFlowVenueOracle): the Go-only
+// session_access_token and the recording-held access_token.
+var sessionsAccessLeg = map[string]string{SessionAccessTokenPattern: SessionAccessTokenReason, AccessTokenPattern: AccessTokenReason}
+
+// CHAOS-13107 (leg acp, goapi-leg-local-acp-2): a GoBlanked naming access_token must not drop it. The key drop is for a
+// member the recording never had (session_access_token); access_token, which the recording holds, stays on the target
+// body and is compared unvalued on both planes.
+func TestTargetResponseBodyKeepsTheRecordingHeldAccessToken(t *testing.T) {
+	golden := goldenBody(t, "accept: ivan joins org A")
+	target := withLast(withEdDSAToken(t, targetOf(t, golden, false)), projectedSession)
+	got := TargetResponseBody(target, sessionsAccessLeg)
+	if !strings.Contains(got, `"access_token":`+eddsaProjected) {
+		t.Fatalf("TargetResponseBody dropped access_token:\n%s", got)
+	}
+	if strings.Contains(got, "session_access_token") {
+		t.Fatalf("TargetResponseBody kept the Go-only session_access_token:\n%s", got)
+	}
+}
+
+// The runner's whole path on every one of the six sign-in steps: the golden's HS256 projection and auth-service's eddsa
+// answer (with its session_access_token) compare equal once classified, each carrying the one place holder, and the
+// step reports unvalued; on a leg that does not declare access_token nothing is unvalued.
+func TestSignInBodiesCompareTheSixStepsUnvaluedOnASessionsLeg(t *testing.T) {
+	for _, s := range sixSteps {
+		golden := goldenBody(t, s.step)
+		target := withLast(withEdDSAToken(t, targetOf(t, golden, s.alice)), projectedSession)
+		py, gv, unvalued := SignInBodies(s.step, golden, target, sessionsAccessLeg)
+		if !unvalued {
+			t.Errorf("%s: not compared unvalued:\n python %s\n go     %s", s.step, py, gv)
+			continue
+		}
+		if py != gv {
+			t.Errorf("%s: the classified pair differs:\n python %s\n go     %s", s.step, py, gv)
+		}
+		if strings.Count(py, unvaluedAccessToken) != 1 || strings.Count(gv, unvaluedAccessToken) != 1 {
+			t.Errorf("%s: want one place holder on each plane:\n python %s\n go     %s", s.step, py, gv)
+		}
+		if _, _, unvalued := SignInBodies(s.step, golden, target, map[string]string{SessionAccessTokenPattern: SessionAccessTokenReason}); unvalued {
+			t.Errorf("%s: unvalued on a leg that does not declare access_token", s.step)
+		}
+	}
+	golden := goldenBody(t, "accept: ivan joins org A")
+	if _, _, unvalued := SignInBodies("register: new address", golden, withEdDSAToken(t, targetOf(t, golden, false)), sessionsAccessLeg); unvalued {
+		t.Error("a step outside the six was compared unvalued")
+	}
+}

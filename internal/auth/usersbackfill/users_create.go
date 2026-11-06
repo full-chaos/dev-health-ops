@@ -139,7 +139,10 @@ func readPasswordLine(r io.Reader) (string, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", err
 	}
-	line = strings.TrimRight(line, "\r\n")
+	// Only the line ending (LF or CRLF) is removed; a CR without a following LF belongs to the password.
+	if strings.HasSuffix(line, "\n") {
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+	}
 	if line == "" || len(line) > maxPasswordLine {
 		return "", errors.New("bad password line")
 	}

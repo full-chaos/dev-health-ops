@@ -113,3 +113,25 @@ func TestUsersCreateConnectsWhenOwnedAndRefusesSuperuserOnlyAfterTheRead(t *test
 		t.Errorf("superuser create: exit %d, connect reached %d", code, reached)
 	}
 }
+
+func TestUsersCreatePasswordLineRemovesOnlyTheLineEnding(t *testing.T) {
+	for in, want := range map[string]string{
+		"pw12345678ab\n":         "pw12345678ab",
+		"pw12345678ab\r\n":       "pw12345678ab",
+		"pw12345678ab\r\nrest\n": "pw12345678ab",
+		"pw12345678ab":           "pw12345678ab",
+		"pw12345678ab\r":         "pw12345678ab\r",
+		"pw12345678ab\r\r":       "pw12345678ab\r\r",
+		"pw12345678ab\r\r\n":     "pw12345678ab\r",
+		"pw1234\r5678ab\n":       "pw1234\r5678ab",
+	} {
+		if got, err := readPasswordLine(strings.NewReader(in)); err != nil || got != want {
+			t.Errorf("readPasswordLine(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "\n", "\r\n"} {
+		if got, err := readPasswordLine(strings.NewReader(in)); err == nil {
+			t.Errorf("readPasswordLine(%q) = %q, nil; want an error", in, got)
+		}
+	}
+}

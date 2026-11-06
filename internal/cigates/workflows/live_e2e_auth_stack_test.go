@@ -40,7 +40,7 @@ func liveFlagRows(t *testing.T) []flagRow {
 
 func liveStackEnv(t *testing.T, side string) map[string]string {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "print-env", side, "/state")
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", side, "/state", "--", "env")
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"JWT_SECRET_KEY=0123456789abcdef0123456789abcdef0123",                    // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
@@ -52,13 +52,13 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("FAIL: print-env %s: %v\n%s", side, err, errb.String())
+		t.Fatalf("FAIL: with-env %s: %v\n%s", side, err, errb.String())
 	}
 	env := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
-			t.Fatalf("FAIL: print-env %s printed a line that is not NAME=VALUE: %q", side, line)
+			t.Fatalf("FAIL: with-env %s printed a line that is not NAME=VALUE: %q", side, line)
 		}
 		env[k] = v
 	}
@@ -177,5 +177,91 @@ func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T)
 	if err := cmd.Run(); err != nil {
 		logged, _ := os.ReadFile(filepath.Join(state, "logs", "auth-service.log"))
 		t.Fatalf("FAIL: up by a relative path did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
+	}
+}
+
+const (
+	sentinelJWT       = "jwt-key-sentinel"
+	sentinelSuccessor = "successor-key-sentinel"
+	sentinelLockout   = "lockout-key-sentinel"
+	sentinelDBPass    = "db-password-sentinel"
+)
+
+func sentinelEnv() []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"),
+		"JWT_SECRET_KEY=" + sentinelJWT,                    // gitleaks:allow -- sentinel for the redaction cell, not a credential
+		"AUTH_SESSION_SUCCESSOR_KEY=" + sentinelSuccessor,  // gitleaks:allow -- sentinel for the redaction cell, not a credential
+		"AUTH_LOGIN_LOCKOUT_KEY=" + sentinelLockout,        // gitleaks:allow -- sentinel for the redaction cell, not a credential
+		"AUTH_RUNTIME_DATABASE_PASSWORD=" + sentinelDBPass, // gitleaks:allow -- sentinel for the redaction cell, not a credential
+		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_subject-sentinel",
+	}
+}
+
+// print-env is a diagnostic printer: no secret value may travel through its output.
+func TestLiveE2EPrintEnvAuthServiceRedactsEverySecret(t *testing.T) {
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "print-env", "auth-service", "/state")
+	cmd.Env = sentinelEnv()
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("FAIL: print-env auth-service: %v\n%s", err, errb.String())
+	}
+	for name, sentinel := range map[string]string{"JWT_SECRET_KEY": sentinelJWT, "AUTH_SESSION_SUCCESSOR_KEY": sentinelSuccessor, "AUTH_LOGIN_LOCKOUT_KEY": sentinelLockout, "database password": sentinelDBPass} {
+		if strings.Contains(out.String()+errb.String(), sentinel) {
+			t.Errorf("FAIL: print-env auth-service prints the %s value", name)
+		}
+	}
+	if !strings.Contains(out.String(), "AUTH_DATABASE_URI=") {
+		t.Errorf("FAIL: print-env auth-service dropped the AUTH_DATABASE_URI line")
+	}
+}
+
+// with-env still hands the real values to the child; the child prints only yes or no.
+func TestLiveE2EWithEnvAuthServicePassesTheRealSecrets(t *testing.T) {
+	script := `[ "$AUTH_JWT_SECRET_KEY" = ` + sentinelJWT + ` ] && [ "$AUTH_SESSION_SUCCESSOR_KEY" = ` + sentinelSuccessor +
+		` ] && [ "$AUTH_LOGIN_LOCKOUT_KEY" = ` + sentinelLockout + ` ] && case "$AUTH_DATABASE_URI" in *"password='` + sentinelDBPass + `'"*) true ;; *) false ;; esac && echo yes || echo no`
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", "/state", "--", "bash", "-c", script)
+	cmd.Env = sentinelEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("FAIL: with-env auth-service: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "yes" {
+		t.Errorf("FAIL: with-env auth-service did not pass the real secret values to the child")
+	}
+}
+
+// assert-audit reads one row: total workload service_credential. Every delegated issue row must carry the workload
+// marker and no service credential marker.
+func TestLiveE2EAssertAuditCells(t *testing.T) {
+	fake := t.TempDir()
+	shim := "#!/bin/sh\ncase \"$AUDIT_CASE\" in\n" +
+		"one_valid_issue) echo '1 1 0' ;;\n" +
+		"valid_plus_missing_workload_marker) echo '2 1 0' ;;\n" +
+		"valid_plus_service_credential) echo '2 1 1' ;;\n" +
+		"no_workload_marker) echo '1 0 0' ;;\n" +
+		"no_issue) echo '0 0 0' ;;\n" +
+		"two_valid_issues) echo '2 2 0' ;;\n" +
+		"*) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(fake, "psql"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for cell, wantOK := range map[string]bool{
+		"one_valid_issue": true, "two_valid_issues": true,
+		"valid_plus_missing_workload_marker": false, "valid_plus_service_credential": false,
+		"no_workload_marker": false, "no_issue": false,
+	} {
+		t.Run(cell, func(t *testing.T) {
+			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "assert-audit", t.TempDir())
+			cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH"), "AUDIT_CASE=" + cell}
+			err := cmd.Run()
+			if wantOK && err != nil {
+				t.Errorf("FAIL: %s refused: %v", cell, err)
+			}
+			if !wantOK && err == nil {
+				t.Errorf("FAIL: %s accepted", cell)
+			}
+		})
 	}
 }

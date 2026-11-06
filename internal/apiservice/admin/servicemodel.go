@@ -395,9 +395,7 @@ WHERE id = $1`, override.ID, enabled, string(config), actor, now); err != nil {
 			changes.Set("old_override", override.IsEnabled)
 		}
 		changes.Set("new_override", enabled)
-		if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
-			changes.Set("impersonated_by", *user.ImpersonatedBy)
-		}
+		setImpersonatedBy(changes, user)
 		encoded, err := pyjson.Marshal(changes)
 		if err != nil {
 			h.internalError(ctx, w, "encode acr_service_model audit", err)

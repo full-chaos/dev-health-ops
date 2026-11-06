@@ -409,7 +409,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path); user_id (path) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path); user_id (path) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/members/{user_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -872,7 +872,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -944,7 +944,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/plans/{plan_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -3764,7 +3764,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/members",
       "service": "dev-health-ops-api",
       "source": {
@@ -5347,7 +5347,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -5386,7 +5386,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -5418,7 +5418,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -5457,7 +5457,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/me/organizations",
       "service": "dev-health-ops-api",
       "source": {
@@ -5530,7 +5530,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -5569,7 +5569,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/onboarding/state",
       "service": "dev-health-ops-api",
       "source": {
@@ -5642,7 +5642,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
       ],
@@ -5681,7 +5681,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -5753,7 +5753,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -5826,7 +5826,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/audit.go:139); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -5865,7 +5865,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/audit",
       "service": "dev-health-ops-api",
       "source": {
@@ -5937,7 +5937,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/audit/{audit_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6040,7 +6040,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/invoices [dev-health-ops-api @api]",
@@ -6324,7 +6324,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:570); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -6363,7 +6363,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/refunds",
       "service": "dev-health-ops-api",
       "source": {
@@ -6435,7 +6435,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/refunds/{refund_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6467,7 +6467,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions [dev-health-ops-api @api]",
@@ -6536,7 +6536,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/history [dev-health-ops-api @api]",
@@ -6605,7 +6605,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "GET /api/v1/billing/subscriptions/list [dev-health-ops-api @api]",
@@ -7184,7 +7184,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
       ],
@@ -7223,7 +7223,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/orgs/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -7256,7 +7256,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.read is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -7366,7 +7366,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "allowed",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the build identity read (this leaf does not extend the vocabulary)"
       ],
@@ -7405,7 +7405,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the guard requires an organization context (internal/api/policy/guard.go:165); the handler reads none (internal/api/buildinfo/buildinfo.go:33)",
+      "resource_resolver": "organization_from_session: the guard requires an organization context (internal/api/policy/guard.go:143); the handler reads none (internal/api/buildinfo/buildinfo.go:33)",
       "route": "/buildinfo",
       "service": "dev-health-ops-api",
       "source": {
@@ -8488,7 +8488,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path); user_id (path) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path); user_id (path) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/members/{user_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8843,7 +8843,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/oauth/{first}/{second}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8915,7 +8915,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers/{provider_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -8947,7 +8947,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action is proven to equal this handler's own check on the own organization profile (candidate for a ruling; this leaf does not extend the vocabulary)"
       ],
@@ -8986,7 +8986,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/orgs/me",
       "service": "dev-health-ops-api",
       "source": {
@@ -11378,7 +11378,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/invites",
       "service": "dev-health-ops-api",
       "source": {
@@ -11449,7 +11449,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path); user_id (body) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path); user_id (body) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/members",
       "service": "dev-health-ops-api",
       "source": {
@@ -11520,7 +11520,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:42); org_id (path); new_owner_user_id (body) supplied by the caller",
+      "resource_resolver": "organization_from_path: the {org_id} path segment, checked against a non-superuser caller's owner or admin membership in that organization (a superuser passes without the check; internal/apiservice/admin/guards.go:46); org_id (path); new_owner_user_id (body) supplied by the caller",
       "route": "/api/v1/admin/orgs/{org_id}/transfer-ownership",
       "service": "dev-health-ops-api",
       "source": {
@@ -12617,7 +12617,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -12656,7 +12656,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/accept-invite",
       "service": "dev-health-ops-api",
       "source": {
@@ -12688,7 +12688,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -12727,7 +12727,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/change-password",
       "service": "dev-health-ops-api",
       "source": {
@@ -12910,7 +12910,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
       ],
@@ -12949,7 +12949,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/oauth/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -13104,7 +13104,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -13143,7 +13143,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/onboard",
       "service": "dev-health-ops-api",
       "source": {
@@ -13175,7 +13175,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -13214,7 +13214,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/onboarding/skip-integration",
       "service": "dev-health-ops-api",
       "source": {
@@ -13529,7 +13529,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers SSO provider management; no settings action is mapped because the handler check is not proven to equal one (this leaf does not extend the vocabulary)"
       ],
@@ -13568,7 +13568,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers",
       "service": "dev-health-ops-api",
       "source": {
@@ -13640,7 +13640,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers/{provider_id}/activate",
       "service": "dev-health-ops-api",
       "source": {
@@ -13712,7 +13712,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/sso/providers/{provider_id}/deactivate",
       "service": "dev-health-ops-api",
       "source": {
@@ -13744,7 +13744,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; once any body-first validation has run, a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: no catalog action covers the session and onboarding routes (this leaf does not extend the vocabulary)"
       ],
@@ -13783,7 +13783,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/auth/switch-org",
       "service": "dev-health-ops-api",
       "source": {
@@ -13926,7 +13926,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/audit/{audit_id}/resolve",
       "service": "dev-health-ops-api",
       "source": {
@@ -13958,7 +13958,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:109, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
@@ -13997,7 +13997,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/checkout",
       "service": "dev-health-ops-api",
       "source": {
@@ -14100,7 +14100,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/plans.go:137); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -14139,7 +14139,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/plans",
       "service": "dev-health-ops-api",
       "source": {
@@ -14319,7 +14319,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/plans/{plan_id}/sync-stripe",
       "service": "dev-health-ops-api",
       "source": {
@@ -14351,7 +14351,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:110, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
@@ -14390,7 +14390,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/portal",
       "service": "dev-health-ops-api",
       "source": {
@@ -14422,7 +14422,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/reconcile.go:413); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -14461,7 +14461,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/reconcile",
       "service": "dev-health-ops-api",
       "source": {
@@ -14493,7 +14493,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32)",
       "gaps": [
         "action: the handler admits only a caller holding admin.billing (internal/api/billing/refunds.go:71); no organization role holds it; admin.billing is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -14532,7 +14532,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/refunds",
       "service": "dev-health-ops-api",
       "source": {
@@ -14564,7 +14564,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/cancel [dev-health-ops-api @api]",
@@ -14633,7 +14633,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/change-plan [dev-health-ops-api @api]",
@@ -14702,7 +14702,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32); a caller without the admin role answers 403 (internal/api/policy/guard.go:236)",
       "gaps": [],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/subscriptions/reactivate [dev-health-ops-api @api]",
@@ -14995,7 +14995,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -15067,7 +15067,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120)",
       "gaps": [
         "action: no catalog action is proven to equal the telemetry settings check; settings.write is the candidate (this leaf does not extend the vocabulary)"
       ],
@@ -15139,7 +15139,7 @@
       "classification": "protected",
       "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13)",
       "delegated_bearer": "denied",
-      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
+      "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:143; internal/api/policy/orgless.go:32), and an X-Org-Id organization the caller may not use answers 403 (internal/api/telemetry/telemetry.go:120); a caller that does not hold admin.telemetry (a superuser holds it), or a request in an active impersonation session, answers 403 (internal/api/telemetry/report.go:46)",
       "gaps": [
         "action: the route admits only a caller holding admin.telemetry (internal/api/telemetry/report.go:32) and acts in one organization; admin.telemetry is a platform action and this route is org-scoped, so the row keeps no action"
       ],
@@ -15783,7 +15783,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:143)",
       "route": "/api/v1/billing/plans/{plan_id}",
       "service": "dev-health-ops-api",
       "source": {

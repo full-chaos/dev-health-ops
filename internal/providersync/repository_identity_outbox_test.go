@@ -194,9 +194,11 @@ func TestParseRepositoryIdentityOutbox(t *testing.T) {
 		set, on bool
 		err     bool
 	}{
-		{"", false, false, false}, {"", true, false, false}, {"  ", true, false, false},
-		{"true", true, true, false}, {" 1 ", true, true, false}, {"false", true, false, false},
-		{"on", true, false, true}, {"yes", true, false, true},
+		{"", false, false, false}, {"true", true, true, false}, {"false", true, false, false},
+		{"", true, false, true}, {"  ", true, false, true}, {" true ", true, false, true}, {"false ", true, false, true},
+		{"1", true, false, true}, {"0", true, false, true}, {"t", true, false, true}, {"f", true, false, true},
+		{"T", true, false, true}, {"F", true, false, true}, {"TRUE", true, false, true}, {"FALSE", true, false, true},
+		{"True", true, false, true}, {"False", true, false, true}, {"on", true, false, true}, {"yes", true, false, true},
 	} {
 		on, err := ParseRepositoryIdentityOutbox(func(string) (string, bool) { return c.value, c.set })
 		if on != c.on || (err != nil) != c.err {

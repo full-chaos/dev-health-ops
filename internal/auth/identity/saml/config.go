@@ -3,9 +3,9 @@
 // verified assertion into a sign-in.
 //
 // Signature, issuer, audience, recipient, destination, time, request and
-// replay checks are made here explicitly; github.com/crewjam/saml supplies only
-// the schema types. Its ServiceProvider parsers are not called (GO-2026-6909).
-// Claims are read only from the XML that the signature verification returned.
+// replay checks are made here explicitly, and github.com/crewjam/saml is run
+// afterwards as a second check. Claims are read only from the XML that the
+// signature verification returned.
 //
 // A SAML identity is keyed by (issuer = IdP entity ID, provider = the
 // sso_providers row id, subject = NameID with its Format and SPNameQualifier).

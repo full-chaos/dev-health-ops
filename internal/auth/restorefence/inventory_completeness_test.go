@@ -29,6 +29,7 @@ var excluded = map[string]string{
 	"auth.restore_fence_state":          "not access-bearing: the fence's own state table",
 	"auth.push_sources":                 "not access-bearing: the principal of one (organization, source); the principal's disable switch is the auth.principals section",
 	"auth.credential_projection":        "not access-bearing: the projected lifecycle state; the live access state is the credential_registry row, which the auth.credential_registry sections narrow",
+	"auth.repository_identities":        "not access-bearing: a copy of the provider repository ids, rebuilt from ClickHouse repos by dho auth repo-identities-sync; the grants it resolves are sections already",
 	"auth.credential_projection_digest": "not access-bearing: digests of applied events",
 	"auth.projection_cursor":            "not access-bearing: the reader's low-water mark, restored with the outbox it indexes",
 	"auth.projection_retry":             "not access-bearing: parked events, restored with the outbox they came from",

@@ -135,7 +135,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api' AND class = 'unresolved'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api' AND class = 'unresolved'"
                     },
                     "groupBy": [],
                     "legend": "",
@@ -201,7 +201,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [
                       {
@@ -274,7 +274,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [
                       {
@@ -347,7 +347,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [
                       {
@@ -409,7 +409,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api' AND class = 'unresolved'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api' AND class = 'unresolved'"
                     },
                     "groupBy": [
                       {
@@ -488,7 +488,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [
                       {
@@ -570,7 +570,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [],
                     "legend": "",
@@ -645,7 +645,7 @@
                     ],
                     "disabled": false,
                     "filter": {
-                      "expression": "deployment.environment = 'production' AND service.name = 'go-api'"
+                      "expression": "deployment.environment = 'production' AND service.name = 'dev-health-api'"
                     },
                     "groupBy": [],
                     "legend": "",

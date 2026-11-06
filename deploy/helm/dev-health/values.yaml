@@ -33,6 +33,17 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+    # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
+    #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
+    #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
+    #    (the access-token issuer), mounts secretName/secretKey read-only at /run/workload, and renders no AUTH_SESSION_ISSUE_TOKEN.
+    #    The Secret holds the bootstrap credential of the api workload (auth-migrate workloads bootstrap-create); the operator makes it.
+    #    auth-service needs AUTH_WORKLOAD_BOOTSTRAP=true and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (the api workload's prn_ id) in
+    #    authService.extraEnv. goApi.extraEnv cannot set the three names while this is on.
+    workloadBootstrap:
+      enabled: false
+      secretName: ""
+      secretKey: api.bootstrap
   # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
   #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization
@@ -43,6 +54,13 @@ goApi:
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true
+  # -- CHAOS-12914: the second goApi.authProxy key. impersonation=true renders AUTH_PROXY_IMPERSONATION=true: go-api starts
+  #    and ends the admin impersonation session at auth-service (a delegated session, 15 minutes, no refresh). Needs
+  #    authService.phase 2 or higher (sessions owned by auth-service): the render refuses it below. Do not turn it on before
+  #    the web change that swaps the browser session to the delegated token (CHAOS-12913) is live. Absent or false renders
+  #    nothing (docs/reference/auth/configuration.md).
+  #    authProxy:
+  #      impersonation: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.
@@ -266,12 +284,22 @@ authService:
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
   socialLinkRoutes: false
-  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML).
-  #    true is refused: the chart does not render auth-service's SSO settings yet,
-  #    so its OIDC and SAML routes would not mount.
+  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML on go-api).
+  #    A switch on needs phase >= 2 and a complete set of settings: secretName and every key name its protocol reads
+  #    (oidc: stateKey, appBaseURL, encryptionKey, encryptionSalt; saml: the same without stateKey). The render fails and
+  #    names the key otherwise. auth-service gets AUTH_SSO_STATE_KEY, APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and
+  #    SETTINGS_ENCRYPTION_SALT by secretKeyRef from that Secret, never a value. The encryption key and salt must be
+  #    go-api's own (it encrypted the provider secrets). The salt key may be absent from the Secret: the pod then derives the
+  #    key with the built-in default salt, as go-api does. Both switches off (the default) render nothing.
   sso:
     oidc: false
     saml: false
+    secretName: ""
+    keys:
+      stateKey: AUTH_SSO_STATE_KEY
+      appBaseURL: APP_BASE_URL
+      encryptionKey: SETTINGS_ENCRYPTION_KEY
+      encryptionSalt: SETTINGS_ENCRYPTION_SALT
   # -- The social sign-in client settings of auth-service, from phase 3: one
   #    existing Secret holding SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET for
   #    github, gitlab and google, the names go-api reads. Each key is optional:
@@ -513,6 +541,16 @@ authService:
     pushLifecycle:
       writerRole: ""
       callerRoles: []
+    # -- CHAOS-13057: the repository identity append function (migration 0057). writerRole is
+    #    a NOLOGIN role that owns it (AUTH_REPO_IDENTITY_WRITER_ROLE) and holds only the outbox
+    #    and revision privileges, none on repository_identities; callerRoles is exactly one login,
+    #    the worker domain login of the provider sync (AUTH_REPO_IDENTITY_CALLER_ROLES). Both or
+    #    neither. The writer role must exist and the migration login must be a member of it
+    #    BEFORE this Job runs (the same privileged step as pushLifecycle). Empty leaves the
+    #    function unexecutable (the worker's WORKER_REPO_IDENTITY_OUTBOX must stay off).
+    repoIdentity:
+      writerRole: ""
+      callerRoles: []
     # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
     #    are granted like sessionReaderRoles (the rendered list is the union);
     #    phase >= 2 fails the render while either is empty.
@@ -644,6 +682,12 @@ authService:
         ports:
           - protocol: TCP
             port: 443
+      # -- Peers of the identity providers (OIDC discovery and token calls, SAML metadata), `to` entries; TCP 443
+      #    is fixed. REQUIRED while a switch of authService.sso is on and the policy is on; nothing renders with
+      #    both switches off. The peer forms are the mail ones (an ipBlock of one CIDR, or the whole-internet form
+      #    with the private ranges excepted).
+      sso:
+        to: []
       # -- Peers of the OTLP/gRPC trace collector, `to` entries plus port. Rendered only while
       #    authService.tracing.enabled, and then required when the policy is on. An ipBlock (the node
       #    InternalIP of a hostPort collector) and a podSelector/namespaceSelector are both accepted;

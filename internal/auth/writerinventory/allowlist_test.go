@@ -76,6 +76,12 @@ var Allowlist = []Entry{
 	{File: "internal/audit/audit.go", Func: "insertOutboxRow", Table: "auth.auth_outbox_events", Verb: "INSERT"},
 	{File: "internal/audit/publisher.go", Func: "Publisher.deliverOne", Table: "auth.auth_outbox_events", Verb: "UPDATE"},
 	{File: "internal/audit/reaper.go", Func: "Reap", Table: "auth.auth_outbox_events", Verb: "DELETE"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "DELETE"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "INSERT"},
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "PGSink.Apply", Table: "auth.repository_identities", Verb: "UPDATE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the grant id fill moved out of PGSink.Apply into one function that the backfill
+	// and the repository identity reader share; each caller runs it inside its own audit.Commit.
+	{File: "internal/auth/repoidentity/repoidentity.go", Func: "FillGrantRepoIDs", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Create", Table: "auth.resource_grants", Verb: "INSERT"},
 	{File: "internal/auth/grant/store.go", Func: "Store.Update", Table: "auth.resource_grants", Verb: "UPDATE"},
 	{File: "internal/auth/grantend/grantend.go", Func: "Plan.Apply", Table: "auth.resource_grants", Verb: "UPDATE"},
@@ -221,6 +227,15 @@ var Allowlist = []Entry{
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
 	{File: "internal/auth/pushprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
+	// CHAOS-13057 (PLAN-13034 a56ac6f7, acp GO): the repository identity reader moves a repository_identities row to an event's
+	// revision (the UPDATE first, the INSERT only for a repository with no row), and keeps its own cursor and retry rows on
+	// stream repository_identity, each inside audit.Commit.
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.advance", Table: "auth.projection_cursor", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPDATE"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.apply", Table: "auth.repository_identities", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.park", Table: "auth.projection_retry", Verb: "UPSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.readMark", Table: "auth.projection_cursor", Verb: "INSERT"},
+	{File: "internal/auth/repoidentityprojection/reader.go", Func: "Reader.release", Table: "auth.projection_retry", Verb: "DELETE"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.IssueKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "INSERT"},
 	{File: "internal/auth/serviceaccount/keys.go", Func: "Store.RotateKey", Table: "auth.credential_registry", Verb: "UPDATE"},

@@ -125,6 +125,11 @@ BUILD_FLAG=--build
 # go-api asks auth-service for a session (sessions flag on) with its workload token: the bootstrap credential is written
 # and the api workload principal read before go-api and auth-service start.
 printf 'step 1: the go-api workload credential (auth-workload-bootstrap)\n'
+# CHAOS-13242: the access-token issuer is compose.yml's own (auth-issuer serves its discovery document and key set), so the
+# Web code in step 3 can read them; the workload token carries the same issuer.
+ISSUER_HOST=auth.dev-health.internal
+ISSUER_URL="https://${ISSUER_HOST}:8443"
+export AUTH_TOKEN_ISSUER_URL="${ISSUER_URL}"
 RUN_BUILD=(--build)
 [ "${AUTH_PROOF_PREBUILT:-}" != 1 ] || RUN_BUILD=()
 auth_workload_session_issue compose "${RUN_BUILD[@]}" || die "the go-api workload credential is not ready"
@@ -185,8 +190,6 @@ printf 'step 3: the real Web auth code: login, refresh, logout\n'
 # eddsa and reads the issuer's discovery document and key set itself, as the web dev server does
 # (docs/operate/install/local-evaluation.md): the issuer name resolves to loopback, port 8443 reaches the proof's
 # auth-issuer, and the local CA is trusted.
-ISSUER_HOST=auth.dev-health.internal
-ISSUER_URL="https://${ISSUER_HOST}:8443"
 ISSUER_PORT="$(compose port auth-issuer 8443 | sed 's/.*://')"
 [[ "${ISSUER_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral auth-issuer port (${ISSUER_PORT})"
 compose cp auth-issuer:/run/tls/ca/issuer.pem "${SINK_DIR}/issuer-ca.pem" || die "could not copy the issuer CA"

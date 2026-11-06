@@ -220,10 +220,10 @@ func TestPoolRecordedClassesARefusedLoopbackDialThroughTheDriver(t *testing.T) {
 	if !errors.As(err, &read) || read.Class != "dial_refused_local" || strings.Contains(err.Error(), "secret-word") {
 		t.Fatalf("error = %v, want a dial_refused_local ReadError with no driver text", err)
 	}
-	start := time.Now()
+	clock := useFakeClock(t)
 	logs, gateErr := checkWith(t, poolRecorder{pool: pool})
-	if gateErr != nil || !strings.Contains(logs, "class=dial_refused_local") || !strings.Contains(logs, "attempts=1") || time.Since(start) > 3*time.Second {
-		t.Fatalf("error = %v, log = %q, took %v; want one fast read and a skip", gateErr, logs, time.Since(start))
+	if gateErr != nil || !strings.Contains(logs, "class=dial_refused_local") || !strings.Contains(logs, "attempts=1") || len(clock.waited) != 0 {
+		t.Fatalf("error = %v, log = %q, waits = %v; want one read, no retry wait and a skip", gateErr, logs, clock.waited)
 	}
 }
 

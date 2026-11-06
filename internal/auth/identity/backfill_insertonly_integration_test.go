@@ -4,10 +4,13 @@ package identity
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 )
 
 // authRows is the auth schema's rows of one principal as text: principals, users and external identities.
@@ -24,36 +27,50 @@ func (e *env) authRows(t *testing.T, ctx context.Context, id uuid.UUID) string {
 }
 
 // CHAOS-13107 (acp ruling on #5795): compose's auth-users-backfill is insert-only. An auth user that auth-service changed
-// (its password hash and name) survives a second insert-only run from the stale public.users values byte-equal, and the
-// run writes no audit row. The default run would set both back (TestBackfillUpdatesOnlyWhatDiffers).
+// survives a second insert-only run from the stale public.users values byte-equal, and the run writes no audit row. The
+// changes go through auth-service's own write paths: the password through the owned store's SetPasswordHash, the name
+// through audit.Commit as the runtime login (the projection's commit; the security tables refuse any other write). The
+// default run would set both back (applyBackfillCredentials).
 func TestInsertOnlyBackfillKeepsAnAuthUserChangedThroughAuthService(t *testing.T) {
 	e := getEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	stale := BackfillTarget{ID: uuid.New(), Email: uniqueEmail("bfio"), DisplayName: "Public Name", Active: true, Verified: true,
+	email := uniqueEmail("bfio")
+	id := e.seedUser(t, ctx, email, true, true)
+	stale := BackfillTarget{ID: id, Email: email, DisplayName: "Public Name", Active: true, Verified: true,
 		PasswordHash: bcryptFor(t, "public-test-material"), InsertOnly: true}
 	if res, err := e.store.BackfillUser(ctx, stale, false); err != nil || !res.Inserted {
 		t.Fatalf("first insert-only run: %+v %v", res, err)
 	}
-	// auth-service changes the password and the name; public.users keeps the old values.
-	if _, err := e.admin.Exec(ctx, `UPDATE auth.users SET password_hash = $2, updated_at = clock_timestamp() WHERE principal_id = $1`,
-		stale.ID, *bcryptFor(t, "changed-through-auth-service")); err != nil {
-		t.Fatal(err)
+	// auth-service changes the password and the name; the backfill target keeps the old values.
+	if err := e.owned.SetPasswordHash(ctx, id, *bcryptFor(t, "changed-through-auth-service"), Actor{}); err != nil {
+		t.Fatalf("change the password through auth-service: %v", err)
 	}
-	if _, err := e.admin.Exec(ctx, `UPDATE auth.principals SET display_name = 'Changed Through Auth', updated_at = clock_timestamp() WHERE id = $1`, stale.ID); err != nil {
-		t.Fatal(err)
+	principal := id.String()
+	if err := audit.Commit(ctx, e.runtime, e.owned.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			_, err := tx.Exec(ctx, `UPDATE auth.principals SET display_name = 'Changed Through Auth', updated_at = clock_timestamp() WHERE id = $1`, id)
+			return err
+		},
+		Audit:  localAudit("auth.principal.projection_updated", "principal_projected", principal, Actor{}),
+		Events: []audit.OutboxEvent{userEvent(principal, "user.credentials_changed")},
+	}); err != nil {
+		t.Fatalf("change the name through audit.Commit: %v", err)
 	}
-	before := e.authRows(t, ctx, stale.ID)
-	auditBefore := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, stale.ID)
+	before := e.authRows(t, ctx, id)
+	if !strings.Contains(before, "Changed Through Auth") {
+		t.Fatalf("the name change did not land: %s", before)
+	}
+	auditBefore := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, id)
 	res, err := e.store.BackfillUser(ctx, stale, false)
+	if after := e.authRows(t, ctx, id); after != before {
+		t.Fatalf("the insert-only run changed the auth user (%+v, %v):\n before %s\n after  %s", res, err, before, after)
+	}
+	if after := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, id); after != auditBefore {
+		t.Fatalf("the insert-only run wrote audit rows: %d -> %d", auditBefore, after)
+	}
 	if err != nil || !res.Kept || res.Updated || res.Inserted {
 		t.Fatalf("second insert-only run: %+v %v", res, err)
-	}
-	if after := e.authRows(t, ctx, stale.ID); after != before {
-		t.Fatalf("the insert-only run changed the auth user:\n before %s\n after  %s", before, after)
-	}
-	if after := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE subject_principal_id = $1`, stale.ID); after != auditBefore {
-		t.Fatalf("the insert-only run wrote audit rows: %d -> %d", auditBefore, after)
 	}
 }
 

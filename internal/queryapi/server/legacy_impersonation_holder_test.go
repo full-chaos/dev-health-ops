@@ -11,12 +11,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
+
+// legacyHolderSubscriptionDocument is a registered subscription on the access stack: not a query, so refused like a
+// mutation.
+const legacyHolderSubscriptionDocument = "subscription LegacyHolderSub { probe }"
 
 // actionOnlyHolderStore is a live admin that is not a superuser and holds admin.impersonate by its platform set (a
 // member of ecOrg), with session as its go-api row and sessionErr as the row read's failure. /query serves it as
@@ -64,9 +70,11 @@ func TestQueryRefusesAnActionOnlyHoldersWriteBesideALiveRow(t *testing.T) {
 		for signing, token := range actionOnlyHolderTokens(t, minter) {
 			for _, route := range legacyQueryRoutes {
 				t.Run(storeName+" "+signing+" "+route.listener+" "+route.path, func(t *testing.T) {
-					on := legacyStack(t, minter, store(), true)
-					if got := postDocument(on, route.listener, route.path, token, legacyMutationDocument); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
-						t.Fatalf("switch on, mutation: got %d %s, ran %d; want 403 %s and no resolver", got.Status, got.Body, len(*on.seen), legacyRefusalBody)
+					for kind, document := range map[string]string{"mutation": legacyMutationDocument, "subscription": legacyHolderSubscriptionDocument} {
+						on := legacyStack(t, minter, store(), true)
+						if got := postDocument(on, route.listener, route.path, token, document); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
+							t.Fatalf("switch on, %s: got %d %s, ran %d; want 403 %s and no resolver", kind, got.Status, got.Body, len(*on.seen), legacyRefusalBody)
+						}
 					}
 					read := legacyStack(t, minter, store(), true)
 					got := postDocument(read, route.listener, route.path, token, iaDocument)
@@ -182,5 +190,36 @@ func TestInvalidImpersonationSwitchStartsWithOneWarnAndRefuses(t *testing.T) {
 				t.Fatalf("%s=%q: /graphql refuse=%v, want %v (fail closed)", impersonationProxyEnv, raw, refuse, wantWarn || raw == "true")
 			}
 		})
+	}
+}
+
+// TestQueryLeavesANonHoldersWriteBesideALiveRow: the refusal follows admin.impersonate: a plain member (no platform
+// action) beside a live row, or whose row read fails, keeps today's answer on a mutation, the switch on.
+func TestQueryLeavesANonHoldersWriteBesideALiveRow(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	member := func(session *policy.Impersonation, sessionErr error) *accessStore {
+		store := newAccessStore()
+		store.sessions = map[uuid.UUID]*policy.Impersonation{}
+		if session != nil {
+			store.sessions[ecUser] = session
+		}
+		store.errSession = sessionErr
+		return store
+	}
+	for name, store := range map[string]func() *accessStore{
+		"live row":       func() *accessStore { return member(legacySession(), nil) },
+		"row read fails": func() *accessStore { return member(nil, errors.New("session store timeout")) },
+	} {
+		for signing, token := range actionOnlyHolderTokens(t, minter) {
+			for _, route := range legacyQueryRoutes {
+				t.Run(name+" "+signing+" "+route.listener+" "+route.path, func(t *testing.T) {
+					s := legacyStack(t, minter, store(), true)
+					if got := postDocument(s, route.listener, route.path, token, legacyMutationDocument); got.Status != http.StatusOK || len(*s.seen) != 1 {
+						t.Fatalf("got %d %s, ran %d; want today's 200 and one run", got.Status, got.Body, len(*s.seen))
+					}
+				})
+			}
+		}
 	}
 }

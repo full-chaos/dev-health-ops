@@ -162,4 +162,3 @@ See CHAOS-5590 for rollback sequence and verify before attempting.
 
 - [Query-api bootstrap](query-api-bootstrap.md) — first-time deploy of the Go query API.
 - [Operator commands](operator-commands.md) — workerctl one-off Pod pattern (Trap #169).
-- [Prod cutover 2026-09-11 lessons](../prod-cutover-2026-09-11-lessons/index.md) — index of all related changes.

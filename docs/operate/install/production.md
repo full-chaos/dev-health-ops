@@ -25,9 +25,7 @@ The root [`compose.yml`](https://github.com/full-chaos/dev-health-ops/blob/main/
 
 ## Current worker ownership
 
-The Go worker fleet owns every production job and schedule. Celery was stopped
-in production on 2026-08-19 and its services were removed from the deployed
-topology; no Python Celery worker or Beat process runs in production, and no
+The Go worker fleet owns every production job and schedule. No Python Celery worker or Beat process runs in production, and no
 route is served by one.
 
 What that means when you deploy:
@@ -39,7 +37,7 @@ What that means when you deploy:
   deployment whose routes disagree with the manifest fails closed rather than
   serving the wrong runtime.
 
-No Compose file or chart defines the Celery services any more (CHAOS-5589): R146 established Celery is not a rollback target, so the fleet is deleted outright, not archived-in-place. Go/River is the unconditional default worker topology.
+No Compose file or chart defines the Celery services any more: Celery is not a rollback target, so the fleet is deleted outright, not archived-in-place. Go/River is the unconditional default worker topology.
 
 ## Prepare the production inputs
 
@@ -70,7 +68,7 @@ MIGRATION_DATABASE_URI=postgres://devhealth_migrate:<secret>@postgres:5432/devhe
 
 Long-running workers must not receive `MIGRATION_DATABASE_URI`. Provision the domain and queue roles before the one-shot migration applies River grants.
 
-The Go topology requires `max_connections` on that PostgreSQL server to be at least the declared `postgres_budget.server_max_connections` in `deploy/go-workers/deployment.json` — currently **200**. Nothing in the stack checks this for you: the deployment contract validates the topology against its own declaration, but it cannot read your server. A managed instance left at the common default of 100 cannot hold the three PgBouncer pools plus the migration and administrative reserve, and the shortfall only appears under the load that needs every pool at once. The three PgBouncer poolers start unconditionally now (CHAOS-5589: the Go fleet depends on them, not an opt-in), so confirm this before bringing up the stack at all:
+The Go topology requires `max_connections` on that PostgreSQL server to be at least the declared `postgres_budget.server_max_connections` in `deploy/go-workers/deployment.json` — currently **200**. Nothing in the stack checks this for you: the deployment contract validates the topology against its own declaration, but it cannot read your server. A managed instance left at the common default of 100 cannot hold the three PgBouncer pools plus the migration and administrative reserve, and the shortfall only appears under the load that needs every pool at once. The three PgBouncer poolers start unconditionally (the Go fleet depends on them, not an opt-in), so confirm this before bringing up the stack at all:
 
 ```bash
 psql "$MIGRATION_DATABASE_URI" -Atc 'SHOW max_connections'

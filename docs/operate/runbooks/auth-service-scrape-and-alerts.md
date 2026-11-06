@@ -9,7 +9,7 @@ lifecycle: active
 
 # Auth-service scrape check and alert import
 
-This runbook is the login-flip gate for monitoring: the auth-service operator `/metrics` is scraped, and the three `auth_service_rate_limit` rules from `alerts/rules.yml` are loaded in SigNoz. Both steps are done by the owner. Nothing here is run by a lane or a script. No Prometheus loads `alerts/rules.yml` in prod: the file is the text of record, and the rules are created in SigNoz from it in the builder form given below.
+This runbook is the login-flip gate for monitoring: the auth-service operator `/metrics` is scraped, and the three `auth_service_rate_limit` rules from `alerts/rules.yml` are loaded in SigNoz. Both steps are done by the owner. Nothing here is run by a script. No Prometheus loads `alerts/rules.yml` in prod: the file is the text of record, and the rules are created in SigNoz from it in the builder form given below.
 
 ## Before you start
 
@@ -30,7 +30,7 @@ If a series is missing: the collector scrape did not reach the port. Check the c
 
 ## Step 2: load the three rules
 
-Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is the builder threshold rule form of the three rules in `alerts/rules.yml`. PromQL rules do not evaluate on this SigNoz (D6417: its ClickHouse has no `timeSeriesLastToGrid`, so every PromQL query returns HTTP 400), so none of the rules in this runbook is a PromQL rule. These three blocks are derived from `alerts/rules.yml` and are not yet imported: run Step 3 on each rule before you save it. The notification channel is left empty on purpose: the rules route by notification policy (`usePolicy`). Field names follow the SigNoz rule schema; if your SigNoz version rejects a field, keep the metric, the filter, the group-by key, the threshold, the window, the severity and the labels, and set the rest in the form.
+Create each rule in SigNoz (Alerts, New alert, import JSON). The JSON below is the builder threshold rule form of the three rules in `alerts/rules.yml`. PromQL rules do not evaluate on this SigNoz (its ClickHouse has no `timeSeriesLastToGrid`, so every PromQL query returns HTTP 400), so none of the rules in this runbook is a PromQL rule. These three blocks are derived from `alerts/rules.yml` and are not yet imported: run Step 3 on each rule before you save it. The notification channel is left empty on purpose: the rules route by notification policy (`usePolicy`). Field names follow the SigNoz rule schema; if your SigNoz version rejects a field, keep the metric, the filter, the group-by key, the threshold, the window, the severity and the labels, and set the rest in the form.
 
 Notes on the derivation:
 
@@ -264,9 +264,9 @@ No test of a firing alert is run in prod. The rule shapes are checked in CI agai
 
 ## Valkey memory and eviction rules
 
-The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). Its rule text is the text of record, and the two rules are saved in SigNoz as builder threshold rules, which are the JSON below. PromQL rules do not evaluate on this SigNoz (D6417, see Step 2), so these two rules are saved in the builder form too. Import the two rules in the same way as Step 2, with the JSON below. The rules carry no channel: they route by notification policy (`usePolicy`).
+The `valkey` group in `alerts/rules.yml` watches the in-chart Valkey that holds the auth-service rate-limit counters. The series come from the collector's redis receiver (`redis.keys.evicted`, `redis.memory.used`). Its rule text is the text of record, and the two rules are saved in SigNoz as builder threshold rules, which are the JSON below. PromQL rules do not evaluate on this SigNoz (see Step 2), so these two rules are saved in the builder form too. Import the two rules in the same way as Step 2, with the JSON below. The rules carry no channel: they route by notification policy (`usePolicy`).
 
-The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 bytes) that the roll step for CHAOS-11630 sets. Change the rule and `valkey.maxmemory` together. Until that roll step runs, the live maxmemory is larger (256 MiB), so the memory rule is only stricter.
+The memory threshold is 161061274 bytes: 80% of the maxmemory 192mb (201326592 bytes) that the roll step sets. Change the rule and `valkey.maxmemory` together. Until that roll step runs, the live maxmemory is larger (256 MiB), so the memory rule is only stricter.
 
 ```json
 {

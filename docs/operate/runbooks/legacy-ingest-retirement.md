@@ -26,10 +26,10 @@ They used one deployment-wide API key (`INGEST_API_KEYS`, header `X-API-Key`) or
 
 ## Timeline
 
-1. Deprecated and guarded (ops #4934). The routes mounted only when `DEV_HEALTH_LEGACY_INGEST_ENABLED` was true. The default was off.
-2. Pinned off in prod (deploy #643). The prod values set `legacyIngest.enabled: false`.
-3. Retired (ops #5234). go-api no longer mounts the routes. It no longer reads `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`, `INGEST_API_KEYS` or `INGEST_SIGNING_SECRET`.
-4. Credential classes deleted (ops #5252). The classes `legacy_ingest_api_key` and `legacy_ingest_hmac_signature` are gone from the registry and from the stored-class check. See [Credential classes](../../reference/auth/credential-classes.md).
+1. Deprecated and guarded. The routes mounted only when `DEV_HEALTH_LEGACY_INGEST_ENABLED` was true. The default was off.
+2. Pinned off in prod. The prod values set `legacyIngest.enabled: false`.
+3. Retired. go-api no longer mounts the routes. It no longer reads `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`, `INGEST_API_KEYS` or `INGEST_SIGNING_SECRET`.
+4. Credential classes deleted. The classes `legacy_ingest_api_key` and `legacy_ingest_hmac_signature` are gone from the registry and from the stored-class check. See [Credential classes](../../reference/auth/credential-classes.md).
 
 ## What the service does now
 

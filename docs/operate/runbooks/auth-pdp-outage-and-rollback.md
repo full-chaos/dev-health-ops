@@ -95,3 +95,7 @@ The test is `TestRollbackCannotReactivateRevokedAccess` (`internal/api/policy/en
 - The legacy guard decides the routes again. Shadow comparison (`AUTH_SHADOW_PDP`) is separate and unchanged: see [Auth shadow PDP triage](auth-shadow-pdp-triage.md).
 - Before the next turn-on: the `unjudged` count of the row must be 0 for the window its leaf names (`docs/reference/auth/readiness-and-slo.md:76`), and auth-service must list go-api's workload principal in `AUTH_AUTHORIZE_CALLER_SUBJECTS` (`docs/reference/auth/authn-authz.md:162`).
 - Field reference for the switch: [Enforcement switch](../../reference/auth/authn-authz.md#enforcement-switch).
+
+## Before a turn-on: platform role parity read
+
+Before a go-api or query-api enforcement cell turns on (F7, F8, F9), run the read in `ci/auth_preflip_platform_role_parity.sql` once, read-only, against the production database (`BEGIN TRANSACTION READ ONLY;`, the file, `ROLLBACK;`). Record its output on the flip ticket. The flip goes on only when every count except `superusers` is 0. A non-zero `superusers_without_platform_admin` or `platform_admin_not_superuser` means go-api's superuser flag and the decision point's platform role disagree for that user; a non-zero `platform_admin_on_disabled_copy_of_active_user` means the decision point would admit a platform admin that go-api refuses (product rule 1, CHAOS-13209). Fix the data first, then read again. This is a point-in-time read, not a start refusal and not a wait. A cell in `internal/api/policy` runs the same file.

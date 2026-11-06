@@ -528,7 +528,7 @@ jobs:
 
       - name: Write JUnit XML next to the providersync race slice's go test -json (race legs)
         continue-on-error: true
-        if: always() && steps.relevance.outputs.relevant == 'true' && startsWith(matrix.name, 'race-')
+        if: always() && startsWith(matrix.name, 'race-') && steps.relevance.outputs.relevant == 'true'
         # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays.
         run: bash ci/go_test_json_to_junit.sh go-test-json
 

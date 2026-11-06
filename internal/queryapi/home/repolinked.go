@@ -74,6 +74,9 @@ type RepoLinkBasis struct {
 	Native       int `json:"native"`
 	ExplicitText int `json:"explicit_text"`
 	Heuristic    int `json:"heuristic"`
+	// Scope is ScopeRepositoryCeiling when the counts are held to the repositories of a ceiling; empty otherwise
+	// (CHAOS-13086).
+	Scope string `json:"scope,omitempty"`
 }
 
 // RepoLinkCoverage says how much of the work the repository view can see: an
@@ -273,6 +276,7 @@ GROUP BY work_item_id`,
 func (loader *repoLinkedLoader) readBasis(ctx context.Context, budget string, view *repoLinkedView) error {
 	basis := basisQuery()
 	if loader.f.Ceiling.Restricted() {
+		view.basis.Scope = ScopeRepositoryCeiling
 		// An item linked to a repository outside the ceiling is not "in more than one repository's view" of this
 		// caller: only the repositories of the view count (CHAOS-13086).
 		basis = strings.Replace(basis, "uniqExact(repo_id) > 1", "uniqExactIf(repo_id, repo_id IN {link_repo_ids:Array(UUID)}) > 1", 1)

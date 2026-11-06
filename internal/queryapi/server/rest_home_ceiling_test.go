@@ -100,8 +100,8 @@ func TestHomeCeiling_OrganizationAndLegacyAreTodaysAnswer(t *testing.T) {
 						t.Fatalf("a ceiling or link term reached an unrestricted statement:\n%s", statement)
 					}
 				}
-				if strings.Contains(got.body, "omitted_signals") {
-					t.Fatalf("an unrestricted answer carries omitted_signals: %s", got.body)
+				if strings.Contains(got.body, "omitted_signals") || strings.Contains(got.body, "narrowed_counts") {
+					t.Fatalf("an unrestricted answer carries omitted_signals or narrowed_counts: %s", got.body)
 				}
 			})
 		}
@@ -140,7 +140,8 @@ func TestHomeCeiling_RecommendationsAreOmittedWithAReason(t *testing.T) {
 			t.Fatalf("recommendations were read for an allowlist caller:\n%s", statement)
 		}
 	}
-	for _, want := range []string{`"omitted_signals"`, `"kind":"recommendations"`, `"reason":"not scoped to repositories"`} {
+	for _, want := range []string{`"omitted_signals"`, `"kind":"recommendations"`, `"reason":"not scoped to repositories"`,
+		`"narrowed_counts"`, `"scope":"repository ceiling"`} {
 		if !strings.Contains(got.body, want) {
 			t.Fatalf("body has no %s: %s", want, got.body)
 		}

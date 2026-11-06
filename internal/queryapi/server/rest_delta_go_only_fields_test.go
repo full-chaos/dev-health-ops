@@ -148,6 +148,7 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 	sameButDeltas(reflect.TypeOf(homeRESTResponse{}), reflect.TypeOf(homePythonResponse{}), []fieldShape{
 		{"FilterEmptyReason", "*string", `json:"filter_empty_reason"`},
 		{"OmittedSignals", "[]home.OmittedSignal", `json:"omitted_signals,omitempty"`},
+		{"NarrowedCounts", "[]home.NarrowedCount", `json:"narrowed_counts,omitempty"`},
 	})
 	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}), nil)
 }

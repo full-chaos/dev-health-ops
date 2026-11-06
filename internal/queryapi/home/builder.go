@@ -278,7 +278,8 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	if err != nil {
 		return nil, err
 	}
-	response.OmittedSignals = omittedSignals(f)
+	response.OmittedSignals = omittedSignals(f, response.Deltas)
+	response.NarrowedCounts = narrowedCounts(f)
 	return response, nil
 }
 

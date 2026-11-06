@@ -71,6 +71,8 @@ type homeRESTResponse struct {
 	// OmittedSignals (CHAOS-13086, Go-only, last, absent when empty): the signal panels a caller held to a repository
 	// ceiling is not served, with the reason. A caller with no ceiling gets no such key.
 	OmittedSignals []home.OmittedSignal `json:"omitted_signals,omitempty"`
+	// NarrowedCounts (CHAOS-13086, Go-only, last, absent when empty): the counts held to the repositories of a ceiling.
+	NarrowedCounts []home.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
@@ -132,6 +134,7 @@ func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 		DataConfidence:        resp.DataConfidence,
 		FilterEmptyReason:     resp.FilterEmptyReason,
 		OmittedSignals:        resp.OmittedSignals,
+		NarrowedCounts:        resp.NarrowedCounts,
 	}
 }
 

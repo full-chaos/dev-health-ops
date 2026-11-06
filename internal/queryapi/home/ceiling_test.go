@@ -159,10 +159,10 @@ func TestCeilingRecommendationsAreNotRead(t *testing.T) {
 }
 
 func TestCeilingOmittedSignalsNameTheReason(t *testing.T) {
-	if got := omittedSignals(ceilingFilters("org", teamscope.NoCeiling())); got != nil {
+	if got := omittedSignals(ceilingFilters("org", teamscope.NoCeiling()), nil); got != nil {
 		t.Fatalf("an unrestricted caller omits %v", got)
 	}
-	got := omittedSignals(ceilingFilters("org", restrictedCeiling(t, ceilingRepoA)))
+	got := omittedSignals(ceilingFilters("org", restrictedCeiling(t, ceilingRepoA)), nil)
 	want := []OmittedSignal{{"recommendations", "not scoped to repositories"}, {"compounding_risk_team", "not scoped to repositories"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("omitted = %v, want %v", got, want)
@@ -253,5 +253,80 @@ func TestCeilingCoverageAndBasisAreHeldToTheView(t *testing.T) {
 		if (name == "ceiling") != scoped {
 			t.Fatalf("%s: coverage and basis held to the view = %t\n%s\n%s", name, scoped, coverage, basis)
 		}
+	}
+}
+
+func ceilingDelta(metric string, pct float64) MetricDelta {
+	return MetricDelta{Metric: metric, HasData: true, HasPriorData: true, DeltaPct: &pct}
+}
+
+// acp (i): each work-item driver left out under a ceiling (the summary sentence's, each signal caption's) is listed
+// with the reason; a repository metric's drivers are served inside the ceiling and not listed; no ceiling lists none.
+func TestCeilingDriversOmittedAreListed(t *testing.T) {
+	deltas := []MetricDelta{ceilingDelta("cycle_time", 40), ceilingDelta("review_latency", 10), ceilingDelta("throughput", 0)}
+	if got := omittedSignals(ceilingFilters("org", teamscope.NoCeiling()), deltas); got != nil {
+		t.Fatalf("no ceiling lists %v", got)
+	}
+	got := omittedSignals(ceilingFilters("org", restrictedCeiling(t, ceilingRepoA)), deltas)
+	kinds := map[string]string{}
+	for _, o := range got {
+		kinds[o.Kind] = o.Reason
+	}
+	for _, kind := range []string{"recommendations", "compounding_risk_team", "summary_driver:cycle_time", "signal_driver:cycle_time"} {
+		if kinds[kind] != ReasonNotScopedToRepositories {
+			t.Errorf("%s is not listed with the reason: %v", kind, got)
+		}
+	}
+	for _, kind := range []string{"signal_driver:review_latency", "summary_driver:review_latency", "signal_driver:throughput"} {
+		if _, ok := kinds[kind]; ok {
+			t.Errorf("%s is listed but names no omitted driver: %v", kind, got)
+		}
+	}
+}
+
+// acp (ii): the counts of the view under a ceiling are the narrowed counts, never the organization's, and the basis
+// says so. A planted organization count (the statement without the item scope) is red.
+func TestCeilingCoverageIsTheNarrowedCount(t *testing.T) {
+	answer := func(statement string) [][]any {
+		if strings.Contains(statement, "countIf(work_item_id IN") {
+			if strings.Contains(statement, "AND work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr FINAL") {
+				return [][]any{{int64(5), int64(5)}}
+			}
+			return [][]any{{int64(100), int64(60)}}
+		}
+		return nil
+	}
+	for name, tc := range map[string]struct {
+		ceiling teamscope.Ceiling
+		want    RepoLinkCoverage
+		scope   string
+	}{
+		"ceiling": {restrictedCeiling(t, ceilingRepoA), RepoLinkCoverage{LinkedItems: 5, ItemsInWindow: 5}, ScopeRepositoryCeiling},
+		"none":    {teamscope.NoCeiling(), RepoLinkCoverage{LinkedItems: 60, ItemsInWindow: 100}, ""},
+	} {
+		client := &recordingClient{answer: answer}
+		loader := &repoLinkedLoader{client: client, f: ceilingFilters("org", tc.ceiling), orgID: ceilingOrgID, repoIDs: []string{ceilingRepoA},
+			compareStart: day(2024, 1, 1), endDay: day(2024, 1, 8)}
+		view := &repoLinkedView{}
+		if err := loader.readCoverage(context.Background(), "", view); err != nil {
+			t.Fatal(err)
+		}
+		if err := loader.readBasis(context.Background(), "", view); err != nil {
+			t.Fatal(err)
+		}
+		if view.coverage != tc.want || view.basis.Scope != tc.scope {
+			t.Fatalf("%s: coverage %+v basis scope %q, want %+v %q", name, view.coverage, view.basis.Scope, tc.want, tc.scope)
+		}
+	}
+}
+
+func TestCeilingNarrowedCountsAreNamed(t *testing.T) {
+	if got := narrowedCounts(ceilingFilters("org", teamscope.NoCeiling())); got != nil {
+		t.Fatalf("no ceiling names %v", got)
+	}
+	got := narrowedCounts(ceilingFilters("org", restrictedCeiling(t, ceilingRepoA)))
+	want := []NarrowedCount{{"repo_link_basis", ScopeRepositoryCeiling}, {"repo_link_coverage", ScopeRepositoryCeiling}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("narrowed counts %v, want %v", got, want)
 	}
 }

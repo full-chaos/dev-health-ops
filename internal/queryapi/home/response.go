@@ -348,7 +348,18 @@ type Response struct {
 	// OmittedSignals (CHAOS-13086) names the signal panels a caller held to a repository ceiling is not served, and
 	// why. Empty for a caller with no ceiling: its answer is today's, byte for byte.
 	OmittedSignals []OmittedSignal `json:"-"`
+	// NarrowedCounts (CHAOS-13086) names the counts held to the repositories of a ceiling. Empty without a ceiling.
+	NarrowedCounts []NarrowedCount `json:"-"`
 }
+
+// NarrowedCount says one count of an answer is held to a scope narrower than the organization.
+type NarrowedCount struct {
+	Kind  string `json:"kind"`
+	Scope string `json:"scope"`
+}
+
+// ScopeRepositoryCeiling is the scope of a count held to the repositories of a ceiling.
+const ScopeRepositoryCeiling = "repository ceiling"
 
 // OmittedSignal says one signal panel was left out of an answer, and the reason.
 type OmittedSignal struct {
@@ -361,14 +372,40 @@ const ReasonNotScopedToRepositories = "not scoped to repositories"
 
 // omittedSignals are the panels a caller held to a repository ceiling is not served: recommendations (keyed by team)
 // and the team rows of the compounding risk panel (its repository rows are served inside the ceiling).
-func omittedSignals(f Filters) []OmittedSignal {
+//
+// Under a ceiling the work-item drivers are not produced either (the team daily table that names them has no
+// repository dimension): the summary sentence's driver and each signal caption that would have named one are listed.
+func omittedSignals(f Filters, deltas []MetricDelta) []OmittedSignal {
 	if !f.Ceiling.Restricted() {
 		return nil
 	}
-	return []OmittedSignal{
+	out := []OmittedSignal{
 		{Kind: "recommendations", Reason: ReasonNotScopedToRepositories},
 		{Kind: "compounding_risk_team", Reason: ReasonNotScopedToRepositories},
 	}
+	if top, ok := topDeltaByMagnitude(deltas); ok && workItemDriverOmitted(top) {
+		out = append(out, OmittedSignal{Kind: "summary_driver:" + top.Metric, Reason: ReasonNotScopedToRepositories})
+	}
+	for _, d := range deltas {
+		if workItemDriverOmitted(d) {
+			out = append(out, OmittedSignal{Kind: "signal_driver:" + d.Metric, Reason: ReasonNotScopedToRepositories})
+		}
+	}
+	return out
+}
+
+// workItemDriverOmitted says a delta would have named drivers of a stated move, were it not held to a ceiling.
+func workItemDriverOmitted(d MetricDelta) bool {
+	_, ok := d.Percent()
+	return ok && d.HasData && metricScope(d.Metric) == "team" && namesDrivers(d)
+}
+
+// narrowedCounts are the counts of the repository view held to a ceiling.
+func narrowedCounts(f Filters) []NarrowedCount {
+	if !f.Ceiling.Restricted() {
+		return nil
+	}
+	return []NarrowedCount{{Kind: "repo_link_basis", Scope: ScopeRepositoryCeiling}, {Kind: "repo_link_coverage", Scope: ScopeRepositoryCeiling}}
 }
 
 // Tile is one entry of HomeResponse.tiles (services/home.py:1187-1208) --

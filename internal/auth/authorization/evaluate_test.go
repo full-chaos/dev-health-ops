@@ -587,7 +587,7 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 				rows = append(rows, liveGrant(fmt.Sprintf("o/r%03d", i)))
 			}
 			return repoSnapshot("member", rows...)
-		}(), ReasonRepositoryAllowlistTooLarge, nil},
+		}(), ReasonRepositoryAllowlistTooLarge, filteredOrgEvaluator()},
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},

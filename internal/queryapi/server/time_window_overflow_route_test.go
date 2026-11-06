@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // TestReportWindowOverflowIsThePython503 drives each route family to a
@@ -58,7 +59,7 @@ func TestReportWindowOverflowIsThePython503(t *testing.T) {
 			for key, value := range test.path {
 				req.SetPathValue(key, value)
 			}
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			test.handler(rec, req)
 			if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"detail":"Data unavailable"}` {
@@ -80,7 +81,7 @@ func TestAggregatedFlameWindowOverflowIsTheGeneric500(t *testing.T) {
 	} {
 		handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		handler(rec, req)
 		if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != `{"detail":"Internal Server Error"}` {
@@ -90,7 +91,7 @@ func TestAggregatedFlameWindowOverflowIsTheGeneric500(t *testing.T) {
 	// A start_date means Python never computes end_day - range_days.
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput&range_days=9223372036854775808&start_date=2026-01-01", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 	if rec.Code != http.StatusOK {
@@ -112,7 +113,7 @@ func TestEmptyDayCountIsA422(t *testing.T) {
 		"explain compare_days":     {newExplainGetHandler(newEmptyRowsExplainReader(t)), "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=repo-a&compare_days=", "compare_days"},
 	} {
 		req := httptest.NewRequest(http.MethodGet, test.target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		test.handler(rec, req)
 		want := `"type":"int_parsing","loc":["query","` + test.field + `"]`
@@ -130,7 +131,7 @@ func TestRepeatedDayCountLastWins(t *testing.T) {
 		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&range_days=1000000000&range_days=14": http.StatusOK,
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))(rec, req)
 		if rec.Code != want {
@@ -142,7 +143,7 @@ func TestRepeatedDayCountLastWins(t *testing.T) {
 		"/api/v1/home?compare_days=1000000000&compare_days=14": http.StatusOK,
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		newHomeGetHandler(emptyRowsHomeClient{}, nil)(rec, req)
 		if rec.Code != want {
@@ -164,7 +165,7 @@ func TestRepeatedStringScalarQueryParamLastWins(t *testing.T) {
 		"/api/v1/drilldown/prs?scope_type=repo&scope_id=repo-a&start_date=2024-01-01&start_date=not-a-date": http.StatusUnprocessableEntity,
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))(rec, req)
 		if rec.Code != want {

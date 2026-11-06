@@ -68,11 +68,6 @@ const (
 	configInvalidMetric = "dev_health_query_api_pdp_config_invalid"
 )
 
-// allowlistCutOver is the cut-over registry: the row profiles ("METHOD /route") whose handlers narrow every read to
-// a scope's repository allowlist. An allowlist decision on a route not listed is not carried out (503), so a caller
-// with a repository ceiling never reaches an unfiltered read. Empty until the per-handler cutover lists its routes.
-var allowlistCutOver = map[string]bool{}
-
 // ExemptClasses is the explicit exempt list.
 var ExemptClasses = []string{ClassHS256, ClassEnvelope}
 
@@ -101,6 +96,8 @@ const (
 type DenyError struct {
 	Reason pep.Reason
 	Local  bool
+	// Class is the route class of a refused allowlist decision (a log field, never a metric label).
+	Class string
 }
 
 func (e *DenyError) Error() string { return "pdp: denied: " + string(e.Reason) }
@@ -413,10 +410,10 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) (pe
 	decision := g.decider.Decide(ctx, g.request(action, bearer, orgID))
 	switch {
 	case decision.Allowed():
-		scope, refused := g.scopeOf(decision, profile, action, orgID)
+		scope, refused, class := g.scopeOf(decision, profile, action, orgID)
 		if refused != "" {
 			g.count(ctx, ModeEnforce, ResultNotCarriedOut, label)
-			return pepgate.Scope{}, &DenyError{Reason: refused, Local: true}
+			return pepgate.Scope{}, &DenyError{Reason: refused, Local: true, Class: class}
 		}
 		g.count(ctx, ModeEnforce, ResultAllow, label)
 		return scope, nil
@@ -437,40 +434,41 @@ func (g *Gate) request(action, bearer, orgID string) pep.Request {
 // its tenant_scope must both name the request's organization, compared as UUIDs (the scope carries the canonical
 // form); redaction,
 // minimum_assurance and step_up are not carried out; repository_scope organization, or an allowlist holding "*", is
-// every repository; any other allowlist is a ceiling only on a route the cut-over registry lists; neither repository
+// every repository; any other allowlist is a ceiling only on a route whose class the registry narrows; neither repository
 // member is the tenant alone for an action the catalog marks repository_scope none, and no repository otherwise.
-func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason) {
+func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.Scope, pep.Reason, string) {
 	org, ok := canonicalUUID(orgID)
 	if !ok {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
 	if decided, ok := d.OrganizationID(); !ok || !sameUUID(decided, org) {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
 	o := d.Obligations()
 	if tenant, ok := o.TenantScope(); !ok || !sameUUID(tenant, org) {
-		return pepgate.Scope{}, ReasonTenantMismatch
+		return pepgate.Scope{}, ReasonTenantMismatch, ""
 	}
 	if _, ok := o.MinimumAssurance(); ok || len(o.Redaction()) != 0 || o.StepUpRequired() {
-		return pepgate.Scope{}, ReasonNotCarriedOut
+		return pepgate.Scope{}, ReasonNotCarriedOut, ""
 	}
 	switch {
 	case o.RepositoryScopeOrganization():
-		return pepgate.Organization(org), ""
+		return pepgate.Organization(org), "", ""
 	case o.RepositoryRestricted():
 		keys := o.RepositoryAllowlist()
 		if slices.Contains(keys, "*") {
-			return pepgate.Organization(org), ""
+			return pepgate.Organization(org), "", ""
 		}
 		if !g.carriesAllowlist[profile] {
-			return pepgate.Scope{}, ReasonNotCarriedOut
+			reason, class := allowlistRefusal(profile)
+			return pepgate.Scope{}, reason, class
 		}
-		return pepgate.Allowlist(org, keys), ""
+		return pepgate.Allowlist(org, keys), "", ""
 	}
 	if catalogued, err := policycatalog.Default().Action(action); err == nil && catalogued.RepositoryScope == policycatalog.RepositoryScopeNone {
-		return pepgate.Organization(org), ""
+		return pepgate.Organization(org), "", ""
 	}
-	return pepgate.Scope{}, ReasonNoRepositoryRule
+	return pepgate.Scope{}, ReasonNoRepositoryRule, ""
 }
 
 // Wait blocks until every shadow call in flight has ended.

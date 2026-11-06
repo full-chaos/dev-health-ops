@@ -15,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -102,7 +103,7 @@ func TestFilterOptionsListsOnlyActiveTeamIDs(t *testing.T) {
 	handler := newFilterOptionsWorkHandler(client)
 	fetch := func(orgID string) (teams []string, names map[string]string) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: orgID}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: orgID, Scope: pepgate.Legacy(orgID)}))
 		rec := httptest.NewRecorder()
 		serveRoute(t, handler, rec, req)
 		if rec.Code != http.StatusOK {

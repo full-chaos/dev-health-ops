@@ -409,7 +409,11 @@ func newInvestmentExplainWorkHandler(
 			writeRESTUnauthorized(w, r, "investment_explain", "Not authenticated")
 			return
 		}
-		r, admitted := admitModel(gate, w, r, "investment_explain", claims.OrgID)
+		org, ok := restScopeOrg(w, r, "investment_explain", claims)
+		if !ok {
+			return
+		}
+		r, admitted := admitModel(gate, w, r, "investment_explain", org)
 		if !admitted {
 			return
 		}
@@ -432,7 +436,7 @@ func newInvestmentExplainWorkHandler(
 			// A body-read I/O failure has no Python counterpart to match --
 			// see drilldown_prs_route.go's own POST handler for the same
 			// reasoning. Status unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "investment_explain", org, http.StatusBadRequest, "bad request")
 			return
 		}
 		if len(bodyBytes) > investmentExplainMaxBodyBytes {
@@ -440,13 +444,13 @@ func newInvestmentExplainWorkHandler(
 			// endpoint enforces none at all (see investmentExplainMaxBodyBytes's
 			// own doc comment), so there is no Python body to match here
 			// either. Status unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "investment_explain", claims.OrgID, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			writeRESTError(w, r, "investment_explain", org, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 			return
 		}
 
 		reqBody, validationErrors := decodeInvestmentExplainRequestBody([]any{"body"}, bodyBytes)
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -456,7 +460,7 @@ func newInvestmentExplainWorkHandler(
 		}
 		forceRefresh, _ := strconv.ParseBool(lastQueryValue(r.URL.Query(), "force_refresh"))
 
-		opts, buildErr := buildExplainOptions(r.Context(), reader, claims.OrgID, reqBody, llmProvider, forceRefresh)
+		opts, buildErr := buildExplainOptions(r.Context(), reader, org, reqBody, llmProvider, forceRefresh)
 		if buildErr != nil {
 			// buildExplainOptions fails only on a store read (the repo ref
 			// lookup), never on a request value, so the cause goes to the log
@@ -464,9 +468,9 @@ func newInvestmentExplainWorkHandler(
 			status, message, _ := policy.MapError(buildErr)
 			echoRequestID(w, r)
 			slog.Default().ErrorContext(r.Context(), "query-api: investment_explain: building the options failed",
-				slog.String("org_id", claims.OrgID), slog.String("request_id", envelopeRequestID(r)),
+				slog.String("org_id", org), slog.String("request_id", logSafeRequestID(envelopeRequestID(r))),
 				slog.Int("status", status), slog.String("error", buildErr.Error()))
-			writeRESTError(w, r, "investment_explain", claims.OrgID, status, message)
+			writeRESTError(w, r, "investment_explain", org, status, message)
 			return
 		}
 
@@ -479,7 +483,7 @@ func newInvestmentExplainWorkHandler(
 		// instead of a wrong Go answer. Team-lead ruling, CHAOS-4977 codex
 		// round 1's #5.
 		if _, unsupported := investmentexplain.ResolveUnsupportedProviderKindForOrg(
-			r.Context(), llmProvider, claims.OrgID, orgSettings,
+			r.Context(), llmProvider, org, orgSettings,
 		); unsupported {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotImplemented)
@@ -487,7 +491,7 @@ func newInvestmentExplainWorkHandler(
 			return
 		}
 
-		// available/complete are closures over claims.OrgID and
+		// available/complete are closures over org and
 		// orgSettings, matching investmentexplain.AvailabilityFunc/
 		// CompleteFunc's own EXISTING types exactly -- CHAOS-5006 PR3
 		// added no new parameter to ExplainInvestmentMix's complete
@@ -501,7 +505,7 @@ func newInvestmentExplainWorkHandler(
 			categorize.CompletionResult, string, string, error,
 		) {
 			return investmentexplain.CompleteInvestmentMixExplanationForOrg(
-				ctx, requestedProvider, requestedModel, claims.OrgID, orgSettings, budgetStore, fullPrompt)
+				ctx, requestedProvider, requestedModel, org, orgSettings, budgetStore, fullPrompt)
 		}
 
 		echoRequestID(w, r)

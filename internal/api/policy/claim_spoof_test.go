@@ -113,7 +113,7 @@ func TestASuperuserClaimOnAUserAccessTokenGivesNoSuperuserPower(t *testing.T) {
 			}
 
 			// The platform row is judged with no live impersonation row: a live one refuses every platform action
-			// (12735, D6714), whatever the superuser source.
+			// as built (12735), whatever the superuser source.
 			plain := &spoofStore{user: store.user, org: store.org, target: store.target, superuser: tc.row, noSession: true}
 			platform := serve(policy.NewGuard(issuer.AuthenticatorOver(t, plain, nil), nil).WrapPlatform(policy.ActionAdminOrgs, ok))
 			if platform.Code != tc.status {

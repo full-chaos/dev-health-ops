@@ -351,25 +351,26 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	if s.percent < 100 && s.seen.Add(1)%100 >= s.percent {
 		return
 	}
+	caller := shadowCallerOf(o.Caller)
 	if o.Impersonating && o.Pattern != stopImpersonationPattern {
-		countShadowResult(ctx, resultImpersonationRefused, ShadowReasonNone)
+		s.record(ctx, o.Pattern, row, caller, resultImpersonationRefused, ShadowReasonNone, "")
 		return
 	}
 	switch o.served.against(o.OrgID) {
 	case servedOrgUnparsed:
-		countShadowResult(ctx, resultSkipped, ShadowReasonNone)
+		s.record(ctx, o.Pattern, row, caller, resultSkipped, ShadowReasonNone, "")
 		return
 	case servedOrgOther:
-		s.observeServedOrgOther(ctx, o, row)
+		s.observeServedOrgOther(ctx, o, row, caller)
 		return
 	}
 	if row.HighRisk && !s.highRisk {
-		countShadowResult(ctx, resultSkipped, shadowReasonOf(o.SkipReason))
+		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
 		return
 	}
 	org := strings.ToLower(o.OrgID)
 	if o.Bearer == "" || !o.UserAccessToken || (row.ResourceType == policycatalog.ScopeOrganization && org == "") {
-		countShadowResult(ctx, resultSkipped, shadowReasonOf(o.SkipReason))
+		s.record(ctx, o.Pattern, row, caller, resultSkipped, shadowReasonOf(o.SkipReason), "")
 		return
 	}
 	request := pep.Request{PrincipalReference: o.Bearer, Action: row.Action, ResourceType: row.ResourceType, ResourceKey: shadowPlatformKey}
@@ -379,12 +380,8 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	select {
 	case s.slots <- struct{}{}:
 	default:
-		countShadowResult(ctx, resultDropped, ShadowReasonNone)
+		s.record(ctx, o.Pattern, row, caller, resultDropped, ShadowReasonNone, "")
 		return
-	}
-	caller := o.Caller
-	if !slices.Contains(shadowCallers, caller) {
-		caller = ShadowCallerMember
 	}
 	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed}
 	s.wg.Add(1)
@@ -401,16 +398,12 @@ func (s *Shadow) Wait() {
 // observeServedOrgOther records what enforcement would answer when the request names an organization that is not
 // the token's: a refusal with no decision point call. Against a legacy allow that is a mismatch of class
 // intentional; against a legacy deny, a match.
-func (s *Shadow) observeServedOrgOther(ctx context.Context, o ShadowObservation, row ShadowRow) {
+func (s *Shadow) observeServedOrgOther(ctx context.Context, o ShadowObservation, row ShadowRow, caller string) {
 	if !o.LegacyAllowed {
-		countShadowResult(ctx, resultMatch, ShadowReasonNone)
+		s.record(ctx, o.Pattern, row, caller, resultMatch, ShadowReasonNone, "")
 		return
 	}
-	caller := o.Caller
-	if !slices.Contains(shadowCallers, caller) {
-		caller = ShadowCallerMember
-	}
-	countShadowResult(ctx, resultMismatch, ShadowReasonNone)
+	s.record(ctx, o.Pattern, row, caller, resultMismatch, ShadowReasonNone, "")
 	countShadowMismatch(ctx, row.Namespace, caller, classIntentional)
 	if s.logAllowed(slices.Index(shadowClasses, classIntentional)) {
 		s.logger.WarnContext(ctx, "api shadow pdp: the request names an organization that is not the token organization",
@@ -425,14 +418,14 @@ func (s *Shadow) run(call shadowCall) {
 	defer func() { <-s.slots }()
 	defer func() {
 		if recover() != nil {
-			countShadowResult(call.ctx, resultError, ShadowReasonNone)
+			s.record(call.ctx, call.pattern, call.row, call.caller, resultError, ShadowReasonNone, "")
 		}
 	}()
 	ctx, cancel := context.WithTimeout(call.ctx, s.timeout)
 	defer cancel()
 	decision := s.decider.Decide(ctx, call.request)
 	if decision.Local() {
-		countShadowResult(call.ctx, resultError, ShadowReasonNone)
+		s.record(call.ctx, call.pattern, call.row, call.caller, resultError, ShadowReasonNone, "")
 		if s.logAllowed(len(shadowClasses)) {
 			s.logger.WarnContext(call.ctx, "api shadow pdp: no verdict", slog.String("namespace", call.row.Namespace),
 				slog.String("caller", call.caller), slog.String("reason", string(decision.Reason())))
@@ -440,11 +433,11 @@ func (s *Shadow) run(call shadowCall) {
 		return
 	}
 	if decision.Allowed() == call.legacyAllowed {
-		countShadowResult(call.ctx, resultMatch, ShadowReasonNone)
+		s.record(call.ctx, call.pattern, call.row, call.caller, resultMatch, ShadowReasonNone, decision.DecisionID())
 		return
 	}
 	class := s.classify(call.legacyAllowed, decision, call.row.Namespace)
-	countShadowResult(call.ctx, resultMismatch, ShadowReasonNone)
+	s.record(call.ctx, call.pattern, call.row, call.caller, resultMismatch, ShadowReasonNone, decision.DecisionID())
 	countShadowMismatch(call.ctx, call.row.Namespace, call.caller, class)
 	if s.logAllowed(slices.Index(shadowClasses, class)) {
 		s.logger.WarnContext(call.ctx, "api shadow pdp: mismatch with the legacy guard",
@@ -453,6 +446,27 @@ func (s *Shadow) run(call shadowCall) {
 			slog.String("legacy", verdictWord(call.legacyAllowed)), slog.String("shadow", verdictWord(decision.Allowed())),
 			slog.String("reason_code", string(decision.Reason())), slog.String("decision_id", decision.DecisionID()))
 	}
+}
+
+// shadowResultLine: one INFO line per shadowed request; decision_id only when the decision point answered.
+const shadowResultLine = "api shadow pdp: result"
+
+// record counts result and writes the shadowResultLine of one shadowed request.
+func (s *Shadow) record(ctx context.Context, route string, row ShadowRow, caller, result, reason, decisionID string) {
+	countShadowResult(ctx, result, reason)
+	attrs := []slog.Attr{slog.String("route", route), slog.String("namespace", row.Namespace), slog.String("caller", caller),
+		slog.String("result", result)}
+	if decisionID != "" {
+		attrs = append(attrs, slog.String("decision_id", decisionID))
+	}
+	s.logger.LogAttrs(ctx, slog.LevelInfo, shadowResultLine, attrs...)
+}
+
+func shadowCallerOf(caller string) string {
+	if slices.Contains(shadowCallers, caller) {
+		return caller
+	}
+	return ShadowCallerMember
 }
 
 func verdictWord(allowed bool) string {

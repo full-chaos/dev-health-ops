@@ -151,12 +151,22 @@ func revokedCallerStore() *fakeStore {
 	return store
 }
 
+// revokedWriteCells and revokedReadCells are the route levels for a caller
+// without admin.impersonate. The scope reads such a caller's row on a write
+// only (the read limit of CHAOS-13143): it never applies the row to it, so a
+// read answers as the caller itself.
+var (
+	revokedWriteCells = []legacyCell{{"Admin POST", http.MethodPost, "/admin"}, {"AdminOrg DELETE", http.MethodDelete, "/admin-org"}}
+	revokedReadCells  = []legacyCell{{"Admin GET", http.MethodGet, "/admin"}, {"AdminOrg GET", http.MethodGet, "/admin-org"},
+		{"Authenticated GET", http.MethodGet, "/authenticated"}}
+)
+
 // The refusal follows the live row, not the caller's admin.impersonate: a
-// legacy caller whose action was revoked is refused like a holder, and after
-// the row ends the switch changes none of its answers.
+// legacy caller whose action was revoked is refused on a write like a holder,
+// and after the row ends the switch changes none of its answers.
 func TestRevokedLegacyImpersonationCallerIsRefusedUnderTheProxySwitch(t *testing.T) {
 	headers := bearer(t, superClaims)
-	for _, cell := range refusedLegacyCells[:5] {
+	for _, cell := range revokedWriteCells {
 		t.Run(cell.name, func(t *testing.T) {
 			got := serveBody(legacyStack(t, revokedCallerStore(), &switchOn), cell.method, cell.path, headers)
 			if got.status != http.StatusForbidden || got.body != legacyRefusal {
@@ -174,6 +184,49 @@ func TestRevokedLegacyImpersonationCallerIsRefusedUnderTheProxySwitch(t *testing
 				t.Errorf("%s %s: refused after the row ended: %d %s", cell.method, cell.path, on.status, on.body)
 			}
 		})
+	}
+}
+
+// A read by the revoked caller with a live row answers as the caller itself:
+// byte-equal to the same caller without a row, with the switch on or unset, in
+// its own org, with no target data and no impersonation headers. No row is
+// read: a failing row read changes nothing.
+func TestRevokedLegacyImpersonationCallerReadsAsItselfUnderTheProxySwitch(t *testing.T) {
+	headers := bearer(t, superClaims)
+	for _, cell := range revokedReadCells {
+		t.Run(cell.name, func(t *testing.T) {
+			ended := revokedCallerStore()
+			delete(ended.sessions, userID)
+			self := serveBody(legacyStack(t, ended, &switchOn), cell.method, cell.path, headers)
+			failing := revokedCallerStore()
+			failing.errSession = errors.New("session read failed")
+			for name, store := range map[string]*fakeStore{"live row": revokedCallerStore(), "failing row read": failing} {
+				for _, set := range []*bool{&switchOn, nil} {
+					got := serveBody(legacyStack(t, store, set), cell.method, cell.path, headers)
+					assertSameResponse(t, cell, got, self)
+					if got.body == legacyRefusal || strings.Contains(got.body, targetOrgID.String()) || strings.Contains(got.body, targetUserID.String()) ||
+						got.header.Get("X-Impersonating") != "" || got.header.Get("X-Impersonated-User-Id") != "" {
+						t.Errorf("%s, %s: %d %s %v, want the caller's own answer", cell.name, name, got.status, got.body, got.header)
+					}
+				}
+			}
+			if cell.path == "/authenticated" && (self.status != http.StatusOK || self.body != "org="+ownOrg+" user="+userID.String()+" imp=-") {
+				t.Errorf("Authenticated GET as itself: %d %s, want 200 in its own org", self.status, self.body)
+			}
+		})
+	}
+}
+
+// A failed row read for the revoked caller on a write is the dependency
+// failure 503 under the switch.
+func TestRevokedLegacyImpersonationCallerSessionReadFailsClosedUnderTheProxySwitch(t *testing.T) {
+	for _, cell := range revokedWriteCells {
+		store := revokedCallerStore()
+		store.errSession = errors.New("session read failed")
+		got := serveBody(legacyStack(t, store, &switchOn), cell.method, cell.path, bearer(t, superClaims))
+		if got.status != http.StatusServiceUnavailable || got.body != `{"detail":{"message":"Database temporarily unavailable"}}` {
+			t.Errorf("%s: %d %s, want the dependency failure 503", cell.name, got.status, got.body)
+		}
 	}
 }
 

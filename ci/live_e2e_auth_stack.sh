@@ -10,6 +10,8 @@
 #   bash ci/live_e2e_auth_stack.sh print-env SIDE STATE_DIR                 print NAME=VALUE lines of SIDE, secret values redacted
 #   bash ci/live_e2e_auth_stack.sh assert-audit STATE_DIR                   every delegated session issue used the workload credential
 #   bash ci/live_e2e_auth_stack.sh down STATE_DIR                           stop auth-service by pid
+#   bash ci/live_e2e_auth_stack.sh stop-auth STATE_DIR      stop auth-service by pid (the outage cell); start-auth starts it again with the same environment
+#   bash ci/live_e2e_auth_stack.sh start-auth STATE_DIR
 # SIDE is go-api, query-api, auth-service or web. The flags are ci/live_e2e_auth_flags.tsv (the prod flag set).
 # The https front (localhost:8443 to 127.0.0.1:8095) with STATE_DIR/tls is the caller's: the Go and web verifiers read
 # the issuer over https and nothing here serves TLS.
@@ -23,6 +25,13 @@ ISSUER="${LIVE_E2E_AUTH_ISSUER:-https://localhost:8443}"
 KEY_ID="${LIVE_E2E_AUTH_KEY_ID:-e2e-auth}"
 AUTH_API_ADDR="${LIVE_E2E_AUTH_API_ADDR:-127.0.0.1:8095}"
 AUTH_OPERATOR_ADDR="${LIVE_E2E_AUTH_OPERATOR_ADDR:-127.0.0.1:8096}"
+TOKENREVIEW_ADDR="${LIVE_E2E_TOKENREVIEW_ADDR:-127.0.0.1:8444}"
+# The workload exchange trusts a job-local fake of the Kubernetes API (cigate live-e2e tokenreview-serve) for the web workload only.
+TRUST_DOMAIN=live-e2e.test
+CLUSTER_ISSUER=https://kubernetes.default.svc.cluster.local
+WEB_NAMESPACE=live-e2e
+WEB_SERVICE_ACCOUNT=web
+WEB_SERVICE_ACCOUNT_UID=0b6c1d7e-3f2a-4a56-9d0c-5f3a1c2b7e11
 SCHEMA=auth
 RUNTIME_ROLE=devhealth_auth
 MIGRATION_ROLE=devhealth_auth_migrator
@@ -78,12 +87,16 @@ raw_env() {
     web)
       printf '%s\n' \
         "AUTH_ACCESS_TOKEN_ISSUER=${ISSUER}" \
-        "NODE_EXTRA_CA_CERTS=${state}/tls/ca.pem"
+        "NODE_EXTRA_CA_CERTS=${state}/tls/ca.pem" \
+        "AUTH_INTERNAL_URL=http://${AUTH_API_ADDR}" \
+        "AUTH_WORKLOAD_SUBJECT_FILE=${state}/workload/web.subject" \
+        "AUTH_WORKLOAD_ISSUER=${ISSUER}"
       ;;
     auth-service)
       : "${JWT_SECRET_KEY:?JWT_SECRET_KEY is not set}" "${AUTH_SESSION_SUCCESSOR_KEY:?AUTH_SESSION_SUCCESSOR_KEY is not set}"
       : "${AUTH_LOGIN_LOCKOUT_KEY:?AUTH_LOGIN_LOCKOUT_KEY is not set}" "${AUTH_RUNTIME_DATABASE_PASSWORD:?AUTH_RUNTIME_DATABASE_PASSWORD is not set}"
       : "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:?AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT is not set}"
+      : "${AUTH_AUTHORIZE_CALLER_SUBJECTS:?AUTH_AUTHORIZE_CALLER_SUBJECTS is not set}"
       flag_rows auth-service
       printf '%s\n' \
         "AUTH_SERVICE_HTTP_ADDR=${AUTH_API_ADDR}" \
@@ -96,7 +109,13 @@ raw_env() {
         "AUTH_SESSION_SUCCESSOR_KEY=${AUTH_SESSION_SUCCESSOR_KEY}" \
         "AUTH_LOGIN_LOCKOUT_KEY=${AUTH_LOGIN_LOCKOUT_KEY}" \
         "AUTH_VALKEY_URI=${VALKEY_URI}" \
-        "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}"
+        "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}" \
+        "AUTH_AUTHORIZE_CALLER_SUBJECTS=${AUTH_AUTHORIZE_CALLER_SUBJECTS}" \
+        "AUTH_WORKLOAD_TRUST_DOMAIN=${TRUST_DOMAIN}" \
+        "AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER=${CLUSTER_ISSUER}" \
+        "AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL=https://${TOKENREVIEW_ADDR}" \
+        "AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE=${state}/tls/ca.pem" \
+        "AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE=${state}/workload/reviewer.token"
       ;;
     *) die "unknown side ${side} (go-api, query-api, auth-service, web)" ;;
   esac
@@ -109,9 +128,12 @@ with_env() {
   [ "${1:-}" = "--" ] || die "with-env needs -- before the command"
   shift
   [ "$#" -gt 0 ] || die "with-env needs a command"
+  # Built first: a process substitution would hide a refused side (a required variable unset) and run CMD half-configured.
+  local lines
+  lines="$(raw_env "${side}" "${state}")"
   while IFS= read -r line; do
     export "${line%%=*}=${line#*=}"
-  done < <(raw_env "${side}" "${state}")
+  done <<<"${lines}"
   exec "$@"
 }
 
@@ -158,8 +180,8 @@ up() {
   mkdir -p "${STATE}/bin" "${STATE}/logs" "${STATE}/tls"
   mkdir -m 700 "${STATE}/workload"
 
-  printf 'step 1: build auth-service and auth-migrate\n'
-  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/auth-service" ./cmd/auth-service && go build -trimpath -o "${STATE}/bin/auth-migrate" ./cmd/auth-migrate)
+  printf 'step 1: build auth-service, auth-migrate and cigate\n'
+  (cd "${ROOT}" && go build -trimpath -o "${STATE}/bin/auth-service" ./cmd/auth-service && go build -trimpath -o "${STATE}/bin/auth-migrate" ./cmd/auth-migrate && go build -trimpath -o "${STATE}/bin/cigate" ./cmd/cigate)
 
   printf 'step 2: signing key (dho mint envelope-keys)\n'
   "${dho}" mint envelope-keys --dir "${STATE}/keys" --key-id "${KEY_ID}" --skip-existing >/dev/null
@@ -204,15 +226,40 @@ up() {
     psql -v ON_ERROR_STOP=1 -At -c "SELECT principal_id FROM ${SCHEMA}.workloads WHERE name = 'api'")"
   [[ "${principal}" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "the api workload row has no principal id"
 
+  printf 'step 5b: web workload binding (the ServiceAccount identity the fake TokenReview vouches for)\n'
+  migrate_run "${MIGRATION_ROLE}" "${migration_password}" workloads bind -workload web -environment live-e2e -trust-domain "${TRUST_DOMAIN}" \
+    -issuer "${CLUSTER_ISSUER}" -namespace "${WEB_NAMESPACE}" -service-account "${WEB_SERVICE_ACCOUNT}" -uid "${WEB_SERVICE_ACCOUNT_UID}" -apply >/dev/null
+  local web_principal
+  web_principal="$(PGHOST="${PGHOST_USE}" PGPORT="${PGPORT_USE}" PGDATABASE="${PGDATABASE_USE}" \
+    psql -v ON_ERROR_STOP=1 -At -c "SELECT principal_id FROM ${SCHEMA}.workloads WHERE name = 'web'")"
+  [[ "${web_principal}" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "the web workload row has no principal id"
+
   printf 'step 6: job-local CA and localhost certificate\n'
   make_tls
+
+  printf 'step 6b: web subject token and the fake TokenReview (test code: the exchange trusts it by configuration)\n'
+  "${STATE}/bin/cigate" live-e2e subject-jws "${STATE}/workload/web.subject"
+  "${STATE}/bin/cigate" live-e2e reviewer-token "${STATE}/workload/reviewer.token"
+  (
+    cd "${STATE}"
+    TR_NAMESPACE="${WEB_NAMESPACE}" TR_SERVICE_ACCOUNT="${WEB_SERVICE_ACCOUNT}" TR_UID="${WEB_SERVICE_ACCOUNT_UID}" \
+      nohup "${STATE}/bin/cigate" live-e2e tokenreview-serve "${TOKENREVIEW_ADDR}" "${STATE}/tls/tls.crt" "${STATE}/tls/tls.key" \
+      "${STATE}/workload/web.subject" "${STATE}/workload/reviewer.token" >"${STATE}/logs/tokenreview.log" 2>&1 &
+    echo "$!" >"${STATE}/tokenreview.pid"
+  )
+  for _ in $(seq 1 30); do
+    if curl -sS -o /dev/null --cacert "${STATE}/tls/ca.pem" "https://${TOKENREVIEW_ADDR}/" 2>/dev/null; then break; fi
+    sleep 1
+  done
 
   printf 'step 7: start auth-service\n'
   export AUTH_RUNTIME_DATABASE_PASSWORD="${runtime_password}"
   AUTH_SESSION_SUCCESSOR_KEY="$(new_secret)"
   AUTH_LOGIN_LOCKOUT_KEY="$(new_secret)"
   AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT="$(principal_ref "${principal}")"
-  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
+  AUTH_AUTHORIZE_CALLER_SUBJECTS="$(principal_ref "${web_principal}")"
+  export AUTH_SESSION_SUCCESSOR_KEY AUTH_LOGIN_LOCKOUT_KEY AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT AUTH_AUTHORIZE_CALLER_SUBJECTS
+  raw_env auth-service "${STATE}" >"${STATE}/auth-service.env"
   (
     cd "${STATE}"
     nohup bash "${SELF}" with-env auth-service "${STATE}" -- "${STATE}/bin/auth-service" \
@@ -246,15 +293,49 @@ assert_audit() {
   [ "${workload}" -eq "${total}" ] || die "a delegated session issue has no workload marker"
 }
 
-down() {
-  STATE="$(cd "$1" && pwd)"
-  local pidfile="${STATE}/auth-service.pid" pid
+stop_pid() {
+  local pidfile="$1" pid
   [ -f "${pidfile}" ] || return 0
   pid="$(cat "${pidfile}")"
   [[ "${pid}" =~ ^[0-9]+$ ]] || die "pid file holds no pid"
   if [ -d "/proc/${pid}" ] && [ "$(readlink "/proc/${pid}/cwd")" = "${STATE}" ]; then
     kill "${pid}" || true
   fi
+}
+
+down() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/auth-service.pid"
+  stop_pid "${STATE}/tokenreview.pid"
+}
+
+stop_auth() {
+  STATE="$(cd "$1" && pwd)"
+  stop_pid "${STATE}/auth-service.pid"
+  for _ in $(seq 1 30); do
+    curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  die "auth-service still answers after stop"
+}
+
+# start_auth STATE: auth-service again, with the environment `up` saved (mode 0600, job-local).
+start_auth() {
+  STATE="$(cd "$1" && pwd)"
+  [ -f "${STATE}/auth-service.env" ] || die "no saved auth-service environment: run up first"
+  if curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1; then die "auth-service already answers"; fi
+  (
+    cd "${STATE}"
+    # shellcheck disable=SC2016 # the loop is the child's, $1 and $2 are its own arguments
+    nohup bash -c 'while IFS= read -r line; do export "${line%%=*}=${line#*=}"; done <"$1"; exec "$2"' _ \
+      "${STATE}/auth-service.env" "${STATE}/bin/auth-service" >>"${STATE}/logs/auth-service.log" 2>&1 &
+    echo "$!" >"${STATE}/auth-service.pid"
+  )
+  for _ in $(seq 1 60); do
+    if curl -fsS "http://${AUTH_OPERATOR_ADDR}/readyz" >/dev/null 2>&1; then return 0; fi
+    sleep 1
+  done
+  die "auth-service did not become ready again"
 }
 
 verb="${1:-}"
@@ -279,5 +360,13 @@ case "${verb}" in
     [ "$#" -eq 2 ] || die "usage: down STATE_DIR"
     down "$2"
     ;;
-  *) die "usage: up | with-env | print-env | assert-audit | down" ;;
+  stop-auth)
+    [ "$#" -eq 2 ] || die "usage: stop-auth STATE_DIR"
+    stop_auth "$2"
+    ;;
+  start-auth)
+    [ "$#" -eq 2 ] || die "usage: start-auth STATE_DIR"
+    start_auth "$2"
+    ;;
+  *) die "usage: up | with-env | print-env | assert-audit | down | stop-auth | start-auth" ;;
 esac

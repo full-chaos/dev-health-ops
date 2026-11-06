@@ -16,6 +16,9 @@ import (
 // credential). ci/live_e2e_auth_stack.sh builds the environment of each process; ci/live_e2e_auth_flags.tsv is the
 // one place that names the flags, with the prod line each one copies. Nothing here starts a process.
 
+// The web workload principal the stack lets call POST /v1/authorize (22 base64url characters after prn_).
+const webSubject = "prn_AAAAAAAAAAAAAAAAAAAAAA"
+
 type flagRow struct{ scope, name, value, source, delta string }
 
 func liveFlagRows(t *testing.T) []flagRow {
@@ -48,6 +51,7 @@ func liveStackEnv(t *testing.T, side string) map[string]string {
 		"AUTH_LOGIN_LOCKOUT_KEY=a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s",     // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_RUNTIME_DATABASE_PASSWORD=runtime-password-for-test",               // gitleaks:allow -- placeholder value fed to the environment printer, not a credential
 		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_hh9WycdvSHSM26P15yRmgA",
+		"AUTH_AUTHORIZE_CALLER_SUBJECTS=" + webSubject,
 	}
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -178,6 +182,60 @@ func TestLiveE2EAuthStackUpStartsAuthServiceWhenRunByARelativePath(t *testing.T)
 		logged, _ := os.ReadFile(filepath.Join(state, "logs", "auth-service.log"))
 		t.Fatalf("FAIL: up by a relative path did not start auth-service: %v\n%s\nauth-service.log:\n%s", err, out.String(), logged)
 	}
+	// up binds the web workload, writes the web subject and the reviewer token, and saves the auth-service environment
+	// (mode 0600) that start-auth reuses.
+	saved, err := os.ReadFile(filepath.Join(state, "auth-service.env"))
+	if err != nil {
+		t.Fatalf("FAIL: up saved no auth-service environment: %v", err)
+	}
+	if !strings.Contains(string(saved), "\nAUTH_AUTHORIZE_CALLER_SUBJECTS=prn_") && !strings.HasPrefix(string(saved), "AUTH_AUTHORIZE_CALLER_SUBJECTS=prn_") {
+		t.Errorf("FAIL: the saved environment names no authorize caller")
+	}
+	if info, err := os.Stat(filepath.Join(state, "auth-service.env")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("FAIL: auth-service.env mode %v err %v, want 0600", info, err)
+	}
+	if !strings.Contains(out.String(), "step 5b") || !strings.Contains(out.String(), "step 6b") {
+		t.Errorf("FAIL: up skipped the web binding or the fake TokenReview step:\n%s", out.String())
+	}
+}
+
+// stop-auth ends auth-service by pid (the outage cell); start-auth brings it back with the saved environment.
+func TestLiveE2EStopAndStartAuthService(t *testing.T) {
+	root := repoRoot(t)
+	fake := t.TempDir()
+	state := t.TempDir()
+	for _, d := range []string{"bin", "logs"} {
+		if err := os.Mkdir(filepath.Join(state, d), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, body string, mode os.FileMode) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(state, "bin", "auth-service"), "#!/bin/sh\necho \"$MARK\" >> \""+state+"/logs/starts\"\nexec sleep 60\n", 0o755)
+	write(filepath.Join(state, "auth-service.env"), "MARK=started-with-saved-env\n", 0o600)
+	// readyz answers while the pid of the pid file is alive.
+	write(filepath.Join(fake, "curl"), "#!/bin/sh\nkill -0 \"$(cat '"+state+"/auth-service.pid')\" 2>/dev/null\n", 0o755)
+	run := func(verb string) {
+		t.Helper()
+		cmd := exec.Command("bash", "ci/live_e2e_auth_stack.sh", verb, state)
+		cmd.Dir = root
+		cmd.Env = []string{"PATH=" + fake + ":" + os.Getenv("PATH")}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("FAIL: %s: %v\n%s", verb, err, out)
+		}
+	}
+	t.Cleanup(func() { run("down") })
+	run("start-auth")
+	run("stop-auth")
+	run("start-auth")
+	starts, _ := os.ReadFile(filepath.Join(state, "logs", "starts"))
+	if strings.Count(string(starts), "started-with-saved-env") != 2 {
+		t.Errorf("FAIL: auth-service started with the saved environment %d times, want 2:\n%s", strings.Count(string(starts), "started-with-saved-env"), starts)
+	}
 }
 
 const (
@@ -195,6 +253,7 @@ func sentinelEnv() []string {
 		"AUTH_LOGIN_LOCKOUT_KEY=" + sentinelLockout,        // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_RUNTIME_DATABASE_PASSWORD=" + sentinelDBPass, // gitleaks:allow -- sentinel for the redaction cell, not a credential
 		"AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_subject-sentinel",
+		"AUTH_AUTHORIZE_CALLER_SUBJECTS=prn_caller-sentinel",
 	}
 }
 
@@ -263,5 +322,46 @@ func TestLiveE2EAssertAuditCells(t *testing.T) {
 				t.Errorf("FAIL: %s accepted", cell)
 			}
 		})
+	}
+}
+
+// The PDP refuses every caller unless AUTH_AUTHORIZE_CALLER_SUBJECTS names it, and the web workload gets its token through
+// the exchange against a job-local fake of the Kubernetes API (the product trusts its issuer by configuration).
+func TestLiveE2EAuthServiceEnvLetsTheWebWorkloadCallThePDP(t *testing.T) {
+	env := liveStackEnv(t, "auth-service")
+	cfg, err := authconfig.Load(authconfig.Spec{LookupEnv: func(k string) (string, bool) { v, ok := env[k]; return v, ok }})
+	if err != nil {
+		t.Fatalf("FAIL: auth-service refuses the live e2e environment: %v", err)
+	}
+	if len(cfg.AuthorizeCallerSubjects) != 1 || cfg.AuthorizeCallerSubjects[0] != webSubject {
+		t.Errorf("FAIL: authorize callers %v, want only the web workload %s", cfg.AuthorizeCallerSubjects, webSubject)
+	}
+	ex := cfg.WorkloadExchange
+	if !ex.Enabled || !ex.Bootstrap {
+		t.Errorf("FAIL: exchange enabled %v, bootstrap %v: go-api keeps the bootstrap subject, web needs the TokenReview one", ex.Enabled, ex.Bootstrap)
+	}
+	if !strings.HasPrefix(ex.KubeAPIURL, "https://127.0.0.1:") || ex.ClusterIssuer == "" || ex.TrustDomain == "" {
+		t.Errorf("FAIL: kube API %q, cluster issuer %q, trust domain %q", ex.KubeAPIURL, ex.ClusterIssuer, ex.TrustDomain)
+	}
+	if !strings.HasSuffix(ex.KubeCAFile, "/tls/ca.pem") || !strings.HasSuffix(ex.ReviewerTokenFile, "/workload/reviewer.token") {
+		t.Errorf("FAIL: CA file %q, reviewer token file %q", ex.KubeCAFile, ex.ReviewerTokenFile)
+	}
+}
+
+func TestLiveE2EAuthServiceEnvNeedsTheCallerSubjects(t *testing.T) {
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", "/state", "--", "env")
+	cmd.Env = append(sentinelEnv()[:5:5], "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=prn_subject-sentinel")
+	if err := cmd.Run(); err == nil {
+		t.Fatal("FAIL: auth-service env builds without AUTH_AUTHORIZE_CALLER_SUBJECTS: the PDP would refuse web")
+	}
+}
+
+func TestLiveE2EWebEnvHasTheWorkloadInputs(t *testing.T) {
+	env := liveStackEnv(t, "web")
+	if env["AUTH_INTERNAL_URL"] != "http://127.0.0.1:8095" || env["AUTH_WORKLOAD_SUBJECT_FILE"] != "/state/workload/web.subject" {
+		t.Errorf("FAIL: web workload inputs %q %q", env["AUTH_INTERNAL_URL"], env["AUTH_WORKLOAD_SUBJECT_FILE"])
+	}
+	if env["AUTH_WORKLOAD_ISSUER"] == "" || env["AUTH_WORKLOAD_ISSUER"] != env["AUTH_ACCESS_TOKEN_ISSUER"] {
+		t.Errorf("FAIL: web workload issuer %q, access token issuer %q", env["AUTH_WORKLOAD_ISSUER"], env["AUTH_ACCESS_TOKEN_ISSUER"])
 	}
 }

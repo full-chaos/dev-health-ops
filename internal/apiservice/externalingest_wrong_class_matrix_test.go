@@ -125,11 +125,7 @@ func newPushRig(t *testing.T, pool *pgxpool.Pool) *pushRig {
 	logs := &pushLogBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	store := matrixStore{probeStore: newProbeStore(), counts: counts}
-	hs, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(hs, store, logger)
+	auth, err := policy.NewAuthenticator(store, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

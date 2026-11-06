@@ -97,7 +97,7 @@ func routed(t *testing.T, store Store, validator RoutedValidator) *Authenticator
 }
 
 func TestRouteAccessRefusesAnIncompleteSetup(t *testing.T) {
-	auth := authenticator(t, newStore())
+	auth := unrouted(t, newStore())
 	if auth.RouteAccess(nil, "dev-health-ops-api") == nil || auth.RouteAccess(&fakeValidator{}, "") == nil || auth.Routed() {
 		t.Fatal("RouteAccess accepted a nil validator or an empty service")
 	}

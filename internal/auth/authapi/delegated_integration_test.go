@@ -84,7 +84,7 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if l.authenticator, err = policy.NewAuthenticator(verifier, policy.PGStore{Pool: p.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler)); err != nil {
+	if l.authenticator, err = policy.NewAuthenticator(policy.PGStore{Pool: p.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	return l

@@ -91,7 +91,7 @@ func NewPinRig(t *testing.T, ctx context.Context, admin *pgxpool.Pool, instance 
 		t.Fatal(err)
 	}
 	reader := policy.PGStore{Pool: login(roles["pin_reader"]), AuthSchema: "auth"}
-	auth, err := policy.NewAuthenticator(verifier, pinStore{PGStore: reader, users: admin},
+	auth, err := policy.NewAuthenticator(pinStore{PGStore: reader, users: admin},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

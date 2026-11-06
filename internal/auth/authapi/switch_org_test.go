@@ -918,7 +918,7 @@ func goAPISwitchHandler(t *testing.T, v *validateFixture) http.Handler {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(nil, goAPIValidateStore{v}, logger)
+	auth, err := policy.NewAuthenticator(goAPIValidateStore{v}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

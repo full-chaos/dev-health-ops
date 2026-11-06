@@ -102,7 +102,7 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), m.org, users[m.user],
 	}
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -456,7 +456,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), orgID, adm
 	}
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -125,7 +125,7 @@ VALUES (gen_random_uuid(), $1, NULL, $2, gen_random_uuid(), now() + interval '7 
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: runtime}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: runtime}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

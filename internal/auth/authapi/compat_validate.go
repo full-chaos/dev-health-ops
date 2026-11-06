@@ -127,7 +127,7 @@ func (validateStore) ReadsPlatformRoles() bool { return false }
 // verifier, so an unrouted call is refused. The route mounts only with the
 // EdDSA configuration (withValidateRoute).
 func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
-	auth, err := policy.NewAuthenticator(nil, validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
+	auth, err := policy.NewAuthenticator(validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
 	if err != nil {
 		return nil, err
 	}

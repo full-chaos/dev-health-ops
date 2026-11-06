@@ -678,8 +678,8 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 }
 
 // TestIssuerSetCallerLookupOutageIsTheListener503 is D6666: a store outage
-// behind the validator answers through the api listener exactly as with the
-// issuer unset: OrgScope runs first and answers the guard's 503.
+// behind the validator answers through the api listener with the guard's 503
+// (OrgScope runs first).
 func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
@@ -687,20 +687,14 @@ func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	store.sessions[downSID] = policy.SessionRow{PrincipalID: probeDown, LegacyTokenVersion: i64ptr(0)}
 	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
 	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
-	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})
-	if unset.Status != http.StatusServiceUnavailable || unset.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
-		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
-	}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)
 	if got := probeDo(f.handler, probeRequest{"legacy", http.MethodGet, probeAuthenticated, bearer(legacy)}); got.Status != http.StatusUnauthorized || got.Body != genericRefusal {
 		t.Errorf("legacy: issuer set answers %d %s, want the generic 401 (ops_access_token_hs256 is retired)", got.Status, got.Body)
 	}
 	for name, token := range map[string]string{"user": user} {
 		got := probeDo(f.handler, probeRequest{name, http.MethodGet, probeAuthenticated, bearer(token)})
-		a, _ := json.Marshal(probeAnswer{Status: got.Status, Headers: got.Headers, Body: got.Body})
-		b, _ := json.Marshal(probeAnswer{Status: unset.Status, Headers: unset.Headers, Body: unset.Body})
-		if !bytes.Equal(a, b) {
-			t.Errorf("%s: issuer set answers %s, issuer unset %s", name, a, b)
+		if got.Status != http.StatusServiceUnavailable || got.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
+			t.Errorf("%s: issuer set answers %d %s, want the listener 503", name, got.Status, got.Body)
 		}
 	}
 }

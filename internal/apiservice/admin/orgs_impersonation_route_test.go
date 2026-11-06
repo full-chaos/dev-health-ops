@@ -42,7 +42,7 @@ func serveOrgWrite(t *testing.T, active bool, method, path, body string) (status
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: active}, logger)
+	auth, err := policy.NewAuthenticator(impersonatingStore{active: active}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

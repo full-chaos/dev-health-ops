@@ -8,13 +8,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/externalingest"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/usertokens"
 )
 
@@ -53,28 +52,14 @@ func (s *orgScopeStore) ActiveImpersonation(context.Context, uuid.UUID) (*policy
 func TestExternalPushSchemaRoutesAreGlobalOnTheRealListenerChain(t *testing.T) {
 	tokens := usertokens.All(t)
 	pool, connects := usertokens.CountingPool(t)
-	verifier, err := edgetoken.New(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The middleware verifies go-api's own HS256 access token (no session claim): mint one the way go-api
-	// does, with a fresh organisation. The shared tokens (with a session claim, as auth-service issues them)
-	// are sent too; the middleware treats a token it does not accept as no credential.
-	signer, err := edgetoken.NewSigner(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The middleware verifies a routed user access token with a fresh organisation. The shared tokens are
+	// sent too; the middleware treats a token it does not accept as no credential.
+	ed := edtokens.New(t)
 	orgClaim := uuid.NewString()
-	access, err := signer.Access(edgetoken.AccessClaims{UserID: uuid.NewString(), Email: "ada@example.com", OrgID: orgClaim, Role: "member", TokenVersion: 1}, time.Now().UTC(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
 	claims := struct{ Org string }{Org: orgClaim}
 	store := &orgScopeStore{member: uuid.MustParse(claims.Org)}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := ed.AuthenticatorOver(t, store, quietLogger())
+	access := ed.MustMint(t, edtokens.Claims{UserID: uuid.New(), OrgID: orgClaim})
 	scope := policy.NewScope(auth, quietLogger())
 	routes := markResponseModels(externalingest.Routes(externalingest.Deps{Pool: pool, Logger: quietLogger()}))
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)

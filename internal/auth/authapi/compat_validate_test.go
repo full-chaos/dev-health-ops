@@ -212,7 +212,7 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 		f.t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, goAPIValidateStore{f}, logger)
+	auth, err := policy.NewAuthenticator(goAPIValidateStore{f}, logger)
 	if err != nil {
 		f.t.Fatal(err)
 	}

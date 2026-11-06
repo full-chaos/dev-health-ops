@@ -113,7 +113,7 @@ func TestASuperuserGrantCannotLandBetweenTheGuardAndTheWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestOppositeOwnershipTransfersBothFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -137,7 +137,7 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(edge, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	auth, err := policy.NewAuthenticator(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

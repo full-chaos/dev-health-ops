@@ -26,7 +26,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
@@ -64,6 +63,25 @@ func New(t testing.TB) *Issuer {
 	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
 }
 
+// Fresh is New for a package-level fixture (no test at hand); it panics when no key can be made.
+func Fresh() *Issuer {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
+}
+
+// MustMint is Mint that fails t.
+func (i *Issuer) MustMint(t testing.TB, c Claims) string {
+	t.Helper()
+	token, err := i.Mint(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
 // Claims are the inputs of one token. OrgID "" mints a token without an organization. TokenVersion is the
 // users.token_version the token's session begins at: the api refuses the token once the users row moves past it.
 type Claims struct {
@@ -73,6 +91,10 @@ type Claims struct {
 	TokenVersion int64
 	IssuedAt     time.Time
 	Lifetime     time.Duration
+	// Extra are more claims (for example a spoofed is_superuser); they never replace a standard claim.
+	Extra map[string]any
+	// Subject, when set, replaces the wire sub (a refusal cell's malformed subject).
+	Subject string
 }
 
 // PrincipalID is the wire form of a user id in a token's sub and act.sub.
@@ -102,8 +124,16 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 	if c.OrgID != "" {
 		claims["org_id"] = c.OrgID
 	}
+	if c.Subject != "" {
+		claims["sub"] = c.Subject
+	}
 	if c.Actor != nil {
 		claims["act"] = map[string]any{"sub": PrincipalID(*c.Actor)}
+	}
+	for key, value := range c.Extra {
+		if _, standard := claims[key]; !standard {
+			claims[key] = value
+		}
 	}
 	header, err := json.Marshal(map[string]any{"alg": "EdDSA", "typ": "at+jwt", "kid": KeyID})
 	if err != nil {
@@ -157,14 +187,19 @@ type Store struct {
 
 // SessionState is the live session row of a minted token; an unknown session is not found.
 func (s Store) SessionState(_ context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
-	s.issuer.mu.Lock()
-	defer s.issuer.mu.Unlock()
-	minted, ok := s.issuer.sessions[id]
+	row, ok := s.issuer.session(id)
+	return row, ok, nil
+}
+
+func (i *Issuer) session(id uuid.UUID) (policy.SessionRow, bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	minted, ok := i.sessions[id]
 	if !ok {
-		return policy.SessionRow{}, false, nil
+		return policy.SessionRow{}, false
 	}
 	version := minted.tokenVersion
-	return policy.SessionRow{PrincipalID: minted.principal, LegacyTokenVersion: &version}, true, nil
+	return policy.SessionRow{PrincipalID: minted.principal, LegacyTokenVersion: &version}, true
 }
 
 // Store wraps base so the session check sees this Issuer's sessions.
@@ -177,11 +212,23 @@ func (i *Issuer) Authenticator(t testing.TB, base policy.PGStore, logger *slog.L
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	unreachable, err := edgetoken.New(base64.RawURLEncoding.EncodeToString(i.priv.Seed()), "edtokens-unused", Audience)
-	if err != nil {
-		t.Fatal(err)
+	return i.route(t, i.Store(base), logger)
+}
+
+// AuthenticatorOver is Authenticator over any policy store (a unit test's in-memory double): the session
+// check answers this Issuer's sessions first, then base's own when it reads sessions; the users read is
+// base's own AccessUser when it has one, else its UserState.
+func (i *Issuer) AuthenticatorOver(t testing.TB, base policy.Store, logger *slog.Logger) *policy.Authenticator {
+	t.Helper()
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
 	}
-	auth, err := policy.NewAuthenticator(unreachable, i.Store(base), logger)
+	return i.route(t, overStore{Store: base, issuer: i}, logger)
+}
+
+func (i *Issuer) route(t testing.TB, store policy.Store, logger *slog.Logger) *policy.Authenticator {
+	t.Helper()
+	auth, err := policy.NewAuthenticator(store, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,4 +236,28 @@ func (i *Issuer) Authenticator(t testing.TB, base policy.PGStore, logger *slog.L
 		t.Fatal(err)
 	}
 	return auth
+}
+
+// overStore is base with this Issuer's sessions.
+type overStore struct {
+	policy.Store
+	issuer *Issuer
+}
+
+func (s overStore) SessionState(ctx context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
+	if row, ok := s.issuer.session(id); ok {
+		return row, true, nil
+	}
+	if own, ok := s.Store.(policy.SessionStore); ok {
+		return own.SessionState(ctx, id)
+	}
+	return policy.SessionRow{}, false, nil
+}
+
+func (s overStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.AccessUserRow, bool, error) {
+	if own, ok := s.Store.(policy.AccessUserStore); ok {
+		return own.AccessUser(ctx, id)
+	}
+	state, found, err := s.Store.UserState(ctx, id)
+	return policy.AccessUserRow{State: state}, found, err
 }

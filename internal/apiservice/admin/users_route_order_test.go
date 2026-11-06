@@ -49,7 +49,7 @@ func mountedUserRoutes(t *testing.T) (server *httptest.Server, bearer string, to
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, superuserPolicyStore{}, logger)
+	auth, err := policy.NewAuthenticator(superuserPolicyStore{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

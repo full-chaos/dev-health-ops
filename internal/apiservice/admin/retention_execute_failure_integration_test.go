@@ -109,7 +109,7 @@ VALUES ($1, $2, 'old-row', 'team', 'r', '{}'::json, '{}'::json, 'success', now()
 		t.Fatal(err)
 	}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, quiet)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, quiet)
 	if err != nil {
 		t.Fatal(err)
 	}

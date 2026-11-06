@@ -214,7 +214,7 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, err
 	}
 	logger := slog.New(slog.NewTextHandler(e.goLog, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: admin0}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: admin0}, logger)
 	if err != nil {
 		return nil, err
 	}

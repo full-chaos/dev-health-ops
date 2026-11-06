@@ -7,17 +7,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // plantedStore records every users-row read by id and every other read.
@@ -81,16 +78,12 @@ const plantedRoute = "/api/v1/planted"
 // valid superuser token with a live impersonation session). OrgScope and
 // Impersonation must decide with the caller Principal read, never the replaced value.
 func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	for _, mode := range []string{"legacy", "routed"} {
+	tokens := edtokens.New(t)
+	for _, mode := range []string{"routed"} {
 		t.Run(mode, func(t *testing.T) {
-			verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-			if err != nil {
-				t.Fatal(err)
-			}
 			caller, swapUser := uuid.New(), uuid.New()
 			store := &plantedStore{superuser: swapUser, target: uuid.New()}
-			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+			auth, err := policy.NewAuthenticator(store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -104,17 +97,8 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			scope.DeclaredRows(func(profile string) (policy.BearerRow, bool) {
 				return policy.BearerRow{AccessToken: true}, profile == http.MethodGet+" "+plantedRoute
 			})
-			sign := func(sub uuid.UUID, superuser bool) string {
-				token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-					"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-					"iss": "dev-health-ops", "aud": "dev-health-api", "exp": time.Now().Add(time.Hour).Unix(),
-				}).SignedString([]byte(key))
-				if err != nil {
-					t.Fatal(err)
-				}
-				return token
-			}
-			original, swapped := sign(caller, false), sign(swapUser, true)
+			// swapUser's users row says superuser and it holds a live impersonation session.
+			original, swapped := tokens.MustMint(t, edtokens.Claims{UserID: caller}), tokens.MustMint(t, edtokens.Claims{UserID: swapUser})
 			trapped := 0
 			trap := func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,11 +124,10 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if trapped != 1 {
 				t.Fatalf("trap ran %d times", trapped)
 			}
-			// legacy: the caller's token passes and the scope refuses its org (403).
-			// routed: the validator refuses the caller's token, the planted route
-			// (no guard) answers with no org, and the validator saw only the
-			// caller's bearer. Either way the scope decides with the caller
-			// Principal read, never the swapped header.
+			// The validator refuses the caller's token, the planted route (no
+			// guard) answers with no org, and the validator saw only the caller's
+			// bearer: the scope decides with the caller Principal read, never the
+			// swapped header.
 			wantCode, wantReads := http.StatusForbidden, []uuid.UUID{caller}
 			if mode == "routed" {
 				wantCode, wantReads = http.StatusOK, nil

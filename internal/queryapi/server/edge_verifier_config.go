@@ -7,7 +7,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -121,8 +120,7 @@ func warnUnusedEdgeSecret(getenv getenvFunc, logger *slog.Logger) {
 //
 // With AUTH_ACCESS_TOKEN_ISSUER set, the Authenticator routes every token by
 // the request's endpoint-profile row (routeAuthenticator), and the issuer
-// alone, with no edge secret, builds it: its validator then has no HS256
-// verifier.
+// alone, with no edge secret, builds it.
 func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (*policy.Authenticator, policy.Store, error) {
 	access, routed, err := accessFromEnv(getenv)
 	if err != nil {
@@ -134,11 +132,6 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 		}
 		return nil, nil, nil
 	}
-	secret, issuer, audience := unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
-	verifier, err := edgetoken.New(secret, issuer, audience)
-	if err != nil {
-		return nil, nil, fmt.Errorf("build query edge-access-token verifier: %w", err)
-	}
 	authSchema, err := policy.AuthSchemaFromEnv(getenv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
@@ -148,7 +141,7 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
 	store := newQueryAPIUserStore(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned})
-	auth, err := policy.NewAuthenticator(verifier, store, nil)
+	auth, err := policy.NewAuthenticator(store, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}

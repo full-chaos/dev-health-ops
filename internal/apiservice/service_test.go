@@ -13,17 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/buildstamp"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/egressallow"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
@@ -410,36 +409,25 @@ func (s scopeStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*po
 // security or CORS header (they are inner), while an impersonated request's
 // response carries the impersonation headers and the security headers.
 func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T) {
-	key := strings.Repeat("fixture-key-", 3)
-	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	store := scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.AuthenticatorOver(t, store, quietLogger())
 	scope := policy.NewScope(auth, quietLogger())
 	cfg := apiTestConfig()
 	cfg.CORSAllowedOrigins = []string{"https://app.example"}
-	server, err := NewServer(cfg, quietLogger(), nil, scope.Layers()...)
+	// One handler on a real org-scoped go-api row that takes a user access token (the access check judges
+	// a bearer only on a row); it answers 404 as an unrouted path did.
+	const scopedRoute = "/api/v1/billing/invoices"
+	routes := []httpapi.Route{{Method: http.MethodGet, Pattern: scopedRoute, Handler: http.NotFoundHandler()}}
+	server, err := NewServer(cfg, quietLogger(), routes, scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sign := func(sub uuid.UUID, superuser bool) string {
-		token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": sub.String(), "type": "access", "org_id": uuid.NewString(), "is_superuser": superuser,
-			"exp": time.Now().Add(time.Hour).Unix(),
-		}).SignedString([]byte(key))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return token
-	}
+	// No token org: the X-Org-Id header names the org. The admin's users row says superuser.
+	sign := func(sub uuid.UUID) string { return tokens.MustMint(t, edtokens.Claims{UserID: sub}) }
 
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(uuid.New(), false))
+	request := httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(uuid.New()))
 	request.Header.Set("X-Org-Id", uuid.NewString())
 	request.Header.Set("Origin", "https://app.example")
 	recorder := httptest.NewRecorder()
@@ -457,8 +445,8 @@ func TestServerRunsTheScopeMiddlewaresOutsideSecurityHeadersAndCORS(t *testing.T
 		t.Fatalf("the org scope 403 lacks the plane stamp the prover reads: %v", recorder.Header())
 	}
 
-	request = httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
-	request.Header.Set("Authorization", "Bearer "+sign(store.admin, true))
+	request = httptest.NewRequest(http.MethodGet, scopedRoute, nil)
+	request.Header.Set("Authorization", "Bearer "+sign(store.admin))
 	recorder = httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound || recorder.Header().Get("X-Impersonating") != "true" ||

@@ -250,19 +250,6 @@ func hs256Handler(t *testing.T, enf *Enforcer) http.Handler {
 	return mux
 }
 
-// A caller the decision point cannot judge keeps the legacy answer, counted with its own counter by route and reason.
-func TestALegacyHS256CallerKeepsTheLegacyAnswerAndIsCountedUnjudged(t *testing.T) {
-	rec := recordEnforce(t)
-	pdp := newTestPDP(t, denyWith("role_lacks_action"))
-	got := serve(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
-	if got.status != http.StatusOK {
-		t.Fatalf("legacy HS256 token on an enforced cell: %d %q, want the legacy 200", got.status, got.body)
-	}
-	if n := len(pdp.calls()); n != 0 || len(rec.snapshot()) != 0 || !slices.Equal(rec.unjudgedSnapshot(), []string{"GET /api/v1/admin/teams/hs256"}) {
-		t.Fatalf("%d PDP calls, decisions %v, unjudged %v, want 0, none and [GET /api/v1/admin/teams/hs256]", n, rec.snapshot(), rec.unjudgedSnapshot())
-	}
-}
-
 // impersonating serves next with a live go-api impersonation row for the caller: the admin's own bearer, acting in
 // targetOrgID. The decision point has no delegated session for that bearer to judge.
 func impersonating(next http.Handler) http.Handler {
@@ -649,10 +636,11 @@ func TestTheUnjudgedCounterHasNoDelegatedReason(t *testing.T) {
 	enforceRequest(impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("teams")))), http.MethodGet, "/api/v1/admin/teams")
 	enforceRequest(impersonating(enforceHandler(t, personaStore(personaSuperuser), userClaims(nil), newEnforcerFor(t, pdp.client(t), onFor("admin")))), http.MethodGet, "/api/v1/admin/orgs")
 	enforceRequest(delegatedBearerHandler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
-	serve(hs256Handler(t, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, newEnforcerFor(t, pdp.client(t), onFor("teams"))), http.MethodGet, "/api/v1/admin/teams")
 	description, reasons := collectSum(t, reader, enforceUnjudgedMetric, "reason")
-	if !slices.Equal(reasons, []string{"hs256"}) {
-		t.Errorf("unjudged reasons %v, want [hs256] (no delegated point)", reasons)
+	if !slices.Equal(reasons, []string{"no_org"}) {
+		t.Errorf("unjudged reasons %v, want [no_org] (no delegated point)", reasons)
 	}
 	if want := "by route row and reason: hs256, no_org"; !strings.HasSuffix(description, want) {
 		t.Errorf("unjudged description %q, want it to end %q", description, want)
@@ -726,13 +714,13 @@ func TestAnUnjudgedRequestLogsOneDebugLineThatQuotesNoToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" })
-	serve(hs256Handler(t, enf), http.MethodGet, "/api/v1/admin/teams", token)
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	enforceRequest(enforceHandler(t, personaStore(personaAdmin), noOrg, enf), http.MethodGet, "/api/v1/admin/teams")
 	line := logs.String()
-	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=hs256") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
-		t.Fatalf("log %q: want one DEBUG line with the route and reason hs256", line)
+	if strings.Count(line, "level=DEBUG") != 1 || !strings.Contains(line, "reason=no_org") || !strings.Contains(line, "route=\"GET /api/v1/admin/teams\"") {
+		t.Fatalf("log %q: want one DEBUG line with the route and reason no_org", line)
 	}
-	if strings.Contains(line, strings.TrimPrefix(token["Authorization"], "Bearer ")) {
+	if strings.Contains(line, shadowBearer) {
 		t.Fatalf("the log quotes the token: %q", line)
 	}
 }

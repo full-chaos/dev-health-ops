@@ -18,6 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 var (
@@ -34,12 +35,14 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 
 // fakeStore is Store in memory. A non-nil err* field makes that call fail.
 type fakeStore struct {
-	users          map[uuid.UUID]UserState
-	members        map[[2]uuid.UUID]bool
-	roles          map[[2]uuid.UUID]string
-	sessions       map[uuid.UUID]*Impersonation
-	errUser        error
-	errMember      error
+	users     map[uuid.UUID]UserState
+	members   map[[2]uuid.UUID]bool
+	roles     map[[2]uuid.UUID]string
+	sessions  map[uuid.UUID]*Impersonation
+	errUser   error
+	errMember error
+	// errMemberOf fails the Membership read of one (user, org) pair only.
+	errMemberOf    map[[2]uuid.UUID]error
 	errSession     error
 	userCalls      int
 	sessionCalls   int
@@ -67,6 +70,9 @@ func (f *fakeStore) Membership(_ context.Context, user, org uuid.UUID) (string, 
 		return "", false, f.errMember
 	}
 	key := [2]uuid.UUID{user, org}
+	if err := f.errMemberOf[key]; err != nil {
+		return "", false, err
+	}
 	return f.roles[key], f.members[key], nil
 }
 
@@ -126,14 +132,111 @@ func sign(t *testing.T, c jwt.MapClaims) string {
 	return token
 }
 
+// fixtureValidator is the routed validator of these unit tests: it reads a
+// sign() fixture as the verified access-token claims (sub, org_id, sid,
+// impersonating_user_id as act.sub). An absent sid names the session whose id
+// is the subject's own id (fakeStore.SessionState answers it).
+type fixtureValidator struct{ verifier *edgetoken.Verifier }
+
+func (v fixtureValidator) Validate(_ context.Context, _, _, bearer string) (*RoutedResult, error) {
+	claims, err := v.verifier.Verify(bearer)
+	if err != nil {
+		return nil, err
+	}
+	sub, _ := claims["sub"].(string)
+	id, ok := ParsePyUUID(sub)
+	if !ok {
+		return nil, errors.New("fixture: unusable sub")
+	}
+	out := &AccessTokenClaims{Subject: principalPrefix + wireID(id), SessionID: sessionid.Wire(id)}
+	if sid, present := claims["sid"]; present {
+		out.SessionID, _ = sid.(string)
+	}
+	if org, ok := claims["org_id"].(string); ok {
+		out.OrgID = &org
+	}
+	if by, ok := claims["impersonating_user_id"].(string); ok {
+		actor := by
+		if actorID, ok := ParsePyUUID(by); ok {
+			actor = principalPrefix + wireID(actorID)
+		}
+		out.Actor = &actor
+	}
+	return &RoutedResult{Claims: out}, nil
+}
+
+// checkToken is the live legacy-claims check (Verify, then CheckClaims, as
+// query-api's EdgeVerifier runs it) on a sign() fixture.
+func checkToken(t *testing.T, store Store, token string) (*User, error) {
+	t.Helper()
+	verifier, err := edgetoken.New(testKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := verifier.Verify(token)
+	if err != nil {
+		return nil, errRejected
+	}
+	return unrouted(t, store).CheckClaims(context.Background(), verified)
+}
+
+// unrouted is an Authenticator with no access check (no RouteAccess).
+func unrouted(t *testing.T, store Store) *Authenticator {
+	t.Helper()
+	auth, err := NewAuthenticator(store, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return auth
+}
+
+// fixtureStore is a test store with the access check's two reads: its own
+// when it has them, else the users row as AccessUser and, for the fixture
+// session (id = the user's id), a live session pinned at the user's
+// token_version.
+type fixtureStore struct{ Store }
+
+func (f fixtureStore) AccessUser(ctx context.Context, id uuid.UUID) (AccessUserRow, bool, error) {
+	if own, ok := f.Store.(AccessUserStore); ok {
+		return own.AccessUser(ctx, id)
+	}
+	state, found, err := f.UserState(ctx, id)
+	return AccessUserRow{State: state}, found, err
+}
+
+func (f fixtureStore) SessionState(ctx context.Context, id uuid.UUID) (SessionRow, bool, error) {
+	if own, ok := f.Store.(SessionStore); ok {
+		return own.SessionState(ctx, id)
+	}
+	users, ok := f.Store.(interface {
+		fixtureUsers() map[uuid.UUID]UserState
+	})
+	if !ok {
+		return SessionRow{}, false, nil
+	}
+	state, found := users.fixtureUsers()[id]
+	if !found {
+		return SessionRow{}, false, nil
+	}
+	version := state.TokenVersion
+	return SessionRow{PrincipalID: id, LegacyTokenVersion: &version}, true, nil
+}
+
+// fixtureUsers is the users the fixture sessions are of (read without
+// counting a users read).
+func (f *fakeStore) fixtureUsers() map[uuid.UUID]UserState { return f.users }
+
 func authenticator(t *testing.T, store Store) *Authenticator {
 	t.Helper()
 	verifier, err := edgetoken.New(testKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := NewAuthenticator(verifier, store, quiet())
+	auth, err := NewAuthenticator(fixtureStore{Store: store}, quiet())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(fixtureValidator{verifier: verifier}, "dev-health-ops-api"); err != nil {
 		t.Fatal(err)
 	}
 	return auth
@@ -218,7 +321,7 @@ func TestAuthenticateDecisionTable(t *testing.T) {
 			} else {
 				token = sign(t, claims(nil)) + test.token
 			}
-			user, err := authenticator(t, store).Authenticate(context.Background(), token)
+			user, err := checkToken(t, store, token)
 			got := "ok"
 			switch {
 			case err == nil:
@@ -453,7 +556,7 @@ func TestOrgScopeDecisionTable(t *testing.T) {
 		{name: "header member org padded", org: " " + memberOrg + "\t", auth: "valid", status: 200, body: "org=" + memberOrg + " "},
 		{name: "header blank is no header", org: "   ", auth: "valid", status: 200, body: "org=" + ownOrg + " "},
 		{name: "header stranger org", org: strangerOrg, auth: "valid", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
-		{name: "header not a uuid", org: "nope", auth: "valid", status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
+		{name: "header not a uuid", org: "nope", auth: "valid", claims: func(c jwt.MapClaims) { delete(c, "org_id") }, status: 403, body: `{"detail": "X-Org-Id not permitted for this user"}`},
 		{name: "header stranger org superuser", org: strangerOrg, auth: "valid", store: superStore, status: 200, body: "org=" + strangerOrg + " "},
 		{name: "membership lookup fails", org: strangerOrg, auth: "valid", store: func(s *fakeStore) { s.errMember = errors.New("x") }, status: 500, body: `{"detail":"Internal Server Error"}`},
 		{name: "user lookup unavailable", auth: "valid", store: func(s *fakeStore) { s.errUser = errors.Join(ErrUnavailable, errors.New("x")) }, status: 503, body: `{"detail":{"message":"Database temporarily unavailable"}}`},
@@ -515,7 +618,6 @@ func TestImpersonationDecisionTable(t *testing.T) {
 		sessionLookups int
 	}{
 		{name: "no header", status: 200},
-		{name: "claim not superuser skips the session lookup", auth: "valid", store: superRow, status: 200, userLookups: 1},
 		{name: "claim superuser, row not", auth: "valid", claims: superClaim, store: func(s *fakeStore) { s.sessions[userID] = active }, status: 200, userLookups: 1},
 		{name: "superuser without session", auth: "valid", claims: superClaim, store: superRow, status: 200, userLookups: 1, sessionLookups: 1},
 		{name: "superuser with session", auth: "valid", claims: superClaim, store: func(s *fakeStore) { superRow(s); s.sessions[userID] = active }, status: 200, impersonated: true, userLookups: 1, sessionLookups: 1},

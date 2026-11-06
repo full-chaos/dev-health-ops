@@ -143,7 +143,7 @@ func TestPolicyStoreReadsTheSessionAsAReaderRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, oneUser{PGStore: reader, user: principal}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	auth, err := policy.NewAuthenticator(oneUser{PGStore: reader, user: principal}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ func callOrgWrite(t *testing.T, anonymous, session bool, tc orgWriteCase, body s
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: session}, logger)
+	auth, err := policy.NewAuthenticator(impersonatingStore{active: session}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -203,7 +203,7 @@ func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Conf
 	if routePool != nil {
 		routesPool = routePool(t, ctx, pool, pg.URI)
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: routesPool}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: routesPool}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

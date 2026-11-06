@@ -42,7 +42,7 @@ func logoutRoute(t *testing.T) (http.Handler, *bytes.Buffer) {
 	deps := completeDeps(t)
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(deps.Verifier, activeUsers{}, logger)
+	auth, err := policy.NewAuthenticator(activeUsers{}, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

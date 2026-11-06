@@ -91,7 +91,7 @@ func ecEdgeAuth(t *testing.T, store policy.Store) *policy.Authenticator {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, store, nil)
+	auth, err := policy.NewAuthenticator(store, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

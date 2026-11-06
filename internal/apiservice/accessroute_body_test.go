@@ -30,7 +30,7 @@ func TestIssuerSetBodyFirstRoutesKeepTheRouteProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
+	auth, err := policy.NewAuthenticator(newProbeStore(), quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

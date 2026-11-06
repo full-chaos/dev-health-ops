@@ -87,8 +87,8 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 	}{
 		"P1 tenant_scope absent":             {func(r *pepfake.Rule) { r.TenantScope = "" }, ReasonTenantMismatch},
 		"P2 tenant_scope other org":          {func(r *pepfake.Rule) { r.TenantScope = "66666666-6666-6666-6666-666666666666" }, ReasonTenantMismatch},
-		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonNotCarriedOut},
-		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonNotCarriedOut},
+		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonAllowlistRouteUnsupported},
+		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonAllowlistRouteUnsupported},
 		"P6 scope and allowlist (malformed)": {func(r *pepfake.Rule) { r.RepositoryAllowlist = []string{"acme/a"} }, pep.ReasonMalformed},
 		"P8 redaction":                       {func(r *pepfake.Rule) { r.Redaction = []pep.RedactionClass{pep.RedactFreeText} }, ReasonNotCarriedOut},
 		"P8 minimum_assurance":               {func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, ReasonNotCarriedOut},

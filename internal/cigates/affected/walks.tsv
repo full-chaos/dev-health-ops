@@ -337,6 +337,8 @@ internal/jobs/workgraph	error_attr_census_test.go	internal/jobs/workgraph	tree	*
 internal/jobs/workgraph/units	pr_link_protection_test.go	internal	tree	*.go
 internal/jobs/workgraph/writercontract	writercontract_test.go	internal	tree	*
 internal/llmorgsettings	baseurl_reader_guard_test.go	unexpressed	-	*.go
+internal/llmorgsettings	keyreaders_census_test.go	cmd	tree	*.go
+internal/llmorgsettings	keyreaders_census_test.go	internal	tree	*.go
 internal/loadharness	pdp_profiles_test.go	internal/loadharness/testdata/pdp	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata	dir	*
 internal/loadharness	profiles_test.go	internal/loadharness/testdata/abuse	dir	*
@@ -439,6 +441,7 @@ internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	-
+internal/queryapi/server	rest_allowlist_census_test.go	unexpressed	-	-
 internal/queryapi/server	rest_error_response_test.go	unexpressed	-	-
 internal/queryapi/server	rest_routes_test.go	unexpressed	-	-
 internal/queryapi/server	result_row_bound_census_test.go	unexpressed	-	-

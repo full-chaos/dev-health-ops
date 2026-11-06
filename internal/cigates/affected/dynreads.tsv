@@ -442,6 +442,7 @@ internal/jobs/report	report_test.go
 internal/jobs/report	runtime_integration_test.go
 internal/jobs/workgraph/operationaledges	incidents_golden_integration_test.go
 internal/llmorgsettings	baseurl_reader_guard_test.go
+internal/llmorgsettings	keyreaders_census_test.go
 internal/llmorgsettings	relation_test.go
 internal/loadharness	pdp_profiles_test.go
 internal/loadharness	profiles_test.go
@@ -531,6 +532,7 @@ internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
+internal/queryapi/pepgate	legacy_site_census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -585,6 +587,7 @@ internal/queryapi/server	rate_coverage_documents_integration_test.go
 internal/queryapi/server	registered_document_field_gate_test.go
 internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
+internal/queryapi/server	rest_allowlist_census_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	rest_scope_census_test.go

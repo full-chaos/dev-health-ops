@@ -46,7 +46,7 @@ VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, id, "llmmodels-route
 VALUES ($1, $2, true, true, false, 0, now(), now())`, adminUserID, "llmmodels-route-admin@example.com")
 			for key, value := range map[string]string{"provider": "openai", "model": "gpt-5-mini", "api_key": "sk-models-route", "base_url": "https://example.invalid/v1"} {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
-VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), orgID.String(), key, value)
+VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00:00+00')`, uuid.New(), orgID.String(), key, value)
 			}
 			tokens := map[string]map[string]any{}
 			for slug, org := range map[string]uuid.UUID{"set": orgID, "bare": bareOrgID} {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // loadValidationErrorGolden decodes a testdata JSON file captured from the
@@ -66,7 +67,7 @@ func TestGetValidationErrorsMatchPython(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := newDrilldownPRsGetHandler(newEmptyRowsDrilldownReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs?"+tc.query, nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 
@@ -105,7 +106,7 @@ func TestPostValidationErrorsMatchPython(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader(tc.body))
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 
@@ -134,7 +135,7 @@ func TestNestedMetricFilterFieldsMatchPython(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	body := `{"filters":{"scope":{"level":"not_a_real_level"},"time":{"range_days":"not-a-number"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
@@ -174,7 +175,7 @@ func TestNestedMetricFilterFieldsMatchPython(t *testing.T) {
 func TestMalformedJSONSyntaxMatchesPython(t *testing.T) {
 	handler := newDrilldownPRsPostHandler(newEmptyRowsDrilldownReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/prs", bytes.NewReader([]byte(`not json`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 

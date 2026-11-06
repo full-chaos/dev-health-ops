@@ -570,7 +570,7 @@ func (h handlers) processSAMLResponse(ctx context.Context, w http.ResponseWriter
 		if relayState == "" {
 			return samlClaims{}, ssoAuthErr("Missing SAML RelayState")
 		}
-		state, err := verifySAMLStateKeys(h.stateKeys(), relayState, row.ID, now)
+		state, err := verifySAMLState(h.StateSecret, relayState, row.ID, now)
 		if err != nil {
 			if errors.Is(err, errSAMLStateExpired) {
 				return samlClaims{}, ssoAuthErr("SAML RelayState expired")

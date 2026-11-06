@@ -109,9 +109,12 @@ with_env() {
   [ "${1:-}" = "--" ] || die "with-env needs -- before the command"
   shift
   [ "$#" -gt 0 ] || die "with-env needs a command"
+  # Built first: a process substitution would hide a refused side (a required variable unset) and run CMD half-configured.
+  local lines
+  lines="$(raw_env "${side}" "${state}")"
   while IFS= read -r line; do
     export "${line%%=*}=${line#*=}"
-  done < <(raw_env "${side}" "${state}")
+  done <<<"${lines}"
   exec "$@"
 }
 

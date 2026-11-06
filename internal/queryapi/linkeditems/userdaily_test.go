@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
@@ -91,5 +92,26 @@ func TestUserDailyWithNoRepositoryReadsNothing(t *testing.T) {
 	rows, err := daily.Rows(context.Background())
 	if err != nil || len(rows) != 0 || client.calls != 0 {
 		t.Fatalf("rows %v err %v statements %d, want none", rows, err, client.calls)
+	}
+}
+
+type boundClient struct{ err error }
+
+func (c boundClient) Query(context.Context, string, []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	return nil, c.err
+}
+
+// C13: a store bound (rows 396, time 159) is the typed ErrRecomputeBound with no rows; any other error is not.
+func TestUserDailyStoreBoundIsTheTypedError(t *testing.T) {
+	for name, err := range map[string]error{"rows": &chdriver.Exception{Code: 396}, "time": &chdriver.Exception{Code: 159}} {
+		daily := NewUserDaily(Loader{Client: boundClient{err}, OrgID: "org", RepoIDs: []string{"r1"}, WindowStart: day(1), WindowEnd: day(6), Budget: UserBudget})
+		rows, got := daily.Rows(context.Background())
+		if !errors.Is(got, ErrRecomputeBound) || rows != nil {
+			t.Fatalf("%s: rows %v err %v, want ErrRecomputeBound and no rows", name, rows, got)
+		}
+	}
+	other := NewUserDaily(Loader{Client: boundClient{errors.New("store down")}, OrgID: "org", RepoIDs: []string{"r1"}, WindowStart: day(1), WindowEnd: day(6), Budget: UserBudget})
+	if _, got := other.Rows(context.Background()); got == nil || errors.Is(got, ErrRecomputeBound) {
+		t.Fatalf("err %v, want a plain error that is not the bound", got)
 	}
 }

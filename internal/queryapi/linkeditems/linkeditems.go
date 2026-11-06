@@ -7,6 +7,7 @@ package linkeditems
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 )
 
 // RowQuerier is the read boundary of the loader.
@@ -216,6 +218,10 @@ func computeByDay[Row any](from, to time.Time, versions []Version, attributions 
 // the Home repository view. A bound hit is an error of the read, never an answer over more items.
 const UserBudget = "\nSETTINGS max_execution_time = 30, max_result_rows = 200000"
 
+// ErrRecomputeBound is a read of the recompute that hit its bound (rows or time). The caller answers a typed error
+// with the stated reason, never an empty answer and never the organization-wide rows.
+var ErrRecomputeBound = errors.New("ceiling recompute bound exceeded")
+
 // UserDaily is the per-person daily rows of the items linked to a loader's repositories, read once for the window of
 // the loader and shared by every statement of one request (CHAOS-13087).
 type UserDaily struct {
@@ -239,6 +245,9 @@ func (u *UserDaily) Rows(ctx context.Context) (map[time.Time][]workitemmetrics.U
 		versions, attributions, err := u.loader.Read(ctx)
 		if err != nil {
 			u.err = err
+			if bound, _ := chclient.BoundHit(err); bound != chclient.BoundNone && ctx.Err() == nil {
+				u.err = fmt.Errorf("%w: %w", ErrRecomputeBound, err)
+			}
 			return
 		}
 		u.rows = UserRowsByDay(u.loader.WindowStart, u.loader.WindowEnd, versions, attributions)

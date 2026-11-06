@@ -89,6 +89,7 @@ func grantCases() []routeCase {
 
 // The grant routes are served with the embedded document: its rows are there, so each answers and none is a 404.
 func TestGrantRoutesAreServedWithTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	f := newGrantFixture(t)
 	for _, c := range grantCases() {
 		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {
@@ -102,6 +103,7 @@ func TestGrantRoutesAreServedWithTheEmbeddedDocument(t *testing.T) {
 
 // The grant routes are on the startup gate: a document without a row builds no route at all and names the route.
 func TestGrantRoutesAreOnTheStartupGate(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureFor(t, nil, nil)
 	for _, c := range grantCases() {
 		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
@@ -122,6 +124,7 @@ func TestGrantRoutesAreOnTheStartupGate(t *testing.T) {
 
 // Each route reads a strict body and answers the store's result; the verbs get the request's members.
 func TestGrantRoutesPassTheRequestAndAnswerTheGrant(t *testing.T) {
+	t.Parallel()
 	f := newGrantFixture(t)
 	expires := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC)
 	post := func(c routeCase, mutate func(map[string]any)) map[string]any {
@@ -167,6 +170,7 @@ func TestGrantRoutesPassTheRequestAndAnswerTheGrant(t *testing.T) {
 
 // A body that is not exactly the route's members is a 400 and reaches no store.
 func TestGrantRoutesRefuseMalformedBodies(t *testing.T) {
+	t.Parallel()
 	f := newGrantFixture(t)
 	for _, c := range grantCases() {
 		mutations := map[string]func(map[string]any){
@@ -195,6 +199,7 @@ func TestGrantRoutesRefuseMalformedBodies(t *testing.T) {
 
 // Every store error has its literal answer, and no answer carries the key.
 func TestGrantRoutesMapEveryStoreRefusal(t *testing.T) {
+	t.Parallel()
 	f := newGrantFixture(t)
 	for _, c := range []struct {
 		err    error
@@ -223,6 +228,7 @@ func TestGrantRoutesMapEveryStoreRefusal(t *testing.T) {
 // actor that stops being an admin between the two is refused by the verb's own Authorize with the rule's reason, and a
 // grant that is not in the organization answers 403 to an actor who is no admin of it and 404 only once the rule passes.
 func TestGrantRoutesRunTheActorRuleBeforeAndInsideTheVerb(t *testing.T) {
+	t.Parallel()
 	f := newGrantFixture(t)
 	for _, c := range grantCases() {
 		expectRefusal(t, f.post(c.path, encode(c.body(f, f.viewer)), nil), http.StatusForbidden, "admin_required")
@@ -252,6 +258,7 @@ func TestGrantRoutesRunTheActorRuleBeforeAndInsideTheVerb(t *testing.T) {
 // The go-api workload token is taken by the three grant routes, as by the service account routes, and the operations are on the
 // workload list.
 func TestGrantRoutesTakeTheWorkloadToken(t *testing.T) {
+	t.Parallel()
 	for _, op := range grantOps {
 		if !workloadOperations[op] {
 			t.Fatalf("%s is not on the workload list", op)

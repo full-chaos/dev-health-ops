@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,10 +17,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -112,9 +111,9 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { containers.DropRole(admin, role, t.Logf) })
-	// A test that turns AUTH_USERS_OWNED or AUTH_ORGS_OWNED on gets the switch-gated grants with it.
-	usersOwned, orgsOwned := extra[authconfig.EnvUsersOwned] == "true", extra[authconfig.EnvOrgsOwned] == "true"
-	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: usersOwned, OrgsOwned: orgsOwned}); err != nil {
+	// A test that turns AUTH_USERS_OWNED on gets the switch-gated grants with it.
+	usersOwned := extra[authconfig.EnvUsersOwned] == "true"
+	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role, UsersOwned: usersOwned}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 	for _, grant := range publicReadGrants() {
@@ -179,6 +178,16 @@ func newRoutesEnvDialing(t *testing.T, ctx context.Context, extra map[string]str
 			_ = component.Shutdown(context.Background())
 		}
 	})
+	// The harness serves the API handler without lifecycle.Run, so it starts the
+	// JWKS document itself: in production Run starts it, with its first read,
+	// before the API listener.
+	for _, component := range components {
+		if document, ok := component.(*authapi.JWKSDocument); ok {
+			if err := document.Start(ctx); err != nil {
+				t.Fatalf("start %s: %v", document.Name(), err)
+			}
+		}
+	}
 	var apiHandler http.Handler
 	for _, component := range components {
 		if announced, ok := component.(announcedListener); ok {
@@ -493,13 +502,11 @@ func TestSessionRoutesThroughConfigure(t *testing.T) {
 	t.Logf("%s refresh=200 grace=same reuse=401 revoke=204 revoke_all=204 stale=401 deactivated=401 edge_verifier=accepts", sessionRoutesMarker)
 }
 
-// TestASessionCannotNameAnOrganizationAuthHasNotProjected pins why the login
-// seams project the organization before they create a session:
-// auth.sessions.organization_id references auth.organizations, so an
-// organization only go-api's public.organizations holds is refused by the
-// foreign key until identity.ProjectOrganization has run (CHAOS-10228
-// finding and ruling).
-func TestASessionCannotNameAnOrganizationAuthHasNotProjected(t *testing.T) {
+// TestASessionNamingAnOrganizationOnlyPublicHoldsProjectsTheCopy pins that the
+// issue itself projects the organization copy: auth.sessions.organization_id
+// references auth.organizations, so the session transaction inserts the copy
+// from public.organizations before the session row (D6651, CHAOS-12680).
+func TestASessionNamingAnOrganizationOnlyPublicHoldsProjectsTheCopy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	e := newRoutesEnv(t, ctx)
@@ -509,10 +516,16 @@ func TestASessionCannotNameAnOrganizationAuthHasNotProjected(t *testing.T) {
 VALUES ($1, $2, 'Go API Only', 'community', true, '{}', 'self', now(), now())`, org, "goapi-"+org.String()[:8]); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.sessions.Create(ctx, user, &org, []string{"pwd"})
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != "23503" || pgErr.ConstraintName != "sessions_organization_id_fkey" {
-		t.Fatalf("Create with an unprojected organization = %v, want the sessions_organization_id_fkey violation", err)
+	issued, err := e.sessions.Create(ctx, user, &org, []string{"pwd"})
+	if err != nil {
+		t.Fatalf("Create with an unprojected organization = %v, want a session", err)
+	}
+	if issued.Session.OrganizationID == nil || *issued.Session.OrganizationID != org {
+		t.Fatalf("session organization = %v, want %s", issued.Session.OrganizationID, org)
+	}
+	var n int
+	if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.organizations WHERE id = $1`, org).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("auth.organizations copies = %d, %v; want 1", n, err)
 	}
 }
 

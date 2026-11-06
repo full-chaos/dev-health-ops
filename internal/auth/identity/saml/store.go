@@ -135,6 +135,9 @@ type NewAccount struct {
 	FullName string
 	// LegacySubject is the NameID value, go-api's public.users auth_provider_id.
 	LegacySubject string
+	// NameIDFormat and SPNameQualifier are the assertion NameID's own attributes, as asserted; go-api stores
+	// them in public.users (saml_nameid_format, saml_sp_name_qualifier).
+	NameIDFormat, SPNameQualifier string
 	// LegacyFullName is the public.users full_name: nil is NULL.
 	LegacyFullName *string
 }

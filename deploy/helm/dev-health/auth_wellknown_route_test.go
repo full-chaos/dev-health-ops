@@ -182,6 +182,13 @@ func TestWellKnownRouteRefusals(t *testing.T) {
 		{"root path", 2, []string{wkHostValue(wkPath("/", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
 		{"a third path", 2, []string{wkHostValue(append([]string{wkPath("/healthz", "Exact")}, wkBothPaths...)...)}, issuer, "only the two well-known documents as Exact paths"},
 		{"look-alike path", 2, []string{wkHostValue(wkPath(wkJWKS+"x", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
+		// The OAuth authorization server's paths stay off the public ingress: they reach auth-service only through go-api.
+		{"OAuth authorize path", 2, []string{wkHostValue(wkPath("/oauth/authorize", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
+		{"OAuth paths by prefix", 2, []string{wkHostValue(wkPath("/oauth", "Prefix"))}, issuer, "only the two well-known documents as Exact paths"},
+		{"OAuth metadata path", 2, []string{wkHostValue(wkPath("/.well-known/oauth-authorization-server/oauth", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
+		{"OAuth metadata by prefix", 2, []string{wkHostValue(wkPath("/.well-known/oauth-authorization-server", "Prefix"))}, issuer, "only the two well-known documents as Exact paths"},
+		{"OAuth issuer-path JWKS", 2, []string{wkHostValue(wkPath("/oauth/.well-known/jwks.json", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
+		{"OAuth issuer-path discovery", 2, []string{wkHostValue(wkPath("/oauth/.well-known/openid-configuration", "Exact"))}, issuer, "only the two well-known documents as Exact paths"},
 		{"duplicate path", 2, []string{wkHostValue(wkPath(wkJWKS, "Exact"), wkPath(wkJWKS, "Exact"))}, issuer, "path to auth-service twice"},
 		{"host also routes web", 2, []string{`{"host":"` + wkHost + `","paths":[` + wkPath(wkJWKS, "Exact") + `,{"path":"/","pathType":"Prefix","service":"web"}]}`}, issuer, "only the two well-known documents"},
 		{"host with allow-list", 2, []string{`{"host":"` + wkHost + `","pythonAllowList":true,"paths":[` + wkPath(wkJWKS, "Exact") + `]}`}, issuer, "must not carry a pythonAllowList"},

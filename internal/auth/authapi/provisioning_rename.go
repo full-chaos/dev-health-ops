@@ -13,9 +13,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 )
 
-// PatternOrgRename is the organization rename route. It mounts only on an
-// endpoint-profile row that accepts every class it admits (the embedded document
-// holds one); it is not on the startup gate.
+// PatternOrgRename is the organization rename route. Its endpoint-profile row is on the
+// startup gate: a document without it, or with a class beside the ones the route admits,
+// refuses the service start.
 const PatternOrgRename = "/internal/v1/organizations/rename"
 
 const opOrgRename = "organization_rename"
@@ -26,11 +26,7 @@ type renameAnswer struct {
 	Renamed        bool   `json:"renamed"`
 }
 
-func (h provisioningHandlers) withOrgRenameRoute(routes []httpapi.Route, rows []byte) []httpapi.Route {
-	if rowsAcceptFor(rows, []string{PatternOrgRename}, admittedClasses(PatternOrgRename)) != nil {
-		h.Logger.Info("auth provisioning route not mounted: no endpoint-profile row", "route", PatternOrgRename)
-		return routes
-	}
+func (h provisioningHandlers) withOrgRenameRoute(routes []httpapi.Route) []httpapi.Route {
 	return append(routes, httpapi.Route{Method: http.MethodPost, Pattern: PatternOrgRename, Handler: http.HandlerFunc(h.orgRename)})
 }
 

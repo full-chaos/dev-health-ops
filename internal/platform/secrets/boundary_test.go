@@ -165,3 +165,17 @@ func TestBoundary_UnrelatedErrorTextIsUnchanged(t *testing.T) {
 		t.Fatalf("Redact of unrelated text changed it: %v", got)
 	}
 }
+
+func TestUnparsableBoundaryFailsClosedInRedactOnly(t *testing.T) {
+	dsn := "postgres://login_q7x:" + marker + "@[::1"
+	b := NewUnparsableBoundary(dsn)
+	if got := b.Redact(errors.New("cannot parse " + dsn + " login_q7x")); got == nil || got.Error() != UnparsableMarker {
+		t.Errorf("Redact = %v, want %q", got, UnparsableMarker)
+	}
+	if b.Redact(nil) != nil {
+		t.Error("Redact(nil) is not nil")
+	}
+	if got := b.RedactText("log " + dsn); strings.Contains(got, marker) || !strings.Contains(got, "log") {
+		t.Errorf("RedactText = %q, want the DSN removed and the rest kept", got)
+	}
+}

@@ -2,11 +2,15 @@ package authschema
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/repokey"
 )
 
 func grantShapeMigration(t *testing.T) string {
@@ -62,16 +66,70 @@ func schemaPattern(t *testing.T, file string, path ...string) string {
 	return pattern
 }
 
-// The database refuses a repository grant key that the authorization request
-// would not accept: the CHECK pattern is the authorization_request.v1 pattern.
-func TestRepositoryGrantKeyCheckIsTheContractPattern(t *testing.T) {
-	want := schemaPattern(t, "authorization_request.v1.schema.json", "then", "properties", "resource", "properties", "key", "pattern")
-	match := regexp.MustCompile(`(?s)resource_grants_repository_key_canonical\s+CHECK\s*\(\s*resource_kind <> 'repository' OR resource_id ~ '([^']*)'\s*\)`).FindStringSubmatch(grantShapeMigration(t))
-	if match == nil {
-		t.Fatal("resource_grants_repository_key_canonical is not the expected CHECK shape")
+// repositoryKeyCheck is the newest definition of the repository key CHECK: the
+// pattern and the byte bound it holds.
+func repositoryKeyCheck(t *testing.T) (pattern string, maxBytes string) {
+	t.Helper()
+	migrations, err := Migrations()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if match[1] != want {
-		t.Fatalf("grant key CHECK pattern = %q, authorization_request.v1 repository key pattern = %q", match[1], want)
+	form := regexp.MustCompile(`(?s)ADD CONSTRAINT resource_grants_repository_key_canonical\s+CHECK \(resource_kind <> 'repository' OR \(resource_id ~ '([^']*)' AND octet_length\(resource_id\) <= (\d+)\)\) NOT VALID`)
+	named := regexp.MustCompile(`ADD CONSTRAINT resource_grants_repository_key_canonical`)
+	var last *Migration
+	for i := range migrations {
+		if named.MatchString(migrations[i].SQL) {
+			last = &migrations[i]
+		}
+	}
+	if last == nil {
+		t.Fatal("no migration adds resource_grants_repository_key_canonical")
+	}
+	match := form.FindStringSubmatch(last.SQL)
+	if match == nil {
+		t.Fatalf("migration %04d_%s does not add resource_grants_repository_key_canonical in the pattern + octet_length form", last.Version, last.Name)
+	}
+	return match[1], match[2]
+}
+
+// The table CHECK is the one repository key rule: the repokey pattern, the
+// authorization_request.v1 key pattern, and the 255-byte bound.
+func TestRepositoryGrantKeyCheckIsTheContractPattern(t *testing.T) {
+	pattern, maxBytes := repositoryKeyCheck(t)
+	if pattern != repokey.SchemaPattern {
+		t.Fatalf("grant key CHECK pattern = %q, repokey.SchemaPattern = %q", pattern, repokey.SchemaPattern)
+	}
+	if want := fmt.Sprint(repokey.MaxBytes); maxBytes != want {
+		t.Fatalf("grant key CHECK byte bound = %s, repokey.MaxBytes = %s", maxBytes, want)
+	}
+	if request := schemaPattern(t, "authorization_request.v1.schema.json", "then", "properties", "resource", "properties", "key", "pattern"); pattern != request {
+		t.Fatalf("grant key CHECK pattern = %q, authorization_request.v1 key pattern = %q", pattern, request)
+	}
+}
+
+// The CHECK pattern, run as written, accepts what the key rule accepts and
+// refuses what it refuses.
+func TestRepositoryGrantKeyCheckRefusesAndAccepts(t *testing.T) {
+	pattern, maxBytes := repositoryKeyCheck(t)
+	re := regexp.MustCompile(pattern)
+	limit, _ := strconv.Atoi(maxBytes)
+	seg := func(n int) string { return strings.Repeat("a", n) }
+	deep := func(n int) string { return strings.TrimSuffix(strings.Repeat("a/", n), "/") }
+	accept := []string{"*", "acme/widgets", "a/b", "acme/api.v2", "grp/sub/web", "a/b/c/d/e", "acme/.github", deep(20), seg(100) + "/" + seg(100)}
+	refuse := []string{"Acme/widgets", "a", "a/", "/a", "a//b", "a/b/", "a./b", "a/b-/c", "a_/b/c", "a/b/c.", "a/b/c-", "a/b/c_", "a/.b/c", "a/b/..", "a/b/.", "a b/c", "**", "a/b*", deep(21)}
+	for _, key := range accept {
+		if !re.MatchString(key) || len(key) > limit {
+			t.Errorf("CHECK refuses %q", key)
+		}
+	}
+	for _, key := range refuse {
+		if re.MatchString(key) && len(key) <= limit {
+			t.Errorf("CHECK accepts %q", key)
+		}
+	}
+	long := seg(100) + "/" + seg(100) + "/" + seg(60)
+	if !re.MatchString(long) || len(long) <= limit {
+		t.Errorf("a %d-byte key must match the pattern and exceed the %d-byte bound", len(long), limit)
 	}
 }
 

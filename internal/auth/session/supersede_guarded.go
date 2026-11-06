@@ -18,7 +18,7 @@ import (
 // supersedeRefusals are the refusals of a guarded supersede: nothing is
 // written for any of them.
 var supersedeRefusals = []error{ErrPredecessorNotLive, ErrPredecessorOtherPrincipal, ErrPredecessorDelegated,
-	ErrPrincipalUnavailable, ErrGuardRefused}
+	ErrPrincipalUnavailable, ErrOrganizationUnavailable, ErrGuardRefused}
 
 // CreateSupersedingGuarded is the organization switch auth-service serves
 // itself (POST /api/v1/auth/switch-org): CreateSupersedingAudited with guard

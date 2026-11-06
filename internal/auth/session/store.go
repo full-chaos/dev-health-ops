@@ -38,6 +38,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionevent"
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionrule"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
@@ -47,9 +48,11 @@ import (
 // rotationGraceWindow).
 const GraceWindow = 30 * time.Second
 
-// defaultRefreshTTL is go-api's rolling refresh lifetime, which ACP-ADR-03
+// DefaultRefreshTTL is the one refresh lifetime value of the auth plane. The session
+// store defaults to it, and the auth runtime hands the same value to the decision
+// reader, which has no default of its own. It is go-api's rolling refresh lifetime, which ACP-ADR-03
 // keeps (7 days rolling, single-use, family-linked).
-const defaultRefreshTTL = 7 * 24 * time.Hour
+const DefaultRefreshTTL = 7 * 24 * time.Hour
 
 var (
 	// ErrSessionNotFound reports an unknown session id.
@@ -75,7 +78,11 @@ type Config struct {
 	Schema authschema.ValidatedIdentifier
 	// SuccessorKey is a 32-byte base64url server secret deriving rotated credentials.
 	SuccessorKey contracts.SecretString
-	// RefreshTTL is a credential's idle lifetime; 0 means 7 days (go-api's).
+	// RefreshTTL is a credential's idle lifetime; 0 means DefaultRefreshTTL (7 days, go-api's).
+	// It is also the lifetime of a session with no credential in the liveness rule, so the
+	// decision reader (decisionstate.Config.RefreshTTL) must be given the same value: the
+	// auth runtime passes sessionRefreshTTL() to both, and a test fails if a literal
+	// appears in either place.
 	RefreshTTL time.Duration
 	// SessionLifetime is an optional absolute session lifetime; 0 means no cap
 	// (go-api parity). With a cap, a credential never outlives its session.
@@ -92,11 +99,14 @@ type Config struct {
 
 // Store is the session domain over one auth schema.
 type Store struct {
-	pool            *pgxpool.Pool
-	schema          authschema.ValidatedIdentifier
-	q               string
-	key             *[successorKeyBytes]byte
-	refreshTTL      time.Duration
+	pool       *pgxpool.Pool
+	schema     authschema.ValidatedIdentifier
+	q          string
+	key        *[successorKeyBytes]byte
+	refreshTTL time.Duration
+	// rule is the one liveness rule (revoked, expiry, cap) over this schema and
+	// refreshTTL; the effective* methods below are its aliases for the row s.
+	rule            sessionrule.Rule
 	sessionLifetime time.Duration
 	usersOwned      bool
 	platformOwned   bool
@@ -105,6 +115,11 @@ type Store struct {
 	revocations     metric.Int64Counter
 	delegations     metric.Int64Counter
 }
+
+// RefreshTTL is the refresh lifetime the store reads liveness with: Config.RefreshTTL, or
+// DefaultRefreshTTL when that was 0. A reader of the same rule elsewhere (decisionstate)
+// takes this value, not a copy of the default.
+func (s *Store) RefreshTTL() time.Duration { return s.refreshTTL }
 
 // Format and LogValue keep the successor key out of every printed form: fmt
 // reaches unexported fields through reflection, past any method on them.
@@ -129,10 +144,15 @@ func New(cfg Config) (*Store, error) {
 		refreshTTL: cfg.RefreshTTL, sessionLifetime: cfg.SessionLifetime, usersOwned: cfg.UsersOwned, platformOwned: cfg.PlatformRolesOwned, logger: cfg.Logger,
 	}
 	if s.refreshTTL <= 0 {
-		s.refreshTTL = defaultRefreshTTL
+		s.refreshTTL = DefaultRefreshTTL
 	}
 	if s.sessionLifetime < 0 {
 		return nil, errors.New("session: a negative session lifetime")
+	}
+	// The rule is built after the defaults above, so it reads the lifetime the credentials
+	// are issued with, not the raw configuration value.
+	if s.rule, err = sessionrule.New(s.q, s.refreshTTL); err != nil {
+		return nil, err
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -244,61 +264,41 @@ func (s *Store) sessionColumns() string {
 }
 
 // effectiveRevokedAt is the expression for alias s's revoked_at as the record
-// reports it: the session's own revoke (ownRevokedAt), else, for a browser
-// client's session, the whole effective revoke of its web session, evaluated
-// over the web session's row. A client session is created after its web session,
-// so a password change between the two creations voids the parent and not the
-// child's own stamp: the parent's stamp must be read against the parent's
-// created_at. Liveness is read, not written (CHAOS-12398): a web logout, an
-// organization switch, revoke-all and a password change end the child with no
-// code on those paths.
-func (s *Store) effectiveRevokedAt() string {
-	return `COALESCE(` + s.ownRevokedAt("s") + `, ` + s.ofWebParent(s.ownRevokedAt("wp")) + `)`
-}
-
-// ownRevokedAt is one session row's revoke, for alias: the explicit revoke, else
-// the principal's password stamp (users.password_updated_at) when that is
-// strictly after the session was created. A password change thus ends every
+// reports it, from the one session rule (sessionrule.Rule.Revoked): the session's
+// own revoke, else the principal's password stamp (users.password_updated_at)
+// when that is strictly after the session was created, else, for a browser
+// client's session, the same two tests over its web session's row.
+//
+// A client session is created after its web session, so a password change between
+// the two creations voids the parent and not the child's own stamp: the parent's
+// stamp is read against the parent's created_at. A password change thus ends every
 // older session in the same transaction that wrote the new hash, whether or not
 // RevokeAll ran. Both times are database-clock values; a principal with no stamp
-// voids nothing.
-func (s *Store) ownRevokedAt(alias string) string {
-	return fmt.Sprintf(`COALESCE(%[2]s.revoked_at,
-		(SELECT u.password_updated_at FROM %[1]s.users u
-		 WHERE u.principal_id = %[2]s.principal_id AND u.password_updated_at > %[2]s.created_at))`, s.q, alias)
-}
+// voids nothing. Liveness is read, not written (CHAOS-12398): a web logout, an
+// organization switch, revoke-all and a password change end the child with no
+// code on those paths.
+func (s *Store) effectiveRevokedAt() string { return s.rule.Revoked("s") }
 
-// effectiveExpiry is the expression for alias s's effective expiry: its own, or
-// for a browser client's session its web session's when that is first. LEAST
-// ignores the NULL of an unlinked session.
-func (s *Store) effectiveExpiry() string {
-	return `LEAST(` + s.ownExpiry("s") + `, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
-}
+// effectiveExpiry is the expression for alias s's effective expiry
+// (sessionrule.Rule.Expiry): its own, or for a browser client's session its web
+// session's when that is first. A session's own expiry is the absolute cap or its
+// newest credential's expiry, whichever is first; a session with no credential
+// uses its last rotation plus the refresh lifetime. LEAST ignores the NULL of an
+// unlinked session. Depth one: a linked session's parent has no link (0042's
+// trigger), so one subquery is the whole chain.
+func (s *Store) effectiveExpiry() string { return s.rule.Expiry("s") }
 
-// effectiveCap is alias s's absolute cap: sessions.expires_at, or for a browser
-// client's session its web session's effective expiry when that is first. A
-// refresh exchange and a new credential's expiry both read it, so a client
+// The three methods are kept as methods, not inlined at each caller, so a statement
+// of this package reads "s.effectiveExpiry()" and the alias it assumes (s) is stated
+// once. They build text only: the SQL itself lives in internal/auth/sessionrule, and
+// a test (TestTheStoreReadsTheSharedRule) fails if one of them stops being the rule's.
+// Callers pass the clock themselves (clock_timestamp()), so the rule has no clock of its own.
+//
+// effectiveCap is alias s's absolute cap (sessionrule.Rule.Cap): sessions.expires_at,
+// or for a browser client's session its web session's effective expiry when that is
+// first. A refresh exchange and a new credential's expiry both read it, so a client
 // session cannot be exchanged, or hold a credential, past its web session.
-func (s *Store) effectiveCap() string {
-	return `LEAST(s.expires_at, ` + s.ofWebParent(s.ownExpiry("wp")) + `)`
-}
-
-// ownExpiry is one session row's expiry, for alias: the absolute cap or its
-// newest credential's expiry, whichever is first. A session with no credential
-// uses its last rotation plus the refresh lifetime.
-func (s *Store) ownExpiry(alias string) string {
-	return fmt.Sprintf(`LEAST(%[2]s.expires_at, COALESCE(
-		(SELECT r.expires_at FROM %[1]s.refresh_credentials r WHERE r.session_id = %[2]s.id
-		 ORDER BY r.issued_at DESC, r.created_at DESC LIMIT 1),
-		COALESCE(%[2]s.last_seen_at, %[2]s.created_at) + %[3]d * interval '1 microsecond'))`, s.q, alias, s.refreshTTL.Microseconds())
-}
-
-// ofWebParent reads expr over alias wp, the web session of alias s. It is NULL
-// for an unlinked session. Depth one: a linked session's parent has no link
-// (0042's trigger), so one subquery is the whole chain.
-func (s *Store) ofWebParent(expr string) string {
-	return `(SELECT ` + expr + ` FROM ` + s.q + `.sessions wp WHERE wp.id = s.web_session_id)`
-}
+func (s *Store) effectiveCap() string { return s.rule.Cap("s") }
 
 func scanRecord(row pgx.Row, extra ...any) (Record, error) {
 	var (
@@ -358,14 +358,23 @@ func (s *Store) Create(ctx context.Context, principalID uuid.UUID, organizationI
 		return Issued{}, ErrInvalidAMR
 	}
 	var out Issued
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
-		return err
+	subject := principalID.String()
+	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
+		Apply: func(ctx context.Context, tx audit.TxOps) error {
+			var err error
+			out, err = s.insertSession(ctx, tx, principalID, organizationID, amr, contracts.SecretString{})
+			return err
+		},
+		Audit:     createdEvent(ctx, subject),
+		OffStream: audit.OffStreamSessionLifecycle,
+		Refusals:  []error{ErrPrincipalUnavailable, ErrOrganizationUnavailable},
 	})
 	if err != nil {
 		if errors.Is(err, ErrPrincipalUnavailable) {
-			return Issued{}, err
+			return Issued{}, ErrPrincipalUnavailable
+		}
+		if errors.Is(err, ErrOrganizationUnavailable) {
+			return Issued{}, ErrOrganizationUnavailable
 		}
 		return Issued{}, fmt.Errorf("%w: creating a session: %w", ErrStore, err)
 	}
@@ -421,8 +430,8 @@ func (s *Store) lockSession(ctx context.Context, db queryRower, sessionID string
 	var now time.Time
 	var err error
 	l.Record, err = scanRecord(db.QueryRow(ctx, `
-		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), p.disabled_at IS NOT NULL
-		FROM `+s.q+`.sessions s JOIN `+s.q+`.principals p ON p.id = s.principal_id
+		SELECT `+s.sessionColumns()+`, clock_timestamp(), `+s.effectiveCap()+` <= clock_timestamp(), pu.id IS NULL OR NOT pu.is_active
+		FROM `+s.q+`.sessions s LEFT JOIN public.users pu ON pu.id = s.principal_id
 		WHERE s.id = $1
 		FOR UPDATE OF s`, sessionID), &now, &l.capExpired, &l.principalDisabled)
 	l.expired = err == nil && !now.Before(l.ExpiresAt)
@@ -898,6 +907,26 @@ func (s *Store) Current(ctx context.Context, sessionID uuid.UUID) (Record, error
 	return record, nil
 }
 
+// CurrentWithClientClass is Current plus, in the same statement, the class of the
+// session's live OAuth grant (browser or mcp): "" when it has none or its grant is
+// revoked. A session has at most one grant (oauth_grants.session_id is unique).
+func (s *Store) CurrentWithClientClass(ctx context.Context, sessionID uuid.UUID) (Record, string, error) {
+	var class *string
+	record, err := scanRecord(s.pool.QueryRow(ctx, `SELECT `+s.sessionColumns()+`,
+		(SELECT g.client_class FROM `+s.q+`.oauth_grants g WHERE g.session_id = s.id AND g.revoked_at IS NULL)
+		FROM `+s.q+`.sessions s WHERE s.id = $1`, sessionID.String()), &class)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, "", ErrSessionNotFound
+	}
+	if err != nil {
+		return Record{}, "", fmt.Errorf("%w: reading the session: %w", ErrStore, err)
+	}
+	if class == nil {
+		return record, "", nil
+	}
+	return record, *class, nil
+}
+
 // requestIDOf is the audit request id of a write: the actor's, else the id of
 // the request the write runs in (internal/auth/requestid), so every audit row
 // a request writes carries it.
@@ -928,5 +957,14 @@ func (s *Store) recordExchange(ctx context.Context, result Result, err error) {
 		s.logger.DebugContext(ctx, "refresh exchange", "reason_code", string(result.Reason), "session_id", result.Session.ID.String())
 	default:
 		s.logger.InfoContext(ctx, "refresh exchange refused", "reason_code", string(result.Reason))
+	}
+}
+
+// createdEvent is the audit row of a session Create starts (the callers that
+// bring their own sign-in event use CreateAudited).
+func createdEvent(ctx context.Context, principal string) audit.AuditEvent {
+	return audit.AuditEvent{
+		EventType: "auth.session.created", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal, RequestID: requestid.Audit(ctx),
+		Attributes: map[string]any{"reason_code": "accepted", "target_kind": "session"},
 	}
 }

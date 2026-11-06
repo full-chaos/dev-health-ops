@@ -89,10 +89,6 @@ type Options struct {
 	// holds UsersWriteGrant on public.users. Off, it holds no write privilege
 	// there, and the grants pass revokes any it held.
 	UsersOwned bool
-	// OrgsOwned is the organizations-owned switch (AUTH_ORGS_OWNED): the runtime
-	// role holds OrganizationWriteGrants on public.organizations. Off, it holds
-	// no UPDATE there, and the grants pass revokes any it held.
-	OrgsOwned bool
 	// DeferNarrowing keeps, with the acknowledgement, every lost grant the
 	// users-owned switch gives (the 4->3 flip-back release, whose old owned
 	// pods still serve); the rest narrows. See defer_narrowing.go.
@@ -111,11 +107,18 @@ type Options struct {
 	// (CHAOS-10895). Empty means the function stays owned by the migration role
 	// and nobody can execute it. It must already exist, must have no login and
 	// no membership, and the migration role must be a member of it (the one
-	// thing ALTER FUNCTION OWNER needs); see applyPushLifecycleWriter.
+	// thing ALTER FUNCTION OWNER needs); see applyFunctionWriter.
 	PushLifecycleWriterRole string
 	// PushLifecycleCallerRoles are the logins that may execute that function:
-	// go-api's, and no other. Required when PushLifecycleWriterRole is set.
+	// go-api's login and the worker domain login that runs the expiry sweeper
+	// (CHAOS-12828), and no other. Required when PushLifecycleWriterRole is set.
 	PushLifecycleCallerRoles []string
+	// RepoIdentityWriterRole is the dedicated NOLOGIN role that owns append_repository_identity_event (migration
+	// 0057), set up like PushLifecycleWriterRole. Empty leaves the function unexecutable.
+	RepoIdentityWriterRole string
+	// RepoIdentityCallerRoles are the logins that may execute that function: the worker domain login, and no other.
+	// Required when RepoIdentityWriterRole is set.
+	RepoIdentityCallerRoles []string
 	// LockTimeout bounds how long one migration's transaction waits for a
 	// lock. Zero means DefaultMigrationLockTimeout; see the lock policy.
 	LockTimeout time.Duration
@@ -227,6 +230,9 @@ func (o Options) Validate(migrationRole string) error {
 		return err
 	}
 	if err := o.validatePushLifecycle(migrationRole); err != nil {
+		return err
+	}
+	if err := o.validateRepoIdentity(migrationRole); err != nil {
 		return err
 	}
 	if migrationRole != "" && migrationRole == o.RuntimeRole {
@@ -437,7 +443,7 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		"tables", len(RuntimePosture()),
 	)
 
-	if err := applyPushLifecycleWriter(ctx, conn, options, logger); err != nil {
+	if err := applyFunctionWriters(ctx, conn, options, logger); err != nil {
 		return result, err
 	}
 
@@ -460,7 +466,7 @@ func applyGrantsAndVerify(ctx context.Context, conn pooledConn, options Options,
 		return result, err
 	}
 	violations = excuseRetained(violations, retained)
-	writerViolations, err := pushWriterViolations(ctx, conn, options)
+	writerViolations, err := functionWritersViolations(ctx, conn, options)
 	if err != nil {
 		return result, err
 	}

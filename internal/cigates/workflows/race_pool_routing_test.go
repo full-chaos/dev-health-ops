@@ -49,8 +49,8 @@ func TestRaceLegsRouteToThePoolOnlyOnPushToMainOfThisRepo(t *testing.T) {
 		t.Fatalf("CI_RACE_RUNNER must appear only in the guard and the value, got: %s", runsOn)
 	}
 	timeout, _ := leg["timeout-minutes"].(string)
-	if !strings.HasPrefix(timeout, "${{ ("+racePoolTerm+") && ") || !strings.HasSuffix(timeout, " && 45 || 30 }}") {
-		t.Fatalf("timeout-minutes must be 45 on the pool path and 30 otherwise, got: %s", timeout)
+	if !strings.HasPrefix(timeout, "${{ ("+racePoolTerm+") && ") || !strings.HasSuffix(timeout, " && 45 || (github.event_name == 'merge_group' && 45 || 45) }}") {
+		t.Fatalf("timeout-minutes must be 45 on the pool path, on merge_group and on pull requests (CHAOS-13036), got: %s", timeout)
 	}
 }
 
@@ -252,10 +252,10 @@ func TestOnlyTheSixRaceLegsCarryThePoolFlag(t *testing.T) {
 	}
 }
 
-const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'15m'"
+const raceTimeoutPool, raceTimeoutDefault = "'25m'", "'30m'"
 
 func raceTimeoutExpr(term, pool, other string) string {
-	return "${{ (" + term + ") && " + pool + " || " + other + " }}"
+	return "${{ (" + term + ") && " + pool + " || (github.event_name == 'merge_group' && " + pool + " || " + other + ") }}"
 }
 
 func raceTimeoutValue(t *testing.T, expr string, ctx map[string]string) string {
@@ -271,7 +271,19 @@ func raceTimeoutValue(t *testing.T, expr string, ctx map[string]string) string {
 	if evalRacePoolTerm(t, term, ctx) {
 		return pool
 	}
-	return other
+	// CHAOS-12856: the other arm is `(github.event_name == 'merge_group' && <pool> || <default>)`.
+	inner := strings.TrimSuffix(strings.TrimPrefix(other, "(github.event_name == 'merge_group' && "), ")")
+	if inner == other {
+		return "unparsed"
+	}
+	mqPool, def, ok := strings.Cut(inner, " || ")
+	if !ok {
+		return "unparsed"
+	}
+	if ctx["github.event_name"] == "merge_group" {
+		return mqPool
+	}
+	return def
 }
 
 // raceTimeoutProblems pins the exact expression, then evaluates it per leg and event.
@@ -293,6 +305,8 @@ func raceTimeoutProblems(t *testing.T, expr string) []string {
 		{"race leg on push to another branch", map[string]string{"github.ref": "refs/heads/feature"}, raceTimeoutDefault},
 		{"race leg on another repository", map[string]string{"github.repository": "someone/dev-health-ops"}, raceTimeoutDefault},
 		{"race leg with the variable unset", map[string]string{"vars.CI_RACE_RUNNER": ""}, raceTimeoutDefault},
+		{"race leg on merge group", map[string]string{"github.event_name": "merge_group", "github.ref": "refs/heads/gh-readonly-queue/main/pr-1"}, raceTimeoutPool},
+		{"static leg on merge group", map[string]string{"github.event_name": "merge_group", "matrix.pool": ""}, raceTimeoutPool},
 		{"race leg on workflow dispatch", map[string]string{"github.event_name": "workflow_dispatch"}, raceTimeoutDefault},
 		{"race leg on schedule", map[string]string{"github.event_name": "schedule"}, raceTimeoutDefault},
 	} {

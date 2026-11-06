@@ -68,8 +68,8 @@ func rootResult(argv []string) map[string]any {
 	switch {
 	case err != nil:
 		result := map[string]any{"stage": "exit", "code": tagged("int", "2")}
-		if strings.HasPrefix(err.Msg, "argument --llm-concurrency: invalid int value: ") {
-			// The one message dho words itself: the oracle compares its bytes.
+		if strings.HasPrefix(err.Msg, "argument --llm-concurrency: invalid int value") {
+			// The one message dho words itself: the oracle compares it with Python's, less the quoted value.
 			result["msg"] = tagged("str", err.Msg)
 		}
 		return result

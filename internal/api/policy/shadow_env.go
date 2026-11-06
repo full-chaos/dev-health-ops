@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -23,6 +24,12 @@ const (
 	EnvShadowPDPInFlight = "AUTH_SHADOW_PDP_MAX_IN_FLIGHT"
 )
 
+// ShadowInputError is the error a NewDecider returns when a named environment input is missing or bad.
+// Variable names the input or inputs (comma separated), never a value or a path.
+type ShadowInputError struct{ Variable string }
+
+func (e *ShadowInputError) Error() string { return "shadow input: " + e.Variable }
+
 // ShadowEnvDeps are what a service brings to ShadowFromEnv.
 type ShadowEnvDeps struct {
 	// Rows is the service's action map.
@@ -31,6 +38,8 @@ type ShadowEnvDeps struct {
 	// error text is never logged.
 	NewDecider func() (pep.Decider, error)
 	Logger     *slog.Logger
+	// On means the caller already decided the shadow is on; AUTH_SHADOW_PDP is then not read.
+	On bool
 }
 
 // ShadowFromEnv builds the shadow from the environment. It never fails a start: off, or any
@@ -47,12 +56,15 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 		recordShadowStateSafe(ctx, false, true)
 		return nil
 	}
+	if lookup == nil {
+		return disabled("lookup")
+	}
 	read := func(key string) string {
 		value, _ := lookup(key)
 		return strings.TrimSpace(value)
 	}
-	on := false
-	if raw := read(EnvShadowPDP); raw != "" {
+	on := deps.On
+	if raw := read(EnvShadowPDP); raw != "" && !deps.On {
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
 			return disabled(EnvShadowPDP)
@@ -93,6 +105,10 @@ func ShadowFromEnv(lookup func(string) (string, bool), deps ShadowEnvDeps) *Shad
 	}
 	decider, err := deps.NewDecider()
 	if err != nil || decider == nil {
+		var input *ShadowInputError
+		if errors.As(err, &input) && input.Variable != "" {
+			return disabled(input.Variable)
+		}
 		return disabled("decider")
 	}
 	cfg.Decider = decider

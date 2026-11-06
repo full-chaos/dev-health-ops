@@ -41,7 +41,7 @@ var impersonationRoutes = map[string]string{
 
 // coveredFamilies are the route prefixes whose protected rows carry the fields.
 var coveredFamilies = []string{
-	"/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
+	"/api/v1/acr", "/api/v1/admin", "/api/v1/auth", "/api/v1/billing", "/api/v1/licensing", "/api/v1/orgs", "/api/v1/internal",
 	"/api/v1/external-ingest", "/api/v1/telemetry", "/api/v1/webhooks", "/buildinfo",
 }
 
@@ -149,18 +149,20 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 	}
 	policy, _ := row["impersonation_policy"].(string)
 	tenancy, _ := row["tenant_requirement"].(string)
+	rowRoute, _ := row["route"].(string)
+	internalRoute := strings.HasPrefix(rowRoute, "/api/v1/internal/")
 	switch {
 	case policy == "" || policy == "unknown":
 		bad("impersonation_policy is missing or unknown")
 	case impersonationRoutes[id] != "" && policy != impersonationRoutes[id]:
 		bad("an impersonation route has impersonation_policy %q, want %q", policy, impersonationRoutes[id])
 	case impersonationRoutes[id] != "":
-	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "subject_to_impersonation_override":
+	case tenancy == "org_scoped" && internalRoute && policy == "subject_to_impersonation_override":
 		bad("an internal-listener org-scoped route claims subject_to_impersonation_override (the internal listener runs no impersonation middleware)")
 		if !gapNames(row, "credential_binding") {
 			bad("an internal-listener org-scoped route has no credential_binding gap")
 		}
-	case tenancy == "org_scoped" && strings.HasSuffix(id, "@internal]") && policy == "not_applicable_non_main_app":
+	case tenancy == "org_scoped" && internalRoute && policy == "not_applicable_non_main_app":
 		if !gapNames(row, "impersonation_policy") {
 			bad("an internal-listener org-scoped route is not_applicable_non_main_app without a gaps entry naming impersonation_policy")
 		}
@@ -624,6 +626,23 @@ func TestInternalOrgScopedRowsPlantedImpersonationAndCredentialGap(t *testing.T)
 			got = adminFieldViolations(both, scopes, root)
 			if !violationsContain(got, internalFlipMessage) || !violationsContain(got, internalGapMessage) {
 				t.Fatalf("the flip with the dropped gap did not report both: %v", got)
+			}
+		})
+	}
+}
+
+func TestInternalOrgScopedRowWithOtherIDFormIsStillInternal(t *testing.T) {
+	root := testRoot(t)
+	scopes := catalogScopes(t)
+	for id, row := range rowsByID(t, internalOrgScopedIDs) {
+		t.Run(id, func(t *testing.T) {
+			planted := cloneRow(t, row)
+			planted["id"] = "GET " + planted["route"].(string) + " [internal-listener]"
+			planted["impersonation_policy"] = "subject_to_impersonation_override"
+			dropGap(planted, "credential_binding")
+			got := adminFieldViolations(planted, scopes, root)
+			if !violationsContain(got, internalFlipMessage) || !violationsContain(got, internalGapMessage) {
+				t.Fatalf("an internal row with another id suffix escaped the internal rule: %v", got)
 			}
 		})
 	}

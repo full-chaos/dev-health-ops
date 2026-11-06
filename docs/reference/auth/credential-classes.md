@@ -95,6 +95,8 @@ Design docs (read the guardrails at minimum):
 | `workload_bootstrap_credential` | optional_feature | workload | |
 | `service_account_key` | **unconsumed** | service_account | issued by the key routes; no route accepts it |
 | `service_account_token` | **unconsumed** | service_account | contract only; nothing mints or verifies it yet |
+| `oauth_authorization_code` | **unconsumed** | human | minted at consent; the token endpoint that redeems it is not built |
+| `oauth_consent_csrf_token` | active | human | minted at describe, checked at approve and deny |
 
 **30 classes at the Wave 0 freeze** (31 with `effective_principal_envelope`, added by CHAOS-4737 below). 5 were not in CHAOS-3273's minimum list and were discovered
 during this inventory (`new_vs_ticket: true` in the JSON):
@@ -136,11 +138,11 @@ have rows in `contracts/auth/v1/endpoint-profiles.auth-service.json`. The
 provisioning audit rows name the actor, the request id and the calling
 credential (`caller_principal_id` and `workload_jti` of the go-api workload token).
 
-Four read scopes name the versioned read API (CHAOS-10995; contracts only, no
-route serves them yet): `principals:read`, `organizations:read`,
-`memberships:read` and `grants:read`. A read holds its read scope and a write
-scope never satisfies one (`contracts.ReadScopeAllows`). A mint verb that issues
-them and the routes that check them come with the routes.
+Four read scopes name the versioned read API (CHAOS-10995): `principals:read`,
+`organizations:read`, `memberships:read` and `grants:read`. A read scope is never
+satisfied by a write scope (`contracts.ReadScopeAllows`). No credential of this
+class holds one: the read routes (`/internal/v1/{principals,organizations,memberships,grants}/{get,list}`)
+refuse this credential and take the go-api workload token only.
 
 **`org_invite_token` (CHAOS-11798).** The invite link token: `signedtoken.Build`
 over the invite id (32 lowercase hex characters, a dot, 64 lowercase hex
@@ -260,6 +262,24 @@ it, no verifier reads it and no endpoint row accepts it, so the class is
 Its issue will write the append-only audit event
 `auth.service_account.token_issued`, naming the credential row id, never the
 key value.
+
+**`oauth_authorization_code` and `oauth_consent_csrf_token` (CHAOS-12400).**
+The two secrets of auth-service's OAuth 2.1 authorization server (ADR-13).
+`POST /oauth/authorize`, action `describe`, binds an authorization request to
+the bearer's web session once and returns the consent anti-CSRF token:
+`fcocs_` and 32 random bytes as unpadded base64url. Action `approve` or `deny`
+must carry it in the form body field `csrf_token`, with the same web session
+and principal; one decision spends it, and it ends with its request (10
+minutes). `approve` mints the authorization code, `fcoac_` and 32 random bytes,
+inside the consent's audit commit, and returns it once on the client's exact
+redirect. It is single use, lives 60 seconds and is bound to the client, the
+redirect, the RFC 8707 resource and the S256 challenge. auth-service keeps the
+SHA-256 of each on `auth.oauth_authorization_requests`, never the value; no
+audit row holds either. Neither is a bearer, and no route takes either as
+one. The code is `unconsumed` until the token endpoint (O4)
+redeems it. The anti-CSRF token is `active`: describe mints it and
+approve and deny check it. The routes mount with `AUTH_TOKEN_ISSUER_URL` set;
+no ingress or go-api proxy path reaches them from outside.
 
 **`acr_browser_refresh_token` (CHAOS-12141).** The refresh token of the ACR
 first-party browser client (acr CHAOS-12124): `acrrt_` and 32 random bytes as

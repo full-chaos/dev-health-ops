@@ -12,10 +12,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The projection reader's one grant (CHAOS-11199): column SELECT on exactly these columns of auth.credential_projection,
-// for the worker login that runs the acr reconcile. A widened, narrowed or reordered list fails here first.
+// The projection reader's one grant (CHAOS-11199, CHAOS-10897): column SELECT on exactly these columns of
+// auth.credential_projection, for the worker login that runs the acr and the External Push reconcile. A widened, narrowed or reordered list fails here first.
 func TestTheProjectionReaderGrantIsPinnedToTheReadColumns(t *testing.T) {
-	want := []string{"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at"}
+	want := []string{"domain_owner", "organization_id", "external_reference", "revision", "status", "expires_at", "scopes", "source_id"}
 	reads := authschema.ProjectionReaderReads()
 	if len(reads) != 1 || reads[0].Table != "credential_projection" || !slices.Equal(reads[0].Columns, want) {
 		t.Fatalf("ProjectionReaderReads = %+v, want credential_projection %v", reads, want)

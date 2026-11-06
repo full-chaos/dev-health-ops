@@ -212,7 +212,7 @@ func ProvisioningRoutes(deps ProvisioningDeps) ([]httpapi.Route, error) {
 		{Method: http.MethodPost, Pattern: PatternGrantUpdate, Handler: http.HandlerFunc(h.grantUpdate)},
 		{Method: http.MethodPost, Pattern: PatternGrantRevoke, Handler: http.HandlerFunc(h.grantRevoke)},
 	}
-	routes = h.withOrgRenameRoute(h.withStateRoute(routes, rows), rows)
+	routes = h.withOrgRenameRoute(h.withStateRoute(routes))
 	return routes, nil
 }
 

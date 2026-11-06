@@ -11,6 +11,7 @@ admin-users	admin-identities	/admin/teams-and-identities/users-and-memberships/	
 admin-mapping	admin-identities	/admin/teams-and-identities/identity-mapping/	Review identity and membership mapping	task-guide	true	public	planned	false	
 admin-roles	admin-identities	/admin/teams-and-identities/roles-and-access/	Manage roles and access	task-guide	true	public	planned	false	
 admin-org-members	admin-identities	/admin/teams-and-identities/manage-org-members/	Manage organization members	task-guide	true	public	active	false	Invite a person, change a role, remove a member and transfer ownership of an organization.
+admin-grant-repository-access	admin-identities	/admin/teams-and-identities/grant-repository-access/	Grant access to repositories	task-guide	true	public	active	false	Give a member access to one repository or to every repository of an organization, with an optional expiry, then change or end it.
 admin-sources	admin	/admin/data-sources/	Connect data sources	landing	true	public	planned	false	
 admin-source-prereq	admin-sources	/admin/data-sources/prerequisites/	Data-source prerequisites	task-guide	true	public	planned	false	
 admin-github	admin-sources	/admin/data-sources/github/	Connect GitHub	task-guide	true	public	planned	false	
@@ -33,3 +34,4 @@ admin-auth	admin-troubleshooting	/admin/troubleshooting/authentication-and-roles
 admin-provider-fail	admin-troubleshooting	/admin/troubleshooting/provider-connections/	Provider connection failures	troubleshooting	true	public	planned	false	
 admin-sync-fail	admin-troubleshooting	/admin/troubleshooting/sync-and-coverage/	Sync and coverage problems	troubleshooting	true	public	planned	false	
 admin-identity-fail	admin-troubleshooting	/admin/troubleshooting/identity-and-membership/	Identity and membership problems	troubleshooting	true	public	planned	false	
+admin-ask-dev	admin	/admin/ask-dev/	Turn on Ask Dev	task-guide	true	public	active	false	The flags, model settings, limits and refusals that decide whether users get Ask Dev.

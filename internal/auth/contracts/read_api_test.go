@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -38,6 +39,8 @@ var readAPIKeywordTokens = map[string]string{
 	"const":                "const:",
 	"enum":                 "enum:",
 	"maxItems":             "maxItems:",
+	"not":                  "not: validated against",
+	"maxLength":            "maxLength:",
 	"maximum":              "maximum:",
 	"minLength":            "minLength:",
 	"minimum":              "minimum:",
@@ -117,7 +120,7 @@ const readAPIGoldenDir = "contracts/auth/v1/golden/read-api"
 
 // readAPICorpusDigest pins every file of golden/read-api. Moving it is a
 // deliberate edit beside the corpus change.
-const readAPICorpusDigest = "sha256:75d9df449af79340eb0e7e0bb7f99d696bfc9b0555b5a5012a740aecff68cb63"
+const readAPICorpusDigest = "sha256:ee3959786133046efde33c87a9cc42e9e8b05c5561562409ec3003706c4ea4b4"
 
 func readAPIGoldenFiles(t *testing.T) []decisionFile {
 	t.Helper()
@@ -520,7 +523,8 @@ func TestReadAPIResourceKeyNeverAppearsInARefusalOrAnErrorBody(t *testing.T) {
 	}
 }
 
-func TestReadScopesAreReadOnlyAndTheSessionIssuerClassNamesThem(t *testing.T) {
+// The read routes take only the go-api workload token: the session issuer class, retired on them, names no read scope.
+func TestReadScopesAreReadOnlyAndTheSessionIssuerClassHoldsNone(t *testing.T) {
 	want := []string{ScopeGrantsRead, ScopeMembershipsRead, ScopeOrganizationsRead, ScopePrincipalsRead}
 	sort.Strings(want)
 	if got := ReadScopes(); !equalLists(got, want) {
@@ -575,11 +579,12 @@ func TestReadScopesAreReadOnlyAndTheSessionIssuerClassNamesThem(t *testing.T) {
 			held = class.Auth.Scopes
 		}
 	}
-	sort.Strings(held)
+	if len(held) == 0 {
+		t.Fatal("credential-classes.json: internal_svc_authsess_token names no scope")
+	}
 	for _, scope := range ReadScopes() {
-		i := sort.SearchStrings(held, scope)
-		if i == len(held) || held[i] != scope {
-			t.Errorf("credential-classes.json: internal_svc_authsess_token does not name %s (has %v)", scope, held)
+		if slices.Contains(held, scope) {
+			t.Errorf("credential-classes.json: internal_svc_authsess_token still names %s (has %v)", scope, held)
 		}
 	}
 }
@@ -640,5 +645,31 @@ func TestReadResourcesMirrorTheV1ResourcesAndTheirStores(t *testing.T) {
 	sort.Strings(kinds)
 	if !equalLists(stringList(t, schemaNode(t, "principal-read", "properties", "kind", "enum")), kinds) || len(kinds) == 0 {
 		t.Errorf("principal-read kind != principals kind CHECK %v", kinds)
+	}
+}
+
+func TestReadAPIPrincipalListItemMembershipFollowsTheKind(t *testing.T) {
+	op := ReadOperation{Name: "principals_list", IDPrefix: "prn_"}
+	req := &ReadRequest{Operation: op, OrganizationID: "org_A"}
+	principal := func(kind string) *readResourceWire {
+		return &readResourceWire{PrincipalID: "prn_1", Kind: kind}
+	}
+	membership := &readResourceWire{OrganizationID: "org_A", PrincipalID: "prn_1"}
+	for _, c := range []struct {
+		name string
+		item readItemWire
+		want string
+	}{
+		{"user with its membership", readItemWire{Principal: principal("user"), Membership: membership}, ""},
+		{"user without a membership", readItemWire{Principal: principal("user")}, "item_membership_missing"},
+		{"service account without a membership", readItemWire{Principal: principal("service_account")}, ""},
+		{"workload without a membership", readItemWire{Principal: principal("workload")}, ""},
+		{"service account with a membership", readItemWire{Principal: principal("service_account"), Membership: membership}, "item_membership_forbidden"},
+		{"workload with a membership", readItemWire{Principal: principal("workload"), Membership: membership}, "item_membership_forbidden"},
+		{"no principal", readItemWire{Membership: membership}, "item_pair_mismatch"},
+	} {
+		if got := checkReadListItem(op, req, c.item); got != c.want {
+			t.Errorf("%s: rule %q, want %q", c.name, got, c.want)
+		}
 	}
 }

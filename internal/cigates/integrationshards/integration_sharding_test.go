@@ -750,7 +750,7 @@ func sameSet(a, b map[string]bool) bool {
 // discoveryFunctions are the ci/check_go.sh functions the discovery harness lifts into bash. A name the script does not
 // define is skipped, so the same test runs against an older script.
 var discoveryFunctions = []string{
-	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "go_test_name_ok",
+	"die", "check_listed_test_file", "scan_listed_go_tests", "scan_go_test_paths", "gotestfuncs_bin", "go_run_name_ok", "byte_len", "go_test_name_ok",
 	"integration_test_files", "split_plain_test_files", "split_package_hook", "discover_integration_tagged_tests",
 	"run_integration_packages", "warn_integration_weight_drift", "discover_daily_tests",
 }

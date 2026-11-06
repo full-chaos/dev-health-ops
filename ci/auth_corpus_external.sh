@@ -9,7 +9,8 @@
 #    releases its host-global names and ports) starts go-api with its dependencies: postgres, pgbouncer, clickhouse,
 #    valkey, the migrations, the roles and the envelope key. The stores are published on ephemeral loopback ports.
 # 2. The corpus seeds those stores as a superuser, then sends its requests to go-api's published api listener. Its
-#    mail sink listens on the runner (0.0.0.0:2525); go-api mails to host.docker.internal.
+#    mail sink is the project's smtpsink service (CHAOS-11387): the planes mail smtpsink:2525 on the project network,
+#    and the test reads the capture from its :9090 read API, published on loopback only.
 # 3. Where a corpus case changes go-api's environment, ci/auth_corpus_set_env.sh recreates go-api through compose.
 # Leg acp turns on the AUTH_PROXY_* flag of an aggregate only when the running auth-service serves every route of it
 # (ci/auth_corpus_acp_routes.tsv): a route auth-service mounts answers OPTIONS with 405, one it does not with 404.
@@ -50,6 +51,8 @@ fi
 source "${SCRIPT_DIR}/auth_corpus_set.sh"
 # shellcheck source=ci/lib/registry_retry.sh
 source "${SCRIPT_DIR}/lib/registry_retry.sh"
+# shellcheck source=ci/lib/auth_workload_session_issue.sh
+source "${SCRIPT_DIR}/lib/auth_workload_session_issue.sh"
 # From /dev/urandom: compose adopts a resource that already carries the project name, so it must not be guessable.
 PROJECT="authcorpus$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
 # The override tags the images this run builds with the project, so the trap removes exactly its own two.
@@ -252,6 +255,18 @@ up_service() {
 printf 'step 1: up --build --wait go-api (project %s)\n' "${PROJECT}"
 up_service go-api
 if [ "${LEG}" = "acp" ]; then
+  # go-api asks auth-service's session issue route for the sessions of the sign-in flows it still serves with its workload
+  # token: the bootstrap credential is written and the api workload principal read once the migrations ran and before
+  # auth-service starts. The values go to the state file, so every go-api recreate (ci/auth_corpus_set_env.sh) keeps them;
+  # go-api reads the selector only once the sessions flag is on.
+  printf 'step 1a: the go-api workload credential (auth-workload-bootstrap)\n'
+  auth_workload_session_issue compose --build || die "the go-api workload credential is not ready"
+  {
+    printf 'export AUTH_TOKEN_ISSUER_URL=%q\n' "${AUTH_TOKEN_ISSUER_URL}"
+    printf 'export AUTH_WORKLOAD_BOOTSTRAP=%q\n' "${AUTH_WORKLOAD_BOOTSTRAP}"
+    printf 'export AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT=%q\n' "${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT}"
+    printf 'export AUTH_SESSION_ISSUE_CREDENTIAL=%q\n' "${AUTH_SESSION_ISSUE_CREDENTIAL}"
+  } >>"${STATE}"
   printf 'step 1b: up --build --wait auth-service\n'
   up_service auth-service
 fi
@@ -369,21 +384,7 @@ if [ "${LEG}" = "acp" ]; then
   classify
   printf 'leg acp forwards: %s\n' "${FORWARDED[*]:-none (sessions is not served; every route stays in go-api)}"
   if [ "${#FORWARDED[@]}" -gt 0 ]; then
-    # go-api asks auth-service's issue route for the sessions of the sign-in flows it still serves, with an
-    # auth-session-issuer service credential: mint one into the project's database and hand go-api the token through
-    # the state file, before the sessions flag turns on (go-api refuses to start with the flag and no credential).
-    ISSUE_TOKEN="svc_authsess_$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n')"
-    [[ "${ISSUE_TOKEN}" =~ ^svc_authsess_[A-Za-z0-9_-]{43}$ ]] || die "could not build a session issue credential"
-    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" >/dev/null \
-      < <(printf '\\set token %s\n' "'${ISSUE_TOKEN}'"; cat <<'SQL'
-INSERT INTO internal_service_credentials (id, service_name, token_hash, token_prefix, scopes, created_at)
-VALUES (gen_random_uuid(), 'auth-session-issuer', encode(sha256(convert_to(:'token', 'UTF8')), 'hex'), left(:'token', 16),
-        '["sessions:issue"]', now());
-SQL
-      ) \
-      || die "could not store the session issue credential"
-    printf 'export AUTH_SESSION_ISSUE_TOKEN=%q\n' "${ISSUE_TOKEN}" >>"${STATE}"
-    unset ISSUE_TOKEN
+    # go-api presents its workload token on the session issue route (step 1a); it holds no svc_authsess_ credential.
     if [[ " ${FORWARDED[*]} " == *" sessions "* ]]; then
       # The sessions flag drops the api role's refresh_tokens INSERT and UPDATE at migrate time, and go-api's
       # readiness check reads the same flag: apply the grants for it before go-api restarts with it.

@@ -92,6 +92,7 @@ func callerOf(f *provFixture, op string) audit.Caller {
 // auth-service, subject the configured go-api principal) and hands the verb the
 // workload principal and the token's jti as the caller.
 func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	want := uuidOfWire(t, f.w.subject)
 	for _, c := range workloadRouteCases() {
@@ -117,24 +118,28 @@ func TestProvisioningRoutesAcceptTheGoAPIWorkloadToken(t *testing.T) {
 // or oversized values get the same 401 body as a refused session issuer
 // credential, before any credential check, users read, verb or key-set read.
 func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	golden := func() string {
 		f := newProvWorkloadFixture(t)
 		c := routeCases()[0]
 		return refusalWithoutPerRequestFields(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), map[string]string{"Authorization": "Bearer " + provisioningToken}).Body.Bytes())
 	}()
 	for name, build := range issuePreKeyRefusals() {
-		for _, c := range routeCases() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newProvWorkloadFixture(t)
-			response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
-			expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
-			if f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
-				t.Fatalf("%s %s: read before the verdict (verbs %d, users %d, key set %d)", name, c.op,
-					f.storeCalls(), f.users.reads, f.w.keys.reads)
+			for _, c := range routeCases() {
+				response := f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w))
+				expectRefusal(t, response, http.StatusUnauthorized, reasonInvalidCredentials)
+				if f.storeCalls() != 0 || f.users.reads != 0 || f.w.keys.reads != 0 {
+					t.Fatalf("%s %s: read before the verdict (verbs %d, users %d, key set %d)", name, c.op,
+						f.storeCalls(), f.users.reads, f.w.keys.reads)
+				}
+				if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
+					t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
+				}
 			}
-			if got := refusalWithoutPerRequestFields(t, response.Body.Bytes()); got != golden {
-				t.Fatalf("%s %s: refusal body %s differs from %s", name, c.op, got, golden)
-			}
-		}
+		})
 	}
 }
 
@@ -143,19 +148,23 @@ func TestProvisioningRoutesRefuseWrongCredentialsBeforeAnyRead(t *testing.T) {
 // credential check, users read or verb.
 func TestProvisioningRoutesRefuseATokenTheVerifierRefuses(t *testing.T) {
 	for name, build := range issueVerifierRefusals() {
-		for _, c := range routeCases() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			f := newProvWorkloadFixture(t)
-			expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
-			if f.storeCalls() != 0 || f.users.reads != 0 {
-				t.Fatalf("%s %s: a refused token reached a store", name, c.op)
+			for _, c := range routeCases() {
+				expectRefusal(t, f.post(c.path, encode(c.body(f.provFixture, f.super)), build(f.w)), http.StatusUnauthorized, reasonInvalidCredentials)
+				if f.storeCalls() != 0 || f.users.reads != 0 {
+					t.Fatalf("%s %s: a refused token reached a store", name, c.op)
+				}
 			}
-		}
+		})
 	}
 }
 
 // With no workload path (the subject variable unset), a workload token is refused with no read, and the retired
 // session issuer credential is refused too.
 func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
+	t.Parallel()
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixtureOff(t, docWithRow(t, PatternOrgSuspend))
 	for _, c := range routeCases() {
@@ -171,6 +180,7 @@ func TestProvisioningRefusesTheWorkloadTokenWhenThePathIsOff(t *testing.T) {
 
 // A key set that cannot be read is a 503, never a 401 and never a pass.
 func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	f.w.keys.err = errors.New("custody down")
 	for _, c := range workloadRouteCases() {
@@ -186,6 +196,7 @@ func TestProvisioningWorkloadKeySetOutageIs503(t *testing.T) {
 // either on it and takes a workload token, or is off it and refuses one: a new
 // route takes no workload token until it is listed.
 func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T) {
+	t.Parallel()
 	var listed []string
 	for op := range workloadOperations {
 		listed = append(listed, op)
@@ -220,6 +231,7 @@ func TestEveryProvisioningRouteIsOnTheWorkloadListOrRefusesTheToken(t *testing.T
 // No token text, jti or subject reaches the log of a workload call, accepted
 // or refused; a refusal logs its reason.
 func TestProvisioningWorkloadLogsCarryNoTokenText(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	c := routeCases()[0]
 	accepted, jti := f.w.mint("workload+jwt", nil)
@@ -247,6 +259,7 @@ func TestProvisioningWorkloadLogsCarryNoTokenText(t *testing.T) {
 // binary embeds: the routes build with the workload path on, the verb gets the
 // workload principal and the token's jti as the caller.
 func TestOrgSuspendAcceptsTheGoAPIWorkloadTokenOnTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w)
 	header, jti := w.mint("workload+jwt", nil)
@@ -271,6 +284,7 @@ func TestOrgSuspendAcceptsTheGoAPIWorkloadTokenOnTheEmbeddedDocument(t *testing.
 // the verifier refuses and a refused session issuer credential are the same
 // 401, and none reaches the verb.
 func TestOrgSuspendStillRefusesEveryOtherBearer(t *testing.T) {
+	t.Parallel()
 	refusals := map[string]func(*workloadIssueFixture) map[string]string{}
 	for name, build := range issuePreKeyRefusals() {
 		refusals["pre-key "+name] = build
@@ -279,14 +293,17 @@ func TestOrgSuspendStillRefusesEveryOtherBearer(t *testing.T) {
 		refusals["verifier "+name] = build
 	}
 	for name, build := range refusals {
-		w := newWorkloadIssueFixture(t)
-		f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w)
-		body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
-		expectRefusal(t, f.post(PatternOrgSuspend, body, build(w)), http.StatusUnauthorized, reasonInvalidCredentials)
-		if f.reactivate.suspends != 0 || f.users.reads != 0 {
-			t.Fatalf("%s: a refused bearer reached the suspend verb (%d) or the users seam (%d)", name,
-				f.reactivate.suspends, f.users.reads)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := newWorkloadIssueFixture(t)
+			f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w)
+			body := encode(map[string]any{"organization_id": f.org.String(), "actor_principal_id": f.super.String()})
+			expectRefusal(t, f.post(PatternOrgSuspend, body, build(w)), http.StatusUnauthorized, reasonInvalidCredentials)
+			if f.reactivate.suspends != 0 || f.users.reads != 0 {
+				t.Fatalf("%s: a refused bearer reached the suspend verb (%d) or the users seam (%d)", name,
+					f.reactivate.suspends, f.users.reads)
+			}
+		})
 	}
 	w := newWorkloadIssueFixture(t)
 	f := newProvFixtureFor(t, authv1.AuthServiceEndpointProfiles, w)

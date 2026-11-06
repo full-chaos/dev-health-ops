@@ -64,8 +64,7 @@ type BornOrganization struct {
 }
 
 // organizationBirth is one new organization. Each birth writes go-api's row, the
-// auth row and the owner membership of both schemas in one commit, because with
-// AUTH_ORGS_OWNED the projection creates no auth row (ProjectOrganization).
+// auth row and the owner membership of both schemas in one commit.
 type organizationBirth struct {
 	ID, MembershipID uuid.UUID
 	Slug, Name       string

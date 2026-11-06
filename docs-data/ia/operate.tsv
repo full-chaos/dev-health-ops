@@ -30,7 +30,7 @@ op-workers	op-run	/operate/run/workers-and-jobs/	Workers, jobs, retries, and sch
 op-job-recovery	op-run	/operate/run/job-recovery-lifecycle/	Job recovery lifecycle	reference	true	public	planned	false	
 op-ingestion	op-run	/operate/run/ingestion-and-backfills/	Ingestion and backfill operations	task-guide	true	public	planned	false	
 op-controls	op-run	/operate/run/operational-controls/	Safe operational controls	task-guide	true	public	planned	false	
-op-ask-dev-rollout	op-run	/operate/run/ask-dev-rollout/	Ask Dev rollout	task-guide	true	public	planned	false	
+op-ask-dev-rollout	op-run	/operate/run/ask-dev-rollout/	Repair stranded Ask Dev conversations	task-guide	true	public	planned	false	
 op-observe	operate	/operate/observe/	Observe the platform	landing	true	public	planned	false	
 op-healthchecks	op-observe	/operate/observe/health-checks/	Health checks	reference	true	public	planned	false	
 op-logs	op-observe	/operate/observe/logs/	Logs	reference	true	public	planned	false	
@@ -38,6 +38,7 @@ op-metrics	op-observe	/operate/observe/metrics-and-traces/	Metrics and traces	re
 op-alerts	op-observe	/operate/observe/dashboards-and-alerts/	Dashboards and alerts	task-guide	true	public	planned	false	
 op-security	operate	/operate/security/	Security operations	landing	true	public	planned	false	
 op-hardening	op-security	/operate/security/hardening/	Production hardening	task-guide	true	public	planned	false	
+op-external-push-credentials	op-security	/operate/security/external-push-credentials/	Manage External Push credentials	task-guide	true	public	active	false	
 op-credential-inc	op-security	/operate/security/credential-incidents/	Credential and access incidents	runbook	true	public	planned	false	
 op-security-inc	op-security	/operate/security/incident-response/	Security incident response	runbook	true	public	planned	false	
 op-runbooks	operate	/operate/runbooks/	Runbooks	troubleshooting-index	true	public	planned	false	
@@ -54,15 +55,21 @@ op-rb-dr	op-runbooks	/operate/runbooks/disaster-recovery/	Disaster recovery	runb
 op-rb-prod-k3s	op-runbooks	/operate/runbooks/prod-k3s-deploy-and-operate/	Prod k3s deploy and operate	runbook	true	public	active	false
 op-rb-query-api	op-runbooks	/operate/runbooks/query-api-bootstrap/	Query-api bootstrap on prod k3s	runbook	true	public	active	false
 op-rb-auth-sessions-flip	op-runbooks	/operate/runbooks/auth-sessions-flip-and-rollback/	Auth sessions flip and rollback	runbook	true	public	active	false
+op-rb-auth-shadow-triage	op-runbooks	/operate/runbooks/auth-shadow-pdp-triage/	Auth shadow PDP triage	runbook	true	public	active	false
+op-rb-auth-pdp-outage-rollback	op-runbooks	/operate/runbooks/auth-pdp-outage-and-rollback/	Auth PDP outage and rollback	runbook	true	public	active	false
 op-rb-auth-signing-key-planned-rotation	op-runbooks	/operate/runbooks/auth-signing-key-planned-rotation/	Auth signing-key planned rotation	runbook	true	public	active	false
 op-rb-auth-signing-key-emergency-rotation	op-runbooks	/operate/runbooks/auth-signing-key-emergency-rotation-and-rollback/	Auth signing-key emergency rotation and rollback	runbook	true	public	active	false
 op-rb-auth-users-owned-flip	op-runbooks	/operate/runbooks/auth-users-owned-flip-and-rollback/	Auth users-owned flip and rollback	runbook	true	public	active	false
 op-rb-auth-platform-roles-flip	op-runbooks	/operate/runbooks/auth-platform-roles-flip-and-rollback/	Auth platform roles flip and rollback	runbook	true	public	active	false
 op-rb-auth-service-scrape-alerts	op-runbooks	/operate/runbooks/auth-service-scrape-and-alerts/	Auth-service scrape check and alert import	runbook	true	public	active	false
+op-rb-auth-push-projection-drift-alerts	op-runbooks	/operate/runbooks/auth-push-projection-drift-alerts/	Push projection drift alerts	runbook	true	public	active	false
 op-rb-auth-users-flip-back-grants	op-runbooks	/operate/runbooks/auth-users-flip-back-grants/	Auth users flip-back grants	runbook	true	public	active	false
 op-rb-auth-workload-bootstrap-credential	op-runbooks	/operate/runbooks/auth-workload-bootstrap-credential/	Workload bootstrap credential	runbook	true	public	active	false
 op-rb-auth-service-accounts	op-runbooks	/operate/runbooks/auth-service-accounts/	Service accounts	runbook	true	public	active	false
 op-rb-auth-workload-kubernetes-federation	op-runbooks	/operate/runbooks/auth-workload-kubernetes-federation/	Kubernetes workload federation	runbook	true	public	active	false
+op-rb-auth-workload-assertion-key-rotation	op-runbooks	/operate/runbooks/auth-workload-assertion-key-rotation/	Web assertion key rotation	runbook	true	public	active	false
+op-rb-auth-client-address-proof	op-runbooks	/operate/runbooks/auth-client-address-proof/	Auth client-address proof	runbook	true	public	active	false
 op-rb-auth-legacy-compat	op-runbooks	/operate/runbooks/auth-legacy-compat-and-rollback/	Auth legacy compatibility and rollback	runbook	true	public	active	false	
+op-rb-external-push-lifecycle	op-runbooks	/operate/runbooks/external-push-lifecycle/	External Push lifecycle events	runbook	true	public	active	false	
 op-prod-cutover-lessons	operate	/operate/prod-cutover-2026-09-11-lessons/	Prod cutover 2026-09-11 lessons	landing	true	public	active	false	
 op-rb-legacy-ingest-retired	op-runbooks	/operate/runbooks/legacy-ingest-retirement/	Legacy ingest retirement	runbook	true	public	active	false

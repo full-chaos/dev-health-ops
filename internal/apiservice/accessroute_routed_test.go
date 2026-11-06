@@ -310,8 +310,8 @@ func TestIssuerSetUserTokenPath(t *testing.T) {
 			}
 		}},
 		{name: "x-org-id of a non-member org", path: probeAuthenticated, token: user(nil), headers: map[string]string{"X-Org-Id": probeTargetOrg.String()}, status: http.StatusForbidden},
-		{name: "superuser from the users row, impersonating", path: probeSuperuser, token: minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(adminSID), "org_id": nil}), status: http.StatusOK, check: func(t *testing.T, body map[string]any) {
-			if body["impersonating"] != probeTarget.String() || body["org"] != probeTargetOrg.String() || userWith(body)["is_superuser"] != true {
+		{name: "superuser from the users row, impersonating, platform route refused", path: probeSuperuser, token: minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(adminSID), "org_id": nil}), status: http.StatusForbidden, check: func(t *testing.T, body map[string]any) {
+			if body["detail"] != "Not allowed in an impersonation session" {
 				t.Errorf("impersonation %v", body)
 			}
 		}},
@@ -598,7 +598,7 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy != 196 || user != 196 {
+	if legacy != 197 || user != 197 {
 		t.Errorf("%d legacy rows, %d user rows", legacy, user)
 	}
 }
@@ -678,11 +678,10 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 	}
 }
 
-// TestIssuerSetCallerLookupOutageIsTheListener500: a store outage behind the
-// validator answers through the api listener exactly as with the issuer
-// unset: OrgScope runs first and answers the generic 500 (OrgIdMiddleware
-// parity); the 503 of the guard is not reached on this listener.
-func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
+// TestIssuerSetCallerLookupOutageIsTheListener503 is D6666: a store outage
+// behind the validator answers through the api listener exactly as with the
+// issuer unset: OrgScope runs first and answers the guard's 503.
+func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	downSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c7")
@@ -690,7 +689,7 @@ func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
 	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
 	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
 	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})
-	if unset.Status != http.StatusInternalServerError {
+	if unset.Status != http.StatusServiceUnavailable || unset.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
 		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
 	}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)

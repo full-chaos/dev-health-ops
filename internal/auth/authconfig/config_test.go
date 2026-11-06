@@ -318,15 +318,16 @@ func TestLoadRejectsAnUndeclaredOverride(t *testing.T) {
 func TestEveryDeclaredOptionResolves(t *testing.T) {
 	distinct := map[string]string{
 		EnvUsersOwned:                  "true",
-		EnvOrgsOwned:                   "true",
 		EnvRevisionFeed:                "on",
 		EnvPushProjection:              "on",
+		EnvRepoIdentityProjection:      "on",
 		rule.OwnedEnv:                  "true",
 		EnvLogLevel:                    "debug",
 		EnvShutdownTimeout:             "42s",
 		EnvHealthCheckTimeout:          "1500ms",
 		EnvAPIAddress:                  "127.0.0.1:19095",
 		EnvOperatorAddress:             "127.0.0.1:19096",
+		EnvInternalAddress:             "127.0.0.1:19097",
 		EnvRequestTimeout:              "7s",
 		EnvMaxBodyBytes:                "4096",
 		EnvRateLimitPerSecond:          "3.5",
@@ -334,6 +335,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvPublicMaxInFlight:           "17",
 		EnvPublicRateLimit:             "7.5",
 		EnvPublicRateLimitBurst:        "19",
+		EnvPDPCallerRateLimit:          "11.5",
+		EnvPDPCallerRateLimitBurst:     "123",
+		EnvPDPRouteRateLimit:           "13.5",
+		EnvPDPRouteRateLimitBurst:      "321",
 		EnvDatabaseSchema:              "authtest",
 		EnvDatabaseMaxConns:            "11",
 		EnvDatabaseConnectTimeout:      "3s",
@@ -351,21 +356,23 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     "prn_AAAAAAAAAAAAAAAAAAAAAA,prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvAcrEventsWorkloadSubject:    "prn_BBBBBBBBBBBBBBBBBBBBBB",
 		EnvTrustedProxies:              "10.0.0.5,192.168.0.0/16",
+		EnvClientAddrMode:              "signed",
 		"SOCIAL_GITHUB_CLIENT_ID":      "gh-client",
 		"SOCIAL_GITLAB_CLIENT_ID":      "gl-client",
 		"SOCIAL_GOOGLE_CLIENT_ID":      "google-client",
 	}
 	read := map[string]func(Config) string{
 		EnvUsersOwned:                  func(c Config) string { return strconv.FormatBool(c.UsersOwned) },
-		EnvOrgsOwned:                   func(c Config) string { return strconv.FormatBool(c.OrgsOwned) },
 		EnvRevisionFeed:                func(c Config) string { return strconv.FormatBool(c.RevisionFeed) },
 		EnvPushProjection:              func(c Config) string { return strconv.FormatBool(c.PushProjection) },
+		EnvRepoIdentityProjection:      func(c Config) string { return strconv.FormatBool(c.RepoIdentityProjection) },
 		rule.OwnedEnv:                  func(c Config) string { return strconv.FormatBool(c.PlatformRolesOwned) },
 		EnvLogLevel:                    func(c Config) string { return c.LogLevel.String() },
 		EnvShutdownTimeout:             func(c Config) string { return c.ShutdownTimeout.String() },
 		EnvHealthCheckTimeout:          func(c Config) string { return c.HealthCheckTimeout.String() },
 		EnvAPIAddress:                  func(c Config) string { return c.APIAddress },
 		EnvOperatorAddress:             func(c Config) string { return c.OperatorAddress },
+		EnvInternalAddress:             func(c Config) string { return c.InternalAddress },
 		EnvRequestTimeout:              func(c Config) string { return c.RequestTimeout.String() },
 		EnvMaxBodyBytes:                func(c Config) string { return itoa(c.MaxBodyBytes) },
 		EnvRateLimitPerSecond:          func(c Config) string { return ftoa(c.RateLimit.PerSecond) },
@@ -373,6 +380,10 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvPublicMaxInFlight:           func(c Config) string { return itoa(int64(c.Public.MaxInFlight)) },
 		EnvPublicRateLimit:             func(c Config) string { return ftoa(c.Public.PerSecond) },
 		EnvPublicRateLimitBurst:        func(c Config) string { return itoa(int64(c.Public.Burst)) },
+		EnvPDPCallerRateLimit:          func(c Config) string { return ftoa(c.PDPCaller.PerSecond) },
+		EnvPDPCallerRateLimitBurst:     func(c Config) string { return itoa(int64(c.PDPCaller.Burst)) },
+		EnvPDPRouteRateLimit:           func(c Config) string { return ftoa(c.PDPRoute.PerSecond) },
+		EnvPDPRouteRateLimitBurst:      func(c Config) string { return itoa(int64(c.PDPRoute.Burst)) },
 		EnvDatabaseSchema:              func(c Config) string { return c.DatabaseSchema },
 		EnvDatabaseMaxConns:            func(c Config) string { return itoa(int64(c.DatabaseMaxConns)) },
 		EnvDatabaseConnectTimeout:      func(c Config) string { return c.DatabaseConnectTimeout.String() },
@@ -390,6 +401,7 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 		EnvAuthorizeCallerSubjects:     func(c Config) string { return strings.Join(c.AuthorizeCallerSubjects, ",") },
 		EnvAcrEventsWorkloadSubject:    func(c Config) string { return c.AcrEventsWorkloadSubject },
 		EnvTrustedProxies:              func(c Config) string { return itoa(int64(c.TrustedProxies.Len())) },
+		EnvClientAddrMode:              func(c Config) string { return string(c.ClientAddrMode) },
 		"SOCIAL_GITHUB_CLIENT_ID":      func(c Config) string { return c.Social["github"].ID },
 		"SOCIAL_GITLAB_CLIENT_ID":      func(c Config) string { return c.Social["gitlab"].ID },
 		"SOCIAL_GOOGLE_CLIENT_ID":      func(c Config) string { return c.Social["google"].ID },
@@ -431,6 +443,9 @@ func TestEveryDeclaredOptionResolves(t *testing.T) {
 			}
 			if option.Env == EnvRevisionFeed {
 				env[EnvValkeyURI] = testValkeyURI
+			}
+			if option.Env == EnvClientAddrMode {
+				env[EnvClientAddrVerifyKey] = "k1:" + strings.Repeat("A", 43)
 			}
 			if option.Env == EnvSessionIssueWorkloadSubject || option.Env == EnvAuthorizeCallerSubjects || option.Env == EnvAcrEventsWorkloadSubject {
 				env[EnvTokenIssuerURL] = "https://auth.example.com"
@@ -541,40 +556,6 @@ func TestUsersOwnedRefusesAnythingButTrueOrFalse(t *testing.T) {
 	}
 }
 
-func TestOrgsOwnedDefaultsOff(t *testing.T) {
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
-	if err != nil || cfg.OrgsOwned {
-		t.Fatalf("default OrgsOwned = %v, err %v; want false", cfg.OrgsOwned, err)
-	}
-}
-
-func TestOrgsOwnedParsesLikeUsersOwned(t *testing.T) {
-	for _, value := range []string{"", "false", "true", "TRUE", " true ", "False", "yes", "1", "on", "enabled"} {
-		users, orgs := baseEnv(), baseEnv()
-		users[EnvUsersOwned], orgs[EnvOrgsOwned] = value, value
-		uc, uerr := Load(Spec{LookupEnv: lookupFrom(users)})
-		oc, oerr := Load(Spec{LookupEnv: lookupFrom(orgs)})
-		if (uerr == nil) != (oerr == nil) {
-			t.Fatalf("value %q: AUTH_USERS_OWNED err=%v, AUTH_ORGS_OWNED err=%v; the parse rules differ", value, uerr, oerr)
-		}
-		if uerr == nil && uc.UsersOwned != oc.OrgsOwned {
-			t.Fatalf("value %q: UsersOwned=%v OrgsOwned=%v", value, uc.UsersOwned, oc.OrgsOwned)
-		}
-	}
-}
-
-func TestOrgsOwnedDoesNotMountAnyRoute(t *testing.T) {
-	env := baseEnv()
-	env[EnvOrgsOwned] = "true"
-	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
-	if err != nil || !cfg.OrgsOwned {
-		t.Fatalf("OrgsOwned = %v, err %v", cfg.OrgsOwned, err)
-	}
-	if cfg.LimitedRoutesMounted() {
-		t.Fatal("AUTH_ORGS_OWNED mounted a rate-limited route")
-	}
-}
-
 func TestPublicAdmissionDefaultsAndRanges(t *testing.T) {
 	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
 	if err != nil {
@@ -634,5 +615,27 @@ func TestRateLimitBurstRefusesAValueBeyondIntRange(t *testing.T) {
 	e[EnvRateLimitBurst] = "1.5"
 	if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
 		t.Errorf("1.5: error = %v, want an integer refusal", err)
+	}
+}
+
+func TestPDPRateLimitDefaultsAndRanges(t *testing.T) {
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(baseEnv())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (RateLimit{PerSecond: 150, Burst: 300}); cfg.PDPCaller != want {
+		t.Errorf("PDPCaller = %+v, want %+v", cfg.PDPCaller, want)
+	}
+	if want := (RateLimit{PerSecond: 2000, Burst: 4000}); cfg.PDPRoute != want {
+		t.Errorf("PDPRoute = %+v, want %+v", cfg.PDPRoute, want)
+	}
+	for _, env := range []string{EnvPDPCallerRateLimit, EnvPDPCallerRateLimitBurst, EnvPDPRouteRateLimit, EnvPDPRouteRateLimitBurst} {
+		for _, value := range []string{"0", "100001", "x"} {
+			e := baseEnv()
+			e[env] = value
+			if _, err := Load(Spec{LookupEnv: lookupFrom(e)}); err == nil {
+				t.Errorf("%s=%s accepted, want a range refusal", env, value)
+			}
+		}
 	}
 }

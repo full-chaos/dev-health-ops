@@ -113,7 +113,6 @@ func TestRepoGrant_AllowsLiveGrant(t *testing.T) {
 	for _, tc := range []struct{ name, grantKey, reqKey string }{
 		{"exact key", "acme/api", "acme/api"},
 		{"org wide grant, one repo", "*", "acme/api"},
-		{"org wide grant, org wide request", "*", "*"},
 	} {
 		d := e.Evaluate(repoRequest(tc.reqKey), repoSnapshot("member", liveGrant(tc.grantKey)))
 		if !d.Allowed || d.Reason != ReasonAllowedByRepositoryGrant {
@@ -132,7 +131,7 @@ func TestRepoGrant_AnyRowEndsTheMembershipDefault(t *testing.T) {
 	for _, role := range []string{"viewer", "member", "admin", "owner"} {
 		wantDeny(t, role+" other repo", e.Evaluate(repoRequest("acme/api"), repoSnapshot(role, liveGrant("acme/web"))), ReasonRepositoryNotGranted)
 	}
-	wantDeny(t, "repo grant for org wide request", e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("acme/api"))), ReasonRepositoryNotGranted)
+	wantDeny(t, "repo grant for org wide request", e.Evaluate(repoRequest("*"), repoSnapshot("member", liveGrant("acme/api"))), ReasonInvalidRequest)
 }
 
 func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
@@ -144,7 +143,7 @@ func TestRepoGrant_GrantNeedsStanding(t *testing.T) {
 	for _, st := range []Status{StatusUnknown, StatusInvited, StatusSuspended, StatusRemoved} {
 		s := repoSnapshot("member", g)
 		s.memberships = map[string]Membership{testOrg: {OrgID: testOrg, Role: "member", Status: st}}
-		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonMembershipInactive)
+		wantDeny(t, "membership "+string(rune('0'+st)), e.Evaluate(repoRequest("acme/api"), s), ReasonNoMembership)
 	}
 	s = repoSnapshot("member", g)
 	s.memberships = map[string]Membership{testOrg: {OrgID: orgB, Role: "member", Status: StatusActive}}
@@ -255,14 +254,14 @@ func TestRepoGrant_RequestKeyShape(t *testing.T) {
 	e := plantedEvaluator()
 	s := repoSnapshot("member", liveGrant("*"))
 	long := string(bytes.Repeat([]byte("a"), 101))
-	for _, key := range []string{"", "ACME/api", "acme/API", "a/b/c", "acme/api ", " acme/api", "acme/api\n", "acme/api\x00", "acme", "/api", "acme/", "**", "*/*", "acme/*", long + "/api", "acme/" + long, "-a/b", ".a/b"} {
+	for _, key := range []string{"", "ACME/api", "acme/API", "acme/api ", " acme/api", "acme/api\n", "acme/api\x00", "acme", "/api", "acme/", "**", "*/*", "acme/*", long + "/api", "acme/" + long, "-a/b", ".a/b"} {
 		out, ok := NormalizeRequest(repoRequest(key))
 		if ok || out != (Request{}) {
 			t.Errorf("accepted key %q", key)
 		}
 		wantDeny(t, "key "+key, e.Evaluate(repoRequest(key), s), ReasonInvalidRequest)
 	}
-	for _, key := range []string{"*", "a/b", "acme/api", "a.b-c_d/e", "0/0"} {
+	for _, key := range []string{"*", "a/b", "acme/api", "a.b-c_d/e", "0/0", "a/b/c", "acme/grp/.github"} {
 		if out, ok := NormalizeRequest(repoRequest(key)); !ok || out != repoRequest(key) {
 			t.Errorf("refused or changed key %q: %+v", key, out)
 		}
@@ -419,7 +418,7 @@ func TestRepoGrant_ReasonsAreClosed(t *testing.T) {
 			}
 		}
 	}
-	if len(AllReasons()) != 26 {
+	if len(AllReasons()) != 27 {
 		t.Errorf("reason count %d", len(AllReasons()))
 	}
 }

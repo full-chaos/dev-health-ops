@@ -61,3 +61,29 @@ func TestFederatedPublicUserRefusesAnInvalidSubject(t *testing.T) {
 		t.Errorf("social edge whitespace: err = %v, want ErrLegacyProjection", err)
 	}
 }
+
+// CHAOS-11622: a SAML row carries the NameID Format and SPNameQualifier as asserted (go-api's samlNameIDParts:
+// an empty string stays an empty string); an OIDC row, even handed the parts, and a social row carry NULL.
+func TestFederatedPublicUserCarriesTheSAMLNameIDParts(t *testing.T) {
+	id := uuid.New()
+	key := ExternalKey{Issuer: "https://idp.example.test", Provider: "6f0c2d58-6b43-4b8e-9a8e-3a6f7a1c9d11", Subject: "saml1|f|q|v"}
+	for name, parts := range map[string]SAMLNameIDParts{
+		"both set":   {Format: "urn:oasis:names:tc:SAML:2.0:nameid-format:persistent", SPNameQualifier: "sp-q"},
+		"both empty": {},
+		"padded":     {Format: "f", SPNameQualifier: " q "},
+	} {
+		p := parts
+		got, err := federatedPublicUser(id, "a@example.test", ProvisionRequest{Key: key, LegacyProvider: "saml", LegacySubject: "v", SAMLNameID: &p})
+		if err != nil || got.SAMLNameID == nil || *got.SAMLNameID != parts {
+			t.Errorf("%s: row %+v err %v, want parts %+v", name, got.SAMLNameID, err, parts)
+		}
+	}
+	got, err := federatedPublicUser(id, "b@example.test", ProvisionRequest{Key: key, LegacyProvider: "saml", LegacySubject: "v"})
+	if err != nil || got.SAMLNameID != nil {
+		t.Errorf("saml without parts: %+v %v, want NULL parts", got.SAMLNameID, err)
+	}
+	oidc, err := federatedPublicUser(id, "c@example.test", ProvisionRequest{Key: key, LegacyProvider: "oidc", LegacySubject: "v", SAMLNameID: &SAMLNameIDParts{Format: "f"}})
+	if err != nil || oidc.SAMLNameID != nil {
+		t.Errorf("oidc: %+v %v, want NULL parts", oidc.SAMLNameID, err)
+	}
+}

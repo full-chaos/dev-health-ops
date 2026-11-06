@@ -30,9 +30,6 @@ type Config struct {
 	Sessions SessionEnder
 	Logger   *slog.Logger
 	Meter    metric.Meter
-	// OwnsOrgs is AUTH_ORGS_OWNED: each verb also writes go-api's
-	// public.organizations name and is_active in its commit.
-	OwnsOrgs bool
 }
 
 // SessionEnder ends an organization's credentials inside a verb's transaction.
@@ -57,7 +54,6 @@ type Store struct {
 	q         string
 	commit    func(context.Context, audit.Mutation) error
 	sessions  SessionEnder
-	ownsOrgs  bool
 	logger    *slog.Logger
 	mutations metric.Int64Counter
 }
@@ -69,7 +65,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("org: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), sessions: cfg.Sessions, ownsOrgs: cfg.OwnsOrgs, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, q: authschema.Quote(cfg.Schema), sessions: cfg.Sessions, logger: cfg.Logger}
 	s.commit = func(ctx context.Context, m audit.Mutation) error { return audit.Commit(ctx, cfg.Pool, cfg.Schema, m) }
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -289,9 +285,6 @@ func (s *Store) mutateOnce(ctx context.Context, v verb, id uuid.UUID, newName st
 			_, err = tx.Exec(ctx, `UPDATE `+s.q+`.organizations SET name = $2,
 disabled_at = CASE WHEN $3::boolean THEN NULL ELSE COALESCE(disabled_at, clock_timestamp()) END,
 updated_at = clock_timestamp() WHERE id = $1`, id, d.next.name, d.next.active)
-			if err == nil {
-				err = s.writePublic(ctx, tx, id, d.next)
-			}
 			if err != nil || v != verbSuspend || s.sessions == nil {
 				return err
 			}
@@ -305,18 +298,6 @@ updated_at = clock_timestamp() WHERE id = $1`, id, d.next.name, d.next.active)
 		Events:   []audit.OutboxEvent{eventFor(v, id, "")},
 		Refusals: []error{errSessionsBusy},
 	})
-}
-
-// writePublic brings go-api's public.organizations name and is_active to next
-// in the verb's commit while auth-service owns organizations. An organization
-// with no go-api row has nothing to keep equal.
-func (s *Store) writePublic(ctx context.Context, tx audit.TxOps, id uuid.UUID, next state) error {
-	if !s.ownsOrgs {
-		return nil
-	}
-	_, err := tx.Exec(ctx, `UPDATE public.organizations SET name = $2, is_active = $3, updated_at = clock_timestamp() WHERE id = $1`,
-		id, next.name, next.active)
-	return err
 }
 
 func statusOf(active bool) Status {

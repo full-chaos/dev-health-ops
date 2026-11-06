@@ -30,7 +30,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/api/acrcredentials"
 	"github.com/full-chaos/dev-health-ops/internal/api/apimetrics"
+	"github.com/full-chaos/dev-health-ops/internal/platform/removedenv"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"log/slog"
@@ -212,7 +214,7 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 		Provision:     deps.OrgProvisioner,
 	})...)
 	if deps.Guard != nil {
-		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger, deps.OrgRenamer)...)
+		routes = append(routes, orgs.Routes(deps.Pool, deps.Guard, logger)...)
 		routes = append(routes, telemetry.Routes(deps.Pool, deps.Guard, deps.Auth, deps.Telemetry.Endpoint, logger)...)
 		routes = append(routes, customerpush.Routes(customerpush.Deps{Pool: deps.Pool, Guard: deps.Guard, Logger: logger, Cipher: deps.Decryptor,
 			PushLifecycleEvents: deps.PushLifecycleEvents, AuthSchema: deps.AuthSchema})...)
@@ -258,6 +260,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			// recorded for, not the instant it happens to replay at.
 			Now: deps.Now, PlatformRoles: deps.platformRoles(),
 		})...)
+		routes = append(routes, acrcredentials.Routes(acrcredentials.Deps{Guard: deps.Guard, Revoker: deps.ACRRevoker, Logger: logger,
+			Members: policy.PGStore{Pool: deps.Pool, AuthSchema: deps.AuthSchema, PlatformRolesOwned: deps.PlatformRolesOwned}})...)
 		routes = append(routes, admin.Routes(admin.Deps{
 			Pool:               deps.Pool,
 			Valkey:             deps.Valkey,
@@ -278,7 +282,8 @@ func Routes(deps Deps, logger *slog.Logger) []httpapi.Route {
 			OrgReactivator:     deps.OrgReactivator,
 			OrgProvisioner:     deps.OrgProvisioner,
 			OrgSuspender:       deps.OrgSuspender,
-			OrgState:           deps.OrgState, OrgRenamer: deps.OrgRenamer,
+			OrgState:           deps.OrgState,
+			Delegator:          deps.Delegator,
 		})...)
 	}
 	webhookintake.LogUnconfiguredSecrets(logger)
@@ -331,9 +336,9 @@ func configure(
 }
 
 // orgStateReconciler is the is_active reconcile loop: only with the organization client, so only with
-// AUTH_PROXY_ORG_PROVISIONING on, only with a database, and never while auth-service owns organizations (it writes is_active).
+// AUTH_PROXY_ORG_PROVISIONING on, and only with a database.
 func orgStateReconciler(deps Deps, logger *slog.Logger) []lifecycle.Component {
-	if deps.OrgState == nil || deps.Pool == nil || admin.OrgsOwned() {
+	if deps.OrgState == nil || deps.Pool == nil {
 		return nil
 	}
 	return []lifecycle.Component{admin.NewOrgStateReconciler(deps.Pool, deps.OrgState, logger)}
@@ -394,12 +399,16 @@ func configureWith(
 	logger *slog.Logger,
 	adjust func(*Deps),
 ) ([]lifecycle.Component, error) {
+	removedenv.ObserveOrgsOwned(ctx, envsecrets.ProcessLookup, logger)
 	if err := checkTrustedProxies(logger); err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_trusted_proxies", "api_trusted_proxies_invalid", err)
 	}
 	authProxy, err := ParseAuthProxyConfig(envsecrets.ProcessLookup)
 	if err != nil {
-		return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		var onlyShadow bool
+		if authProxy, onlyShadow = shadowOnlyProxyFault(envsecrets.ProcessLookup); !onlyShadow {
+			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
+		}
 	}
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
@@ -409,6 +418,7 @@ func configureWith(
 	if err != nil {
 		return nil, err
 	}
+	deps.ACRRevoker = newACRRevoker(envsecrets.ProcessLookup, logger)
 	deps.UsersOwned, err = ParseUsersOwned(envsecrets.ProcessLookup, authProxy)
 	if err != nil {
 		closeComponents(depComponents)
@@ -434,13 +444,14 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_session_issue", "api_session_issue_config_invalid", err)
 	}
+	deps.Delegator = impersonationDelegator(ctx, authProxy, deps.SessionIssuer, logger)
 	orgClient, err := orgLifecycleClient(authProxy, provisioningCred)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_org_provisioning", "api_org_provisioning_config_invalid", err)
 	}
 	if orgClient != nil {
-		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState, deps.OrgRenamer = orgClient, orgClient, orgClient, orgClient
+		deps.OrgReactivator, deps.OrgSuspender, deps.OrgState = orgClient, orgClient, orgClient
 	}
 	depComponents = append(depComponents, orgStateReconciler(deps, logger)...)
 	deps.OrgProvisioner, err = orgProvisioner(authProxy, provisioningCred)
@@ -456,6 +467,14 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_access_token_verifier", "api_protection_config_failed", err)
 		}
 		deps.Auth, deps.Guard, deps.AuthSchema = protected.auth, protected.guard, protected.authSchema
+		decisionPoint := newDecisionPoint(authProxy, envsecrets.ProcessLookup, sharedWorkloadClient(provisioningCred, sessionCred))
+		enforcer, err := buildEnforcer(envsecrets.ProcessLookup, logger, decisionPoint)
+		if err != nil {
+			closeComponents(depComponents)
+			return nil, dependencyFailure(ctx, logger, "api_authz_enforce", "api_authz_enforce_config_invalid", err)
+		}
+		protected.guard.SetEnforcer(enforcer)
+		protected.guard.SetShadow(newShadow(decisionPoint, envsecrets.ProcessLookup, logger))
 		deps.Verifier, deps.Signer = protected.verifier, protected.signer
 		// ReadOnce first: the org scope and the route's guard read the token
 		// org's membership once per request.
@@ -467,7 +486,7 @@ func configureWith(
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_access_verify", "api_access_verify_config_invalid", err)
 	}
-	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys)
+	deps.ACRWorkload, err = buildACRWorkload(envsecrets.ProcessLookup, accessKeys, logger)
 	if err != nil {
 		closeComponents(depComponents)
 		return nil, dependencyFailure(ctx, logger, "api_acr_workload", "api_acr_workload_config_invalid", err)

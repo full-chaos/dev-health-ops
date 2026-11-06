@@ -95,12 +95,14 @@ func TestTheRegistryNamesTheProvisioningRoutesAsWorkloadConsumersOnly(t *testing
 					named++
 				}
 			}
-			if named != len(provisioningRoutes) {
-				t.Errorf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
+			// The eight read routes mount with the provisioning routes, on the same two switches.
+			if want := len(provisioningRoutes) + len(ReadOperations()); named != want {
+				t.Errorf("%d workload_token provisioning consumers name both variables, want %d", named, want)
 			}
 		case "internal_svc_authsess_token":
 			for _, consumer := range class.Consumers {
-				if strings.Contains(consumer.Description, "memberships:write") || strings.Contains(consumer.Description, "/internal/v1/memberships") ||
+				if strings.Contains(consumer.Description, "memberships:write") || strings.Contains(consumer.Description, ":read scope") ||
+					strings.Contains(consumer.Description, "/internal/v1/principals") || strings.Contains(consumer.Description, "/internal/v1/memberships") ||
 					strings.Contains(consumer.Description, "/internal/v1/invites") || strings.Contains(consumer.Description, "/internal/v1/organizations") ||
 					strings.Contains(consumer.Description, "/internal/v1/service-accounts") || strings.Contains(consumer.Description, "/internal/v1/grants") {
 					t.Errorf("internal_svc_authsess_token still names a provisioning consumer: %s", consumer.Description)

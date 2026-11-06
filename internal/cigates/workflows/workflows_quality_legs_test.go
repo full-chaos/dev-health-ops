@@ -143,7 +143,7 @@ func qualityLegViolations(t *testing.T, root string) []string {
 	if !ran {
 		add("no go-quality-leg step runs `ci-leg ${{ matrix.args }}`")
 	}
-	const poolTimeout = "${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || 30 }}"
+	const poolTimeout = "${{ (matrix.pool && vars.CI_RACE_RUNNER != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'full-chaos/dev-health-ops') && 45 || (github.event_name == 'merge_group' && 45 || 45) }}"
 	if tm, ok := leg["timeout-minutes"].(int); !(ok && tm <= 30) && leg["timeout-minutes"] != poolTimeout {
 		add("go-quality-leg timeout-minutes must be <= 30 (or the pool expression), got %v", leg["timeout-minutes"])
 	}
@@ -228,7 +228,7 @@ func TestGoQualityLegsPlantedDefects(t *testing.T) {
 		{"a race entry goes missing from the matrix", []mutation{{legs, `"args": "race 2 6"`, `"args": "race 7 6"`}}, []string{"not 1..N of N"}},
 		{"fail-fast comes back on", []mutation{{wf, "fail-fast: false", "fail-fast: true"}}, []string{"fail-fast must be false"}},
 		{"the fan-in can skip", []mutation{{wf, "\n    if: always()\n", "\n    if: success()\n"}}, []string{"fan-in must be always()"}},
-		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || 30 }}", "&& 90 || 30 }}"}}, []string{"timeout-minutes must be <= 30"}},
+		{"the pool timeout grows past 45", []mutation{{wf, "&& 45 || (github.event_name == 'merge_group'", "&& 90 || (github.event_name == 'merge_group'"}}, []string{"timeout-minutes must be <= 30"}},
 		{"the fan-in stops judging the legs unconditional", []mutation{{wf, "go-quality-leg|unconditional|", "go-quality-leg|path-filtered|"}}, []string{"unconditional"}},
 		{"the fan-in stops judging the plan job unconditional", []mutation{{wf, "go-quality-plan|unconditional|", "go-quality-plan|path-filtered|"}}, []string{"judge the plan job"}},
 		{"the fan-in stops needing the plan job", []mutation{{wf, "needs: [go-quality-plan, go-quality-leg]", "needs: [go-quality-leg]"}}, []string{"must need exactly go-quality-plan and go-quality-leg"}},

@@ -197,9 +197,14 @@ const OffStreamRestoreFence = "restore_fence"
 // projected state and republishes nothing.
 const OffStreamCredentialProjection = "credential_projection"
 
+// OffStreamRepositoryIdentity marks the copy of the provider repository ids into auth.repository_identities and
+// the backfill of resource_grants.resource_repo_id (CHAOS-12720): the source of the ids is ClickHouse repos, so the
+// copy is not an auth fact and has no provisioning event.
+const OffStreamRepositoryIdentity = "repository_identity"
+
 var offStreamReasons = map[string]bool{
 	OffStreamSessionLifecycle: true, OffStreamLinkCredentialLifecycle: true, OffStreamSigningKeyLifecycle: true,
-	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true,
+	OffStreamWorkloadRegistry: true, OffStreamRestoreFence: true, OffStreamCredentialProjection: true, OffStreamRepositoryIdentity: true,
 }
 
 // TxOps is what a mutation may do inside the transaction.
@@ -566,6 +571,9 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 			return err
 		}
 	}
+	if Rehearsing(ctx) {
+		return nil
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("%w: committing", ErrMutationFailed)
 	}
@@ -574,14 +582,17 @@ func Commit(ctx context.Context, pool *pgxpool.Pool, schema authschema.Validated
 
 func logCommitFailure(ctx context.Context, m Mutation, err error) {
 	level, msg := slog.LevelError, "audit: Commit failed; its own transaction rolled back"
+	args := []any{"audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
+		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err)}
 	for _, refusal := range m.Refusals {
 		if errors.Is(err, refusal) {
 			level, msg = slog.LevelWarn, "audit: Commit refused; its own transaction rolled back"
+			// The Go type name of the declared refusal, never its text.
+			args = append(args, "refusal", logging.ErrorType(refusal))
 			break
 		}
 	}
-	slog.Log(ctx, level, msg, "audit_event_type", m.Audit.EventType, "outbox_events", len(m.Events),
-		"aggregate_types", aggregateTypes(m.Events), "off_stream", m.OffStream, logging.ErrorAttr(err))
+	slog.Log(ctx, level, msg, args...)
 }
 
 // outboxOrder is the order a mutation's events are written in:

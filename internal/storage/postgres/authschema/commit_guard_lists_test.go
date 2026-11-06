@@ -14,6 +14,7 @@ var guardedTables = []string{
 	"credential_registry", "service_accounts", "workloads", "workload_bindings", "workload_assertion_keys", "external_identities",
 	"organizations", "aggregate_revisions", "signing_keys", "invites", "restore_fence_state", "oauth_grants",
 	"push_sources", "credential_projection", "credential_projection_digest", "projection_cursor", "projection_retry",
+	"repository_identities",
 }
 
 // unguardedTables are deliberately outside the guard, each with its reason.

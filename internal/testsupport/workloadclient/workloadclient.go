@@ -53,6 +53,17 @@ func ForToken(t testing.TB, token string) *workloadtoken.Client {
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": token, "issued_token_type": workloadtoken.TokenTypeJWT, "token_type": "Bearer", "expires_in": 300})
 	}))
 	t.Cleanup(exchange.Close)
+	client, err := workloadtoken.New(workloadtoken.Config{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: Issuer,
+		Subject: workloadtoken.BootstrapCredentialFile(BootstrapFile(t)), Transport: &http.Transport{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// BootstrapFile writes a well-formed workload bootstrap credential to a file of the test's own and returns its path.
+func BootstrapFile(t testing.TB) string {
+	t.Helper()
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {
 		t.Fatal(err)
@@ -61,10 +72,5 @@ func ForToken(t testing.TB, token string) *workloadtoken.Client {
 	if err := os.WriteFile(path, []byte(workloadtoken.BootstrapPrefix+base64.RawURLEncoding.EncodeToString(random)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	client, err := workloadtoken.New(workloadtoken.Config{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: Issuer,
-		Subject: workloadtoken.BootstrapCredentialFile(path), Transport: &http.Transport{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return client
+	return path
 }

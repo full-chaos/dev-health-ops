@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/membership"
 	"github.com/full-chaos/dev-health-ops/internal/auth/org"
 	"github.com/full-chaos/dev-health-ops/internal/auth/orgdeprovision"
+	"github.com/full-chaos/dev-health-ops/internal/auth/publicread"
 	"github.com/full-chaos/dev-health-ops/internal/auth/serviceaccount"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
@@ -24,7 +25,8 @@ import (
 var provisioningProfileRows []byte
 
 // provisioningRoutes builds the internal membership, invite and organization
-// deprovision routes when AUTH_MEMBERSHIP_ROUTES is on, and none otherwise.
+// deprovision routes and, behind the same switch, the internal read routes (each
+// mounted only with its endpoint-profile row) when AUTH_MEMBERSHIP_ROUTES is on, and none otherwise.
 // Every verb behind them refuses while auth-service does not own users. They
 // take the session issue route's workload path (nil refuses workload tokens).
 // A membership removal ends the member's sessions of the organization, and an
@@ -44,7 +46,7 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
-	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Sessions: sessions, Logger: logger, OwnsOrgs: cfg.OrgsOwned})
+	orgs, err := org.New(org.Config{Pool: pool, Schema: schema, Sessions: sessions, Logger: logger})
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +63,22 @@ func provisioningRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpoo
 	if err != nil {
 		return nil, err
 	}
-	return authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
+	routes, err := authapi.ProvisioningRoutes(authapi.ProvisioningDeps{
 		Users: pgUsers(cfg, pool, schema), Reader: pool, Organizations: identities,
 		Memberships: members, Invites: invites, Deprovision: deprovision, Orgs: orgs, ServiceAccounts: accounts, Grants: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
 	})
+	if err != nil {
+		return nil, err
+	}
+	reader, err := publicread.New(publicread.Config{Querier: pool, AuthSchema: schema.String(), Logger: logger})
+	if err != nil {
+		return nil, err
+	}
+	reads, err := authapi.ReadRoutes(authapi.ReadDeps{
+		Reads: reader, GrantReads: grants, Workload: workload, Logger: logger, ProfileRows: provisioningProfileRows,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return append(routes, reads...), nil
 }

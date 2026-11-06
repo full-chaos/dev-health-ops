@@ -221,12 +221,12 @@ The go-api shadow harness runs the new policy decision next to the legacy guard 
 
 **The signal is not live yet.** The mismatch and result panels show no data and the rule is inert until the shadow is wired into go-api (the pull request that adds the `AUTH_SHADOW_PDP` switch) and `AUTH_SHADOW_PDP` is on. The two status panels differ: once the shadow is wired, `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid` report data even with the switch off (0 and 0 when off; 0 and 1 when the shadow settings are invalid). The counters are lazy: an OpenTelemetry counter has no series until its first `Add`, so an absent series means nothing happened. The rule has no absent-data alert. Do not read an applied rule as proof that the shadow is armed; the check is `dev_health_api_shadow_enabled` = 1 in SigNoz.
 
-Labels are a closed set: `namespace`, `caller`, `class` on `dev_health_api_shadow_mismatch_total`, and `result` on `dev_health_api_shadow_results_total`. `namespace` is the action namespace (admin, billing, integrations, license, members, settings, teams), not the Kubernetes namespace. `caller` is member, admin or superuser. `class` is legacy_bug, new_bug, unresolved or intentional. Filters use only `service.name` and `deployment.environment` besides these. No organization, user, route, action or decision id is ever a label.
+Labels are a closed set: `namespace`, `caller`, `class` on `dev_health_api_shadow_mismatch_total`, and `result`, `reason` on `dev_health_api_shadow_results_total`. `reason` is none, hs256 or envelope. `namespace` is the action namespace (admin, billing, integrations, license, members, settings, teams), not the Kubernetes namespace. `caller` is member, admin or superuser. `class` is legacy_bug, new_bug, unresolved or intentional. Filters use only `service.name` and `deployment.environment` besides these. No organization, user, route, action or decision id is ever a label.
 
 What to read:
 
 - `AuthShadowMismatchUnresolved`: any increase of `dev_health_api_shadow_mismatch_total` with `class = 'unresolved'` in one hour, evaluated every 5 minutes, severity warning, channel `accounts-email`, no renotify (one email per transition; the dashboard holds the detail). `unresolved` is the default class, so any difference that no reviewed row of the class table covers lands here.
-- Dashboard: unresolved total; mismatches by action namespace, by caller and by class; a namespace by caller table; results by `result` (match, mismatch, error, dropped, skipped); `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid`.
+- Dashboard: unresolved total; mismatches by action namespace, by caller and by class; a namespace by caller table; results by `result` (match, mismatch, error, dropped, skipped, impersonation_refused); `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid`.
 - Zero mismatches is not "good" by itself: read the results panel, because error, dropped or skipped calls produce no mismatch.
 - The metric says where; the go-api WARN log "api shadow pdp: mismatch with the legacy guard" says what (action, route, reason_code, decision_id). The log is limited to one line per second per class: use it for samples, never for counts.
 
@@ -303,3 +303,319 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a
   }
 }
 ```
+
+## Auth service SLO alerts
+
+The table of targets, windows and sources is in the [auth readiness and SLO reference](../../reference/auth/readiness-and-slo.md) (CHAOS-11220). Four rules in `alerts/rules.yml`, group `auth_slo`, evaluate it: PDP p95 above 25 ms, PDP p99 above 75 ms, session issue or refresh p95 above 200 ms, and the oldest pending outbox event above 300 seconds. Each fires when the condition holds for five minutes. The latency rules read `dev_health_api_http_request_duration_seconds` filtered by `route`; 25 ms, 75 ms and 200 ms are bucket edges of that histogram, so the quantile is not rounded up to the next edge. Availability is not a rule of this group: `AuthService5xx` (any 5xx in five minutes, live) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for ten minutes, in `alerts/rules.yml`, not yet created in SigNoz) cover it, and no burn-rate rule exists.
+
+These four blocks are derived from `alerts/rules.yml` and are not yet imported. Before you save a rule, run its query over the last hour in SigNoz: "no data" (and not 0) means the series does not reach SigNoz yet (the auth-service series is empty until go-api forwards routes to it), so stop and report. The notification channel is `accounts-email`; the policy is not used.
+
+```json
+{
+  "alert": "AuthzLatencyP95High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p95"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/v1/authorize', '/v1/authorize:batch') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.025,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth PDP p95 latency above 25 ms",
+    "description": "The p95 of POST /v1/authorize and /v1/authorize:batch on the auth service was above 25 ms for five minutes (target p95 < 25 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthzLatencyP99High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p99"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/v1/authorize', '/v1/authorize:batch') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.075,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth PDP p99 latency above 75 ms",
+    "description": "The p99 of POST /v1/authorize and /v1/authorize:batch on the auth service was above 75 ms for five minutes (target p99 < 75 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthTokenLatencyP95High",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "dev_health_api_http_request_duration_seconds",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p95"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND route IN ('/internal/v1/sessions', '/v1/token/refresh') AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 0.2,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth token issue or refresh p95 latency above 200 ms",
+    "description": "The p95 of session issue and refresh on the auth service was above 200 ms for five minutes (target p95 < 200 ms)."
+  }
+}
+```
+
+```json
+{
+  "alert": "AuthOutboxOldestPendingHigh",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "schemaVersion": "v2alpha1",
+  "condition": {
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "s",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "stepInterval": 60,
+            "aggregations": [
+              {
+                "metricName": "devhealth_auth_outbox_oldest_pending_age_seconds",
+                "timeAggregation": "latest",
+                "spaceAggregation": "max"
+              }
+            ],
+            "filter": {
+              "expression": "service.name = 'auth-service' AND deployment.environment = 'production'"
+            },
+            "disabled": false
+          }
+        }
+      ]
+    },
+    "selectedQueryName": "A",
+    "thresholds": {
+      "kind": "basic",
+      "spec": [
+        {
+          "name": "warning",
+          "target": 300,
+          "targetUnit": "s",
+          "op": "above",
+          "matchType": "all_the_times",
+          "channels": [
+            "accounts-email"
+          ]
+        }
+      ]
+    }
+  },
+  "evaluation": {
+    "kind": "rolling",
+    "spec": {
+      "evalWindow": "5m",
+      "frequency": "1m"
+    }
+  },
+  "notificationSettings": {
+    "usePolicy": false
+  },
+  "labels": {
+    "severity": "warning",
+    "team": "platform",
+    "environment": "production",
+    "service": "auth-service"
+  },
+  "annotations": {
+    "summary": "Auth outbox oldest pending event older than 5 minutes",
+    "description": "The oldest unpublished auth outbox event was older than 300 seconds for five minutes (target: under 5 minutes)."
+  }
+}
+```
+
+## Auth service SLO dashboard
+
+The dashboard source is `deploy/signoz/dashboards/auth-slo.json` ("Dev Health - Auth Service SLO (production)", CHAOS-11221). It has panels only. The alert rules and the SLO numbers are in the SLO table change (`docs/reference/auth/readiness-and-slo.md`, group `auth_slo` in `alerts/rules.yml`); the dashboard draws their lines and holds no second copy of a rule. A signal with no set number has a panel and no alert.
+
+**No data yet.** The auth-service series is empty until the auth service takes traffic (phase 2); until then go-api serves the auth routes. The panels show no data and the rules stay inactive, as for the shadow dashboard.
+
+What it shows:
+
+- Requests by `status_class`, the 5xx count, and the p95 and p99 of the routes `/v1/authorize` and `/v1/authorize:batch` (lines at 25 ms and 75 ms), the p95 of `/internal/v1/sessions` and `/v1/token/refresh` (line at 200 ms), JWKS and the exchange route (rate and p95; no target is set). All read `dev_health_api_http_requests_total` and `dev_health_api_http_request_duration_seconds` filtered to `listener = 'auth-api-http'` and the `route` set of the alert it draws (the `route` label is the registered path pattern, with no method). Each line is a bucket edge of the histogram, so a percentile resolves to its edge. A guard pins each line, route set and metric to its alert.
+- Workload exchanges by `outcome` and `reason` (`auth.workload.exchanges`; `subject` and `audience` are never a group-by), refresh exchanges by `reason_code`, access tokens refused by `reason` and `profile`, decision cache lookups by `result`.
+- Outbox: oldest pending age (line at 300 s), delivered rate, delivery failures by `reason`, and `publisher_enabled` (0 means no sink).
+- Revision feed events by `disposition`, resyncs by `cause`, subscription up, and push projection lag, parked and final rows. The push projection lag counts outbox ids, not seconds, and stays above 0 for up to one hour (the reader horizon) after a decided event, so no alert reads it. These are proxies for revocation propagation, not seconds of effect: the revocation lag metric does not exist yet (CHAOS-12917), so there is no panel and no alert for it.
+- Legacy ingest audit failures by `reason`.
+
+Not covered, because the service emits no metric for it: the JWKS cache age at the verifiers, a PDP outage seen at the caller, and revocation lag in seconds.
+
+The labels are the closed set in `internal/platform/otlpmetrics/labels.tsv`; the dashboard filters on `deployment.environment`, `service.name`, `listener` and `route` and groups only by labels listed there. `auth.*` metric names can land underscored in SigNoz: the owner checks the names at import (auth-service scrape runbook, Step 3). The import is a separate step from the merged JSON.

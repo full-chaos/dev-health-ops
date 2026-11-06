@@ -120,6 +120,10 @@ func TestPolicyStoreReadsTheSessionAsAReaderRole(t *testing.T) {
 	if _, err := admin.Exec(ctx, `INSERT INTO acp.principals (id, kind, display_name) VALUES ($1, 'user', 'reader-store-test')`, principal.String()); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Reader Store', 0)`,
+		principal, "rs-"+principal.String()+"@example.test", "rs-"+principal.String()); err != nil {
+		t.Fatal(err)
+	}
 	issued, err := sessions.Create(ctx, principal, nil, []string{"pwd"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

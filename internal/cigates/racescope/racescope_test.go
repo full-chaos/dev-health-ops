@@ -147,6 +147,12 @@ func TestRowsAreSortedUniqueAndWellFormed(t *testing.T) {
 			t.Errorf("%s list was accepted", name)
 		}
 	}
+	if _, err := Parse(write("a\trender-guard\tx\tr\n")); err == nil {
+		t.Error("a render-guard row with a witness was accepted")
+	}
+	if _, err := Parse(write("# c\na\trender-guard\t-\tr\nb\tnone\t-\tr\n")); err != nil {
+		t.Errorf("a render-guard row was refused: %v", err)
+	}
 	if _, err := Parse(write("# c\na\tnone\t-\tr\nb\tnone\t-\tr\n")); err != nil {
 		t.Errorf("a well-formed list was refused: %v", err)
 	}
@@ -296,20 +302,23 @@ func TestWhatTheScanCannotModelIsNotExcludable(t *testing.T) {
 // names it, and until its line in scan.go carries a comment naming the stdlib contract that makes it synchronous.
 func TestThePureCalleeAllowlistIsPinnedAndEachEntryHasItsReason(t *testing.T) {
 	t.Parallel()
-	want := []string{"(*testing.T).Run", "path/filepath.Walk", "path/filepath.WalkDir", "slices.SortFunc", "slices.SortStableFunc", "sort.Slice", "sort.SliceStable"}
-	var got []string
-	for k := range pureCallees {
-		got = append(got, k)
+	want := map[string]int{"(*testing.T).Run": 1, "path/filepath.Walk": 1, "path/filepath.WalkDir": 1, "slices.SortFunc": 1, "slices.SortStableFunc": 1, "sort.Slice": 1, "sort.SliceStable": 1}
+	render := func(m map[string]int) string {
+		var kv []string
+		for k, i := range m {
+			kv = append(kv, k+"@"+strconv.Itoa(i))
+		}
+		sort.Strings(kv)
+		return strings.Join(kv, ",")
 	}
-	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("pureCallees is %v, the pinned set is %v: pin the new entry here and give its line a comment naming the contract", got, want)
+	if got := render(pureCallees); got != render(want) {
+		t.Fatalf("pureCallees (callee@index of its function value) is %s, the pinned set is %s: pin the new entry or the moved index here and give its line a comment naming the contract", got, render(want))
 	}
 	src, err := os.ReadFile("scan.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range want {
+	for k := range want {
 		found := false
 		for _, line := range strings.Split(string(src), "\n") {
 			if strings.Contains(line, `"`+k+`":`) {
@@ -588,5 +597,153 @@ func TestPlanForIgnoresAnInheritedQualitySelection(t *testing.T) {
 	plan := planFor(t, repoRoot(t), "test-shard-plan", 1, 1)
 	if len(plan) <= 100 || !plan["internal/teamid"] {
 		t.Errorf("the test plan holds %d package(s) under an inherited selection, want the whole plan incl. internal/teamid", len(plan))
+	}
+}
+
+// CHAOS-11499: the scan result may not depend on the host arch. A file named for one arch is ignored by go list on the other; it is
+// judged by the arch that type-checks it, and a file no CI arch type-checks stays refused as untyped.
+func archOnlyFiles(arch string, dirty bool) map[string]map[string]string {
+	body := "func G() int { return 2 }\n"
+	if dirty {
+		body = "func G() int { go func() {}(); return 2 }\n"
+	}
+	tag := "//go:build " + arch + "\n\n"
+	return map[string]map[string]string{
+		"suffix source":        {"a/x_" + arch + ".go": "package a\n\n" + body},
+		"suffix internal test": {"a/x_" + arch + "_test.go": "package a\n\n" + body},
+		"suffix external test": {"a/x_" + arch + "_test.go": "package a_test\n\n" + body},
+		"tag source":           {"a/xt.go": tag + "package a\n\n" + body},
+		"tag internal test":    {"a/xt_test.go": tag + "package a\n\n" + body},
+		"tag external test":    {"a/xt_test.go": tag + "package a_test\n\n" + body},
+	}
+}
+
+func TestACleanArchOnlyFileIsAcceptedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		for name, extra := range archOnlyFiles(arch, false) {
+			files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+			for k, v := range extra {
+				files[k] = v
+			}
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: a clean file was refused:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestADirtyArchOnlyFileIsRefusedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		for name, extra := range archOnlyFiles(arch, true) {
+			files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+			for k, v := range extra {
+				files[k] = v
+			}
+			if got := problemsOf(t, files, rowA); !strings.Contains(got, "go statement") {
+				t.Errorf("%s for %s only: a goroutine was accepted:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAFileNoCIArchTypeChecksIsStillRefusedAsUntyped(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/x_windows.go": "package a\n\nfunc W() int { return 4 }\n"}
+	if got := problemsOf(t, files, rowA); !strings.Contains(got, "x_windows.go: the file was not type-checked") {
+		t.Errorf("a windows-only file: want it refused as untyped, got:\n%s", got)
+	}
+}
+
+func TestAnInheritedGOARCHDoesNotChangeTheScan(t *testing.T) {
+	files := func() map[string]string {
+		return map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest, "a/arch_amd64.go": "package a\n\nfunc G() int { return 2 }\n", "a/arch_arm64.go": "package a\n\nfunc H() int { return 3 }\n", "a/arch_windows.go": "package a\n\nfunc W() int { return 4 }\n"}
+	}
+	var results []string
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Setenv("GOARCH", arch)
+		results = append(results, problemsOf(t, files(), rowA))
+	}
+	if results[0] != results[1] {
+		t.Fatalf("the scan differs by GOARCH:\namd64:\n%s\narm64:\n%s", results[0], results[1])
+	}
+	if results[0] == "" {
+		t.Fatal("arch-named files were accepted")
+	}
+}
+
+func TestACleanPackageWhoseOnlyTestIsArchOnlyIsAcceptedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		tag := "//go:build " + arch + "\n\n"
+		for name, files := range map[string]map[string]string{
+			"suffix internal test": {"a/x_" + arch + "_test.go": cleanTest},
+			"suffix external test": {"a/x_" + arch + "_test.go": "package a_test\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"},
+			"tag internal test":    {"a/xt_test.go": tag + cleanTest},
+			"tag external test":    {"a/xt_test.go": tag + "package a_test\n\nimport \"testing\"\n\nfunc TestG(t *testing.T) {}\n"},
+		} {
+			files["a/a.go"] = cleanPkg
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: refused:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAPackageThatExistsOnOneArchOnlyIsAcceptedOnEveryHost(t *testing.T) {
+	t.Parallel()
+	for _, arch := range []string{"amd64", "arm64"} {
+		tag := "//go:build " + arch + "\n\n"
+		for name, files := range map[string]map[string]string{
+			"suffix": {"a/a_" + arch + ".go": cleanPkg, "a/a_" + arch + "_test.go": cleanTest},
+			"tag":    {"a/a.go": tag + cleanPkg, "a/a_test.go": tag + cleanTest},
+		} {
+			if got := problemsOf(t, files, rowA); got != "" {
+				t.Errorf("%s for %s only: refused:\n%s", name, arch, got)
+			}
+		}
+	}
+}
+
+func TestAPackageWithNoTestOnAnyArchIsStillRefused(t *testing.T) {
+	t.Parallel()
+	for name, files := range map[string]map[string]string{
+		"plain":     {"a/a.go": cleanPkg},
+		"arch-only": {"a/a_amd64.go": cleanPkg},
+	} {
+		if got := problemsOf(t, files, rowA); !strings.Contains(got, "has no test") {
+			t.Errorf("%s: want has no test, got:\n%s", name, got)
+		}
+	}
+	if got := problemsOf(t, map[string]string{"b/b.go": "package b\n"}, rowA); !strings.Contains(got, "no such package") {
+		t.Errorf("want no such package, got:\n%s", got)
+	}
+}
+
+// D6694: class render-guard is a closed list. A row for a package outside renderGuardPackages is refused, and so is a pinned package that has no row.
+func TestRenderGuardClassIsAClosedPinnedList(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"a/a.go": cleanPkg, "a/a_test.go": cleanTest}
+	if got := problemsOf(t, files, Row{"a", renderGuardClass, "-", "x"}); !strings.Contains(got, "not in racescope's renderGuardPackages") {
+		t.Errorf("a render-guard row for an unpinned package was not refused:\n%s", got)
+	}
+	if got := problemsOf(t, files, Row{"a", "none", "x", "x"}); !strings.Contains(got, "only class none or render-guard") {
+		t.Errorf("a bad witness was not refused:\n%s", got)
+	}
+	root := repoRoot(t)
+	have := map[string]bool{}
+	for _, r := range shippedRows(t, root) {
+		if r.Class == renderGuardClass {
+			have[r.Package] = true
+		}
+	}
+	for pkg := range renderGuardPackages {
+		if !have[pkg] {
+			t.Errorf("%s is pinned as render-guard and has no such row in ci/race_excluded_packages.tsv", pkg)
+		}
+	}
+	if len(have) != len(renderGuardPackages) {
+		t.Errorf("render-guard rows %v differ from the pinned list %v", have, renderGuardPackages)
 	}
 }

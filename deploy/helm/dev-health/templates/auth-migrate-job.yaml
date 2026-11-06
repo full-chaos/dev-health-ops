@@ -10,6 +10,8 @@ runtime login. Defaults off with the service (authService.phase 0).
 {{- if and (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") .Values.authService.migrate.enabled }}
 {{- $a := .Values.authService }}
 {{- $m := $a.migrate }}
+{{- include "dev-health.authPushLifecycle" . }}
+{{- include "dev-health.authRepoIdentity" . }}
 {{- if not $m.secretName }}{{- fail "authService.migrate.secretName is required: the Secret holding the migration login's DSN (key authService.migrate.secretKey), distinct from the runtime login's" }}{{- end }}
 {{- if eq $m.secretName $a.database.secretName }}
 {{- if eq $m.secretKey $a.database.secretKey }}{{- fail "authService.migrate and authService.database name the same Secret key: the migration login and the runtime login must be distinct (ACP-ADR-04)" }}{{- end }}
@@ -78,6 +80,12 @@ spec:
               value: {{ . | quote }}
             - name: AUTH_PUSH_LIFECYCLE_CALLER_ROLES
               value: {{ join "," $m.pushLifecycle.callerRoles | quote }}
+            {{- end }}
+            {{- with $m.repoIdentity.writerRole }}
+            - name: AUTH_REPO_IDENTITY_WRITER_ROLE
+              value: {{ . | quote }}
+            - name: AUTH_REPO_IDENTITY_CALLER_ROLES
+              value: {{ join "," $m.repoIdentity.callerRoles | quote }}
             {{- end }}
           resources:
             {{- toYaml $m.resources | nindent 12 }}

@@ -40,13 +40,14 @@
         "grant_revoked",
         "impersonation_denied",
         "invalid_request",
-        "membership_inactive",
         "no_membership",
         "org_mismatch",
         "organization_inactive",
         "platform_role_absent",
         "principal_inactive",
+        "repository_allowlist_too_large",
         "repository_not_granted",
+        "repository_unresolved",
         "resource_mismatch",
         "role_lacks_action",
         "role_scope_mismatch",
@@ -89,9 +90,16 @@
           "maxItems": 256,
           "items": {
             "type": "string",
-            "pattern": "^([a-z0-9][a-z0-9._-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}|\\*)$"
+            "pattern": "^(?:[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?(?:/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?/(?:[a-z0-9]|[a-z0-9.][a-z0-9._-]{0,98}[a-z0-9])|\\*)$",
+            "maxLength": 255
           },
-          "description": "Canonical repository keys the service may touch; `*` means organization-wide. An empty array means NONE, not unrestricted: unrestricted is the absence of the member plus a tenant scope. The decision point states an organization-wide allow as the explicit [\"*\"] with a tenant scope, never as an absent member, and sends the member (an empty one included) on every allow of an action that filters by repository, so a consumer reads an absent allowlist on such an action as a deny. At most 256 keys: the decision point never truncates a list, a member over the bound is a deny with its own reason code."
+          "description": "Canonical repository keys the service may touch. An empty array means NONE, not unrestricted. At most 256 keys: the decision point never truncates a list, a principal with more readable repositories is denied with repository_allowlist_too_large. The decision point never emits `*` (a consumer still accepts it as organization-wide); an allow that reads every repository of the organization says so with repository_scope."
+        },
+        "repository_scope": {
+          "enum": [
+            "organization"
+          ],
+          "description": "The principal may read every repository of the tenant: no allowlist limits the read. Closed to organization; an unknown value makes the whole decision invalid and the consumer denies. A decision carries repository_scope or repository_allowlist, never both. On an allow of an action that filters by repository, a consumer that finds NEITHER denies: an absent member never means unrestricted."
         },
         "redaction": {
           "type": "array",
@@ -112,6 +120,16 @@
         "step_up": {
           "type": "boolean",
           "description": "True when the caller must complete step-up authentication before the action proceeds."
+        }
+      },
+      "not": {
+        "required": [
+          "repository_scope",
+          "repository_allowlist"
+        ],
+        "properties": {
+          "repository_scope": {},
+          "repository_allowlist": {}
         }
       },
       "description": "ENFORCEABLE obligations, not advice (TRD section 8: services enforce them locally). The member set is CLOSED and additionalProperties is false, so a decision carrying an obligation this contract does not define is invalid and fails closed rather than being half-honoured. Present only on an allow."

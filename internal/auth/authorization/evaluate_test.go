@@ -3,6 +3,7 @@ package authorization
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -108,7 +109,7 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 	for _, r := range roles {
 		for _, a := range actions {
 			var req Request
-			var snap fakeSnapshot
+			var snap Snapshot
 			switch a.ResourceKind {
 			case "organization":
 				req = orgRequest(a.Action)
@@ -122,7 +123,7 @@ func TestEvaluate_EveryCatalogActionByEveryRole(t *testing.T) {
 			}
 			switch r.Scope {
 			case "organization":
-				snap = orgSnapshot(r.Role)
+				snap = repoSnapshot(r.Role)
 			case "platform":
 				snap = platformSnapshot(r.Role)
 			default:
@@ -277,7 +278,7 @@ func TestEvaluate_EveryNonActiveStatusDenies(t *testing.T) {
 		}
 		s = orgSnapshot("owner")
 		s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: v}
-		if got := e.Evaluate(orgRequest("org.read"), s); got.Allowed || got.Reason != ReasonMembershipInactive {
+		if got := e.Evaluate(orgRequest("org.read"), s); got.Allowed || got.Reason != ReasonNoMembership {
 			t.Errorf("membership %d: %+v", v, got)
 		}
 	}
@@ -451,11 +452,13 @@ func TestReasonSetIsClosed(t *testing.T) {
 	want := []Reason{
 		"allowed_by_role", "invalid_request", "unknown_action", "resource_mismatch",
 		"principal_inactive", "organization_inactive", "no_membership", "org_mismatch",
-		"membership_inactive", "platform_role_absent", "role_unknown", "role_scope_mismatch",
+		"platform_role_absent", "role_unknown", "role_scope_mismatch",
 		"role_lacks_action", "allowed_by_repository_grant", "grant_absent", "repository_not_granted",
 		"grant_expired", "grant_revoked", "workload_audience_denied",
 		"workload_action_denied", "clock_unavailable", "service_account_inactive",
 		"allowed_by_membership_default", "grant_read_failed", "impersonation_denied", "delegation_invalid",
+		"repository_unresolved",
+		"repository_allowlist_too_large",
 	}
 	got := AllReasons()
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
@@ -563,14 +566,21 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		{"resource mismatch", Request{Action: "org.read", ResourceKind: "platform"}, orgSnapshot("owner"), ReasonResourceMismatch, nil},
 		{"principal inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.principal = StatusSuspended }), ReasonPrincipalInactive, nil},
 		{"organization inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.orgStatus[testOrg] = StatusSuspended }), ReasonOrganizationInactive, nil},
-		{"membership inactive", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
+		{"membership not active", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: testOrg, Role: "owner", Status: StatusRemoved}
-		}), ReasonMembershipInactive, nil},
+		}), ReasonNoMembership, nil},
 		{"no membership", orgRequest("org.read"), inactive(func(s *fakeSnapshot) { s.memberships = map[string]Membership{} }), ReasonNoMembership, nil},
 		{"org mismatch", orgRequest("org.read"), inactive(func(s *fakeSnapshot) {
 			s.memberships[testOrg] = Membership{OrgID: "org-2", Role: "owner", Status: StatusActive}
 		}), ReasonOrgMismatch, nil},
 		{"platform role absent", platformRequest("admin.users"), orgSnapshot("owner"), ReasonPlatformRoleAbsent, nil},
+		{"allowlist too large", orgRequest("analytics.read"), func() Snapshot {
+			var rows []Grant
+			for i := 0; i <= MaxRepositoryAllowlist; i++ {
+				rows = append(rows, liveGrant(fmt.Sprintf("o/r%03d", i)))
+			}
+			return repoSnapshot("member", rows...)
+		}(), ReasonRepositoryAllowlistTooLarge, nil},
 		{"role unknown", orgRequest("org.read"), orgSnapshot("guest"), ReasonRoleUnknown, nil},
 		{"role scope mismatch", orgRequest("org.read"), orgSnapshot("platform_admin"), ReasonRoleScopeMismatch, nil},
 		{"role lacks action", orgRequest("org.delete"), orgSnapshot("viewer"), ReasonRoleLacksAction, nil},
@@ -584,6 +594,7 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		{"clock unavailable", repoRequest("acme/api"), noClock(repoSnapshot("member", liveGrant("acme/api"))), ReasonClockUnavailable, plantedEvaluator()},
 		{"service account inactive", repoRequest("acme/api"), inactiveSA(), ReasonServiceAccountInactive, plantedEvaluator()},
 		{"grant read failed", repoRequest("acme/api"), readFails(repoSnapshot("member")), ReasonGrantReadFailed, plantedEvaluator()},
+		{"repository unresolved", repoRequest("acme/api"), repoSnapshot("member", idGrant("acme/api", "github:1")), ReasonRepositoryUnresolved, plantedEvaluator()},
 		{"impersonation denied", orgRequest("org.delete"), delegated("owner", []string{"org.delete"}, ""), ReasonImpersonationDenied, nil},
 		{"delegation invalid", orgRequest("org.read"), delegated("owner", nil, "").withChain(nil), ReasonDelegationInvalid, nil},
 	}

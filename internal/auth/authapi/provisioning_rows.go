@@ -12,7 +12,7 @@ var provisioningPatterns = []string{PatternMembershipAdd, PatternMembershipRole,
 	PatternMembershipTransfer, PatternInviteCreate, PatternInviteAccept, PatternOrgDeprovision, PatternOrgReactivate, PatternInviteRevoke,
 	PatternOrgSuspend, PatternOrgOnboard, PatternOrgCreate, PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable,
 	PatternServiceAccountOwner, PatternServiceAccountKeyIssue, PatternServiceAccountKeyRotate, PatternServiceAccountKeyRevoke,
-	PatternServiceAccountKeyList, PatternGrantCreate, PatternGrantUpdate, PatternGrantRevoke}
+	PatternServiceAccountKeyList, PatternGrantCreate, PatternGrantUpdate, PatternGrantRevoke, PatternOrgState, PatternOrgRename}
 
 // provisioningRouteOps maps each provisioning operation to its route.
 var provisioningRouteOps = map[string]string{
@@ -36,12 +36,12 @@ var errProvisioningRows = errors.New("authapi: the provisioning routes need thei
 
 // provisioningRowsPresent refuses the provisioning routes unless the
 // endpoint-profile document (the one this binary embeds) holds, for each
-// route, an auth-service row accepting every credential class the route
+// route, an auth-service row listing exactly the credential classes the route
 // admits (admittedClasses): the switch may turn the routes on only in a build
 // that profiles them. The error names the route only.
 func provisioningRowsPresent(raw []byte) error {
 	for _, pattern := range provisioningPatterns {
-		if err := rowsAcceptFor(raw, []string{pattern}, admittedClasses(pattern)); err != nil {
+		if err := rowsExactFor(raw, []string{pattern}, admittedClasses(pattern)); err != nil {
 			return err
 		}
 	}
@@ -71,6 +71,16 @@ const workloadTokenClass = "workload_token"
 // and classes is not empty: a route mounts only on a row that names every
 // credential class its handler admits.
 func rowsAcceptFor(raw []byte, patterns, classes []string) error {
+	return rowsMatchFor(raw, patterns, classes, containsAll)
+}
+
+// rowsExactFor is rowsAcceptFor with the row's accepted classes equal to
+// classes as a set: a class beside the required ones refuses too.
+func rowsExactFor(raw []byte, patterns, classes []string) error {
+	return rowsMatchFor(raw, patterns, classes, sameSet)
+}
+
+func rowsMatchFor(raw []byte, patterns, classes []string, match func(have, want []string) bool) error {
 	if len(classes) == 0 {
 		return fmt.Errorf("%w: no credential class to admit", errProvisioningRows)
 	}
@@ -88,8 +98,7 @@ func rowsAcceptFor(raw []byte, patterns, classes []string) error {
 	for _, pattern := range patterns {
 		found := false
 		for _, row := range document.Rows {
-			if row.Service == AccessService && row.Method == "POST" && row.Route == pattern &&
-				containsAll(row.AcceptedClasses, classes) {
+			if row.Service == AccessService && row.Method == "POST" && row.Route == pattern && match(row.AcceptedClasses, classes) {
 				found = true
 				break
 			}
@@ -136,4 +145,8 @@ func containsAll(have, want []string) bool {
 		}
 	}
 	return true
+}
+
+func sameSet(have, want []string) bool {
+	return containsAll(have, want) && containsAll(want, have)
 }

@@ -1,15 +1,18 @@
 package authapi
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
@@ -20,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/requestid"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -173,6 +177,60 @@ func admit(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, ro
 		}
 	}
 	return true
+}
+
+// refundFunc gives back the charges one request took, at most once.
+type refundFunc func(ctx context.Context)
+
+// refundTimeout bounds the refund calls of one request: they run on a context
+// the client cannot cancel, so a stuck store must not hold the answer.
+const refundTimeout = time.Second
+
+// admitRefundable is admit for a route that gives its charges back when it
+// fails before the work the limit guards (CHAOS-12737). It counts as admit does;
+// the refund it returns lowers each counter it raised by one, once, and
+// never touches a hit that was refused. A store that cannot refund, or a
+// refund that fails, keeps the charge (the strict side) and logs one WARN line
+// naming the limit and the error class, never a key, an address or an e-mail.
+// A store error on a later charge refunds the earlier ones before the answer.
+func admitRefundable(w http.ResponseWriter, r *http.Request, write httpapi.ErrorWriter, route string, logger *slog.Logger, charges ...charge) (refundFunc, bool) {
+	scope, known := scopeCodes[route]
+	if !known {
+		write(w, r, httpapi.CodeInternal)
+		return nil, false
+	}
+	var taken []charge
+	var once sync.Once
+	refund := func(ctx context.Context) {
+		once.Do(func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundTimeout)
+			defer cancel()
+			for _, c := range taken {
+				if err := c.limiter.Refund(ctx, c.key, scope); err != nil {
+					logger.WarnContext(ctx, "login limiter refund failed; the charge stays",
+						slog.String("limit", c.limiter.ID()), logging.ErrorAttr(err))
+				}
+			}
+		})
+	}
+	for _, c := range charges {
+		allowed, err := c.limiter.AllowCounted(r.Context(), c.key, scope)
+		if err != nil {
+			refund(r.Context())
+			if httpapi.DependencyFailure(err) {
+				write(w, r, httpapi.CodeUnavailable)
+			} else {
+				write(w, r, httpapi.CodeInternal)
+			}
+			return nil, false
+		}
+		if !allowed {
+			write(w, r, httpapi.CodeRateLimited)
+			return nil, false
+		}
+		taken = append(taken, c)
+	}
+	return refund, true
 }
 
 // goAPIRefusal is the refusal of a route go-api also serves (/api/v1/auth/*):

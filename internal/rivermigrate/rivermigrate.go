@@ -134,13 +134,11 @@ func Execute(
 			"  RIVER_DOMAIN_DATABASE_ROLE, RIVER_QUEUE_DATABASE_ROLE, RIVER_COORDINATOR_DATABASE_ROLE (optional)\n"+
 			"  RIVER_DATABASE_SCHEMA (optional)\n"+
 			"  AUTH_PROXY_SESSIONS (optional, go-api's flag: true revokes the api role's refresh_tokens INSERT and UPDATE)\n"+
+			"  AUTH_PLATFORM_ROLES_OWNED (optional, go-api's flag: true narrows the api role's users writes to columns, the superuser column out)\n"+
 			"MIGRATION_DATABASE_URI and the DEV_HEALTH_MIGRATION_PG_* component form are mutually exclusive; set exactly one.\n")
 	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	if code, ok := cli.ParseFlags(flags, stderr, args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "argument error: positional arguments are not accepted")
@@ -219,12 +217,12 @@ func Execute(
 	if value, present := lookup("API_DATABASE_ROLE"); present && strings.TrimSpace(value) != "" {
 		apiRole = value
 	}
-	sessionsOwnedByAuth, err := authProxySessions(lookup)
+	apiPosture, sessionsOwnedByAuth, err := apiPostureFromLookup(lookup)
 	if err != nil {
 		config.WriteConfigError(stderr, err)
 		return 1
 	}
-	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(postgresstore.APIPosture(sessionsOwnedByAuth))
+	apiTableGrants, apiColumnGrants, apiSequences := postureGrants(apiPosture)
 	queryAPIRole, queryAPIGrants, queryAPIColumnGrants := queryAPILeg(lookup)
 	var queryAPISessionRead *riverstore.SessionReadGrant
 	if queryAPIRole != "" {

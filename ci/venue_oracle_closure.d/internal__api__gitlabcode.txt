@@ -1,9 +1,12 @@
+contracts/auth/v1
 contracts/auth/v1/vocabulary
 internal/api/policy
 internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
 internal/api/restcore
+internal/apiservice/accessrouting
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/edgetoken
 internal/auth/httpapi
@@ -11,6 +14,7 @@ internal/auth/passwordhash
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/sessionid
+internal/authzenforce
 internal/chmigrate
 internal/cli
 internal/egressguard
@@ -27,6 +31,7 @@ internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
@@ -41,11 +46,13 @@ internal/pythonparity/pyunicodedata
 internal/storage/clickhouse
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
 internal/syncdispatchruntime/synclog
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/egressallow
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
@@ -53,9 +60,11 @@ internal/testsupport/proxycapture
 internal/testsupport/pydanticecho
 internal/testsupport/redirectprobe
 internal/testsupport/venueoracle
+~contracts/auth/v1/jsonschema
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
 ~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

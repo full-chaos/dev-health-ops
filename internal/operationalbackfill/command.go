@@ -11,7 +11,6 @@ package operationalbackfill
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -62,11 +61,8 @@ func runOperational(ctx context.Context, env cli.Env) int {
 	org := flags.String("org", "", "the organization id")
 	instance := flags.String("atlassian-provider-instance-id", "atlassian-ops", "Atlassian Ops instance")
 	sink := flags.String("sink", "clickhouse", "analytics sink backend; only clickhouse is supported")
-	if err := flags.Parse(env.Args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return cli.ExitOK
-		}
-		return cli.ExitUsage
+	if code, ok := cli.ParseFlags(flags, env.Stderr, env.Args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(env.Stderr, "argument error: positional arguments are not accepted")

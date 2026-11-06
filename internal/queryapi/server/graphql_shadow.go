@@ -8,6 +8,7 @@ import (
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
@@ -23,6 +24,9 @@ func graphQLShadow() graph.OperationShadow {
 		}
 		return nil
 	}, Enforced: func(ctx context.Context, action string) bool {
+		if claims, _ := authctx.FromContext(ctx); claims.ImpersonationActive && !claims.Delegated {
+			return false // a legacy impersonation session is not decided, so it keeps its shadow
+		}
 		return pdp.FromContext(ctx).RootEnforced(pdp.CallerUser, action)
 	}}
 }

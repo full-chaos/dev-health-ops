@@ -301,8 +301,10 @@ func TestGraphQLEnforceTenantMismatchIs503(t *testing.T) {
 	}
 }
 
-// G6: a superuser naming another org is asked about the named org (no local bypass); a deny refuses.
-func TestGraphQLEnforceSuperuserRebindAsksForTheNamedOrg(t *testing.T) {
+// G6, machinery (not a product rule): the PEP asks the PDP about the organization the org guard admitted (here a
+// superuser's named org) and obeys the answer; this cell's PDP denies. A platform admin is allowed without membership by
+// PDP policy (ticket 13209, product rule 1); no enforce flip before it.
+func TestGraphQLEnforcePEPAsksAboutTheNamedOrgAndObeys(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("no_membership")
 	decider := &countingDecider{next: pepOf(t, srv.URL)}
@@ -325,8 +327,9 @@ func TestGraphQLEnforceNoVerdictIs503(t *testing.T) {
 	runGraphQLEnforce(t, bad, callerUser, enforceDocAnalytics).code503(t, string(pdp.ReasonNoDecisionPoint))
 }
 
-// G10: an allowlist on a root the registry does not list (the registry is empty in this change) is not carried out,
-// [] included; an allowlist holding "*" is the whole organization.
+// G10, machinery (not a product rule): an allowlist on a root the registry does not list (the registry is empty in this
+// change) is not carried out, [] included; an allowlist holding "*" is the whole organization. Whether the PDP ever sends
+// an allowlist for these reads is PDP policy (ticket 13207, product rule 2: org-wide reads); no enforce flip before it.
 func TestGraphQLEnforceAllowlistIsRefusedUntilARootCarriesIt(t *testing.T) {
 	for name, keys := range map[string][]string{"one": {"acme/widgets"}, "empty": {}} {
 		t.Run(name, func(t *testing.T) {
@@ -577,7 +580,7 @@ func runRootsAs(t *testing.T, gate *pdp.Gate, decider *countingDecider, claims a
 
 // Known flaw F1 (13211 lists the only accepted impersonation narrowing): a legacy impersonation session (go-api's
 // row, the admin's own token) answers as main does with every cell on: served as the target, never decided as the
-// actor in the target's organization (no ask); in shadow mode it is still observed.
+// actor in the target's organization (no ask); in shadow mode the shadow still sees it, as on main.
 func TestGraphQLEnforceLegacyImpersonationAnswersAsMain(t *testing.T) {
 	impersonating := enforceCaller{user: true, impersonate: true}
 	doc := `query Q { securityOverview(orgId: "` + servedOrgB.String() + `") { __typename } }`
@@ -597,8 +600,14 @@ func TestGraphQLEnforceLegacyImpersonationAnswersAsMain(t *testing.T) {
 	}
 	shadowDecider := &countingDecider{next: pepOf(t, srv.URL)}
 	shadow, _ := enforceGate(t, pdp.ModeShadow, "analytics", shadowDecider)
+	before := shadowCounters(t)
 	if got := runGraphQLEnforce(t, shadow, impersonating, doc); got != legacy {
 		t.Fatalf("shadow, cell on: %+v, want main's answer %+v", got, legacy)
+	}
+	// The shadow sees the session as it does on main: counted, never asked (the 5.12 core's impersonation rule).
+	want := map[string]int64{shadowResultsMetric + "|reason=none,result=impersonation_refused": 1}
+	if got := settle(t, before, want); fmt.Sprint(got) != fmt.Sprint(want) || len(shadowDecider.requests()) != 0 {
+		t.Fatalf("5.12 counters %v with %d asks, want %v and no ask", got, len(shadowDecider.requests()), want)
 	}
 }
 

@@ -41,8 +41,8 @@ type Caller struct {
 	// operation without it is refused while a cell of any of its roots is on.
 	Unscoped bool
 	// LegacyImpersonation is a go-api impersonation session carried by the admin's own token: the request runs as the
-	// target while its bearer is the admin's, so the decision point would judge the actor in the target's organization
-	// (D6714). A delegated bearer is not one: the decision point judges it as the target.
+	// target while its bearer is the admin's. It is not decided: it answers as main does (known flaw F1). A delegated
+	// bearer is not one: the decision point judges it as the target (D6714).
 	LegacyImpersonation bool
 }
 
@@ -58,8 +58,6 @@ const (
 	ReasonNoPrincipal pep.Reason = "authz_enforce_no_principal"
 	// ReasonNoScope is an operation whose ingress set no scope, with a cell of one of its roots on.
 	ReasonNoScope pep.Reason = "authz_enforce_no_scope"
-	// ReasonLegacyImpersonation is a user caller in a legacy impersonation session with a cell of one of its roots on.
-	ReasonLegacyImpersonation pep.Reason = "legacy_impersonation"
 )
 
 // rootCutOver is the GraphQL cut-over registry: the root keys whose resolvers narrow every read to a scope's
@@ -70,7 +68,7 @@ var rootCutOver = map[string]bool{}
 // RootEnforced reports whether a root of action is decided for a caller of class: the cell of the action's namespace
 // is on in the caller's cell set. An unknown class is decided when either set has the cell on.
 func (g *Gate) RootEnforced(class CallerClass, action string) bool {
-	if g == nil {
+	if g == nil || !orgScoped(action) {
 		return false
 	}
 	namespace, _, _ := strings.Cut(action, ".")
@@ -117,15 +115,21 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		}
 		return legacy(), nil
 	}
+	// Known flaw F1 (13211 lists the only accepted impersonation narrowing): a legacy impersonation session answers as
+	// main does. Its bearer is the admin's, so a decision would judge the actor in the target's organization.
+	if caller.Class == CallerUser && caller.LegacyImpersonation {
+		return legacy(), nil
+	}
 	var enforced []Root
 	for _, root := range roots {
 		if g.RootEnforced(caller.Class, root.Action) {
 			enforced = append(enforced, root)
 			continue
 		}
-		// acp ruling (1), as on the REST rows: a mode named enforce never serves a user caller's root on the legacy
-		// path. The header carrier is judged by its own cells only (D6721).
-		if caller.Class == CallerUser && g.mode == ModeEnforce {
+		// acp ruling (1), as on the REST rows: a mode named enforce never serves a user caller's organization root on
+		// the legacy path. The header carrier is judged by its own cells only (D6721); a root whose action is not
+		// organization-scoped is never decided (product rule 1).
+		if caller.Class == CallerUser && g.mode == ModeEnforce && orgScoped(root.Action) {
 			g.count(ctx, ModeEnforce, ResultNotConfigured, root.Action)
 			return nil, &DenyError{Reason: ReasonEnforceCellOff, Local: true}
 		}
@@ -134,10 +138,6 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		return legacy(), nil
 	}
 	label := enforced[0].Action
-	if caller.Class == CallerUser && caller.LegacyImpersonation {
-		g.count(ctx, ModeEnforce, ResultDeny, label)
-		return nil, &DenyError{Reason: ReasonLegacyImpersonation}
-	}
 	switch {
 	case g.mode == modeInvalid:
 		g.count(ctx, modeInvalid, ResultNotConfigured, label)
@@ -148,13 +148,6 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	case g.decider == nil:
 		g.count(ctx, ModeEnforce, ResultNoPDP, label)
 		return nil, &DenyError{Reason: ReasonNoDecisionPoint, Local: true}
-	}
-	for _, root := range enforced {
-		// A root whose action is not organization-scoped (the platform dashboard) is not asked about an organization.
-		if catalogued, err := policycatalog.Default().Action(root.Action); err != nil || catalogued.ResourceKind != policycatalog.ScopeOrganization {
-			g.count(ctx, ModeEnforce, ResultNotCarriedOut, root.Action)
-			return nil, &DenyError{Reason: ReasonNotCarriedOut, Local: true}
-		}
 	}
 	decisions := map[string]pep.Decision{}
 	var merged pepgate.Scope
@@ -198,6 +191,14 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		scopes[root.Key] = merged
 	}
 	return scopes, nil
+}
+
+// orgScoped reports whether a root's action is organization-scoped: only those are decided. A platform action (the
+// platform dashboard) stays on its legacy decision, RequirePlatformAdmin, whatever the cells (product rule 1). An
+// action the catalog does not know counts as organization-scoped (decided, so refused when it cannot be).
+func orgScoped(action string) bool {
+	catalogued, err := policycatalog.Default().Action(action)
+	return err != nil || catalogued.ResourceKind == policycatalog.ScopeOrganization
 }
 
 // carries reports whether profile (a REST row or a GraphQL root key) is in a cut-over registry.

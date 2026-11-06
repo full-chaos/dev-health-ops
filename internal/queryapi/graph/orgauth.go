@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -45,11 +46,20 @@ func requestOrg(ctx context.Context) (string, error) {
 	return servedOrg(claims), nil
 }
 
-// servedOrg is the organization a root field is served for: the scope's organization when the request carries one
-// (on an enforced root, the decided organization; Legacy keeps the caller's), else the claims' own.
+// servedOrg is the organization a root field is served for: the claims' org, as the ingress spelled it, while it is
+// the scope's organization as a UUID (on an enforced root, the decided organization); "" when it is not, which the
+// org helpers refuse. Without a scope it is the claims' org.
 func servedOrg(claims authctx.Claims) string {
-	if org, ok := claims.Scope.OrgID(); ok {
-		return org
+	org, ok := claims.Scope.OrgID()
+	if !ok || org == claims.OrgID {
+		return claims.OrgID
+	}
+	scoped, err := uuid.Parse(org)
+	if err != nil {
+		return ""
+	}
+	if own, err := uuid.Parse(claims.OrgID); err != nil || own != scoped {
+		return ""
 	}
 	return claims.OrgID
 }

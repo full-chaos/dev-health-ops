@@ -72,9 +72,9 @@ func (e OperationEnforce) InterceptOperation(ctx context.Context, next graphql.O
 	return next(context.WithValue(ctx, rootScopesKey{}, scopes))
 }
 
-// InterceptRootField hands each root field its decided scope through the request's claims. On an enforced root the
-// claims' OrgID becomes the scope's organization (the decided one, in its canonical spelling), so a resolver reads in
-// that organization and an orgId argument spelled otherwise is refused by the org helpers.
+// InterceptRootField hands each root field its decided scope through the request's claims. The claims' OrgID keeps the
+// ingress's spelling (main's answer for every spelling, product rule 1); the org helpers serve it only while it is the
+// scope's organization as a UUID.
 func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
 	scopes, _ := ctx.Value(rootScopesKey{}).(map[string]pepgate.Scope)
 	field := graphql.GetRootFieldContext(ctx)
@@ -86,9 +86,6 @@ func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.Roo
 	if scope, ok := scopes[rootKey(operation.Operation.Operation, field.Field.Name)]; ok {
 		if claims, ok := authctx.FromContext(ctx); ok {
 			claims.Scope = scope
-			if org, decided := scope.OrgID(); decided && scope.Kind() != pepgate.KindLegacy {
-				claims.OrgID = org
-			}
 			ctx = authctx.WithClaims(ctx, claims)
 		}
 	}

@@ -71,7 +71,6 @@ func TestOperationEnforceRefusalSetsTheIngressStatus(t *testing.T) {
 func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
 	want := map[string]bool{
 		"operation_org_guard.go OperationOrgGuard.InterceptOperation": true,
-		"operation_enforce.go OperationEnforce.InterceptRootField":    true,
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {

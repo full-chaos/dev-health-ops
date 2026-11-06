@@ -23,6 +23,12 @@ var orglessRoutes = map[string]bool{
 	"POST /api/v1/auth/change-password":             true,
 }
 
+// orglessPlatformRoutes are the route patterns a caller with no organization reaches, with the admin cell on, only by
+// the decision point's answer for the action: the impersonation status reports the caller's own session.
+var orglessPlatformRoutes = map[string]string{
+	"GET /api/v1/admin/impersonate/status": ActionAdminImpersonate,
+}
+
 // OrglessMayReach reports whether a caller with no organization may reach the
 // route; the path is cleaned first, so a dot-dot segment names the route it
 // resolves to.

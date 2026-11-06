@@ -190,11 +190,14 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		if user.OrgID == "" && !OrglessMayReach(r.Method, r.URL.Path) {
 			reach := false
 			var err error
+			action, platformRoute := orglessPlatformRoutes[r.Pattern]
 			switch {
 			case !enforced:
 				reach = user.Holds(gt.orglessAction())
 			case gt.kind != gateNone:
 				reach, err = holds(gt.action)
+			case platformRoute:
+				reach, err = holds(action)
 			}
 			if err != nil {
 				refuse(err)

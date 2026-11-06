@@ -498,3 +498,45 @@ func TestAnHS256SuperuserIsAdmittedByTheMembershipRoleWithTheAdminCellOn(t *test
 		})
 	}
 }
+
+// With the admin cell on, an organization-less caller reaches the impersonation status route only by the decision
+// point's admin.impersonate answer (in a live impersonation session too: the session's own status stays reachable); a
+// deny is the organization-less refusal and no verdict a 503. With the cell off, go-api's own flag decides, no question.
+func TestAnOrglessCallerReachesTheImpersonationStatusOnlyByThePDPAnswerWithTheAdminCellOn(t *testing.T) {
+	const orgRequired = `{"detail":"Organization context required"}`
+	for _, c := range []struct {
+		name          string
+		cell          string
+		decider       func(t *testing.T) pep.Decider
+		impersonating bool
+		status        int
+		body          string
+		singles       int
+	}{
+		{"PDP allows", "admin", func(t *testing.T) pep.Decider { return pepfake.New(platformRule(rule.ActionAdminImpersonate)) }, false, 200, "platform=true bypass=false", 1},
+		{"PDP allows, impersonating", "admin", func(t *testing.T) pep.Decider { return pepfake.New(platformRule(rule.ActionAdminImpersonate)) }, true, 200, "platform=true bypass=false", 1},
+		{"PDP denies", "admin", func(t *testing.T) pep.Decider { return newDenyingFake(t) }, false, 403, orgRequired, 1},
+		{"no verdict", "admin", func(*testing.T) pep.Decider { return panicDecider{} }, false, 503, `{"detail":"Authorization service temporarily unavailable"}`, 0},
+		{"cell off", "teams", func(t *testing.T) pep.Decider { return newDenyingFake(t) }, false, 200, "platform=true bypass=true", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decider := &countingDecider{inner: c.decider(t)}
+			h := seamHandler(t, legacyStore(true, ""), orglessAccessClaims(), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
+			if c.impersonating {
+				h = impersonating(h)
+			}
+			got := seamServe(h, http.MethodGet, "/api/v1/admin/impersonate/status")
+			if got.status != c.status || got.body != c.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			}
+			if c.status == 503 && got.header.Get("Retry-After") != enforceRetryAfter {
+				t.Fatalf("503 without Retry-After")
+			}
+			if c.status != 503 {
+				if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
+					t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
+				}
+			}
+		})
+	}
+}

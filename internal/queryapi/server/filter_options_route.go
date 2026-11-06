@@ -160,7 +160,7 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: filteroptions: encode response failed: org_id=%s request_id=%s err=%v",
-				org, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

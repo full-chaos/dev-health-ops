@@ -468,7 +468,7 @@ func newInvestmentExplainWorkHandler(
 			status, message, _ := policy.MapError(buildErr)
 			echoRequestID(w, r)
 			slog.Default().ErrorContext(r.Context(), "query-api: investment_explain: building the options failed",
-				slog.String("org_id", org), slog.String("request_id", envelopeRequestID(r)),
+				slog.String("org_id", org), slog.String("request_id", logSafeRequestID(envelopeRequestID(r))),
 				slog.Int("status", status), slog.String("error", buildErr.Error()))
 			writeRESTError(w, r, "investment_explain", org, status, message)
 			return

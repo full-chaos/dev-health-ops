@@ -432,7 +432,7 @@ func newWorkUnitExplainHandler(
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if err := writeModelResponse(w, explanation); err != nil {
 			log.Printf("query-api: work_unit_explain: write response failed: org_id=%s request_id=%s err=%v",
-				org, envelopeRequestID(r), err)
+				org, logSafeRequestID(envelopeRequestID(r)), err)
 			writeModelFailure(w)
 		}
 	}

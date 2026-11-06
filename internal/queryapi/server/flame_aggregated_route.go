@@ -253,7 +253,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			computed, windowErr := timewindow.AddDays(endDay, -rangeDays)
 			if windowErr != nil {
 				log.Printf("query-api: flame_aggregated: report window out of Python's date range: org_id=%s request_id=%s",
-					org, envelopeRequestID(r))
+					org, logSafeRequestID(envelopeRequestID(r)))
 				writeRESTError(w, r, "flame_aggregated", org, http.StatusInternalServerError, "Internal Server Error")
 				return
 			}
@@ -301,7 +301,7 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: flame_aggregated: encode response failed: org_id=%s request_id=%s err=%v",
-				org, envelopeRequestID(r), encodeErr)
+				org, logSafeRequestID(envelopeRequestID(r)), encodeErr)
 			writeModelFailure(w)
 		}
 	}

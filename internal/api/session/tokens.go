@@ -87,6 +87,16 @@ func (h handlers) sessionsOffOr(pattern string, local http.HandlerFunc) http.Han
 	return local
 }
 
+// refreshNotLocal is the refresh route's local handler: go-api keeps no refresh credential. With sessions on the
+// proxy forwards the route and this never runs; without a session issuer it is sessionsOff.
+func (h handlers) refreshNotLocal(w http.ResponseWriter, r *http.Request) {
+	if h.Issuer == nil {
+		h.sessionsOff(w, r)
+		return
+	}
+	refuse(w, http.StatusServiceUnavailable, sessionissue.UnavailableText)
+}
+
 // sessionsOff answers 503 config_missing naming AUTH_PROXY_SESSIONS.
 func (h handlers) sessionsOff(w http.ResponseWriter, r *http.Request) {
 	h.Logger.ErrorContext(r.Context(), "session route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)

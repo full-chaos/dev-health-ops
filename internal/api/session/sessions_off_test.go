@@ -39,3 +39,29 @@ func TestSessionsOffAnswers503NamingTheFlagOnEveryMintingRoute(t *testing.T) {
 		}
 	}
 }
+
+// With a session issuer the local handlers run: none answers the sessions-off refusal.
+func TestWithASessionIssuerNoRouteAnswersTheSessionsOffRefusal(t *testing.T) {
+	deps := completeDeps(t)
+	locals := map[string]http.Handler{}
+	deps.Inner = func(pattern string, local http.Handler) http.Handler {
+		locals[pattern] = local
+		return local
+	}
+	Routes(deps)
+	for pattern := range sessionsOffRoutes {
+		local := locals[pattern]
+		if local == nil {
+			t.Errorf("%s: no handler", pattern)
+			continue
+		}
+		rec := httptest.NewRecorder()
+		func() {
+			defer func() { _ = recover() }()
+			local.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pattern, strings.NewReader("{}")))
+		}()
+		if strings.Contains(rec.Body.String(), "AUTH_PROXY_SESSIONS") {
+			t.Errorf("%s: answered the sessions-off refusal with an issuer set: %q", pattern, rec.Body.String())
+		}
+	}
+}

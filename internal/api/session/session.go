@@ -142,7 +142,7 @@ func Routes(deps Deps) []httpapi.Route {
 			httpapi.ValidateThenLimitDependency(validateLogin, h.loginLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/login", h.login)))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/social-login", Handler: guard.BodyFirst(policy.Public, inner("/api/v1/auth/social-login", h.socialLogin))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/refresh", Handler: guard.BodyFirst(policy.Public,
-			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.sessionsOff)))},
+			httpapi.ValidateThenLimitDependency(validateRefresh, h.refreshLimiter, forwardedIPKey, h.Write)(inner("/api/v1/auth/refresh", h.refreshNotLocal)))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me", h.me))},
 		{Method: http.MethodGet, Pattern: "/api/v1/auth/me/organizations", Handler: guard.Wrap(policy.Authenticated, inner("/api/v1/auth/me/organizations", h.myOrganizations))},
 		{Method: http.MethodPost, Pattern: "/api/v1/auth/switch-org", Handler: guard.BodyFirst(policy.Authenticated, inner("/api/v1/auth/switch-org", h.switchOrg))},

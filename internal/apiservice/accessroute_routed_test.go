@@ -615,8 +615,8 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy != 0 || user != 197 {
-		t.Errorf("%d legacy rows, %d user rows: want 0 (ops_access_token_hs256 is retired) and 197", legacy, user)
+	if legacy != 0 || user != 198 {
+		t.Errorf("%d legacy rows, %d user rows: want 0 (ops_access_token_hs256 is retired) and 198", legacy, user)
 	}
 }
 

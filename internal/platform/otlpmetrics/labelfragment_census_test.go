@@ -111,6 +111,9 @@ func buildFragmentCensus(t *testing.T, root string) fragmentCensus {
 	sort.Strings(files)
 	for _, rel := range files {
 		src := sources[rel]
+		if filepath.ToSlash(filepath.Dir(rel)) == jobruntimeDir && rel != jobruntimeTelemetry && strings.Contains(src, "writeMetadata(") {
+			c.jobruntimeFamilies(rel, src, packageConsts(byDir[jobruntimeDir]))
+		}
 		if !strings.Contains(src, "# TYPE") {
 			continue
 		}
@@ -153,7 +156,7 @@ func buildFragmentCensus(t *testing.T, root string) fragmentCensus {
 		if dynamic != allowedDynamicSites[rel] {
 			c.unreadable = append(c.unreadable, fmt.Sprintf("%s: %d \"# TYPE\" sites name their family by a %%s argument or a run-time value, %d are covered (allowedDynamicSites); name the new site", rel, dynamic, allowedDynamicSites[rel]))
 		}
-		if rel == "internal/jobruntime/telemetry.go" {
+		if rel == jobruntimeTelemetry {
 			c.jobruntimeFamilies(rel, src, consts)
 		}
 		for _, f := range families {
@@ -322,17 +325,138 @@ func (c *fragmentCensus) add(name, file string, line int, kind string, keys ...s
 	c.sites[name] = fragmentSite{file: file, line: line, family: name, kind: kind}
 }
 
-// jobruntimeFamilies reads telemetry.go of the job runtime: families come from writeMetadata calls, labels from the
-// write*Sample and writeHistogram calls of the family. A call whose name or label argument it cannot read is unreadable, and so
-// is a sample call of a family with no writeMetadata call.
+const (
+	jobruntimeDir       = "internal/jobruntime"
+	jobruntimeTelemetry = "internal/jobruntime/telemetry.go"
+)
+
+// jobruntimeClosures are the writer closures of a job runtime file that take the family name as their first argument. The
+// census skips the writeMetadata and sample calls in a closure's body and reads each call of the closure as one family: the
+// keys of labelsFunc (which must be exactly fixed) plus, when keyArg >= 0, the key that argument names.
+var jobruntimeClosures = []struct {
+	file, closure, kind, labelsFunc string
+	fixed                           []string
+	keyArg                          int
+}{
+	{"internal/jobruntime/telemetry_investment_llm.go", "writeKeyed", "counter", "func (labels investmentLLMCommon) metricLabels(", []string{"model", "prompt_kind", "prompt_version", "provider", "stage"}, 2},
+	{"internal/jobruntime/telemetry_investment_llm.go", "writeHist", "histogram", "func (labels investmentLLMCommon) metricLabels(", []string{"model", "prompt_kind", "prompt_version", "provider", "stage"}, -1},
+}
+
+// blockEnd returns the offset just past the "}" that closes the first "{" at or after from, or -1.
+func blockEnd(src string, from int) int {
+	depth := 0
+	var quote byte
+	for i := from; i < len(src); i++ {
+		ch := src[i]
+		if quote != 0 {
+			if ch == '\\' && quote != '`' {
+				i++
+			} else if ch == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch ch {
+		case '"', '`', '\'':
+			quote = ch
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
+}
+
+// closureFamilies adds the families written through the jobruntimeClosures of rel and returns the closures' bodies.
+func (c *fragmentCensus) closureFamilies(rel, src string, consts map[string]string) [][2]int {
+	var bodies [][2]int
+	for _, spec := range jobruntimeClosures {
+		if spec.file != rel {
+			continue
+		}
+		decl := regexp.MustCompile(`\b` + spec.closure + ` := func\(`).FindStringIndex(src)
+		end := -1
+		if decl != nil {
+			end = blockEnd(src, decl[1])
+		}
+		if end < 0 {
+			c.unreadable = append(c.unreadable, fmt.Sprintf("%s: closure %s is no longer declared", rel, spec.closure))
+			continue
+		}
+		bodies = append(bodies, [2]int{decl[0], end})
+		at := strings.Index(src, spec.labelsFunc)
+		labelsEnd := -1
+		if at >= 0 {
+			labelsEnd = blockEnd(src, at+len(spec.labelsFunc))
+		}
+		if labelsEnd < 0 {
+			c.unreadable = append(c.unreadable, fmt.Sprintf("%s: closure %s: label function %q is gone", rel, spec.closure, spec.labelsFunc))
+			continue
+		}
+		spelled := labelKeysIn(src[at:labelsEnd])
+		sort.Strings(spelled)
+		if strings.Join(spelled, ",") != strings.Join(spec.fixed, ",") {
+			c.unreadable = append(c.unreadable, fmt.Sprintf("%s: closure %s: %q spells %v, the spec pins %v", rel, spec.closure, spec.labelsFunc, spelled, spec.fixed))
+			continue
+		}
+		calls := 0
+		for _, loc := range regexp.MustCompile(`\b`+spec.closure+`\(`).FindAllStringIndex(src, -1) {
+			args := splitCallArgs(src, loc[1]-1)
+			line := lineOf(src, loc[0])
+			name, ok := "", false
+			if len(args) > 0 {
+				name, ok = stringValue(args[0], consts)
+			}
+			if !ok {
+				c.unreadable = append(c.unreadable, fmt.Sprintf("%s:%d: %s family name is neither a literal nor a package constant", rel, line, spec.closure))
+				continue
+			}
+			keys := append([]string{}, spec.fixed...)
+			if spec.keyArg >= 0 {
+				key, keyOK := "", false
+				if spec.keyArg < len(args) {
+					key, keyOK = stringValue(args[spec.keyArg], consts)
+				}
+				if !keyOK {
+					c.unreadable = append(c.unreadable, fmt.Sprintf("%s:%d: %s label name argument %d is neither a literal nor a package constant", rel, line, spec.closure, spec.keyArg))
+					continue
+				}
+				keys = append(keys, key)
+			}
+			c.add(name, rel, line, spec.kind, keys...)
+			calls++
+		}
+		if calls == 0 {
+			c.unreadable = append(c.unreadable, fmt.Sprintf("%s: closure %s has no call: the spec backs nothing", rel, spec.closure))
+		}
+	}
+	return bodies
+}
+
+// jobruntimeFamilies reads one file of the job runtime that calls writeMetadata: families come from writeMetadata calls and
+// jobruntimeClosures calls, labels from the write*Sample and writeHistogram calls of the family. A call whose name or label
+// argument it cannot read is unreadable, and so is a sample call of a family with no writeMetadata call.
 func (c *fragmentCensus) jobruntimeFamilies(rel, src string, consts map[string]string) {
 	labelFuncs := map[string][]string{}
 	for _, m := range regexp.MustCompile(`func (\w+MetricLabels)\([^)]*\) \[\]metricLabel \{\s*return \[\]metricLabel\{([^}]*(?:\{[^}]*\}[^}]*)*)\}\s*\}`).FindAllStringSubmatch(src, -1) {
 		labelFuncs[m[1]] = labelKeysIn(m[2])
 	}
+	bodies := c.closureFamilies(rel, src, consts)
+	inClosure := func(offset int) bool {
+		for _, body := range bodies {
+			if offset >= body[0] && offset < body[1] {
+				return true
+			}
+		}
+		return false
+	}
 	declared := map[string]bool{}
 	for _, loc := range regexp.MustCompile(`\bwriteMetadata\(`).FindAllStringIndex(src, -1) {
-		if strings.HasSuffix(src[:loc[0]], "func ") {
+		if strings.HasSuffix(src[:loc[0]], "func ") || inClosure(loc[0]) {
 			continue
 		}
 		args := splitCallArgs(src, loc[1]-1)
@@ -351,7 +475,7 @@ func (c *fragmentCensus) jobruntimeFamilies(rel, src string, consts map[string]s
 		c.add(name, rel, line, kind)
 	}
 	for _, loc := range regexp.MustCompile(`\bwrite(?:Int|Uint|Float)Sample\(|\bwriteHistogram\(`).FindAllStringIndex(src, -1) {
-		if strings.HasSuffix(src[:loc[0]], "func ") {
+		if strings.HasSuffix(src[:loc[0]], "func ") || inClosure(loc[0]) {
 			continue
 		}
 		args := splitCallArgs(src, loc[1]-1)

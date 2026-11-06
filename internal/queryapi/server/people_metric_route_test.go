@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 func TestPeopleMetricSwitchFromEnvDefaultsDisabled(t *testing.T) {
@@ -43,7 +44,7 @@ func TestNewPeopleMetricHandlerMissingMetricValidationError(t *testing.T) {
 	handler := newPeopleMetricHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/metric", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -69,7 +70,7 @@ func TestNewPeopleMetricHandlerHappyPath(t *testing.T) {
 	handler := newPeopleMetricHandler(newPeopleDetailFoundReader(t, "alice@example.com"))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anything/metric?metric=churn", nil)
 	req.SetPathValue("person_id", "anything")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -91,7 +92,7 @@ func TestNewPeopleMetricHandlerUnsupportedMetric(t *testing.T) {
 	handler := newPeopleMetricHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/metric?metric=not-a-real-metric", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -113,7 +114,7 @@ func TestNewPeopleMetricHandlerPersonNotFound(t *testing.T) {
 	handler := newPeopleMetricHandler(newPeopleDetailNotFoundReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/nobody/metric?metric=churn", nil)
 	req.SetPathValue("person_id", "nobody")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -134,7 +135,7 @@ func TestNewPeopleMetricHandlerDataUnavailable(t *testing.T) {
 	handler := newPeopleMetricHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/metric?metric=churn", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -150,7 +151,7 @@ func TestNewPeopleMetricHandlerRejectsComparativeParams(t *testing.T) {
 			handler := newPeopleMetricHandler(newPeopleDetailFailingReader(t))
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/metric?metric=churn&"+key+"=x", nil)
 			req.SetPathValue("person_id", "anyone")
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -169,7 +170,7 @@ func TestNewPeopleMetricHandlerMissingMetricBeatsComparativeParamRejection(t *te
 	handler := newPeopleMetricHandler(newPeopleDetailFailingReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/people/anyone/metric?compare_to=x", nil)
 	req.SetPathValue("person_id", "anyone")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {

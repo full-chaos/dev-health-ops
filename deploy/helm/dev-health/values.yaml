@@ -316,14 +316,14 @@ authService:
   #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
   #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
   #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
-  #    pods of the listed peers on this port and nothing else. The API port, its Service and its policy do not
+  #    pods of the listed peers and of authService.networkPolicy.workloadClients on this port and nothing else. The API port, its Service and its policy do not
   #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
   internal:
     enabled: false
     # -- A whole number from 1 to 65535, not port or operatorPort.
     port: 8097
     # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
-    #    once; at least one while enabled.
+    #    once. While enabled, this list or authService.networkPolicy.workloadClients must be non-empty.
     peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
@@ -529,6 +529,12 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-13063: the logins granted SELECT on the External Push credential projection (auth.credential_projection:
+    #    domain_owner, organization_id, external_reference, revision, status, expires_at, scopes, source_id), for the worker
+    #    reconcile drift probe (PUSH_RECONCILE_PROBE=on reads it through the worker's domain login). Rendered as
+    #    AUTH_PROJECTION_READER_ROLES on the auth-migrate and auth-grants Jobs, only when listed. Each must already exist and
+    #    must differ from the migration login and runtimeRole. Empty grants none: the probe then logs SQLSTATE 42501.
+    projectionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
     #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and
@@ -632,6 +638,15 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- CHAOS-13130: workloads outside this release admitted on the INTERNAL port (authService.internal.port) alone,
+    #    as more `from` entries of the <fullname>-auth-service-internal policy; needs authService.internal.enabled.
+    #    The API port is not opened. Each entry: `podSelector` (required, a non-empty matchLabels or
+    #    matchExpressions) and an optional `namespaceSelector` (non-empty; omit it for this release's namespace).
+    #    Any other key (a port, an ipBlock) fails the render. For acr-api:
+    #    `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/component":"api"}},`
+    #    `"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"<acr namespace>"}}}]`.
+    #    A pod admitted here still gets a workload token only when its ServiceAccount is registered for the exchange.
+    workloadClients: []
     # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
     #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
     #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.

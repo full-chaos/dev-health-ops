@@ -88,8 +88,8 @@ func TestEveryAccessTokenRowAcceptsOnlyTheUserAccessToken(t *testing.T) {
 		}
 	}
 	// CHAOS-12128 added the principal access read (42 before); CHAOS-11813 retired the 6 legacy ingest rows (48 before).
-	if user != 197 || plain != 43 {
-		t.Errorf("rows with access_token_validation %d, without %d; want 197 and 43", user, plain)
+	if user != 198 || plain != 43 {
+		t.Errorf("rows with access_token_validation %d, without %d; want 198 and 43", user, plain)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestRealRowTableAcceptsAValidUserAccessToken(t *testing.T) {
 	}
 }
 
-// Every row outside the widened 197 (the 48 api rows without the opt-in and
+// Every row outside the widened 198 (the 48 api rows without the opt-in and
 // the 3 billing-edge rows) accepts no access-token class and keeps refusing a
 // user access token: an api row by its row, a billing-edge row because the
 // access-token table holds api rows only.
@@ -234,7 +234,7 @@ func TestWidenedRowsCarryTheirExactClassList(t *testing.T) {
 		}
 		widened++
 	}
-	if widened != 197 || withExtra != len(extra) {
-		t.Errorf("checked %d widened rows (%d with an extra class), want 197 and %d", widened, withExtra, len(extra))
+	if widened != 198 || withExtra != len(extra) {
+		t.Errorf("checked %d widened rows (%d with an extra class), want 198 and %d", widened, withExtra, len(extra))
 	}
 }

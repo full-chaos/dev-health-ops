@@ -15,6 +15,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
 )
@@ -28,8 +29,8 @@ type gatedREST struct {
 }
 
 // newGatedREST is the REST fixture (GET/POST /api/v1/home behind authenticateRESTRequest) served through the plane
-// handler with a gate of mode over a PEP client of base.
-func newGatedREST(t *testing.T, mode, base string, routed bool) *gatedREST {
+// handler with a gate of mode and the 5.17 cells of cellList over a PEP client of base.
+func newGatedREST(t *testing.T, mode, cellList, base string, routed bool) *gatedREST {
 	t.Helper()
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -41,7 +42,8 @@ func newGatedREST(t *testing.T, mode, base string, routed bool) *gatedREST {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	cfg := pdp.Config{Mode: mode, Meter: provider.Meter("test"), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	cfg := pdp.Config{Mode: mode, Switch: authzenforce.Parse(authzenforce.QueryAPI, cellList), Meter: provider.Meter("test"),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	if base != "" {
 		client, err := pep.New(pep.Config{BaseURL: base, AllowPlainHTTP: true, HTTPClient: &http.Client{}, ClientService: pdp.ClientService, Timeout: time.Second})
 		if err != nil {
@@ -100,10 +102,10 @@ var (
 	gatedUnavailable = answer{http.StatusServiceUnavailable, `{"detail":"Authorization unavailable"}`}
 )
 
-// Enforce: a PDP deny is 403 and the handler is never reached; an allow serves.
+// Enforce (the analytics cell on): a PDP deny is 403 and the handler is never reached; an allow serves.
 func TestRESTPDPEnforceDenyIs403(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: got %+v, want %+v", got, gatedOK)
 	}
@@ -117,12 +119,12 @@ func TestRESTPDPEnforceDenyIs403(t *testing.T) {
 	}
 }
 
-// Enforce: PDP down is 503, never a pass.
+// Enforce (the analytics cell on): PDP down is 503, never a pass.
 func TestRESTPDPEnforceDownIs503(t *testing.T) {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	base := closed.URL
 	closed.Close()
-	g := newGatedREST(t, pdp.ModeEnforce, base, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", base, true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
 		t.Fatalf("PDP down: got %+v, want %+v", got, gatedUnavailable)
 	}
@@ -133,7 +135,7 @@ func TestRESTPDPEnforceDownIs503(t *testing.T) {
 func TestRESTPDPEnforceAllowlistIs503(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": "00000000-0000-4000-8000-000000000000", "repository_allowlist": []string{"acme/widgets"}})
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
 		t.Fatalf("allow with an allowlist: got %+v, want %+v", got, gatedUnavailable)
 	}
@@ -147,7 +149,7 @@ func TestRESTPDPEnforceAllowlistIs503(t *testing.T) {
 func TestRESTPDPShadowNeverDenies(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("no_membership")
-	g := newGatedREST(t, pdp.ModeShadow, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeShadow, "", srv.URL, true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("shadow deny: got %+v, want %+v", got, gatedOK)
 	}
@@ -165,7 +167,7 @@ func TestRESTPDPShadowNeverDenies(t *testing.T) {
 func TestRESTPDPOffAsksNothing(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("no_membership")
-	g := newGatedREST(t, pdp.ModeOff, "", true)
+	g := newGatedREST(t, pdp.ModeOff, "", "", true)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("off: got %+v, want %+v", got, gatedOK)
 	}
@@ -182,7 +184,7 @@ func TestRESTPDPOffAsksNothing(t *testing.T) {
 func TestRESTPDPMisconfiguredIs503(t *testing.T) {
 	for _, mode := range []string{"banana", pdp.ModeEnforce, pdp.ModeShadow} {
 		t.Run(mode, func(t *testing.T) {
-			g := newGatedREST(t, mode, "", true)
+			g := newGatedREST(t, mode, "", "", true)
 			if got := g.do(http.MethodGet, g.userToken()); got != gatedUnavailable {
 				t.Fatalf("misconfigured %s: got %+v, want %+v", mode, got, gatedUnavailable)
 			}
@@ -198,7 +200,7 @@ func TestRESTPDPExemptCallersBypassAndCount(t *testing.T) {
 	srv.Deny("role_lacks_action")
 	for name, routed := range map[string]bool{"routed": true, "unrouted": false} {
 		t.Run(name, func(t *testing.T) {
-			g := newGatedREST(t, pdp.ModeEnforce, srv.URL, routed)
+			g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, routed)
 			edge := g.do(http.MethodGet, g.edgeToken(t))
 			if routed && edge.Status != http.StatusUnauthorized {
 				t.Fatalf("routed edge token: got %+v, want 401", edge)

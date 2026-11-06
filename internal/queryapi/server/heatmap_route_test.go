@@ -13,6 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -112,7 +113,7 @@ func TestNewHeatmapWorkHandlerRequiresAuthContext(t *testing.T) {
 func TestNewHeatmapWorkHandlerRequiresTypeAndMetric(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -136,7 +137,7 @@ func TestNewHeatmapWorkHandlerRequiresTypeAndMetric(t *testing.T) {
 func TestNewHeatmapWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?range_days=abc&start_date=bad&limit=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -166,7 +167,7 @@ func TestNewHeatmapWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
 func TestNewHeatmapWorkHandlerComparativeParamRejected(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&rank=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -184,7 +185,7 @@ func TestNewHeatmapWorkHandlerComparativeParamRejected(t *testing.T) {
 func TestNewHeatmapWorkHandlerValidationBeforeComparativeReject(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?rank=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -197,7 +198,7 @@ func TestNewHeatmapWorkHandlerValidationBeforeComparativeReject(t *testing.T) {
 func TestNewHeatmapWorkHandlerUnknownMetricIs404(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=not_a_real_metric", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -214,7 +215,7 @@ func TestNewHeatmapWorkHandlerUnknownMetricIs404(t *testing.T) {
 func TestNewHeatmapWorkHandlerInvalidScopeTypeIs400(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&scope_type=bogus", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -230,7 +231,7 @@ func TestNewHeatmapWorkHandlerInvalidScopeTypeIs400(t *testing.T) {
 func TestNewHeatmapWorkHandlerIndividualRequiresDeveloperScope(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=individual&metric=active_hours&scope_type=org", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -246,7 +247,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresDeveloperScope(t *testing.T) {
 func TestNewHeatmapWorkHandlerDeveloperScopeRequiresIndividual(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=temporal_load&metric=review_wait_density&scope_type=developer", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -262,7 +263,7 @@ func TestNewHeatmapWorkHandlerDeveloperScopeRequiresIndividual(t *testing.T) {
 func TestNewHeatmapWorkHandlerIndividualRequiresScopeID(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=individual&metric=active_hours&scope_type=developer", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -279,7 +280,7 @@ func TestNewHeatmapWorkHandlerIndividualRequiresScopeID(t *testing.T) {
 func TestNewHeatmapWorkHandlerHappyPathShape(t *testing.T) {
 	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/heatmap?type=context_switch&metric=repo_touchpoints&scope_type=repo", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -311,7 +312,7 @@ func TestNewHeatmapWorkHandlerServesTheSelectedFilterKeysLast(t *testing.T) {
 		"/api/v1/heatmap?type=context_switch&metric=repo_touchpoints&repo_ids=&team_ids=t1": `"repo_filter_applied":null,"filter_empty_reason":null}`,
 	} {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		serveRoute(t, handler, rec, req)
 		if rec.Code != http.StatusOK || !strings.HasSuffix(rec.Body.String(), want+"\n") && !strings.HasSuffix(rec.Body.String(), want) {

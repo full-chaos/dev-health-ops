@@ -137,9 +137,14 @@ type fakeDelegator struct {
 	ended   []uuid.UUID
 	session sessionissue.DelegatedSession
 	err     error
+	// onStart, when set, runs as auth-service is asked to start a session.
+	onStart func()
 }
 
 func (f *fakeDelegator) StartDelegated(_ context.Context, _ *http.Request, req sessionissue.DelegatedRequest) (sessionissue.DelegatedSession, error) {
+	if f.onStart != nil {
+		f.onStart()
+	}
 	f.started = append(f.started, req)
 	return f.session, f.err
 }
@@ -198,7 +203,7 @@ func (c *delegatedCase) allStatements() string {
 }
 
 func TestDelegatedStartAsksAuthServiceAndWritesNoRowOrAudit(t *testing.T) {
-	c := newDelegatedCase(true)
+	c, _ := newHandoffCase(t)
 	rec := c.do(c.h.impersonateStart(), c.target, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
@@ -214,7 +219,7 @@ func TestDelegatedStartAsksAuthServiceAndWritesNoRowOrAudit(t *testing.T) {
 		t.Fatalf("go-api wrote: begins=%d statements=%s", c.db.begins, c.allStatements())
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"status":"active"`, `"access_token":"a.b.c"`, `"token_type":"bearer"`, `"expires_in":900`, `"session_access_token":"s.t.u"`, `"target_user"`, `"expires_at"`} {
+	for _, want := range []string{`"status":"active"`, `"access_token":"a.b.c"`, `"token_type":"bearer"`, `"expires_in":900`, `"session_access_token":"s.t.u"`, `"target_user"`, `"expires_at"`, `"handoff_id":"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("answer lacks %s: %s", want, body)
 		}
@@ -236,11 +241,11 @@ func TestDelegatedStartFailsClosedWhenAuthServiceFails(t *testing.T) {
 		"plain":       errors.New("boom"),
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := newDelegatedCase(true)
+			c, _ := newHandoffCase(t)
 			c.delegator.err = err
 			rec := c.do(c.h.impersonateStart(), c.target, true)
-			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), sessionissue.UnavailableText) {
-				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), sessionissue.UnavailableText) || len(c.delegator.started) != 1 {
+				t.Fatalf("status %d, %d auth-service starts: %s", rec.Code, len(c.delegator.started), rec.Body.String())
 			}
 			if strings.Contains(rec.Body.String(), "access_token") || c.db.begins != 0 || strings.Contains(c.allStatements(), "INSERT") {
 				t.Fatalf("fallback or token leaked: begins=%d %s", c.db.begins, rec.Body.String())

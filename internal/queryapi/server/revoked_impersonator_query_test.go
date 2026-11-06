@@ -112,3 +112,31 @@ func TestProofWriteDoorRefusesTheRevokedImpersonator(t *testing.T) {
 		}
 	}
 }
+
+// TestProofWriteDoorFailsClosedForAPlainMemberWhoseRowReadFails: the write door reads the row of every caller that
+// does not hold admin.impersonate, so a plain member's write now depends on that read; a failed read is the door's
+// failed identity read (the bare 401), with no resolver run, the switch unset or on.
+func TestProofWriteDoorFailsClosedForAPlainMemberWhoseRowReadFails(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	member := map[string]string{
+		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
+		"EdDSA": minter.mint(ecUser, nil, nil),
+	}
+	for switchName, on := range revokedSwitches {
+		for signing, token := range member {
+			t.Run(switchName+" "+signing, func(t *testing.T) {
+				store := newAccessStore()
+				store.errSession = errors.New("session store timeout")
+				door, seen := revokedWriteDoor(t, minter, store, on)
+				if got := postProofWrite(door, token); got.Code != http.StatusUnauthorized || got.Body.String() != queryRefusal || len(*seen) != 0 {
+					t.Fatalf("got %d %q, ran %d; want 401 %q and no resolver", got.Code, got.Body.String(), len(*seen), queryRefusal)
+				}
+				ok, seenOK := revokedWriteDoor(t, minter, newAccessStore(), on)
+				if got := postProofWrite(ok, token); got.Code != http.StatusOK || len(*seenOK) != 1 {
+					t.Fatalf("read succeeds: got %d %q, ran %d; want 200 and one run", got.Code, got.Body.String(), len(*seenOK))
+				}
+			})
+		}
+	}
+}

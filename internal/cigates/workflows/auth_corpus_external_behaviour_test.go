@@ -45,6 +45,8 @@ case "$*" in
   *" logs "*" auth-service"*)
     if [ -z "${FAKE_AUTH_LOGS+x}" ]; then echo 'level=INFO msg="listener bound"'; else printf '%s\n' "$FAKE_AUTH_LOGS"; fi ;;
   *" port "*) echo 127.0.0.1:12345 ;;
+  *" config --format json"*)
+    if [ -n "${FAKE_COMPOSE_CONFIG:-}" ]; then printf '%s\n' "$FAKE_COMPOSE_CONFIG"; else echo '{"services":{"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}'; fi ;;
   *" ps -q go-api"*) echo cid-go-api ;;
   *"exec -T postgres psql"*"-At -f -"*) echo prn_AAAAAAAAAAAAAAAAAAAAAA ;;
   *"inspect --format"*)
@@ -63,7 +65,10 @@ case "$1" in
   test)
     case "$*" in
       *" -c "*) ;;
-      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `" ;;
+      *) printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "` + record + `"
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" >> "` + record + `.forwarded"
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER-unset}" >> "` + record + `.issuer"
+         printf '%s\n' "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "` + record + `.usersowned" ;;
     esac
     case "$*" in
       *" -c "*)
@@ -73,6 +78,7 @@ case "$1" in
         cat > "$out" <<'BIN'
 #!/bin/sh
 printf 'SMTPADMIN %s\n' "$DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN" >> "$FAKE_RECORD"
+printf 'TESTENV forwarded=%s owned=%s\n' "${DEVHEALTH_AUTH_ORACLE_FORWARDED-unset}" "${DEVHEALTH_AUTH_ORACLE_USERS_OWNED-unset}" >> "$FAKE_RECORD"
 if [ -n "$FAKE_GO_TEST_EXITS" ]; then exit 0; fi
 printf '%s\n' "$$" > "$FAKE_TEST_PID_FILE"
 printf 'SEEDED\n' >> "$FAKE_RECORD"
@@ -784,30 +790,32 @@ func hasEnv(env []string, want string) bool {
 }
 
 // go-api and auth-service both send their mail to the corpus mail sink by its service name, and the sink is a service of
-// the leg's own project on the networks both reach: no address, no host gateway.
+// the leg's own project on the networks both reach: no address, no host gateway. CHAOS-13107: auth-service sends the
+// credentials mail on both legs (compose.yml forwards credentials on leg go-api too), so its mail settings and the
+// sink's two networks are the main override's.
 func TestAuthCorpusPlanesSendMailToTheSinkServiceByName(t *testing.T) {
 	mainText, acpText := readRepoFile(t, "ci", "auth_corpus_external.override.yml"), readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")
-	main, acp := parseOverride(t, mainText), parseOverride(t, acpText)
+	main := parseOverride(t, mainText)
 	if !hasEnv(main.Services["go-api"].Environment, "SMTP_HOST=smtpsink") || !hasEnv(main.Services["go-api"].Environment, "SMTP_PORT=2525") {
 		t.Errorf("go-api must send mail to smtpsink:2525: %v", main.Services["go-api"].Environment)
 	}
 	for _, want := range []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS", "SMTP_HOST=smtpsink", "SMTP_PORT=2525", "APP_BASE_URL=https://app.example.test/"} {
-		if !hasEnv(acp.Services["auth-service"].Environment, want) {
-			t.Errorf("auth-service environment lacks %q: %v", want, acp.Services["auth-service"].Environment)
+		if !hasEnv(main.Services["auth-service"].Environment, want) {
+			t.Errorf("auth-service environment lacks %q: %v", want, main.Services["auth-service"].Environment)
 		}
 	}
 	if _, ok := main.Services["smtpsink"]; !ok {
 		t.Fatal("the main override has no smtpsink service")
 	}
 	for _, name := range []string{"default", "auth_plane"} {
-		if networks, _ := acp.Services["smtpsink"].Networks.(map[string]any); networks == nil || !containsKey(networks, name) {
-			t.Errorf("smtpsink is not on the %s network in leg acp: %v", name, acp.Services["smtpsink"].Networks)
+		if networks, _ := main.Services["smtpsink"].Networks.(map[string]any); networks == nil || !containsKey(networks, name) {
+			t.Errorf("smtpsink is not on the %s network: %v", name, main.Services["smtpsink"].Networks)
 		}
 	}
 	for _, service := range []struct {
 		doc  overrideDoc
 		name string
-	}{{main, "go-api"}, {acp, "auth-service"}} {
+	}{{main, "go-api"}, {main, "auth-service"}} {
 		if _, ok := service.doc.Services[service.name].DependsOn["smtpsink"]; !ok {
 			t.Errorf("%s does not wait for smtpsink", service.name)
 		}
@@ -903,17 +911,25 @@ func TestAuthCorpusSetEnvOfTheAutoOrgVariableAlsoRecreatesAuthServiceOnLegAcp(t 
 	}
 }
 
-func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariableOnLegAcp(t *testing.T) {
+// CHAOS-13107: compose.yml forwards sign-up (AUTH_PROXY_CREDENTIALS) to auth-service on leg go-api too, so the auto-org
+// variable recreates auth-service on both legs; any other variable recreates go-api only.
+func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariable(t *testing.T) {
 	for name, c := range map[string]struct {
 		leg, variable string
-	}{"other variable on acp": {"acp", "X_NAME"}, "auto-org on the go-api leg": {"go-api", "AUTH_AUTO_CREATE_ORG_ON_REGISTER"}} {
+		touched       bool
+	}{
+		"other variable on acp":      {"acp", "X_NAME", false},
+		"other variable on go-api":   {"go-api", "X_NAME", false},
+		"auto-org on the go-api leg": {"go-api", "AUTH_AUTO_CREATE_ORG_ON_REGISTER", true},
+		"auto-org on the acp leg":    {"acp", "AUTH_AUTO_CREATE_ORG_ON_REGISTER", true},
+	} {
 		fake := newFakeDocker(t)
 		_, env := setEnvFixture(t, fake)
 		if out, code := runSetEnv(t, append(env, "AUTH_CORPUS_LEG="+c.leg), c.variable, "v"); code != 0 {
 			t.Fatalf("%s: exit %d: %s", name, code, out)
 		}
-		if calls := fake.calls(t); strings.Contains(calls, "auth-service") {
-			t.Errorf("%s: auth-service was touched; calls:\n%s", name, calls)
+		if calls := fake.calls(t); strings.Contains(calls, "auth-service") != c.touched {
+			t.Errorf("%s: auth-service touched = %v, want %v; calls:\n%s", name, !c.touched, c.touched, calls)
 		}
 	}
 }
@@ -1317,6 +1333,171 @@ func TestAuthCorpusRefusedForceSocialLeavesNoTemporaryDirectory(t *testing.T) {
 			entries, readErr := os.ReadDir(tmp)
 			if readErr != nil || len(entries) != 0 {
 				t.Errorf("the refused run left %d entries in its TMPDIR (%v)", len(entries), readErr)
+			}
+		})
+	}
+}
+
+// CHAOS-13107: compose.yml routes go-api's auth aggregates through auth-service, as production does (sessions, local
+// login, credentials and social; OIDC and SAML off). On leg go-api the script reads each of go-api's AUTH_PROXY_* keys,
+// one by one, as compose renders them for the leg and hands the corpus exactly the aggregates that are "true", so it
+// classifies auth-service's answers (authrows) instead of comparing them as go-api's own. go-api's own start-up rules
+// are the script's too: an aggregate without sessions, and OIDC or SAML (no corpus rows), fail the leg by name.
+func TestAuthCorpusGoAPILegForwardsSessionsWhenComposeRoutesThem(t *testing.T) {
+	env := func(pairs string) string {
+		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}`
+	}
+	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
+	for _, tc := range []struct {
+		name, config, want, refusal string
+	}{
+		{"the prod set", env(prodSet), "sessions,local_login,credentials,social", ""},
+		{"the prod set, OIDC and SAML off", env(prodSet + `,"AUTH_PROXY_OIDC":"false","AUTH_PROXY_SAML":null`), "sessions,local_login,credentials,social", ""},
+		{"sessions only", env(`"AUTH_PROXY_SESSIONS":"true"`), "sessions", ""},
+		{"sessions and local login", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"false"`), "sessions,local_login", ""},
+		{"social without credentials", env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_SOCIAL":"true"`), "sessions,social", ""},
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}}}}`, "", ""},
+		{"sessions unset", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":null}}}}`, "", ""},
+		{"no environment", `{"services":{"go-api":{}}}`, "", ""},
+		{"local login without sessions", env(`"AUTH_PROXY_LOCAL_LOGIN":"true"`), "", "AUTH_PROXY_LOCAL_LOGIN=true without AUTH_PROXY_SESSIONS"},
+		{"OIDC on", env(prodSet + `,"AUTH_PROXY_OIDC":"true"`), "", "AUTH_PROXY_OIDC=true"},
+		{"SAML on", env(prodSet + `,"AUTH_PROXY_SAML":"true"`), "", "AUTH_PROXY_SAML=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeDocker(t)
+			fake.withCurl(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+			cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + tc.config)
+			out, err := cmd.CombinedOutput()
+			if tc.refusal != "" {
+				if err == nil || !strings.Contains(string(out), tc.refusal) {
+					t.Fatalf("want the refusal naming %q, got err=%v:\n%s", tc.refusal, err, out)
+				}
+				if _, statErr := os.Stat(fake.record + ".forwarded"); statErr == nil {
+					t.Error("the corpus test ran")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("leg go-api failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(fake.calls(t), " config --format json") {
+				t.Errorf("leg go-api never read go-api's environment from the rendered compose config; calls:\n%s", fake.calls(t))
+			}
+			raw, err := os.ReadFile(fake.record + ".forwarded")
+			if err != nil {
+				t.Fatalf("the corpus test never ran: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(raw)); got != tc.want {
+				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_FORWARDED=%q, want %q", got, tc.want)
+			}
+			if owned, _ := os.ReadFile(fake.record + ".usersowned"); strings.TrimSpace(string(owned)) != "false" {
+				t.Errorf("leg go-api with users not owned hands the corpus DEVHEALTH_AUTH_ORACLE_USERS_OWNED=%q, want false", owned)
+			}
+		})
+	}
+}
+
+// CHAOS-13107: compose.yml has auth-service own users (AUTH_USERS_OWNED, as production's phase 4). The corpus seeds its
+// users into public.users, so on leg go-api with users owned the script runs the owned hand-off of leg acp: the test
+// seeds and waits, the script copies the seeded users (users-backfill, refused while the flag is true, so run with it
+// false for that one command), recreates auth-service, and hands the test the forwarded set; the test is told users
+// are owned. go-api's rule is the script's too: users owned needs sessions, local login and credentials forwarded.
+func TestAuthCorpusGoAPILegRunsTheOwnedHandOffWhenComposeOwnsUsers(t *testing.T) {
+	const prodSet = `"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_PROXY_CREDENTIALS":"true","AUTH_PROXY_SOCIAL":"true"`
+	env := func(pairs string) string {
+		return `{"services":{"go-api":{"environment":{` + pairs + `}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"https://auth.corpus.example"}}}}`
+	}
+	t.Run("owned", func(t *testing.T) {
+		fake := newFakeDocker(t)
+		fake.withCurl(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+		cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + env(prodSet+`,"AUTH_USERS_OWNED":"true"`))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("leg go-api failed: %v\n%s", err, out)
+		}
+		calls := fake.calls(t)
+		for _, want := range []string{
+			"TESTENV forwarded=sessions,local_login,credentials,social owned=true",
+			"SEEDED",
+			"FLIPPED sessions,local_login,credentials,social",
+		} {
+			if !strings.Contains(calls, want) {
+				t.Errorf("no %q in the calls:\n%s", want, calls)
+			}
+		}
+		seeded, backfill := strings.Index(calls, "SEEDED"), strings.Index(calls, "run --rm --no-deps auth-users-backfill")
+		flipped := strings.Index(calls, "FLIPPED")
+		if backfill < 0 || seeded > backfill || backfill > flipped {
+			t.Errorf("users-backfill must run after the seed and before the hand-off; calls:\n%s", calls)
+		}
+		// CHAOS-13107: the copy is compose.yml's own one-shot (AUTH_USERS_OWNED=false for that run only), not an
+		// ad-hoc run of migrate with the flag on the command line.
+		if !strings.Contains(calls, "run --rm --no-deps auth-users-backfill") || strings.Contains(calls, "migrate auth users-backfill") {
+			t.Errorf("the seeded users were not copied by the auth-users-backfill one-shot; calls:\n%s", calls)
+		}
+		if _, statErr := os.Stat(fake.record + ".owned"); statErr != nil {
+			t.Error("auth-service was not recreated after the backfill")
+		}
+	})
+	t.Run("owned without credentials", func(t *testing.T) {
+		fake := newFakeDocker(t)
+		fake.withCurl(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+		cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + env(`"AUTH_PROXY_SESSIONS":"true","AUTH_PROXY_LOCAL_LOGIN":"true","AUTH_USERS_OWNED":"true"`))
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "AUTH_USERS_OWNED=true without AUTH_PROXY_CREDENTIALS") {
+			t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
+		}
+	})
+}
+
+// CHAOS-13107: with sessions forwarded the corpus checks each answer's session_access_token against auth-service's issuer
+// (authrows.SessionAccessTokenErr): the script hands it the issuer as compose renders it, and refuses a leg that names none.
+// Without sessions the corpus is handed no issuer.
+func TestAuthCorpusHandsTheCorpusAuthServicesIssuerWhenSessionsAreForwarded(t *testing.T) {
+	const issuer = "https://auth.corpus.example"
+	for _, tc := range []struct {
+		name, config, want string
+		refused            bool
+	}{
+		{"sessions on", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, issuer, false},
+		{"sessions off", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"false"}},"auth-service":{"environment":{"AUTH_TOKEN_ISSUER_URL":"` + issuer + `"}}}}`, "unset", false},
+		{"sessions on, no issuer", `{"services":{"go-api":{"environment":{"AUTH_PROXY_SESSIONS":"true"}},"auth-service":{"environment":{}}}}`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := newFakeDocker(t)
+			fake.withCurl(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(authProofRoot(t), "ci", "auth_corpus_external.sh"), "go-api")
+			cmd.Env = fake.env("FAKE_COMPOSE_CONFIG=" + tc.config)
+			out, err := cmd.CombinedOutput()
+			if tc.refused {
+				if err == nil || !strings.Contains(string(out), "auth-service names no AUTH_TOKEN_ISSUER_URL") {
+					t.Fatalf("want the refusal by name, got err=%v:\n%s", err, out)
+				}
+				if _, statErr := os.Stat(fake.record + ".issuer"); statErr == nil {
+					t.Error("the corpus test ran without the issuer")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("leg go-api failed: %v\n%s", err, out)
+			}
+			raw, err := os.ReadFile(fake.record + ".issuer")
+			if err != nil {
+				t.Fatalf("the corpus test never ran: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(raw)); got != tc.want {
+				t.Errorf("leg go-api hands the corpus DEVHEALTH_AUTH_ORACLE_SESSION_ISSUER=%q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -186,6 +186,10 @@ func TestPlantedFailures(t *testing.T) {
 			f["internal/queryapi/pdp/pdp.go"] = basePDP + "\n// TEMPORARY: ExemptClasses:ClassHS256 stays until the flip.\n"
 			return baseLedger
 		}, []string{"unregistered exception", "internal/queryapi/pdp/pdp.go:10"}},
+		{"P14 an exact row stays stale when its key is only quoted in the file", func(f map[string]string) string {
+			f["internal/queryapi/pdp/pdp.go"] = basePDP + "\n// ClassEnvelope left; was ExemptClasses:ClassEnvelope.\n"
+			return baseLedger + "pdp-envelope\ttemporary\tinternal/queryapi/pdp/pdp.go\tExemptClasses:ClassEnvelope\tCHAOS-27\topen\tgone\n"
+		}, []string{"pdp-envelope", "stale row, no exception"}},
 		{"P12 an interim comment in a single-file scope", func(f map[string]string) string {
 			f["internal/apiservice/accessverify.go"] = "package apiservice\n\n// An interim pin until the registry lands.\nvar C = 3\n"
 			return baseLedger
@@ -240,14 +244,15 @@ func TestAMissingScanInputFailsLoudly(t *testing.T) {
 
 func TestMalformedLedgerRowsAreRefused(t *testing.T) {
 	for name, line := range map[string]string{
-		"six columns":    "a\ttemporary\tp\tn\tCHAOS-1\topen\n",
-		"bad kind":       "a\tlater\tp\tn\tCHAOS-1\topen\tr\n",
-		"bad id":         "A_B\ttemporary\tp\tn\tCHAOS-1\topen\tr\n",
-		"absolute path":  "a\ttemporary\t/etc/p\tn\tCHAOS-1\topen\tr\n",
-		"unknown state":  "a\ttemporary\tp\tn\tCHAOS-1\tdone\tr\n",
-		"empty needle":   "a\ttemporary\tp\t \tCHAOS-1\topen\tr\n",
-		"duplicate id":   "a\ttemporary\tp\tn\tCHAOS-1\topen\tr\na\ttemporary\tp\tn\tCHAOS-1\topen\tr\n",
-		"decision empty": "a\tdecision\tp\tn\t-\topen\tr\n",
+		"six columns":     "a\ttemporary\tp\tn\tCHAOS-1\topen\n",
+		"bad kind":        "a\tlater\tp\tn\tCHAOS-1\topen\tr\n",
+		"bad id":          "A_B\ttemporary\tp\tn\tCHAOS-1\topen\tr\n",
+		"absolute path":   "a\ttemporary\t/etc/p\tn\tCHAOS-1\topen\tr\n",
+		"unknown state":   "a\ttemporary\tp\tn\tCHAOS-1\tdone\tr\n",
+		"empty needle":    "a\ttemporary\tp\t \tCHAOS-1\topen\tr\n",
+		"duplicate id":    "a\ttemporary\tp\tn\tCHAOS-1\topen\tr\na\ttemporary\tp\tn\tCHAOS-1\topen\tr\n",
+		"decision empty":  "a\tdecision\tp\tn\t-\topen\tr\n",
+		"temporary ruled": "a\ttemporary\tp\tn\tD1\topen\tr\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, defects := exceptionledger.ParseLedger([]byte(line)); len(defects) == 0 {

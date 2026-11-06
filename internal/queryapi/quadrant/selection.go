@@ -65,12 +65,12 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 			if err != nil {
 				return selection{}, err
 			}
-			out.linked = &linkedRepoScope{repoIDs: held}
+			out.linked = &linkedRepoScope{repoIDs: held, ceilinged: params.Ceiling.Restricted()}
 			out.emptyReason = teamscope.EmptyReasonText(filter.EmptyReason)
 		} else if params.Ceiling.Restricted() {
 			// No repository is named: the items read are those linked to the ceiling. A team scope narrows the points
 			// by team; it never widens the repositories (team ownership is not a repository link).
-			out.linked = &linkedRepoScope{repoIDs: params.Ceiling.IDs()}
+			out.linked = &linkedRepoScope{repoIDs: params.Ceiling.IDs(), ceilinged: true}
 		}
 		if len(filter.TeamIDs) > 0 {
 			out.teams = filter.TeamIDs

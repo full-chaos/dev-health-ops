@@ -11,6 +11,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkeditems"
 )
 
@@ -28,6 +29,9 @@ const (
 // issue-key prefix.
 type linkedRepoScope struct {
 	repoIDs []string
+	// ceilinged is a read held to the repository ceiling of an allowlist decision: a bound hit of its recompute is
+	// the typed linkeditems.ErrRecomputeBound.
+	ceilinged bool
 
 	once sync.Once
 	rows map[time.Time][]workitemmetrics.MetricsDailyRow
@@ -64,6 +68,9 @@ func (scope *linkedRepoScope) dailyRows(ctx context.Context, client QueryClient,
 		versions, attributions, err := loader.Read(ctx)
 		if err != nil {
 			scope.err = err
+			if bound, _ := chclient.BoundHit(err); scope.ceilinged && bound != chclient.BoundNone && ctx.Err() == nil {
+				scope.err = fmt.Errorf("%w: %w", linkeditems.ErrRecomputeBound, err)
+			}
 			return
 		}
 		scope.rows = linkeditems.RowsByDay(startDay, endDay, versions, attributions)

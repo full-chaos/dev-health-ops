@@ -48,7 +48,7 @@ func TestPasswordWritesEndEarlierAuthSessions(t *testing.T) {
 
 	oldReset := rig.SignIn(t, ctx, bob)
 	check("before the reset", bob, oldReset, false)
-	resetToken, tokenHash := signedtoken.Build(uuid.New(), authmail.Config{}.Secret())
+	resetToken, tokenHash := signedtoken.Build(uuid.New(), testLinkSecret)
 	if _, err := st.pool.Exec(ctx, `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at)
 		VALUES (gen_random_uuid(), $1::uuid, $2, now() + interval '1 hour', now())`, changeBob, tokenHash); err != nil {
 		t.Fatalf("seed reset token: %v", err)

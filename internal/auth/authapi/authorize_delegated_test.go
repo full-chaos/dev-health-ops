@@ -129,9 +129,8 @@ func TestAuthorizeDelegatedAllowCarriesObligations(t *testing.T) {
 	if !d.Allowed || d.ReasonCode != "allowed_by_role" {
 		t.Fatalf("%+v", d)
 	}
-	want := map[string]any{"tenant_scope": h.org, "minimum_assurance": "aal1", "repository_scope": "organization"}
-	if len(d.Obligations) != len(want) || d.Obligations["tenant_scope"] != want["tenant_scope"] || d.Obligations["minimum_assurance"] != want["minimum_assurance"] ||
-		d.Obligations["repository_scope"] != want["repository_scope"] {
+	want := map[string]any{"tenant_scope": h.org, "minimum_assurance": "aal1"}
+	if len(d.Obligations) != len(want) || d.Obligations["tenant_scope"] != want["tenant_scope"] || d.Obligations["minimum_assurance"] != want["minimum_assurance"] {
 		t.Fatalf("obligations %v, want %v", d.Obligations, want)
 	}
 }

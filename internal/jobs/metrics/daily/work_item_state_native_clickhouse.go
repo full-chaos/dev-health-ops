@@ -43,13 +43,9 @@ func (item workItemStateWorkItem) workScopeID() string {
 }
 
 // workItemStateTransition is the narrow subset of `work_item_transitions`
-// (same migration) compute_work_item_state_durations_daily reads.
-type workItemStateTransition struct {
-	WorkItemID string
-	OccurredAt time.Time
-	FromStatus string // "" is a valid, meaningful value -- see _segment_statuses
-	ToStatus   string
-}
+// (same migration) compute_work_item_state_durations_daily reads: the shared
+// workitemmetrics.StateTransition.
+type workItemStateTransition = workitemmetrics.StateTransition
 
 // LoadWorkItemStateWorkItems ports the item half of ClickHouseMetricsLoader.
 // load_work_items (src/dev_health_ops/metrics/loaders/clickhouse.py:454) --
@@ -174,14 +170,11 @@ FROM (
 }
 
 // workItemPrimaryAttribution is one work item's winning
-// (is_primary=1) row from `work_item_team_attributions`.
-type workItemPrimaryAttribution struct {
-	TeamID   string // "" when the primary row's team_id is NULL (e.g. source=unassigned)
-	TeamName string
-	// CoOwnerTeamIDs are the item's other teams (is_primary = 2), read only by
-	// the work_item family for the team split of a person's row.
-	CoOwnerTeamIDs []string
-}
+// (is_primary=1) row from `work_item_team_attributions`: the shared
+// workitemmetrics.PrimaryAttribution. TeamID is "" when the primary row's
+// team_id is NULL (e.g. source=unassigned); CoOwnerTeamIDs (is_primary = 2)
+// are read only by the work_item family for the team split of a person's row.
+type workItemPrimaryAttribution = workitemmetrics.PrimaryAttribution
 
 // LoadWorkItemPrimaryTeamAttributions reads the primary (is_primary=1) row
 // per work item from `work_item_team_attributions` for one repo, INSTEAD OF
@@ -296,31 +289,16 @@ WHERE org_id = ? AND repo_id = ? AND is_primary = 1
 }
 
 // workItemStateDailyRow is one aggregated output row, matching
-// WorkItemStateDurationDailyRecord (schemas.py:598-609).
-type workItemStateDailyRow struct {
-	Provider      string
-	WorkScopeID   string
-	TeamID        string
-	TeamName      string
-	Status        string
-	DurationHours float64
-	ItemsTouched  uint32
-	AvgWIP        float64
-}
+// WorkItemStateDurationDailyRecord (schemas.py:598-609): the shared
+// workitemmetrics.StateDurationRow.
+type workItemStateDailyRow = workitemmetrics.StateDurationRow
 
 // workItemBlockedDurationDailyRow is one item's daily blocked-duration
 // snapshot. Every item the daily state worker processes that contributes state
 // time to the day has a row, including a zero duration. The zero replaces a
 // prior blocked result when a recompute finds no blocked interval for that
 // item.
-type workItemBlockedDurationDailyRow struct {
-	Provider      string
-	WorkScopeID   string
-	TeamID        string
-	TeamName      string
-	WorkItemID    string
-	DurationHours float64
-}
+type workItemBlockedDurationDailyRow = workitemmetrics.ItemBlockedDurationRow
 
 // workItemStateBatchConn is the narrow write capability
 // WriteWorkItemStateDurationsDaily needs.

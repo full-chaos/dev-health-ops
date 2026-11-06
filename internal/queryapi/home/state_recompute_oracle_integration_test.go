@@ -136,6 +136,28 @@ func TestStateRecomputeOfTheLinkedItemsEqualsTheDailyStateTable(t *testing.T) {
 	}
 	sameState(t, "every repository of the world", recomputedState(ctx, t, client, orgAll, []string{oracleR1, oracleR2}, from, to), table)
 
+	// The status list of the filter options under a ceiling (linkeditems.Statuses) is the distinct status of the table
+	// when the job ran every day of the items' lives, as it did here.
+	statuses, err := linkeditems.Statuses(ctx, linkeditems.Loader{
+		Client: client, OrgID: orgAll, RepoIDs: []string{oracleR1, oracleR2},
+		WindowStart: time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), WindowEnd: to, Budget: linkeditems.StateBudget,
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tableStatuses := map[string]bool{}
+	for key := range table {
+		tableStatuses[key.status] = true
+	}
+	var want []string
+	for status := range tableStatuses {
+		want = append(want, status)
+	}
+	sort.Strings(want)
+	if fmt.Sprint(statuses) != fmt.Sprint(want) {
+		t.Errorf("linked statuses %v, daily table statuses %v", statuses, want)
+	}
+
 	one := recomputedState(ctx, t, client, orgAll, []string{oracleR1}, from, to)
 	sameState(t, "repository 1 against the world of its linked items", one, readStateTable(ctx, t, client, orgR1, from, to))
 	if len(one) == 0 || len(one) >= len(table) {

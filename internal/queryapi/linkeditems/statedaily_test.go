@@ -287,3 +287,25 @@ func TestStateDailyWithNoRepositoryReadsNothing(t *testing.T) {
 		t.Fatalf("rows %v err %v statements %d, want none", rows, err, len(client.statements))
 	}
 }
+
+// The status list is the statuses of segments of positive length, with the blocked overlay: a status an item passes
+// through in no time is not listed, an item with no transition adds nothing, and blocked time adds "blocked".
+func TestStatusesAreThoseOfSegmentsOfPositiveLength(t *testing.T) {
+	versions := []Version{
+		stateVersion("jira:OPS-1", "jira", "in_progress", at(1, 0), nil, stateRepo, day(9)),
+		stateVersion("jira:OPS-2", "jira", "done", at(1, 0), nil, stateRepo, day(9)),
+		stateVersion("jira:OPS-3", "jira", "canceled", at(1, 0), nil, stateRepo, day(9)),
+	}
+	transitions := []workitemmetrics.StateTransition{
+		{WorkItemID: "jira:OPS-1", OccurredAt: at(2, 0), FromStatus: "todo", ToStatus: "in_review"},
+		{WorkItemID: "jira:OPS-1", OccurredAt: at(2, 0), FromStatus: "in_review", ToStatus: "in_progress"},
+	}
+	unblocked := at(3, 0)
+	blocked := map[string][]workitemmetrics.BlockedInterval{"jira:OPS-1": {{Start: at(2, 12), End: &unblocked}}}
+	if got := statusesOf(versions, transitions, day(9), nil); !reflect.DeepEqual(got, []string{"in_progress", "todo"}) {
+		t.Fatalf("statuses = %v, want in_progress and todo (in_review lasts no time; OPS-2 and OPS-3 have no transition)", got)
+	}
+	if got := statusesOf(versions, transitions, day(9), blocked); !reflect.DeepEqual(got, []string{"blocked", "in_progress", "todo"}) {
+		t.Fatalf("statuses = %v, want blocked too", got)
+	}
+}

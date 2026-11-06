@@ -504,18 +504,22 @@ func TestHandoffStoreCommandsAreSetAndEvalOnly(t *testing.T) {
 }
 
 // The consume route is the policy package's live-row exempt pattern, behind the admin.impersonate platform wrap, and
-// not mounted with the admin routes yet.
-func TestHandoffConsumeRouteIsTheExemptPatternAndNotMounted(t *testing.T) {
+// mounted with the admin routes.
+func TestHandoffConsumeRouteIsTheExemptPatternAndMounted(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := &handlers{guard: policy.NewGuard(nil, logger), logger: logger}
 	routes := h.handoffRoutes()
 	if len(routes) != 1 || routes[0].Method+" "+routes[0].Pattern != policy.ImpersonationHandoffConsumePattern {
 		t.Fatalf("consume routes %+v, want one at %q", routes, policy.ImpersonationHandoffConsumePattern)
 	}
+	mounted := 0
 	for _, route := range h.routes() {
 		if route.Method+" "+route.Pattern == policy.ImpersonationHandoffConsumePattern {
-			t.Fatalf("the consume route is mounted before its endpoint-profile row")
+			mounted++
 		}
+	}
+	if mounted != 1 {
+		t.Fatalf("the consume route is mounted %d times, want 1", mounted)
 	}
 }
 

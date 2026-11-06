@@ -9880,6 +9880,75 @@
         "name": "EdDSA"
       },
       "classification": "protected",
+      "current_state_cache_behavior": "valkey: the route uses up the one-use record of a start handoff in one script that deletes the key impersonation:handoff:<id> only when it names the caller (internal/apiservice/admin/impersonation_handoff.go:59); the record is written by the delegated start before auth-service is asked (SET NX EX 150, internal/apiservice/admin/impersonation_handoff.go:52); no client or a store error answers 503 and admits nothing (internal/apiservice/admin/impersonation_handoff.go:117); the impersonation session cache is not read or written",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:191); the route is reachable while the caller's impersonation row is live, as the stop is (internal/api/policy/guard.go liveRowExemptPatterns); every refusal (no record, used, expired, gone, another administrator's, a malformed id) answers one 409 text (internal/apiservice/admin/impersonation_handoff.go:111, internal/apiservice/admin/impersonation_handoff.go:122)",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/impersonate/handoff/consume [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the handoff id comes from the request body and the record must name the caller (internal/apiservice/admin/impersonation_handoff.go:90); the caller's own organization is not read",
+      "route": "/api/v1/admin/impersonate/handoff/consume",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/impersonation_handoff.go",
+        "line": 81
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "APIJWTAudience (go-api config)",
+        "issuer": "APIJWTIssuer (go-api config)",
+        "token_type": "HS256 JWT"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "action": "admin.impersonate",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
       "current_state_cache_behavior": "valkey: the route reads the open session from Postgres (internal/apiservice/admin/impersonation.go:260) and after the commit writes the negative cache entry through (internal/apiservice/admin/impersonationcache.go:149); a failed write is logged and opens the cache circuit, and the read side then falls back to Postgres (internal/apiservice/admin/impersonationcache.go:203)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "platform route, behaviour today: only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:189); the route acts on the caller's own open session and answers 400 when there is none (internal/apiservice/admin/impersonation.go:267)",

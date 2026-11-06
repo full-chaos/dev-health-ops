@@ -12,6 +12,7 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-go/pep"
 
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -220,6 +221,27 @@ func TestGraphQLCeilingPullRequestOutsideTheCeilingIsNotFound(t *testing.T) {
 func TestGraphQLCeilingMixedOperationIsRefused(t *testing.T) {
 	doc := `query Q { securityOverview(orgId: "` + ecOrg.String() + `") { __typename } improveOpportunities(limit: 5, windowDays: 30) { __typename } }`
 	got := runCeilingRoot(t, doc, allowlistOf("acme/a"))
+	if !strings.Contains(got.body, `"reason":"`+string(pdp.ReasonNotCarriedOut)+`"`) || got.roots != 0 || len(got.statements) != 0 {
+		t.Fatalf("answered %s with %d root fields and %d statements, want the whole operation refused", got.body, got.roots, len(got.statements))
+	}
+}
+
+// The operation's merged allowlist must be carried by every decided root: an N root allowed with an allowlist and a
+// root not in the registry allowed organization-wide (each action decided on its own) is refused whole, no root
+// field runs; the organization-wide allow alone does not let the unregistered root read past the allowlist.
+func TestGraphQLCeilingMergedAllowlistMustBeCarriedByEveryRoot(t *testing.T) {
+	allowlisted, orgWide := pdptest.New(t), pdptest.New(t)
+	allowlisted.Obligations(allowlistOf("acme/a"))
+	byAction := funcDecider{func(ctx context.Context, req pep.Request) pep.Decision {
+		if req.Action == "metrics.read" {
+			return pepOf(t, orgWide.URL).Decide(ctx, req)
+		}
+		return pepOf(t, allowlisted.URL).Decide(ctx, req)
+	}}
+	gate := pdp.New(pdp.Config{Mode: pdp.ModeEnforce, Decider: byAction, Switch: authzenforce.Parse(authzenforce.QueryAPI, "analytics,metrics"),
+		ExtraShadowRows: graphQLShadowRows(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	doc := `query Q { securityOverview(orgId: "` + ecOrg.String() + `") { __typename } busFactor(orgId: "` + ecOrg.String() + `") { __typename } }`
+	got := runCeilingRootWith(t, gate, doc)
 	if !strings.Contains(got.body, `"reason":"`+string(pdp.ReasonNotCarriedOut)+`"`) || got.roots != 0 || len(got.statements) != 0 {
 		t.Fatalf("answered %s with %d root fields and %d statements, want the whole operation refused", got.body, got.roots, len(got.statements))
 	}

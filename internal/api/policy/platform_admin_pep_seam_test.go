@@ -147,6 +147,10 @@ func seamMux(guard *Guard) *http.ServeMux {
 	mux.Handle("GET /api/v1/admin/users/{user_id}", guard.WrapAdminOr(rule.ActionAdminUsers, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "served")
 	})))
+	// A platform wrap with no profile row: the decision point decides no route question, so the wrap itself asks.
+	mux.Handle("GET /api/v1/admin/seam/platform", guard.WrapPlatform(rule.ActionAdminOrgs, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "served")
+	})))
 	// A plain admin route: no platform action of its own, so User.IsAdmin alone admits.
 	mux.Handle("GET /api/v1/admin/seam/plain", guard.Wrap(Admin, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "served")
@@ -529,5 +533,34 @@ func TestAnHS256SuperuserWithNoMembershipRowKeepsMainsAnswerWithTheAdminCellOn(t
 	equalToMain(t, got, mainAnswer(t, serveWith))
 	if got.status != http.StatusOK || got.body != "served" {
 		t.Fatalf("%d %q: main serves it", got.status, got.body)
+	}
+}
+
+// With the admin cell on, a platform wrap whose row the decision point does not decide takes the wrap action from the
+// decision point: its allow admits a caller with no local flag, its deny refuses a caller with one.
+func TestAPlatformWrapWithNoRowAsksThePDPWithTheAdminCellOn(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		allow     bool
+		superuser bool
+		status    int
+	}{
+		{"pdp allows, flag off", true, false, http.StatusOK},
+		{"pdp denies, flag on", false, true, http.StatusForbidden},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decider := &countingDecider{inner: newDenyingFake(t)}
+			if c.allow {
+				decider.inner = newDenyingFake(t, platformRule(rule.ActionAdminOrgs))
+			}
+			got := seamServe(seamHandler(t, legacyStore(c.superuser, "member"), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), "admin")),
+				http.MethodGet, "/api/v1/admin/seam/platform")
+			if got.status != c.status {
+				t.Fatalf("%d %q, want %d", got.status, got.body, c.status)
+			}
+			if singles, batches := decider.counts(); singles != 1 || batches != 0 {
+				t.Fatalf("%d single and %d batch calls, want one question", singles, batches)
+			}
+		})
 	}
 }

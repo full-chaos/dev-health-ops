@@ -14,6 +14,7 @@ Choose the supported boundary that matches the work:
 - [Send normalized records with Customer Push](customer-push/index.md)
 - [Use supported APIs](api/index.md)
 - [Configure provider webhooks](webhooks/index.md)
+- [Connect an agent to the hosted MCP server](mcp/index.md)
 - [Build a supported integration](build-an-integration/index.md)
 - [Troubleshoot integrations](troubleshooting/index.md)
 

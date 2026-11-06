@@ -223,6 +223,8 @@ nav:
           - Configure: integrate/webhooks/configure.md
           - Verify signatures: integrate/webhooks/verify-signatures.md
           - Retries and replay: integrate/webhooks/retries-and-replay.md
+      - Connect an agent (MCP):
+          - integrate/mcp/index.md
       - Build an integration:
           - integrate/build-an-integration/index.md
           - Provider integration: integrate/build-an-integration/provider.md

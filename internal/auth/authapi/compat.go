@@ -603,8 +603,9 @@ func (h compatHandlers) compatLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // revokeLegacy verifies a go-api refresh JWT and ends its lineage. A token that
-// does not verify revokes nothing, as an unknown opaque credential does; no
-// principal is projected, since the go-api rows exist without it.
+// does not verify revokes nothing, as an unknown opaque credential does, and so
+// does every such token once the Issuer holds no legacy key: an unverified jti
+// never revokes. No principal is projected, since the go-api rows exist without it.
 func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor session.Actor) (bool, error) {
 	ctx := r.Context()
 	legacy, err := h.Issuer.VerifyLegacyRefresh(token)
@@ -612,6 +613,7 @@ func (h compatHandlers) revokeLegacy(r *http.Request, token string, actor sessio
 		h.rec.logger.DebugContext(ctx, "legacy refresh token refused at logout", "reason", edgetoken.ReasonOf(err))
 		return false, nil
 	}
+	legacyLogoutAccepted.Load().Accepted(ctx)
 	return h.Sessions.RevokeLegacy(ctx, legacy, actor)
 }
 

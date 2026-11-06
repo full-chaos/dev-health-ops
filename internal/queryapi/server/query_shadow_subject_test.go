@@ -1,0 +1,65 @@
+package server
+
+import (
+	"net/http"
+	"os"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+)
+
+// CHAOS-12659 G6: /query hands the operation layer the bearer it authenticated, as /graphql does, so the PDP can judge
+// a user access token there; the header carrier has no bearer and hands none.
+func TestQueryHandsTheOperationItsBearer(t *testing.T) {
+	store := newAccessStore()
+	m := newAccessMinter(t)
+	setup := testAccess(m.keys, nil, accessTestNow)
+	auth := ecEdgeAuth(t, newQueryAPIUserStoreFrom(store))
+	if err := routeAuthenticator(auth, setup.opts, true); err != nil {
+		t.Fatal(err)
+	}
+	verifier, priv := iaVerifier(t)
+	type seen struct {
+		subject graph.ShadowSubject
+		has     bool
+	}
+	var got []seen
+	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"probe": true})
+	mux.Register("probe", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		subject, has := graph.ShadowSubjectFrom(r.Context())
+		got = append(got, seen{subject, has})
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Served through a mux: a routed token is judged by the row of the pattern the mux recorded.
+	routes := http.NewServeMux()
+	routes.Handle("/query", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, newQueryAPIUserStoreFrom(store), "", nil))
+	handler := routes.ServeHTTP
+
+	user := m.mint(ecUser, nil, nil)
+	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "member", tokenVersion: 5})
+	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: "org-env", Role: "member"})
+	cells := []struct {
+		name   string
+		carry  func(*http.Request)
+		want   graph.ShadowSubject
+		wantOK bool
+	}{
+		{"user access token", irBearer(user), graph.ShadowSubject{Bearer: user, UserAccessToken: true, SkipReason: policy.ShadowReasonNone}, true},
+		{"edge token", irBearer(edge), graph.ShadowSubject{Bearer: edge, SkipReason: policy.ShadowReasonHS256}, true},
+		{"envelope", irBearer(envelope), graph.ShadowSubject{Bearer: envelope, SkipReason: policy.ShadowReasonEnvelope}, true},
+		{"headers", iaHeaders("org-hdr", "member", false, false), graph.ShadowSubject{}, false},
+	}
+	for _, cell := range cells {
+		got = nil
+		if code := iaPost(t, handler, cell.carry); code != http.StatusOK || len(got) != 1 {
+			t.Errorf("%s: %d, ran %d times, want 200 once", cell.name, code, len(got))
+			continue
+		}
+		if got[0].has != cell.wantOK || got[0].subject != cell.want {
+			t.Errorf("%s: subject %+v (present %v), want %+v (present %v)", cell.name, got[0].subject, got[0].has, cell.want, cell.wantOK)
+		}
+	}
+}

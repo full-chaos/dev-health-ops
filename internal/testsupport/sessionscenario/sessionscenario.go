@@ -462,9 +462,9 @@ type Harness struct {
 	// the expected one. Nil keeps every golden answer.
 	Replay     map[string]func(golden RecordedAnswer) RecordedAnswer
 	ReplayRows map[string]func(golden string) string
-	// KnownDefects names golden steps whose recorded (legacy) answer stays the wanted answer while the Go plane
-	// differs from it for a tracked defect: a difference is logged with the reason, never accepted as the answer.
-	KnownDefects map[string]string
+	// SkipSteps names replay steps whose fix is not on the base yet (value: the reason, with its ticket). The step's
+	// subtest is SKIPPED, never passed, and fails once the Go plane gives the golden answer, so the skip is removed.
+	SkipSteps map[string]string
 
 	golden    *Recording
 	cursor    int
@@ -527,9 +527,14 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			// for both sides.
 			out[p.name] = answers{python: goResponse, goSide: goResponse}
 		}
-		if reason, known := h.KnownDefects[p.name]; known && !same && h.Python == nil {
-			fmt.Fprintf(&h.receipt, "%-64s go=%d KNOWN DEFECT (%s)\n", p.name, goResponse.Status, reason)
-			h.T.Logf("%s: known defect (%s), the golden stays the wanted answer:\n %s", p.name, reason, detail)
+		if reason, skip := h.SkipSteps[p.name]; skip && h.Python == nil {
+			fmt.Fprintf(&h.receipt, "%-64s go=%d SKIP (%s)\n", p.name, goResponse.Status, reason)
+			h.T.Run(p.name, func(t *testing.T) {
+				if same {
+					t.Fatalf("the Go plane now gives the golden answer: remove the skip (%s)", reason)
+				}
+				t.Skipf("%s:\n %s", reason, detail)
+			})
 			continue
 		}
 		fmt.Fprintf(&h.receipt, "%-64s go=%d %s\n", p.name, goResponse.Status, venueoracle.Mark(same))

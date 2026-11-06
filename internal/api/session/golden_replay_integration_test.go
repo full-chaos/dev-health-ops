@@ -87,9 +87,9 @@ func TestSessionRoutesMatchGolden(t *testing.T) {
 
 	replay, replayRows := routedReplay(t)
 	target := sessionscenario.Target{BaseURL: server.URL, PostgresURI: pg.URI, ResetLimits: st.openWindows, Replay: replay, ReplayRows: replayRows,
-		// D6773 (product rule 1(c)): bob is an org-less superuser with no membership row; the legacy (HS256) path's
-		// /me answer (role "member") stays the wanted answer. The routed path answers role "" today.
-		KnownDefects: map[string]string{"me: bob superuser": "D6773, CHAOS-13206"}}
+		// D6773 (product rule 1(c)): bob is an org-less superuser with no membership row; the golden (legacy) /me
+		// answer (role "member") is the wanted answer. The routed path answers role "" until CHAOS-13206 merges.
+		SkipSteps: map[string]string{"me: bob superuser": "CHAOS-13206, carry at merge"}}
 	t.Log("\n" + sessionscenario.RunTarget(t, ctx, target, sessionscenario.MintEdDSATokens(t, access, specs)))
 }
 

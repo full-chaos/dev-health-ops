@@ -109,8 +109,11 @@ type Config struct {
 	// Decider asks the PDP; required unless Mode is ModeOff.
 	Decider pep.Decider
 	// Rows is an endpoint-profile document; nil reads query-api's.
-	Rows   []byte
-	Logger *slog.Logger
+	Rows []byte
+	// ExtraShadowRows are rows beyond the REST ones (the GraphQL roots), keyed by their own pattern; the one shadow holds
+	// them all. A key that is also a REST row turns the shadow off, after one ERROR.
+	ExtraShadowRows map[string]policy.ShadowRow
+	Logger          *slog.Logger
 	// Meter records the counters and gauges; nil is the global meter.
 	Meter metric.Meter
 	// Switch is query-api's 5.17 cell set: a route is enforced only while the cell of its action namespace is on.
@@ -138,6 +141,11 @@ type Gate struct {
 // FromSettings builds the gate from lookup. Off reads nothing but EnvMode and the 5.17 cell list. It never fails: a
 // bad value or a missing input is a gate that refuses every PDP-gated request, after one ERROR naming the variable.
 func FromSettings(lookup func(string) (string, bool), logger *slog.Logger) *Gate {
+	return FromSettingsWithRows(lookup, logger, nil)
+}
+
+// FromSettingsWithRows is FromSettings with extra shadow rows (Config.ExtraShadowRows).
+func FromSettingsWithRows(lookup func(string) (string, bool), logger *slog.Logger, extra map[string]policy.ShadowRow) *Gate {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -155,7 +163,7 @@ func FromSettings(lookup func(string) (string, bool), logger *slog.Logger) *Gate
 	if decider == nil {
 		return invalid(Config{Logger: logger, Switch: cells}, variable)
 	}
-	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, Lookup: lookup})
+	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, Lookup: lookup, ExtraShadowRows: extra})
 }
 
 // newDecider builds the PEP client in go-api's form (#5605): the workload client over the origin of AUTH_PROXY_URL,
@@ -316,6 +324,13 @@ func buildShadow(cfg Config, actions map[string]string, logger *slog.Logger) *po
 	lookup := cfg.Lookup
 	if lookup == nil {
 		lookup = func(string) (string, bool) { return "", false }
+	}
+	for key, row := range cfg.ExtraShadowRows {
+		if _, taken := rows[key]; taken {
+			logger.Error("query-api pdp: an extra shadow row key is also a REST row; the shadow is off", slog.String("variable", "rows"))
+			return nil
+		}
+		rows[key] = row
 	}
 	return policy.ShadowFromEnv(lookup, policy.ShadowEnvDeps{Rows: rows, Logger: logger, On: true,
 		NewDecider: func() (pep.Decider, error) { return cfg.Decider, nil }})

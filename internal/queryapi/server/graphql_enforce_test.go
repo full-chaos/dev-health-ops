@@ -37,7 +37,9 @@ var (
 	enforceDocAnalytics = `query Q { securityOverview(orgId: "` + ecOrg.String() + `") { __typename } }`
 	enforceDocMetrics   = `query Q { busFactor(orgId: "` + ecOrg.String() + `") { __typename } }`
 	enforceDocTwo       = `query Q { securityOverview(orgId: "` + ecOrg.String() + `") { __typename } busFactor(orgId: "` + ecOrg.String() + `") { __typename } }`
-	enforceDocOtherOrg  = `query Q { securityOverview(orgId: "` + servedOrgB.String() + `") { __typename } }`
+	// enforceDocMRoot is a root with a read that is not keyed by repository (class M): it never carries an allowlist.
+	enforceDocMRoot    = `query Q { improveOpportunities(limit: 5, windowDays: 30) { __typename } }`
+	enforceDocOtherOrg = `query Q { securityOverview(orgId: "` + servedOrgB.String() + `") { __typename } }`
 )
 
 // enforceRun is what one operation answered and read.
@@ -323,7 +325,7 @@ func TestGraphQLEnforceNoVerdictIs503(t *testing.T) {
 	runGraphQLEnforce(t, bad, callerUser, enforceDocAnalytics).code503(t, string(pdp.ReasonNoDecisionPoint))
 }
 
-// G10: an allowlist on a root the registry does not list (the registry is empty in this change) is not carried out,
+// G10: an allowlist on a root the registry does not list (an M root here: its reads are not all repository-keyed) is not carried out,
 // [] included; an allowlist holding "*" is the whole organization.
 func TestGraphQLEnforceAllowlistIsRefusedUntilARootCarriesIt(t *testing.T) {
 	for name, keys := range map[string][]string{"one": {"acme/widgets"}, "empty": {}} {
@@ -331,13 +333,13 @@ func TestGraphQLEnforceAllowlistIsRefusedUntilARootCarriesIt(t *testing.T) {
 			srv := pdptest.New(t)
 			srv.Obligations(map[string]any{"tenant_scope": ecOrg.String(), "repository_allowlist": keys})
 			gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", pepOf(t, srv.URL))
-			runGraphQLEnforce(t, gate, callerUser, enforceDocAnalytics).code503(t, string(pdp.ReasonNotCarriedOut))
+			runGraphQLEnforce(t, gate, callerUser, enforceDocMRoot).code503(t, string(pdp.ReasonNotCarriedOut))
 		})
 	}
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": ecOrg.String(), "repository_allowlist": []string{"*"}})
 	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", pepOf(t, srv.URL))
-	runGraphQLEnforce(t, gate, callerUser, enforceDocAnalytics).served(t)
+	runGraphQLEnforce(t, gate, callerUser, enforceDocMRoot).served(t)
 }
 
 // G11: redaction, step_up, and a minimum_assurance above what query-api carries out are refused, never served.

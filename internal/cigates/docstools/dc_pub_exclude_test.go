@@ -48,7 +48,7 @@ func copyFile(t *testing.T, src, dst string) {
 }
 
 // copyOfDocs returns a work dir holding a copy of the real tree, with mkdocs.yml text edited by edit.
-func copyOfDocs(t *testing.T, root string, edit func(string) string) string {
+func copyOfDocs(t *testing.T, root string, edit func(string) string, stray bool) string {
 	t.Helper()
 	work, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -62,6 +62,9 @@ func copyOfDocs(t *testing.T, root string, edit func(string) string) string {
 			}
 			rel, _ := filepath.Rel(root, path)
 			copyFile(t, path, filepath.Join(work, rel))
+			if stray && filepath.ToSlash(rel) == strayCopiedFrom {
+				copyFile(t, path, filepath.Join(filepath.Dir(filepath.Join(work, rel)), strayPage))
+			}
 			return nil
 		})
 	}
@@ -101,17 +104,14 @@ func withExclude(entries ...string) func(string) string {
 	}
 }
 
-const strayPage = "zz-stray-page.md"
-
-func addStrayPage(t *testing.T, work string) {
-	t.Helper()
-	copyFile(t, filepath.Join(work, "docs", "index.md"), filepath.Join(work, "docs", strayPage))
-}
+const (
+	strayPage       = "zz-stray-page.md"
+	strayCopiedFrom = "docs/index.md"
+)
 
 func TestExcludedPageNeedsNoNavigationRow(t *testing.T) {
 	root := repoRootForDocs(t)
-	work := copyOfDocs(t, root, withExclude(append([]string{strayPage}, excludedFromTheSite...)...))
-	addStrayPage(t, work)
+	work := copyOfDocs(t, root, withExclude(append([]string{strayPage}, excludedFromTheSite...)...), true)
 	if code, out := validatePublicationIn(t, work); code != 0 {
 		t.Fatalf("a page named in exclude_docs was refused: exit %d: %s", code, out)
 	}
@@ -119,8 +119,7 @@ func TestExcludedPageNeedsNoNavigationRow(t *testing.T) {
 
 func TestPageOutsideNavigationAndExcludeDocsStillFails(t *testing.T) {
 	root := repoRootForDocs(t)
-	work := copyOfDocs(t, root, withExclude(excludedFromTheSite...))
-	addStrayPage(t, work)
+	work := copyOfDocs(t, root, withExclude(excludedFromTheSite...), true)
 	code, out := validatePublicationIn(t, work)
 	if code == 0 || !strings.Contains(out, "unclassified Markdown outside navigation") || !strings.Contains(out, strayPage) {
 		t.Fatalf("a stray page outside nav and exclude_docs was not refused: exit %d: %s", code, out)
@@ -129,8 +128,7 @@ func TestPageOutsideNavigationAndExcludeDocsStillFails(t *testing.T) {
 
 func TestExcludeDocsIsAnExactPathNotAPrefix(t *testing.T) {
 	root := repoRootForDocs(t)
-	work := copyOfDocs(t, root, withExclude(append([]string{"zz-stray"}, excludedFromTheSite...)...))
-	addStrayPage(t, work)
+	work := copyOfDocs(t, root, withExclude(append([]string{"zz-stray"}, excludedFromTheSite...)...), true)
 	code, out := validatePublicationIn(t, work)
 	if code == 0 || !strings.Contains(out, strayPage) {
 		t.Fatalf("a prefix of a page path hid the page: exit %d: %s", code, out)

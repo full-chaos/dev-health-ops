@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // reasonReadFailsClient lets every read through except the one that counts the
@@ -61,7 +62,7 @@ func TestHomeFilterEmptyReasonReadsOnlyWhenTheFieldIsServed(t *testing.T) {
 		body := `{"query":"query($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) { home(orgId: $orgId, filters: $filters, window: $window) { healthState { status } ` + selection + ` } }","variables":` + variables + `}`
 		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		gql.ServeHTTP(rec, req)
 		var out struct {
@@ -94,7 +95,7 @@ func TestHomeFilterEmptyReasonReadsOnlyWhenTheFieldIsServed(t *testing.T) {
 	// REST always serves the key: a failed reason read is the route's data-unavailable answer.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(`{"filters":{"scope":{"level":"team","ids":["team-one"]},"what":{"repos":["`+notHeld.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 	rec := httptest.NewRecorder()
 	newHomePostHandler(failing, nil)(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {

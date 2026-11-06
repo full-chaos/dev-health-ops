@@ -25,6 +25,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -252,7 +253,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		key, handler := pattern, handler
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			routeWriter := httpapi.NewRouteWriter(w, key, responseModelRoutes[key])
-			handler(routeWriter, r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: orgID, Role: "owner"})))
+			handler(routeWriter, r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: orgID, Scope: pepgate.Legacy(orgID), Role: "owner"})))
 		})
 	}
 

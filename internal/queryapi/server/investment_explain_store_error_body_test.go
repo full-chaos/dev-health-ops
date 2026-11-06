@@ -13,6 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type failingStoreClient struct{}
@@ -29,7 +30,7 @@ func TestInvestmentExplainStoreFailureKeepsDriverTextOutOfTheBody(t *testing.T) 
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	body := strings.NewReader(`{"filters":{"what":{"repos":["some-repo"]}}}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", body)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -56,7 +57,7 @@ func TestInvestmentExplainStoreFailureLogsAtErrorLevelAndEchoesTheRequestID(t *t
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain",
 		strings.NewReader(`{"filters":{"what":{"repos":["some-repo"]}}}`))
 	req.Header.Set("X-Request-Id", "review-request-1")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -71,7 +72,7 @@ func TestInvestmentExplainStoreFailureLogsAtErrorLevelAndEchoesTheRequestID(t *t
 	}
 	bad := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", strings.NewReader(`{"filters":{"what":{"repos":["r"]}}}`))
 	bad.Header.Set("X-Request-Id", "a b\tc")
-	bad = bad.WithContext(authctx.WithClaims(bad.Context(), authctx.Claims{OrgID: "org-1"}))
+	bad = bad.WithContext(authctx.WithClaims(bad.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	badRec := httptest.NewRecorder()
 	handler(badRec, bad)
 	if got := badRec.Header().Get("X-Request-Id"); got != "" {
@@ -92,7 +93,7 @@ func TestInvestmentExplainStreamingFailureLogsTheRequestID(t *testing.T) {
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", strings.NewReader(`{}`))
 	req.Header.Set("X-Request-Id", "stream-review-1")
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)

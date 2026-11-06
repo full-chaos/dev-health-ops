@@ -206,7 +206,7 @@ func TestGitHubTestsDockerBuildArtifactExclusionBookkeeping(t *testing.T) {
 // excluding them is a bandwidth optimization, not a correctness fix, and
 // "digests-" is a plausible prefix a real report artifact could organically
 // collide with on some other repository. githubTestsNonReportArtifactPrefixes
-// is deliberately empty by default; this test pins that decision so a future
+// holds only go-images- (CHAOS-13193) by default; this test pins that decision so a future
 // change re-adding a global prefix default (rather than routing it through
 // CHAOS-4591's config-driven predicate) fails loudly, not silently.
 func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {

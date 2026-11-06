@@ -248,7 +248,7 @@ func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) erro
 // ExcludedArtifactSample) purely for operator visibility and CHAOS-4591
 // (per-sync-config selectable artifact ingestion).
 //
-// githubTestsNonReportArtifactPrefixes is deliberately EMPTY by default
+// githubTestsNonReportArtifactPrefixes holds ONLY go-images- by default (CHAOS-13193)
 // (codex review round 1, P1): "digests-*" artifacts (this repo's own
 // docker-images.yml uploads one empty touch-file per build target) ARE real,
 // valid, tiny zips that parse cleanly and contribute zero report rows --
@@ -262,7 +262,10 @@ func (artifact githubTestsArtifactPayload) declaredOversize(maxBytes int64) erro
 // CHAOS-4591 can populate it per org/repo as an explicit, informed opt-in
 // rather than a global default nobody chose.
 var githubTestsNonReportArtifactSuffixes = []string{".dockerbuild"}
-var githubTestsNonReportArtifactPrefixes = []string{}
+
+// "go-images-" are the docker-images tarballs ops CI uploads (>100 MiB); never
+// reports (CHAOS-13193). go-test-* artifacts carry the JUnit XML and stay selected.
+var githubTestsNonReportArtifactPrefixes = []string{"go-images-"}
 
 const (
 	githubTestsExclusionReasonSuffix = "non_report_artifact_suffix"

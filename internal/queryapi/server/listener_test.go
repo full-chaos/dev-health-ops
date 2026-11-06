@@ -106,13 +106,13 @@ func TestInternalListenerExistsOnlyWhenItsAddressIsSet(t *testing.T) {
 func TestInternalOnlyRouteExistsOnlyOnTheInternalListener(t *testing.T) {
 	plane := listenerPlane(t)
 	defer plane.Close()
-	internalMux, ok := plane.InternalHandler.(*http.ServeMux)
-	if !ok {
-		t.Fatalf("Plane.InternalHandler is a %T, want *http.ServeMux", plane.InternalHandler)
-	}
+	// A route of the internal set only, in front of Build's internal handler (which falls through to the public one).
+	internalMux := http.NewServeMux()
+	internalMux.Handle("/", plane.InternalHandler)
 	internalMux.HandleFunc("/internal-only-probe", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)
 	})
+	plane.InternalHandler = internalMux
 
 	public, internal := Listeners("127.0.0.1:0", "127.0.0.1:0", plane, nil, nil)
 	ctx := context.Background()

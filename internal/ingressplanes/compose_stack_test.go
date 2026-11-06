@@ -885,20 +885,20 @@ func TestComposeStackCheckSeesEachDefect(t *testing.T) {
 		},
 		{
 			name: "query-api does not wait for clickhouse",
-			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
-			new:  "      postgres:\n        condition: service_healthy\n\n  # The router of the stack",
+			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
+			new:  "      postgres:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
 			want: "plane stores: query-api does not wait for clickhouse",
 		},
 		{
 			name: "query-api does not wait for postgres",
-			old:  "      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
-			new:  "      go-river-migrate:\n        condition: service_completed_successfully\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			old:  "      go-river-migrate:\n        condition: service_completed_successfully\n      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
+			new:  "      go-river-migrate:\n        condition: service_completed_successfully\n      clickhouse:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
 			want: "plane stores: query-api does not wait for postgres",
 		},
 		{
 			name: "query-api waits for a started postgres only",
-			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
-			new:  "      postgres:\n        condition: service_started\n      clickhouse:\n        condition: service_healthy\n\n  # The router of the stack",
+			old:  "      postgres:\n        condition: service_healthy\n      clickhouse:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
+			new:  "      postgres:\n        condition: service_started\n      clickhouse:\n        condition: service_healthy\n      # CHAOS-13107: auth-service healthy means the session read grant is in\n",
 			want: "plane stores: query-api waits for postgres with \"service_started\"",
 		},
 		{

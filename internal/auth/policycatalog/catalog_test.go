@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "f8fdfb7c71f7f00460f27d630dbcf063617f363facee4d7fcb2222d3ba0bcef7"
-	rolesSHA   = "f65308dd26eebe161d69febcebcc09b34cb5166fc6f3621bae6a4c7cb7aa0afb"
+	actionsSHA = "adc30003b4c7903456e1222db039ebb865c7c1348e51997375caeeefac59e1e4"
+	rolesSHA   = "01694e80b7f03a278c0594bfcc21b35f28b954a7956db2db3198cf3d638f77e7"
 )
 
 func repoRoot(t *testing.T) string {
@@ -694,7 +694,7 @@ func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
 	}
 }
 
-func TestThePlatformAdminActionsAreTheEightOrganizationActionsOfTheAdminGuard(t *testing.T) {
+func TestThePlatformAdminActionsAreTheAdminGuardAndTheLegacyQueryAPIActions(t *testing.T) {
 	var got []string
 	for _, a := range Default().Actions() {
 		if a.PlatformAdmin {
@@ -702,8 +702,9 @@ func TestThePlatformAdminActionsAreTheEightOrganizationActionsOfTheAdminGuard(t 
 		}
 	}
 	sort.Strings(got)
-	want := []string{"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
-		"members.read", "settings.write", "teams.write"}
+	want := []string{"analytics.read", "billing.manage", "git.read", "integrations.read", "integrations.write",
+		"members.invite", "members.manage", "members.read", "metrics.read", "reports.write", "settings.write", "teams.write",
+		"work_items.read"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}

@@ -39,6 +39,7 @@ internal/apiservice/admin/guards.go	handlers.ensureUserInScope	admin.users	3
 internal/apiservice/admin/guards.go	orgIDForNonSuperuser	admin.users	3
 internal/apiservice/admin/impersonation.go	handlers.impersonationRoutes	admin.impersonate	route
 internal/apiservice/admin/impersonation.go	handlers.impersonationStatus	admin.impersonate	handler
+internal/apiservice/admin/impersonation_handoff.go	handlers.handoffRoutes	admin.impersonate	route
 internal/apiservice/admin/orgs.go	handlers.orgRoutes	admin.orgs	route
 internal/apiservice/admin/platformstats.go	handlers.platformRoutes	admin.stats	route
 internal/apiservice/admin/users.go	handlers.createUserOrg	admin.users	8

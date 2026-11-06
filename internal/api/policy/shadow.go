@@ -368,7 +368,7 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		return
 	}
 	caller := shadowCallerOf(o.Caller)
-	if o.Impersonating && o.Pattern != stopImpersonationPattern {
+	if o.Impersonating && !liveRowExempt(o.Pattern) {
 		s.record(ctx, o.Pattern, row, caller, resultImpersonationRefused, ShadowReasonNone, "")
 		return
 	}

@@ -438,7 +438,7 @@ var allOrgRoles = []string{"admin", "member", "owner", "viewer"}
 
 var legacyGuards = map[string]legacyGuard{
 	"rest-org": {orgRoles: allOrgRoles, proofs: []claimProof{
-		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, true"}},
+		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}},
 	}},
 	"internal-org": {orgRoles: allOrgRoles, proofs: []claimProof{
 		{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"OrgID: claims.OrgID"}},

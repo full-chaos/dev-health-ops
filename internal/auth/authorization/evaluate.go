@@ -12,6 +12,7 @@ const (
 	resourcePlatform     = "platform"
 	resourceRepository   = "repository"
 	wildcardKey          = "*"
+	platformAdminAction  = "admin.orgs"
 	maxFieldLen          = 128
 )
 
@@ -122,6 +123,12 @@ func (e *Evaluator) evaluateBase(r Request, s Snapshot) Decision {
 	case policycatalog.ScopeOrganization:
 		if s.OrganizationStatus(r.OrganizationID) != StatusActive {
 			return deny(ReasonOrganizationInactive)
+		}
+		// The legacy admin guard admits a holder of admin.orgs before it reads the membership row; the flagged
+		// actions are exactly the organization actions of its rows, so the holder gets the owner's allow shape.
+		if act.PlatformAdmin && e.cat.Allows(s.PlatformRole(), platformAdminAction) {
+			return Decision{Allowed: true, Reason: ReasonAllowedByPlatformAdmin, PolicyRevision: rev,
+				Obligations: &Obligations{TenantScope: r.OrganizationID}}
 		}
 		m, found := s.Membership(r.OrganizationID)
 		if !found {

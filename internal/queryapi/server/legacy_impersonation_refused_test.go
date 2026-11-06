@@ -354,3 +354,74 @@ func TestGraphQLRevokedHolderIsRefusedByOperationType(t *testing.T) {
 		})
 	}
 }
+
+// legacyGraphQLRaw sends one /graphql request with its URL and raw body as given.
+func legacyGraphQLRaw(s *behaviourStack, method, target, body, bearer string) legacyAnswer {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	if method == http.MethodPost {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("Authorization", "Bearer "+bearer)
+	recorder := httptest.NewRecorder()
+	s.handlers["query"].ServeHTTP(recorder, request)
+	header := recorder.Header().Clone()
+	header.Del("X-Request-ID")
+	return legacyAnswer{recorder.Code, strings.TrimSpace(recorder.Body.String()), header}
+}
+
+// TestGraphQLRevokedHolderUnregisteredAndUnparsable: with the switch on, the revoked holder beside a live row: a
+// parsable but unregistered query passes the scope and is the dispatch's 404 with no resolver run; an unregistered
+// mutation, and a POST with only a persisted-query hash and no query string, are refused in the scope (403), before
+// the registry lookup; a GET with two operations or text that does not parse answers byte-equal to the switch unset.
+func TestGraphQLRevokedHolderUnregisteredAndUnparsable(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	live := func() *accessStore { return revokedHolderStore(legacySession(), nil) }
+	post := func(document string) string {
+		body, _ := json.Marshal(map[string]string{"query": document})
+		return string(body)
+	}
+	for signing, token := range legacyTokens(t, minter) {
+		t.Run(signing+" POST unregistered query", func(t *testing.T) {
+			s := legacyStack(t, minter, live(), true)
+			got := legacyGraphQLRaw(s, http.MethodPost, "/graphql", post("query LegacyUnregisteredRead { probe }"), token)
+			if got.Status != http.StatusNotFound || !strings.Contains(got.Body, "UNREGISTERED_DOCUMENT") || len(*s.seen) != 0 {
+				t.Fatalf("got %d %s, resolver ran %d; want the dispatch's 404 UNREGISTERED_DOCUMENT and no run", got.Status, got.Body, len(*s.seen))
+			}
+		})
+		for name, body := range map[string]string{
+			"POST unregistered mutation":          post("mutation LegacyUnregisteredWrite { probe }"),
+			"POST persisted-query hash, no query": `{"extensions":{"persistedQuery":{"version":1,"sha256Hash":"` + digestHex(iaDocument) + `"}}}`,
+		} {
+			t.Run(signing+" "+name, func(t *testing.T) {
+				s := legacyStack(t, minter, live(), true)
+				got := legacyGraphQLRaw(s, http.MethodPost, "/graphql", body, token)
+				if got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*s.seen) != 0 {
+					t.Fatalf("got %d %s, resolver ran %d; want the scope's 403 %s and no run", got.Status, got.Body, len(*s.seen), legacyRefusalBody)
+				}
+			})
+		}
+		// The registry digest is over strings.TrimSpace of the text (digest.Document); the scope parses the text as sent.
+		t.Run(signing+" POST registered text wrapped in whitespace", func(t *testing.T) {
+			query := legacyStack(t, minter, live(), true)
+			servedAsItself(t, "tab and newline around the query", legacyGraphQLRaw(query, http.MethodPost, "/graphql", post("\t\n"+iaDocument+"\r\n"), token), query)
+			write := legacyStack(t, minter, live(), true)
+			if got := legacyGraphQLRaw(write, http.MethodPost, "/graphql", post("\u00a0"+legacyMutationDocument+"\u3000"), token); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*write.seen) != 0 {
+				t.Fatalf("no-break spaces around the mutation: got %d %s, resolver ran %d; want 403 and no run", got.Status, got.Body, len(*write.seen))
+			}
+		})
+		for name, document := range map[string]string{
+			"GET two operations":           "query LegacyOne { probe } query LegacyTwo { probe }",
+			"GET text that does not parse": "query LegacyBroken {",
+		} {
+			t.Run(signing+" "+name, func(t *testing.T) {
+				on := legacyStack(t, minter, live(), true)
+				got := legacyGraphQLDocument(on, http.MethodGet, token, document)
+				unset := legacyStack(t, minter, live(), false)
+				if was := legacyGraphQLDocument(unset, http.MethodGet, token, document); !got.equal(was) || len(*on.seen) != 0 {
+					t.Fatalf("switch on %+v, unset %+v (resolver ran %d); want byte-equal and no run", got, was, len(*on.seen))
+				}
+			})
+		}
+	}
+}

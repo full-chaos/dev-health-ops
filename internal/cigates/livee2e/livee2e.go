@@ -453,3 +453,76 @@ func number(v any) (float64, error) {
 	}
 	return 0, fmt.Errorf("not a number: %v", v)
 }
+
+// apiAudience is the audience of auth-service's access token under the eddsa class.
+const apiAudience = "dev-health-api"
+
+// AssertLoginToken checks the access token of a login answer: EdDSA, the kid of the auth-service key, the issuer of
+// auth-service, the API audience, a lifetime within one hour and not yet expired. It reads the claims without
+// verifying the signature (the services verify it) and returns one line that names the checked claims and never the
+// token.
+func AssertLoginToken(payload []byte, issuer, kid string, now time.Time) (string, error) {
+	var answer struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(payload, &answer); err != nil {
+		return "", errors.New("the login answer is not JSON")
+	}
+	if answer.AccessToken == "" {
+		return "", errors.New("the login answer has no access_token")
+	}
+	parts := strings.Split(answer.AccessToken, ".")
+	if len(parts) != 3 {
+		return "", errors.New("the access token does not have three parts")
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+		Aud any    `json:"aud"`
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+	}
+	for i, into := range []any{&header, &claims} {
+		raw, err := base64.RawURLEncoding.DecodeString(parts[i])
+		if err != nil || json.Unmarshal(raw, into) != nil {
+			return "", errors.New("the access token header or claims are not base64url JSON")
+		}
+	}
+	if header.Alg != "EdDSA" {
+		return "", fmt.Errorf("the access token alg is %q, want EdDSA", header.Alg)
+	}
+	if header.Kid != kid {
+		return "", fmt.Errorf("the access token kid is %q, want %q", header.Kid, kid)
+	}
+	if claims.Iss != issuer {
+		return "", fmt.Errorf("the access token iss is %q, want %q", claims.Iss, issuer)
+	}
+	if !audienceHas(claims.Aud, apiAudience) {
+		return "", fmt.Errorf("the access token aud does not carry %s", apiAudience)
+	}
+	lifetime := claims.Exp - claims.Iat
+	if lifetime <= 0 || lifetime > 3600 {
+		return "", fmt.Errorf("the access token lifetime is %d s, want 1 to 3600", lifetime)
+	}
+	if claims.Exp <= now.Unix() {
+		return "", errors.New("the access token is expired")
+	}
+	return fmt.Sprintf("login token alg=EdDSA kid=%s iss=%s aud=%s lifetime=%ds", header.Kid, claims.Iss, apiAudience, lifetime), nil
+}
+
+func audienceHas(aud any, want string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == want
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == want {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -4933,9 +4933,11 @@ check_auth_fuzz() {
   [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"
 }
 
-# check_auth_vuln: govulncheck over the auth packages only, pinned. ANY
-# reachable finding fails the gate: there is no ignore list, so a pull request
-# cannot whitelist a vulnerability.
+# check_auth_vuln: govulncheck over the auth packages only, pinned. Any
+# reachable finding fails the gate, except a row of ci/auth-vuln-exceptions.tsv
+# that matches its advisory id, module and version exactly. A row ends when the
+# advisory has a fixed version: the gate then fails until the row is removed.
+# A row is reviewed in the pull request (no date field).
 check_auth_vuln() {
   local report
   report="$(mktemp)"
@@ -4948,7 +4950,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck --exceptions "${ROOT}/ci/auth-vuln-exceptions.tsv" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -5039,7 +5041,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth-vuln-exceptions.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac

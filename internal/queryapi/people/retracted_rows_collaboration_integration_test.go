@@ -20,7 +20,7 @@ func TestTheCollaborationReadLeavesOutAKeyWhoseNewestRowIsARetraction(t *testing
 	day := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
 	crossorg.SeedRetractedPeople(ctx, t, admin, f, day)
 	for name, want := range map[string]float64{"alice": 10, "bob": 0, "carol": 10} {
-		rows, err := fetchPersonCollaboration(ctx, client, []string{name + "@example.com"}, day, day.AddDate(0, 0, 1), f.OrgA)
+		rows, err := fetchPersonCollaboration(ctx, client, []string{name + "@example.com"}, day, day.AddDate(0, 0, 1), f.OrgA, readScope{})
 		if err != nil {
 			t.Fatal(err)
 		}

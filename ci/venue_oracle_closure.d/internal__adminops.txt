@@ -41,6 +41,7 @@ internal/auth/passwordpolicy
 internal/auth/platformrole/rule
 internal/auth/policycatalog
 internal/auth/publicaudit
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/requestid
 internal/auth/sessionevent

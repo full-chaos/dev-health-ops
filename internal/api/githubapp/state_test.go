@@ -175,6 +175,19 @@ func TestVerifyReadsTimeClaimsLikePyJWT(t *testing.T) {
 	}
 }
 
+func TestStateMintedUnderTheJWTKeyInTheEnvironmentIsRefused(t *testing.T) {
+	t.Setenv("JWT_SECRET_KEY", testSigner.Secret)
+	now := time.Now()
+	old, err := testSigner.Mint("org-1", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := Signer{Secret: "successor-secret-successor-secret-1", Issuer: testSigner.Issuer, Audience: testSigner.Audience}
+	if _, err := other.Verify(old, now); err == nil {
+		t.Fatal("a state under JWT_SECRET_KEY verified with another key")
+	}
+}
+
 func TestStateMintedUnderAnotherKeyIsRefused(t *testing.T) {
 	now := time.Now()
 	old, err := testSigner.Mint("org-1", nil, now)

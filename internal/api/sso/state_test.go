@@ -197,6 +197,16 @@ func TestValidateOIDCRedirectURIHTTPS(t *testing.T) {
 	}
 }
 
+func TestStateMintedUnderTheJWTKeyInTheEnvironmentIsRefused(t *testing.T) {
+	t.Setenv("JWT_SECRET_KEY", stateTestSecretA)
+	now := time.Now()
+	providerID := "11111111-1111-4111-8111-111111111111"
+	old := mustMint(t, stateTestSecretA, providerID, stateTestOrg, now)
+	if _, err := verifyOIDCState(stateTestSecretB, old, providerID, now); err == nil {
+		t.Fatal("a state under JWT_SECRET_KEY verified with another key")
+	}
+}
+
 func TestStateMintedUnderAnotherKeyIsRefused(t *testing.T) {
 	now := time.Now()
 	providerID := "11111111-1111-4111-8111-111111111111"

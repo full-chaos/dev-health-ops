@@ -143,7 +143,7 @@ func TestRESTPDPEnforceAllowlistIs503(t *testing.T) {
 	}
 }
 
-// Shadow asks and counts, and never denies.
+// Shadow never denies and never counts on the #5679 counter: the 5.12 core counts it (rest_shadow_test.go).
 func TestRESTPDPShadowNeverDenies(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Deny("no_membership")
@@ -151,11 +151,13 @@ func TestRESTPDPShadowNeverDenies(t *testing.T) {
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("shadow deny: got %+v, want %+v", got, gatedOK)
 	}
-	if n := len(srv.Requests()); n != 1 {
-		t.Fatalf("shadow asked %d times, want 1", n)
+	for deadline := time.Now().Add(3 * time.Second); len(srv.Requests()) < 1 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 	}
-	if got := g.counter(t, "dev_health_query_api_pdp_results_total"); got["action=analytics.read,mode=shadow,result=mismatch"] != 1 {
-		t.Fatalf("results %v", got)
+	if n := len(srv.Requests()); n != 1 {
+		t.Fatalf("shadow asked %d times, want 1 (the gate's Authorize asks nothing in shadow; the core asks once)", n)
+	}
+	if got := g.counter(t, "dev_health_query_api_pdp_results_total"); len(got) != 0 {
+		t.Fatalf("results %v, want no series in shadow", got)
 	}
 }
 

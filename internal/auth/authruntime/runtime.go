@@ -652,12 +652,18 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	repoIdentityComponents, err := repoIdentityProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
 
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}, jwks}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	components = append(components, feed.components...)
 	components = append(components, projectionComponents...)
+	components = append(components, repoIdentityComponents...)
 	components = append(components, outboxLoop, announcedListener{listener: operatorHTTP, logger: logger})
 	components = append(components, listeners...)
 	return append(components, health.Gate{Registry: registry}), nil

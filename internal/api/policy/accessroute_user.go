@@ -97,25 +97,34 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 		IsSuperuser: row.State.IsSuperuser, Platform: row.State.Platform, TokenVersion: int(row.State.TokenVersion), accessToken: true, SessionID: sessionID,
 		ImpersonatedBy: impersonatedBy}
 	if claims.OrgID != nil && *claims.OrgID != "" {
-		role, member, err := a.Membership(ctx, user.UserID, *claims.OrgID)
+		role, err := a.tokenOrgRole(ctx, user, *claims.OrgID)
 		if err != nil {
-			a.logger.WarnContext(ctx, "api user access token membership lookup failed",
-				slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
 			return nil, err
-		}
-		if !member {
-			// Parity with the HS256 path (D6773): an admin.orgs holder keeps
-			// a token org without a membership row (useTokenOrg, CheckTokenOrg
-			// in scope.go), with the role a non-member's token carries.
-			if !user.Holds(ActionAdminOrgs) {
-				a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
-				return nil, errRejected
-			}
-			role = nonMemberRole
 		}
 		user.OrgID, user.Role = *claims.OrgID, role
 	}
 	return user, nil
+}
+
+// tokenOrgRole is the user's role in the org claim: the membership's role, or,
+// for an admin.orgs holder with no membership row, the role the HS256 path
+// gives it (D6773): useTokenOrg and CheckTokenOrg in scope.go keep that
+// caller's token org. Any other caller without the row is refused.
+func (a *Authenticator) tokenOrgRole(ctx context.Context, user *User, orgID string) (string, error) {
+	role, member, err := a.Membership(ctx, user.UserID, orgID)
+	if err != nil {
+		a.logger.WarnContext(ctx, "api user access token membership lookup failed",
+			slog.String("user_id", user.UserID), slog.Bool("unavailable", errors.Is(err, ErrUnavailable)))
+		return "", err
+	}
+	if member {
+		return role, nil
+	}
+	if !user.Holds(ActionAdminOrgs) {
+		a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
+		return "", errRejected
+	}
+	return nonMemberRole, nil
 }
 
 // AccessUser reads the users row a user access token is checked against. NULL

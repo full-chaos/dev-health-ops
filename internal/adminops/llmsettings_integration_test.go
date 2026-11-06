@@ -27,7 +27,7 @@ const (
 	llmKeySecret = "oracle-settings-key-not-real"
 	llmSalt      = "oracle-salt"
 	// llmGoPinDigest is the sha256 of the go pin file.
-	llmGoPinDigest = "bdb607b459902c7ec4ed094a6a8e8a14f5470138d967b3af3897f8b473566d50"
+	llmGoPinDigest = "9b936be826df1a96951ce9ee67ea7575710ff0f8e21d8240c049215e8fe59ff0"
 )
 
 type llmStep struct {
@@ -207,6 +207,31 @@ var llmModelRetired = map[int]llmRetired{
 
 const llmModelRuling = "CHAOS-10594 D6107: a BYO provider without a model is refused (the route's rule)"
 
+// llmTargetChangeRetired lists what the provider/base_url rule changes: step 22
+// (`set --provider openai --model m --base-url ""` over the stored "ünï" key) is
+// refused, and step 23 then leaves the rows step 22 left (Python stored step 22).
+var llmTargetChangeRetired = map[int]llmRetired{
+	22: {exit: true, stdout: true, state: true},
+	23: {state: true},
+}
+
+const llmTargetChangeRuling = "CHAOS-13096 (D6711): provider/base_url change without a key is refused; Python accepted it, that acceptance is the defect"
+
+// llmRetiredSteps is every retired field of every rule, by step.
+func llmRetiredSteps() map[int]llmRetired {
+	out := map[int]llmRetired{}
+	for _, rule := range []map[int]llmRetired{llmModelRetired, llmTargetChangeRetired} {
+		for step, fields := range rule {
+			merged := out[step]
+			merged.exit = merged.exit || fields.exit
+			merged.stdout = merged.stdout || fields.stdout
+			merged.state = merged.state || fields.state
+			out[step] = merged
+		}
+	}
+	return out
+}
+
 func compareLLM(t *testing.T, got, want []llmResult, wantName string, retired map[int]llmRetired, pin *venueoracle.GoPin) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -256,8 +281,8 @@ func TestLLMSettingsMatchTheFrozenPythonOutput(t *testing.T) {
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
 	}
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/golden/llmsettings.go-pin.json", SHA256: llmGoPinDigest, Ruling: llmModelRuling})
-	compareLLM(t, llmSession(t), frozen, "frozen Python", llmModelRetired, pin)
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/golden/llmsettings.go-pin.json", SHA256: llmGoPinDigest, Ruling: llmModelRuling + "; " + llmTargetChangeRuling})
+	compareLLM(t, llmSession(t), frozen, "frozen Python", llmRetiredSteps(), pin)
 	// A script that stored nothing, or refused nothing, passes for any implementation.
 	stored, refused := 0, 0
 	for _, item := range frozen {

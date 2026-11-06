@@ -39,7 +39,8 @@ var (
 	shadowCallers    = []string{"member", "admin", "superuser"}
 	shadowClasses    = []string{"legacy_bug", "new_bug", "unresolved", "intentional"}
 	shadowResults    = []string{"match", "mismatch", "error", "dropped", "skipped", "impersonation_refused"}
-	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope}
+	shadowReasons    = []string{ShadowReasonNone, ShadowReasonHS256, ShadowReasonEnvelope, ShadowReasonNoUserBearer, ShadowReasonCap,
+		ShadowReasonUnmapped, ShadowReasonOpRefused}
 )
 
 // The closed values of the reason label on the results counter. "none" is every result that has no skip reason,
@@ -48,6 +49,12 @@ const (
 	ShadowReasonNone     = "none"
 	ShadowReasonHS256    = "hs256"
 	ShadowReasonEnvelope = "envelope"
+	// A GraphQL operation: no user bearer rode with it (an MCP op), a root field has no catalog row, the operation passed
+	// the observe cap, or the guard refused the operation for its shape.
+	ShadowReasonNoUserBearer = "no_user_bearer"
+	ShadowReasonCap          = "cap"
+	ShadowReasonUnmapped     = "unmapped"
+	ShadowReasonOpRefused    = "op_refused"
 )
 
 // ShadowReasons is the one closed list of reason label values.
@@ -395,6 +402,14 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	call := shadowCall{ctx: context.WithoutCancel(ctx), request: request, row: row, pattern: o.Pattern, caller: caller, legacyAllowed: o.LegacyAllowed}
 	s.wg.Add(1)
 	go s.run(call)
+}
+
+// CountSkipped counts one skipped result with reason (one of ShadowReasons, else "none") for a request the service
+// cannot or will not ask the PDP about. A nil Shadow counts nothing.
+func (s *Shadow) CountSkipped(ctx context.Context, reason string) {
+	if s != nil {
+		countShadowResult(ctx, resultSkipped, shadowReasonOf(reason))
+	}
 }
 
 // Wait blocks until every call in flight has ended. A nil Shadow has none.

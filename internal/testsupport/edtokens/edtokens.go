@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	// IssuerURL, Audience and KeyID are the iss, aud and kid of every token minted here.
+	// IssuerURL, Audience and KeyID are the iss, aud and kid of every token minted here, unless FromKey names
+	// another issuer and kid.
 	IssuerURL = "https://edtokens.test"
 	Audience  = "dev-health-api"
 	KeyID     = "edtokens-test"
@@ -41,6 +42,8 @@ const (
 // Issuer mints user access tokens under its own key and remembers each token's session.
 type Issuer struct {
 	priv     ed25519.PrivateKey
+	issuer   string
+	kid      string
 	keys     authverify.StaticKeys
 	mu       sync.Mutex
 	sessions map[uuid.UUID]session
@@ -60,8 +63,29 @@ func New(t testing.TB) *Issuer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
+	return &Issuer{priv: priv, issuer: IssuerURL, kid: KeyID, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
 }
+
+// FromKey is an Issuer that mints under a given key, as the issuer issuerURL with key id kid: the key of a real
+// issuer a target trusts (an auth-service the test does not run itself).
+func FromKey(priv ed25519.PrivateKey, kid, issuerURL string) (*Issuer, error) {
+	if len(priv) != ed25519.PrivateKeySize {
+		return nil, errors.New("edtokens: not an Ed25519 private key")
+	}
+	if kid == "" || issuerURL == "" {
+		return nil, errors.New("edtokens: a key needs its key id and issuer")
+	}
+	pub, _ := priv.Public().(ed25519.PublicKey)
+	return &Issuer{priv: priv, issuer: issuerURL, kid: kid, keys: authverify.StaticKeys{kid: pub}, sessions: map[uuid.UUID]session{}}, nil
+}
+
+// String names the issuer and key id only: a printed Issuer never shows its key.
+func (i *Issuer) String() string {
+	return "edtokens.Issuer{issuer: " + i.issuer + ", kid: " + i.kid + "}"
+}
+
+// GoString is String, for %#v.
+func (i *Issuer) GoString() string { return i.String() }
 
 // Fresh is New for a package-level fixture (no test at hand); it panics when no key can be made.
 func Fresh() *Issuer {
@@ -69,7 +93,7 @@ func Fresh() *Issuer {
 	if err != nil {
 		panic(err)
 	}
-	return &Issuer{priv: priv, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
+	return &Issuer{priv: priv, issuer: IssuerURL, kid: KeyID, keys: authverify.StaticKeys{KeyID: pub}, sessions: map[uuid.UUID]session{}}
 }
 
 // MustMint is Mint that fails t.
@@ -127,7 +151,7 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 		sid = *c.SessionID
 	}
 	claims := map[string]any{
-		"iss": IssuerURL, "aud": Audience, "sub": PrincipalID(c.UserID), "principal_type": "human",
+		"iss": i.issuer, "aud": Audience, "sub": PrincipalID(c.UserID), "principal_type": "human",
 		"sid": sessionid.Wire(sid), "jti": strings.ReplaceAll(uuid.NewString(), "-", ""),
 		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(lifetime).Unix(), "scope": "api:access",
 	}
@@ -148,7 +172,7 @@ func (i *Issuer) Mint(c Claims) (string, error) {
 			claims[key] = value
 		}
 	}
-	header, err := json.Marshal(map[string]any{"alg": "EdDSA", "typ": "at+jwt", "kid": KeyID})
+	header, err := json.Marshal(map[string]any{"alg": "EdDSA", "typ": "at+jwt", "kid": i.kid})
 	if err != nil {
 		return "", err
 	}
@@ -187,7 +211,7 @@ func (i *Issuer) Sessions() []Session {
 // Verifier verifies a token of this Issuer as the api does.
 func (i *Issuer) Verifier(t testing.TB) *authverify.Verifier {
 	t.Helper()
-	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: IssuerURL, Audience: Audience, Keys: i.keys})
+	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: i.issuer, Audience: Audience, Keys: i.keys})
 	if err != nil {
 		t.Fatal(err)
 	}

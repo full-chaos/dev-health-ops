@@ -88,6 +88,9 @@ type ShadowRow struct {
 	HighRisk     bool
 	// OrgFromPath: the profile resolver is organization_from_path; the handler serves the {org_id} path organization.
 	OrgFromPath bool
+	// OrgFromQuery: the profile resolver is organization_from_query_or_session; the handler serves the organization the
+	// last org_id query value names, else the session's.
+	OrgFromQuery bool
 }
 
 func (row ShadowRow) valid() bool {
@@ -98,7 +101,7 @@ func (row ShadowRow) valid() bool {
 func (row ShadowRow) matchesCatalog() bool {
 	action, err := policycatalog.Default().Action(row.Action)
 	catalog := row
-	catalog.OrgFromPath = false
+	catalog.OrgFromPath, catalog.OrgFromQuery = false, false
 	return err == nil && catalog == shadowRowOf(action)
 }
 
@@ -148,6 +151,12 @@ func ParseShadowRows(raw []byte, service string) (map[string]ShadowRow, error) {
 				return nil, fmt.Errorf("shadow rows: %s reads its organization from the path but is no organization row with an {%s} segment", key, pathOrgSegment)
 			}
 			row.OrgFromPath = true
+		}
+		if strings.HasPrefix(entry.Resolver, queryOrgResolver) {
+			if row.ResourceType != policycatalog.ScopeOrganization || strings.Contains(entry.Route, "{"+pathOrgSegment+"}") {
+				return nil, fmt.Errorf("shadow rows: %s reads its organization from the %s query parameter but is no organization row, or has an {%s} segment", key, queryOrgParam, pathOrgSegment)
+			}
+			row.OrgFromQuery = true
 		}
 		rows[key] = row
 	}

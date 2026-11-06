@@ -125,12 +125,19 @@ type llmPurposeUpsert struct {
 	purpose         llmorgsettings.Purpose
 	provider, model string
 	apiKey, baseURL *string
+	// baseURLKey: the body held a base_url key in any case, null value included.
+	baseURLKey bool
 	// inTx runs inside the write transaction before it commits; nil is none.
 	inTx func(ctx context.Context, tx pgx.Tx) error
 }
 
+// decisionRefusal is the rule of the two decision providers for this write.
+func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
+	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL, in.baseURLKey)
+}
+
 func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := clefRefusal(in.provider, in.purpose, true, in.model, in.baseURL); refusal != nil {
+	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""

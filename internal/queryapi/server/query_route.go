@@ -6858,6 +6858,9 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // fall-through, because a write door is the one place "the check could not
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
+	// An AUTH_PROXY_IMPERSONATION that does not parse fails closed (one WARN at Build).
+	refuseLegacy, refuseErr := refusesLegacyImpersonation(getenv)
+	refuseLegacy = refuseLegacy || refuseErr != nil
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isGraphQLEdge(r.Context()) {
 			r = bindRequestID(w, r)
@@ -6891,6 +6894,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// before the unregistered-document 404 can answer (CHAOS-6757 r1).
 			// Python parity: the edge's GraphQLRouter resolves get_context (401
 			// "Authentication required") before it picks an operation.
+			if refuseLegacy {
+				r = r.WithContext(withLegacyImpersonationRefused(r.Context()))
+			}
 			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 			if !ok {
 				return
@@ -7011,6 +7017,14 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			if kind, _ := digest.DocumentKind(query); kind != digest.KindQuery {
 				log.Printf("query-api: /graphql refused a GET for a non-query document: operation=%s kind=%q", operation, kind)
 				refuseMutationOverGET(w)
+				return
+			}
+		}
+
+		if holderRowLive(r.Context()) {
+			if !legacyDocumentReads(query) {
+				log.Printf("query-api: refused a non-query document of an admin.impersonate holder beside a live impersonation row: operation=%s", operation)
+				policy.WriteImpersonationRefused(w)
 				return
 			}
 		}

@@ -63,6 +63,9 @@ the release-wide policy admits every pod in the namespace).
 {{- if eq (upper (trim (toString .name))) "AUTH_ACCESS_TOKEN_ISSUER" }}
 {{- fail "queryApi.extraEnv must not set AUTH_ACCESS_TOKEN_ISSUER: authService.accessToken.issuerURL renders it, for auth-service and go-api too" }}
 {{- end }}
+{{- if eq (upper (trim (toString .name))) "AUTH_PROXY_IMPERSONATION" }}
+{{- fail "queryApi.extraEnv must not set AUTH_PROXY_IMPERSONATION: goApi.authProxy.impersonation renders it, for go-api and query-api both" }}
+{{- end }}
 {{- end }}
 {{- if .Values.queryApi.internal.enabled }}
 {{- range .Values.queryApi.internal.allowedFrom }}
@@ -183,6 +186,11 @@ spec:
             {{- end }}
             {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
             - name: AUTH_PLATFORM_ROLES_OWNED
+              value: "true"
+            {{- end }}
+            {{- /* go-api's AUTH_PROXY_IMPERSONATION, from the same value: on, /graphql refuses the admin's own bearer beside a live impersonation row. */}}
+            {{- if eq (default false (default dict .Values.goApi.authProxy).impersonation) true }}
+            - name: AUTH_PROXY_IMPERSONATION
               value: "true"
             {{- end }}
             {{- if .Values.queryApi.internal.enabled }}

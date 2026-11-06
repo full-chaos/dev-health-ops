@@ -5,18 +5,9 @@ import (
 	"testing"
 )
 
-// servedOrgInvoiceRows are the census query rows whose handler reads org_id only for an admin.billing holder
-// (invoiceOrg, internal/api/billing/invoices.go:31); any other caller is served the token organization.
-var servedOrgInvoiceRows = map[string]bool{
-	"GET /api/v1/billing/invoices":                    true,
-	"GET /api/v1/billing/invoices/{invoice_id}":       true,
-	"POST /api/v1/billing/invoices/{invoice_id}/void": true,
-}
-
 // Product rule 1 (D6773) and CHAOS-13209 B3/B4: with a census row's namespace switched on, a request that serves
 // another organization than the token's (or a token with none) gets the answer the same guard gives with no enforcer:
-// status and body, and no decision point call. The one exception is an invoice row asked by a caller the handler
-// does not read org_id for: that request serves the token organization, so the decision point judges it there.
+// status and body, and no decision point call: the legacy guard decides, then the handler's own served-org check.
 func TestServedOrgOtherOrganizationKeepsTheLegacyAnswer(t *testing.T) {
 	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
 	for _, row := range servedOrgCensus {
@@ -26,12 +17,11 @@ func TestServedOrgOtherOrganizationKeepsTheLegacyAnswer(t *testing.T) {
 				name   string
 				setup  servedOrgSetup
 				served string
-				holder bool
 			}{
-				{"platform admin with token A serves another org", servedOrgSetup{who: personaSuperuser}, strangerOrg, true},
-				{"admin of A and B with token A serves B", servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}}, memberOrg, false},
-				{"admin of A only with token A serves another org", servedOrgSetup{who: personaAdmin}, strangerOrg, false},
-				{"platform admin with no token org serves A", servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg, true},
+				{"platform admin with token A serves another org", servedOrgSetup{who: personaSuperuser}, strangerOrg},
+				{"admin of A and B with token A serves B", servedOrgSetup{who: personaAdmin, adminOf: []string{memberOrg}}, memberOrg},
+				{"admin of A only with token A serves another org", servedOrgSetup{who: personaAdmin}, strangerOrg},
+				{"platform admin with no token org serves A", servedOrgSetup{who: personaSuperuser, claims: noOrg}, ownOrg},
 			} {
 				legacy := servedOrgServe(t, row, tc.setup, tc.served)
 				pdp := newTestPDP(t, allowAll)
@@ -41,14 +31,7 @@ func TestServedOrgOtherOrganizationKeepsTheLegacyAnswer(t *testing.T) {
 				if got.status != legacy.status || got.body != legacy.body {
 					t.Errorf("%s: enforced %d %q, want the legacy %d %q", tc.name, got.status, got.body, legacy.status, legacy.body)
 				}
-				calls := pdp.calls()
-				if servedOrgInvoiceRows[row.pattern] && !tc.holder {
-					if len(calls) != 1 || calls[0].Org != ownOrg {
-						t.Errorf("%s: PDP saw %+v, want one question on the token org %s (the handler ignores org_id)", tc.name, calls, ownOrg)
-					}
-					continue
-				}
-				if len(calls) != 0 {
+				if calls := pdp.calls(); len(calls) != 0 {
 					t.Errorf("%s: PDP saw %+v, want no call", tc.name, calls)
 				}
 			}
@@ -71,6 +54,34 @@ func TestServedOrgOtherOrganizationKeepsTheLegacyAnswerForHS256(t *testing.T) {
 			}
 			if n := len(pdp.calls()); n != 0 {
 				t.Errorf("HS256: %d PDP calls, want 0", n)
+			}
+		})
+	}
+}
+
+// D1 is not WIDER (acp Q3): a viewer of A who is an admin of B, with token A, asks an Admin row that serves B. The
+// legacy guard refuses the viewer at policy.Admin on the token org (guard.go:178); judging B alone would admit them.
+// Both paths answer 403 with the legacy body, and no decision point call is made.
+func TestServedOrgViewerOfAAdminOfBIsRefusedOnBothPaths(t *testing.T) {
+	viewer := persona{role: "viewer"}
+	for _, row := range servedOrgCensus {
+		if row.level != Admin {
+			continue
+		}
+		t.Run(row.pattern, func(t *testing.T) {
+			setup := servedOrgSetup{who: viewer, adminOf: []string{memberOrg}}
+			legacy := servedOrgServe(t, row, setup, memberOrg)
+			if legacy.status != http.StatusForbidden || legacy.body != `{"detail":"Admin access required"}` {
+				t.Fatalf("legacy: %d %q, want 403 Admin access required", legacy.status, legacy.body)
+			}
+			pdp := newTestPDP(t, allowAll)
+			setup.enforcer = servedOrgEnforcer(t, pdp, servedOrgNamespace(t, row.pattern))
+			got := servedOrgServe(t, row, setup, memberOrg)
+			if got.status != legacy.status || got.body != legacy.body {
+				t.Errorf("enforced: %d %q, want the legacy %d %q", got.status, got.body, legacy.status, legacy.body)
+			}
+			if calls := pdp.calls(); len(calls) != 0 {
+				t.Errorf("PDP saw %+v, want no call", calls)
 			}
 		})
 	}

@@ -383,8 +383,8 @@ func parPtr(u uuid.UUID) *uuid.UUID { return &u }
 
 // Product rule 1 (D6773), CHAOS-13209: on the real go-api Routes over a migrated database, with the members, billing
 // and other namespaces enforced by the production evaluator, every B3/B4 row gives the platform admin and the
-// cross-org callers the answer the same token gets with enforcement off (status and body), and the no-membership
-// platform admin revokes an acr credential as the token organization's admin (F1).
+// cross-org callers the answer the same token gets with enforcement off (status and body); the acr revoke route keeps
+// its legacy refusal of a no-membership platform admin (F1, equal).
 func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -441,6 +441,8 @@ func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 		}
 	}
 
+	// F1 is EQUAL (acp Q1): a holder with an org claim and no membership row is refused not_member on both paths
+	// (acrcredentials/routes.go:119), and acr is never called.
 	revoke := "/api/v1/acr/credentials/cred_parity_1/revoke"
 	for _, side := range []struct {
 		name string
@@ -448,9 +450,9 @@ func TestPlatformAdminAndCrossOrgAnswersEqualLegacy(t *testing.T) {
 	}{{"enforce-on", rig.enforced}, {"enforce-off", rig.legacy}} {
 		status, body, _ := rig.do(side.h, http.MethodPost, revoke, "", hsSU0b.token)
 		calls := rig.revoker.take()
-		want := fmt.Sprintf("org=%s cred=cred_parity_1 actor_type=admin actor=%s", B, parSU0)
-		if status != http.StatusNoContent || len(calls) != 1 || calls[0] != want {
-			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want 204 and [%s]", side.name, hsSU0b.label, status, body, calls, want)
+		if status != http.StatusForbidden || body != `{"detail":"Organization access denied"}` || len(calls) != 0 {
+			t.Errorf("F1 %s %s: %d %s, revoke calls %v, want the legacy 403 Organization access denied and none", side.name, hsSU0b.label,
+				status, body, calls)
 		}
 	}
 	var role string

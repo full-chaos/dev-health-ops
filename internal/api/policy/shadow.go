@@ -372,12 +372,10 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 		s.record(ctx, o.Pattern, row, caller, resultImpersonationRefused, ShadowReasonNone, "")
 		return
 	}
-	switch o.served.against(o.OrgID) {
-	case servedOrgUnparsed:
+	// A served organization that is no UUID, or that is not the token's, keeps the legacy answer under enforcement too:
+	// nothing to compare.
+	if o.served.against(o.OrgID) != servedOrgJudged {
 		s.record(ctx, o.Pattern, row, caller, resultSkipped, ShadowReasonNone, "")
-		return
-	case servedOrgOther:
-		s.observeServedOrgOther(ctx, o, row, caller)
 		return
 	}
 	if row.HighRisk && !s.highRisk {
@@ -416,24 +414,6 @@ func (s *Shadow) CountSkipped(ctx context.Context, reason string) {
 func (s *Shadow) Wait() {
 	if s != nil {
 		s.wg.Wait()
-	}
-}
-
-// observeServedOrgOther records what enforcement would answer when the request names an organization that is not
-// the token's: a refusal with no decision point call. Against a legacy allow that is a mismatch of class
-// intentional; against a legacy deny, a match.
-func (s *Shadow) observeServedOrgOther(ctx context.Context, o ShadowObservation, row ShadowRow, caller string) {
-	if !o.LegacyAllowed {
-		s.record(ctx, o.Pattern, row, caller, resultMatch, ShadowReasonNone, "")
-		return
-	}
-	s.record(ctx, o.Pattern, row, caller, resultMismatch, ShadowReasonNone, "")
-	countShadowMismatch(ctx, row.Namespace, caller, classIntentional)
-	if s.logAllowed(slices.Index(shadowClasses, classIntentional)) {
-		s.logger.WarnContext(ctx, "api shadow pdp: the request names an organization that is not the token organization",
-			slog.String("namespace", row.Namespace), slog.String("caller", caller), slog.String("class", classIntentional),
-			slog.String("action", row.Action), slog.String("route", o.Pattern), slog.String("legacy", "allow"), slog.String("shadow", "deny"),
-			slog.String("reason", "served_org_not_judged_org"))
 	}
 }
 

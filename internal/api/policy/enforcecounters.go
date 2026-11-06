@@ -44,10 +44,12 @@ func countEnforce(ctx context.Context, namespace, outcome string) {
 const (
 	enforceUnjudgedHS256 = "hs256"
 	enforceUnjudgedNoOrg = "no_org"
+	// enforceUnjudgedServedOrg: the request serves another organization than the token's, or the token has none.
+	enforceUnjudgedServedOrg = "served_org"
 )
 
 // enforceUnjudgedReasons is the closed reason set of the unjudged counter.
-var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg}
+var enforceUnjudgedReasons = []string{enforceUnjudgedHS256, enforceUnjudgedNoOrg, enforceUnjudgedServedOrg}
 
 type enforceUnjudgedAdder func(ctx context.Context, route, reason string)
 

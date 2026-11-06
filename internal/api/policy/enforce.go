@@ -22,8 +22,6 @@ const (
 	enforceOutcomeErrorDeny = "error_deny"
 	// enforceOutcomeImpersonationRefused: a caller with a live go-api impersonation row, refused before any call.
 	enforceOutcomeImpersonationRefused = "impersonation_refused"
-	// enforceOutcomeOrgMismatch: a served organization that is not the token's, refused before any call.
-	enforceOutcomeOrgMismatch = "org_mismatch"
 
 	enforceDefaultTimeout = 2 * time.Second
 	enforceRetryAfter     = "5"
@@ -56,8 +54,7 @@ type EnforceConfig struct {
 var goAPIRoutesWithoutRepositoryDimension = map[string]bool{}
 
 // enforceOutcomes is the closed outcome set of the decision counter.
-var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceOutcomeErrorDeny, enforceOutcomeImpersonationRefused,
-	enforceOutcomeOrgMismatch}
+var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceOutcomeErrorDeny, enforceOutcomeImpersonationRefused}
 
 // Enforcer lets the policy decision point decide the routes of the namespaces that are switched on. For such a
 // route its answer replaces the legacy guard's: an allow passes, a deny refuses, and a failure of any kind refuses,
@@ -66,8 +63,8 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
 // delegation: it is refused before any call, except on the stop route. A delegated session's own bearer is decided
 // like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
-// organization route with no organization): that request keeps the legacy answer, which is the same answer the
-// route gives with its cell off.
+// organization route with no organization, a request that serves another organization than the token's): that
+// request keeps the legacy answer, which is the same answer the route gives with its cell off.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -179,12 +176,14 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
 	}
-	// The handler must serve the organization the decision point judges; this holds for an unjudged caller too.
+	// A request that serves another organization than the token's, or a token with none, keeps the legacy answer: the
+	// legacy guard judges the token organization at the route's level and the handler the served one. The decision point
+	// judges one organization, and neither alone is that answer (product rule 1, D6773).
 	if o.served.against(o.orgID) == servedOrgOther {
-		countEnforce(ctx, row.Namespace, enforceOutcomeOrgMismatch)
-		e.logger.WarnContext(ctx, "api enforcement: the request names an organization that is not the token organization, the route is refused",
+		countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedServedOrg)
+		e.logger.DebugContext(ctx, "api enforcement: the request serves another organization than the token's, the legacy answer stands",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
-		return enforceDeny
+		return enforceLegacy
 	}
 	org := strings.ToLower(o.orgID)
 	if reason := unjudgedReason(o, row, org); reason != "" {

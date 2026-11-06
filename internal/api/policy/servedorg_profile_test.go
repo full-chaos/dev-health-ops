@@ -55,35 +55,32 @@ func TestServedOrgQueryRowsAreTheProfileQueryResolverRows(t *testing.T) {
 	}
 }
 
-// A row's query resolver alone makes the seam compare its org_id: the same route with an
-// organization_from_session resolver serves the session organization, and with organization_from_query_or_session
-// another organization is refused with a 403 before any PDP call.
+// A row's query resolver alone makes the seam compare its org_id: the same route with an organization_from_session
+// resolver serves the session organization and the PDP judges it, and with organization_from_query_or_session another
+// organization keeps the legacy answer with no PDP call (product rule 1).
 func TestServedOrgQueryRowComesFromItsProfileResolver(t *testing.T) {
 	stranger := uuid.MustParse(strangerOrg).String()
 	for _, tc := range []struct {
 		resolver string
-		status   int
 		calls    int
 	}{
-		{"organization_from_session: the caller's organization", http.StatusOK, 1},
-		{queryResolverKind + " the last org_id query value", http.StatusForbidden, 0},
+		{"organization_from_session: the caller's organization", 1},
+		{queryResolverKind + " the last org_id query value", 0},
 	} {
 		rows, err := ParseShadowRows(profileDocument(profileRowWith("GET", "/api/v1/admin/teams", "teams.read", tc.resolver)), "dev-health-ops-api")
 		if err != nil {
 			t.Fatalf("%s: %v", tc.resolver, err)
 		}
+		legacy := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), nil), http.MethodGet, "/api/v1/admin/teams?org_id="+stranger)
 		pdp := newTestPDP(t, allowAll)
 		enf, err := NewEnforcer(EnforceConfig{Decider: pdp.client(t), Rows: rows, Switch: onFor("teams"), Timeout: shadowDefaultTimeout, Logger: quiet()})
 		if err != nil {
 			t.Fatal(err)
 		}
 		got := enforceRequest(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), enf), http.MethodGet, "/api/v1/admin/teams?org_id="+stranger)
-		calls := pdp.calls()
-		if got.status != tc.status || len(calls) != tc.calls {
-			t.Errorf("%s: %d %q, PDP saw %+v, want %d with %d call(s)", tc.resolver, got.status, got.body, calls, tc.status, tc.calls)
-		}
-		if tc.status == http.StatusForbidden && got.body != servedOrgDenyBody(AdminOrg) {
-			t.Errorf("%s: body %q, want the level's deny body %s", tc.resolver, got.body, servedOrgDenyBody(AdminOrg))
+		if calls := pdp.calls(); got.status != legacy.status || got.body != legacy.body || len(calls) != tc.calls {
+			t.Errorf("%s: %d %q, PDP saw %+v, want the legacy %d %q with %d call(s)", tc.resolver, got.status, got.body, calls,
+				legacy.status, legacy.body, tc.calls)
 		}
 	}
 }

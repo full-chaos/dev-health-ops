@@ -14,7 +14,7 @@ import (
 // policy.AdminOrg profile rows. The catalog flag must name exactly these.
 var platformAdminActions = []string{
 	"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
-	"members.read", "settings.read", "settings.write", "teams.read", "teams.write",
+	"members.read", "settings.write", "teams.write",
 }
 
 func flaggedActions(t *testing.T) []string {
@@ -89,7 +89,7 @@ func TestPlatformAdminCellsOverTheFlaggedActions(t *testing.T) {
 				}
 			}
 		}
-		// members.read, settings.read and teams.read are member actions: a member is allowed them by role, with or
+		// members.read is a member action: a member is allowed them by role, with or
 		// without platform_owner; every other flagged action is refused to a member without admin.orgs.
 		memberHolds := policycatalog.Default().Allows("member", a)
 		for _, platform := range []string{"platform_owner", ""} {

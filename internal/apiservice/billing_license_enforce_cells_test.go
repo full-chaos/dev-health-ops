@@ -134,8 +134,8 @@ func TestEveryBillingAndLicensingRouteHasOneEnforcementClass(t *testing.T) {
 	}
 }
 
-// cellPDP is a decision point over the wire: it records each request and answers with verdict.
-type cellPDP struct {
+// billingCellPDP is a decision point over the wire: it records each request and answers with verdict.
+type billingCellPDP struct {
 	srv     *httptest.Server
 	verdict string // "allow", "deny" or "error"
 	mu      sync.Mutex
@@ -144,9 +144,9 @@ type cellPDP struct {
 
 type cellSeen struct{ principal, action, kind, key, org string }
 
-func newCellPDP(t *testing.T, verdict string) *cellPDP {
+func newBillingCellPDP(t *testing.T, verdict string) *billingCellPDP {
 	t.Helper()
-	p := &cellPDP{verdict: verdict}
+	p := &billingCellPDP{verdict: verdict}
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			PrincipalReference string `json:"principal_reference"`
@@ -188,7 +188,7 @@ func newCellPDP(t *testing.T, verdict string) *cellPDP {
 	return p
 }
 
-func (p *cellPDP) client(t *testing.T) *pep.Client {
+func (p *billingCellPDP) client(t *testing.T) *pep.Client {
 	t.Helper()
 	c, err := pep.New(pep.Config{BaseURL: p.srv.URL, AllowPlainHTTP: true, HTTPClient: p.srv.Client(), ClientService: goAPIAccessService, Timeout: 2 * time.Second})
 	if err != nil {
@@ -197,7 +197,7 @@ func (p *cellPDP) client(t *testing.T) *pep.Client {
 	return c
 }
 
-func (p *cellPDP) calls() []cellSeen {
+func (p *billingCellPDP) calls() []cellSeen {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.seen)
@@ -334,7 +334,7 @@ func classAKeys() []string {
 // Enforcer whose only namespace is another area's. probeUser is an admin of probeOrg without admin.billing, so every
 // org row reaches its handler and the platform row is refused by the legacy gate.
 func TestBillingClassARowsAskNothingWithTheSwitchOff(t *testing.T) {
-	pdp := newCellPDP(t, "deny")
+	pdp := newBillingCellPDP(t, "deny")
 	for name, rig := range map[string]*cellRig{
 		"no enforcer":          newCellRig(t, "", nil, false),
 		"another namespace on": newCellRig(t, "teams", pdp.client(t), false),
@@ -360,7 +360,7 @@ func TestBillingClassARowsAskNothingWithTheSwitchOff(t *testing.T) {
 // Class A with its namespace on: a caller with a live go-api impersonation row is refused with a 403 before any PDP
 // call (12814 option A). This cell changes when CHAOS-13106 judges a read as the target user (D6714).
 func TestBillingClassARowsRefuseAnImpersonatingCallerBeforeThePDP(t *testing.T) {
-	pdp := newCellPDP(t, "allow")
+	pdp := newBillingCellPDP(t, "allow")
 	rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 	impersonating := bearer(rig.minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(cellAdminSID), "org_id": nil}))
 	for _, key := range classAKeys() {
@@ -383,7 +383,7 @@ func TestBillingClassARowsAreDecidedByThePDPWithTheSwitchOn(t *testing.T) {
 			action := billingClassA[key]
 			platform := action == "admin.billing"
 			for _, verdict := range []string{"allow", "deny", "error"} {
-				pdp := newCellPDP(t, verdict)
+				pdp := newBillingCellPDP(t, verdict)
 				rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 				headers := rig.userBearer()
 				status, body, header := rig.serve(key, headers)
@@ -461,7 +461,7 @@ func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 		if !slices.Contains(cellQueryOrgRows, key) && !strings.Contains(key, "{org_id}") {
 			t.Fatalf("%s names its organization neither in org_id nor in {org_id}", key)
 		}
-		pdp := newCellPDP(t, "allow")
+		pdp := newBillingCellPDP(t, "allow")
 		rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 		recorder := httptest.NewRecorder()
 		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOtherOrg, rig.userBearer()))
@@ -503,7 +503,7 @@ func TestBillingClassARowsRefuseWithNoDecisionPoint(t *testing.T) {
 func TestBillingClassARowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
 	hs256 := bearer(probeHS256(t, probeKey, map[string]any{"sub": probeUser.String(), "org_id": probeOrg.String(), "role": "admin", "tv": 3}))
 	off := newCellRig(t, "", nil, false)
-	pdp := newCellPDP(t, "deny")
+	pdp := newBillingCellPDP(t, "deny")
 	on := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 	for _, key := range classAKeys() {
 		offStatus, offBody, _ := off.serve(key, hs256)
@@ -521,7 +521,7 @@ func TestBillingClassARowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
 // legacy checks until their rows name an action; D, E and F are never PDP rows.
 func TestBillingRowsWithoutAnActionAreNeverDecidedByThePDP(t *testing.T) {
 	off := newCellRig(t, "", nil, false)
-	pdp := newCellPDP(t, "deny")
+	pdp := newBillingCellPDP(t, "deny")
 	on := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 	var keys []string
 	for _, class := range [][]string{billingClassB, billingClassC, billingClassD, billingClassE, billingClassF} {

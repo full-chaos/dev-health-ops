@@ -15,6 +15,7 @@ import (
 
 const usage = `usage: cigate live-e2e <verb>
   assert-health FILE | assert-meta FILE | assert-home FILE
+  assert-login-token FILE ISSUER KID     (FILE holds the login answer; prints one proof line)
   edge-request DOCUMENTS OPERATION ORG
   mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
   valkey-ping                            (env REDIS_URL)
@@ -59,6 +60,20 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		if err != nil {
 			return fail(err)
 		}
+		return 0
+	case "assert-login-token":
+		if !need(3) {
+			return 2
+		}
+		payload, err := os.ReadFile(args[1])
+		if err != nil {
+			return fail(err)
+		}
+		line, err := AssertLoginToken(payload, args[2], args[3], time.Now())
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintln(stdout, line)
 		return 0
 	case "edge-request":
 		if !need(3) {

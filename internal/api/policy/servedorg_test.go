@@ -25,7 +25,8 @@ type servedOrgCensusRow struct {
 }
 
 // servedOrgCensus is every go-api action row whose handler serves another organization than the session's: the 8
-// organization_from_path rows and the 9 billing rows whose handler reads an org_id query parameter (resolveOrg).
+// organization_from_path rows and the 9 billing organization_from_query_or_session rows, whose handler reads an org_id
+// query parameter (resolveOrg).
 var servedOrgCensus = []servedOrgCensusRow{
 	{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false},
 	{"POST /api/v1/admin/orgs/{org_id}/members", Admin, false},
@@ -471,17 +472,20 @@ func TestServedOrgARowOutsideTheCensusIsNotCompared(t *testing.T) {
 	}
 }
 
-// The rows the seam compares are the census: OrgFromPath on exactly its path rows, the query table on exactly its
-// org_id rows.
+// The rows the seam compares are the census: OrgFromPath on exactly its path rows, OrgFromQuery on exactly its
+// org_id rows, never both on one row.
 func TestServedOrgSeamRowsAreTheCensus(t *testing.T) {
 	var flagged, query, censusPath, censusQuery []string
 	for pattern, row := range servedOrgRows(t) {
+		if row.OrgFromPath && row.OrgFromQuery {
+			t.Errorf("%s reads its organization from the path and the query", pattern)
+		}
 		if row.OrgFromPath {
 			flagged = append(flagged, pattern)
 		}
-	}
-	for pattern := range goAPIQueryOrgRows {
-		query = append(query, pattern)
+		if row.OrgFromQuery {
+			query = append(query, pattern)
+		}
 	}
 	for _, row := range servedOrgCensus {
 		if row.query {

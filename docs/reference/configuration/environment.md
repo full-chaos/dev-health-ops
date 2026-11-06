@@ -57,7 +57,7 @@ The API and sync workers need the same app client values. The redirect URI is th
 
 ## Worker and schedule settings
 
-!!! note "Go workers are configured by flags first (CHAOS-4020)"
+!!! note "Go workers are configured by flags first"
 
     The Go worker processes (`dho worker`, `dho reconciler`,
     `dho scheduler`, `dho stream-runner`) resolve every setting

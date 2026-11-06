@@ -69,9 +69,11 @@ compose() {
 
 SINK_PID=""
 SINK_DIR=""
+FORWARD_PID=""
 cleanup() {
   local status=$?
   [ -z "${SINK_PID}" ] || kill "${SINK_PID}" >/dev/null 2>&1 || true
+  [ -z "${FORWARD_PID}" ] || kill "${FORWARD_PID}" >/dev/null 2>&1 || true
   [ -z "${SINK_DIR}" ] || rm -rf "${SINK_DIR}"
   if [ "${status}" -ne 0 ]; then
     printf '\n--- auth services at failure ---\n' >&2
@@ -179,9 +181,31 @@ before="$(psql_one "SELECT count(*) FROM public.refresh_tokens WHERE user_id = '
 printf 'public.refresh_tokens rows for the user before the Web run: %s\n' "${before}"
 
 printf 'step 3: the real Web auth code: login, refresh, logout\n'
+# CHAOS-13242: auth-service issues EdDSA access tokens (compose.yml, CHAOS-13107), so the Web code runs with class
+# eddsa and reads the issuer's discovery document and key set itself, as the web dev server does
+# (docs/operate/install/local-evaluation.md): the issuer name resolves to loopback, port 8443 reaches the proof's
+# auth-issuer, and the local CA is trusted.
+ISSUER_HOST=auth.dev-health.internal
+ISSUER_URL="https://${ISSUER_HOST}:8443"
+ISSUER_PORT="$(compose port auth-issuer 8443 | sed 's/.*://')"
+[[ "${ISSUER_PORT}" =~ ^[0-9]+$ ]] || die "could not read the ephemeral auth-issuer port (${ISSUER_PORT})"
+compose cp auth-issuer:/run/tls/ca/issuer.pem "${SINK_DIR}/issuer-ca.pem" || die "could not copy the issuer CA"
+if ! getent hosts "${ISSUER_HOST}" | grep -q '^127\.0\.0\.1[[:space:]]'; then
+  [ "${CI:-}" = true ] || die "${ISSUER_HOST} must resolve to 127.0.0.1 (the CI run adds it to /etc/hosts)"
+  printf '127.0.0.1 %s\n' "${ISSUER_HOST}" | sudo tee -a /etc/hosts >/dev/null
+fi
+node "${SCRIPT_DIR}/auth_webproof_issuer_forward.mjs" 8443 "${ISSUER_PORT}" "${SINK_DIR}/forward.ready" &
+FORWARD_PID=$!
+for _ in $(seq 1 50); do [ -s "${SINK_DIR}/forward.ready" ] && break; sleep 0.1; done
+[ -s "${SINK_DIR}/forward.ready" ] || die "the issuer forward did not start on 127.0.0.1:8443"
+status="$(curl --silent --show-error --max-time 10 --cacert "${SINK_DIR}/issuer-ca.pem" --output /dev/null \
+  --write-out '%{http_code}' "${ISSUER_URL}/.well-known/openid-configuration")"
+printf 'GET %s/.well-known/openid-configuration -> %s\n' "${ISSUER_URL}" "${status}"
+[ "${status}" = "200" ] || die "the issuer discovery answered ${status}"
 (
   cd "${WEB_DIR}"
   AUTH_PROOF_BACKEND_URL="${BASE}" AUTH_PROOF_EMAIL="${EMAIL}" AUTH_PROOF_PASSWORD="${PASSWORD}" \
+    AUTH_ACCESS_TOKEN_CLASS=eddsa AUTH_ACCESS_TOKEN_ISSUER="${ISSUER_URL}" NODE_EXTRA_CA_CERTS="${SINK_DIR}/issuer-ca.pem" \
     pnpm exec vitest run --config vitest.auth-proxy.config.ts
 )
 

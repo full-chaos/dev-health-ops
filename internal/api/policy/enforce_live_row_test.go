@@ -162,3 +162,35 @@ func TestEnforceOffIsUnchangedForARevokedImpersonator(t *testing.T) {
 		}
 	}
 }
+
+// With the shadow beside enforcement, as go-api installs them, a refusal by the live row asks no decision point
+// either: the shadow records impersonation_refused unasked. A failed row read leaves the session state unknown, so the
+// shadow records nothing and asks nothing.
+func TestARevokedImpersonatorsRowRefusalAsksTheShadowNothing(t *testing.T) {
+	for _, cell := range revokedRefusedCells {
+		for name, readErr := range map[string]error{"live row": nil, "failing row read": errors.New("impersonation row read failed")} {
+			t.Run(cell.namespace+" "+cell.method+" "+name, func(t *testing.T) {
+				recordEnforce(t)
+				srec := recordShadow(t)
+				pdp := newTestPDP(t, allowAll)
+				sh, _ := newShadowFor(t, pdp.client(t), nil)
+				guard := NewGuard(routed(t, revokedImpersonatorStore(true, readErr), &fakeValidator{result: userClaims(nil)}), quiet())
+				guard.SetEnforcer(newEnforcerFor(t, pdp.client(t), onFor(cell.namespace)))
+				guard.SetShadow(sh)
+				mux := http.NewServeMux()
+				mux.Handle("POST /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
+				mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(ActionAdminOrgs, echo))
+				got := enforceRequest(mux, cell.method, cell.path)
+				sh.wg.Wait()
+				want, wantResults := http.StatusForbidden, []string{"impersonation_refused"}
+				if readErr != nil {
+					want, wantResults = http.StatusServiceUnavailable, nil
+				}
+				_, results := srec.snapshot()
+				if got.status != want || !slices.Equal(results, wantResults) || len(pdp.calls()) != 0 {
+					t.Errorf("%d, shadow %v, %d PDP calls; want %d, %v, 0", got.status, results, len(pdp.calls()), want, wantResults)
+				}
+			})
+		}
+	}
+}

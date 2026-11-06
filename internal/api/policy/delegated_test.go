@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -182,6 +183,20 @@ func TestAccessTokenActorIsImpersonatedBy(t *testing.T) {
 	}
 	if user, err := routed(t, newAccessStore(), &fakeValidator{result: userClaims(nil)}).Authenticate(ctx, "x.y.z"); err != nil || user.ImpersonatedBy != nil {
 		t.Fatalf("no act: user %+v err %v, want no ImpersonatedBy", user, err)
+	}
+}
+
+// TestAccessTokenActorIsNotTheSubject: a delegation names two principals, so a
+// token whose act names its own subject is refused before any store read.
+func TestAccessTokenActorIsNotTheSubject(t *testing.T) {
+	ctx := WithRouteProfile(context.Background(), "GET /p")
+	self := wireOwner
+	store := newAccessStore()
+	// A users read would answer this error, which is not a refusal.
+	store.errUser = errors.New("users read reached")
+	user, err := routed(t, store, &fakeValidator{result: userClaims(func(c *AccessTokenClaims) { c.Actor = &self })}).Authenticate(ctx, "x.y.z")
+	if user != nil || !IsRefusal(err) {
+		t.Fatalf("act names the subject: user %+v err %v, want a refusal before the users read", user, err)
 	}
 }
 

@@ -30,16 +30,24 @@ type restFixture struct {
 	handler  http.Handler
 	reader   *accessReader
 	envelope string
+	priv     ed25519.PrivateKey
 }
 
 func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool) *restFixture {
+	t.Helper()
+	return newRESTFixtureServing(t, store, setup, legacyOn, nil)
+}
+
+// newRESTFixtureServing is newRESTFixture with the handler behind authenticateRESTRequest replaced by serve (GET and
+// POST), which runs with the verified claims on the request context.
+func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool, serve http.HandlerFunc) *restFixture {
 	t.Helper()
 	verifier, priv := iaVerifier(t)
 	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &restFixture{envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
+	f := &restFixture{priv: priv, envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
 	if setup != nil {
 		f.reader = setup.reader
 		if err := routeEdgeVerifier(edge, setup.opts, legacyOn); err != nil {
@@ -55,6 +63,10 @@ func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacy
 		r = r.WithContext(authctx.WithClaims(r.Context(), claims))
 		switch r.Method {
 		case http.MethodGet, http.MethodPost:
+			if serve != nil {
+				serve(w, r)
+				return
+			}
 			_, _ = fmt.Fprintf(w, `{"org":%q}`, claims.OrgID)
 		default:
 			writeRESTMethodNotAllowed(w, r, "home")

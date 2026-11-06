@@ -21,8 +21,8 @@ lifecycle: active
 The shadow asks the policy decision point (PDP) the same question the legacy go-api guard has already answered, and counts every difference. It never changes a response.
 {: .fc-page-lede }
 
-!!! warning "Status: shadow is dark; no service calls ShadowFromEnv yet, as of e590f357b896"
-    The shadow core is on `main`, but no service builds it, so `AUTH_SHADOW_PDP` has no effect in any deployment and the series below have no data. The pull request that wires it into go-api updates this banner. Until then this page is the procedure to follow once it is wired.
+!!! warning "Status: go-api builds the shadow; it is off unless `AUTH_SHADOW_PDP` is true"
+    go-api builds the shadow at start (`newShadow` in `internal/apiservice/shadow.go`) and reports its series under `service.name` `dev-health-api`. With `AUTH_SHADOW_PDP` unset or false the shadow is off: `dev_health_api_shadow_enabled` is 0 and the counters have no series.
 
 ## What is compared
 
@@ -59,6 +59,8 @@ A bad value never stops the service. The shadow stays off, the log has an ERROR 
 | `skipped` | A covered request the shadow cannot ask. | only to judge coverage |
 
 Zero mismatches is not "good" on its own. Read the results panel first: `error`, `dropped` and `skipped` calls produce no mismatch.
+
+For a count per route, read the go-api INFO log `api shadow pdp: result`. Each shadowed request writes one line with `route` (the row key, `METHOD /route`), `namespace`, `caller` and `result`. The line also carries `decision_id` when the decision point answered. A `match` with no `decision_id` was decided without a decision point call (the request names another organization), so it is not PDP evidence for the row.
 
 The `AuthShadowMismatchUnresolved` alert (`alerts/rules.yml`, group `auth_shadow`) fires on any increase of `class="unresolved"` within one hour. The dashboard "Dev Health - Auth Shadow Mismatch (production)" (`deploy/signoz/dashboards/auth-shadow-mismatch.json`) shows mismatches by namespace, caller and class. Setup and labels are in [Auth shadow mismatch](../observe/dashboards-and-alerts.md#auth-shadow-mismatch).
 

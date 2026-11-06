@@ -7,13 +7,15 @@ import (
 
 // A push row above the reader's low-water mark is never reaped, whatever its
 // age: the reader has not decided it yet. A row of any other aggregate type is
-// reaped as before, and a push row with no cursor row at all is kept.
+// reaped as before, and a push row with no cursor row at all is kept. A
+// repository identity row follows the same rule on its own stream.
 func TestReapSelectionKeepsAPushRowAboveTheCursor(t *testing.T) {
 	sql := reapSelection(`"auth".auth_outbox_events`, `"auth".projection_cursor`)
 	for _, want := range []string{
 		"e.published_at IS NOT NULL",
 		"e.published_at < $1",
 		"(e.aggregate_type <> 'external_push_credential' OR e.id <= COALESCE((SELECT c.low_water FROM \"auth\".projection_cursor AS c WHERE c.stream = 'external_push'), 0))",
+		"(e.aggregate_type <> 'repository_identity' OR e.id <= COALESCE((SELECT c.low_water FROM \"auth\".projection_cursor AS c WHERE c.stream = 'repository_identity'), 0))",
 		"FOR UPDATE SKIP LOCKED",
 		"LIMIT $2",
 	} {

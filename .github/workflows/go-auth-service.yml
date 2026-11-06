@@ -1,7 +1,7 @@
 # Quality and release gates for the Auth Control Plane tree (CHAOS-4887, Wave 1
 # of CHAOS-3274): go test and -race scoped to the auth packages, the
 # production-middleware stack test (G-69), one fuzz run per parser (grouped by package) and
-# a strict govulncheck (any reachable finding fails; no ignore list). The gate logic lives in `ci/check_go.sh auth`;
+# a strict govulncheck (any reachable finding fails, except an exact id+module+version row of ci/auth-vuln-exceptions.tsv that has no fixed version). The gate logic lives in `ci/check_go.sh auth`;
 # this file only schedules it.
 #
 # RELEVANCE IS DECIDED INSIDE, not in the trigger (the go-quality.yml design,

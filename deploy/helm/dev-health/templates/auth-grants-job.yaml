@@ -14,6 +14,7 @@ the ops tables.
 {{- $a := .Values.authService }}
 {{- $m := $a.migrate }}
 {{- include "dev-health.authPushLifecycle" . }}
+{{- include "dev-health.authRepoIdentity" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -80,6 +81,12 @@ spec:
               value: {{ . | quote }}
             - name: AUTH_PUSH_LIFECYCLE_CALLER_ROLES
               value: {{ join "," $m.pushLifecycle.callerRoles | quote }}
+            {{- end }}
+            {{- with $m.repoIdentity.writerRole }}
+            - name: AUTH_REPO_IDENTITY_WRITER_ROLE
+              value: {{ . | quote }}
+            - name: AUTH_REPO_IDENTITY_CALLER_ROLES
+              value: {{ join "," $m.repoIdentity.callerRoles | quote }}
             {{- end }}
           resources:
             {{- toYaml $m.resources | nindent 12 }}

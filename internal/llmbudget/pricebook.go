@@ -37,6 +37,11 @@ import (
 //     (last updated 2026-10-15). The daily free neurons are not deducted.
 //   - clef on Cloudflare Workers AI (rows added 2026-10-24): same pricing page,
 //     last updated Oct 20, 2026.
+//   - typesafe (an org's own TypeSafe jev key; rows added 2026-11-05, which is
+//     why the list version is that day's): USD 0.042 per M input tokens, output
+//     not billed, as read 2026-10-06 for the platform jev cost
+//     (jobs/investment/shadowphase.go shadowRatesVersion); TypeSafe's own price
+//     page was not re-read on 2026-11-05.
 //   - openai, the models beyond the OpenAI book's two (rows added 2026-10-30,
 //     which is why the list version is that day's):
 //     https://developers.openai.com/api/docs/pricing (the page
@@ -48,7 +53,7 @@ import (
 
 // ListPricingVersion is the version of this list, stored with each
 // reservation it prices. The OpenAI book keeps PricingVersion.
-const ListPricingVersion = "provider-list-2026-10-30.v1"
+const ListPricingVersion = "provider-list-2026-11-05.v1"
 
 type listPriceRow struct {
 	provider string
@@ -75,7 +80,10 @@ var (
 	workersAIRoute = regexp.MustCompile(`\A/client/v4/accounts/[^/]+/ai/v1/?\z`)
 	// clefRoute is the path a clef request is POSTed to, the one the budget guard
 	// prices: the account, then /ai/run/@cf/cloudflare/<clef|clef-flash>.
-	clefRoute = regexp.MustCompile(`\A/client/v4/accounts/[0-9a-f]{32}/ai/run/@cf/cloudflare/clef(-flash)?\z`)
+	clefRoute     = regexp.MustCompile(`\A/client/v4/accounts/[0-9a-f]{32}/ai/run/@cf/cloudflare/clef(-flash)?\z`)
+	typeSafeHosts = []string{"api.typesafe.ai"}
+	// typeSafeRoute is the one path an org's TypeSafe request is POSTed to.
+	typeSafeRoute = regexp.MustCompile(`\A/v1/systemone\z`)
 
 	// defaultHosts is the host of each provider's default endpoint in the
 	// shared llm package: the endpoint a call with no base URL reaches.
@@ -122,6 +130,11 @@ var listPrices = []listPriceRow{
 	// updated Oct 20, 2026; read 2026-10-24).
 	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef", rates: listRates(240_000, 240_000, 0)},
 	{provider: "clef", hosts: workersAIHosts, route: clefRoute, model: "clef-flash", rates: listRates(38_000, 38_000, 0)},
+
+	// typesafe jev on an org's own TypeSafe key, a SystemOne decision model: $0.042
+	// per M input tokens, output not billed, no cache price (read 2026-10-06, not
+	// re-read). One row for each model of llmorgsettings' closed list.
+	{provider: "typesafe", hosts: typeSafeHosts, route: typeSafeRoute, model: "jev-1.13.0", rates: listRates(42_000, 42_000, 0)},
 
 	// openai, beyond the OpenAI book's gpt-5-mini and gpt-5-nano: Standard tier,
 	// short context, https://developers.openai.com/api/docs/pricing, read 2026-10-30.

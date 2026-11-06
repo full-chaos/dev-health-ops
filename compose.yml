@@ -33,6 +33,14 @@ x-jwt-secret-key:
     # startup (edgetoken), and both planes read this one value.
     JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
 
+# The two state keys go-api signs login and install state with. Each is its own
+# key, never JWT_SECRET_KEY (config refuses equal keys), and unset means 503
+# config_missing on those routes. Local-only placeholders, 32+ characters.
+x-state-secret-keys:
+  keys: &state-secret-keys
+    SSO_STATE_SECRET: ${SSO_STATE_SECRET:-local-dev-sso-state-secret-0123456789abcdef}
+    GITHUB_APP_STATE_SECRET: ${GITHUB_APP_STATE_SECRET:-local-dev-github-app-state-secret-0123456789}
+
 # The one address of the router on the `planes` network (see `networks:`
 # below). The router has this address, and go-api names this address, and
 # only this address, in TRUSTED_PROXIES: go-api then reads X-Forwarded-For and
@@ -1165,6 +1173,7 @@ services:
       # credential, SSO and PagerDuty routes cannot read a stored secret).
       <<:
         - *jwt-secret-key
+        - *state-secret-keys
         - *settings-encryption-key
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}

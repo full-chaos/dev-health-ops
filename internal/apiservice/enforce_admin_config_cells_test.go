@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,13 +17,16 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-go/pep"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
+	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
@@ -33,18 +37,18 @@ var adminConfigRoute = regexp.MustCompile(`^/api/v1/admin/(settings|integrations
 // adminConfigActions is today's action of every 6.8 row ("" = no action, so the Enforcer never asks for it). A
 // profile change to any of these rows must change this table in the same PR.
 var adminConfigActions = map[string]string{
-	"GET /api/v1/admin/backfill-jobs":                                                  "",
-	"GET /api/v1/admin/backfill-jobs/{job_id}":                                         "",
+	"GET /api/v1/admin/backfill-jobs":                                                  "integrations.read",
+	"GET /api/v1/admin/backfill-jobs/{job_id}":                                         "integrations.read",
 	"GET /api/v1/admin/integrations":                                                   "integrations.read",
 	"POST /api/v1/admin/integrations":                                                  "integrations.write",
 	"POST /api/v1/admin/integrations/github/install-callback":                          "integrations.write",
-	"POST /api/v1/admin/integrations/github/install-url":                               "",
+	"POST /api/v1/admin/integrations/github/install-url":                               "integrations.write",
 	"POST /api/v1/admin/integrations/pagerduty/api-token":                              "integrations.write",
 	"POST /api/v1/admin/integrations/pagerduty/authorize":                              "integrations.write",
 	"POST /api/v1/admin/integrations/pagerduty/callback":                               "integrations.write",
 	"POST /api/v1/admin/integrations/pagerduty/client-credentials":                     "integrations.write",
 	"POST /api/v1/admin/integrations/pagerduty/disconnect":                             "integrations.write",
-	"POST /api/v1/admin/integrations/pagerduty/preflight":                              "",
+	"POST /api/v1/admin/integrations/pagerduty/preflight":                              "integrations.write",
 	"GET /api/v1/admin/integrations/pagerduty/services":                                "integrations.read",
 	"GET /api/v1/admin/integrations/pagerduty/status":                                  "integrations.read",
 	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings":                       "integrations.write",
@@ -54,46 +58,46 @@ var adminConfigActions = map[string]string{
 	"POST /api/v1/admin/integrations/pagerduty/webhook-bindings/{binding_id}/rotate":   "integrations.write",
 	"GET /api/v1/admin/integrations/{integration_id}":                                  "integrations.read",
 	"PATCH /api/v1/admin/integrations/{integration_id}":                                "integrations.write",
-	"POST /api/v1/admin/integrations/{integration_id}/backfill":                        "",
+	"POST /api/v1/admin/integrations/{integration_id}/backfill":                        "integrations.write",
 	"GET /api/v1/admin/integrations/{integration_id}/datasets":                         "integrations.read",
 	"PATCH /api/v1/admin/integrations/{integration_id}/datasets":                       "integrations.write",
-	"POST /api/v1/admin/integrations/{integration_id}/discover":                        "",
+	"POST /api/v1/admin/integrations/{integration_id}/discover":                        "integrations.read",
 	"GET /api/v1/admin/integrations/{integration_id}/sources":                          "integrations.read",
 	"PATCH /api/v1/admin/integrations/{integration_id}/sources/{source_id}":            "integrations.write",
-	"POST /api/v1/admin/integrations/{integration_id}/sync":                            "",
+	"POST /api/v1/admin/integrations/{integration_id}/sync":                            "integrations.write",
 	"POST /api/v1/admin/settings":                                                      "settings.write",
-	"GET /api/v1/admin/settings/{category}":                                            "settings.read",
+	"GET /api/v1/admin/settings/{category}":                                            "settings.write",
 	"DELETE /api/v1/admin/settings/{category}/{key}":                                   "settings.write",
-	"GET /api/v1/admin/settings/{category}/{key}":                                      "settings.read",
+	"GET /api/v1/admin/settings/{category}/{key}":                                      "settings.write",
 	"PUT /api/v1/admin/settings/{category}/{key}":                                      "settings.write",
-	"GET /api/v1/admin/sync-configs":                                                   "",
-	"POST /api/v1/admin/sync-configs":                                                  "",
-	"GET /api/v1/admin/sync-configs/auto-import-capabilities":                          "",
-	"POST /api/v1/admin/sync-configs/batch":                                            "",
-	"DELETE /api/v1/admin/sync-configs/{config_id}":                                    "",
-	"GET /api/v1/admin/sync-configs/{config_id}":                                       "",
-	"PATCH /api/v1/admin/sync-configs/{config_id}":                                     "",
-	"POST /api/v1/admin/sync-configs/{config_id}/backfill":                             "",
-	"GET /api/v1/admin/sync-configs/{config_id}/coverage":                              "",
-	"GET /api/v1/admin/sync-configs/{config_id}/jobs":                                  "",
-	"GET /api/v1/admin/sync-configs/{config_id}/repositories":                          "",
-	"PUT /api/v1/admin/sync-configs/{config_id}/repositories":                          "",
-	"POST /api/v1/admin/sync-configs/{config_id}/trigger":                              "",
-	"GET /api/v1/admin/sync-runs/{run_id}":                                             "",
-	"GET /api/v1/admin/sync-runs/{run_id}/units":                                       "",
-	"GET /api/v1/admin/sync-targets":                                                   "",
-	"GET /api/v1/admin/teams":                                                          "teams.read",
+	"GET /api/v1/admin/sync-configs":                                                   "integrations.read",
+	"POST /api/v1/admin/sync-configs":                                                  "integrations.write",
+	"GET /api/v1/admin/sync-configs/auto-import-capabilities":                          "integrations.read",
+	"POST /api/v1/admin/sync-configs/batch":                                            "integrations.write",
+	"DELETE /api/v1/admin/sync-configs/{config_id}":                                    "integrations.write",
+	"GET /api/v1/admin/sync-configs/{config_id}":                                       "integrations.read",
+	"PATCH /api/v1/admin/sync-configs/{config_id}":                                     "integrations.write",
+	"POST /api/v1/admin/sync-configs/{config_id}/backfill":                             "integrations.write",
+	"GET /api/v1/admin/sync-configs/{config_id}/coverage":                              "integrations.read",
+	"GET /api/v1/admin/sync-configs/{config_id}/jobs":                                  "integrations.read",
+	"GET /api/v1/admin/sync-configs/{config_id}/repositories":                          "integrations.read",
+	"PUT /api/v1/admin/sync-configs/{config_id}/repositories":                          "integrations.write",
+	"POST /api/v1/admin/sync-configs/{config_id}/trigger":                              "integrations.write",
+	"GET /api/v1/admin/sync-runs/{run_id}":                                             "integrations.read",
+	"GET /api/v1/admin/sync-runs/{run_id}/units":                                       "integrations.read",
+	"GET /api/v1/admin/sync-targets":                                                   "integrations.read",
+	"GET /api/v1/admin/teams":                                                          "teams.write",
 	"POST /api/v1/admin/teams":                                                         "teams.write",
 	"DELETE /api/v1/admin/teams/{team_id}":                                             "teams.write",
-	"GET /api/v1/admin/teams/{team_id}":                                                "teams.read",
+	"GET /api/v1/admin/teams/{team_id}":                                                "teams.write",
 	"PATCH /api/v1/admin/teams/{team_id}":                                              "teams.write",
-	"POST /api/v1/admin/teams/{team_id}":                                               "",
-	"POST /api/v1/admin/teams/{team_id}/approve-changes":                               "",
-	"POST /api/v1/admin/teams/{team_id}/confirm-inferred-members":                      "",
-	"POST /api/v1/admin/teams/{team_id}/confirm-members":                               "",
-	"GET /api/v1/admin/teams/{team_id}/discover-members":                               "",
-	"POST /api/v1/admin/teams/{team_id}/dismiss-changes":                               "",
-	"GET /api/v1/admin/teams/{team_id}/infer-members":                                  "",
+	"POST /api/v1/admin/teams/{team_id}":                                               "teams.write",
+	"POST /api/v1/admin/teams/{team_id}/approve-changes":                               "teams.write",
+	"POST /api/v1/admin/teams/{team_id}/confirm-inferred-members":                      "teams.write",
+	"POST /api/v1/admin/teams/{team_id}/confirm-members":                               "teams.write",
+	"GET /api/v1/admin/teams/{team_id}/discover-members":                               "teams.write",
+	"POST /api/v1/admin/teams/{team_id}/dismiss-changes":                               "teams.write",
+	"GET /api/v1/admin/teams/{team_id}/infer-members":                                  "teams.write",
 }
 
 // adminConfigNamespaces are the cells 6.8 turns on.
@@ -150,8 +154,8 @@ func TestAdminConfigRowsMatchTheProfile(t *testing.T) {
 			unmapped++
 		}
 	}
-	if len(adminConfigActions) != 61 || unmapped != 30 {
-		t.Errorf("table has %d rows, %d without an action; want 61 and 30", len(adminConfigActions), unmapped)
+	if len(adminConfigActions) != 61 || unmapped != 0 {
+		t.Errorf("table has %d rows, %d without an action; want 61 and 0", len(adminConfigActions), unmapped)
 	}
 	rows, err := policy.ParseShadowRows(authv1.GoAPIEndpointProfiles, goAPIAccessService)
 	if err != nil {
@@ -173,8 +177,12 @@ type cellPDP struct {
 	srv    *httptest.Server
 	client *pep.Client
 	mu     sync.Mutex
-	mode   string // allow, deny, fail
+	mode   string // allow, deny, fail, evaluate
 	seen   []pep.Request
+	// callers maps a bearer token to the state the evaluate mode decides over.
+	callers map[string]cellSnapshot
+	// reasons are the internal reasons of the evaluate mode, one per call.
+	reasons []authorization.Reason
 }
 
 func newCellPDP(t *testing.T) *cellPDP {
@@ -189,8 +197,12 @@ func newCellPDP(t *testing.T) *cellPDP {
 			return
 		}
 		var body struct {
-			Resource struct {
-				Org *string `json:"organization_id"`
+			PrincipalReference string `json:"principal_reference"`
+			Action             string `json:"action"`
+			Resource           struct {
+				Type string  `json:"type"`
+				Key  string  `json:"key"`
+				Org  *string `json:"organization_id"`
 			} `json:"resource"`
 		}
 		raw, _ := io.ReadAll(r.Body)
@@ -202,6 +214,31 @@ func newCellPDP(t *testing.T) *cellPDP {
 		allowed, reason := mode == "allow", "role_lacks_action"
 		if allowed {
 			reason = "allowed_by_role"
+		}
+		if mode == "evaluate" {
+			p.mu.Lock()
+			snapshot, known := p.callers[body.PrincipalReference]
+			p.mu.Unlock()
+			if !known {
+				http.Error(w, "unknown caller", http.StatusInternalServerError)
+				return
+			}
+			orgID := ""
+			if body.Resource.Org != nil {
+				orgID = *body.Resource.Org
+			}
+			request := authorization.Request{Action: body.Action, ResourceKind: body.Resource.Type, OrganizationID: orgID}
+			if body.Resource.Type == "repository" {
+				request.ResourceKey = body.Resource.Key
+			}
+			d := authorization.NewEvaluator().Evaluate(request, snapshot)
+			allowed, reason = d.Allowed, string(d.Reason)
+			p.mu.Lock()
+			p.reasons = append(p.reasons, d.Reason)
+			p.mu.Unlock()
+			if d.Reason == authorization.ReasonAllowedByPlatformAdmin {
+				reason = "allowed_by_role"
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -238,7 +275,7 @@ func (p *cellPDP) DecideBatch(ctx context.Context, reqs []pep.Request) []pep.Dec
 func (p *cellPDP) reset(mode string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.mode, p.seen = mode, nil
+	p.mode, p.seen, p.reasons = mode, nil, nil
 }
 
 func (p *cellPDP) calls() []pep.Request {
@@ -252,8 +289,24 @@ func (p *cellPDP) calls() []pep.Request {
 // so a handler that is reached fails at its first read and never at the guard.
 func adminConfigServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer) (http.Handler, *eddsaMinter) {
 	t.Helper()
+	return adminConfigServerWith(t, enforcer, nil)
+}
+
+// adminConfigServerWith is adminConfigServer over a probe store that edit has changed first.
+func adminConfigServerWith(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore)) (http.Handler, *eddsaMinter) {
+	t.Helper()
+	return adminConfigServerOver(t, enforcer, edit, func(_ *testing.T, deps Deps) []httpapi.Route { return Routes(deps, quietLogger()) })
+}
+
+// adminConfigServerOver is adminConfigServerWith over the routes build returns: the same authenticator, routed
+// access verify, Enforcer and scope layers, whatever the routes are.
+func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore), build func(*testing.T, Deps) []httpapi.Route) (http.Handler, *eddsaMinter) {
+	t.Helper()
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
+	if edit != nil {
+		edit(store)
+	}
 	verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
 	if err != nil {
 		t.Fatal(err)
@@ -302,11 +355,88 @@ func adminConfigServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer)
 	}
 	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, Signer: signer}
 	scope := policy.NewScope(auth, quietLogger())
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
+	server, err := NewServer(apiTestConfig(), quietLogger(), build(t, deps), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return server.Handler(), minter
+}
+
+// principalEcho answers 200 with exactly what an admin-config handler acts on: the guarded user, the effective org, the
+// role, the admin and admin.orgs answers, the superuser flag and the impersonation context.
+func principalEcho(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{}
+	if user := policy.UserFrom(r.Context()); user != nil {
+		out["user_id"] = user.UserID
+		out["org"] = policy.EffectiveOrgID(r.Context(), user)
+		out["org_id"] = user.OrgID
+		out["role"] = user.Role
+		out["is_admin"] = user.IsAdmin()
+		out["holds_admin_orgs"] = user.Holds(policy.ActionAdminOrgs)
+		out["is_superuser"] = user.IsSuperuser
+	}
+	if session := policy.ImpersonationFrom(r.Context()); session != nil {
+		out["impersonating"] = session.TargetUserID.String()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// adminConfigEchoRoutes mounts the admin-config rows with the principal echo behind the guard level each row's
+// registration names in the source (scanRegistrations, the same scan the profile gate uses), over the mounted
+// route table. The rows come from the table, never from a typed list.
+func adminConfigEchoRoutes(t *testing.T, deps Deps) []httpapi.Route {
+	t.Helper()
+	regs := scanRegistrations(t, "../api", ".")
+	echo := http.HandlerFunc(principalEcho)
+	var routes []httpapi.Route
+	for _, m := range mountedRoutes(t) {
+		if _, ok := adminConfigActions[m.Method+" "+m.Pattern]; !ok || m.Listener != "api" {
+			continue
+		}
+		reg, ok := registrationFor(regs, m)
+		if !ok {
+			t.Fatalf("%s: no registration found in the source", m.key())
+		}
+		level := reg.Level
+		if level == "" {
+			level = dispatchedLevels[m.key()]
+		}
+		var authz policy.Authz
+		switch level {
+		case "Admin":
+			authz = policy.Admin
+		case "AdminOrg":
+			authz = policy.AdminOrg
+		default:
+			t.Fatalf("%s: guard level %q, the echo wraps Admin and AdminOrg only", m.key(), level)
+		}
+		routes = append(routes, httpapi.Route{Method: m.Method, Pattern: m.Pattern, Handler: deps.Guard.Wrap(authz, echo)})
+	}
+	return routes
+}
+
+// adminConfigEchoServer is adminConfigServerWith with every row's handler replaced by the principal echo.
+func adminConfigEchoServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore)) (http.Handler, *eddsaMinter) {
+	t.Helper()
+	routes := 0
+	handler, minter := adminConfigServerOver(t, enforcer, edit, func(t *testing.T, deps Deps) []httpapi.Route {
+		built := adminConfigEchoRoutes(t, deps)
+		routes = len(built)
+		got := make([]string, 0, len(built))
+		for _, r := range built {
+			got = append(got, r.Method+" "+r.Pattern)
+		}
+		sort.Strings(got)
+		if want := sortedAdminConfigKeys(); !slices.Equal(got, want) {
+			t.Fatalf("echo routes %d, want the %d rows of sortedAdminConfigKeys\ngot  %v\nwant %v", len(got), len(want), got, want)
+		}
+		return built
+	})
+	if routes != 61 {
+		t.Fatalf("%d echo routes, want 61", routes)
+	}
+	return handler, minter
 }
 
 func newCellEnforcer(t *testing.T, decider pep.Decider, namespaces string, unconfigured bool) *policy.Enforcer {
@@ -506,5 +636,244 @@ func TestAdminConfigCellsOnWithoutAClientFailClosed(t *testing.T) {
 		if got.status != http.StatusServiceUnavailable || !strings.Contains(got.body, `"reason_code":"authz_enforce_no_decision_point"`) {
 			t.Errorf("%s: %d %s, want the 503 with the reason code", key, got.status, got.body)
 		}
+	}
+}
+
+// cellSnapshot is the state the evaluate mode decides over: the caller's platform role and its role in the token org.
+type cellSnapshot struct {
+	platformRole string
+	orgRole      string // "" = no membership row
+}
+
+func (cellSnapshot) PrincipalStatus() authorization.Status { return authorization.StatusActive }
+func (c cellSnapshot) PlatformRole() string                { return c.platformRole }
+func (cellSnapshot) OrganizationStatus(string) authorization.Status {
+	return authorization.StatusActive
+}
+func (c cellSnapshot) Membership(org string) (authorization.Membership, bool) {
+	if c.orgRole == "" {
+		return authorization.Membership{}, false
+	}
+	return authorization.Membership{OrgID: org, Role: c.orgRole, Status: authorization.StatusActive}, true
+}
+
+var (
+	cellPlatformMember = uuid.MustParse("00000000-0000-4000-8000-0000000000f1")
+	cellPlatformNoRow  = uuid.MustParse("00000000-0000-4000-8000-0000000000f2")
+	cellPlatformSID    = uuid.MustParse("00000000-0000-4000-8000-0000000000f3")
+	cellNoRowSID       = uuid.MustParse("00000000-0000-4000-8000-0000000000f4")
+)
+
+// withPlatformAdmins adds two platform admins (users.is_superuser): one whose org role is member, one with no
+// membership row in the token org.
+func withPlatformAdmins(store *probeStore) {
+	store.users[cellPlatformMember] = probeUserRow{state: policy.UserState{IsActive: true, IsSuperuser: true}, email: "pm@example.test"}
+	store.users[cellPlatformNoRow] = probeUserRow{state: policy.UserState{IsActive: true, IsSuperuser: true}, email: "pn@example.test"}
+	store.members[[2]uuid.UUID{cellPlatformMember, probeOrg}] = "member"
+	store.sessions[cellPlatformSID] = policy.SessionRow{PrincipalID: cellPlatformMember, LegacyTokenVersion: i64ptr(0)}
+	store.sessions[cellNoRowSID] = policy.SessionRow{PrincipalID: cellPlatformNoRow, LegacyTokenVersion: i64ptr(0)}
+}
+
+type cellCaller struct {
+	name  string
+	token string
+	snap  cellSnapshot
+}
+
+func cellCallers(minter *eddsaMinter) map[string]cellCaller {
+	mk := func(name string, user uuid.UUID, sid uuid.UUID, snap cellSnapshot) cellCaller {
+		return cellCaller{name: name, token: minter.mint(user, map[string]any{"sid": sessionid.Wire(sid)}), snap: snap}
+	}
+	return map[string]cellCaller{
+		"org admin":                      mk("org admin", probeUser, probeLiveSID, cellSnapshot{orgRole: "admin"}),
+		"platform admin + org member":    mk("platform admin + org member", cellPlatformMember, cellPlatformSID, cellSnapshot{platformRole: "platform_admin", orgRole: "member"}),
+		"platform admin + no membership": mk("platform admin + no membership", cellPlatformNoRow, cellNoRowSID, cellSnapshot{platformRole: "platform_admin"}),
+		"org member":                     mk("org member", probeMember, probeOtherSID, cellSnapshot{orgRole: "member"}),
+	}
+}
+
+// register lets the evaluate mode decide for the callers' tokens.
+func (p *cellPDP) register(callers map[string]cellCaller) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.callers = map[string]cellSnapshot{}
+	for _, c := range callers {
+		p.callers[c.token] = c.snap
+	}
+}
+
+func (p *cellPDP) reasonsSeen() []authorization.Reason {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]authorization.Reason(nil), p.reasons...)
+}
+
+// With the 6.8 cells on and the real evaluator behind the decision point, on every row of the table: an org admin
+// and a platform admin with an org role of member are let through to the handler (the platform admin by
+// allowed_by_platform_admin); an org member without admin.orgs is refused with the legacy 403 body. member holds
+// settings.read and teams.read only, so it holds none of the four actions the table asks (integrations.read,
+// integrations.write, settings.write, teams.write).
+func TestAdminConfigCellsOnPlatformAdminIsDecidedByTheEvaluator(t *testing.T) {
+	pdp := newCellPDP(t)
+	handler, minter := adminConfigServerWith(t, func(t *testing.T) *policy.Enforcer {
+		return newCellEnforcer(t, pdp, adminConfigNamespaces, false)
+	}, withPlatformAdmins)
+	callers := cellCallers(minter)
+	pdp.register(callers)
+	rows := 0
+	for _, key := range sortedAdminConfigKeys() {
+		action := adminConfigActions[key]
+		rows++
+		for _, name := range []string{"org admin", "platform admin + org member", "org member"} {
+			c := callers[name]
+			pdp.reset("evaluate")
+			got := cellDo(handler, key, c.token, nil)
+			calls := pdp.calls()
+			if len(calls) != 1 || calls[0].Action != action || calls[0].OrganizationID != probeOrg.String() {
+				t.Fatalf("%s / %s: calls %+v, want one %s call on %s", key, name, calls, action, probeOrg)
+			}
+			if name == "org member" {
+				if got.status != http.StatusForbidden || got.body != adminRequiredBody {
+					t.Errorf("%s / %s: %d %s, want the 403 %s", key, name, got.status, got.body, adminRequiredBody)
+				}
+				continue
+			}
+			if isGuardRefusal(got) {
+				t.Errorf("%s / %s: %d %s, want the handler's answer", key, name, got.status, got.body)
+			}
+			want := authorization.ReasonAllowedByRole
+			if name == "platform admin + org member" {
+				want = authorization.ReasonAllowedByPlatformAdmin
+			}
+			if r := pdp.reasonsSeen(); len(r) != 1 || r[0] != want {
+				t.Errorf("%s / %s: reasons %v, want %s", key, name, r, want)
+			}
+		}
+	}
+	if rows != 61 {
+		t.Errorf("%d rows, want 61", rows)
+	}
+}
+
+// A platform admin with no membership row in the token org, on a legacy token, is not a user access token, so the
+// Enforcer does not judge it (no decision point call) and the legacy guard admits the admin.orgs holder: the
+// handler answers, on or off.
+func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
+	pdp := newCellPDP(t)
+	for _, on := range []bool{false, true} {
+		var enforcer func(*testing.T) *policy.Enforcer
+		if on {
+			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, adminConfigNamespaces, false) }
+		}
+		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
+		callers := cellCallers(minter)
+		pdp.register(callers)
+		legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		for _, key := range sortedAdminConfigKeys() {
+			pdp.reset("evaluate")
+			got := cellDo(handler, key, legacy, nil)
+			if isGuardRefusal(got) {
+				t.Errorf("on=%v %s legacy token: %d %s, want the handler's answer", on, key, got.status, got.body)
+			}
+			if calls := pdp.calls(); len(calls) != 0 {
+				t.Errorf("on=%v %s: %d decision point calls, want 0", on, key, len(calls))
+			}
+		}
+	}
+}
+
+// D6773 (chris 2026-11-06, 13:12Z): a platform admin never needs a membership row, and every token class gives the
+// same answer as the legacy path today, not stricter and not wider. With a user access token and no membership row
+// in the token org, each row must answer exactly what the legacy (HS256) token of the same caller gets for the same
+// request, on or off. Today the authenticator refuses it with 401 before the guard: a known defect that
+// CHAOS-13206 fixes.
+func TestAdminConfigCellsPlatformAdminWithoutMembershipRowAnswersAsLegacy(t *testing.T) {
+	t.Skip("known defect, D6773, CHAOS-13206")
+	echoParityWithLegacy(t, cellPlatformNoRow, "platform admin + no membership")
+}
+
+// The control for the cell above: the platform admin WITH an org role of member gets the same echoed principal on a
+// user access token and on the legacy token, on or off, so the echo compare is not vacuous.
+func TestAdminConfigCellsPlatformAdminWithMembershipRowEchoesAsLegacy(t *testing.T) {
+	echoParityWithLegacy(t, cellPlatformMember, "platform admin + org member")
+}
+
+// echoParityWithLegacy compares, on every row and on or off, the answer of the caller's user access token with the
+// answer of the HS256 legacy token of the same caller, over the principal echo behind the production guard.
+func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
+	t.Helper()
+	pdp := newCellPDP(t)
+	for _, on := range []bool{false, true} {
+		var enforcer func(*testing.T) *policy.Enforcer
+		if on {
+			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, adminConfigNamespaces, false) }
+		}
+		handler, minter := adminConfigEchoServer(t, enforcer, withPlatformAdmins)
+		callers := cellCallers(minter)
+		pdp.register(callers)
+		legacy := probeHS256(t, probeKey, map[string]any{"sub": user.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		rows := 0
+		for _, key := range sortedAdminConfigKeys() {
+			rows++
+			pdp.reset("evaluate")
+			want := cellDo(handler, key, legacy, nil)
+			if want.status != http.StatusOK {
+				t.Errorf("on=%v %s: legacy token answer %d %s, want the 200 echo", on, key, want.status, want.body)
+			}
+			got := cellDo(handler, key, callers[caller].token, nil)
+			if got.status != want.status || got.body != want.body {
+				t.Errorf("on=%v %s: %d %s, want the legacy answer %d %s (D6773)", on, key, got.status, got.body, want.status, want.body)
+			}
+		}
+		if rows != 61 {
+			t.Errorf("on=%v: %d rows, want 61", on, rows)
+		}
+	}
+}
+
+// With the 6.8 cells off, the answer to each caller on each row is the same with no Enforcer and with an Enforcer
+// whose namespaces are other ones, and it is the legacy answer: the org admin, the platform admin with an org role
+// of member and the platform admin on a legacy token reach the handler, the org member gets the 403, the platform
+// admin with no membership row gets today's 401 (known defect D6773, CHAOS-13206: only byte-equality is checked for it
+// here). The decision point is never asked.
+func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
+	pdp := newCellPDP(t)
+	plain, plainMinter := adminConfigServerWith(t, nil, withPlatformAdmins)
+	other, otherMinter := adminConfigServerWith(t, func(t *testing.T) *policy.Enforcer {
+		return newCellEnforcer(t, pdp, "billing,members,org,admin", false)
+	}, withPlatformAdmins)
+	plainCallers, otherCallers := cellCallers(plainMinter), cellCallers(otherMinter)
+	pdp.register(otherCallers)
+	pdp.reset("evaluate")
+	legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+	legacyAnswer := map[string]func(cellAnswer) bool{
+		"org admin":                      func(a cellAnswer) bool { return !isGuardRefusal(a) },
+		"platform admin + org member":    func(a cellAnswer) bool { return !isGuardRefusal(a) },
+		"platform admin + no membership": func(cellAnswer) bool { return true }, // D6773 known defect, CHAOS-13206
+		"org member":                     func(a cellAnswer) bool { return a.status == http.StatusForbidden && a.body == adminRequiredBody },
+	}
+	rows := 0
+	for _, key := range sortedAdminConfigKeys() {
+		rows++
+		for name, ok := range legacyAnswer {
+			a := cellDo(plain, key, plainCallers[name].token, nil)
+			b := cellDo(other, key, otherCallers[name].token, nil)
+			if a.status != b.status || a.body != b.body {
+				t.Errorf("%s / %s: no enforcer %d %s, other namespaces %d %s, want byte-equal", key, name, a.status, a.body, b.status, b.body)
+			}
+			if !ok(a) {
+				t.Errorf("%s / %s: %d %s is not the legacy answer", key, name, a.status, a.body)
+			}
+		}
+		a, b := cellDo(plain, key, legacy, nil), cellDo(other, key, legacy, nil)
+		if a.status != b.status || a.body != b.body || isGuardRefusal(a) {
+			t.Errorf("%s / legacy token: %d %s vs %d %s, want byte-equal handler answers", key, a.status, a.body, b.status, b.body)
+		}
+	}
+	if rows != 61 {
+		t.Errorf("%d rows, want 61", rows)
+	}
+	if calls := pdp.calls(); len(calls) != 0 {
+		t.Errorf("%d decision point calls with the cells off", len(calls))
 	}
 }

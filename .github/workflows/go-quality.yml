@@ -526,6 +526,12 @@ jobs:
             jq -R -r 'fromjson? | select(type == "object" and ((.Test // "") != "") and (.Action == "pass" or .Action == "fail" or .Action == "skip")) | [.Package, .Test, .Action, (.Elapsed // 0)] | @tsv' "${f}"
           done | gzip -9 > "go-test-timings/${{ matrix.name }}.tsv.gz"
 
+      - name: Write JUnit XML next to the providersync race slice's go test -json (race legs)
+        continue-on-error: true
+        if: always() && steps.relevance.outputs.relevant == 'true' && startsWith(matrix.name, 'race-')
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays.
+        run: bash ci/go_test_json_to_junit.sh go-test-json
+
       - name: Upload the providersync race slice's go test -json (race legs)
         continue-on-error: true
         # CHAOS-10498: check_go.sh writes the race leg's providersync slice as go test -json (go-test-json/providersync-race-<shard>.json);

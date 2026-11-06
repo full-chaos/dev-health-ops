@@ -90,13 +90,16 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"ImpersonationActive: claims.ImpersonationActive"}, anyOf: []string{}},
 			{file: "internal_auth.go", decl: "checkEdgeCarrier", needles: []string{"impersonationActive := session != nil"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 403 Not allowed in an impersonation session for the legacy impersonation caller (the admin's own bearer beside a live go-api impersonation row) while AUTH_PROXY_IMPERSONATION is on (checkEdgeCarrier, policy.WriteImpersonationRefused); 403 for an organization not on the go_api_proof_orgs allowlist", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 403 Not allowed in an impersonation session for the legacy impersonation caller (the admin's own bearer beside a live go-api impersonation row) while AUTH_PROXY_IMPERSONATION is on (checkEdgeCarrier, policy.WriteImpersonationRefused); 403 Not allowed in an impersonation session for a caller that does not hold admin.impersonate while its go-api impersonation row is live, with the switch on or off (liveScope on the write door, errRevokedImpersonatorWrite); 403 for an organization not on the go_api_proof_orgs allowlist", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"http.Error(w, \"unauthorized\", http.StatusUnauthorized)"}, anyOf: []string{}},
 			{file: "query_route.go", decl: "newDocumentDispatchHandler", needles: []string{"http.Error(w, \"this org is not enabled for proof-write\", http.StatusForbidden)"}, anyOf: []string{}},
 			{file: "internal_auth.go", decl: "liveScope", needles: []string{"legacyImpersonationRefused(ctx)"}, anyOf: []string{}},
 			{file: "internal_auth.go", decl: "authenticateEdgeCarrier", needles: []string{"policy.WriteImpersonationRefused(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/impersonation_refused.go", decl: "WriteImpersonationRefused", needles: []string{"http.StatusForbidden", "msgImpersonationReadOnly"}, anyOf: []string{}},
 			{file: "legacy_impersonation_query_test.go", decl: "TestProofWriteDoorRefusesTheLegacyImpersonationCaller", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
+			{file: "internal_auth.go", decl: "liveScope", needles: []string{"user.Holds(policy.ActionAdminImpersonate)", "onWriteDoor(ctx)", "errRevokedImpersonatorWrite"}, anyOf: []string{}},
+			{file: "query_route.go", decl: "newDocumentDispatchHandler", needles: []string{"withWriteDoor(r.Context())"}, anyOf: []string{}},
+			{file: "revoked_impersonator_query_test.go", decl: "TestProofWriteDoorRefusesTheRevokedImpersonator", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "proof_write_dispatch_test.go", decl: "TestProofWriteRefusesAnOrgNotOnTheAllowlist", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 		}},
 	},

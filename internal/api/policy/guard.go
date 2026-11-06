@@ -369,9 +369,15 @@ func (g *Guard) RefuseImpersonatingCaller(next http.Handler) http.Handler {
 // row is live when it is called.
 const ImpersonationHandoffConsumePattern = "POST /api/v1/admin/impersonate/handoff/consume"
 
-// liveRowExemptPatterns are the platform routes that stay reachable while the
-// caller's impersonation row is live. Every live-row refusal reads this set
-// through liveRowExempt.
-var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
+// statusImpersonationPattern is the route that reads the caller's impersonation
+// session.
+const statusImpersonationPattern = "GET /api/v1/admin/impersonate/status"
+
+// liveRowExemptPatterns are the routes that stay reachable while the caller's
+// impersonation row is live: the admin's own bearer reads the session, admits
+// its start handoff and ends it. Every live-row refusal, the scope's legacy
+// refusal included, reads this one set through liveRowExempt. Status takes no
+// platform action and is never enforced, so only the scope's refusal meets it.
+var liveRowExemptPatterns = map[string]bool{statusImpersonationPattern: true, stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
 
 func liveRowExempt(pattern string) bool { return liveRowExemptPatterns[pattern] }

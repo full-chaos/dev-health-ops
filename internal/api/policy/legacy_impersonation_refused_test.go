@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -262,9 +263,17 @@ func TestRevokedLegacyImpersonationCallerSessionReadFailsClosedUnderTheProxySwit
 	}
 }
 
-// Status and stop still apply the session to the legacy caller: the web
-// sends the admin's bearer to exactly these two.
+// Status, handoff consume and stop still apply the session to the legacy
+// caller: the web sends the admin's bearer to exactly these three.
 func TestLegacyImpersonationCallerReachesStatusAndStop(t *testing.T) {
+	cells := []string{}
+	for _, cell := range admittedLegacyCells {
+		cells = append(cells, cell.method+" "+cell.path)
+	}
+	slices.Sort(cells)
+	if exempt := slices.Sorted(maps.Keys(liveRowExemptPatterns)); !slices.Equal(cells, exempt) {
+		t.Fatalf("admitted cells %v, want the guard's live-row exempt set %v", cells, exempt)
+	}
 	headers := bearer(t, superClaims)
 	for _, cell := range admittedLegacyCells {
 		t.Run(cell.name, func(t *testing.T) {

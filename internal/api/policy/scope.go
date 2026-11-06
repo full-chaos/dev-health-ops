@@ -216,7 +216,7 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 // admin.impersonate, an active session makes the target's org the request's org, sets the
 // impersonation context, and stamps X-Impersonating / X-Impersonated-User-Id on the response;
 // with RefuseLegacyImpersonation on, it refuses a live row with 403 instead, but on
-// legacySessionRoutes (a non-holder's row is read on writes only). The row is kept for the
+// liveRowExemptPatterns (a non-holder's row is read on writes only). The row is kept for the
 // Guard refusals (Guard.sessionRow). A session lookup failure is 503 (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -303,15 +303,10 @@ func (l legacyCallerOption) reads(r *http.Request) bool {
 	return readMethod(r.Method)
 }
 
-// legacySessionRoutes are the route templates where a refused legacy caller
-// is still served in its session: the admin's own bearer reads and ends it.
-var legacySessionRoutes = map[string]bool{
-	"GET /api/v1/admin/impersonate/status": true,
-	"POST /api/v1/admin/impersonate/stop":  true,
-}
-
 // refusesLegacyCaller reports whether the legacy caller is refused on r: the
-// option is on and r is not one of legacySessionRoutes. The route is the
+// option is on and r is not one of liveRowExemptPatterns, where a refused
+// legacy caller is still served in its session (the guard's live-row
+// refusals read the same set). The route is the
 // template RouteProfiles recorded, whose method must be the request's own (a
 // GET template also matches HEAD); a request no route matches is refused.
 func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
@@ -320,7 +315,7 @@ func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
 	}
 	profile := RouteProfileFrom(r.Context())
 	method, _, _ := strings.Cut(profile, " ")
-	return method != r.Method || !legacySessionRoutes[profile]
+	return method != r.Method || !liveRowExempt(profile)
 }
 
 // pyTruthy is bool() of a decoded JSON value.

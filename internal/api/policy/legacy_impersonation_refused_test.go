@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 const (
 	statusRoute     = "/api/v1/admin/impersonate/status"
 	stopRoute       = "/api/v1/admin/impersonate/stop"
+	consumeRoute    = "/api/v1/admin/impersonate/handoff/consume"
 	legacyRefusal   = `{"detail":"Not allowed in an impersonation session"}`
 	delegatedOKPath = "/delegated-ok"
 )
@@ -36,6 +38,8 @@ func legacyRoutes(guard *Guard) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: delegatedOKPath, Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute, Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodPost, Pattern: stopRoute, Handler: guard.WrapPlatform(rule.ActionAdminImpersonate, echo)},
+		{Method: http.MethodPost, Pattern: consumeRoute, Handler: guard.WrapPlatform(rule.ActionAdminImpersonate, echo)},
+		{Method: http.MethodPost, Pattern: consumeRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute + "x", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodPost, Pattern: stopRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
@@ -115,12 +119,15 @@ var refusedLegacyCells = []legacyCell{
 	{"stop other version", http.MethodPost, "/api/v2/admin/impersonate/stop"},
 	{"status under a prefix", http.MethodGet, "/prefix" + statusRoute},
 	{"start", http.MethodPost, "/api/v1/admin/impersonate"},
+	{"consume GET", http.MethodGet, consumeRoute},
+	{"consume child path", http.MethodPost, consumeRoute + "/extra"},
 	{"unknown path", http.MethodGet, "/nowhere"},
 }
 
 var admittedLegacyCells = []legacyCell{
 	{"status", http.MethodGet, statusRoute},
 	{"stop", http.MethodPost, stopRoute},
+	{"handoff consume", http.MethodPost, consumeRoute},
 }
 
 var switchOn, switchOff = true, false
@@ -217,6 +224,32 @@ func TestRevokedLegacyImpersonationCallerReadsAsItselfUnderTheProxySwitch(t *tes
 	}
 }
 
+// With the switch off (set off or never set), the scope neither reads nor
+// applies the revoked caller's live row: a write answers as the caller itself,
+// byte-equal to the same caller without a row, and a failing row read changes
+// nothing.
+func TestRevokedLegacyImpersonationCallerWritesAsItselfWithTheSwitchOff(t *testing.T) {
+	headers := bearer(t, superClaims)
+	for _, cell := range revokedLegacyWriteCells {
+		t.Run(cell.name, func(t *testing.T) {
+			ended := revokedCallerStore()
+			delete(ended.sessions, userID)
+			self := serveBody(legacyStack(t, ended, nil), cell.method, cell.path, headers)
+			failing := revokedCallerStore()
+			failing.errSession = errors.New("session read failed")
+			for name, store := range map[string]*fakeStore{"live row": revokedCallerStore(), "failing row read": failing} {
+				for _, set := range []*bool{&switchOff, nil} {
+					got := serveBody(legacyStack(t, store, set), cell.method, cell.path, headers)
+					assertSameResponse(t, cell, got, self)
+					if got.header.Get("X-Impersonating") != "" || strings.Contains(got.body, targetOrgID.String()) {
+						t.Errorf("%s, %s: %d %s %v, want the caller's own answer", cell.name, name, got.status, got.body, got.header)
+					}
+				}
+			}
+		})
+	}
+}
+
 // A failed row read for the revoked caller on a write is the dependency
 // failure 503 under the switch.
 func TestRevokedLegacyImpersonationCallerSessionReadFailsClosedUnderTheProxySwitch(t *testing.T) {
@@ -230,9 +263,17 @@ func TestRevokedLegacyImpersonationCallerSessionReadFailsClosedUnderTheProxySwit
 	}
 }
 
-// Status and stop still apply the session to the legacy caller: the web
-// sends the admin's bearer to exactly these two.
+// Status, handoff consume and stop still apply the session to the legacy
+// caller: the web sends the admin's bearer to exactly these three.
 func TestLegacyImpersonationCallerReachesStatusAndStop(t *testing.T) {
+	cells := []string{}
+	for _, cell := range admittedLegacyCells {
+		cells = append(cells, cell.method+" "+cell.path)
+	}
+	slices.Sort(cells)
+	if exempt := slices.Sorted(maps.Keys(liveRowExemptPatterns)); !slices.Equal(cells, exempt) {
+		t.Fatalf("admitted cells %v, want the guard's live-row exempt set %v", cells, exempt)
+	}
 	headers := bearer(t, superClaims)
 	for _, cell := range admittedLegacyCells {
 		t.Run(cell.name, func(t *testing.T) {

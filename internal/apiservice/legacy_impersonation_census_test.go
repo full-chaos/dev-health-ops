@@ -62,13 +62,13 @@ func (s *legacySessionStore) ReadsPlatformRoles() bool { return false }
 
 // legacyAdmitted are the only routes where the switch lets the legacy caller
 // through the scope in its session.
-var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api/v1/admin/impersonate/stop"}
+var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api/v1/admin/impersonate/handoff/consume", "POST /api/v1/admin/impersonate/stop"}
 
 // TestLegacyImpersonationCallerCensusUnderTheProxySwitch is the census of
 // every route the go-api listener mounts, on the real chain (ReadOnce,
 // Principal, OrgScope, Impersonation, with the declared rows) and the scope
 // newProtection builds with AUTH_PROXY_IMPERSONATION on: the legacy caller is
-// let through in its session on status and stop only. Every other route
+// let through in its session on status, handoff consume and stop only. Every other route
 // either refuses it in the scope (403, no impersonation headers, its handler
 // never runs) or never applies the session (a route that skips the scope or
 // whose row takes no access token: the caller is anonymous there). The

@@ -53,6 +53,7 @@ internal/auth/acrlisting
 internal/auth/acrmint
 internal/auth/acrrevoke
 internal/auth/authconfig
+internal/auth/authorization
 internal/auth/clientaddr
 internal/auth/contracts
 internal/auth/contracts/externalpush

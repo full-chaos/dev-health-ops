@@ -251,9 +251,15 @@ const goAPIAccessService = "dev-health-ops-api"
 // signs with, and the HS256 path as the legacy verifier.
 func (f *validateFixture) goAPIRouteAccess(auth *policy.Authenticator, logger *slog.Logger) {
 	f.t.Helper()
-	set, err := f.signer.KeySet(context.Background())
+	routeGoAPIAccess(f.t, auth, f.signer, logger)
+}
+
+// routeGoAPIAccess is goAPIRouteAccess over the keys signer signs with.
+func routeGoAPIAccess(t *testing.T, auth *policy.Authenticator, signer *token.Signer, logger *slog.Logger) {
+	t.Helper()
+	set, err := signer.KeySet(context.Background())
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	keys := authverify.StaticKeys{}
 	for _, key := range set.Published() {
@@ -261,19 +267,19 @@ func (f *validateFixture) goAPIRouteAccess(auth *policy.Authenticator, logger *s
 	}
 	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: goldenIssuer, Audience: "dev-health-api", Keys: keys})
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:   goAPIAccessRows(f.t),
+		Rows:   goAPIAccessRows(t),
 		EdDSA:  verifier,
 		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
 		Logger: logger,
 	})
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	if err := auth.RouteAccess(goAPIRoutedAccess{validator}, goAPIAccessService); err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 }
 

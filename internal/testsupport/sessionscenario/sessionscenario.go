@@ -457,6 +457,11 @@ type Harness struct {
 	// Rows renders query on the Python database ("" in replay) and on the
 	// Go database.
 	Rows func(query string) (python, goRows string)
+	// Replay and ReplayRows re-judge single golden steps and row sets for a replay (Python nil) whose Go
+	// stack answers some steps differently by a ruling: each gets the golden answer (or rows) and returns
+	// the expected one. Nil keeps every golden answer.
+	Replay     map[string]func(golden RecordedAnswer) RecordedAnswer
+	ReplayRows map[string]func(golden string) string
 
 	golden    *Recording
 	cursor    int
@@ -503,6 +508,9 @@ func (h *Harness) run(pairs []pair) map[string]answers {
 			if admitted, ok := validateLimitAdmitted[p.name]; ok {
 				want = RecordedAnswer{Name: p.name, Status: admitted.status, Body: admitted.body}
 			}
+			if rejudge, ok := h.Replay[p.name]; ok {
+				want = rejudge(want)
+			}
 			goBody := Normalize(goResponse.Body)
 			// The Go api never writes input or ctx of a validation error.
 			same = want.Status == goResponse.Status && pydanticecho.Strip(want.Body) == goBody
@@ -542,6 +550,9 @@ func (h *Harness) compareRows(name, query string) {
 			h.T.Fatalf("golden rows are out of step at %q", name)
 		}
 		pyRows = socialLinkRows(name, h.golden.Rows[h.rowCursor].Rows)
+		if rejudge, ok := h.ReplayRows[name]; ok {
+			pyRows = rejudge(pyRows)
+		}
 		h.rowCursor++
 	} else {
 		h.recording.Rows = append(h.recording.Rows, RecordedRows{Name: name, Rows: pyRows})

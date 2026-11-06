@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
 )
 
@@ -33,6 +35,9 @@ type Target struct {
 	// ValkeyURI is flushed to open fresh rate-limit windows; ResetLimits does it when the limiter is elsewhere.
 	ValkeyURI   string
 	ResetLimits func()
+	// Replay and ReplayRows are Harness.Replay and Harness.ReplayRows (nil: every golden answer as recorded).
+	Replay     map[string]func(golden RecordedAnswer) RecordedAnswer
+	ReplayRows map[string]func(golden string) string
 }
 
 // Validate is an error unless the corpus can open fresh rate-limit windows on the target between batches.
@@ -137,6 +142,24 @@ func MintTokens(t *testing.T, specs map[string]map[string]any) map[string]string
 	return tokens
 }
 
+// MintEdDSATokens mints the seed access tokens as routed user access tokens (EdDSA) of issuer: the subject,
+// organization and token version come from the spec; role and superuser stay in the seeded rows the routed
+// path reads, never in a claim.
+func MintEdDSATokens(t *testing.T, issuer *edtokens.Issuer, specs map[string]map[string]any) map[string]string {
+	t.Helper()
+	tokens := map[string]string{}
+	for name, spec := range specs {
+		id, _ := spec["user_id"].(string)
+		claims := edtokens.Claims{UserID: uuid.MustParse(id)}
+		claims.OrgID, _ = spec["org_id"].(string)
+		if version, ok := spec["token_version"].(int); ok {
+			claims.TokenVersion = int64(version)
+		}
+		tokens[name] = issuer.MustMint(t, claims)
+	}
+	return tokens
+}
+
 // RunTarget replays the corpus against tg, whose stores Prepare seeded (tokens are its result), and returns
 // the receipt. It reaches the target through its URL and stores only.
 func RunTarget(t *testing.T, ctx context.Context, tg Target, tokens map[string]string) string {
@@ -149,7 +172,8 @@ func RunTarget(t *testing.T, ctx context.Context, tg Target, tokens map[string]s
 				t.Fatalf("%s: %v", sql, err)
 			}
 		},
-		Reset: func() { tg.resetLimits(t, ctx) },
-		Rows:  func(query string) (string, string) { return "", TableRows(t, ctx, tg.PostgresURI, query) },
+		Reset:  func() { tg.resetLimits(t, ctx) },
+		Rows:   func(query string) (string, string) { return "", TableRows(t, ctx, tg.PostgresURI, query) },
+		Replay: tg.Replay, ReplayRows: tg.ReplayRows,
 	})
 }

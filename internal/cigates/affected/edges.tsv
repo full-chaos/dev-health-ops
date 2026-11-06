@@ -52,6 +52,7 @@ internal/cigates/affected	scan.go	unexpressed
 internal/cigates/affectedmatrix	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedmodule	ci_script_helpers_test.go	unexpressed
 internal/cigates/affectedreject	ci_script_helpers_test.go	unexpressed
+internal/cigates/bigboy	acr_db_init_fetch_test.go	unexpressed
 internal/cigates/bigboy	cigate_build_test.go	unexpressed
 internal/cigates/bigboy	compose_ch_users_test.go	unexpressed
 internal/cigates/bigboy	compose_one_file_test.go	unexpressed
@@ -152,6 +153,7 @@ internal/cigates/workflows	go_quality_legs_shape_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
+internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed
 internal/cigates/workflows	providersync_shard_budget_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	registry_retry_test.go	unexpressed

@@ -35,14 +35,18 @@ images (`docker-images.yml`). Pin by digest outside local use.
 
 ## Compose (local and self-hosted)
 
-The services are behind the `auth` profile of the repository `compose.yml`, so a
-plain `docker compose up` starts none of them.
+Since CHAOS-13107 the services are part of the default stack of the repository
+`compose.yml`: go-api forwards production's set (sessions, local login, credentials
+and social; phase 4 with `AUTH_USERS_OWNED=true`), so a plain `docker compose up`
+starts them. `--profile auth` still works and selects nothing more. The local
+issuer, the session keys and go-api's session credential are in
+[Evaluate locally](../../operate/install/local-evaluation.md).
 
 ```bash
-docker compose --profile auth up --build --wait auth-service
+docker compose up --build --wait auth-service
 ```
 
-That runs seven services in order:
+That runs these services in order:
 
 | Service | Job |
 | --- | --- |
@@ -52,6 +56,7 @@ That runs seven services in order:
 | `auth-migrate` | One-shot. Applies the auth schema as the migration login, which owns the schema (`AUTH_SCHEMA_OWNER_ROLE` pins that), and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
 | `auth-grants` | One-shot. Runs `auth-migrate grants` (the grant-only pass) after `auth-migrate`, as the same elevated login, so the runtime login's table privileges, including those on the public tables, are current before auth-service starts. |
 | `auth-fence-init` | One-shot, dev compose only. `auth-migrate restore-fence init -if-absent` writes the first restore-fence row of the fresh database (timeline 1) so that auth-service is ready; a repeat bring-up exits 0 without writing. Never run it on a restored volume (use `restore-fence apply`), and the Helm chart has no such Job: a production database is initialised once by hand (see the first roll below). |
+| `auth-users-backfill` | One-shot, dev compose only (CHAOS-13107). Runs `dho auth users-backfill -insert-only` (creates the missing auth users, never changes an existing one) as the runtime login with `AUTH_USERS_OWNED=false` for that run only, after `auth-migrate` and `auth-grants`, so `public.users` (on a fresh install, the migrations' service placeholder) is in the auth schema before auth-service, which owns users, serves. Every bring-up runs it. |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
 
 Things that are easy to get wrong:
@@ -59,8 +64,9 @@ Things that are easy to get wrong:
 - **Network.** `auth-provision`, `auth-migrate`, `auth-grants`, `auth-fence-init` and `auth-service` join only
   the `auth_plane` network, which `postgres` also joins; `auth-keys-init` needs
   no network at all (`network_mode: none`, it only writes a file into its
-  volume). None of them can reach any other stack service. The only effect on the
-  default stack is that `postgres` has two networks instead of one.
+  volume). Since CHAOS-13107 `valkey` (auth-service's rate-limit store), go-api
+  (it calls the session issue route) and `auth-issuer` (it forwards the
+  discovery document and the JWKS) join `auth_plane` too.
 - **DSNs are keyword form** (`host=postgres port=5432 user=... password='...'`).
   A URI would need every reserved character of the password percent-encoded,
   which Compose cannot do. Any password works except one containing a single
@@ -82,7 +88,8 @@ curl -fsS http://127.0.0.1:8096/readyz        # {"status":"ok"}
 docker compose --profile auth run --rm --no-deps auth-migrate --check
 ```
 
-Roll it back (nothing else depends on it):
+Roll it back (go-api and query-api depend on it since CHAOS-13107: stop them
+first):
 
 ```bash
 docker compose --profile auth rm --stop --force \
@@ -183,7 +190,13 @@ Roll order, each step before the next; every switch is off until its step:
    External Push writer, at every authService.phase).
 3. auth-service with `AUTH_REPO_IDENTITY_PROJECTION=on` (readiness check
    `repository_identity_projection_reader`). The reader is a no-op while the outbox holds none of these events.
-4. The worker with its producer switch on (the producer change, CHAOS-13058), only after steps 2 and 3.
+4. The worker with `WORKER_REPO_IDENTITY_OUTBOX=true` (unset is off; a set value must be exactly `true` or `false`,
+   stricter than `AUTH_PUSH_LIFECYCLE_EVENTS` on purpose; any other value stops start-up), only after steps 2 and 3. The commit of each `repos` effect of the github and gitlab
+   repo-metadata sync then appends one event per repository with a provider id, in the effect ledger's
+   transaction, through the function of `AUTH_DATABASE_SCHEMA` (default `auth`). A row without a provider id
+   (local git, External Push) gives none. The switch on before step 2 fails every repo-metadata unit (the
+   commit refuses without the function) rather than losing an event, and the worker logs
+   `repository_identity_outbox_not_ready` once at start; turning it off again is the rollback.
 
 ### The migration login owns the auth schema and is not a superuser
 

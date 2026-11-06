@@ -70,7 +70,8 @@ lg ledger-commented-row pass 'chore(ci): CHAOS-80 add the check'
 lg ledger-prefix-is-not-the-id pass 'chore(ci): CHAOS-7 add the check'
 lg ledger-other-id pass 'chore(ci): CHAOS-1 add the check'
 lg ledger-missing fail 'chore(ci): CHAOS-1 add the check' "$ledger_dir/absent.tsv"
-if EVENT=pull_request AUTHOR=chaos TITLE='chore(ci): CHAOS-1 add the check' EXCEPTION_LEDGER="$ledger_dir/absent.tsv" bash "$script" 2>&1 >/dev/null | grep -q 'cannot read the exception ledger'; then
+missing_err=$(EVENT=pull_request AUTHOR=chaos TITLE='chore(ci): CHAOS-1 add the check' EXCEPTION_LEDGER="$ledger_dir/absent.tsv" bash "$script" 2>&1 >/dev/null || true)
+if [[ "$missing_err" == *'cannot read the exception ledger'* ]]; then
   echo "ok   ledger-missing-names-the-ledger"
 else
   echo "FAIL ledger-missing-names-the-ledger"; fails=$((fails + 1))

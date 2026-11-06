@@ -42,7 +42,6 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
-devhealth_auth_legacy_link_accepted_total	purpose,service	code: internal/api/authmail/legacy.go
 devhealth_auth_legacy_logout_accepted_total	class,service	code: internal/auth/accessverify/logout.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
@@ -256,6 +255,7 @@ dev_health_post_sync_fanout_total	outcome	code: internal/jobruntime/telemetry.go
 dev_health_post_sync_touched_days_total	event	code: internal/jobruntime/telemetry.go
 dev_health_provider_all_artifacts_unreadable_total	dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_artifact_skipped_total	dataset,provider,reason	code: internal/providerfoundation/budget.go
+dev_health_provider_non_report_members_skipped_total	class,dataset,provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_denied_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_release_errors_total	provider	code: internal/providerfoundation/budget.go
 dev_health_provider_budget_underestimate_total	dataset,dimension,provider	code: internal/providerfoundation/budget.go

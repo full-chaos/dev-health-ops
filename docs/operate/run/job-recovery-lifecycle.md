@@ -88,7 +88,7 @@ for the same job may be two hours. **The lease is up to twelve times faster than
 the job runtime at telling you a worker died.**
 
 This signal is durable and already in the database. It is not currently surfaced
-as a metric or alert — see CHAOS-4025.
+as a metric or alert.
 
 ## Two lease layers, not one
 
@@ -112,10 +112,9 @@ identical from outside:
 | Idempotency | `worker_job_runs.lease_expires_at` | The retry is reported as a duplicate success and the handler never runs |
 | Domain | `daily_metrics_*`, `work_graph_execution_requests`, `remaining_metric_*` | The retry parks until the lease expires, then reclaims it |
 
-The domain-layer behaviour is current as of CHAOS-3991. The idempotency layer
+The idempotency layer
 still reports a live lease as duplicate success without running the handler, so
-a worker killed hard enough to leave that lease behind can still lose its retry
-— tracked as CHAOS-3998.
+a worker killed hard enough to leave that lease behind can still lose its retry.
 
 ## The four liveness states
 
@@ -141,7 +140,7 @@ The distinguishing question is not "is there a job row" but **"is there a job
 that will still run"**.
 
 A job can reach Dead by more than one route: its worker declared success while
-another claimant's lease was live (fixed in CHAOS-3991), its head terminalized
+another claimant's lease was live, its head terminalized
 as a non-success state, or it exhausted its attempts and was discarded. All
 three end the same way — a non-terminal row with no live job.
 
@@ -393,7 +392,7 @@ sweep is not running or its writes are refused — read
 Rescue re-runs a job that still exists. It cannot help when the job itself is
 gone. If a domain row is non-terminal, its lease is expired, and no live job
 references it, no amount of waiting will recover it — that work needs a reclaim
-sweep (CHAOS-3997), not patience.
+sweep, not patience.
 
 Equally, a fresh run does not supersede a stuck one. Completion fences are keyed
 by run id, and run ids are derived from the organization, day, and generation.
@@ -405,7 +404,7 @@ above, and it is deliberately narrow: it supersedes only requests that are still
 `pending`, only within one producer, and so only work that nothing is waiting
 on.
 
-**Daily metrics has a targeted reclaim sweep as of CHAOS-4358/CHAOS-4304**: once
+**Daily metrics has a targeted reclaim sweep**: once
 every `daily_partition` River job for a run has failed and been discarded,
 nothing re-enqueues work for that run on its own — a fresh
 `metrics.daily_dispatch` run of `Dispatcher.Work` still calls the SAME
@@ -431,13 +430,13 @@ terminalizes the partition `failed_permanent`, undoing the reset (see
 for the exact env vars and required-order rationale).
 
 **The redrive above does not cover a run stranded one step LATER, after every
-partition already succeeded (CHAOS-4389).** `CompletePartition` enqueues the
+partition already succeeded.** `CompletePartition` enqueues the
 run's single `metrics.daily_finalize` job exactly once, the instant the last
 partition transitions to `succeeded`, under the fixed key
 `metrics.daily_finalize:<run id>` — permanently deduped by the outbox like
 every other kind here. If THAT job is discarded by River before
-`CompleteFinalize` ever runs (e.g. the compatibility bridge's `Finalize` call
-hitting the same memory-bound class CHAOS-4361 fixed for partitions), the run
+`CompleteFinalize` ever runs (e.g. the `Finalize` call
+hitting the same memory-bound class that affects partitions), the run
 sits `status='running'` forever despite 100% partition success, and
 `daily-redrive`'s own stranded-partition predicate never matches it (it
 requires at least one non-succeeded partition). `dho workers metrics
@@ -448,10 +447,9 @@ re-verifying under a row lock that the run is still `running`, every
 partition is still `succeeded`, and finalization has not already settled.
 
 **A stuck finalize LEDGER row defeats a bare republish the same way it
-defeats a partition redrive (CHAOS-4409).** The Python compatibility
-bridge's own finalize ledger row (`metric_compatibility_executions`,
+defeats a partition redrive.** The finalize ledger row (`metric_compatibility_executions`,
 `operation='finalize'`) can be left `ambiguous`/stuck-`executing` from the
-original stranding — the owning api process died mid-`Finalize`, or a
+original stranding — the owning process died mid-`Finalize`, or a
 progress-having finalize failure never got a human `/repair` call.
 Publishing a fresh `metrics.daily_finalize` job into that state is a
 guaranteed `JobCancelError ambiguous_refused`, forever, no matter how many
@@ -461,17 +459,16 @@ this ledger row for every candidate BEFORE publishing anything, calling the
 same bulk-repair endpoint `daily-redrive` already calls for partition rows
 (extended to also select `operation='finalize'`) — and aborts the whole
 invocation, publishing nothing, if any row's original claim still reads as
-live (retry once that claim settles). This is what actually unblocked 13
-prod runs found stuck in the CHAOS-4389 stranded shape whose finalize ledger
-row, not the Go-side run state, was the thing blocking them. See
+live (retry once that claim settles). In this stranded shape the finalize ledger
+row, not the Go-side run state, is what blocks the run. See
 [cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the exact command shape, `--all-complete`'s cross-organization sweep,
 the ledger-repair ordering, and its telemetry counters.
 
 **Neither of the above covers re-running finalize for a day that already
-completed (CHAOS-4405).** `run_daily_metrics_finalize` now also writes
+completed.** `run_daily_metrics_finalize` now also writes
 `compounding_risk_daily`(scope='team') and `team_cognitive_load_daily`
-(CHAOS-4399, #1963) exactly once per org/day — a day finalized before that
+exactly once per org/day — a day finalized before that
 landed has zero rows in either table, even though its run is a perfectly
 healthy `status='succeeded'`. Neither `daily-redrive` (partitions only) nor
 `daily-finalize` (only ever touches a run still stuck non-terminal) can
@@ -480,11 +477,10 @@ finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
 --review-evidence "<why>" --reason <code> --correlation-id <id>` closes this: it transactionally resets an
 eligible `'succeeded'` run back to a claimable state (in the same
 transaction as the fresh publish) so it can reach `FinalizeHandler.Work`
-again at all — both Go's `ClaimFinalize` and the Python compat bridge's own
-claim-row query hard-require `status='running'`, so a bare republish against
+again at all — `ClaimFinalize` and the ledger claim-row query both hard-require `status='running'`, so a bare republish against
 an already-terminal run is a guaranteed no-op — the reset ALSO assigns a
 fresh `generation`, or the redriven attempt would reuse the identical
-Python-side execution identity that already reached `'succeeded'` and get
+ledger execution identity that already reached `'succeeded'` and get
 silently skipped instead of actually recomputing anything. Always start with
 `--dry-run` (lists days + current run state, zero writes) before authorizing
 the real pass. Every reset writes a provenance row to
@@ -494,7 +490,7 @@ same transaction as the reset and the publish, and steps `daily-finalize
 is plausibly still in flight — not permanently: the moment that specific
 claim resolves (success or failure), the same completion path that settles
 the run also closes this row, and a **failed** redriven finalize reappears
-in the sweep immediately, exactly like any other ordinary CHAOS-4389
+in the sweep immediately, exactly like any other ordinary
 discard. A redriven job that never reaches a claim AT ALL — discarded/
 cancelled by River, or never delivered into River at all — has no
 completion path to close this row either, so `daily-finalize --all-complete`
@@ -511,15 +507,14 @@ was dispatched and then stranded or discarded — they need a row to already
 exist. A day sync never ran for, or one whose row aged out of River's
 retention, has no row to recover. `dho workers metrics remaining
 start --family <family> --day <YYYY-MM-DD> [--to <YYYY-MM-DD>] --org <uuid>
---review-evidence "<why>" --reason <code> --correlation-id <id>` (CHAOS-4254) closes this gap for the day-scoped
+--review-evidence "<why>" --reason <code> --correlation-id <id>` closes this gap for the day-scoped
 remaining-metrics families (`complexity`, `dora`, `release_impact`):
 `remaining.PostgresStore.StartManualBackfillRun` inserts through the same
 `insertRun` path every automatic producer's `StartRunTx` shares, under a
 generation derived deterministically from the request's own flags (never
 wall-clock time, so a retried invocation is idempotent rather than a
-duplicate). This is also the prod recovery path for CHAOS-4384's
-dora-frozen-at-0 incident, since a day the pre-fix same-day coverage bug
-froze at 0 rows already has a "succeeded" partition — recomputing it needs a
+duplicate). This is also the recovery path for a dora day frozen at 0 rows,
+since such a day already has a "succeeded" partition — recomputing it needs a
 rule the automatic dora trigger deliberately does not apply: an UNAMBIGUOUS
 single-day (`backfill_days == 1`) 0-row partition is backfillable regardless
 of whether the day has closed, while a non-zero-row day, an in-progress
@@ -527,28 +522,3 @@ automatic run, or an AMBIGUOUS multi-day partition whose aggregate can't
 prove any one day's own row count are all refused. See
 [cli-reference](../../reference/cli/index.md#dho-workers-metrics)
 for the full command shape and coverage rule.
-
-## Sources
-
-- CHAOS-3991 — a claim conflict reported as success deleted the job that would
-  have reclaimed the lease
-- CHAOS-3997 — reclaim sweep for runs stranded with no live job
-- CHAOS-4025 — expired leases on running rows are not surfaced as a signal
-- CHAOS-4358 / CHAOS-4304 — targeted redrive for daily-metrics runs stranded by
-  discarded `daily_partition` jobs, and the ledger-side ambiguous/executing
-  repair that must run alongside it
-- CHAOS-4389 — targeted redrive for daily-metrics runs stranded one step
-  later, by a discarded `daily_finalize` job after every partition already
-  succeeded
-- CHAOS-4409 — extends the CHAOS-4304 ledger-repair pattern to the finalize
-  ledger row: a stuck `ambiguous`/`executing` finalize execution refuses a
-  redriven finalize job forever, independent of the Go-side run state
-- CHAOS-4399 / CHAOS-4405 — team-scope aggregation moved into the finalize
-  step (fixing a multi-repo-team undercount), and the historical
-  finalize-redrive backfill that re-runs it for already-completed days
-- CHAOS-5642 — coalescing for `investment.materialize`: one pending
-  materialization per (organization, day range, scope), a later flush
-  superseding the queued one, and a bound on an unbounded start
-- CHAOS-4254 / CHAOS-4384 — manual backfill for a remaining-metrics day that
-  was never dispatched at all, and its use as the recovery path for a dora
-  day frozen at 0 rows by the pre-fix same-day coverage bug

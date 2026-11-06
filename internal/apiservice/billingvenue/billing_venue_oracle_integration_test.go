@@ -518,10 +518,10 @@ func billingSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool) billingF
 	return f
 }
 
-// billingOrglessSuperusers is the "super" seed: a superuser whose org claim (orgD) names an organization it holds
-// no membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190),
-// so its user access token carries none; the recorded request stays keyed by the recorded claim.
-var billingOrglessSuperusers = []string{"super"}
+// billingOrglessSuperusers names no seed: the "super" seed (a superuser whose org claim, orgD, names an organization
+// it holds no membership in) keeps its recorded org claim, and its user access token gets the recorded (HS256)
+// answer (product rule 1, D6773).
+var billingOrglessSuperusers []string
 
 // orgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user holds
 // no live membership in, or is not a UUID.

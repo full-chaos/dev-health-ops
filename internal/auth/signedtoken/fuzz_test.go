@@ -11,7 +11,7 @@ import (
 // the id it names (so no near-miss spelling is ever accepted under a
 // different signature), and a non-ASCII signature is reported, not compared.
 func FuzzValidSignedToken(f *testing.F) {
-	secret := Secret("jwt-secret-for-fuzz-0123456789abcdef", "settings-key")
+	secret := "link-secret-for-fuzz-0123456789abcdef"
 	id := uuid.MustParse("12345678-1234-5678-1234-567812345678")
 	token, _ := Build(id, secret)
 	f.Add(token)

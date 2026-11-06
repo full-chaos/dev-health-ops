@@ -222,6 +222,7 @@ internal/cigates/docstools	dc_helpers_test.go
 internal/cigates/docstools	dc_links.go
 internal/cigates/docstools	dc_paths_test.go
 internal/cigates/docstools	dc_pub.go
+internal/cigates/docstools	dc_pub_exclude_test.go
 internal/cigates/docstools	dc_pub_helpers_test.go
 internal/cigates/docstools	dc_pub_py.go
 internal/cigates/docstools	dc_pub_test.go

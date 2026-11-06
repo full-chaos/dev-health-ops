@@ -26,10 +26,10 @@ They used one deployment-wide API key (`INGEST_API_KEYS`, header `X-API-Key`) or
 
 ## Timeline
 
-1. Deprecated and guarded (ops #4934). The routes mounted only when `DEV_HEALTH_LEGACY_INGEST_ENABLED` was true. The default was off.
-2. Pinned off in prod (deploy #643). The prod values set `legacyIngest.enabled: false`.
-3. Retired (ops #5234). go-api no longer mounts the routes. It no longer reads `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`, `INGEST_API_KEYS` or `INGEST_SIGNING_SECRET`.
-4. Credential classes deleted (ops #5252). The classes `legacy_ingest_api_key` and `legacy_ingest_hmac_signature` are gone from the registry and from the stored-class check. See [Credential classes](../../reference/auth/credential-classes.md).
+1. Deprecated and guarded. The routes mounted only when `DEV_HEALTH_LEGACY_INGEST_ENABLED` was true. The default was off.
+2. Pinned off in prod. The prod values set `legacyIngest.enabled: false`.
+3. Retired. go-api no longer mounts the routes. It no longer reads `DEV_HEALTH_LEGACY_INGEST_ENABLED`, `DEV_HEALTH_LEGACY_INGEST_SUNSET`, `INGEST_API_KEYS` or `INGEST_SIGNING_SECRET`.
+4. Credential classes deleted. The classes `legacy_ingest_api_key` and `legacy_ingest_hmac_signature` are gone from the registry and from the stored-class check. See [Credential classes](../../reference/auth/credential-classes.md).
 
 ## What the service does now
 
@@ -41,10 +41,12 @@ They used one deployment-wide API key (`INGEST_API_KEYS`, header `X-API-Key`) or
 
 The only refusal is in the Helm chart. It happens when you render the chart, not when the service starts. The render fails, whether `goApi.enabled` is true or false, with one of these texts:
 
-- `legacyIngest is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); only legacyIngest.enabled: false may remain`
-- `legacyIngest.enabled is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); set it false or remove it`
-- `legacyIngest.sunset is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); remove it`
-- `goApi.extraEnv must not set <NAME>: the legacy ingest routes are retired (CHAOS-11813) and go-api reads no such setting`
+- the `legacyIngest` key is retired; only `legacyIngest.enabled: false` may remain
+- `legacyIngest.enabled` is retired; set it false or remove it
+- `legacyIngest.sunset` is retired; remove it
+- `goApi.extraEnv` must not set a legacy ingest variable; go-api reads no such setting
+
+Each refusal message also says that the legacy `/api/v1/ingest/*` routes of go-api are gone.
 
 To clear a refusal:
 

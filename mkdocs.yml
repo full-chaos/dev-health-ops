@@ -6,6 +6,8 @@ site_url: https://docs.fullchaos.dev
 # edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  go-migration-matrix.md
 site_dir: .build/docs
 
 theme:
@@ -201,8 +203,6 @@ nav:
           - Auth legacy compatibility and rollback: operate/runbooks/auth-legacy-compat-and-rollback.md
           - External Push lifecycle events: operate/runbooks/external-push-lifecycle.md
           - Legacy ingest retirement: operate/runbooks/legacy-ingest-retirement.md
-      - Prod cutover 2026-09-11:
-          - operate/prod-cutover-2026-09-11-lessons/index.md
   - Integrate and extend:
       - integrate/index.md
       - Customer Push:
@@ -225,6 +225,8 @@ nav:
           - Configure: integrate/webhooks/configure.md
           - Verify signatures: integrate/webhooks/verify-signatures.md
           - Retries and replay: integrate/webhooks/retries-and-replay.md
+      - Connect an agent (MCP):
+          - integrate/mcp/index.md
       - Build an integration:
           - integrate/build-an-integration/index.md
           - Provider integration: integrate/build-an-integration/provider.md
@@ -296,8 +298,6 @@ nav:
       - Deprecations: reference/deprecations/index.md
       - Runtime:
           - reference/runtime/index.md
-          - Python↔Go live-path ledger: reference/runtime/python-go-live-path-ledger.md
-          - Go migration matrix: go-migration-matrix.md
   - Contribute:
       - contribute/index.md
       - Get started:

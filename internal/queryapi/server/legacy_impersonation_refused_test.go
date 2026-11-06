@@ -226,7 +226,7 @@ func TestRefusesLegacyImpersonationReadsTheSwitchAsGoAPI(t *testing.T) {
 		if on != want.on || (err != nil) != want.err {
 			t.Errorf("%s=%q: got %v, %v; want %v, error %v", impersonationProxyEnv, raw, on, err, want.on, want.err)
 		}
-		deps, depsErr := newGraphQLEdgeDeps(getenv, lookup, nil)
+		deps, depsErr := newGraphQLEdgeDeps(getenv, lookup, nil, nil)
 		if deps.refuseLegacyImpersonation != want.on || (depsErr != nil) != want.err {
 			t.Errorf("%s=%q: /graphql deps refuse=%v error=%v; want %v, error %v", impersonationProxyEnv, raw, deps.refuseLegacyImpersonation, depsErr, want.on, want.err)
 		}

@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -394,7 +395,8 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		if edgeErr != nil {
 			return fail(edgeErr)
 		}
-		edgeDeps, depsErr := newGraphQLEdgeDeps(getenv, lookup, edgeAuth)
+		// An AUTH_PROXY_IMPERSONATION go-api would refuse refuses startup here too.
+		edgeDeps, depsErr := newGraphQLEdgeDeps(getenv, lookup, edgeAuth, slog.Default())
 		if depsErr != nil {
 			return fail(depsErr)
 		}

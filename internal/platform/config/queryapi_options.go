@@ -57,6 +57,11 @@ var queryAPIOptions = func() []Option {
 			Usage: "true while auth-service owns sessions (go-api's flag): the role posture then also requires the read of the auth schema's sessions; unset or false = off, any other value refuses readiness",
 		},
 		{
+			Flag: "auth-proxy-impersonation", Env: "AUTH_PROXY_IMPERSONATION", Kind: KindString,
+			Services: q, Group: GroupRuntime,
+			Usage: "true while go-api starts impersonation as an auth-service delegated session (go-api's flag): /graphql then refuses the admin's own bearer beside a live impersonation row (403); unset or false = off, any other value refuses startup",
+		},
+		{
 			Flag: "auth-platform-roles-owned", Env: "AUTH_PLATFORM_ROLES_OWNED", Kind: KindString,
 			Services: q, Group: GroupDatabase,
 			Usage: "true while auth-service owns the platform roles: is_superuser is read from the auth platform role assignments and the role posture also requires that read (needs AUTH_PROXY_SESSIONS); unset or false = off, any other value refuses startup",

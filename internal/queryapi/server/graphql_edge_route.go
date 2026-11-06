@@ -105,11 +105,9 @@ func (w *wholeResponse) send() {
 	_, _ = w.ResponseWriter.Write(w.body.Bytes())
 }
 
-// graphQLEdgeDeps is what /graphql's request middleware needs beyond the
-// /query pipeline: the edge authenticator the org scope and impersonation
-// middlewares read the caller with, the CORS allow-list, the body limit, and
-// whether the impersonation middleware refuses the legacy impersonation
-// caller (AUTH_PROXY_IMPERSONATION, policy.Scope.RefuseLegacyImpersonation).
+// graphQLEdgeDeps is what /graphql's request middleware needs beyond the /query pipeline: the edge authenticator
+// the org scope and impersonation middlewares read the caller with, the CORS allow-list, the body limit, and
+// whether the impersonation middleware refuses the legacy impersonation caller (AUTH_PROXY_IMPERSONATION).
 type graphQLEdgeDeps struct {
 	auth                      *policy.Authenticator
 	corsOrigins               []string
@@ -122,8 +120,7 @@ type graphQLEdgeDeps struct {
 // its order (api/_middleware.py registers in reverse, so the last one added
 // runs first) inside Starlette's ServerErrorMiddleware (an unhandled error's
 // 500 carries only its content headers): the correlation id, OrgIdMiddleware,
-// ImpersonationMiddleware,
-// GraphQLQuerySizeLimitMiddleware, SecurityHeadersMiddleware,
+// ImpersonationMiddleware, GraphQLQuerySizeLimitMiddleware, SecurityHeadersMiddleware,
 // CORSMiddleware, then the route. The order is the contract, not a detail:
 // a refusal from a middleware outside SecurityHeadersMiddleware (the org
 // scope's 403, the size limit's 413 and browser 404) carries no security
@@ -131,10 +128,10 @@ type graphQLEdgeDeps struct {
 // scope and impersonation middlewares are go-api's own ports
 // (internal/api/policy), the headers and CORS the shared ones
 // (internal/api/pyheaders), so query-api and go-api cannot drift apart on
-// them. The provenance stamp is outermost, so every answer is bound to the
-// build that gave it.
+// them. The provenance stamp is outermost, so every answer is bound to the build that gave it.
 func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler {
 	scope := policy.NewScope(deps.auth, deps.logger)
+	scope.RefuseLegacyImpersonation(deps.refuseLegacyImpersonation)
 	var handler http.Handler = newGraphQLEdgeHandler(query)
 	handler = pyheaders.NewCORS(deps.corsOrigins).Wrap(handler)
 	handler = pyheaders.SecurityHeaders(handler)

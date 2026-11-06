@@ -2,6 +2,11 @@ package graph
 
 import (
 	"context"
+	goast "go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -54,5 +59,64 @@ func TestOperationEnforceRefusalSetsTheIngressStatus(t *testing.T) {
 				t.Fatalf("status unavailable=%t forbidden=%t, want %t %t", status.Unavailable(), status.Forbidden(), tc.unavailable, tc.forbidden)
 			}
 		})
+	}
+}
+
+// G16: the organization a resolver reads in is the request claims' OrgID, written only by the org guard's superuser
+// rebind and by the decision (the scope's org on an enforced root). A new writer is a new way to serve an org nobody
+// decided; listed both ways.
+func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
+	want := map[string]bool{
+		"operation_org_guard.go OperationOrgGuard.InterceptOperation": true,
+		"operation_enforce.go OperationEnforce.InterceptRootField":    true,
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*goast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			site := name + " " + fn.Name.Name
+			if fn.Recv != nil && len(fn.Recv.List) == 1 {
+				if ident, ok := fn.Recv.List[0].Type.(*goast.Ident); ok {
+					site = name + " " + ident.Name + "." + fn.Name.Name
+				}
+			}
+			goast.Inspect(fn.Body, func(n goast.Node) bool {
+				assign, ok := n.(*goast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for _, lhs := range assign.Lhs {
+					if sel, ok := lhs.(*goast.SelectorExpr); ok && sel.Sel.Name == "OrgID" {
+						got[site] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	for site := range got {
+		if !want[site] {
+			t.Errorf("%s writes a claims OrgID; only the org guard's rebind and the decision may", site)
+		}
+	}
+	for site := range want {
+		if !got[site] {
+			t.Errorf("listed writer %s writes no OrgID (stale list)", site)
+		}
 	}
 }

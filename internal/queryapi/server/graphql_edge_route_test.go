@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -816,8 +817,8 @@ func edgePostAs(t *testing.T, handler http.Handler, token string) *httptest.Resp
 func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 	targetOrg := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: targetOrg, TargetRole: "viewer"}
-	admin := authctx.Claims{OrgID: ecOrg.String(), Role: "owner", IsSuperuser: true}
-	target := authctx.Claims{OrgID: targetOrg.String(), Role: "viewer", IsSuperuser: true, ImpersonationActive: true}
+	admin := authctx.Claims{OrgID: ecOrg.String(), Role: "owner", IsSuperuser: true, Scope: pepgate.Legacy(ecOrg.String())}
+	target := authctx.Claims{OrgID: targetOrg.String(), Role: "viewer", IsSuperuser: true, ImpersonationActive: true, Scope: pepgate.Legacy(targetOrg.String())}
 	claimsSuper := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
 	claimsPlain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
 	for name, tc := range map[string]struct {

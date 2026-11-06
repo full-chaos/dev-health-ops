@@ -10,7 +10,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
 
@@ -61,8 +60,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 			return authctx.Claims{}, false
 		}
 		internalidentity.RecordOutcome("headers", "accepted")
-		claims.Scope = pepgate.Legacy(claims.OrgID)
-		return claims, true
+		return withLegacyScope(claims), true
 	}
 
 	token, ok := bearerToken(r.Header.Get("Authorization"))
@@ -87,8 +85,7 @@ func authenticateInternalRequest(w http.ResponseWriter, r *http.Request, verifie
 		return authctx.Claims{}, false
 	}
 	internalidentity.RecordOutcome("envelope", "accepted")
-	return authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive,
-		Scope: pepgate.Legacy(claims.OrgID)}, true
+	return withLegacyScope(authctx.Claims{OrgID: claims.OrgID, Role: claims.Role, IsSuperuser: claims.IsSuperuser, ImpersonationActive: claims.ImpersonationActive}), true
 }
 
 // authenticateEdgeCarrier is /query's edge-access-token path (CHAOS-6263
@@ -295,8 +292,8 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	// named action that set holds.
 
 	internalidentity.RecordOutcome("edge", "accepted")
-	return authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
-		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform, Scope: pepgate.Legacy(orgID)}, edgeAccepted
+	return withLegacyScope(authctx.Claims{OrgID: orgID, Role: role, IsSuperuser: user.IsSuperuser, ImpersonationActive: impersonationActive,
+		Delegated: user.ImpersonatedBy != nil, Platform: user.Platform}), edgeAccepted
 }
 
 // authenticateEdgeTokenOnly authenticates /graphql, the product path an

@@ -203,7 +203,9 @@ func namespaceOf(action string) string {
 	return namespace
 }
 
-// P1, P4, P5, P7, P8, P9, P11, P12 on every namespace: a refusal answers before the handler, so no read runs. P4 is the
+// P1, P4, P5, P7, P8, P9, P11, P12 on every namespace: a refusal answers before the handler, so no read runs. P7 (no
+// repository member) is the one row that serves: these actions are org-wide for every member (catalog version 14), so the
+// answer is today's read, byte for byte. P4 is the
 // F-A form: an allow with repository_allowlist [] on a route not cut over is 503, never the org-wide read.
 func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 	cases := []struct {
@@ -218,7 +220,7 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 		{"P2 tenant_scope other org", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = liveOtherOrg.String() }, false, gatedUnavailable, false},
 		{"P4 allowlist []", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, false, gatedUnavailable, false},
 		{"P5 allowlist [acme/a]", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, false, gatedUnavailable, false},
-		{"P7 no repository member", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope = "" }, false, gatedUnavailable, false},
+		{"P7 no repository member", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope = "" }, false, answer{Status: http.StatusOK}, false},
 		{"P8 minimum_assurance", pdp.ModeEnforce, func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, false, gatedUnavailable, false},
 		{"P9 deny", pdp.ModeEnforce, nil, true, gatedForbidden, false},
 		{"P12 cell on, mode off", pdp.ModeOff, nil, false, gatedUnavailable, false},
@@ -245,6 +247,12 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 				}
 				gate, _ := seamGate(t, tc.mode, cellList, decider)
 				got := s.run(gate, s.user)
+				if tc.want.Status == http.StatusOK {
+					if legacy := legacyRun(t, route, userBearer); !got.same(legacy) {
+						t.Fatalf("answered %d %q, want today's read (%d %q)", got.status, got.body, legacy.status, legacy.body)
+					}
+					return
+				}
 				if (answer{got.status, strings.TrimSpace(got.body)}) != tc.want {
 					t.Fatalf("answered %d %q, want %+v", got.status, got.body, tc.want)
 				}

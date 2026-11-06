@@ -17,41 +17,24 @@ func valid(t *testing.T, c Config, token string) bool {
 	return ok
 }
 
-func TestLinkSecretUnsetKeepsTheLegacyChain(t *testing.T) {
-	c := Config{TokenSecret: "access-key"}
-	if got := c.Secret(); got != "access-key" {
-		t.Fatalf("signing secret %q, want the legacy chain secret", got)
-	}
-	token, _ := signedtoken.Build(uuid.New(), c.Secret())
-	if !valid(t, c, token) {
-		t.Fatal("a token signed with the legacy secret is refused with no link secret set")
-	}
-	if got := (Config{}).AcceptSecrets(); len(got) != 1 || got[0] != signedtoken.DevFallbackSecret {
-		t.Fatalf("zero Config accepts %v, want only the last-resort default", got)
-	}
-}
-
-func TestLinkSecretSignsAndKeepsPreRollTokensValid(t *testing.T) {
+func TestLinkSecretSignsAndOnlyItsOwnKeysAccept(t *testing.T) {
 	id := uuid.New()
-	preRoll, _ := signedtoken.Build(id, "access-key")
+	formerChain, _ := signedtoken.Build(id, "access-key")
 
-	rolled := Config{TokenSecret: "access-key", LinkSecret: "link-key"}
+	rolled := Config{LinkSecret: "link-key"}
 	if got := rolled.Secret(); got != "link-key" {
 		t.Fatalf("signing secret %q, want the link secret", got)
 	}
-	if !valid(t, rolled, preRoll) {
-		t.Fatal("a link issued before the roll is refused after it")
+	if valid(t, rolled, formerChain) {
+		t.Fatal("a link signed with a key outside the link secrets is accepted")
 	}
 	fresh, _ := signedtoken.Build(uuid.New(), rolled.Secret())
 	if !valid(t, rolled, fresh) {
-		t.Fatal("a link issued after the roll is refused")
-	}
-	if ok, _ := signedtoken.ValidAny(fresh, []string{"access-key"}); ok {
-		t.Fatal("a post-roll link validates under the access key alone")
+		t.Fatal("a link signed with the link secret is refused")
 	}
 }
 
-func TestLinkSecretRotationAcceptsThePreviousAndDropsTheLegacyKeyWhenRemoved(t *testing.T) {
+func TestLinkSecretRotationAcceptsThePreviousAndDropsItWhenRemoved(t *testing.T) {
 	id := uuid.New()
 	underOld, _ := signedtoken.Build(id, "link-old")
 	rotated := Config{LinkSecret: "link-new", PreviousLinkSecret: "link-old"}
@@ -72,7 +55,7 @@ func TestLinkSecretRotationAcceptsThePreviousAndDropsTheLegacyKeyWhenRemoved(t *
 }
 
 func TestLinkSecretAcceptListHasNoDuplicatesOrBlanks(t *testing.T) {
-	c := Config{TokenSecret: "same", LinkSecret: "same", PreviousLinkSecret: "same"}
+	c := Config{LinkSecret: "same", PreviousLinkSecret: "same"}
 	if got := c.AcceptSecrets(); len(got) != 1 || got[0] != "same" {
 		t.Fatalf("accepts %v, want one entry", got)
 	}

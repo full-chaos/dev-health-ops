@@ -218,8 +218,8 @@ func TestSeamCellOnDenyIs403(t *testing.T) {
 	wantNoScope(t, scope)
 }
 
-// P11 + P13: shadow mode with the cell of the route's namespace off asks in the background, counts, never refuses,
-// and the scope is Legacy.
+// P11 + P13: shadow mode with the cell of the route's namespace off never refuses and the scope is Legacy; Authorize
+// itself asks nothing and counts nothing (the 5.12 shadow core, built by the gate, asks from the REST hooks).
 func TestSeamCellOffIsShadow(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mode, cells, profile, action string
@@ -242,11 +242,14 @@ func TestSeamCellOffIsShadow(t *testing.T) {
 			if org, ok := scope.OrgID(); !ok || org != seamOrg || scope.Kind() != pepgate.KindLegacy {
 				t.Fatalf("scope kind %v org %q, want Legacy(%s)", scope.Kind(), org, seamOrg)
 			}
-			if decider.calls.Load() != 1 {
-				t.Fatalf("shadow asked %d times, want 1", decider.calls.Load())
+			if decider.calls.Load() != 0 {
+				t.Fatalf("Authorize asked %d times, want 0", decider.calls.Load())
 			}
-			if got := m.points(t, resultMetric); got["action="+tc.action+",mode=shadow,result=mismatch"] != 1 || len(got) != 1 {
-				t.Fatalf("results %v, want one shadow mismatch", got)
+			if got := m.points(t, resultMetric); len(got) != 0 {
+				t.Fatalf("results %v, want none", got)
+			}
+			if g.Shadow() == nil {
+				t.Fatal("shadow-mode gate built no shadow")
 			}
 		})
 	}

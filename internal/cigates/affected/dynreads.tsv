@@ -17,6 +17,7 @@ cmd/registrydump	main.go
 cmd/strip-agent-attribution	main.go
 cmd/strip-agent-attribution	main_test.go
 deploy/helm/dev-health	auth_phase_test.go
+deploy/helm/dev-health	auth_sso_settings_test.go
 deploy/helm/dev-health	go_pgbouncer_session_rollingupdate_test.go
 internal/adminops	users_password_fixtures_test.go
 internal/api/credentials	probes.go
@@ -113,6 +114,7 @@ internal/auth/contracts/tokencorpus	service_account_test.go
 internal/auth/httpapi	transport_error_contract_test.go
 internal/auth/identity	externalkey_test.go
 internal/auth/identity	placeholder_copies_test.go
+internal/auth/identity	sp_callsite_ast_test.go
 internal/auth/identity/local	corpus_helpers_integration_test.go
 internal/auth/identity/oidc	oauth_denial_stages_test.go
 internal/auth/keyrotation	rotation_integration_test.go
@@ -129,6 +131,7 @@ internal/auth/pushprojection	import_guard_test.go
 internal/auth/pushreconcile	import_guard_test.go
 internal/auth/ratelimitvalkey	acl_feed_test.go
 internal/auth/ratelimitvalkey	acl_test.go
+internal/auth/repoidentityprojection	reader_test.go
 internal/auth/restorefence	consumers_reader_test.go
 internal/auth/restorefence	consumers_test.go
 internal/auth/session	credential_test.go
@@ -521,6 +524,7 @@ internal/queryapi/investmentexplain	repofilter_golden_test.go
 internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
+internal/queryapi/pepgate	census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -576,6 +580,7 @@ internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
+internal/queryapi/server	rest_scope_census_test.go
 internal/queryapi/server	result_row_bound_census_test.go
 internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go

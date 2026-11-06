@@ -306,21 +306,20 @@ func TestHarnessLoginEmailsPassTheLoginValidator(t *testing.T) {
 			t.Fatalf("%s: %v", f, err)
 		}
 		for _, tg := range cfg.Targets {
-			body := harnessTokenRE.ReplaceAllStringFunc(tg.Body, func(m string) string {
-				if m == "${SEQ}" {
-					return "1"
-				}
-				return "x"
-			})
 			var doc map[string]any
-			if json.Unmarshal([]byte(body), &doc) != nil {
+			if json.Unmarshal([]byte(tg.Body), &doc) != nil {
 				continue
 			}
-			email, ok := doc["email"].(string)
+			rawEmail, ok := doc["email"].(string)
 			if !ok {
 				continue
 			}
 			found++
+			if tok := slices.DeleteFunc(harnessTokenRE.FindAllString(rawEmail, -1), func(m string) bool { return m == "${SEQ}" }); len(tok) > 0 {
+				t.Errorf("%s/%s: login e-mail %q holds the dynamic token %s; only ${SEQ} is allowed", f, tg.Name, rawEmail, tok[0])
+				continue
+			}
+			email := strings.ReplaceAll(rawEmail, "${SEQ}", "1")
 			if _, err := identity.NormalizeEmail(email); err != nil {
 				t.Errorf("%s/%s: login e-mail %q is refused by the login validator", f, tg.Name, email)
 			}

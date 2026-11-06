@@ -94,8 +94,9 @@ func TestTheRegistryNamesTheProvisioningRoutesAsConsumersOfBothClasses(t *testin
 				named++
 			}
 		}
-		if named != len(provisioningRoutes) {
-			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, len(provisioningRoutes))
+		// The eight read routes mount with the provisioning routes, on the same two switches.
+		if want := len(provisioningRoutes) + len(ReadOperations()); named != want {
+			t.Fatalf("%d workload_token provisioning consumers name both variables, want %d", named, want)
 		}
 	}
 }

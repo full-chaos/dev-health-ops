@@ -239,7 +239,7 @@ func (t *txReader) Unfed(ctx context.Context, principal uuid.UUID, orgID string)
 
 // StateVersion is a digest of every row a decision of the pair depends on, in the transaction's snapshot: the principal's
 // public.users row, the organization's public.organizations row, the pair's public.memberships row (each by the values a
-// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, and
+// decision reads: the runtime role has column grants on them, which do not cover xmin), every grant row of the pair, the organization's repository identity rows while the pair holds an id-bearing grant, and
 // the principal's platform role assignments while auth owns them (by xmin). The auth copies of the first three are not
 // hashed: a write of a copy does not move the version. A committed insert, delete, or change of a value a decision reads
 // is a new digest, with or without an outbox event; VACUUM FREEZE keeps it.
@@ -280,7 +280,8 @@ func stateQuery(schema string, org, owned bool) string {
 		parts = append(parts,
 			`SELECT 'public.organizations', id::text, COALESCE(is_active, false)::text FROM public.organizations WHERE id = $2`,
 			`SELECT 'public.memberships', user_id::text || '/' || org_id::text, COALESCE('r:' || role, 'null') FROM public.memberships WHERE org_id = $2 AND user_id = $1`,
-			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`)
+			`SELECT 'resource_grants', id::text, xmin::text FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2`,
+			`SELECT 'repository_identities', provider || ':' || provider_repo_id, xmin::text FROM `+schema+`.repository_identities WHERE organization_id = $2 AND EXISTS (SELECT 1 FROM `+schema+`.resource_grants WHERE principal_id = $1 AND organization_id = $2 AND resource_repo_id IS NOT NULL)`)
 	}
 	if owned {
 		parts = append(parts, `SELECT 'platform_role_assignments', id::text, xmin::text FROM `+schema+`.platform_role_assignments WHERE principal_id = $1`)
@@ -478,7 +479,7 @@ func (t *txReader) organization(ctx context.Context, principal, org uuid.UUID, s
 			return err
 		}
 	}
-	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, expires_at, revoked_at IS NOT NULL
+	rows, err := t.tx.Query(ctx, `SELECT id, role_key, resource_kind, resource_id, coalesce(resource_repo_id, ''), expires_at, revoked_at IS NOT NULL
 FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id = $2`, principal, org)
 	if err != nil {
 		return storeErr("grants", err)
@@ -491,7 +492,7 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 			g       authorization.Grant
 			expires *time.Time
 		)
-		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &expires, &g.Revoked); err != nil {
+		if err := rows.Scan(&id, &g.Role, &g.ResourceKind, &g.ResourceKey, &g.RepoID, &expires, &g.Revoked); err != nil {
 			return storeErr("grants", err)
 		}
 		grantIDs = append(grantIDs, id)
@@ -506,6 +507,39 @@ FROM `+t.table("resource_grants")+` WHERE principal_id = $1 AND organization_id 
 	}
 	if t.r.collect {
 		s.deps = append(s.deps, organizationDependencies(org, grantIDs)...)
+	}
+	for _, g := range s.grants {
+		if g.RepoID != "" {
+			return t.repositoryIdentities(ctx, org, s)
+		}
+	}
+	return nil
+}
+
+// repositoryIdentities reads the organization's path to id map, only for a pair that holds a grant with a repository id.
+// A path with more than one row maps to no id: a new repository took a path before the sync moved the old row.
+func (t *txReader) repositoryIdentities(ctx context.Context, org uuid.UUID, s *snapshot) error {
+	rows, err := t.tx.Query(ctx, `SELECT provider || ':' || provider_repo_id, current_path FROM `+t.table("repository_identities")+
+		` WHERE organization_id = $1`, org)
+	if err != nil {
+		return storeErr("repository identities", err)
+	}
+	defer rows.Close()
+	s.repoIDs, s.repoPaths = map[string]string{}, map[string]string{}
+	for rows.Next() {
+		var id, path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return storeErr("repository identities", err)
+		}
+		s.repoPaths[id] = path
+		if _, dup := s.repoIDs[path]; dup {
+			s.repoIDs[path] = ""
+			continue
+		}
+		s.repoIDs[path] = id
+	}
+	if err := rows.Err(); err != nil {
+		return storeErr("repository identities", err)
 	}
 	return nil
 }
@@ -531,6 +565,10 @@ type snapshot struct {
 	orgStatus    authorization.Status
 	membership   *authorization.Membership
 	grants       []authorization.Grant
+	// repoIDs maps a live repository path of the organization to its id; nil unless a grant holds an id.
+	repoIDs map[string]string
+	// repoPaths maps an id to its path.
+	repoPaths map[string]string
 	// account is the service-account row of a service-account principal.
 	account *authorization.ServiceAccount
 	now     int64
@@ -562,6 +600,25 @@ func (s *snapshot) Grants(orgID string) ([]authorization.Grant, error) {
 		return nil, nil
 	}
 	return s.grants, nil
+}
+
+func (s *snapshot) RepositoryID(orgID, path string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	id := s.repoIDs[path]
+	return id, id != ""
+}
+
+func (s *snapshot) PathForID(orgID, id string) (string, bool) {
+	if orgID == "" || orgID != s.org {
+		return "", false
+	}
+	path, ok := s.repoPaths[id]
+	if !ok || s.repoIDs[path] == "" {
+		return "", false
+	}
+	return path, true
 }
 
 func (s *snapshot) Workload() (authorization.WorkloadLimits, bool) {

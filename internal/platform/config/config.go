@@ -18,6 +18,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/platform/dsnclass"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/netaddr"
 	"github.com/full-chaos/dev-health-ops/internal/platform/queuecontrol"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -948,7 +949,7 @@ func Load(spec Spec) (Config, error) {
 				)
 			}
 			for _, other := range []struct{ value, name string }{{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"}} {
-				if listenAddressesOverlap(cfg.APIBillingEdgeAddress, other.value) {
+				if netaddr.ListenAddressesOverlap(cfg.APIBillingEdgeAddress, other.value) {
 					return Config{}, fmt.Errorf(
 						"%s must differ from %s: each listener has its own address",
 						settingLabel("DEV_HEALTH_API_BILLING_EDGE_ADDR"), settingLabel(other.name),
@@ -969,7 +970,7 @@ func Load(spec Spec) (Config, error) {
 				{cfg.APIAddress, "DEV_HEALTH_API_ADDR"}, {cfg.HTTPAddress, "DEV_HEALTH_HTTP_ADDR"},
 				{cfg.APIBillingEdgeAddress, "DEV_HEALTH_API_BILLING_EDGE_ADDR"},
 			} {
-				if other.value != "" && listenAddressesOverlap(cfg.APIInternalAddress, other.value) {
+				if other.value != "" && netaddr.ListenAddressesOverlap(cfg.APIInternalAddress, other.value) {
 					return Config{}, fmt.Errorf(
 						"%s must differ from %s: each listener has its own address",
 						settingLabel("DEV_HEALTH_API_INTERNAL_ADDR"), settingLabel(other.name),

@@ -290,7 +290,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 			}
 			pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
 			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
-			return authctx.Claims{OrgID: claims.OrgID}, true
+			return legacyClaims(claims.OrgID), true
 		}
 	}
 
@@ -302,7 +302,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 	}
 	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
 	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
-	return authctx.Claims{OrgID: claims.OrgID}, true
+	return legacyClaims(claims.OrgID), true
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

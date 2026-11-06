@@ -216,6 +216,7 @@ internal/auth/workloadexchange	tokenreview.go	internal/auth/workloadexchange
 internal/auth/workloadexchange	tokenreview.go	internal/cigates/chartgates
 internal/auth/workloadinput	workloadinput.go	cmd/dho
 internal/auth/workloadinput	workloadinput.go	deploy/helm/dev-health
+internal/auth/workloadinput	workloadinput.go	internal/adminops
 internal/auth/workloadinput	workloadinput.go	internal/api/githubapp
 internal/auth/workloadinput	workloadinput.go	internal/api/integrationsadmin/backfillvenue
 internal/auth/workloadinput	workloadinput.go	internal/api/integrationsadmin/discoveryvenue
@@ -238,6 +239,7 @@ internal/auth/workloadinput	workloadinput.go	internal/apiservice/ownershipvenue
 internal/auth/workloadinput	workloadinput.go	internal/apiservice/ssovenue
 internal/auth/workloadinput	workloadinput.go	internal/auth/authapi
 internal/auth/workloadinput	workloadinput.go	internal/auth/authruntime
+internal/auth/workloadinput	workloadinput.go	internal/clicredentials
 internal/auth/workloadinput	workloadinput.go	internal/queryapi/pdp
 internal/auth/workloadinput	workloadinput.go	internal/queryapi/server
 internal/auth/workloadinput	workloadinput.go	internal/queryapiservice

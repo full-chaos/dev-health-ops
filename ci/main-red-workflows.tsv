@@ -1,0 +1,14 @@
+# CHAOS-13243: workflows whose red main-push run opens one main-red issue (ci/venue-main-alert.sh).
+# name = exact workflow name (workflow_run.name); must equal the name: of the file and the workflow_run list in venue-oracles-main-alert.yml.
+# cancelled: red = a cancelled run opens the issue (venue-oracles); ignore = it does not open and does not close (main runs are sha-keyed, never cancelled by a newer push; a cancel is manual).
+# witnesses: ";"-separated job-name prefixes. A success run closes the issue only if every witness has jobs and all of them executed (success). - = the venue step proof of ci/last-venue-run.sh.
+# legacy_label: label of an issue opened before CHAOS-13243; found and updated, - = none.
+Venue oracles	venue-oracles.yml	red	-	venue-oracles-main-red
+Go	go.yml	ignore	go-auth-web-proxy-proof;go-storage-integration-plan	-
+Go quality	go-quality.yml	ignore	go-quality-leg (test-;go-quality-leg (race-;go-quality-leg (static	-
+Go auth service	go-auth-service.yml	ignore	auth-test;auth-race;auth-gate	-
+Go workers compose proof	go-workers-compose-proof.yml	ignore	go-workers-compose-proof	-
+Live Backend E2E	live-e2e.yml	ignore	live-e2e-run	-
+Build Docker images	docker-images.yml	ignore	Build Go Image (dho,	-
+Tests	test.yml	ignore	test	-
+CodeQL	codeql-analysis.yml	ignore	Analyze (go)	-

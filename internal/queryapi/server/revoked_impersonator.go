@@ -11,6 +11,10 @@ import (
 // write is refused while the row lives.
 var errRevokedImpersonatorWrite = errors.New("revoked impersonator write refused")
 
+// impersonationAuditMessage is the message of the one log line /query writes
+// when it applies an impersonation session.
+const impersonationAuditMessage = "query-api impersonation session applied"
+
 type writeDoorKey struct{}
 
 // withWriteDoor marks a request of the mutation-only write door, the one

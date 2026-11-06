@@ -157,9 +157,10 @@ func nonSuperuserHolderStore() *accessStore {
 func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
+	// The legacy HS256 token only: go-api's scope does not let this caller impersonate with it
+	// (TestQueryAppliesASessionAsGoAPIsScopeDoes covers its user access token).
 	tokens := map[string]string{
 		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
-		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 	asItself := func(t *testing.T, code int, body string, seen []authctx.Claims) {
 		t.Helper()
@@ -187,6 +188,43 @@ func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
 					return
 				}
 				asItself(t, got.Code, got.Body.String(), *seen)
+			})
+		}
+	}
+}
+
+// TestQueryAppliesASessionAsGoAPIsScopeDoes: /query applies a holder's session only when go-api's scope lets the
+// caller impersonate (policy.User.MayImpersonate): a non-superuser holder with its user access token is served as the
+// target; the same caller with a legacy HS256 token is served as itself; a live superuser whose legacy token carries
+// no superuser claim, while the platform roles switch is not owned, is served as itself (switch off).
+func TestQueryAppliesASessionAsGoAPIsScopeDoes(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	staleClaim := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	cases := map[string]struct {
+		store  func() *accessStore
+		token  string
+		target bool
+	}{
+		"non-superuser holder, user access token":                                   {nonSuperuserHolderStore, minter.mint(ecUser, nil, nil), true},
+		"non-superuser holder, legacy HS256 token":                                  {nonSuperuserHolderStore, staleClaim, false},
+		"live superuser, legacy token without the superuser claim, roles not owned": {func() *accessStore { return legacyStore(legacySession(), nil) }, staleClaim, false},
+	}
+	for name, tc := range cases {
+		for _, route := range legacyQueryRoutes {
+			t.Run(name+" "+route.listener+" "+route.path, func(t *testing.T) {
+				s := legacyStack(t, minter, tc.store(), false)
+				got, _ := legacyQuery(s, route.listener, route.path, tc.token)
+				if got.Status != http.StatusOK || len(*s.seen) != 1 {
+					t.Fatalf("got %d %s, ran %d; want 200 and one run", got.Status, got.Body, len(*s.seen))
+				}
+				claims := (*s.seen)[0]
+				if tc.target && (!claims.ImpersonationActive || claims.OrgID != irTargetOrg.String()) {
+					t.Fatalf("claims %+v, want the target served", claims)
+				}
+				if !tc.target && (claims.ImpersonationActive || claims.OrgID != ecOrg.String()) {
+					t.Fatalf("claims %+v, want the caller itself", claims)
+				}
 			})
 		}
 	}

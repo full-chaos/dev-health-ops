@@ -414,7 +414,7 @@ func OwnerMove(ctx context.Context, pool *pgxpool.Pool, options OwnerMoveOptions
 	}
 
 	if options.Apply && !options.GrantsOnly {
-		rows, err := tx.Query(ctx, schemaObjectsOwnedSQL, options.Schema, options.From, "", PushLifecycleFunction)
+		rows, err := tx.Query(ctx, schemaObjectsOwnedSQL, options.Schema, options.From, "", PushLifecycleFunction, "", RepoIdentityFunction)
 		if err != nil {
 			return report, fmt.Errorf("%w: counting what is left", ErrOwnerMove)
 		}

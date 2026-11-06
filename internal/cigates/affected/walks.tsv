@@ -181,6 +181,7 @@ internal/cigates/docstools	refusals_test.go	unexpressed	-	-
 internal/cigates/docstools	validate_inventory_review.go	unexpressed	-	-
 internal/cigates/docstools	validate_inventory_review_refusals_test.go	unexpressed	-	-
 internal/cigates/emitscan	scan.go	unexpressed	-	-
+internal/cigates/exceptionledger	ledger.go	unexpressed	-	-
 internal/cigates/frozengoldens	frozengoldens_test.go	unexpressed	-	-
 internal/cigates/frozengoldens	reads.go	unexpressed	-	-
 internal/cigates/frozengoldens	reads_guard_test.go	internal/cigates/frozengoldens	dir	*

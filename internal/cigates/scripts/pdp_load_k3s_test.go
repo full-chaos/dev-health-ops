@@ -62,6 +62,8 @@ func TestPDPLoadK3sPrintPlanStatesTheTicketNumbersAndRendersTheChart(t *testing.
 		"plan: the namespace is deleted on exit",
 		"PASS: plan: the knee form renders the caller subject and the eddsa class with the default route limiter",
 		"PASS: plan: the gated form renders the lifted route limiter (per second and burst)",
+		"PASS: plan: the knee form renders the default PDP caller and route limiters",
+		"PASS: plan: the gated form renders the lifted PDP caller and route limiters (per second and burst)",
 		"PASS: plan: the migrate hook Secret carries CLICKHOUSE_URI (the ClickHouse step of dho migrate upgrade)",
 	} {
 		if !strings.Contains(res.stdout, want) {

@@ -2,10 +2,12 @@ package authruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
@@ -42,11 +44,18 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 	if err != nil {
 		return nil, err
 	}
+	sink, err := authorizeAuditSink(func(ctx context.Context) (pgx.Tx, error) {
+		if pool == nil {
+			return nil, errors.New("authruntime: no connection pool")
+		}
+		return pool.Begin(ctx)
+	}, schema)
+	if err != nil {
+		return nil, err
+	}
 	deps := authapi.AuthorizeDeps{State: state, Evaluator: authorization.NewEvaluator(), ProfileRows: authorizeProfileRows, Logger: logger,
 		CallerLimit: authapi.PDPCallerLimit{PerSecond: cfg.PDPCaller.PerSecond, Burst: cfg.PDPCaller.Burst},
-		Audit: func(ctx context.Context, events []audit.AuditEvent) error {
-			return audit.AppendAll(ctx, pool, schema, events...)
-		}}
+		Audit:       sink}
 	if decisions != nil {
 		deps.Cache, deps.Ready = decisions.cache, decisions.ready
 	}
@@ -68,4 +77,16 @@ func authorizeRoutes(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.P
 		}
 	}
 	return authapi.AuthorizeRoutes(deps)
+}
+
+// authorizeAuditSink writes the high-risk decision rows of concurrent calls in
+// shared transactions (audit.GroupWriter): per call all rows or none, answered
+// after the commit.
+func authorizeAuditSink(begin func(context.Context) (pgx.Tx, error), schema authschema.ValidatedIdentifier) (
+	func(context.Context, []audit.AuditEvent) error, error) {
+	writer, err := audit.NewGroupWriter(audit.GroupWriterConfig{Begin: begin, Schema: schema})
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, events []audit.AuditEvent) error { return writer.Append(ctx, events...) }, nil
 }

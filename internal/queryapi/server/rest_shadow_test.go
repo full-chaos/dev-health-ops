@@ -562,7 +562,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 // 5.12 counters.
 func TestRESTEnforceUnchangedByTheShadowSwitch(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	before := shadowCounters(t)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: %+v", got)

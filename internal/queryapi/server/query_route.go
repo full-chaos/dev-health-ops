@@ -6858,6 +6858,9 @@ func withMutationLocation(ctx context.Context, presented *gqlerror.Error) *gqler
 // fall-through, because a write door is the one place "the check could not
 // run" must never read as "the check passed."
 func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, operationByDigest map[string]string, verifier *principal.Verifier, edgeAuth *policy.Authenticator, edgeStore policy.Store, requireKind string, orgAllowed func(context.Context, string) bool, gates ...documentGate) http.HandlerFunc {
+	// A bad AUTH_PROXY_IMPERSONATION refuses startup (newGraphQLEdgeDeps); read here, it fails closed.
+	refuseLegacy, refuseErr := refusesLegacyImpersonation(getenv)
+	refuseLegacy = refuseLegacy || refuseErr != nil
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !isGraphQLEdge(r.Context()) {
 			r = bindRequestID(w, r)
@@ -6891,6 +6894,9 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			// before the unregistered-document 404 can answer (CHAOS-6757 r1).
 			// Python parity: the edge's GraphQLRouter resolves get_context (401
 			// "Authentication required") before it picks an operation.
+			if refuseLegacy {
+				r = r.WithContext(withLegacyImpersonationRefused(r.Context()))
+			}
 			authenticated, ok := authenticateInternalRequest(w, r, verifier, edgeAuth, edgeStore)
 			if !ok {
 				return

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -43,4 +45,21 @@ func newGraphQLEdgeDeps(getenv getenvFunc, lookup func(string) (string, bool), a
 		logger:                    logger,
 		refuseLegacyImpersonation: refuse,
 	}, nil
+}
+
+// errLegacyImpersonationRefused is liveScope's answer for the legacy caller
+// while the request refuses it (withLegacyImpersonationRefused).
+var errLegacyImpersonationRefused = errors.New("legacy impersonation caller refused")
+
+type legacyImpersonationRefusedKey struct{}
+
+// withLegacyImpersonationRefused marks the request so liveScope refuses the
+// admin's own bearer beside a live go-api row instead of serving it as the target.
+func withLegacyImpersonationRefused(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, true)
+}
+
+func legacyImpersonationRefused(ctx context.Context) bool {
+	refused, _ := ctx.Value(legacyImpersonationRefusedKey{}).(bool)
+	return refused
 }

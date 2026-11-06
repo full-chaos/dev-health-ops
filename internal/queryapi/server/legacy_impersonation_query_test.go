@@ -148,11 +148,12 @@ func TestQueryLegacyRefusalLeavesEveryOtherAnswer(t *testing.T) {
 
 // TestProofWriteDoorRefusesTheLegacyImpersonationCaller: the write door
 // (digest.KindMutation, the org allowlist) refuses the legacy caller with the
-// switch on; unset, it is served in the target org (the repro).
+// switch on, or set to a value that is not a bool; unset, it is served in the
+// target org (the repro).
 func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
-	door := func(t *testing.T, refuse bool) (http.HandlerFunc, *[]authctx.Claims) {
+	door := func(t *testing.T, value string) (http.HandlerFunc, *[]authctx.Claims) {
 		t.Helper()
 		store := newQueryAPIUserStoreFrom(legacyStore(legacySession(), nil))
 		auth := ecEdgeAuth(t, store)
@@ -167,8 +168,8 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		getenv := getenvFunc(func(name string) string {
-			if name == impersonationProxyEnv && refuse {
-				return "true"
+			if name == impersonationProxyEnv {
+				return value
 			}
 			return ""
 		})
@@ -188,13 +189,16 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 	}
 	for signing, token := range legacyTokens(t, minter) {
 		t.Run(signing, func(t *testing.T) {
-			unset, seenUnset := door(t, false)
+			unset, seenUnset := door(t, "")
 			if got := post(unset, token); got.Code != http.StatusOK || len(*seenUnset) != 1 || (*seenUnset)[0].OrgID != irTargetOrg.String() {
 				t.Fatalf("switch unset: %d %s claims=%+v, want the mutation served in the target org (main's behavior)", got.Code, got.Body.String(), *seenUnset)
 			}
-			on, seenOn := door(t, true)
-			if got := post(on, token); got.Code != http.StatusForbidden || strings.TrimSpace(got.Body.String()) != legacyRefusalBody || len(*seenOn) != 0 {
-				t.Fatalf("switch on: %d %s, ran %d; want 403 %s and no resolver", got.Code, got.Body.String(), len(*seenOn), legacyRefusalBody)
+			// "yes" refuses startup; a handler built with it anyway fails closed.
+			for _, value := range []string{"true", "yes"} {
+				on, seenOn := door(t, value)
+				if got := post(on, token); got.Code != http.StatusForbidden || strings.TrimSpace(got.Body.String()) != legacyRefusalBody || len(*seenOn) != 0 {
+					t.Fatalf("switch %q: %d %s, ran %d; want 403 %s and no resolver", value, got.Code, got.Body.String(), len(*seenOn), legacyRefusalBody)
+				}
 			}
 		})
 	}

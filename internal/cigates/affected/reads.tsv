@@ -14,6 +14,7 @@ deploy/helm/dev-health	test	contracts
 deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
 internal/api/githubapp	test	ci
+internal/api/policy	test	ci
 internal/api/session	test	ci
 internal/api/sso	test	ci
 internal/api/webhookintake	test	contracts

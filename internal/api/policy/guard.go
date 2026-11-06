@@ -152,8 +152,8 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
 		}
 		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
-		switch verdict := g.enforceVerdict(r, user, bearer); verdict {
-		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused:
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
 			writeEnforceRefusal(w, level, verdict)
 			return
 		case enforceAllow:
@@ -194,14 +194,14 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			if r.Pattern != stopImpersonationPattern {
 				session, err := g.sessionRow(r, user.ID)
 				if err != nil {
-					g.observeShadow(r, caller, bearer, false)
+					// The session state is unknown: the shadow is not asked.
 					g.writeSessionRowFailure(w, r, err)
 					return
 				}
 				if session != nil {
 					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 						slog.String("path", r.Pattern), slog.String("action", gt.action))
-					g.observeShadow(r, caller, bearer, false)
+					g.observeShadowAs(r, caller, bearer, false, true)
 					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 					return
 				}

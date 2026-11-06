@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
+	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
@@ -215,7 +216,8 @@ func TestAdminOrRowsAskOneBatchAndKeepThePlatformAnswer(t *testing.T) {
 }
 
 // An admin-or row with no verdict is refused with a 503: a panicking decision point, a local decision, and an allow
-// whose obligation go-api does not carry out (a repository scope on a row with a repository dimension).
+// whose obligation go-api does not carry out (a repository scope on a row with a repository dimension), even when the
+// other question of the batch is a plain deny.
 func TestAdminOrRowsFailClosedWithoutAVerdict(t *testing.T) {
 	scoped := orgAdminRule()
 	scoped.RepositoryScope = "organization"
@@ -224,7 +226,7 @@ func TestAdminOrRowsFailClosedWithoutAVerdict(t *testing.T) {
 	for name, decider := range map[string]pep.Decider{
 		"panic":           panicDecider{},
 		"local decision":  pepfake.New(bad, orgAdminRule()),
-		"uncarried scope": pepfake.New(scoped),
+		"uncarried scope": newDenyingFake(t, scoped),
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := seamServe(seamHandler(t, legacyStore(true, "admin"), userClaims(nil), seamEnforcer(t, decider, adminUsersRows(t), "admin")), http.MethodGet, "/api/v1/admin/users")
@@ -459,6 +461,39 @@ func TestAnOrglessCallerReachesOnlyByThePDPAnswerWithTheAdminCellOn(t *testing.T
 			}
 			if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
 				t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
+			}
+		})
+	}
+}
+
+// With the admin cell on, the guard admits an HS256 superuser at an admin-or row by its membership row in the token's
+// organization, never by its role claim: platform actions skip no membership read. A member who claims admin is not
+// an admin, and its platform question is refused as a legacy credential. With the cell off the flag skips the read.
+func TestAnHS256SuperuserIsAdmittedByTheMembershipRoleWithTheAdminCellOn(t *testing.T) {
+	legacyBody := `{"detail":{"message":"` + legacyCredentialDetail + `","reason_code":"legacy_credential"}}`
+	for _, c := range []struct {
+		cell   string
+		status int
+		body   string
+	}{
+		{"admin", http.StatusForbidden, legacyBody},
+		{"teams", http.StatusOK, "served"},
+	} {
+		t.Run(c.cell, func(t *testing.T) {
+			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminUsers))}
+			store := newStore()
+			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
+			guard := NewGuard(authenticator(t, store), quiet())
+			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
+			got := serve(seamMux(guard), http.MethodGet, "/api/v1/admin/users/"+targetUserID.String(), bearer(t, func(m jwt.MapClaims) {
+				superClaims(m)
+				m["role"] = "admin"
+			}))
+			if got.status != c.status || got.body != c.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			}
+			if singles, batches := decider.counts(); singles+batches != 0 {
+				t.Fatalf("%d questions, want none", singles+batches)
 			}
 		})
 	}

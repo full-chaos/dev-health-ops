@@ -445,8 +445,9 @@ func cellNamingOrg(key string, org uuid.UUID, headers map[string]string) *http.R
 }
 
 // Class A organization rows with their namespace on: a request that names another organization than the token's
-// (probeUser is a member of probeOtherOrg) is refused with a 403 and the level's body before any PDP call; naming
-// the token's own organization is decided by the PDP once, on that organization.
+// (probeUser is a member of probeOtherOrg) keeps the answer of the same rig with every namespace off, with no PDP call
+// (product rule 1, D6773: the legacy guard and the handler decide it); naming the token's own organization is decided
+// by the PDP once, on that organization.
 func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 	var orgRows []string
 	for _, key := range classAKeys() {
@@ -462,15 +463,15 @@ func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
 			t.Fatalf("%s names its organization neither in org_id nor in {org_id}", key)
 		}
 		pdp := newBillingCellPDP(t, "allow")
+		legacyRig := newCellRig(t, "", pdp.client(t), false)
+		legacy := httptest.NewRecorder()
+		legacyRig.handler.ServeHTTP(legacy, cellNamingOrg(key, probeOtherOrg, legacyRig.userBearer()))
 		rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
 		recorder := httptest.NewRecorder()
 		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOtherOrg, rig.userBearer()))
-		wantBody := `{"detail":"Access denied"}`
-		if b, ok := cellDenyBody[key]; ok {
-			wantBody = b
-		}
-		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != http.StatusForbidden || body != wantBody {
-			t.Errorf("%s naming another org: %d %s, want 403 %s", key, status, body, wantBody)
+		wantStatus, wantBody := legacy.Code, strings.TrimSpace(legacy.Body.String())
+		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != wantStatus || body != wantBody {
+			t.Errorf("%s naming another org: %d %s, want the legacy %d %s", key, status, body, wantStatus, wantBody)
 		}
 		if n := len(pdp.calls()); n != 0 {
 			t.Errorf("%s naming another org: %d PDP calls, want 0", key, n)

@@ -280,7 +280,7 @@ func TestARelationReadTwiceKeepsTheRowSyncedLast(t *testing.T) {
 		return &memoryRows{rows: [][]any{{"gh:a#1", "gh:a#2", "blocks", raw, workitemmetrics.CanonicalBlocksSemantics, lastSynced, nil, nil}}}
 	}
 	for _, read := range []*memoryRows{rows(late, "late"), rows(early, "early"), rows(late, "late again")} {
-		if err := readRelations(context.Background(), queryFunc(func(string, []any) driver.Rows { return read }), "org", nil, 0, relations); err != nil {
+		if err := readRelations(context.Background(), positional{queryFunc(func(string, []any) driver.Rows { return read })}, "org", nil, 0, relations); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -293,7 +293,7 @@ func TestARelationReadTwiceKeepsTheRowSyncedLast(t *testing.T) {
 	for _, seen := range []time.Time{late, early, late} {
 		seen := seen
 		read := &memoryRows{rows: [][]any{{"gh:a#1", "gh:a#2", "blocks", seen}}}
-		if err := readFirstSeen(context.Background(), queryFunc(func(string, []any) driver.Rows { return read }), "org", nil, firstSeen); err != nil {
+		if err := readFirstSeen(context.Background(), positional{queryFunc(func(string, []any) driver.Rows { return read })}, "org", nil, firstSeen); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -305,7 +305,7 @@ func TestARelationReadTwiceKeepsTheRowSyncedLast(t *testing.T) {
 	readTimes := map[string]time.Time{}
 	for _, at := range []time.Time{early, late, early} {
 		read := &memoryRows{rows: [][]any{{"gh:a#1", at}}}
-		if err := readRelationsRead(context.Background(), queryFunc(func(string, []any) driver.Rows { return read }), "q", nil, readTimes); err != nil {
+		if err := readRelationsRead(context.Background(), positional{queryFunc(func(string, []any) driver.Rows { return read })}, "q", nil, readTimes); err != nil {
 			t.Fatal(err)
 		}
 	}

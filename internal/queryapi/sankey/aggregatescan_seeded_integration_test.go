@@ -51,6 +51,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -270,7 +271,7 @@ func TestSankeyAggregateReads_SeededRealClickHouse_ScanFloat64(t *testing.T) {
 	endDay := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
 
 	t.Run("buildExpenseFlow", func(t *testing.T) {
-		_, links, err := buildExpenseFlow(ctx, client, startDay, endDay, "", nil, nil, orgID)
+		_, links, err := buildExpenseFlow(ctx, client, startDay, endDay, "", nil, nil, orgID, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("buildExpenseFlow: %v (this is the UInt64-scan defect if the message contains "+
 				"\"converting UInt64\" / \"unsupported\")", err)
@@ -284,7 +285,7 @@ func TestSankeyAggregateReads_SeededRealClickHouse_ScanFloat64(t *testing.T) {
 	})
 
 	t.Run("buildStateFlow", func(t *testing.T) {
-		_, links, err := buildStateFlow(ctx, client, startDay, endDay, "", nil, nil, orgID)
+		_, links, err := buildStateFlow(ctx, client, startDay, endDay, "", nil, nil, orgID, teamScopeAsOf, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("buildStateFlow: %v (this is the UInt64-scan defect if the message contains "+
 				"\"converting UInt64\" / \"unsupported\")", err)
@@ -298,7 +299,7 @@ func TestSankeyAggregateReads_SeededRealClickHouse_ScanFloat64(t *testing.T) {
 	})
 
 	t.Run("buildHotspotFlow", func(t *testing.T) {
-		_, links, err := buildHotspotFlow(ctx, client, startDay, endDay, "", nil, nil, orgID, teamScopeAsOf)
+		_, links, err := buildHotspotFlow(ctx, client, startDay, endDay, "", nil, nil, orgID, teamScopeAsOf, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("buildHotspotFlow: %v (this is the UInt64-scan defect if the message contains "+
 				"\"converting UInt64\" / \"unsupported\")", err)

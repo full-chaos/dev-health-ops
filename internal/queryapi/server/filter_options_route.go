@@ -29,6 +29,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/filteroptions"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // filterOptionsOperation is this route's routeswitch operation name --
@@ -146,7 +148,13 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			return
 		}
 
-		resp, err := filteroptions.BuildResponse(r.Context(), client, org)
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "filteroptions", org, err)
+			return
+		}
+
+		resp, err := filteroptions.BuildCeilingResponse(r.Context(), client, org, ceiling, time.Now().UTC())
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1466-1467) -- any ClickHouse

@@ -87,8 +87,6 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 	}{
 		"P1 tenant_scope absent":             {func(r *pepfake.Rule) { r.TenantScope = "" }, ReasonTenantMismatch},
 		"P2 tenant_scope other org":          {func(r *pepfake.Rule) { r.TenantScope = "66666666-6666-6666-6666-666666666666" }, ReasonTenantMismatch},
-		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonAllowlistRouteUnsupported},
-		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonAllowlistRouteUnsupported},
 		"P6 scope and allowlist (malformed)": {func(r *pepfake.Rule) { r.RepositoryAllowlist = []string{"acme/a"} }, pep.ReasonMalformed},
 		"P7 neither repository member":       {func(r *pepfake.Rule) { r.RepositoryScope = "" }, ReasonNoRepositoryRule},
 		"P8 redaction":                       {func(r *pepfake.Rule) { r.Redaction = []pep.RedactionClass{pep.RedactFreeText} }, ReasonNotCarriedOut},
@@ -99,6 +97,24 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 			g, decider, _ := seamGate(t, allowRule(tc.edit))
 			scope, err := g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
 			wantLocal(t, err, tc.reason)
+			wantNoScope(t, scope)
+			if decider.calls.Load() != 1 {
+				t.Fatalf("asked %d times, want 1", decider.calls.Load())
+			}
+		})
+	}
+}
+
+// P4, P5: an allowlist on a route not cut over (an M route) is the gate's own refusal: 503, no scope.
+func TestSeamAllowlistOnAMixedRouteIs503(t *testing.T) {
+	for name, allowlist := range map[string][]string{"P4 allowlist [] not cut over": {}, "P5 allowlist [acme/a] not cut over": {"acme/a"}} {
+		t.Run(name, func(t *testing.T) {
+			rule := allowRule(func(r *pepfake.Rule) { r.Action, r.RepositoryScope, r.RepositoryAllowlist = mixedAction, "", allowlist })
+			_, cfg := newMeter(t)
+			decider := &countingDecider{Decider: pepfake.New(rule)}
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, decider, cells("metrics")
+			scope, err := New(cfg).Authorize(context.Background(), mixedProfile, testBearer, seamOrg)
+			wantLocal(t, err, ReasonAllowlistRouteUnsupported)
 			wantNoScope(t, scope)
 			if decider.calls.Load() != 1 {
 				t.Fatalf("asked %d times, want 1", decider.calls.Load())
@@ -193,8 +209,8 @@ func TestSeamAllowlistOnACutOverRoute(t *testing.T) {
 // of its profiles is a row.
 func TestSeamOnlyTheNarrowedRowsCarryAnAllowlist(t *testing.T) {
 	g := New(Config{Mode: ModeOff})
-	if len(g.carriesAllowlist) != 23 {
-		t.Fatalf("cut-over registry holds %d profiles, want the 23 rows of the 17 narrowed classes", len(g.carriesAllowlist))
+	if len(g.carriesAllowlist) != 26 {
+		t.Fatalf("cut-over registry holds %d profiles, want the 26 rows of the 19 narrowed classes", len(g.carriesAllowlist))
 	}
 	for profile := range g.carriesAllowlist {
 		if _, known := g.actions[profile]; !known {

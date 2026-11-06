@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -211,66 +210,22 @@ type workItemStateSegment struct {
 	end    time.Time
 }
 
-// segmentWorkItemStatuses ports _segment_statuses byte-for-byte.
-//
-// End of the final segment is completed_at if present, else computedAt (the
-// Go port has no updated_at fallback tier because
-// compute_work_item_state_durations_daily's caller never passes one either
-// -- job_daily.py:1582 does not read updated_at for this family; the
-// docstring's three-tier fallback describes the function signature's
-// generality, not this call site's actual behavior).
-//
-// created_at/completedAt/computedAt must already be UTC (both loaders and
-// ComputeFamily guarantee this); transitions are sorted here by occurred_at,
-// matching Python's `sorted(transitions, key=...)`.
+// segmentWorkItemStatuses is workitemmetrics.SegmentStatuses in this
+// family's own segment type: the one port of _segment_statuses, shared with
+// the request-time recompute of a repository's linked items (CHAOS-13088).
 func segmentWorkItemStatuses(
 	createdAt time.Time, completedAt *time.Time, itemStatus string,
 	transitions []workItemStateTransition, computedAt time.Time,
 ) []workItemStateSegment {
-	endOfItem := computedAt
-	if completedAt != nil {
-		endOfItem = *completedAt
-	}
-
-	if len(transitions) == 0 {
+	shared := workitemmetrics.SegmentStatuses(createdAt, completedAt, itemStatus, transitions, computedAt)
+	if shared == nil {
 		return nil
 	}
-	ordered := make([]workItemStateTransition, len(transitions))
-	copy(ordered, transitions)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].OccurredAt.Before(ordered[j].OccurredAt) })
-
-	var segments []workItemStateSegment
-
-	first := ordered[0]
-	currentStatus := first.FromStatus
-	if currentStatus == "" {
-		currentStatus = itemStatus
+	segments := make([]workItemStateSegment, 0, len(shared))
+	for _, segment := range shared {
+		segments = append(segments, workItemStateSegment{status: segment.Status, start: segment.Start, end: segment.End})
 	}
-	currentStart := createdAt
-
-	for _, transition := range ordered {
-		transitionAt := transition.OccurredAt
-		if !transitionAt.After(currentStart) {
-			currentStatus = transition.ToStatus
-			currentStart = transitionAt
-			continue
-		}
-		segments = append(segments, workItemStateSegment{status: currentStatus, start: currentStart, end: transitionAt})
-		currentStatus = transition.ToStatus
-		currentStart = transitionAt
-	}
-
-	if endOfItem.After(currentStart) {
-		segments = append(segments, workItemStateSegment{status: currentStatus, start: currentStart, end: endOfItem})
-	}
-
-	filtered := segments[:0]
-	for _, segment := range segments {
-		if segment.end.After(segment.start) {
-			filtered = append(filtered, segment)
-		}
-	}
-	return filtered
+	return segments
 }
 
 // overlayWorkItemStateBlocked applies workitemmetrics.OverlayBlocked to this
@@ -294,24 +249,10 @@ func overlayWorkItemStateBlocked(
 	return result
 }
 
-// workItemStateTotalKey mirrors the Python (provider, work_scope_id,
-// team_id, status) aggregation key.
-type workItemStateTotalKey struct {
-	provider    string
-	workScopeID string
-	teamID      string
-	status      string
-}
-
 // computeWorkItemStateDurationsForRepo ports
 // compute_work_item_state_durations_daily's main body for one repo's
-// already-loaded items/transitions/attributions. Deterministic: items are
-// processed in work_item_id order (Python iterates whatever order its
-// loader returned rows in, which is not itself guaranteed -- team_name is a
-// property of team_id, not of iteration order, in every real case, so this
-// ordering choice cannot change the OUTPUT, only makes it reproducible run
-// to run regardless of ClickHouse row-return order, matching this package's
-// established convention (see computeWellbeingPerRepo's doc comment)).
+// already-loaded items/transitions/attributions (see
+// computeWorkItemStateDurationRowsForRepo).
 func computeWorkItemStateDurationsForRepo(
 	day, start, end time.Time,
 	items []workItemStateWorkItem,
@@ -330,144 +271,23 @@ func computeWorkItemStateDurationsForRepo(
 // rows plus one blocked-duration snapshot for each item that contributed to the
 // target day. A zero is deliberate: it supersedes an earlier positive snapshot
 // when a recompute finds that the item no longer has blocked time.
+//
+// The compute is workitemmetrics.ComputeStateDurationsDay: one definition of
+// the day's state durations for the daily job and for the request-time
+// recompute of a repository's linked items (CHAOS-13088).
 func computeWorkItemStateDurationRowsForRepo(
-	day, start, end time.Time,
+	_, start, end time.Time,
 	items []workItemStateWorkItem,
 	transitions []workItemStateTransition,
 	attributions map[string]workItemPrimaryAttribution,
 	computedAt time.Time,
 	blocked map[string][]workitemmetrics.BlockedInterval,
 ) ([]workItemStateDailyRow, []workItemBlockedDurationDailyRow, int) {
-	transitionsByItem := make(map[string][]workItemStateTransition, len(transitions))
-	for _, transition := range transitions {
-		transitionsByItem[transition.WorkItemID] = append(transitionsByItem[transition.WorkItemID], transition)
+	stateItems := make([]workitemmetrics.StateItem, 0, len(items))
+	for _, item := range items {
+		stateItems = append(stateItems, workitemmetrics.StateItem(item))
 	}
-
-	sortedItems := make([]workItemStateWorkItem, len(items))
-	copy(sortedItems, items)
-	sort.SliceStable(sortedItems, func(i, j int) bool { return sortedItems[i].WorkItemID < sortedItems[j].WorkItemID })
-
-	totals := make(map[workItemStateTotalKey]float64)
-	// keys is built alongside totals, from the same key values, so the key
-	// set is available without a later range over totals -- a map that a
-	// zero-transition input leaves empty is never ranged over.
-	keys := make([]workItemStateTotalKey, 0)
-	keysSeen := make(map[workItemStateTotalKey]struct{})
-	itemsSeen := make(map[workItemStateTotalKey]map[string]struct{})
-	teamNameByKey := make(map[[3]string]string) // (provider, workScopeID, teamID) -> teamName
-	itemRows := make([]workItemBlockedDurationDailyRow, 0, len(sortedItems))
-	missingAttribution := 0
-
-	for _, item := range sortedItems {
-		itemTransitions := transitionsByItem[item.WorkItemID]
-		if len(itemTransitions) == 0 {
-			continue
-		}
-
-		attribution, hasAttribution := attributions[item.WorkItemID]
-		if !hasAttribution {
-			missingAttribution++
-		}
-		teamID, teamName := resolveWorkItemPrimaryTeam(attribution)
-		workScopeID := item.workScopeID()
-		teamNameByKey[[3]string{item.Provider, workScopeID, teamID}] = teamName
-
-		segments := segmentWorkItemStatuses(item.CreatedAt, item.CompletedAt, item.Status, itemTransitions, computedAt)
-		// CHAOS-8493: the parts of a non-terminal segment in which the item
-		// has an open blocker are "blocked". The hours of the item do not
-		// change; see workitemmetrics.OverlayBlocked.
-		segments = overlayWorkItemStateBlocked(segments, blocked[item.WorkItemID])
-		blockedHours := 0.0
-		contributed := false
-		for _, segment := range segments {
-			overlapStart := segment.start
-			if start.After(overlapStart) {
-				overlapStart = start
-			}
-			overlapEnd := segment.end
-			if end.Before(overlapEnd) {
-				overlapEnd = end
-			}
-			if !overlapEnd.After(overlapStart) {
-				continue
-			}
-			contributed = true
-			hours := overlapEnd.Sub(overlapStart).Hours()
-			if segment.status == workitemmetrics.StatusBlocked {
-				blockedHours += hours
-			}
-			key := workItemStateTotalKey{provider: item.Provider, workScopeID: workScopeID, teamID: teamID, status: segment.status}
-			if _, ok := keysSeen[key]; !ok {
-				keysSeen[key] = struct{}{}
-				keys = append(keys, key)
-			}
-			totals[key] += hours
-			seen := itemsSeen[key]
-			if seen == nil {
-				seen = make(map[string]struct{})
-				itemsSeen[key] = seen
-			}
-			seen[item.WorkItemID] = struct{}{}
-		}
-		if contributed {
-			itemRows = append(itemRows, workItemBlockedDurationDailyRow{
-				Provider:      item.Provider,
-				WorkScopeID:   workScopeID,
-				TeamID:        teamID,
-				TeamName:      teamName,
-				WorkItemID:    item.WorkItemID,
-				DurationHours: blockedHours,
-			})
-		}
-	}
-
-	sort.Slice(keys, func(i, j int) bool {
-		a, b := keys[i], keys[j]
-		if a.provider != b.provider {
-			return a.provider < b.provider
-		}
-		if a.workScopeID != b.workScopeID {
-			return a.workScopeID < b.workScopeID
-		}
-		if a.teamID != b.teamID {
-			return a.teamID < b.teamID
-		}
-		return a.status < b.status
-	})
-
-	rows := make([]workItemStateDailyRow, 0, len(keys))
-	for _, key := range keys {
-		totalHours := totals[key]
-		rows = append(rows, workItemStateDailyRow{
-			Provider:      key.provider,
-			WorkScopeID:   key.workScopeID,
-			TeamID:        key.teamID,
-			TeamName:      teamNameByKey[[3]string{key.provider, key.workScopeID, key.teamID}],
-			Status:        key.status,
-			DurationHours: totalHours,
-			// items_touched is the size of an in-memory set of distinct
-			// work-item IDs touched by this (provider, work scope, team,
-			// status) key on one day -- bounded by a day's work-item
-			// volume, never negative -- so it keeps a direct conversion.
-			ItemsTouched: uint32(len(itemsSeen[key])),
-			AvgWIP:       totalHours / 24.0,
-		})
-	}
-	sort.Slice(itemRows, func(i, j int) bool {
-		a, b := itemRows[i], itemRows[j]
-		if a.Provider != b.Provider {
-			return a.Provider < b.Provider
-		}
-		if a.WorkScopeID != b.WorkScopeID {
-			return a.WorkScopeID < b.WorkScopeID
-		}
-		if a.TeamID != b.TeamID {
-			return a.TeamID < b.TeamID
-		}
-		return a.WorkItemID < b.WorkItemID
-	})
-
-	return rows, itemRows, missingAttribution
+	return workitemmetrics.ComputeStateDurationsDay(start, end, stateItems, transitions, attributions, computedAt, blocked)
 }
 
 // resolveWorkItemPrimaryTeam applies normalize_team_id/normalize_team_name

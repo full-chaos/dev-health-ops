@@ -38,6 +38,99 @@ type Querier interface {
 	Query(context.Context, string, ...any) (driver.Rows, error)
 }
 
+// Rows is the result of one read, as both callers' clients return it.
+type Rows interface {
+	Next() bool
+	Scan(...any) error
+	Err() error
+	Close() error
+}
+
+// Param is one parameter of a statement bound by name: the {Name:Type}
+// placeholder of the statement text carries its ClickHouse type.
+type Param struct {
+	Name  string
+	Value any
+}
+
+// NamedQuerier is a ClickHouse read that binds its parameters by name, the
+// form of the query API's client (CHAOS-13088). It runs the same statement
+// text as a Querier, each ? turned into a typed named placeholder
+// (nameParameters).
+type NamedQuerier interface {
+	QueryNamed(ctx context.Context, statement string, params []Param) (Rows, error)
+}
+
+// querier runs one statement of this package with its arguments in order.
+// Every read here goes through it, so the positional and the named caller run
+// the same statement text.
+type querier interface {
+	query(ctx context.Context, statement string, args []any) (Rows, error)
+}
+
+type positional struct{ conn Querier }
+
+func (p positional) query(ctx context.Context, statement string, args []any) (Rows, error) {
+	return p.conn.Query(ctx, statement, args...)
+}
+
+// positionalOf is nil for a nil connection, so the reads below refuse it.
+func positionalOf(conn Querier) querier {
+	if conn == nil {
+		return nil
+	}
+	return positional{conn}
+}
+
+type byName struct{ conn NamedQuerier }
+
+func (n byName) query(ctx context.Context, statement string, args []any) (Rows, error) {
+	text, params, err := nameParameters(statement, args)
+	if err != nil {
+		return nil, err
+	}
+	return n.conn.QueryNamed(ctx, text, params)
+}
+
+// ErrUnnamedArgument reports an argument nameParameters has no ClickHouse
+// type for, or a statement whose placeholders and arguments differ in number.
+var ErrUnnamedArgument = errors.New("workitemblockers: an argument cannot be bound by name")
+
+// nameParameters turns each ? of statement, in order, into the named
+// placeholder {pN:Type} of the N-th argument. No statement of this package
+// has a ? inside a string literal; a count that differs from the arguments
+// is refused, never bound in part.
+func nameParameters(statement string, args []any) (string, []Param, error) {
+	parts := strings.Split(statement, "?")
+	if len(parts)-1 != len(args) {
+		return "", nil, fmt.Errorf("%w: %d placeholders, %d arguments", ErrUnnamedArgument, len(parts)-1, len(args))
+	}
+	var text strings.Builder
+	params := make([]Param, 0, len(args))
+	for index, arg := range args {
+		var chType string
+		switch value := arg.(type) {
+		case string:
+			chType = "String"
+		case []string:
+			chType = "Array(String)"
+		case int:
+			if value < 0 {
+				return "", nil, fmt.Errorf("%w: negative integer", ErrUnnamedArgument)
+			}
+			chType = "UInt64"
+		default:
+			return "", nil, fmt.Errorf("%w: %T", ErrUnnamedArgument, arg)
+		}
+		name := fmt.Sprintf("p%d", index)
+		text.WriteString(parts[index])
+		text.WriteString("{" + name + ":" + chType + "}")
+		params = append(params, Param{Name: name, Value: arg})
+	}
+	text.WriteString(parts[len(args)])
+	return text.String(), params, nil
+}
+
 // ErrInvalidRequest reports a read with no connection or no organization.
 // These reads are never run unscoped: an empty organization would read every
 // tenant's relations.
@@ -84,7 +177,7 @@ const namingFilter = `
 func LoadRelations(
 	ctx context.Context, conn Querier, organizationID string,
 ) ([]workitemmetrics.BlockingRelation, error) {
-	return loadRelations(ctx, conn, organizationID, nil, 0)
+	return loadRelations(ctx, positionalOf(conn), organizationID, nil, 0)
 }
 
 // LoadRelationsNaming reads the blocking relations that name one of naming
@@ -109,7 +202,7 @@ func LoadRelationsNaming(
 	if len(naming) == 0 {
 		return nil, nil
 	}
-	return loadRelations(ctx, conn, organizationID, naming, limit)
+	return loadRelations(ctx, positionalOf(conn), organizationID, naming, limit)
 }
 
 // relationKey is a relation's identity within one organization: the sorting
@@ -128,7 +221,7 @@ func (key relationKey) less(other relationKey) bool {
 }
 
 func loadRelations(
-	ctx context.Context, conn Querier, organizationID string, naming []string, limit int,
+	ctx context.Context, conn querier, organizationID string, naming []string, limit int,
 ) ([]workitemmetrics.BlockingRelation, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidRequest
@@ -182,7 +275,7 @@ func loadRelations(
 // whole organization when chunk is nil) into relations. Of two reads of one
 // relation, the row synced last is kept.
 func readRelations(
-	ctx context.Context, conn Querier, organizationID string, chunk []string, limit int,
+	ctx context.Context, conn querier, organizationID string, chunk []string, limit int,
 	relations map[relationKey]workitemmetrics.BlockingRelation,
 ) error {
 	query := `
@@ -202,7 +295,7 @@ ORDER BY source_work_item_id, target_work_item_id, relationship_type`
 LIMIT ?`
 		args = append(args, limit+1)
 	}
-	rows, err := conn.Query(ctx, query, args...)
+	rows, err := conn.query(ctx, query, args)
 	if err != nil {
 		return fmt.Errorf("load blocking relations: %w", err)
 	}
@@ -256,7 +349,7 @@ LIMIT ?`
 // subquery this read never returns more rows than the relation read, and
 // needs no limit of its own.
 func readFirstSeen(
-	ctx context.Context, conn Querier, organizationID string, chunk []string,
+	ctx context.Context, conn querier, organizationID string, chunk []string,
 	firstSeen map[relationKey]time.Time,
 ) error {
 	subquery := `
@@ -276,7 +369,7 @@ WHERE org_id = ?
   )
 GROUP BY source_work_item_id, target_work_item_id, relationship_type
 ORDER BY source_work_item_id, target_work_item_id, relationship_type`
-	rows, err := conn.Query(ctx, query, args...)
+	rows, err := conn.query(ctx, query, args)
 	if err != nil {
 		return fmt.Errorf("load relation first-seen times: %w", err)
 	}
@@ -372,15 +465,16 @@ WHERE org_id = ?
     ))
   )
 ORDER BY work_item_id, last_synced`
+	read := positional{conn}
 	ends := endSet{}
-	if err := readEnds(ctx, conn, query, []any{
+	if err := readEnds(ctx, read, query, []any{
 		organizationID, workitemmetrics.CanonicalBlocksSemantics, organizationID,
 		len(workitemmetrics.ExternalKeyPrefix) + 1, workitemmetrics.ExternalKeyPrefix,
 	}, ends); err != nil {
 		return nil, err
 	}
 	readTimes := map[string]time.Time{}
-	if err := readRelationsRead(ctx, conn, `
+	if err := readRelationsRead(ctx, read, `
 WITH relation_ends AS (
     SELECT arrayJoin([source_work_item_id, target_work_item_id]) AS end_id
     FROM work_item_dependencies FINAL
@@ -405,6 +499,12 @@ ORDER BY work_item_id`, []any{organizationID, workitemmetrics.CanonicalBlocksSem
 // More rows than limit is ErrLimitExceeded.
 func LoadEndsLimited(
 	ctx context.Context, conn Querier, organizationID string, relations []workitemmetrics.BlockingRelation, limit int,
+) ([]workitemmetrics.RelationEnd, error) {
+	return loadEndsLimited(ctx, positionalOf(conn), organizationID, relations, limit)
+}
+
+func loadEndsLimited(
+	ctx context.Context, conn querier, organizationID string, relations []workitemmetrics.BlockingRelation, limit int,
 ) ([]workitemmetrics.RelationEnd, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" || limit < 1 {
 		return nil, ErrInvalidRequest
@@ -460,8 +560,8 @@ ORDER BY work_item_id`, []any{organizationID, chunk}, readTimes); err != nil {
 // it the type's default time. Only items named by their id are read: an end
 // found by its issue key is a jira or linear item, which only passes that
 // read its relations write.
-func readRelationsRead(ctx context.Context, conn Querier, query string, args []any, readTimes map[string]time.Time) error {
-	rows, err := conn.Query(ctx, query, args...)
+func readRelationsRead(ctx context.Context, conn querier, query string, args []any, readTimes map[string]time.Time) error {
+	rows, err := conn.query(ctx, query, args)
 	if err != nil {
 		return fmt.Errorf("load relation read times: %w", err)
 	}
@@ -562,8 +662,8 @@ func (ends endSet) sorted() []workitemmetrics.RelationEnd {
 }
 
 // readEnds runs one read of relation ends into ends.
-func readEnds(ctx context.Context, conn Querier, query string, args []any, ends endSet) error {
-	rows, err := conn.Query(ctx, query, args...)
+func readEnds(ctx context.Context, conn querier, query string, args []any, ends endSet) error {
+	rows, err := conn.query(ctx, query, args)
 	if err != nil {
 		return fmt.Errorf("load relation ends: %w", err)
 	}
@@ -613,4 +713,42 @@ func LoadBlockedIntervals(
 	}
 	intervals, stats := workitemmetrics.BlockedIntervalsWithStats(relations, ends)
 	return intervals, stats, nil
+}
+
+// LoadBlockedIntervalsNaming is LoadBlockedIntervals for the items naming
+// names, read through a caller that binds by name: the keyed, bounded reads
+// (LoadRelationsNaming, LoadEndsLimited, the same statement text) and the one
+// rule (workitemmetrics.BlockedIntervalsWithStats). A request held to a
+// repository ceiling reads the spans of the items linked to its repositories
+// with it (CHAOS-13088).
+//
+// naming holds the items' work item ids and, for a jira or linear item, the
+// external-key form of its issue key (workitemmetrics.ExternalKeyTarget). An
+// item's spans come from the relations in which it is the blocked end, and a
+// relation that names it is read whatever end names it, with both of its
+// ends, so the spans of a named item are those of the organization-wide read.
+// More relations or ends than limit is ErrLimitExceeded. No name reads nothing.
+func LoadBlockedIntervalsNaming(
+	ctx context.Context, conn NamedQuerier, organizationID string, naming []string, limit int,
+) (map[string][]workitemmetrics.BlockedInterval, error) {
+	if conn == nil || strings.TrimSpace(organizationID) == "" || limit < 1 {
+		return nil, ErrInvalidRequest
+	}
+	if len(naming) == 0 {
+		return nil, nil
+	}
+	read := byName{conn}
+	relations, err := loadRelations(ctx, read, organizationID, naming, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(relations) == 0 {
+		return nil, nil
+	}
+	ends, err := loadEndsLimited(ctx, read, organizationID, relations, limit)
+	if err != nil {
+		return nil, err
+	}
+	intervals, _ := workitemmetrics.BlockedIntervalsWithStats(relations, ends)
+	return intervals, nil
 }

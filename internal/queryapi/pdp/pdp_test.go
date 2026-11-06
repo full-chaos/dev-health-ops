@@ -29,7 +29,10 @@ import (
 const (
 	testProfile = "GET /api/v1/sankey"
 	testAction  = "analytics.read"
-	testOrg     = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
+	// mixedProfile is an M route (CHAOS-13088 moved sankey to N): an allowlist on it is the gate's own refusal.
+	mixedProfile = "GET /api/v1/explain"
+	mixedAction  = "metrics.read"
+	testOrg      = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
 	// testBearer stands for a user access token: the PDP resolves it, the gate never reads it.
 	testBearer = "eyJhbGciOiJFZERTQSIsInR5cCI6ImF0K2p3dCJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
 )
@@ -458,8 +461,8 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}{
 		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, true, "", ResultAllow},
 		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, true, "", ResultAllow},
-		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
-		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
+		"empty allowlist":                      {mixedProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
+		"allowlist of one":                     {mixedProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
 		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
@@ -476,7 +479,7 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 			srv := pdptest.New(t)
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org")
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,metrics,org")
 			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, org)
 			got := m.points(t, resultMetric)
 			if len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result="+tc.result] != 1 {
@@ -497,21 +500,24 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 }
 
 func actionOf(profile string) string {
-	if profile == "GET /buildinfo" {
+	switch profile {
+	case "GET /buildinfo":
 		return "org.read"
+	case mixedProfile:
+		return mixedAction
 	}
 	return testAction
 }
 
 // A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
-// over is the case the reason is pinned to: the gate's own refusal, not the client's. testProfile is an M route, so
+// over is the case the reason is pinned to: the gate's own refusal, not the client's. mixedProfile is an M route, so
 // it names allowlist_route_unsupported.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
 	_, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
-	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, strings.ToLower(testOrg))
+	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("metrics")
+	_, err := New(cfg).Authorize(context.Background(), mixedProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
 	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
 		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)

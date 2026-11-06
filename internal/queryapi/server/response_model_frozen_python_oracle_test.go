@@ -73,9 +73,12 @@ func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
 	want := append(fieldsOf(reflect.TypeOf(filterOptionsPythonResponse{})),
 		field{"TeamNames", "map[string]string", `json:"team_names,omitempty"`},
 		field{"RepoNames", "map[string]string", `json:"repo_names,omitempty"`},
-		field{"DeveloperNames", "map[string]string", `json:"developer_names,omitempty"`})
+		field{"DeveloperNames", "map[string]string", `json:"developer_names,omitempty"`},
+		// CHAOS-13088: the lists a caller held to a repository ceiling is not served, and the mark of the ones it is.
+		field{"OmittedSignals", "[]linkscope.OmittedSignal", `json:"omitted_signals,omitempty"`},
+		field{"NarrowedCounts", "[]linkscope.NarrowedCount", `json:"narrowed_counts,omitempty"`})
 	if got := fieldsOf(reflect.TypeOf(filteroptions.Response{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names, repo_names, developer_names:\n %v", got, want)
+		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names, repo_names, developer_names, omitted_signals, narrowed_counts:\n %v", got, want)
 	}
 }
 

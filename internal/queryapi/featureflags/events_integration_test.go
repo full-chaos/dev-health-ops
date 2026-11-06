@@ -20,6 +20,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -133,7 +134,7 @@ func TestResolveEvents_RealClickHouse_HappyPath(t *testing.T) {
 		{eventType: "flag_toggled", flagKey: "dark-mode", environment: "staging", actorType: "user", prevState: "off", nextState: "on", eventTs: t0},
 	})
 
-	result, err := ResolveEvents(ctx, client, orgID, nil, nil, 1000)
+	result, err := ResolveEvents(ctx, client, orgID, nil, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents: %v", err)
 	}
@@ -163,7 +164,7 @@ func TestResolveEvents_RealClickHouse_HappyPath(t *testing.T) {
 
 	// flagKey filter narrows to the requested flag only.
 	flagKey := "dark-mode"
-	filtered, err := ResolveEvents(ctx, client, orgID, &flagKey, nil, 1000)
+	filtered, err := ResolveEvents(ctx, client, orgID, &flagKey, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents (flagKey filter): %v", err)
 	}
@@ -172,7 +173,7 @@ func TestResolveEvents_RealClickHouse_HappyPath(t *testing.T) {
 	}
 
 	otherFlagKey := "other-flag"
-	filteredOther, err := ResolveEvents(ctx, client, orgID, &otherFlagKey, nil, 1000)
+	filteredOther, err := ResolveEvents(ctx, client, orgID, &otherFlagKey, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents (other flagKey filter): %v", err)
 	}
@@ -181,7 +182,7 @@ func TestResolveEvents_RealClickHouse_HappyPath(t *testing.T) {
 	}
 
 	// count() must NOT be clamped by a small limit -- true total count.
-	limited, err := ResolveEvents(ctx, client, orgID, nil, nil, 1)
+	limited, err := ResolveEvents(ctx, client, orgID, nil, nil, 1, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents (limit=1): %v", err)
 	}
@@ -213,7 +214,7 @@ func TestResolveEvents_RealClickHouse_MissingTableDegrades(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	result, err := ResolveEvents(ctx, client, "org-1", nil, nil, 1000)
+	result, err := ResolveEvents(ctx, client, "org-1", nil, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents returned an error instead of degrading: %v", err)
 	}

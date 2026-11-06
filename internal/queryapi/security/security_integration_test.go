@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -134,7 +135,7 @@ func TestRealClickHouse_Alerts(t *testing.T) {
 			t.Errorf("%s: got %v want %v", name, got, want)
 		}
 	}
-	all, err := ResolveAlerts(ctx, client, "org-1", nil, nil)
+	all, err := ResolveAlerts(ctx, client, "org-1", nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,9 +145,9 @@ func TestRealClickHouse_Alerts(t *testing.T) {
 		t.Errorf("coalesce/repo mapping: %#v", all.Edges[5].Node)
 	}
 	// no leakage
-	foreign, _ := ResolveAlerts(ctx, client, "org-2", nil, nil)
+	foreign, _ := ResolveAlerts(ctx, client, "org-2", nil, nil, teamscope.NoCeiling())
 	eq("org-2 sees only its own", ids(foreign), []string{"X1"})
-	none, _ := ResolveAlerts(ctx, client, "org-3", nil, nil)
+	none, _ := ResolveAlerts(ctx, client, "org-3", nil, nil, teamscope.NoCeiling())
 	eq("unknown org", ids(none), nil)
 
 	cases := []struct {
@@ -170,21 +171,21 @@ func TestRealClickHouse_Alerts(t *testing.T) {
 		{"since+until window", &model.SecurityAlertFilterInput{Since: dayAgo(45), Until: dayAgo(30)}, []string{"A2"}},
 	}
 	for _, c := range cases {
-		got, err := ResolveAlerts(ctx, client, "org-1", c.f, nil)
+		got, err := ResolveAlerts(ctx, client, "org-1", c.f, nil, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		eq(c.name, ids(got), c.want)
 	}
 
-	p1, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 2})
+	p1, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 2}, teamscope.NoCeiling())
 	eq("page1", ids(p1), []string{"A1", "A3"})
 	if !p1.PageInfo.HasNextPage || p1.PageInfo.HasPreviousPage || p1.TotalCount != 2 {
 		t.Errorf("page1 info %#v %d", p1.PageInfo, p1.TotalCount)
 	}
-	p2, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 2, After: p1.PageInfo.EndCursor})
+	p2, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 2, After: p1.PageInfo.EndCursor}, teamscope.NoCeiling())
 	eq("page2", ids(p2), []string{"A2", "B3"})
-	p3, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 5, After: strp("4")})
+	p3, _ := ResolveAlerts(ctx, client, "org-1", nil, &model.SecurityPaginationInput{First: 5, After: strp("4")}, teamscope.NoCeiling())
 	eq("page3", ids(p3), []string{"B1", "B2"})
 	if p3.PageInfo.HasNextPage || !p3.PageInfo.HasPreviousPage || p3.TotalCount != 6 {
 		t.Errorf("page3 info %#v %d", p3.PageInfo, p3.TotalCount)
@@ -201,7 +202,7 @@ func TestRealClickHouse_Overview(t *testing.T) {
 	ctx, conn, client := startSecurityStore(t)
 	seedAll(t, ctx, conn)
 
-	got, err := ResolveOverview(ctx, client, "org-1", nil)
+	got, err := ResolveOverview(ctx, client, "org-1", nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +236,7 @@ func TestRealClickHouse_Overview(t *testing.T) {
 	}
 
 	// No fixed alerts -> mean is absent (NaN from avgIf), never a number.
-	filtered, err := ResolveOverview(ctx, client, "org-1", &model.SecurityAlertFilterInput{RepoIds: []string{repoB}})
+	filtered, err := ResolveOverview(ctx, client, "org-1", &model.SecurityAlertFilterInput{RepoIds: []string{repoB}}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +244,7 @@ func TestRealClickHouse_Overview(t *testing.T) {
 		t.Errorf("filtered kpis %#v", filtered.Kpis)
 	}
 	// Unknown org: one all-zero KPI row, empty lists.
-	empty, err := ResolveOverview(ctx, client, "org-3", nil)
+	empty, err := ResolveOverview(ctx, client, "org-3", nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,14 +261,14 @@ func TestRealClickHouse_AlertOrgMustMatchRepoOrg(t *testing.T) {
 	seedAlert(t, ctx, conn, "org-1", repoA, "A1", "dependabot", "critical", "open", "own", 3, nil, nil)
 	seedAlert(t, ctx, conn, "org-2", repoA, "F1", "dependabot", "critical", "open", "foreign row on org-1 repo", 2, ip(1), nil)
 
-	alerts, err := ResolveAlerts(ctx, client, "org-1", nil, nil)
+	alerts, err := ResolveAlerts(ctx, client, "org-1", nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(alerts.Edges) != 1 || alerts.Edges[0].Node.AlertID != "A1" {
 		t.Fatalf("alerts leaked a row stamped with another org: %#v", alerts.Edges)
 	}
-	ov, err := ResolveOverview(ctx, client, "org-1", nil)
+	ov, err := ResolveOverview(ctx, client, "org-1", nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}

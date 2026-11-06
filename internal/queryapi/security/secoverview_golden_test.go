@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // The golden holds, for neutral securityOverview requests (every filter shape,
@@ -158,7 +159,7 @@ func TestSecurityOverviewMatchesTheFrozenGolden(t *testing.T) {
 			if c.Fail != nil {
 				cl.failAt = map[string]int{"kpi": 0, "breakdown": 1, "top": 2, "trend": 3}[*c.Fail]
 			}
-			got, err := ResolveOverview(context.Background(), cl, "org-1", secOverviewFilter(t, c.FilterSpec))
+			got, err := ResolveOverview(context.Background(), cl, "org-1", secOverviewFilter(t, c.FilterSpec), teamscope.NoCeiling())
 			if c.Error {
 				if err == nil {
 					t.Fatal("the reference answered an error and this resolver did not")

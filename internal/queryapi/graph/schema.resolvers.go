@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -395,6 +396,15 @@ func (r *queryResolver) Pr(ctx context.Context, orgID string, id string) (*model
 	if !ok {
 		return nil, nil
 	}
+	// Every read below is keyed to this one repository: under a repository ceiling (CHAOS-13161) a pull request of a
+	// repository outside it is answered as one that does not exist, before any read.
+	ceiling, err := rootCeiling(ctx, r.ClickHouse)
+	if err != nil {
+		return nil, fmt.Errorf("pr: %w", err)
+	}
+	if ceiling.Restricted() && !slices.Contains(ceiling.IDs(), repoID) {
+		return nil, nil
+	}
 
 	core, exists, err := workgraph.FetchPRCoreRow(ctx, r.ClickHouse, claims.OrgID, repoID, number)
 	if err != nil {
@@ -572,7 +582,12 @@ func (r *queryResolver) FeatureFlags(ctx context.Context, orgID string, provider
 		includeArchivedValue = *includeArchived
 	}
 
-	result, err := featureflags.Resolve(spanCtx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit)
+	ceiling, err := rootCeiling(spanCtx, r.ClickHouse)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("featureFlags: %w", err)
+	}
+	result, err := featureflags.Resolve(spanCtx, r.ClickHouse, orgID, provider, project, includeArchivedValue, limit, ceiling)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("featureFlags: %w", err)
@@ -628,7 +643,12 @@ func (r *queryResolver) FeatureFlagEvents(ctx context.Context, orgID string, fla
 		}
 	}
 
-	result, err := featureflags.ResolveEvents(spanCtx, r.ClickHouse, orgID, flagKey, environment, limit)
+	ceiling, err := rootCeiling(spanCtx, r.ClickHouse)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("featureFlagEvents: %w", err)
+	}
+	result, err := featureflags.ResolveEvents(spanCtx, r.ClickHouse, orgID, flagKey, environment, limit, ceiling)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("featureFlagEvents: %w", err)
@@ -746,7 +766,11 @@ func (r *queryResolver) SecurityAlerts(ctx context.Context, orgID string, filter
 	if err := requireOwnOrg(ctx, orgID); err != nil {
 		return nil, err
 	}
-	result, err := security.ResolveAlerts(ctx, r.ClickHouse, orgID, filters, pagination)
+	ceiling, err := rootCeiling(ctx, r.ClickHouse)
+	if err != nil {
+		return nil, fmt.Errorf("securityAlerts: %w", err)
+	}
+	result, err := security.ResolveAlerts(ctx, r.ClickHouse, orgID, filters, pagination, ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("securityAlerts: %w", err)
 	}
@@ -760,7 +784,11 @@ func (r *queryResolver) SecurityOverview(ctx context.Context, orgID string, filt
 	if err := requireOwnOrg(ctx, orgID); err != nil {
 		return nil, err
 	}
-	result, err := security.ResolveOverview(ctx, r.ClickHouse, orgID, filters)
+	ceiling, err := rootCeiling(ctx, r.ClickHouse)
+	if err != nil {
+		return nil, fmt.Errorf("securityOverview: %w", err)
+	}
+	result, err := security.ResolveOverview(ctx, r.ClickHouse, orgID, filters, ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("securityOverview: %w", err)
 	}
@@ -1108,7 +1136,11 @@ func (r *queryResolver) TestopsRisk(ctx context.Context, orgID string, input mod
 	if err := requireOwnOrg(ctx, orgID); err != nil {
 		return nil, err
 	}
-	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input)
+	ceiling, err := rootCeiling(ctx, r.ClickHouse)
+	if err != nil {
+		return nil, fmt.Errorf("testopsRisk: %w", err)
+	}
+	result, err := testopsrisk.Resolve(ctx, r.ClickHouse, orgID, input, ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("testopsRisk: %w", err)
 	}
@@ -1179,7 +1211,12 @@ func (r *queryResolver) ComplexityTimeseries(ctx context.Context, input model.Co
 		}
 	}
 
-	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit)
+	ceiling, err := rootCeiling(spanCtx, r.ClickHouse)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("complexityTimeseries: %w", err)
+	}
+	result, err := complexitytimeseries.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.Granularity, input.Scope, input.RepoIds, input.Limit, ceiling)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("complexityTimeseries: %w", err)
@@ -1209,7 +1246,12 @@ func (r *queryResolver) Hotspots(ctx context.Context, input model.HotspotsInput)
 		}
 	}
 
-	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit)
+	ceiling, err := rootCeiling(spanCtx, r.ClickHouse)
+	if err != nil {
+		finish("error")
+		return nil, fmt.Errorf("hotspots: %w", err)
+	}
+	result, err := hotspots.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.SinceUtc, input.UntilUtc, input.RepoIds, input.Limit, ceiling)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("hotspots: %w", err)

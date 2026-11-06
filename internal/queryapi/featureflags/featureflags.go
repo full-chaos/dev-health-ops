@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // FlagID ports work_graph/ids.py's generate_feature_flag_id verbatim:
@@ -189,9 +190,14 @@ func degradedResult(reason string) *model.FeatureFlagRegistryResult {
 // flagWhere is the shared WHERE-clause + bindings builder for both the
 // row query and the count query -- mirrors feature_flags.py building
 // where_clauses/params once and reusing them for both statements.
-func flagWhere(orgID string, provider, project *string, includeArchived bool) (string, []clickhouse.Binding) {
+//
+// A repository ceiling (CHAOS-13161) holds both statements to the allowed repositories; the zero ceiling adds nothing.
+func flagWhere(orgID string, provider, project *string, includeArchived bool, ceiling teamscope.Ceiling) (string, []clickhouse.Binding) {
 	clause := "org_id = {org_id:String}"
 	bindings := []clickhouse.Binding{{Name: "org_id", Value: orgID}}
+	term, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	clause += term
+	bindings = append(bindings, ceilingBindings...)
 	if provider != nil {
 		clause += " AND provider = {provider:String}"
 		bindings = append(bindings, clickhouse.Binding{Name: "provider", Value: *provider})
@@ -209,12 +215,12 @@ func flagWhere(orgID string, provider, project *string, includeArchived bool) (s
 // Resolve ports resolve_feature_flags. limit is clamped internally, same
 // as the Python side -- callers must not pre-clamp and must not trust the
 // GraphQL schema's default alone (a client can send any value).
-func Resolve(ctx context.Context, client QueryClient, orgID string, provider, project *string, includeArchived bool, limit int) (*model.FeatureFlagRegistryResult, error) {
+func Resolve(ctx context.Context, client QueryClient, orgID string, provider, project *string, includeArchived bool, limit int, ceiling teamscope.Ceiling) (*model.FeatureFlagRegistryResult, error) {
 	if client == nil {
 		return nil, errors.New("featureflags: clickhouse client is required")
 	}
 
-	whereClause, bindings := flagWhere(orgID, provider, project, includeArchived)
+	whereClause, bindings := flagWhere(orgID, provider, project, includeArchived, ceiling)
 
 	rowBindings := append(append([]clickhouse.Binding{}, bindings...), clickhouse.Binding{Name: "limit_n", Value: clampLimit(limit)})
 

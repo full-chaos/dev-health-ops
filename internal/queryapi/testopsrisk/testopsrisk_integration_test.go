@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
@@ -112,7 +113,7 @@ func TestRealClickHouse_TestopsRisk(t *testing.T) {
 	conf(t, ctx, conn, "org-1", rC, "2026-01-03", 0.9, f1, "2026-01-03 03:00:00")
 
 	in := model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}
-	got, err := Resolve(ctx, client, "org-1", in)
+	got, err := Resolve(ctx, client, "org-1", in, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,14 +165,14 @@ func TestRealClickHouse_TestopsRisk(t *testing.T) {
 		t.Errorf("quadrant rates %#v", got.QuadrantData)
 	}
 
-	other, err := Resolve(ctx, client, "org-2", in)
+	other, err := Resolve(ctx, client, "org-2", in, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(other.Timeseries) != 1 || *other.ReleaseConfidence != 0.05 || *other.QualityDragHours != 99 || len(other.QuadrantData) != 1 || other.QuadrantData[0].ID != "other/web" {
 		t.Errorf("org-2 sees %#v", other)
 	}
-	none, err := Resolve(ctx, client, "org-3", in)
+	none, err := Resolve(ctx, client, "org-3", in, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestRealClickHouse_TestopsRisk(t *testing.T) {
 		t.Errorf("unknown org %#v", none)
 	}
 	// The range is inclusive on both ends.
-	edge, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-03"), EndDate: date("2026-01-03")})
+	edge, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-03"), EndDate: date("2026-01-03")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +196,7 @@ func TestRealClickHouse_TestopsRiskQuadrantLatestByDay(t *testing.T) {
 	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', 'acme/api', 'org-1', now64(3), now64(3)`, rB)
 	conf(t, ctx, conn, "org-1", rB, "2026-01-04", 0.3, `{"pipeline_success_rate": 0.9, "test_pass_rate": 0.8}`, "2026-01-04 01:00:00")
 	conf(t, ctx, conn, "org-1", rB, "2026-01-02", 0.99, `{"pipeline_success_rate": 0.1, "test_pass_rate": 0.2}`, "2026-01-09 01:00:00")
-	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestRealClickHouse_TestopsRiskQuadrantMissingFactorIsNull(t *testing.T) {
 	conf(t, ctx, conn, "org-1", rB, "2026-01-01", 0.3, `{"pipeline_success_rate": 0, "test_pass_rate": null}`, "2026-01-01 01:00:00")
 	// rC: both present
 	conf(t, ctx, conn, "org-1", rC, "2026-01-01", 0.4, `{"pipeline_success_rate": 0.7, "test_pass_rate": 0.6}`, "2026-01-01 01:00:00")
-	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +248,7 @@ func TestRealClickHouse_TestopsRiskRangeEndIsInclusiveForEveryTable(t *testing.T
 	stab(t, ctx, conn, "org-1", rA, "2026-01-31", 0.25, "2026-01-31 02:00:00")
 	drag(t, ctx, conn, "org-1", rA, "2026-01-31", 4, 1, 1, 1, 1, "2026-01-31 02:00:00")
 	conf(t, ctx, conn, "org-1", rA, "2026-01-31", 0.5, "{}", "2026-01-31 02:00:00")
-	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +270,7 @@ func TestRealClickHouse_TestopsRiskQuadrantNameReadsLatestRepoRow(t *testing.T) 
 	for _, r := range []string{rB, rC} {
 		conf(t, ctx, conn, "org-1", r, "2026-01-04", 0.3, `{"pipeline_success_rate": 0.9, "test_pass_rate": 0.8}`, "2026-01-04 01:00:00")
 	}
-	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}

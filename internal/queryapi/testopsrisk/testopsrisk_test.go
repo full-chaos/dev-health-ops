@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 //go:embed testdata/python_cells.json
@@ -155,7 +156,7 @@ func TestResolve_MatchesPythonCells(t *testing.T) {
 			for _, q := range c.Quad {
 				cl.quadrant = append(cl.quadrant, []any{q.Label, nil, q.Success, q.Pass})
 			}
-			got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+			got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +214,7 @@ func TestResolve_MatchesPythonCells(t *testing.T) {
 
 func TestResolve_ScopesEveryStatement(t *testing.T) {
 	cl := &fakeClient{}
-	if _, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}); err != nil {
+	if _, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling()); err != nil {
 		t.Fatal(err)
 	}
 	if len(cl.statements) != 2 {
@@ -276,7 +277,7 @@ func TestResolve_SkipsRowsWithoutADay(t *testing.T) {
 		{nil, 0.5, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5},
 		{day, 0.8, nil, nil, nil, nil, nil, nil},
 	}}
-	got, err := Resolve(context.Background(), cl, "o", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(context.Background(), cl, "o", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +293,7 @@ func TestResolve_QuadrantPointsCarryTheRepoName(t *testing.T) {
 		{"acme/web", "acme/web", 0.9, 0.8},
 		{"33333333-3333-3333-3333-333333333333", nil, 0.5, 0.4},
 	}}
-	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +317,7 @@ func TestQuadrantStatement_NamesOnlyFromTheOrgScopedCatalogue(t *testing.T) {
 func TestResolve_WhitespaceQuadrantNameIsNil(t *testing.T) {
 	ws := " \t"
 	cl := &fakeClient{quadrant: [][]any{{"acme/web", &ws, 0.9, 0.8}}}
-	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}

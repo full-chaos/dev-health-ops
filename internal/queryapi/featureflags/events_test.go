@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // TestResolveEvents_HappyPath is CHAOS-5523's red-first proof: before
@@ -23,7 +25,7 @@ func TestResolveEvents_HappyPath(t *testing.T) {
 		errs: []error{nil, nil},
 	}
 
-	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000)
+	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents: %v", err)
 	}
@@ -69,7 +71,7 @@ func TestResolveEvents_MissingTableDegradesInsteadOfErroring(t *testing.T) {
 		errs:      []error{unknownTableErr("feature_flag_event")},
 	}
 
-	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000)
+	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents returned an error instead of degrading: %v", err)
 	}
@@ -92,7 +94,7 @@ func TestResolveEvents_MissingDifferentTablePropagatesError(t *testing.T) {
 		errs:      []error{unknownTableErr("feature_flag")},
 	}
 
-	_, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000)
+	_, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected an error for a different missing table, got nil")
 	}
@@ -103,7 +105,7 @@ func TestResolveEvents_NonMissingTableErrorPropagates(t *testing.T) {
 		responses: []*fakeRowScanner{nil},
 		errs:      []error{errors.New("boom")},
 	}
-	_, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000)
+	_, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 1000, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected error to propagate")
 	}
@@ -123,7 +125,7 @@ func TestResolveEvents_FiltersAndLimitBindWhenProvided(t *testing.T) {
 	}
 	flagKey := "flag-x"
 	environment := "production"
-	if _, err := ResolveEvents(context.Background(), client, "org-1", &flagKey, &environment, 5); err != nil {
+	if _, err := ResolveEvents(context.Background(), client, "org-1", &flagKey, &environment, 5, teamscope.NoCeiling()); err != nil {
 		t.Fatalf("ResolveEvents: %v", err)
 	}
 	if len(client.statements) != 2 {
@@ -149,7 +151,7 @@ func TestResolveEvents_CountQueryIgnoresLimit(t *testing.T) {
 		},
 		errs: []error{nil, nil},
 	}
-	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 5)
+	result, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 5, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("ResolveEvents: %v", err)
 	}
@@ -175,7 +177,7 @@ func TestResolveEvents_ClampsLimit(t *testing.T) {
 		},
 		errs: []error{nil, nil},
 	}
-	if _, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 5000); err != nil {
+	if _, err := ResolveEvents(context.Background(), client, "org-1", nil, nil, 5000, teamscope.NoCeiling()); err != nil {
 		t.Fatalf("ResolveEvents: %v", err)
 	}
 }

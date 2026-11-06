@@ -136,8 +136,8 @@ func TestPDPOffReadsOnlyTheSwitchAndAsksNothing(t *testing.T) {
 				t.Fatalf("off refused: %v", err)
 			}
 			g.Wait()
-			if !slices.Equal(rec.read, []string{EnvMode, authzenforce.QueryAPI.Env()}) {
-				t.Fatalf("off read %v, want only %s and the 5.17 cell list", rec.read, EnvMode)
+			if !slices.Equal(rec.read, []string{EnvMode, authzenforce.QueryAPI.Env(), authzenforce.QueryAPIHeaders.Env()}) {
+				t.Fatalf("off read %v, want only %s and the two 5.17 cell lists", rec.read, EnvMode)
 			}
 			if n := len(srv.Requests()); n != 0 || srv.Exchanges() != 0 {
 				t.Fatalf("off asked the PDP %d times, exchanged %d times", n, srv.Exchanges())

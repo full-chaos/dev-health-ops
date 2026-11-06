@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -63,7 +64,7 @@ func TestResolve_ReposHoldEachRepositorysTopFileOnTheRealEngine(t *testing.T) {
 	limit := 1
 	since := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
 	until := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
-	result, err := Resolve(ctx, client, repoTopOrgID, since, until, nil, &limit)
+	result, err := Resolve(ctx, client, repoTopOrgID, since, until, nil, &limit, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

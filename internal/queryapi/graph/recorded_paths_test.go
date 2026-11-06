@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/recordedpaths"
 )
 
@@ -137,7 +138,7 @@ func TestTheCoreQueryDoesNotSelectTheKeyColumns(t *testing.T) {
 			}
 		}
 		client := &prGoldenClient{c: tc}
-		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 		if _, err := (&Resolver{ClickHouse: client}).Query().Pr(ctx, "org-argument-ignored", tc.ID); err != nil {
 			t.Fatalf("Pr: %v", err)
 		}

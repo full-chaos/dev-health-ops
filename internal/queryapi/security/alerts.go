@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -92,7 +93,7 @@ func nonEmpty(s *string) *string {
 // ResolveAlerts returns one page of the org's alerts ordered by severity
 // rank then creation time, newest first. One extra row is read to decide
 // hasNextPage; totalCount is the offset plus the returned edges.
-func ResolveAlerts(ctx context.Context, client QueryClient, orgID string, filters *model.SecurityAlertFilterInput, pagination *model.SecurityPaginationInput) (*model.SecurityAlertConnection, error) {
+func ResolveAlerts(ctx context.Context, client QueryClient, orgID string, filters *model.SecurityAlertFilterInput, pagination *model.SecurityPaginationInput, ceiling teamscope.Ceiling) (*model.SecurityAlertConnection, error) {
 	if client == nil {
 		return nil, errors.New("security: clickhouse client is required")
 	}
@@ -107,7 +108,7 @@ func ResolveAlerts(ctx context.Context, client QueryClient, orgID string, filter
 		return nil, err
 	}
 
-	f := buildFilter(orgID, filters)
+	f := buildFilter(orgID, filters, ceiling)
 	bindings := append(append([]clickhouse.Binding{}, f.bindings...),
 		clickhouse.Binding{Name: "limit_n", Value: first + 1},
 		clickhouse.Binding{Name: "offset_n", Value: offset},

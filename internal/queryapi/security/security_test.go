@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 type scriptedRows struct {
@@ -100,7 +101,7 @@ func TestBuildFilter_Enumeration(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := buildFilter("o", c.f)
+			got := buildFilter("o", c.f, teamscope.NoCeiling())
 			if !strings.HasPrefix(got.sql, "WHERE r.org_id = {org_id:String} AND sa.org_id = {org_id:String}") {
 				t.Fatalf("org predicate missing: %s", got.sql)
 			}
@@ -166,7 +167,7 @@ func alertRow(id string, sev string) []any {
 
 func TestResolveAlerts_Pagination(t *testing.T) {
 	c := &recordingClient{responses: [][][]any{{alertRow("A-1", "high"), alertRow("A-2", "low"), alertRow("A-3", "low")}}}
-	got, err := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 2, After: strp("10")})
+	got, err := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 2, After: strp("10")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +189,7 @@ func TestResolveAlerts_Pagination(t *testing.T) {
 
 func TestResolveAlerts_EmptyAndDefaults(t *testing.T) {
 	c := &recordingClient{}
-	got, err := ResolveAlerts(context.Background(), c, "o", nil, nil)
+	got, err := ResolveAlerts(context.Background(), c, "o", nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +203,12 @@ func TestResolveAlerts_EmptyAndDefaults(t *testing.T) {
 
 func TestResolveAlerts_FirstZeroAndNegative(t *testing.T) {
 	c := &recordingClient{responses: [][][]any{{alertRow("A-1", "high")}}}
-	got, _ := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 0})
+	got, _ := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 0}, teamscope.NoCeiling())
 	if len(got.Edges) != 0 || !got.PageInfo.HasNextPage {
 		t.Fatalf("first=0: %#v", got)
 	}
 	c = &recordingClient{responses: [][][]any{{}}}
-	got, _ = ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: -1})
+	got, _ = ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: -1}, teamscope.NoCeiling())
 	if len(got.Edges) != 0 || !got.PageInfo.HasNextPage {
 		t.Fatalf("first=-1 mirrors an empty page with hasNext: %#v", got)
 	}
@@ -221,7 +222,7 @@ func TestResolveOverview_ParsesAndScopes(t *testing.T) {
 		{{"repo-1", "acme/web", uint64(4)}},
 		{{time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), uint64(2), uint64(1)}},
 	}}
-	got, err := ResolveOverview(context.Background(), c, "o", &model.SecurityAlertFilterInput{Search: strp("x")})
+	got, err := ResolveOverview(context.Background(), c, "o", &model.SecurityAlertFilterInput{Search: strp("x")}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestResolveOverview_ParsesAndScopes(t *testing.T) {
 
 func TestResolveOverview_EmptyListsAreNonNil(t *testing.T) {
 	c := &recordingClient{}
-	got, err := ResolveOverview(context.Background(), c, "o", nil)
+	got, err := ResolveOverview(context.Background(), c, "o", nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +261,7 @@ func TestResolveOverview_EmptyListsAreNonNil(t *testing.T) {
 
 func TestResolveAlerts_ExactlyFullLastPageHasNoNext(t *testing.T) {
 	c := &recordingClient{responses: [][][]any{{alertRow("A-1", "high"), alertRow("A-2", "low")}}}
-	got, err := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 2})
+	got, err := ResolveAlerts(context.Background(), c, "o", nil, &model.SecurityPaginationInput{First: 2}, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +272,7 @@ func TestResolveAlerts_ExactlyFullLastPageHasNoNext(t *testing.T) {
 
 func TestResolveOverview_TopReposAreCappedAtTen(t *testing.T) {
 	c := &recordingClient{}
-	if _, err := ResolveOverview(context.Background(), c, "o", nil); err != nil {
+	if _, err := ResolveOverview(context.Background(), c, "o", nil, teamscope.NoCeiling()); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(c.statements[2], "\nLIMIT 10") {
@@ -286,7 +287,7 @@ func TestResolveOverview_NaNMeanIsAbsentAndNumberIsKept(t *testing.T) {
 		want bool
 	}{{nan, false}, {2.5, true}} {
 		c := &recordingClient{responses: [][][]any{{{uint64(1), uint64(0), uint64(0), tc.mean, int64(0)}}}}
-		got, err := ResolveOverview(context.Background(), c, "o", nil)
+		got, err := ResolveOverview(context.Background(), c, "o", nil, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatal(err)
 		}

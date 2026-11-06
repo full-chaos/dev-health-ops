@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 type fakeRowScanner struct {
@@ -164,7 +166,7 @@ func TestResolve_HappyPath(t *testing.T) {
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -215,7 +217,7 @@ func TestResolve_NullBlameConcentrationPropagatesAsNil(t *testing.T) {
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -241,7 +243,7 @@ func TestResolve_EmptyPathSkipsEvidenceURL(t *testing.T) {
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -260,7 +262,7 @@ func TestResolve_EmptyResultSkipsLabelLookup(t *testing.T) {
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -287,7 +289,7 @@ func TestResolve_RepoIDsFilterBindsUnboundedByRowLimit(t *testing.T) {
 	limit := 5
 	repoIDs := []string{"r1", "r2", "r3", "r4", "r5", "r6"}
 	_, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), repoIDs, &limit)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), repoIDs, &limit, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -323,7 +325,7 @@ func TestResolve_OrderByHasDeterministicTieBreak(t *testing.T) {
 		},
 	}
 	_, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -351,7 +353,7 @@ func indexOf(haystack, needle string) int {
 
 func TestResolve_NilClientErrors(t *testing.T) {
 	_, err := Resolve(context.Background(), nil, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected an error for a nil client")
 	}
@@ -362,7 +364,7 @@ func TestResolve_ErrorPropagatesNoDegradedPath(t *testing.T) {
 		errs: []error{errors.New("boom")},
 	}
 	_, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-01T23:59:59Z"), nil, nil, teamscope.NoCeiling())
 	if err == nil {
 		t.Fatal("expected the ClickHouse error to propagate (no degraded path for this operation)")
 	}
@@ -398,7 +400,7 @@ func TestResolve_ReposCarryEachRepositorysTopFileBeyondTheRowLimit(t *testing.T)
 	}
 	limit := 1
 	result, err := Resolve(context.Background(), client, "org-1",
-		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"), []string{"acme/a", "acme/b"}, &limit)
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"), []string{"acme/a", "acme/b"}, &limit, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

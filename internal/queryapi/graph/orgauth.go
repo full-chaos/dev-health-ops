@@ -7,6 +7,7 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // requireOwnOrg admits a request only when the request identity carries
@@ -16,7 +17,7 @@ import (
 // passing a different orgId.
 func requireOwnOrg(ctx context.Context, orgID string) error {
 	claims, ok := authctx.FromContext(ctx)
-	if !ok || claims.OrgID == "" || claims.OrgID != orgID {
+	if !ok || claims.OrgID == "" || claims.OrgID != orgID || servedOrg(claims) != orgID {
 		return &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -33,7 +34,7 @@ func requireOwnOrg(ctx context.Context, orgID string) error {
 // AUTHORIZATION_ERROR.
 func requestOrg(ctx context.Context) (string, error) {
 	claims, ok := authctx.FromContext(ctx)
-	if !ok || claims.OrgID == "" {
+	if !ok || claims.OrgID == "" || servedOrg(claims) == "" {
 		return "", &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -42,5 +43,21 @@ func requestOrg(ctx context.Context) (string, error) {
 			},
 		}
 	}
-	return claims.OrgID, nil
+	return servedOrg(claims), nil
+}
+
+// servedOrg is the organization a root field is served for: the scope's organization when the request carries one
+// (on an enforced root, the decided organization; Legacy keeps the caller's), else the claims' own.
+func servedOrg(claims authctx.Claims) string {
+	if org, ok := claims.Scope.OrgID(); ok {
+		return org
+	}
+	return claims.OrgID
+}
+
+// rootCeiling is the repository ceiling of the root field's scope (CHAOS-13161): the repositories of an allowlist
+// decision; none for Legacy and an organization-wide allow. A root that carries it reads only those repositories.
+func rootCeiling(ctx context.Context, client teamscope.RowQuerier) (teamscope.Ceiling, error) {
+	claims, _ := authctx.FromContext(ctx)
+	return teamscope.ResolveCeiling(ctx, client, claims.Scope)
 }

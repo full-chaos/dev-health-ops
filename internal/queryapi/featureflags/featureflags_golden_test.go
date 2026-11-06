@@ -13,6 +13,8 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // The golden holds, for neutral synthetic requests to the flag registry and
@@ -125,7 +127,7 @@ func TestFeatureFlagResolversMatchTheFrozenGolden(t *testing.T) {
 				gotErr   error
 			)
 			if tc.Kind == "flags" {
-				res, err := Resolve(context.Background(), client, "org-1", strPtr(tc.Args, "provider"), strPtr(tc.Args, "project"), tc.Args["include_archived"].(bool), limit)
+				res, err := Resolve(context.Background(), client, "org-1", strPtr(tc.Args, "provider"), strPtr(tc.Args, "project"), tc.Args["include_archived"].(bool), limit, teamscope.NoCeiling())
 				gotErr = err
 				if err == nil {
 					degraded, total = res.DegradedReason, res.TotalCount
@@ -134,7 +136,7 @@ func TestFeatureFlagResolversMatchTheFrozenGolden(t *testing.T) {
 					}
 				}
 			} else {
-				res, err := ResolveEvents(context.Background(), client, "org-1", strPtr(tc.Args, "flag_key"), strPtr(tc.Args, "environment"), limit)
+				res, err := ResolveEvents(context.Background(), client, "org-1", strPtr(tc.Args, "flag_key"), strPtr(tc.Args, "environment"), limit, teamscope.NoCeiling())
 				gotErr = err
 				if err == nil {
 					degraded, total = res.DegradedReason, res.TotalCount

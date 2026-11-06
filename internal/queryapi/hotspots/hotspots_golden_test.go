@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // The golden holds, for neutral synthetic requests (repo filters, row caps,
@@ -105,7 +107,7 @@ func TestHotspotsMatchesTheFrozenGolden(t *testing.T) {
 				limit = &l
 			}
 			client := &fakeClient{responses: responses, errs: make([]error, len(responses))}
-			got, err := Resolve(context.Background(), client, "org-1", since, until, tc.RepoIDs, limit)
+			got, err := Resolve(context.Background(), client, "org-1", since, until, tc.RepoIDs, limit, teamscope.NoCeiling())
 			if err != nil {
 				t.Fatalf("Resolve: %v", err)
 			}

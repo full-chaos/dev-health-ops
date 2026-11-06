@@ -137,3 +137,15 @@ func TestSafeAttrsNamesTheRoutesSwitchAndNoInviteKey(t *testing.T) {
 		t.Fatal("start line has no membership_routes_enabled=true")
 	}
 }
+
+func TestInviteAcceptSecretsNeverHoldTheAccessSecret(t *testing.T) {
+	env := provisioningEnv(map[string]string{EnvMembershipRoutes: "true",
+		EnvInviteTokenSecret: testInviteSecret, EnvInviteTokenSecretPrevious: testInvitePrevious})
+	cfg, err := Load(Spec{LookupEnv: lookupFrom(env)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.InviteAcceptSecrets(); slices.Contains(got, testAccessSecret) || len(got) != 2 {
+		t.Fatalf("accept list holds %d keys, access secret among them: %v", len(got), slices.Contains(got, testAccessSecret))
+	}
+}

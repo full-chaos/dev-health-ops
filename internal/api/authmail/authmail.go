@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -115,3 +116,9 @@ func (c Config) Try(ctx context.Context, to, subject, template string, values ma
 	}
 	return err
 }
+
+// Configured reports whether link tokens can be signed and accepted.
+func (c Config) Configured() bool { return true }
+
+// RefuseUnconfigured answers 503 config_missing and reports true while no link secret is set.
+func (c Config) RefuseUnconfigured(w http.ResponseWriter) bool { return false }

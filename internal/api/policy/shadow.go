@@ -351,7 +351,7 @@ func (s *Shadow) Observe(ctx context.Context, o ShadowObservation) {
 	if s.percent < 100 && s.seen.Add(1)%100 >= s.percent {
 		return
 	}
-	if o.Impersonating && o.Pattern != stopImpersonationPattern {
+	if o.Impersonating && !liveRowExempt(o.Pattern) {
 		countShadowResult(ctx, resultImpersonationRefused, ShadowReasonNone)
 		return
 	}

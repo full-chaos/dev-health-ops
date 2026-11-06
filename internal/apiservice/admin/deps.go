@@ -172,6 +172,10 @@ type handlers struct {
 	cache  *impersonationCache
 	guard  *policy.Guard
 	logger *slog.Logger
+
+	// handoffs is the one-use record of each impersonation start handoff.
+	handoffs valkeyHandoffs
+
 	// clickHouseDSN, decryptor, pagerDuty and httpDoer are the org-deletion
 	// route's own dependencies (CHAOS-6306); every other handler in this
 	// package ignores them.

@@ -137,9 +137,14 @@ type fakeDelegator struct {
 	ended   []uuid.UUID
 	session sessionissue.DelegatedSession
 	err     error
+	// onStart, when set, runs as auth-service is asked to start a session.
+	onStart func()
 }
 
 func (f *fakeDelegator) StartDelegated(_ context.Context, _ *http.Request, req sessionissue.DelegatedRequest) (sessionissue.DelegatedSession, error) {
+	if f.onStart != nil {
+		f.onStart()
+	}
 	f.started = append(f.started, req)
 	return f.session, f.err
 }

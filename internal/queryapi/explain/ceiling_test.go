@@ -276,3 +276,43 @@ func TestExplainLinkedRulesAreTheStatementRules(t *testing.T) {
 		}
 	}
 }
+
+// repoWorld answers the resolution of a scope repository with B, and records every statement.
+type repoWorld struct{ ceilWorld }
+
+func (w *repoWorld) Query(ctx context.Context, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	if strings.Contains(query, "SELECT toString(id) AS id\nFROM repos FINAL") {
+		w.statements = append(w.statements, query)
+		w.bindings = append(w.bindings, bindings)
+		return &ceilRows{rows: [][]any{{ceilRepoB}}}, nil
+	}
+	return w.ceilWorld.Query(ctx, query, bindings)
+}
+
+// A scope repository outside the ceiling is never named: its id reaches no read of URLs or providers, and the answer
+// carries no source_url, for a metric stored per team or per repository.
+func TestExplainNeverNamesAScopeRepositoryOutsideTheCeiling(t *testing.T) {
+	for _, metric := range []string{"throughput", "review_latency"} {
+		world := &repoWorld{ceilWorld{t: t}}
+		reader, _ := NewReader(world)
+		resp, err := BuildExplainResponse(context.Background(), reader, "org-1", Params{
+			Metric: metric, StartDay: jan(1), EndDay: jan(6), CompareStart: jan(27).AddDate(0, -1, 0), CompareEnd: jan(1),
+			ScopeLevel: "repo", ScopeIDs: []string{ceilRepoB}, Ceiling: ceilingFor(t, ceilRepoA), Now: jan(9),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.SourceURL != nil {
+			t.Fatalf("%s: source_url %q of a repository outside the ceiling", metric, *resp.SourceURL)
+		}
+		for i, statement := range world.statements {
+			if strings.Contains(statement, "source_url") || strings.Contains(statement, "AS provider") {
+				for _, id := range ceilBound(world.bindings[i], "repo_ids") {
+					if id == ceilRepoB {
+						t.Fatalf("%s: the repository outside the ceiling reaches a read:\n%s", metric, statement)
+					}
+				}
+			}
+		}
+	}
+}

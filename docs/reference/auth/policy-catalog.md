@@ -84,6 +84,8 @@ The two cached classes are the allow-cache classes of TRD section 14. The catalo
 
 A high-risk action must have cache class `none`. The loader refuses a catalog that breaks this rule (`internal/auth/policycatalog/catalog.go`, `Load`). The README of the contracts directory points to TRD section 14 for the allow-cache classes.
 
+A read action (`Action.ReadOnly`) is an organization action of risk class `low`. These are the `*.read` actions; a test fails when a low-risk action is not named as a read. A delegated (impersonation) bearer is judged as its target on read actions only.
+
 ## Roles
 
 | Role | Scope | Actions held |

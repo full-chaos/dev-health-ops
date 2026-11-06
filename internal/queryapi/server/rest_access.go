@@ -30,7 +30,11 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
 			return authctx.Claims{OrgID: claims.OrgID}, true
 		}
-		if denied := gate.Authorize(r.Context(), routeProfile(r), token, claims.OrgID); denied != nil {
+		authorize := gate.Authorize
+		if claims.Delegated {
+			authorize = gate.AuthorizeDelegated
+		}
+		if denied := authorize(r.Context(), routeProfile(r), token, claims.OrgID); denied != nil {
 			writePDPDenied(w, r, component, denied)
 			return authctx.Claims{}, false
 		}

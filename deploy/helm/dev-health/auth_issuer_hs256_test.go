@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
 )
 
 const hs256Issuer = "https://auth.example/v1"

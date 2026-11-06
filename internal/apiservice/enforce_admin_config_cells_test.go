@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
@@ -293,6 +295,13 @@ func adminConfigServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer)
 // adminConfigServerWith is adminConfigServer over a probe store that edit has changed first.
 func adminConfigServerWith(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore)) (http.Handler, *eddsaMinter) {
 	t.Helper()
+	return adminConfigServerOver(t, enforcer, edit, func(_ *testing.T, deps Deps) []httpapi.Route { return Routes(deps, quietLogger()) })
+}
+
+// adminConfigServerOver is adminConfigServerWith over the routes build returns: the same authenticator, routed
+// access verify, Enforcer and scope layers, whatever the routes are.
+func adminConfigServerOver(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore), build func(*testing.T, Deps) []httpapi.Route) (http.Handler, *eddsaMinter) {
+	t.Helper()
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	if edit != nil {
@@ -346,11 +355,88 @@ func adminConfigServerWith(t *testing.T, enforcer func(*testing.T) *policy.Enfor
 	}
 	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: guard, Verifier: verifier, Signer: signer}
 	scope := policy.NewScope(auth, quietLogger())
-	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), scope.Layers()...)
+	server, err := NewServer(apiTestConfig(), quietLogger(), build(t, deps), scope.Layers()...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return server.Handler(), minter
+}
+
+// principalEcho answers 200 with exactly what an admin-config handler acts on: the guarded user, the effective org, the
+// role, the admin and admin.orgs answers, the superuser flag and the impersonation context.
+func principalEcho(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{}
+	if user := policy.UserFrom(r.Context()); user != nil {
+		out["user_id"] = user.UserID
+		out["org"] = policy.EffectiveOrgID(r.Context(), user)
+		out["org_id"] = user.OrgID
+		out["role"] = user.Role
+		out["is_admin"] = user.IsAdmin()
+		out["holds_admin_orgs"] = user.Holds(policy.ActionAdminOrgs)
+		out["is_superuser"] = user.IsSuperuser
+	}
+	if session := policy.ImpersonationFrom(r.Context()); session != nil {
+		out["impersonating"] = session.TargetUserID.String()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// adminConfigEchoRoutes mounts the admin-config rows with the principal echo behind the guard level each row's
+// registration names in the source (scanRegistrations, the same scan the profile gate uses), over the mounted
+// route table. The rows come from the table, never from a typed list.
+func adminConfigEchoRoutes(t *testing.T, deps Deps) []httpapi.Route {
+	t.Helper()
+	regs := scanRegistrations(t, "../api", ".")
+	echo := http.HandlerFunc(principalEcho)
+	var routes []httpapi.Route
+	for _, m := range mountedRoutes(t) {
+		if _, ok := adminConfigActions[m.Method+" "+m.Pattern]; !ok || m.Listener != "api" {
+			continue
+		}
+		reg, ok := registrationFor(regs, m)
+		if !ok {
+			t.Fatalf("%s: no registration found in the source", m.key())
+		}
+		level := reg.Level
+		if level == "" {
+			level = dispatchedLevels[m.key()]
+		}
+		var authz policy.Authz
+		switch level {
+		case "Admin":
+			authz = policy.Admin
+		case "AdminOrg":
+			authz = policy.AdminOrg
+		default:
+			t.Fatalf("%s: guard level %q, the echo wraps Admin and AdminOrg only", m.key(), level)
+		}
+		routes = append(routes, httpapi.Route{Method: m.Method, Pattern: m.Pattern, Handler: deps.Guard.Wrap(authz, echo)})
+	}
+	return routes
+}
+
+// adminConfigEchoServer is adminConfigServerWith with every row's handler replaced by the principal echo.
+func adminConfigEchoServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer, edit func(*probeStore)) (http.Handler, *eddsaMinter) {
+	t.Helper()
+	routes := 0
+	handler, minter := adminConfigServerOver(t, enforcer, edit, func(t *testing.T, deps Deps) []httpapi.Route {
+		built := adminConfigEchoRoutes(t, deps)
+		routes = len(built)
+		got := make([]string, 0, len(built))
+		for _, r := range built {
+			got = append(got, r.Method+" "+r.Pattern)
+		}
+		sort.Strings(got)
+		if want := sortedAdminConfigKeys(); !slices.Equal(got, want) {
+			t.Fatalf("echo routes %d, want the %d rows of sortedAdminConfigKeys\ngot  %v\nwant %v", len(got), len(want), got, want)
+		}
+		return built
+	})
+	if routes != 61 {
+		t.Fatalf("%d echo routes, want 61", routes)
+	}
+	return handler, minter
 }
 
 func newCellEnforcer(t *testing.T, decider pep.Decider, namespaces string, unconfigured bool) *policy.Enforcer {
@@ -703,22 +789,44 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 // CHAOS-13206 fixes.
 func TestAdminConfigCellsPlatformAdminWithoutMembershipRowAnswersAsLegacy(t *testing.T) {
 	t.Skip("known defect, D6773, CHAOS-13206")
+	echoParityWithLegacy(t, cellPlatformNoRow, "platform admin + no membership")
+}
+
+// The control for the cell above: the platform admin WITH an org role of member gets the same echoed principal on a
+// user access token and on the legacy token, on or off, so the echo compare is not vacuous.
+func TestAdminConfigCellsPlatformAdminWithMembershipRowEchoesAsLegacy(t *testing.T) {
+	echoParityWithLegacy(t, cellPlatformMember, "platform admin + org member")
+}
+
+// echoParityWithLegacy compares, on every row and on or off, the answer of the caller's user access token with the
+// answer of the HS256 legacy token of the same caller, over the principal echo behind the production guard.
+func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
+	t.Helper()
 	pdp := newCellPDP(t)
 	for _, on := range []bool{false, true} {
 		var enforcer func(*testing.T) *policy.Enforcer
 		if on {
 			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, adminConfigNamespaces, false) }
 		}
-		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
+		handler, minter := adminConfigEchoServer(t, enforcer, withPlatformAdmins)
 		callers := cellCallers(minter)
 		pdp.register(callers)
-		legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		legacy := probeHS256(t, probeKey, map[string]any{"sub": user.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
+		rows := 0
 		for _, key := range sortedAdminConfigKeys() {
+			rows++
+			pdp.reset("evaluate")
 			want := cellDo(handler, key, legacy, nil)
-			got := cellDo(handler, key, callers["platform admin + no membership"].token, nil)
+			if want.status != http.StatusOK {
+				t.Errorf("on=%v %s: legacy token answer %d %s, want the 200 echo", on, key, want.status, want.body)
+			}
+			got := cellDo(handler, key, callers[caller].token, nil)
 			if got.status != want.status || got.body != want.body {
 				t.Errorf("on=%v %s: %d %s, want the legacy answer %d %s (D6773)", on, key, got.status, got.body, want.status, want.body)
 			}
+		}
+		if rows != 61 {
+			t.Errorf("on=%v: %d rows, want 61", on, rows)
 		}
 	}
 }

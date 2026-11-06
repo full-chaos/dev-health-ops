@@ -10,6 +10,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
@@ -165,7 +166,7 @@ func TestFetchIssuesQueryOrderByWorkItemIDTiebreak(t *testing.T) {
 // an item-day, so it must participate in argMax before the positive predicate
 // runs. The outer window group then gives the result table one row per item.
 func TestBlockedIssueSourceDedupsBeforeItFiltersZero(t *testing.T) {
-	source, bindings := renderBlockedIssueWindowSource("team", []string{"team-a"})
+	source, bindings := renderBlockedIssueWindowSource("team", []string{"team-a"}, teamscope.NoCeiling())
 	for _, want := range []string{
 		"FROM work_item_blocked_durations_daily",
 		"WHERE org_id = {org_id:String}",

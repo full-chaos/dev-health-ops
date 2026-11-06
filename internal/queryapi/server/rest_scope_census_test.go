@@ -12,9 +12,8 @@ import (
 
 // C1 (CHAOS-10864 PR-1): a REST handler must read its organization from claims.Scope, the scope the enforced PDP
 // decision allowed, never from claims.OrgID. This census walks the REST route files and lists every use of
-// claims.OrgID that is not an error, response or log sink, by file and the call (or statement) it feeds. No handler
-// is cut over yet, so every read is listed; the list is checked both ways (a new use fails, and an entry no use
-// matches fails), so it can only shrink. The cutover empties it.
+// claims.OrgID that is not an error, response or log sink, by file and the call (or statement) it feeds. Every
+// handler is cut over (CHAOS-13089), so the list of allowed uses is empty.
 
 var restScopeCensusFiles = []string{
 	"quadrant_route.go", "heatmap_route.go", "sankey_route.go", "home_route.go", "opportunities_route.go",
@@ -24,43 +23,9 @@ var restScopeCensusFiles = []string{
 	"people_drilldown_issues_route.go", "explain_route.go", "flame_route.go", "flame_aggregated_route.go",
 }
 
-// restScopeNotCutOver is every non-sink use of claims.OrgID: "file: target" -> count.
-var restScopeNotCutOver = map[string]int{
-	"drilldown_issues_route.go: drilldown.BuildIssuesResponse":                              2,
-	"drilldown_prs_route.go: drilldown.BuildPRsResponse":                                    2,
-	"explain_route.go: explain.BuildExplainResponse":                                        2,
-	"filter_options_route.go: filteroptions.BuildResponse":                                  1,
-	"flame_aggregated_route.go: aggflame.BuildResponse":                                     1,
-	"flame_route.go: flame.BuildResponse":                                                   1,
-	"heatmap_route.go: heatmap.BuildResponse":                                               1,
-	"home_route.go: home.BuildResponseWithFilterEmptyReason":                                2,
-	"investment_explain_route.go: buildExplainOptions":                                      1,
-	"investment_explain_route.go: investmentexplain.CompleteInvestmentMixExplanationForOrg": 1,
-	"investment_explain_route.go: investmentexplain.ResolveUnsupportedProviderKindForOrg":   1,
-	"investment_route.go: investment.BuildResponse":                                         2,
-	"investment_route.go: investment.BuildSunburst":                                         1,
-	"opportunities_route.go: opportunities.BuildResponse":                                   2,
-	"people_drilldown_issues_route.go: people.BuildDrilldownIssuesResponse":                 1,
-	"people_drilldown_prs_route.go: people.BuildDrilldownPRsResponse":                       1,
-	"people_metric_route.go: people.BuildMetricResponse":                                    1,
-	"people_route.go: people.BuildSearchResponse":                                           1,
-	"people_summary_route.go: people.BuildSummaryResponse":                                  1,
-	"quadrant_route.go: quadrant.BuildResponse":                                             1,
-	"sankey_route.go: sankey.BuildResponse":                                                 2,
-	"workunit_explain_route.go: investmentexplain.CompleteWorkUnitExplanationForOrg":        1,
-	"workunit_explain_route.go: investmentexplain.IsLLMAvailableForOrg":                     1,
-	"workunit_explain_route.go: investmentexplain.ProviderValueError":                       2,
-	"workunit_explain_route.go: investmentexplain.ResolveProviderKindForOrg":                1,
-	"workunit_explain_route.go: investmentexplain.ResolveUnsupportedProviderKindForOrg":     1,
-	"workunit_explain_route.go: reader.BuildWorkUnitInvestments":                            1,
-	"workunit_explain_route.go: reader.ResolveRepoFilterIDs":                                1,
-	"workunit_explain_route.go: teamscope.RepoCondition":                                    1,
-	"workunit_explain_route.go: workunitexplain.ExplainWorkUnit":                            1,
-	"workunits_route.go: reader.BuildWorkUnitInvestments":                                   2,
-	"workunits_route.go: reader.ResolveRepoFilterIDs":                                       1,
-	"workunits_route.go: scopeRepoFilter":                                                   1,
-	"workunits_route.go: teamscope.RepoCondition":                                           1,
-}
+// restScopeNotCutOver is every non-sink use of claims.OrgID: "file: target" -> count. CHAOS-13089 cut every handler
+// over, so it is empty; a new non-sink use fails the census.
+var restScopeNotCutOver = map[string]int{}
 
 // restScopeSink reports a callee that only answers, logs or admits: it serves no data of the organization.
 func restScopeSink(callee string) bool {

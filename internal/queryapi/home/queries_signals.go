@@ -22,6 +22,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -78,6 +79,11 @@ const recommendationsSQL = `
 // BuildResponse fails the request, as it does for every other Home read.
 func fetchRecommendationSignals(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string) ([]RecommendationRow, error) {
 	if f.Scope.Level != "team" || len(f.Scope.IDs) == 0 {
+		return nil, nil
+	}
+	if f.Ceiling.Restricted() {
+		// recommendations_daily is keyed by team and has no repository: it is not served to a caller held to a
+		// repository ceiling, and the response says so (OmittedSignals, CHAOS-13086).
 		return nil, nil
 	}
 	query := fmt.Sprintf(recommendationsSQL, "AND team_id IN {team_ids:Array(String)}")
@@ -185,6 +191,19 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	if scoped && len(f.Scope.IDs) > 0 {
 		latestScopeFilter = "AND scope = {scope:String} AND scope_id IN {scope_ids:Array(String)}"
 	}
+	// A ceiling (CHAOS-13086) serves the rows of scope repo whose id is in it. A team row has no repository and is
+	// never served; a request for a team's risk therefore has nothing to serve.
+	ceilingSQL := ""
+	var ceilingBindings []dhclickhouse.Binding
+	if f.Ceiling.Restricted() {
+		ids := f.Ceiling.IDs()
+		if len(ids) == 0 || scoped && f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
+			return nil, nil
+		}
+		ceilingSQL = "AND scope = 'repo' AND scope_id IN {" + teamscope.BindingCeilingIDs + ":Array(String)}"
+		ceilingBindings = []dhclickhouse.Binding{{Name: teamscope.BindingCeilingIDs, Value: ids}}
+		latestScopeFilter += "\n                      " + ceilingSQL
+	}
 	// measuredRisk keeps a scope id only when its newest row is a measurement
 	// (package liverow). A retraction row over the key of a retired team id
 	// has a NULL score: counted as a row it would make every day look
@@ -197,6 +216,9 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
       AND scope = {scope:String}
       AND scope_id IN {scope_ids:Array(String)}
         `
+	}
+	if ceilingSQL != "" {
+		query += "\n      " + ceilingSQL + "\n        "
 	}
 	query += `
         GROUP BY scope, scope_id
@@ -216,6 +238,7 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 			dhclickhouse.Binding{Name: "scope_ids", Value: f.Scope.IDs},
 		)
 	}
+	bindings = append(bindings, ceilingBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

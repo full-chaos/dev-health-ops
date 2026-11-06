@@ -69,7 +69,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 
-	filter, bindings := teamscope.NarrowRepoScope(len(repoRefs) > 0, scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), teamCondition, teamBindings)
+	filter, bindings := teamscope.NarrowRepoScope(len(repoRefs) > 0, scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), teamCondition, teamBindings, f.Ceiling, repoColumn)
 	return filter, bindings, nil
 }
 
@@ -77,7 +77,43 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 // a repo-level scope, or what.repos. A team scope alone is not a repository
 // filter.
 func repoFilterRequested(f Filters) bool {
-	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0
+	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0 || f.Ceiling.Restricted()
+}
+
+// linkedRepoIDs are the repositories the work-item reads of a request go through: the named repositories that resolve,
+// held to the ceiling (a ceiling with no named repository is the ceiling itself), and with a team scope only those the
+// team holds. A team never widens the ceiling: team ownership is not a repository link.
+func linkedRepoIDs(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) ([]string, error) {
+	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
+	var ids []string
+	if len(refs) > 0 || !f.Ceiling.Restricted() {
+		resolved, err := resolveRepoIDs(ctx, client, refs, orgID)
+		if err != nil {
+			return nil, err
+		}
+		ids = resolved
+	}
+	if f.Ceiling.Restricted() {
+		allowed := map[string]bool{}
+		for _, id := range f.Ceiling.IDs() {
+			allowed[id] = true
+		}
+		if len(refs) == 0 {
+			ids = f.Ceiling.IDs()
+		} else {
+			kept := ids[:0:0]
+			for _, id := range ids {
+				if allowed[id] {
+					kept = append(kept, id)
+				}
+			}
+			ids = kept
+		}
+	}
+	if f.Scope.Level == "team" {
+		return teamscope.HeldRepoIDs(ctx, client, orgID, ids, f.Scope.IDs, asOf)
+	}
+	return ids, nil
 }
 
 // filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the

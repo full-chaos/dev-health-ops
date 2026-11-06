@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	testProfile = "GET /api/v1/home"
+	testProfile = "GET /api/v1/sankey"
 	testAction  = "analytics.read"
 	testOrg     = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
 	// testBearer stands for a user access token: the PDP resolves it, the gate never reads it.
@@ -467,8 +467,8 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}{
 		"organization scope, tenant match":     {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization"}, true, "", ResultAllow},
 		"scope none action, tenant only":       {"GET /buildinfo", map[string]any{"tenant_scope": org}, true, "", ResultAllow},
-		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
-		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
+		"empty allowlist":                      {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
+		"allowlist of one":                     {testProfile, map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonAllowlistRouteUnsupported, ResultNotCarriedOut},
 		"allowlist on a scope none action":     {"GET /buildinfo", map[string]any{"tenant_scope": org, "repository_allowlist": []string{"acme/widgets"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
@@ -513,7 +513,8 @@ func actionOf(profile string) string {
 }
 
 // A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
-// over is the case the reason is pinned to: the gate's own refusal, not the client's, names unknown_obligation.
+// over is the case the reason is pinned to: the gate's own refusal, not the client's. testProfile is an M route, so
+// it names allowlist_route_unsupported.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
@@ -521,7 +522,7 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics")
 	_, err := New(cfg).Authorize(context.Background(), testProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
-	if !ok || !denied.Local || denied.Reason != pep.ReasonUnknownObligation {
-		t.Fatalf("answered %#v, want a local DenyError unknown_obligation", err)
+	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
+		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)
 	}
 }

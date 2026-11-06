@@ -527,6 +527,7 @@ internal/queryapi/pdp	headers_switch_census_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
 internal/queryapi/pepgate	census_test.go
+internal/queryapi/pepgate	legacy_site_census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -581,6 +582,7 @@ internal/queryapi/server	rate_coverage_documents_integration_test.go
 internal/queryapi/server	registered_document_field_gate_test.go
 internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
+internal/queryapi/server	rest_allowlist_census_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
 internal/queryapi/server	rest_scope_census_test.go
@@ -589,6 +591,7 @@ internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
 internal/queryapi/server	workunit_explain_route_test.go
 internal/queryapi/server	workunits_route_test.go
+internal/queryapi/teamscope	census_test.go
 internal/queryapi/workgraph	membership_test.go
 internal/queryapiservice	settings_test.go
 internal/reconcilerservice	activation_pin_test.go

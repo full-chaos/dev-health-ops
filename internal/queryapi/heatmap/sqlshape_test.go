@@ -9,6 +9,8 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // capturingClient records every query text it is asked to run and
@@ -75,10 +77,10 @@ func TestFinalDedupOrgIDScopesEveryHeatmapRead(t *testing.T) {
 		_, _ = fetchReviewWaitEvidence(ctx, c, now, now, 1, 1, "", nil, 1, "org-1")
 	})
 	run("fetchIndividualActiveHours (git_commits + repos)", func(c *capturingClient) {
-		_, _ = fetchIndividualActiveHours(ctx, c, now, now, []string{"a@b.com"}, "org-1")
+		_, _ = fetchIndividualActiveHours(ctx, c, now, now, []string{"a@b.com"}, "org-1", teamscope.NoCeiling())
 	})
 	run("fetchIndividualActiveEvidence (git_commits + repos)", func(c *capturingClient) {
-		_, _ = fetchIndividualActiveEvidence(ctx, c, now, now, 1, 1, []string{"a@b.com"}, 1, "org-1")
+		_, _ = fetchIndividualActiveEvidence(ctx, c, now, now, 1, 1, []string{"a@b.com"}, 1, "org-1", teamscope.NoCeiling())
 	})
 	run("fetchHotspotEvidence (file_metrics_daily + repos)", func(c *capturingClient) {
 		_, _ = fetchHotspotEvidence(ctx, c, now, now, "repoA:a.go", "", nil, 1, "org-1")

@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const (
@@ -117,6 +118,10 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "opportunities", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "opportunities", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		scopeType := lastQueryValue(query, "scope_type")
@@ -157,7 +162,7 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -171,7 +176,7 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 		// is the SAME Literal set both routes' _filters_from_query call
 		// validates against -- reused, not re-declared.
 		if !homeValidScopeLevels[scopeType] {
-			writeRESTDataUnavailable(w, r, "opportunities", claims.OrgID,
+			writeRESTDataUnavailable(w, r, "opportunities", org,
 				fmt.Errorf("opportunities: ScopeFilter construction: scope_type %q is not one of the valid levels", scopeType))
 			return
 		}
@@ -191,11 +196,18 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 			f.Time.EndDate = &endDate
 		}
 
-		resp, err := opportunities.BuildResponse(r.Context(), client, claims.OrgID, f, time.Now().UTC())
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
+			return
+		}
+		f.Ceiling = ceiling
+
+		resp, err := opportunities.BuildResponse(r.Context(), client, org, f, time.Now().UTC())
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1194-1208).
-			writeRESTDataUnavailable(w, r, "opportunities", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
 			return
 		}
 
@@ -203,7 +215,7 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 		// build_opportunities_response has already succeeded
 		// (main.py:1204-1206).
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeOpportunitiesResponse(w, r, claims.OrgID, resp)
+		writeOpportunitiesResponse(w, r, org, resp)
 	}
 }
 
@@ -215,30 +227,34 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "opportunities", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "opportunities", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, opportunitiesMaxBodyBytes+1))
 		if err != nil {
-			writeRESTError(w, r, "opportunities", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "opportunities", org, http.StatusBadRequest, "bad request")
 			return
 		}
 		if len(bodyBytes) > opportunitiesMaxBodyBytes {
-			writeRESTError(w, r, "opportunities", claims.OrgID, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			writeRESTError(w, r, "opportunities", org, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 			return
 		}
 
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -250,7 +266,7 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -260,14 +276,22 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 		// own payload (main.py:1211-1226) is the identical HomeRequest
 		// Pydantic model, so this is reuse of an already-reviewed
 		// function, not a parallel re-implementation.
-		resp, err := opportunities.BuildResponse(r.Context(), client, claims.OrgID, homeFiltersFromMap(filtersMap), time.Now().UTC())
+		f := homeFiltersFromMap(filtersMap)
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
+			return
+		}
+		f.Ceiling = ceiling
+
+		resp, err := opportunities.BuildResponse(r.Context(), client, org, f, time.Now().UTC())
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1218-1226).
-			writeRESTDataUnavailable(w, r, "opportunities", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
 			return
 		}
-		writeOpportunitiesResponse(w, r, claims.OrgID, resp)
+		writeOpportunitiesResponse(w, r, org, resp)
 	}
 }
 

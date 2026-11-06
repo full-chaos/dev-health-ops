@@ -32,19 +32,22 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
 // freshness.py:31-51). repo_metrics_daily is read FINAL, matching this
 // package's own FINAL-everywhere convention, though maxOrNull
 // (computed_at) is itself dedup-invariant.
-func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) (*time.Time, error) {
+func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string, ceiling teamscope.Ceiling) (*time.Time, error) {
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
 	query := `
         SELECT maxOrNull(computed_at) AS last_ingested_at
         FROM repo_metrics_daily FINAL
-        WHERE org_id = {org_id:String}
+        WHERE org_id = {org_id:String}` + ceilingSQL + `
     `
-	bindings := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
+	bindings := append([]dhclickhouse.Binding{{Name: "org_id", Value: orgID}}, ceilingBindings...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("home: fetch_last_ingested_at query: %w", err)
@@ -63,18 +66,23 @@ func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) 
 // fetchCoverage ports fetch_coverage (api/queries/freshness.py:54-121).
 // Each percentage is null when its own denominator has no records. This
 // preserves the difference between unavailable coverage and observed 0%.
-func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string) (Coverage, error) {
-	orgBinding := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
+func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string, ceiling teamscope.Ceiling) (Coverage, error) {
+	repoSQL, repoBindings := ceiling.RepoTerm("toString(id)")
+	metricSQL, metricBindings := ceiling.RepoTerm("toString(repo_id)")
+	itemSQL, itemBindings := linkscope.ItemCondition(ceiling, "work_item_id")
+	orgBinding := append([]dhclickhouse.Binding{{Name: "org_id", Value: orgID}}, repoBindings...)
 	windowBindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},
 	}
+	metricWindowBindings := append(append([]dhclickhouse.Binding(nil), windowBindings...), metricBindings...)
+	itemWindowBindings := append(append([]dhclickhouse.Binding(nil), windowBindings...), itemBindings...)
 
 	totalRepos, err := queryOneFloat(ctx, client, `
         SELECT toFloat64(countDistinct(id)) AS total
         FROM repos FINAL
-        WHERE org_id = {org_id:String}
+        WHERE org_id = {org_id:String}`+repoSQL+`
     `, orgBinding)
 	if err != nil {
 		return Coverage{}, fmt.Errorf("home: fetch_coverage total repos: %w", err)
@@ -84,8 +92,8 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
         SELECT toFloat64(countDistinct(repo_id)) AS covered
         FROM repo_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
-    `, windowBindings)
+          AND org_id = {org_id:String}`+metricSQL+`
+    `, metricWindowBindings)
 	if err != nil {
 		return Coverage{}, fmt.Errorf("home: fetch_coverage covered repos: %w", err)
 	}
@@ -97,8 +105,8 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
-    `, windowBindings)
+          AND org_id = {org_id:String}`+itemSQL+`
+    `, itemWindowBindings)
 	if err != nil {
 		return Coverage{}, fmt.Errorf("home: fetch_coverage pr link: %w", err)
 	}
@@ -110,8 +118,8 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
-    `, windowBindings)
+          AND org_id = {org_id:String}`+itemSQL+`
+    `, itemWindowBindings)
 	if err != nil {
 		return Coverage{}, fmt.Errorf("home: fetch_coverage issue cycle: %w", err)
 	}
@@ -221,14 +229,18 @@ func buildScopeDataConfidence(totalRepos, coveredRepos int64, lastIngested *time
 
 // fetchSourceStatuses ports fetch_source_statuses (api/queries/
 // freshness.py:124-162).
-func fetchSourceStatuses(ctx context.Context, client QueryClient, startDay time.Time, orgID string) (map[string]string, error) {
+func fetchSourceStatuses(ctx context.Context, client QueryClient, startDay time.Time, orgID string, ceiling teamscope.Ceiling) (map[string]string, error) {
+	repoSQL, repoBindings := ceiling.RepoTerm("toString(id)")
+	itemSQL, itemBindings := linkscope.ItemCondition(ceiling, "work_item_id")
+	// One ceiling_ids binding serves the repos and the ci_pipeline_runs term: same ids, one name.
+	ciSQL, _ := ceiling.RepoTerm("toString(repo_id)")
 	query := `
         SELECT source, max(last_seen_at) AS last_seen_at
         FROM (
             SELECT lower(provider) AS source, max(last_synced) AS last_seen_at
             FROM repos FINAL
             WHERE org_id = {org_id:String}
-              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')
+              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')` + repoSQL + `
             GROUP BY source
 
             UNION ALL
@@ -236,20 +248,22 @@ func fetchSourceStatuses(ctx context.Context, client QueryClient, startDay time.
             SELECT lower(provider) AS source, max(last_synced) AS last_seen_at
             FROM work_items FINAL
             WHERE org_id = {org_id:String}
-              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')
+              AND lower(provider) NOT IN ('', 'unknown', 'synthetic')` + itemSQL + `
             GROUP BY source
 
             UNION ALL
 
             SELECT 'ci' AS source, max(last_synced) AS last_seen_at
             FROM ci_pipeline_runs FINAL
-            WHERE org_id = {org_id:String}
+            WHERE org_id = {org_id:String}` + ciSQL + `
             HAVING count() > 0
         )
         GROUP BY source
         ORDER BY source
     `
 	bindings := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
+	bindings = append(bindings, repoBindings...)
+	bindings = append(bindings, itemBindings...)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("home: fetch_source_statuses query: %w", err)

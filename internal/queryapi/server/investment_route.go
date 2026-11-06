@@ -326,6 +326,10 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "investment", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "investment", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		scopeType := lastQueryValue(query, "scope_type")
@@ -358,7 +362,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -372,7 +376,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -391,12 +395,19 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			WhatRepos: nil, WorkCategory: nil,
 		}
 
-		resp, err := investment.BuildResponse(r.Context(), reader, claims.OrgID, params)
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
+		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1240-1241) -- this route has
 			// no typed HTTPException branch at all.
-			writeRESTDataUnavailable(w, r, "investment", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment", org, err)
 			return
 		}
 
@@ -404,7 +415,7 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 		// 1237-1238), steering callers toward POST with an explicit
 		// filters body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeInvestmentResponse(w, r, claims.OrgID, resp)
+		writeInvestmentResponse(w, r, org, resp)
 	}
 }
 
@@ -419,10 +430,14 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "investment", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "investment", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
-			writeRESTError(w, r, "investment", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "investment", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -431,17 +446,17 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 		// DrilldownRequest/ExplainRequest's own "filters" field.
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -455,7 +470,7 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -471,7 +486,7 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -481,12 +496,19 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 			WhatRepos: whatRepos, WorkCategory: workCategoryFromFilters(filters),
 		}
 
-		resp, err := investment.BuildResponse(r.Context(), reader, claims.OrgID, params)
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "investment", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment", org, err)
 			return
 		}
-		writeInvestmentResponse(w, r, claims.OrgID, resp)
+		params.Ceiling = ceiling
+
+		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment", org, err)
+			return
+		}
+		writeInvestmentResponse(w, r, org, resp)
 	}
 }
 
@@ -498,6 +520,10 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		claims, ok := authctx.FromContext(r.Context())
 		if !ok {
 			writeRESTUnauthorized(w, r, "investment_sunburst", "Not authenticated")
+			return
+		}
+		org, ok := restScopeOrg(w, r, "investment_sunburst", claims)
+		if !ok {
 			return
 		}
 
@@ -563,7 +589,7 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -577,7 +603,7 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 
 		startTS, endTS, windowErr := timeWindow(investmentTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "investment", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "investment", org)
 			return
 		}
 
@@ -592,15 +618,22 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			WhatRepos: nil, WorkCategory: nil, Limit: limit, IssueSize: issueSize,
 		}
 
-		result, err := investment.BuildSunburst(r.Context(), reader, claims.OrgID, params)
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "investment_sunburst", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "investment_sunburst", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
+		result, err := investment.BuildSunburst(r.Context(), reader, org, params)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment_sunburst", org, err)
 			return
 		}
 
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
 		setSunburstSizingHeaders(w, result.Sizing)
 		slog.DebugContext(r.Context(), "investment_sunburst: served", "issue_size", issueSize, "slices", len(result.Slices), "sizing_headers", result.Sizing != nil)
-		writeInvestmentSunburstResponse(w, r, claims.OrgID, result.Slices)
+		writeInvestmentSunburstResponse(w, r, org, result.Slices)
 	}
 }

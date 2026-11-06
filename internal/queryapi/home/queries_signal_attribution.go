@@ -7,6 +7,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 )
 
 // signalAttributionSQL counts the latest primary attribution for each
@@ -63,10 +65,24 @@ const signalAttributionSQL = `
 // an absent result. For a team scope, repoScopeFilter resolves ownership via
 // teamscope.RepoCondition against wi.repo_id; it never uses legacy team_id
 // fields on a metric row.
+//
+// Under a repository ceiling (CHAOS-13086) the repository of an item is the repository of its linked pull requests,
+// never wi.repo_id: the items counted are those linked to the repositories of the view (linkedRepoIDs).
 func fetchSignalAttribution(ctx context.Context, client QueryClient, f Filters, startDay, endDay time.Time, orgID string, asOf time.Time) (*SignalAttribution, error) {
-	scopeFilter, scopeBindings, err := repoScopeFilter(ctx, client, f, orgID, "toString(wi.repo_id)", asOf)
-	if err != nil {
-		return nil, fmt.Errorf("home: resolve signal attribution scope: %w", err)
+	var scopeFilter string
+	var scopeBindings []dhclickhouse.Binding
+	if f.Ceiling.Restricted() {
+		ids, err := linkedRepoIDs(ctx, client, f, orgID, asOf)
+		if err != nil {
+			return nil, fmt.Errorf("home: resolve signal attribution scope: %w", err)
+		}
+		scopeFilter, scopeBindings = linkscope.ItemConditionIDs(ids, "wct.work_item_id")
+	} else {
+		var err error
+		scopeFilter, scopeBindings, err = repoScopeFilter(ctx, client, f, orgID, "toString(wi.repo_id)", asOf)
+		if err != nil {
+			return nil, fmt.Errorf("home: resolve signal attribution scope: %w", err)
+		}
 	}
 
 	bindings := append([]dhclickhouse.Binding{

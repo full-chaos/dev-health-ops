@@ -8,7 +8,9 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // IssueParams is the already-resolved request shape both GET and POST
@@ -40,6 +42,9 @@ type IssueParams struct {
 	// value is true. False and absent retain the established drilldown
 	// response from work_item_cycle_times.
 	BlockedOnly bool
+	// Ceiling is the repositories the caller may read (CHAOS-13085): an item is served only when a linked pull
+	// request of an allowed repository exists. The zero value reads every item.
+	Ceiling teamscope.Ceiling
 }
 
 // IssueItem ports one dict fetch_issues (api/queries/drilldown.py:60-93)
@@ -307,8 +312,11 @@ func blockedScopeClauseTeam(scopeLevel string, teamIDs []string) (filterSQL stri
 	}
 }
 
-func renderBlockedIssueWindowSource(scopeLevel string, teamIDs []string) (string, []dhclickhouse.Binding) {
+func renderBlockedIssueWindowSource(scopeLevel string, teamIDs []string, ceiling teamscope.Ceiling) (string, []dhclickhouse.Binding) {
 	scopeSQL, scopeBindings := blockedScopeClauseTeam(scopeLevel, teamIDs)
+	linkSQL, linkBindings := linkscope.ItemCondition(ceiling, "b.work_item_id")
+	scopeSQL += linkSQL
+	scopeBindings = append(scopeBindings, linkBindings...)
 	return fmt.Sprintf(blockedIssueWindowSource, latestBlockedItemDaysSource, scopeSQL), scopeBindings
 }
 
@@ -345,8 +353,11 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 	}
 
 	scopeSQL, scopeBindings := scopeClauseTeam(params.ScopeLevel, params.ScopeIDs)
+	linkSQL, linkBindings := linkscope.ItemCondition(params.Ceiling, "wct.work_item_id")
+	scopeSQL += linkSQL
+	scopeBindings = append(scopeBindings, linkBindings...)
 	attributionSource := primaryWorkItemTeamAttributionSource
-	if scopeSQL != "" {
+	if teamSQL, _ := scopeClauseTeam(params.ScopeLevel, params.ScopeIDs); teamSQL != "" {
 		attributionSource = teamScopedWorkItemTeamAttributionSource
 	}
 
@@ -384,7 +395,7 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 }
 
 func buildBlockedIssuesResponse(ctx context.Context, reader *Reader, orgID string, params IssueParams) (*IssuesResponse, error) {
-	source, scopeBindings := renderBlockedIssueWindowSource(params.ScopeLevel, params.ScopeIDs)
+	source, scopeBindings := renderBlockedIssueWindowSource(params.ScopeLevel, params.ScopeIDs, params.Ceiling)
 	query := fmt.Sprintf(fetchBlockedIssuesQuery, source, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(params.StartDay)},

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/llmorgsettings"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // testPlatformGate admits the platform model, for tests of everything but the gate.
@@ -98,7 +99,7 @@ func TestInvestmentExplainRunsTheModelGateBeforeAnyProvider(t *testing.T) {
 			}
 			handler := newInvestmentExplainWorkHandler(reader, nil, resolver, nil, llmorgsettings.Gate{Source: row.source})
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			handler(rec, req)
 			assertGateOutcome(t, rec, resolver, investmentAdmitted(row.source.in.Saved), row.admit, row.status, row.refusal)
@@ -131,7 +132,7 @@ func TestExplainRoutesRefuseWithoutAGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	newInvestmentExplainWorkHandler(reader, nil, nil, nil, nil)(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -200,7 +201,7 @@ func TestMountedExplainHandlersObeyTheModelGate(t *testing.T) {
 	for name, run := range map[string]func(*countingSettings) *httptest.ResponseRecorder{
 		"investment explain": func(settings *countingSettings) *httptest.ResponseRecorder {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			investmentExplainHandler(reader, nil, settings, nil)(rec, req)
 			return rec

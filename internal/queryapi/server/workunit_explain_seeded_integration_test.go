@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 const (
@@ -152,7 +153,7 @@ func TestWorkUnitExplainSeededRealClickHouse_TeamScopeRefusesAUnitOutsideTheTeam
 			req := httptest.NewRequest(http.MethodPost,
 				"/api/v1/work-units/"+testCase.workUnitID+"/explain?"+testCase.query, nil)
 			req.SetPathValue("work_unit_id", testCase.workUnitID)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: workUnitsSeededOrgID}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: workUnitsSeededOrgID, Scope: pepgate.Legacy(workUnitsSeededOrgID)}))
 
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)

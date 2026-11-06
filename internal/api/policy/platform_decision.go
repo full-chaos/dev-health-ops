@@ -25,6 +25,11 @@ var ErrPlatformDecisionUnavailable = errors.New("policy: platform decision unava
 // token) while the admin cell is on: its platform actions are never judged locally under enforcement.
 var ErrPlatformLegacyCredential = errors.New("policy: platform action refused for a legacy credential under enforcement")
 
+// ErrPlatformImpersonation is HoldsPlatform's error in a live go-api impersonation session while the admin cell is on:
+// the bearer is the admin's own, so its platform actions are refused (D6714); admin.impersonate, the session's own
+// status, is still asked.
+var ErrPlatformImpersonation = errors.New("policy: platform action refused in an impersonation session")
+
 const (
 	legacyCredentialReason = "legacy_credential"
 	legacyCredentialDetail = "Platform actions need a user access token while authorization is enforced"
@@ -54,6 +59,10 @@ func (d *platformDecisions) seed(action string, held bool) {
 func (d *platformDecisions) holds(ctx context.Context, action string) (bool, error) {
 	if !rule.PlatformOf(action).Has(action) {
 		return false, nil
+	}
+	if action != ActionAdminImpersonate && ImpersonationFrom(ctx) != nil {
+		d.enforcer.logger.WarnContext(ctx, "api enforcement: a platform question in an impersonation session is refused", slog.String("action", action))
+		return false, ErrPlatformImpersonation
 	}
 	if !d.judged {
 		d.enforcer.logger.WarnContext(ctx, "api enforcement: a platform question of a legacy credential is refused", slog.String("action", action))
@@ -103,10 +112,14 @@ func WithPlatformDecider(ctx context.Context, decider pep.Decider, bearer string
 		enforcer: &Enforcer{decider: decider, timeout: enforceDefaultTimeout, logger: slog.Default()}, bearer: bearer, judged: true})
 }
 
-// WritePlatformDecisionRefusal answers a request whose platform question HoldsPlatform refused: a legacy credential
-// under enforcement is a 403 with reason_code legacy_credential; no verdict is a 503 with a retry hint, as an
-// enforced route that gets none.
+// WritePlatformDecisionRefusal answers a request whose platform question HoldsPlatform refused: an impersonation
+// session is a 403 as on an enforced row; a legacy credential under enforcement is a 403 with reason_code
+// legacy_credential; no verdict is a 503 with a retry hint, as an enforced route that gets none.
 func WritePlatformDecisionRefusal(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrPlatformImpersonation) {
+		WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+		return
+	}
 	if errors.Is(err, ErrPlatformLegacyCredential) {
 		detail := ErrorDetail(legacyCredentialDetail)
 		detail.Set("reason_code", legacyCredentialReason)

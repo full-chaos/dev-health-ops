@@ -219,3 +219,22 @@ func TestPDPAction_TokenOrgAdminIsRefusedAnotherPathOrg(t *testing.T) {
 		}
 	}
 }
+
+// With the admin cell on, a live go-api impersonation row gets no platform action in the users handlers (D6714): even
+// when the decision point would allow the admin's own admin.users, a user outside the org is not in scope and the
+// caller's own org is not served; both answer 403 in an impersonation session.
+func TestPDPAction_ImpersonationSessionGetsNoAdminUsers(t *testing.T) {
+	session := &policy.Impersonation{ID: uuid.New(), AdminUserID: uuid.New(), TargetUserID: uuid.New(), TargetOrgID: uuid.New(),
+		TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
+	user := &policy.User{ID: uuid.New(), IsSuperuser: true}
+	w := httptest.NewRecorder()
+	ctx := policy.WithImpersonation(pdpCtx(t, rule.ActionAdminUsers), session)
+	if got := newHandlers(t).ensureUserInScope(ctx, w, user, uuid.New(), uuid.New()); got || w.Code != http.StatusForbidden ||
+		!strings.Contains(w.Body.String(), "impersonation session") {
+		t.Errorf("user scope: in scope = %v, %d %q; want false and 403 in an impersonation session", got, w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	if _, got := orgIDForNonSuperuser(ctx, w, user); got || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "impersonation session") {
+		t.Errorf("no org context: served = %v, %d %q; want false and 403 in an impersonation session", got, w.Code, w.Body.String())
+	}
+}

@@ -170,6 +170,13 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		// for organization power (fail closed while superuser access without a membership is an open question). Off,
 		// the local set decides as before.
 		enforced := platform != nil
+		// An admin-or or platform wrap the decision point did not decide (a row with no action) gives a live go-api
+		// impersonation row no platform action with the cell on (D6714); the stop route stays the admin's own.
+		if enforced && gt.kind != gateNone && r.Pattern != stopImpersonationPattern && ImpersonationFrom(r.Context()) != nil {
+			g.observeShadow(r, caller, bearer, false)
+			WritePlatformDecisionRefusal(w, ErrPlatformImpersonation)
+			return
+		}
 		holds := func(action string) (bool, error) {
 			if !enforced {
 				return user.Holds(action), nil

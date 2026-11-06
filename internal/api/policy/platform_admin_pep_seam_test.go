@@ -141,6 +141,7 @@ func seamMux(guard *Guard) *http.ServeMux {
 	mux.Handle("GET /api/v1/admin/users", guard.WrapAdminOr(rule.ActionAdminUsers, seamEcho(rule.ActionAdminUsers)))
 	mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(rule.ActionAdminOrgs, seamEcho(rule.ActionAdminOrgs)))
 	mux.Handle("POST /api/v1/telemetry/report", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminTelemetry)))
+	mux.Handle("GET /api/v1/admin/impersonate/status", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminImpersonate)))
 	return mux
 }
 
@@ -355,5 +356,42 @@ func TestPlatformBypassesOrgOutsideTheGuardIsTheLocalSet(t *testing.T) {
 	}
 	if singles, batches := decider.counts(); singles != 1 || batches != 0 {
 		t.Fatalf("%d single and %d batch calls, want only the admin.orgs question", singles, batches)
+	}
+}
+
+// With the admin cell on, a live go-api impersonation row gets no platform action where the decision point does not
+// decide the row (D6714: the bearer is the admin's own, judged as the admin, not as the target). An admin-or row with
+// no action answers 403 before any question, whatever the admin's role; a handler's platform question is refused; the
+// session's own status question (admin.impersonate) is still asked. With the cell off the answer is main's.
+func TestPlatformQuestionsInAnImpersonationSessionAreRefusedWithTheAdminCellOn(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		cell    string
+		role    string
+		method  string
+		path    string
+		status  int
+		body    string
+		singles int
+	}{
+		{"admin-or row, member", "admin", "member", http.MethodGet, "/api/v1/admin/users", 403, impersonationRefusalBody, 0},
+		{"admin-or row, org admin", "admin", "admin", http.MethodGet, "/api/v1/admin/users", 403, impersonationRefusalBody, 0},
+		{"handler question", "admin", "member", http.MethodPost, "/api/v1/telemetry/report", 403, impersonationRefusalBody, 0},
+		{"own session status", "admin", "member", http.MethodGet, "/api/v1/admin/impersonate/status", 200, "platform=true bypass=false", 1},
+		{"admin-or row, cell off", "teams", "member", http.MethodGet, "/api/v1/admin/users", 200, "platform=true bypass=true", 0},
+		{"handler question, cell off", "teams", "member", http.MethodPost, "/api/v1/telemetry/report", 200, "platform=true bypass=true", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminUsers), platformRule(rule.ActionAdminTelemetry),
+				platformRule(rule.ActionAdminImpersonate))}
+			h := impersonating(seamHandler(t, legacyStore(true, c.role), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell)))
+			got := seamServe(h, c.method, c.path)
+			if got.status != c.status || got.body != c.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			}
+			if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
+				t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
+			}
+		})
 	}
 }

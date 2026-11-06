@@ -37,7 +37,7 @@ func Command() cli.Command {
 	return cli.Command{
 		Name:    "auth",
 		Kind:    cli.Group,
-		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, platform-role-grant, platform-role-revoke, platform-role-list",
+		Summary: "auth control plane operator verbs: users-backfill, users-reconcile, oauth-sso-count, orgs-backfill, orgs-reconcile, legacy-link-purge, repo-identities-sync, platform-role-grant, platform-role-revoke, platform-role-list",
 		Children: append([]cli.Command{{
 			Name:    "users-backfill",
 			Kind:    cli.Verb,
@@ -68,6 +68,11 @@ func Command() cli.Command {
 			Kind:    cli.Verb,
 			Summary: "delete go-api's legacy public link-token rows once users are owned (idempotent; counts only; refused unless AUTH_USERS_OWNED is true)",
 			Run:     runLegacyLinkPurge,
+		}, {
+			Name:    "repo-identities-sync",
+			Kind:    cli.Verb,
+			Summary: "copy the provider repository ids from ClickHouse repos into auth.repository_identities and give live repository grants their id (idempotent; counts and grant ids only; run after auth-migrate)",
+			Run:     runRepoIdentities,
 		}}, platformRoleVerbs()...),
 	}
 }

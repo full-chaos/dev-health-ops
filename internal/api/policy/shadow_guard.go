@@ -15,18 +15,16 @@ func (g *Guard) observeShadow(r *http.Request, user *User, bearer string, legacy
 	g.pdp.shadow.Observe(ctx, ShadowObservation{
 		Pattern: r.Pattern, Bearer: bearer, OrgID: user.OrgID, Caller: shadowCallerKind(user),
 		UserAccessToken: user.accessToken, Impersonating: ImpersonationFrom(ctx) != nil, LegacyAllowed: legacyAllowed,
+		served: servedOrgOf(r, g.pdp.shadow.rows[r.Pattern]),
 	})
 }
 
 func shadowCallerKind(user *User) string {
-	switch {
-	case user.Holds(ActionAdminOrgs):
-		return ShadowCallerSuperuser
-	case user.Role == "owner" || user.Role == "admin":
-		return ShadowCallerAdmin
-	}
-	return ShadowCallerMember
+	return ShadowCaller(user.Holds(ActionAdminOrgs), user.Role)
 }
+
+// ShadowCaller is the closed caller kind of a verified user, the same rule the guard's shadow hook uses.
+func (u *User) ShadowCaller() string { return shadowCallerKind(u) }
 
 // ShadowEnabled reports whether a shadow is installed beside the guard.
 func (g *Guard) ShadowEnabled() bool { return g.pdp.shadow != nil }

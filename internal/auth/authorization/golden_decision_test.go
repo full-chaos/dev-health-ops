@@ -32,6 +32,7 @@ type goldenGrant struct {
 	Role         string  `json:"role"`
 	ResourceKind string  `json:"resource_kind"`
 	ResourceKey  string  `json:"resource_key"`
+	RepoID       string  `json:"resource_repo_id"`
 	ExpiresAt    *string `json:"expires_at"`
 	Revoked      bool    `json:"revoked"`
 }
@@ -222,7 +223,7 @@ func goldenSnapshot(t *testing.T, st goldenState) Snapshot {
 	}
 	base := goldenSnap{st: st, now: now}
 	for _, g := range st.Grants {
-		row := Grant{OrgID: g.OrgID, Role: g.Role, ResourceKind: g.ResourceKind, ResourceKey: g.ResourceKey, Revoked: g.Revoked}
+		row := Grant{OrgID: g.OrgID, Role: g.Role, ResourceKind: g.ResourceKind, ResourceKey: g.ResourceKey, RepoID: g.RepoID, Revoked: g.Revoked}
 		if g.ExpiresAt != nil {
 			row.ExpiresAtUnixNano = goldenParseTime(t, *g.ExpiresAt)
 		}

@@ -10,7 +10,7 @@ dir="${1:?usage: ci/go_test_json_to_junit.sh DIR}"
 for json in "${dir}"/*.json; do
   [ -f "${json}" ] || continue
   xml="${json%.json}.xml"
-  if go run "${JUNIT_REPORT_MODULE}" -parser gojson -in "${json}" -out "${xml}"; then
+  if go run -trimpath "${JUNIT_REPORT_MODULE}" -parser gojson -in "${json}" -out "${xml}"; then
     echo "go_test_json_to_junit: ${json##*/} -> ${xml##*/}"
   else
     rm -f -- "${xml}"

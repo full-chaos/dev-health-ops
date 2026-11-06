@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -91,11 +93,26 @@ func TestNewBuilderHoldsAnAllowlistScopeToTheCeiling(t *testing.T) {
 	if bound, unbound := restricted.ceilingBound(); bound == 0 || unbound != 0 {
 		t.Fatalf("repo_metrics_daily reads: %d with the ceiling, %d without; want all with it", bound, unbound)
 	}
-	for name, scope := range map[string]pepgate.Scope{"legacy": pepgate.Legacy("org-1"), "organization": pepgate.Organization("org-1"), "none": {}} {
-		open := &matcherCH{}
-		Resolve(context.Background(), NewBuilder(home.QueryClient(open), scope), "org-1", nil, ceilingNow)
-		if bound, _ := open.ceilingBound(); bound != 0 || open.countWith("identity_path") != 0 {
-			t.Fatalf("%s scope read a matcher or a ceiling", name)
+	reads := func(scope pepgate.Scope) []string {
+		client := &matcherCH{}
+		Resolve(context.Background(), NewBuilder(home.QueryClient(client), scope), "org-1", nil, ceilingNow)
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		out := append([]string(nil), client.sqls...)
+		sort.Strings(out)
+		return out
+	}
+	legacy := reads(pepgate.Legacy("org-1"))
+	// Organization, and no scope at all (an ingress that sets none: /query, the MCP listener), read what Legacy reads,
+	// statement for statement: no matcher, no ceiling term, no "1 = 0".
+	for name, scope := range map[string]pepgate.Scope{"organization": pepgate.Organization("org-1"), "none": {}} {
+		if got := reads(scope); !reflect.DeepEqual(got, legacy) {
+			t.Fatalf("%s scope reads differently from Legacy:\n%s\n---\n%s", name, strings.Join(got, "\n"), strings.Join(legacy, "\n"))
+		}
+	}
+	for _, statement := range legacy {
+		if strings.Contains(statement, "identity_path") || strings.Contains(statement, teamscope.BindingCeilingIDs) || strings.Contains(statement, "1 = 0") {
+			t.Fatalf("a Legacy build read a matcher or a ceiling:\n%s", statement)
 		}
 	}
 }

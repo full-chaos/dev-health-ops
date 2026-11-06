@@ -45,8 +45,14 @@ func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
 	auth := tokens.AuthenticatorOver(t, store, slog.New(refusals))
 	scope := policy.NewScope(auth, quietLogger())
 	reached := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	// stripeSeen is the mux pattern and the route profile the stripe handler saw on its last request.
+	var stripeSeen [2]string
+	stripe := func(w http.ResponseWriter, r *http.Request) {
+		stripeSeen = [2]string{r.Pattern, policy.RouteProfileFrom(r.Context())}
+		w.WriteHeader(http.StatusNoContent)
+	}
 	routes := []httpapi.Route{
-		{Method: http.MethodPost, Pattern: exemptPath, Handler: http.HandlerFunc(reached)},
+		{Method: http.MethodPost, Pattern: exemptPath, Handler: http.HandlerFunc(stripe)},
 		{Method: http.MethodPost, Pattern: "/api/v1/billing/other", Handler: http.HandlerFunc(reached)},
 	}
 	server, err := NewServer(apiTestConfig(), quietLogger(), routes, scope.Layers()...)
@@ -86,6 +92,15 @@ func TestSignatureOnlyRouteSkipsScopeOnlyForExactRoute(t *testing.T) {
 			t.Errorf("%s: the scope judged the bearer %d times (status %d), want 1", name, judged, code)
 		}
 	}
+	// The exemption reads the escaped target; the profile is the mux's own match on the decoded path. So an
+	// encoded slash is not exempt, reaches the handler the mux picks, and is judged against that handler's row.
+	stripeSeen = [2]string{}
+	before := refusals.profileCount("POST " + exemptPath)
+	if code, _, judged := send(http.MethodPost, "/api/v1/billing/webhooks%2Fstripe", false); judged != 1 ||
+		stripeSeen != [2]string{"POST " + exemptPath, "POST " + exemptPath} || refusals.profileCount("POST "+exemptPath)-before != 1 {
+		t.Errorf("encoded slash: status %d, judged %d, stripe handler saw pattern+profile %q, refusals on the stripe row %d; want judged 1 on the stripe row and the stripe handler",
+			code, judged, stripeSeen, refusals.profileCount("POST "+exemptPath)-before)
+	}
 }
 
 func TestNewServerRefusesANilScopeLayerWithoutPanicking(t *testing.T) {
@@ -96,8 +111,9 @@ func TestNewServerRefusesANilScopeLayerWithoutPanicking(t *testing.T) {
 
 // refusalLog is a slog handler that keeps the reason of every "access token refused" record.
 type refusalLog struct {
-	mu      sync.Mutex
-	reasons []string
+	mu       sync.Mutex
+	reasons  []string
+	profiles []string
 }
 
 func (l *refusalLog) Enabled(context.Context, slog.Level) bool { return true }
@@ -108,11 +124,14 @@ func (l *refusalLog) Handle(_ context.Context, r slog.Record) error {
 		return nil
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == "reason" {
-			l.mu.Lock()
+		l.mu.Lock()
+		switch a.Key {
+		case "reason":
 			l.reasons = append(l.reasons, a.Value.String())
-			l.mu.Unlock()
+		case "profile":
+			l.profiles = append(l.profiles, a.Value.String())
 		}
+		l.mu.Unlock()
 		return true
 	})
 	return nil
@@ -125,6 +144,19 @@ func (l *refusalLog) count(reason string) int {
 	n := 0
 	for _, got := range l.reasons {
 		if reason == "" || got == reason {
+			n++
+		}
+	}
+	return n
+}
+
+// profileCount is the refusals judged against the route profile.
+func (l *refusalLog) profileCount(profile string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, got := range l.profiles {
+		if got == profile {
 			n++
 		}
 	}

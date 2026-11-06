@@ -49,6 +49,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
@@ -6787,7 +6788,7 @@ func newGraphQLServerWithLimits(resolver *graph.Resolver, complexityLimit, depth
 	gqlHandler.Use(extension.FixedComplexityLimit(complexityLimit))
 	gqlHandler.Use(depthLimit{Max: depthMax})
 	gqlHandler.AroundFields(graph.RefuseNullForNonNullArguments)
-	useGraphQLGuards(gqlHandler)
+	useGraphQLGuards(gqlHandler, pdp.CallerUnknown)
 	gqlHandler.AroundResponses(recordErrorCount)
 	// CHAOS-4647 diagnostic: the process log carries nothing per-request,
 	// and gqlgen's default presenter surfaces only err.Error() -- which for
@@ -7059,6 +7060,11 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 		if shadowSubject != nil {
 			requestCtx = graph.WithShadowSubject(requestCtx, *shadowSubject)
 		}
+		// The header carrier (authenticateInternalRequest accepted the X-DH-Internal-* headers) has its own cells
+		// (D6721).
+		if !edge {
+			requestCtx = markHeaderCarrier(requestCtx, r)
+		}
 		r = r.WithContext(graph.WithRequestBody(authctx.WithClaims(requestCtx, claims), bodyBytes))
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		if edge {
@@ -7080,6 +7086,8 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 		}
 
+		// An operation the decision refuses as unavailable answers 503 (CHAOS-10865).
+		w, r = withRefusalStatus(w, r)
 		if edge {
 			routeMux.DispatchOr(operation, w, r, graphQLEdgeNotEnabled(operation))
 			return

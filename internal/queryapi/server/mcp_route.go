@@ -90,6 +90,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/featureflags"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -314,7 +315,8 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.Use(depthLimit{Max: limits.depth})
 	gql.Use(mcpOperationGuard{})
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
-	useGraphQLGuards(gql)
+	// The MCP listener accepts the X-DH-Internal-* header carrier only (mcpAuthenticate).
+	useGraphQLGuards(gql, pdp.CallerHeaders)
 	gql.AroundResponses(recordErrorCount)
 	gql.SetErrorPresenter(safeGraphQLErrorPresenter("mcp", func(ctx context.Context) {
 		if obs := mcpObservationFrom(ctx); obs != nil {

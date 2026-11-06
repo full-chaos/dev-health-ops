@@ -236,7 +236,7 @@ func TestGraphQLEnforceAllowServes(t *testing.T) {
 
 // G2 + G5: cell on, a PDP deny (no membership included): FORBIDDEN in the guard's form, no read.
 func TestGraphQLEnforceDenyIsForbidden(t *testing.T) {
-	for _, reason := range []string{"role_lacks_action", "not_member"} {
+	for _, reason := range []string{"role_lacks_action", "no_membership"} {
 		srv := pdptest.New(t)
 		srv.Deny(reason)
 		gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", pepOf(t, srv.URL))
@@ -274,7 +274,7 @@ func TestGraphQLEnforceTenantMismatchIs503(t *testing.T) {
 // G6: a superuser naming another org is asked about the named org (no local bypass); a deny refuses.
 func TestGraphQLEnforceSuperuserRebindAsksForTheNamedOrg(t *testing.T) {
 	srv := pdptest.New(t)
-	srv.Deny("not_member")
+	srv.Deny("no_membership")
 	decider := &countingDecider{next: pepOf(t, srv.URL)}
 	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", decider)
 	runGraphQLEnforce(t, gate, enforceCaller{user: true, superuser: true}, enforceDocOtherOrg).forbidden(t)
@@ -452,4 +452,47 @@ func TestGraphQLEnforceEnforcedRootIsNotShadowed(t *testing.T) {
 	if n := len(decider.requests()); n != 1 {
 		t.Fatalf("asked %d times, want 1 (the decision, no shadow ask)", n)
 	}
+}
+
+// G8: the platform root's action is not organization-scoped: with its namespace on it is never asked about an
+// organization, it is refused.
+func TestGraphQLEnforcePlatformRootIsNotAskedAsAnOrganization(t *testing.T) {
+	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+	gate, _ := enforceGate(t, pdp.ModeShadow, "admin", decider)
+	doc := `query Q { productTelemetryPlatformDashboard(input: {startDate: "2026-01-01", endDate: "2026-01-02"}) { __typename } }`
+	runGraphQLEnforce(t, gate, callerUser, doc).code503(t, string(pdp.ReasonNotCarriedOut))
+	if n := len(decider.requests()); n != 0 {
+		t.Fatalf("asked %d times about a platform root", n)
+	}
+}
+
+// S-e on /query: the X-DH-Internal-* header carrier is marked by its ingress, so the headers cell judges it, a user
+// cell never does; the refusal is HTTP 503.
+func TestGraphQLEnforceQueryHeaderCarrierFollowsTheHeadersCell(t *testing.T) {
+	serve := func(env map[string]string) enforceRun {
+		srv := pdptest.New(t)
+		gate := enforceGateFromEnv(t, srv, env)
+		client := &teamScopeReachClient{}
+		server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
+		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"gql": true})
+		mux.Register("gql", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server.ServeHTTP(w, r.WithContext(pdp.WithGate(r.Context(), gate)))
+		}))
+		verifier, _ := iaVerifier(t)
+		handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(enforceDocAnalytics): "gql"}, verifier, nil, nil, "", nil)
+		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":`+jsonQuote(t, enforceDocAnalytics)+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		iaHeaders(ecOrg.String(), "admin", false, false)(req)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		gate.Wait()
+		if n := len(srv.Requests()); n != 0 {
+			t.Fatalf("the header carrier asked the PDP %d times", n)
+		}
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements)}
+	}
+	serve(map[string]string{pdp.EnvMode: pdp.ModeShadow, "QUERY_API_AUTHZ_ENFORCE": "analytics"}).served(t)
+	serve(map[string]string{pdp.EnvMode: pdp.ModeShadow, "QUERY_API_HEADERS_AUTHZ_ENFORCE": "analytics"}).code503(t, reasonNoPrincipal)
 }

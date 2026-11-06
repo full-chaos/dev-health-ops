@@ -23,10 +23,13 @@ type Service string
 const (
 	GoAPI    Service = "go-api"
 	QueryAPI Service = "query-api"
+	// QueryAPIHeaders is query-api's header carrier (the MCP listener, /query on the internal listener): its GraphQL
+	// operations have cells of their own (D6721), so a QueryAPI cell never refuses a caller that has no principal.
+	QueryAPIHeaders Service = "query-api-headers"
 )
 
 // Services are the services that have cells.
-func Services() []Service { return []Service{GoAPI, QueryAPI} }
+func Services() []Service { return []Service{GoAPI, QueryAPI, QueryAPIHeaders} }
 
 // Env is the environment variable that lists the service's enforced
 // namespaces; "" for a service that has no cells.
@@ -36,6 +39,8 @@ func (s Service) Env() string {
 		return "GO_API_AUTHZ_ENFORCE"
 	case QueryAPI:
 		return "QUERY_API_AUTHZ_ENFORCE"
+	case QueryAPIHeaders:
+		return "QUERY_API_HEADERS_AUTHZ_ENFORCE"
 	}
 	return ""
 }

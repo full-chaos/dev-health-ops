@@ -89,7 +89,7 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	literals := 0
+	literals, enforceLiterals := 0, 0
 	fset := token.NewFileSet()
 	calls := map[string][]string{}
 	for _, name := range files {
@@ -110,6 +110,9 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 				if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "OperationShadow" {
 					literals++
 				}
+				if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "OperationEnforce" {
+					enforceLiterals++
+				}
 			case *ast.FuncDecl:
 				switch node.Name.Name {
 				case "newGraphQLServerWithLimits", "newMCPGraphQLServer", "useGraphQLGuards":
@@ -123,7 +126,7 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 					}
 					switch fun := call.Fun.(type) {
 					case *ast.Ident:
-						if fun.Name == "graphQLShadow" || fun.Name == "useGraphQLGuards" {
+						if fun.Name == "graphQLShadow" || fun.Name == "useGraphQLGuards" || fun.Name == "graphQLEnforce" {
 							calls[node.Name.Name] = append(calls[node.Name.Name], fun.Name)
 						}
 					case *ast.SelectorExpr:
@@ -144,8 +147,12 @@ func TestGraphQLShadowOneHarnessOnBothServers(t *testing.T) {
 	if literals != 1 {
 		t.Errorf("%d graph.OperationShadow literals in the server package, want the one in graphQLShadow", literals)
 	}
-	if got := calls["useGraphQLGuards"]; !slices.Equal(got, []string{"graphQLShadow", "guard"}) {
-		t.Errorf("useGraphQLGuards: calls %v, want the shadow before the org guard", got)
+	if enforceLiterals != 1 {
+		t.Errorf("%d graph.OperationEnforce literals in the server package, want the one in graphQLEnforce", enforceLiterals)
+	}
+	// CHAOS-10865: the decision runs after the org guard, so it decides for the organization the guard admitted.
+	if got := calls["useGraphQLGuards"]; !slices.Equal(got, []string{"graphQLShadow", "guard", "graphQLEnforce"}) {
+		t.Errorf("useGraphQLGuards: calls %v, want the shadow, the org guard, then the decision", got)
 	}
 	for _, fn := range []string{"newGraphQLServerWithLimits", "newMCPGraphQLServer"} {
 		if got := calls[fn]; !slices.Equal(got, []string{"useGraphQLGuards"}) {

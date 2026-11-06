@@ -213,11 +213,11 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 }
 
 // Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
-// in whose users row says superuser, an active session makes the target's
-// org the request's org, sets the impersonation context, and stamps
-// X-Impersonating / X-Impersonated-User-Id on the response. A session
-// lookup failure refuses the request with the generic 500, like the other
-// authorization lookups (fail closed, logged).
+// in who holds admin.impersonate, an active session makes the target's org the
+// request's org, sets the impersonation context, and stamps X-Impersonating /
+// X-Impersonated-User-Id on the response; the row it read is kept for the
+// write and platform refusals (Guard.sessionRow). A session lookup failure
+// refuses the request with 503, the dependency failure (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -247,14 +247,15 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			s.logger.ErrorContext(r.Context(), "api impersonation: session lookup failed; refusing the request",
 				slog.String("path", r.Pattern), slog.String("admin_user_id", user.UserID),
 				slog.Bool("unavailable", isUnavailable(err)), slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
-			WriteInternal(w)
+			WriteAuthFailure(w, "", ErrUnavailable)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionRowKey{}, rowRead{session: session})
 		if session == nil {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		ctx := context.WithValue(r.Context(), orgIDKey, session.TargetOrgID.String())
+		ctx = context.WithValue(ctx, orgIDKey, session.TargetOrgID.String())
 		ctx = context.WithValue(ctx, impersonationKey, session)
 		header := w.Header()
 		header.Add("X-Impersonating", "true")

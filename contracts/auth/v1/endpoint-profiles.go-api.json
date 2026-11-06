@@ -6077,7 +6077,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices",
       "service": "dev-health-ops-api",
       "source": {
@@ -6148,7 +6148,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices/{invoice_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6504,7 +6504,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions",
       "service": "dev-health-ops-api",
       "source": {
@@ -6573,7 +6573,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/history",
       "service": "dev-health-ops-api",
       "source": {
@@ -6642,7 +6642,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/list",
       "service": "dev-health-ops-api",
       "source": {
@@ -9771,6 +9771,75 @@
       "source": {
         "file": "internal/apiservice/admin/impersonation.go",
         "line": 28
+      },
+      "surface_kind": "rest",
+      "tenant_requirement": "cross_org_superuser_only",
+      "token_shape": {
+        "algorithm": "HS256",
+        "audience": "APIJWTAudience (go-api config)",
+        "issuer": "APIJWTIssuer (go-api config)",
+        "token_type": "HS256 JWT"
+      }
+    },
+    {
+      "accepted_credential_classes": [
+        "ops_access_token_hs256",
+        "user_access_token"
+      ],
+      "access_token_validation": {
+        "legacy_hs256": true
+      },
+      "action": "admin.impersonate",
+      "class_disambiguator": {
+        "kind": "jwt_header_alg",
+        "name": "EdDSA"
+      },
+      "classification": "protected",
+      "current_state_cache_behavior": "valkey: the route uses up the one-use record of a start handoff in one script that deletes the key impersonation:handoff:<id> only when it names the caller (internal/apiservice/admin/impersonation_handoff.go:59); the record is written by the delegated start before auth-service is asked (SET NX EX 150, internal/apiservice/admin/impersonation_handoff.go:52); no client or a store error answers 503 and admits nothing (internal/apiservice/admin/impersonation_handoff.go:117); the impersonation session cache is not read or written",
+      "delegated_bearer": "denied",
+      "disclosure_behavior": "platform route, behaviour today: once any body-first validation has run, only a caller holding admin.impersonate (a superuser holds it) passes, any other caller answers 403 (internal/api/policy/guard.go:191); the route is reachable while the caller's impersonation row is live, as the stop is (internal/api/policy/guard.go liveRowExemptPatterns); every refusal (no record, used, expired, gone, another administrator's, a malformed id) answers one 409 text (internal/apiservice/admin/impersonation_handoff.go:111, internal/apiservice/admin/impersonation_handoff.go:122)",
+      "gaps": [],
+      "graphql_field_name": null,
+      "id": "POST /api/v1/admin/impersonate/handoff/consume [dev-health-ops-api @api]",
+      "impersonation_policy": "exempt_no_org_context",
+      "method": "POST",
+      "primary_validator": {
+        "anchor": {
+          "line": 122,
+          "note": "func (g *Guard) Wrap",
+          "path": "internal/api/policy/guard.go"
+        },
+        "description": "policy.Superuser: a valid access token whose user row is a superuser."
+      },
+      "public_rationale": null,
+      "reachable_validators": [
+        {
+          "anchor": {
+            "line": 128,
+            "note": "func (s *Scope) OrgScope",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "OrgScope (OrgIdMiddleware, installed around every api-listener route in service.go configureWith): reads the caller from the Scope.Principal decision only, never the Authorization header, and checks X-Org-Id against that caller; a caller the route's row or the refusal table rules out is anonymous to it.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        },
+        {
+          "anchor": {
+            "line": 221,
+            "note": "func (s *Scope) Impersonation",
+            "path": "internal/api/policy/scope.go"
+          },
+          "description": "Impersonation (ImpersonationMiddleware, installed with OrgScope): reads the caller from the Scope.Principal decision only, never the Authorization header; for a superuser caller it may replace the effective organization on any api-listener route.",
+          "is_intended_validator": false,
+          "reachable_but_not_owner": true
+        }
+      ],
+      "resource_resolver": "none: platform route; the handoff id comes from the request body and the record must name the caller (internal/apiservice/admin/impersonation_handoff.go:90); the caller's own organization is not read",
+      "route": "/api/v1/admin/impersonate/handoff/consume",
+      "service": "dev-health-ops-api",
+      "source": {
+        "file": "internal/apiservice/admin/impersonation_handoff.go",
+        "line": 81
       },
       "surface_kind": "rest",
       "tenant_requirement": "cross_org_superuser_only",
@@ -13960,7 +14029,7 @@
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:109, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
+        "action: every organization role may call the route today (policy.Authenticated at its registration, no role check in the handler internal/api/billing/checkout.go:121); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/checkout [dev-health-ops-api @api]",
@@ -14068,7 +14137,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices/{invoice_id}/void",
       "service": "dev-health-ops-api",
       "source": {
@@ -14353,7 +14422,7 @@
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's organization context; a caller with no organization context answers 403 unless the route is on the org-less list (internal/api/policy/guard.go:165; internal/api/policy/orgless.go:26)",
       "gaps": [
-        "action: every organization role may call the route today (policy.Authenticated, internal/api/billing/routes.go:110, no role check in the handler); billing.manage is held by admin and owner only, so it does not record this route's access"
+        "action: every organization role may call the route today (policy.Authenticated at its registration, no role check in the handler internal/api/billing/checkout.go:253); billing.manage is held by admin and owner only, so it does not record this route's access"
       ],
       "graphql_field_name": null,
       "id": "POST /api/v1/billing/portal [dev-health-ops-api @api]",
@@ -14601,7 +14670,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/cancel",
       "service": "dev-health-ops-api",
       "source": {
@@ -14670,7 +14739,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/change-plan",
       "service": "dev-health-ops-api",
       "source": {
@@ -14739,7 +14808,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/reactivate",
       "service": "dev-health-ops-api",
       "source": {
@@ -15801,5 +15870,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "6f9a5d842b4b0bcd6628d2cf07e370f9384991a9"
+  "source_commit": "5aef592574deff778bb0c572d9632f42f2570cc5"
 }

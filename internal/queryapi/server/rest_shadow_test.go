@@ -441,10 +441,10 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	}
 }
 
-// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests.
+// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests. The in-flight cap is 100 so a slow PDP drops none.
 func TestRESTShadowSampleKnob(t *testing.T) {
 	srv := pdptest.New(t)
-	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50"})
+	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50", policy.EnvShadowPDPInFlight: "100"})
 	before := shadowCounters(t)
 	for i := 0; i < 100; i++ {
 		if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -562,7 +562,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 // 5.12 counters.
 func TestRESTEnforceUnchangedByTheShadowSwitch(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	before := shadowCounters(t)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: %+v", got)

@@ -8,13 +8,19 @@ func (g *Guard) SetShadow(s *Shadow) { g.pdp.shadow = s }
 // observeShadow is the guard's one call site of the shadow core: the caller as the legacy
 // decision saw it, and that decision. It never changes the answer.
 func (g *Guard) observeShadow(r *http.Request, user *User, bearer string, legacyAllowed bool) {
+	g.observeShadowAs(r, user, bearer, legacyAllowed, ImpersonationFrom(r.Context()) != nil)
+}
+
+// observeShadowAs is observeShadow with the impersonation state given: the guard read a live row itself, with no
+// session context.
+func (g *Guard) observeShadowAs(r *http.Request, user *User, bearer string, legacyAllowed, impersonating bool) {
 	if g.pdp.shadow == nil || user == nil {
 		return
 	}
 	ctx := r.Context()
 	g.pdp.shadow.Observe(ctx, ShadowObservation{
 		Pattern: r.Pattern, Bearer: bearer, OrgID: user.OrgID, Caller: shadowCallerKind(user),
-		UserAccessToken: user.accessToken, Impersonating: ImpersonationFrom(ctx) != nil, LegacyAllowed: legacyAllowed,
+		UserAccessToken: user.accessToken, Impersonating: impersonating, LegacyAllowed: legacyAllowed,
 		served: servedOrgOf(r, g.pdp.shadow.rows[r.Pattern]),
 	})
 }

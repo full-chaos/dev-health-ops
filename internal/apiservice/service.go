@@ -538,6 +538,10 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
 	}
 	session.SetRefreshAccepted(refreshAccepted)
+	if err := startLegacyLinkCounter(); err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_legacy_link_counter", "api_legacy_link_counter_invalid", err)
+	}
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)

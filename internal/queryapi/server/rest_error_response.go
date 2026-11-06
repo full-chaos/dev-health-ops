@@ -28,7 +28,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkeditems"
 	"log"
 	"net/http"
 	"strings"
@@ -139,13 +138,7 @@ func writeRESTMethodNotAllowed(w http.ResponseWriter, r *http.Request, component
 // down" (CHAOS-9126, D5879). One WARN names the operation, the bound and the
 // count of scope ids of the request (a count, never a value).
 func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string, err error) {
-	if errors.Is(err, linkeditems.ErrRecomputeBound) {
-		log.Printf("query-api: WARN %s: the ceiling recompute hit its bound: org_id=%s request_id=%s err=%v",
-			component, orgID, envelopeRequestID(r), err)
-		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, linkeditems.ErrRecomputeBound.Error())
-		return
-	}
-	if detail, ok := logRESTBoundHit(r, component, orgID, err); ok {
+	if detail, ok := restReadBoundDetail(r, component, orgID, err); ok {
 		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, detail)
 		return
 	}

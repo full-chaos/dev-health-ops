@@ -95,7 +95,7 @@ func newSeamStack(t *testing.T, route seamRoute) *seamStack {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, testAccess(minter.keys, nil, accessTestNow).opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, testAccess(minter.keys, nil, accessTestNow).opts); err != nil {
 		t.Fatal(err)
 	}
 	s := &seamStack{t: t, route: route, mux: http.NewServeMux(), client: &teamScopeReachClient{}, user: minter.mint(ecUser, nil, nil),
@@ -325,35 +325,36 @@ func TestSeamRESTCellOffIsTodaysPath(t *testing.T) {
 	}
 }
 
-// P14: the exempt classes (HS256 edge token, envelope) never ask, with every cell on and a PDP that denies: today's
-// read, the Legacy scope, one exempt count per class.
+// P14: the exempt class (envelope) never asks, with every cell on and a PDP that denies: today's read, the Legacy
+// scope, one exempt count. The HS256 edge token is the retired class on this routed stack: refused 401 before the
+// gate, no read, no handler, not counted, the PDP never asked.
 func TestSeamRESTExemptCallersStayOnTodaysPath(t *testing.T) {
 	for _, route := range seamRoutes() {
 		t.Run(route.name, func(t *testing.T) {
 			edge := func(*seamStack) string { return (&gatedREST{}).edgeToken(t) }
 			envelope := func(s *seamStack) string { return s.envelope }
-			legacyEdge, legacyEnvelope := legacyRun(t, route, edge), legacyRun(t, route, envelope)
+			legacyEnvelope := legacyRun(t, route, envelope)
 			decider := seamDenier(t)
 			gate, reader := seamGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
-			for name, tc := range map[string]struct {
-				bearer func(*seamStack) string
-				legacy seamRun
-			}{"edge": {edge, legacyEdge}, "envelope": {envelope, legacyEnvelope}} {
-				s := newSeamStack(t, route)
-				got := s.run(gate, tc.bearer(s))
-				if !got.same(tc.legacy) {
-					t.Fatalf("%s differs from today's path:\n got %d %q\nwant %d %q", name, got.status, got.body, tc.legacy.status, tc.legacy.body)
-				}
-				if len(s.seen) != 1 || s.seen[0].Scope != pepgate.Legacy(ecOrg.String()) {
-					t.Fatalf("%s: handler saw %+v, want Scope Legacy", name, s.seen)
-				}
+			s := newSeamStack(t, route)
+			got := s.run(gate, envelope(s))
+			if !got.same(legacyEnvelope) {
+				t.Fatalf("envelope differs from today's path:\n got %d %q\nwant %d %q", got.status, got.body, legacyEnvelope.status, legacyEnvelope.body)
+			}
+			if len(s.seen) != 1 || s.seen[0].Scope != pepgate.Legacy(ecOrg.String()) {
+				t.Fatalf("envelope: handler saw %+v, want Scope Legacy", s.seen)
+			}
+			s = newSeamStack(t, route)
+			refused := s.run(gate, edge(s))
+			if refused.status != http.StatusUnauthorized || len(refused.statements) != 0 || len(s.seen) != 0 {
+				t.Fatalf("routed HS256 edge token: %d %q, %d statements, handler saw %+v; want 401, no read, no handler", refused.status, refused.body, len(refused.statements), s.seen)
 			}
 			if decider.calls.Load() != 0 {
 				t.Fatalf("an exempt caller asked the PDP %d times", decider.calls.Load())
 			}
 			counts := (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_exempt_total")
-			if counts["action="+route.action+",class=ops_access_token_hs256"] != 1 || counts["action="+route.action+",class=effective_principal_envelope"] != 1 {
-				t.Fatalf("exempt counts %v, want one per class", counts)
+			if len(counts) != 1 || counts["action="+route.action+",class=effective_principal_envelope"] != 1 {
+				t.Fatalf("exempt counts %v, want the envelope once and no edge token", counts)
 			}
 		})
 	}

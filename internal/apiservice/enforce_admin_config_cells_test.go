@@ -262,7 +262,7 @@ func adminConfigServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
+	auth, err := policy.NewAuthenticator(store, quietLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func adminConfigServer(t *testing.T, enforcer func(*testing.T) *policy.Enforcer)
 		t.Fatal(err)
 	}
 	validator, err := accessverify.New(accessverify.Config{
-		Rows: realRows(t), EdDSA: eddsa, Legacy: legacyVerifier(auth.AuthenticateLegacy),
+		Rows: realRows(t), EdDSA: eddsa,
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: quietLogger(), Now: func() time.Time { return probeNow },
 	})

@@ -207,14 +207,15 @@ func TestDelegatedBearerIsServedUnderTheProxySwitch(t *testing.T) {
 	}
 }
 
-// A session read that fails is the generic 500 under the switch, as today.
+// A session read that fails is the dependency failure 503 under the switch,
+// as without it.
 func TestLegacyImpersonationSessionReadFailsClosedUnderTheProxySwitch(t *testing.T) {
 	for _, cell := range append(append([]legacyCell{}, admittedLegacyCells...), refusedLegacyCells[0]) {
 		store := legacyCallerStore()
 		store.errSession = errors.New("session read failed")
 		got := serveBody(legacyStack(t, store, &switchOn), cell.method, cell.path, bearer(t, superClaims))
-		if got.status != http.StatusInternalServerError || got.body != `{"detail":"Internal Server Error"}` {
-			t.Errorf("%s: %d %s, want the generic 500", cell.name, got.status, got.body)
+		if got.status != http.StatusServiceUnavailable || got.body != `{"detail":{"message":"Database temporarily unavailable"}}` {
+			t.Errorf("%s: %d %s, want the dependency failure 503", cell.name, got.status, got.body)
 		}
 	}
 }

@@ -69,7 +69,7 @@ AI Attribution remains a preview route and is intentionally omitted from the pub
 
 ## Context Fabric and agent context
 
-Context Fabric is the underlying Dev Health context, graph, evidence, metric, scope, and trust capability. **ACR** provides scoped context and evidence to compatible agents through the hosted `acr-api` and local `acr-mcp` sidecar.
+Context Fabric is the underlying Dev Health context, graph, evidence, metric, scope, and trust capability. **ACR** provides scoped context and evidence to compatible agents through the hosted `acr-api` and the hosted MCP server at `https://mcp.fullchaos.dev`. A local `acr-mcp` sidecar is the secondary path.
 
 ### How the product surfaces relate
 
@@ -89,7 +89,8 @@ Implementation topology, service ownership, contract flow, and the deterministic
 | Entry point | Use it when | Current path |
 | --- | --- | --- |
 | Context Fabric Validation | A platform administrator needs to validate context-packet assembly, coverage, compatibility, and evidence disclosure. | Open `/superadmin/context-fabric/validation`. |
-| ACR MCP sidecar | A compatible coding, review, documentation, or CI agent needs explicit task context or source evidence. | Register `acr-mcp serve` in the agent client, then use `context_for_task` and `source_evidence`. |
+| Hosted MCP server | A compatible coding, review, documentation, or CI agent needs explicit task context or source evidence. | Connect the client to `https://mcp.fullchaos.dev` and sign in. See [Connect an agent to the hosted MCP server](../../integrate/mcp/index.md). |
+| Local `acr-mcp` sidecar | The client cannot reach the hosted server, or you want a local STDIO process. | Register `acr-mcp serve` in the agent client, then use `context_for_task` and `source_evidence`. |
 
 The web app has no conversational window. An agent works through the same diagnosis loop as a person reading the product pages:
 
@@ -97,10 +98,11 @@ The web app has no conversational window. An agent works through the same diagno
 
 ### Use ACR and the MCP for an agent workflow
 
-ACR is a separate hosted Go service family with two primary binaries:
+ACR is a separate hosted Go service family with two primary binaries. An agent client normally connects to the hosted MCP server, so it runs no local process. The `acr-mcp` binary is the local STDIO alternative.
+
 
 - **`acr-api`** assembles context packets, expands authorized provenance, and exposes the hosted entitlement and credential boundary.
-- **`acr-mcp`** runs locally as a STDIO MCP server and connects a compatible client to `acr-api`.
+- **`acr-mcp`** serves the hosted MCP endpoint. It also runs locally as a STDIO MCP server that connects a compatible client to `acr-api`.
 
 The default MCP surface is deliberately small and read-only:
 
@@ -113,7 +115,8 @@ The hosted packet remains authoritative. An existing local CodeGraph index can a
 
 Client setup and platform-specific credential behavior are maintained in the context-fabric-agents repository:
 
-- [Configure the ACR MCP sidecar](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md)
+- [Connect an agent to the hosted MCP server](../../integrate/mcp/index.md)
+- [Use the connected server](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md)
 - [Choose an MCP client setup](https://github.com/full-chaos/context-fabric-agents#supported-clients)
 
 ### Validate Context Fabric as a platform administrator

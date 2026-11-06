@@ -317,13 +317,20 @@ login_signs_by() { # login_signs_by KID: wait out the key-state refresh (15 s), 
   login_user && kid_is "${L_ACCESS}" "$1"
 }
 probe_bg() { # probe_bg TOKEN OUTFILE SECONDS: go-api GET /api/v1/auth/me and query-api GET /api/v1/filters/options every 0.5 s
-  local tok="$1" out="$2" end=$((SECONDS + $3)) n=0
+  # Both calls of a tick run at once, beside the 0.5 s wait: a tick lasts 0.5 s, or as long as the slower call.
+  local tok="$1" out="$2" end=$((SECONDS + $3)) n=0 go_pid query_pid
   : >"${out}"
   while [ "${SECONDS}" -lt "${end}" ]; do
     n=$((n + 1))
-    printf '%d %s %s\n' "${n}" "$(api_code "${tok}" /api/v1/auth/me)" "$(query_code "${tok}")" >>"${out}"
+    api_code "${tok}" /api/v1/auth/me >"${out}.go" &
+    go_pid=$!
+    query_code "${tok}" >"${out}.query" &
+    query_pid=$!
     sleep 0.5
+    wait "${go_pid}" "${query_pid}" || true
+    printf '%d %s %s\n' "${n}" "$(cat "${out}.go")" "$(cat "${out}.query")" >>"${out}"
   done
+  rm -f "${out}.go" "${out}.query"
 }
 
 # Predicates for check (they run in this shell, so they see the helpers above).

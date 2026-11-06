@@ -148,6 +148,25 @@ else
   bad s1-overlap-probe-catches-a-query-api-miss
 fi
 
+# The two calls of a tick run at once, beside the 0.5 s wait (Codex r1 P1: serial calls stretched the tick by their latency).
+# go-api's stub answers only once query-api's call has started, so a serial probe records 000 for go-api.
+probe_together() {
+  local probe
+  probe="$(cat <<EOS
+source "${ROOT}/ci/lib/auth_rotation_probe.sh"
+sleep() { SECONDS=\$((SECONDS + 1)); }
+api_code() { local i; : >"${T}/go.started"; for i in \$(seq 1 30); do [ -e "${T}/query.started" ] && { printf 200; return; }; command sleep 0.1; done; printf 000; }
+query_code() { local i; : >"${T}/query.started"; for i in \$(seq 1 30); do [ -e "${T}/go.started" ] && { printf 200; return; }; command sleep 0.1; done; printf 000; }
+${probe_fn}
+probe_bg tok "${T}/together" 2
+${overlap_pred} "${T}/together"
+EOS
+)"
+  bash -c "${probe}" >/dev/null 2>&1
+}
+if [ -n "${probe_fn}" ] && [ -n "${overlap_pred}" ] && probe_together && [ ! -e "${T}/together.go" ] && [ ! -e "${T}/together.query" ]; then
+  ok s1-overlap-probe-asks-both-at-once; else bad s1-overlap-probe-asks-both-at-once; fi
+
 # Every ops verifier of the new key is asked in the overlap and again after a retires: go-api and query-api, each with the
 # a-token in the overlap and the b-token after the activate and after the retire.
 # shellcheck disable=SC2016

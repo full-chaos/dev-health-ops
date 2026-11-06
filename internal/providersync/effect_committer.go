@@ -14,6 +14,13 @@ type EffectReadback interface {
 	InspectEffect(context.Context, Claim, EffectBatch) (EffectInspection, error)
 }
 
+// effectRowsLedger is a ledger whose flips to Committed also receive the batch
+// the effect wrote (PostgresRepository: the repository identity outbox).
+type effectRowsLedger interface {
+	CommitEffectRows(context.Context, Claim, int, string, EffectBatch, time.Time) error
+	MarkEffectCommittedRows(context.Context, Claim, int, string, EffectBatch, time.Time) error
+}
+
 type EffectCommitResult struct {
 	Written          int
 	Skipped          int
@@ -135,9 +142,8 @@ func (committer EffectCommitter) commitPrepared(
 				}
 				switch inspection {
 				case EffectExact:
-					if err := committer.Ledger.ResolveEffect(
-						ctx, claim, effect.Index, effect.ContentDigest,
-						GenerationBlockMarkCommitted, committer.now(),
+					if err := committer.markCommitted(
+						ctx, claim, *effect, batch,
 					); err != nil {
 						return result, err
 					}
@@ -176,14 +182,39 @@ func (committer EffectCommitter) commitPrepared(
 		if err := committer.Sink.WriteEffect(ctx, claim, batch); err != nil {
 			return result, err
 		}
-		if err := committer.Ledger.CommitEffect(
-			ctx, claim, effect.Index, effect.ContentDigest, committer.now(),
-		); err != nil {
+		if err := committer.commitEffect(ctx, claim, *effect, batch); err != nil {
 			return result, err
 		}
 		result.Written++
 	}
 	return result, nil
+}
+
+func (committer EffectCommitter) commitEffect(
+	ctx context.Context, claim Claim, effect EffectLedgerEntry, batch EffectBatch,
+) error {
+	if ledger, ok := committer.Ledger.(effectRowsLedger); ok {
+		return ledger.CommitEffectRows(
+			ctx, claim, effect.Index, effect.ContentDigest, batch, committer.now(),
+		)
+	}
+	return committer.Ledger.CommitEffect(
+		ctx, claim, effect.Index, effect.ContentDigest, committer.now(),
+	)
+}
+
+func (committer EffectCommitter) markCommitted(
+	ctx context.Context, claim Claim, effect EffectLedgerEntry, batch EffectBatch,
+) error {
+	if ledger, ok := committer.Ledger.(effectRowsLedger); ok {
+		return ledger.MarkEffectCommittedRows(
+			ctx, claim, effect.Index, effect.ContentDigest, batch, committer.now(),
+		)
+	}
+	return committer.Ledger.ResolveEffect(
+		ctx, claim, effect.Index, effect.ContentDigest,
+		GenerationBlockMarkCommitted, committer.now(),
+	)
 }
 
 // sortEffectBatches is THE ordering for effect batches. It exists as one

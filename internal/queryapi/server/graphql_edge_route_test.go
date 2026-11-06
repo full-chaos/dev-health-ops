@@ -896,7 +896,8 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 }
 
 // TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead: the middleware's session
-// read failing refuses with the unhandled 500 before anything runs.
+// read failing refuses with 503 Database temporarily unavailable before
+// anything runs.
 func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:     map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -907,8 +908,8 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	handler, seen := edgeClaimsHarness(t, store)
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	recorder := edgePostAs(t, handler, token)
-	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` || len(*seen) != 0 {
-		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != restUnavailable || len(*seen) != 0 {
+		t.Fatalf("%d %q ran=%v, want the 503 and nothing run", recorder.Code, recorder.Body.String(), *seen)
 	}
 }
 

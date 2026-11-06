@@ -41,10 +41,12 @@ They used one deployment-wide API key (`INGEST_API_KEYS`, header `X-API-Key`) or
 
 The only refusal is in the Helm chart. It happens when you render the chart, not when the service starts. The render fails, whether `goApi.enabled` is true or false, with one of these texts:
 
-- `legacyIngest is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); only legacyIngest.enabled: false may remain`
-- `legacyIngest.enabled is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); set it false or remove it`
-- `legacyIngest.sunset is retired: the legacy /api/v1/ingest/* routes of go-api are gone (CHAOS-11813); remove it`
-- `goApi.extraEnv must not set <NAME>: the legacy ingest routes are retired (CHAOS-11813) and go-api reads no such setting`
+- the `legacyIngest` key is retired; only `legacyIngest.enabled: false` may remain
+- `legacyIngest.enabled` is retired; set it false or remove it
+- `legacyIngest.sunset` is retired; remove it
+- `goApi.extraEnv` must not set a legacy ingest variable; go-api reads no such setting
+
+Each refusal message also says that the legacy `/api/v1/ingest/*` routes of go-api are gone.
 
 To clear a refusal:
 

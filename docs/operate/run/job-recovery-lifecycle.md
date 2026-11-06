@@ -435,7 +435,7 @@ run's single `metrics.daily_finalize` job exactly once, the instant the last
 partition transitions to `succeeded`, under the fixed key
 `metrics.daily_finalize:<run id>` — permanently deduped by the outbox like
 every other kind here. If THAT job is discarded by River before
-`CompleteFinalize` ever runs (e.g. the compatibility bridge's `Finalize` call
+`CompleteFinalize` ever runs (e.g. the `Finalize` call
 hitting the same memory-bound class that affects partitions), the run
 sits `status='running'` forever despite 100% partition success, and
 `daily-redrive`'s own stranded-partition predicate never matches it (it
@@ -447,10 +447,9 @@ re-verifying under a row lock that the run is still `running`, every
 partition is still `succeeded`, and finalization has not already settled.
 
 **A stuck finalize LEDGER row defeats a bare republish the same way it
-defeats a partition redrive.** The Python compatibility
-bridge's own finalize ledger row (`metric_compatibility_executions`,
+defeats a partition redrive.** The finalize ledger row (`metric_compatibility_executions`,
 `operation='finalize'`) can be left `ambiguous`/stuck-`executing` from the
-original stranding — the owning api process died mid-`Finalize`, or a
+original stranding — the owning process died mid-`Finalize`, or a
 progress-having finalize failure never got a human `/repair` call.
 Publishing a fresh `metrics.daily_finalize` job into that state is a
 guaranteed `JobCancelError ambiguous_refused`, forever, no matter how many
@@ -478,11 +477,10 @@ finalize-redrive --org <uuid> --from <YYYY-MM-DD> --to <YYYY-MM-DD>
 --review-evidence "<why>" --reason <code> --correlation-id <id>` closes this: it transactionally resets an
 eligible `'succeeded'` run back to a claimable state (in the same
 transaction as the fresh publish) so it can reach `FinalizeHandler.Work`
-again at all — both Go's `ClaimFinalize` and the Python compat bridge's own
-claim-row query hard-require `status='running'`, so a bare republish against
+again at all — `ClaimFinalize` and the ledger claim-row query both hard-require `status='running'`, so a bare republish against
 an already-terminal run is a guaranteed no-op — the reset ALSO assigns a
 fresh `generation`, or the redriven attempt would reuse the identical
-Python-side execution identity that already reached `'succeeded'` and get
+ledger execution identity that already reached `'succeeded'` and get
 silently skipped instead of actually recomputing anything. Always start with
 `--dry-run` (lists days + current run state, zero writes) before authorizing
 the real pass. Every reset writes a provenance row to

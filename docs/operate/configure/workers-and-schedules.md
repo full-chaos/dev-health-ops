@@ -53,10 +53,8 @@ this tree any more. These were configured together:
 - Beat or scheduler ownership;
 - shutdown grace periods for long-running work.
 
-None of this is live. The queue names, the `worker`/`worker-heavy`/`worker-ingest`/`worker-external-ingest`/`beat`
-service split, and the `WORKER_*_ENABLED` provider switches referenced by older
-issues and runbooks are documented as historical vocabulary — with their Go
-successors — in the
+None of this is live. The Celery queue names, the `worker`/`worker-heavy`/`worker-ingest`/`worker-external-ingest`/`beat`
+service split, and the `WORKER_*_ENABLED` provider switches are not part of the product. Their Go successors are in the
 [generated queue mapping](../../contribute/architecture/go-worker-runtime.md#the-celery-to-river-queue-mapping-generated).
 Do not bring a Celery service back up to diagnose a live incident; it has no
 consumers wired to current queues and no operator keeps its routing
@@ -319,20 +317,7 @@ a bug and re-discover it from scratch.
   at all. The checked-in production compose file was already not the true
   source of prod's Celery topology before either side was archived; treat
   both as historical record of *a* Celery topology, not *the* deployed one.
-- **Helm/Kubernetes defaults match compose.** Earlier, `deploy/helm/dev-health/values.yaml` defaulted `worker.enabled`,
-  `workerIngest.enabled`, `workerExternalIngest.enabled`,
-  `workerHeavy.enabled`, and `beat.enabled` to `true` and `goWorkers.enabled`
-  to `false`, with a `PAGERDUTY_WEBHOOK_TRANSPORT` switch defaulting to
-  `celery`;
-  `deploy/kubernetes/beat.yaml` (removed with the Python api) and `worker.yaml` were the matching plain
-  manifests. They were deleted, not archived: the Celery Helm templates and
-  Kubernetes manifests are gone (the raw Kubernetes tree is gone entirely),
-  and `goWorkers.enabled` now defaults to `true`. Helm now
-  agree with the compose reality this page describes: Go/River primary, no
-  Celery fleet to opt out of. `PAGERDUTY_WEBHOOK_TRANSPORT` itself is gone:
-  it chose between two runtimes consuming the PagerDuty webhook
-  stream, and the Python one no longer exists, so there is nothing left to
-  choose.
+- **Helm/Kubernetes defaults match compose.** `goWorkers.enabled` defaults to `true` in `deploy/helm/dev-health/values.yaml`: Go/River is the only worker runtime, and there is no Celery fleet to opt out of.
 
 ## PostgreSQL requirements
 

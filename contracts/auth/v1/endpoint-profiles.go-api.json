@@ -6077,7 +6077,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices",
       "service": "dev-health-ops-api",
       "source": {
@@ -6148,7 +6148,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices/{invoice_id}",
       "service": "dev-health-ops-api",
       "source": {
@@ -6504,7 +6504,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions",
       "service": "dev-health-ops-api",
       "source": {
@@ -6573,7 +6573,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/history",
       "service": "dev-health-ops-api",
       "source": {
@@ -6642,7 +6642,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and every organization for an admin.billing holder (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/list",
       "service": "dev-health-ops-api",
       "source": {
@@ -14068,7 +14068,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: for an admin.billing holder the last org_id query value names the organization, and without one every organization is served; any other caller's org_id is ignored and the caller's organization from the verified session user is served (internal/api/billing/invoices.go:31)",
       "route": "/api/v1/billing/invoices/{invoice_id}/void",
       "service": "dev-health-ops-api",
       "source": {
@@ -14601,7 +14601,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/cancel",
       "service": "dev-health-ops-api",
       "source": {
@@ -14670,7 +14670,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/change-plan",
       "service": "dev-health-ops-api",
       "source": {
@@ -14739,7 +14739,7 @@
           "reachable_but_not_owner": true
         }
       ],
-      "resource_resolver": "organization_from_session: the caller's organization from the verified session user (internal/api/policy/guard.go:165)",
+      "resource_resolver": "organization_from_query_or_session: the last org_id query value names the organization, admitted for a member there or an admin.billing holder; without one the caller's organization from the verified session user is served, and an admin.billing holder is answered 400 (internal/api/billing/subscriptions.go:47)",
       "route": "/api/v1/billing/subscriptions/reactivate",
       "service": "dev-health-ops-api",
       "source": {

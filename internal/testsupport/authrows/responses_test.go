@@ -77,7 +77,7 @@ func TestProjectedSignInAnswersMatchTheGoldens(t *testing.T) {
 		if target == golden {
 			t.Fatalf("%s: the target body equals the golden's: nothing to classify", s.step)
 		}
-		if got, want := TargetResponseBody(target), GoldenResponseBody(s.step, golden); got != want {
+		if got, want := TargetResponseBody(target, nil), GoldenResponseBody(s.step, golden); got != want {
 			t.Errorf("%s: projected target and golden differ:\n target %s\n golden %s", s.step, got, want)
 		}
 	}
@@ -88,7 +88,7 @@ func TestProjectionKeepsEveryOtherDifference(t *testing.T) {
 	golden := goldenBody(t, "accept: ivan joins org A")
 	target := targetOf(t, golden, false)
 	want := GoldenResponseBody("accept: ivan joins org A", golden)
-	if TargetResponseBody(target) != want {
+	if TargetResponseBody(target, nil) != want {
 		t.Fatal("the clean pair does not match")
 	}
 	for name, mutate := range map[string]func(string) string{
@@ -116,7 +116,7 @@ func TestProjectionKeepsEveryOtherDifference(t *testing.T) {
 		if mutated == target {
 			t.Fatalf("%s: the mutation changed nothing", name)
 		}
-		if TargetResponseBody(mutated) == want {
+		if TargetResponseBody(mutated, nil) == want {
 			t.Errorf("%s was classified away", name)
 		}
 	}
@@ -127,7 +127,7 @@ func TestProjectionKeepsEveryOtherDifference(t *testing.T) {
 	}
 	// a sid outside the access token is not the ignored claim.
 	elsewhere := strings.Replace(target, `"token_type":"bearer"`, `"token_type":"bearer","sid":"ses_gCStSnYMRLCcpk3FDgGkng"`, 1)
-	if TargetResponseBody(elsewhere) == want {
+	if TargetResponseBody(elsewhere, nil) == want {
 		t.Error("a sid field outside the access token was ignored")
 	}
 }
@@ -140,7 +140,7 @@ func TestOrganizationChoiceIsClassifiedOnlyForAlicesTwoSignIns(t *testing.T) {
 			t.Fatal("distinct steps projected alike")
 		}
 		target := targetOf(t, golden, true)
-		if TargetResponseBody(target) != GoldenResponseBody(step, golden) {
+		if TargetResponseBody(target, nil) != GoldenResponseBody(step, golden) {
 			t.Errorf("%s: alice's organization choice was not classified", step)
 		}
 		// the same difference with another organization or role is not the ruled one.
@@ -151,7 +151,7 @@ func TestOrganizationChoiceIsClassifiedOnlyForAlicesTwoSignIns(t *testing.T) {
 			"role admin":     func(s string) string { return strings.ReplaceAll(s, "role=string:owner", "role=string:admin") },
 			"user role only": func(s string) string { return strings.Replace(s, `"role":"owner"`, `"role":"admin"`, 1) },
 		} {
-			if mutated := mutate(target); mutated == target || TargetResponseBody(mutated) == GoldenResponseBody(step, golden) {
+			if mutated := mutate(target); mutated == target || TargetResponseBody(mutated, nil) == GoldenResponseBody(step, golden) {
 				t.Errorf("%s, %s: classified away (or the mutation changed nothing)", step, name)
 			}
 		}
@@ -159,7 +159,7 @@ func TestOrganizationChoiceIsClassifiedOnlyForAlicesTwoSignIns(t *testing.T) {
 	// another step with the same difference, and another user in the alice step, are differences.
 	pia := goldenBody(t, "login: pia, new password")
 	piaTarget := strings.Replace(targetOf(t, pia, false), `"org_id":null,"role":"member"`, `"org_id":"a0000000-0000-4000-8000-00000000000a","role":"owner"`, 1)
-	if piaTarget == targetOf(t, pia, false) || TargetResponseBody(piaTarget) == GoldenResponseBody("login: pia, new password", pia) {
+	if piaTarget == targetOf(t, pia, false) || TargetResponseBody(piaTarget, nil) == GoldenResponseBody("login: pia, new password", pia) {
 		t.Error("another user's organization difference was classified")
 	}
 	aliceGolden := goldenBody(t, aliceLogin1)

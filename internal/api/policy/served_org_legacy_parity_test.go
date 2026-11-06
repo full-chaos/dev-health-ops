@@ -2,6 +2,7 @@ package policy
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 )
 
@@ -84,5 +85,36 @@ func TestServedOrgViewerOfAAdminOfBIsRefusedOnBothPaths(t *testing.T) {
 				t.Errorf("PDP saw %+v, want no call", calls)
 			}
 		})
+	}
+}
+
+// The impersonation refusal runs before the served-org seam (CHAOS-13210 builds on this order): an impersonating
+// caller gets the same answer whether the request names its own organization or another one, with no PDP call.
+func TestServedOrgSeamRunsAfterTheImpersonationRefusal(t *testing.T) {
+	answer := func(org string) (response, int) {
+		pdp := newTestPDP(t, allowAll)
+		h := impersonating(enforceHandler(t, personaStore(personaAdmin), userClaims(nil), servedOrgEnforcer(t, pdp, "billing")))
+		got := enforceRequest(h, http.MethodGet, "/api/v1/billing/invoices?org_id="+org)
+		return got, len(pdp.calls())
+	}
+	own, ownCalls := answer(ownOrg)
+	other, otherCalls := answer(strangerOrg)
+	if other.status != own.status || other.body != own.body || ownCalls != 0 || otherCalls != 0 {
+		t.Errorf("impersonating, another org: %d %q (%d PDP calls), want the own-org answer %d %q (%d calls) and none",
+			other.status, other.body, otherCalls, own.status, own.body, ownCalls)
+	}
+}
+
+// A token with no organization that names the nil UUID is still another organization (servedOrg.against): the legacy
+// answer, counted served_org, not no_org.
+func TestServedOrgNilUUIDWithNoTokenOrgIsServedOrg(t *testing.T) {
+	noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+	row := servedOrgCensus[0]
+	rec := recordEnforce(t)
+	pdp := newTestPDP(t, allowAll)
+	servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, servedOrgNamespace(t, row.pattern))},
+		"00000000-0000-0000-0000-000000000000")
+	if got := rec.unjudgedSnapshot(); !slices.Equal(got, []string{row.pattern + "/served_org"}) || len(pdp.calls()) != 0 {
+		t.Errorf("unjudged %v, %d PDP calls, want [%s/served_org] and none", got, len(pdp.calls()), row.pattern)
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // TestSettingsFinalTopNSafeDisablesLazyMaterialization pins
@@ -61,7 +63,7 @@ func TestFetchPersonPullRequestsSendsLazyMaterializationOff(t *testing.T) {
 		return &prsRowScanner{}, nil
 	}}
 
-	_, err := fetchPersonPullRequests(context.Background(), client, []string{"alice"}, day(2026, 8, 1), day(2026, 9, 1), 50, nil, "org-1")
+	_, err := fetchPersonPullRequests(context.Background(), client, []string{"alice"}, day(2026, 8, 1), day(2026, 9, 1), 50, nil, "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("fetchPersonPullRequests error: %v", err)
 	}

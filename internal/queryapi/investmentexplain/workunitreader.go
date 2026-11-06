@@ -111,6 +111,7 @@ type WorkUnitInvestmentsFilter struct {
 	TeamScopeBindings []dhclickhouse.Binding
 	Limit             int
 	WorkUnitID        string
+	Ceiling           teamscope.Ceiling
 }
 
 // FetchWorkUnitInvestments ports fetch_work_unit_investments
@@ -134,7 +135,7 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 	if explicitCondition != "" {
 		explicitSQL = " AND " + explicitCondition
 	}
-	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings)
+	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings, filter.Ceiling, "repo_id")
 	// A REPOSITORY scope (explicit repositories) reads one row per (unit, repository the unit touches): the row's
 	// repository and the unit's ALLOCATED effort there, so the list rows of a repository scope sum to that scope's
 	// allocation total (CHAOS-9248). Team and org scope read the whole unit, once, as before; a team scope still
@@ -143,7 +144,9 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 	// The row's work-unit count (CHAOS-9695, D5999): 1 for a whole unit, its allocation_weight (its share of the unit)
 	// in a repository scope, so the rows of a repository scope sum to the COUNT of that scope.
 	countSQL := "1.0"
-	if len(filter.RepoIDs) > 0 {
+	if len(filter.RepoIDs) > 0 || filter.Ceiling.Restricted() {
+		// A ceiling reads the allocation rows too: the unit-wide scope of team and organization reads would serve the
+		// whole effort of a unit that touches repositories outside the ceiling (CHAOS-13090, plan F3).
 		source = analytics.RepoAllocationInvestmentSource()
 		countSQL = "allocation_weight"
 	} else {
@@ -230,6 +233,59 @@ LIMIT {limit_n:UInt64}
 		return nil, fmt.Errorf("iterate work unit investment rows: %w", err)
 	}
 	return results, nil
+}
+
+// FetchUnitsTouchingOtherRepos is the set of the given work units that have a repository row outside the ceiling. The
+// quote text of such a unit is unit-level (work_unit_investment_quotes has no repository column) and cannot be narrowed,
+// so it is not served under that ceiling (acp Q3, fail closed). Empty for an unrestricted ceiling.
+func (reader *Reader) FetchUnitsTouchingOtherRepos(ctx context.Context, orgID string, unitIDs []string, ceiling teamscope.Ceiling) (map[string]bool, error) {
+	if reader == nil || reader.client == nil {
+		return nil, ErrUnavailable
+	}
+	touching := map[string]bool{}
+	ids := uniqueNonEmpty(unitIDs)
+	if !ceiling.Restricted() || len(ids) == 0 {
+		return touching, nil
+	}
+	if len(ceiling.IDs()) == 0 {
+		for _, id := range ids {
+			touching[id] = true
+		}
+		return touching, nil
+	}
+
+	query := fmt.Sprintf(`
+SELECT DISTINCT work_unit_id
+FROM %s AS touching_other_repos
+WHERE touching_other_repos.work_unit_id IN {work_unit_ids:Array(String)}
+  AND touching_other_repos.repo_id IS NOT NULL
+  AND toString(touching_other_repos.repo_id) NOT IN {%s:Array(String)}
+%s
+`, analytics.LatestWorkUnitRepoEffortSource(), teamscope.BindingCeilingIDs, settingsMaxExecutionTime())
+	for _, chunk := range chunkStrings(ids, lookupChunkSize) {
+		rows, err := reader.client.Query(ctx, query, []dhclickhouse.Binding{
+			{Name: "work_unit_ids", Value: chunk},
+			{Name: "org_id", Value: orgID},
+			{Name: teamscope.BindingCeilingIDs, Value: ceiling.IDs()},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query work units touching other repositories: %w", err)
+		}
+		for rows.Next() {
+			var unitID string
+			if err := rows.Scan(&unitID); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan work unit touching other repositories row: %w", err)
+			}
+			touching[unitID] = true
+		}
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return nil, fmt.Errorf("iterate work units touching other repositories rows: %w", rowsErr)
+		}
+	}
+	return touching, nil
 }
 
 // FetchRepoScopes ports fetch_repo_scopes (work_unit_investments.py:82-108).

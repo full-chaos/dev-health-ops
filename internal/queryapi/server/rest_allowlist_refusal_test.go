@@ -20,10 +20,11 @@ func TestAllowlistOnRoutesNotNarrowedIs503WithTheClassInTheLog(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s is no route class", route.name)
 		}
-		wantReason := pdp.ReasonNotCarriedOut
-		if kind == pdp.KindMixed {
-			wantReason = pdp.ReasonAllowlistRouteUnsupported
+		if kind != pdp.KindMixed {
+			// CHAOS-13090: the N classes carry the allowlist as a ceiling (rest_ceiling_test.go).
+			continue
 		}
+		wantReason := pdp.ReasonAllowlistRouteUnsupported
 		for name, keys := range map[string][]string{"allowlist []": {}, "allowlist [acme/a]": {"acme/a"}} {
 			t.Run(route.name+"/"+name, func(t *testing.T) {
 				logs := &bytes.Buffer{}
@@ -45,7 +46,7 @@ func TestAllowlistOnRoutesNotNarrowedIs503WithTheClassInTheLog(t *testing.T) {
 				if !strings.Contains(line, "reason="+string(wantReason)) || !strings.Contains(line, "route_class="+route.name) {
 					t.Fatalf("log %q, want reason=%s route_class=%s", line, wantReason, route.name)
 				}
-				if kind == pdp.KindMixed && strings.Contains(line, "reason="+string(pdp.ReasonNotCarriedOut)) {
+				if strings.Contains(line, "reason="+string(pdp.ReasonNotCarriedOut)) {
 					t.Fatalf("a mixed route is refused as unknown_obligation: %q", line)
 				}
 				for label := range (&gatedREST{reader: reader}).counter(t, "dev_health_query_api_pdp_results_total") {

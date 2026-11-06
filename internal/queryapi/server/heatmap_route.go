@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/heatmap"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -229,6 +230,13 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 		if endPresent {
 			params.EndDate = &endDate
 		}
+
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "heatmap", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := heatmap.BuildResponse(r.Context(), client, org, params)
 		if err != nil {

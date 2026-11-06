@@ -206,6 +206,28 @@ type workUnitEvidenceWire struct {
 	Textual    []any `json:"textual"`
 	Structural []any `json:"structural"`
 	Contextual []any `json:"contextual"`
+
+	// omitStructural writes no "structural" key (R1, CHAOS-13090): an omitted field, not an empty list that reads as
+	// "no evidence". Never set on an unrestricted read.
+	omitStructural bool
+}
+
+func (e workUnitEvidenceWire) MarshalJSON() ([]byte, error) {
+	var model any
+	if e.omitStructural {
+		model = struct {
+			Textual    []any `json:"textual"`
+			Contextual []any `json:"contextual"`
+		}{e.Textual, e.Contextual}
+	} else {
+		type plain workUnitEvidenceWire
+		model = plain(e)
+	}
+	value, err := pyjson.FromGoModel(model)
+	if err != nil {
+		return nil, err
+	}
+	return pyjson.Marshal(value)
 }
 
 // evidenceKeyOrder is the key order work_units.py builds each fixed-shape
@@ -345,6 +367,8 @@ func toWorkUnitInvestmentWire(investment investmentexplain.WorkUnitInvestment) w
 			Textual:    textual,
 			Structural: structural,
 			Contextual: contextual,
+
+			omitStructural: investment.Evidence.StructuralOmitted,
 		},
 		ChangeSet: changeSetWire(investment.ChangeSet),
 	}
@@ -508,6 +532,12 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			teamCondition, teamBindings = teamscope.RepoCondition(org, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
+			return
+		}
+
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
 			OrgID:              org,
 			StartTS:            startTS,
@@ -516,6 +546,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
+			Ceiling:            ceiling,
 			Limit:              boundedWorkUnitsLimit(limit),
 			IncludeText:        includeTextual,
 			// _filters_from_query never populates why.work_category for the
@@ -672,6 +703,12 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 
 		themeFilters, subcategoryFilters := investmentexplain.SplitCategoryFilters(workCategoryFromFilters(filters))
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "work_units", org, err)
+			return
+		}
+
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
 			OrgID:              org,
 			StartTS:            startTS,
@@ -680,6 +717,7 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
+			Ceiling:            ceiling,
 			Limit:              boundedWorkUnitsLimit(rawLimit),
 			IncludeText:        includeTextual,
 			ThemeFilters:       themeFilters,

@@ -395,6 +395,13 @@ func newInvestmentGetHandler(reader *investment.Reader) http.HandlerFunc {
 			WhatRepos: nil, WorkCategory: nil,
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
 		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -488,6 +495,13 @@ func newInvestmentPostHandler(reader *investment.Reader) http.HandlerFunc {
 			ScopeLevel: scopeLevel, ScopeIDs: scopeIDs,
 			WhatRepos: whatRepos, WorkCategory: workCategoryFromFilters(filters),
 		}
+
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := investment.BuildResponse(r.Context(), reader, org, params)
 		if err != nil {
@@ -603,6 +617,13 @@ func newInvestmentSunburstGetHandler(reader *investment.Reader) http.HandlerFunc
 			ScopeLevel: scopeType, ScopeIDs: scopeIDs,
 			WhatRepos: nil, WorkCategory: nil, Limit: limit, IssueSize: issueSize,
 		}
+
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "investment_sunburst", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		result, err := investment.BuildSunburst(r.Context(), reader, org, params)
 		if err != nil {

@@ -592,6 +592,7 @@ internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go
 internal/queryapi/server	workunit_explain_route_test.go
 internal/queryapi/server	workunits_route_test.go
+internal/queryapi/teamscope	census_test.go
 internal/queryapi/workgraph	membership_test.go
 internal/queryapiservice	settings_test.go
 internal/reconcilerservice	activation_pin_test.go

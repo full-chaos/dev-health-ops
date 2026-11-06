@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -160,23 +161,42 @@ func TestAllowlistOnAMixedRouteIsRefusedAsUnsupported(t *testing.T) {
 	}
 }
 
-// The eight N classes have no ceiling yet (PR-2b): an allowlist stays unknown_obligation there until a class is
-// narrowed, which is the one-line flip of CHAOS-13083.
-func TestAllowlistOnANarrowableRouteStaysNotCarriedOut(t *testing.T) {
+// CHAOS-13090: the eight N classes narrow every read to a ceiling, so an allowlist decision is carried there and the
+// scope is an Allowlist of the decision's keys.
+func TestAllowlistOnANarrowableRouteIsCarried(t *testing.T) {
+	seen := 0
 	for profile, action := range restRows(t) {
 		class, _ := RouteClassOf(profile)
-		if kind, _ := ClassKind(class); kind != KindNarrowable || AllowlistNarrowed(class) {
+		if kind, _ := ClassKind(class); kind != KindNarrowable {
 			continue
 		}
+		seen++
 		t.Run(profile, func(t *testing.T) {
 			g := allClassGate(t, allowlistRule(action, []string{"acme/a"}))
 			scope, err := g.Authorize(context.Background(), profile, testBearer, seamOrg)
-			wantLocal(t, err, ReasonNotCarriedOut)
-			wantNoScope(t, scope)
-			if denied, _ := err.(*DenyError); denied == nil || denied.Class != class {
-				t.Fatalf("refusal class %#v, want %s", err, class)
+			if err != nil || scope.Kind() != pepgate.KindAllowlist || !slices.Equal(scope.RepoKeys(), []string{"acme/a"}) {
+				t.Fatalf("answered %v, %v, want an Allowlist scope of [acme/a]", scope.Kind(), err)
 			}
 		})
+	}
+	if seen != 11 {
+		t.Fatalf("%d narrowable rows, want 11", seen)
+	}
+}
+
+// The registry narrows exactly the eight N classes (CHAOS-13090): no mixed class, no narrowable class left out.
+func TestNarrowedClassesAreExactlyTheEightNarrowable(t *testing.T) {
+	var narrowable, narrowed []string
+	for _, class := range RouteClassNames() {
+		if kind, _ := ClassKind(class); kind == KindNarrowable {
+			narrowable = append(narrowable, class)
+		}
+		if AllowlistNarrowed(class) {
+			narrowed = append(narrowed, class)
+		}
+	}
+	if len(narrowable) != 8 || !slices.Equal(narrowable, narrowed) {
+		t.Fatalf("narrowed %v, want the narrowable classes %v", narrowed, narrowable)
 	}
 }
 

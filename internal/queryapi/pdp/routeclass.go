@@ -62,9 +62,12 @@ var routeClassOf = map[string]string{
 	"GET /api/v1/flame/aggregated":                    "flame_aggregated",
 }
 
-// allowlistNarrowed is the classes whose handlers narrow every read to a repository ceiling. Empty: the ceiling
-// is CHAOS-13090 (PR-2b); CHAOS-13083 flips one class at a time, with its code and its census entry.
-var allowlistNarrowed = map[string]bool{}
+// allowlistNarrowed is the classes whose handlers narrow every read to a repository ceiling (CHAOS-13090): the eight
+// narrowable classes. CHAOS-13083 adds a mixed class here only with its code and its census entry.
+var allowlistNarrowed = map[string]bool{
+	"heatmap": true, "investment": true, "investment_sunburst": true, "investment_explain": true,
+	"drilldown_prs": true, "work_units": true, "work_unit_explain": true, "people_drilldown_prs": true,
+}
 
 // allowlistCutOver is the cut-over registry: the row profiles ("METHOD /route") whose class is narrowed. An
 // allowlist decision on a route not listed is not carried out (503), so a caller with a repository ceiling never

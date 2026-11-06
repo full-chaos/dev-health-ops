@@ -36,6 +36,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // maxDrilldownLimit ports _MAX_DRILLDOWN_LIMIT (services/people.py:67).
@@ -77,6 +78,8 @@ type DrilldownPRsParams struct {
 	// Now stands in for utc_today() the same way SearchParams.Now/
 	// SummaryParams.Now already do.
 	Now time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // PullRequestRow ports one PullRequestRow the response wraps (api/models/
@@ -144,7 +147,7 @@ LIMIT {limit_n:UInt64}
 
 // fetchPersonPullRequests runs fetchPersonPullRequestsQuery and scans every
 // row, in SELECT order.
-func fetchPersonPullRequests(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, limit int, cursor *time.Time, orgID string) ([]PullRequestRow, error) {
+func fetchPersonPullRequests(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, limit int, cursor *time.Time, orgID string, ceiling teamscope.Ceiling) ([]PullRequestRow, error) {
 	cursorFilter := ""
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_ts", Value: startDay},
@@ -158,7 +161,10 @@ func fetchPersonPullRequests(ctx context.Context, client QueryClient, identities
 		bindings = append(bindings, dhclickhouse.Binding{Name: "cursor", Value: *cursor})
 	}
 
-	query := fmt.Sprintf(fetchPersonPullRequestsQuery, cursorFilter, settingsFinalTopNSafe())
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("pr.repo_id")
+	bindings = append(bindings, ceilingBindings...)
+
+	query := fmt.Sprintf(fetchPersonPullRequestsQuery, cursorFilter+ceilingSQL, settingsFinalTopNSafe())
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_pull_requests query: %w", err)
@@ -235,9 +241,15 @@ func BuildDrilldownPRsResponse(ctx context.Context, reader *Reader, orgID string
 	}
 	identities := identityVariants(canonical, aliasList)
 
-	rows, err := fetchPersonPullRequests(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID)
+	rows, err := fetchPersonPullRequests(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID, params.Ceiling)
 	if err != nil {
 		return nil, err
+	}
+
+	if params.Ceiling.Restricted() && len(rows) == 0 {
+		// A person with no pull request in an allowed repository answers as a person that does not exist: the
+		// identity lookup is org-wide, so the answer must not tell the two apart (acp Q4).
+		return nil, notFound("Person not found")
 	}
 
 	repoIDs := make([]string, 0, len(rows))

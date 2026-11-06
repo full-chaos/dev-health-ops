@@ -375,6 +375,12 @@ func newWorkUnitExplainHandler(
 			teamCondition, teamBindings = teamscope.RepoCondition(org, repoScopeColumn, scopeIDs, time.Now().UTC())
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeWorkUnitExplainUnavailable(w, r, org, err)
+			return
+		}
+
 		investments, err := reader.BuildWorkUnitInvestments(r.Context(), investmentexplain.BuildWorkUnitInvestmentsOptions{
 			OrgID:              org,
 			StartTS:            startTS,
@@ -383,6 +389,7 @@ func newWorkUnitExplainHandler(
 			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
+			Ceiling:            ceiling,
 			Limit:              1,
 			IncludeText:        true,
 			WorkUnitID:         workUnitID,

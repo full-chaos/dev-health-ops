@@ -36,6 +36,8 @@ type PRParams struct {
 	// hardcoded 50 (fetch_pull_requests' own keyword default -- the GET
 	// route has no limit query param at all, api/main.py:938-949).
 	Limit int
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // PRItem ports one dict fetch_pull_requests (api/queries/drilldown.py:
@@ -179,7 +181,7 @@ func BuildPRsResponse(ctx context.Context, reader *Reader, orgID string, params 
 	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "pr.repo_id", params.ScopeIDs, time.Now().UTC())
 	}
-	scopeSQL, scopeBindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	scopeSQL, scopeBindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, params.Ceiling, "pr.repo_id")
 
 	query := fmt.Sprintf(fetchPullRequestsQuery, scopeSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{

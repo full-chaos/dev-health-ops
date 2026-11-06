@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,18 +16,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // Enforce: the PDP allows with a repository allowlist ([] = no repository, [x] = one), and the repository-keyed
-// GET /api/v1/drilldown/prs must not run an organization-wide read: 503 and no statement reaches ClickHouse.
+// GET /api/v1/drilldown/prs is served under the ceiling (CHAOS-13090): 200, and every repository-keyed statement
+// is bound to the allowed repository ids or holds "1 = 0"; no organization-wide read reaches ClickHouse.
 // (The repro of chaos PLAN-10864-v2 F-A, executed red on 86cd04c7: status=200 statements=1.)
 func TestRESTPDPEnforceAllowlistRunsNoOrgWideRead(t *testing.T) {
-	for name, allowlist := range map[string][]string{"empty": {}, "one repository": {"acme/widgets"}} {
-		t.Run(name, func(t *testing.T) { enforceAllowlistRunsNoOrgWideRead(t, allowlist) })
+	for name, c := range map[string]struct {
+		allowlist []string
+		ids       []string
+	}{"empty": {[]string{}, nil}, "one repository": {[]string{"acme/widgets"}, []string{ceilingRepoA}}} {
+		t.Run(name, func(t *testing.T) { enforceAllowlistRunsNoOrgWideRead(t, c.allowlist, c.ids) })
 	}
 }
 
-func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
+func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist, wantIDs []string) {
 	t.Helper()
 	quietStdLog(t)
 	m := newAccessMinter(t)
@@ -39,7 +45,7 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
 		t.Fatal(err)
 	}
-	client := &teamScopeReachClient{}
+	client := &teamScopeReachClient{matcher: map[string][]string{"acme/widgets": {ceilingRepoA}}}
 	reader, err := drilldown.NewReader(client)
 	if err != nil {
 		t.Fatal(err)
@@ -65,11 +71,27 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	rec := httptest.NewRecorder()
 	planeHandler(mux, gate).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusServiceUnavailable || strings.TrimSpace(rec.Body.String()) != `{"detail":"Authorization unavailable"}` {
-		t.Fatalf("status=%d body=%q, want 503 Authorization unavailable", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q, want 200 served under the ceiling", rec.Code, rec.Body.String())
 	}
-	if len(client.statements) != 0 {
-		t.Fatalf("%d statements reached ClickHouse, want 0:\n%s", len(client.statements), strings.Join(client.statements, "\n"))
+	data := 0
+	for i, statement := range client.statements {
+		if !isRepoData(statement) {
+			continue
+		}
+		data++
+		if len(wantIDs) == 0 {
+			if !strings.Contains(statement, "1 = 0") || hasBinding(client.bindings[i], teamscope.BindingCeilingIDs) {
+				t.Fatalf("an empty allowlist reached a repository-keyed read:\n%s", statement)
+			}
+			continue
+		}
+		if ids := bindingStringValues(client.bindings[i], teamscope.BindingCeilingIDs); !reflect.DeepEqual(ids, wantIDs) {
+			t.Fatalf("ceiling_ids = %v, want %v: an organization-wide read reached ClickHouse:\n%s", ids, wantIDs, statement)
+		}
+	}
+	if len(wantIDs) > 0 && data == 0 {
+		t.Fatalf("no repository-keyed statement ran:\n%s", strings.Join(client.statements, "\n"))
 	}
 }
 

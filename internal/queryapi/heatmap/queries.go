@@ -21,6 +21,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // dateBindingValue formats t as a bare "YYYY-MM-DD" string for binding
@@ -442,11 +444,12 @@ type individualActiveHoursRow struct {
 // fetchIndividualActiveHours ports fetch_individual_active_hours
 // verbatim. identities empty returns (nil, nil) without querying,
 // matching Python's own `if not identities: return []` guard.
-func fetchIndividualActiveHours(ctx context.Context, client QueryClient, startTS, endTS time.Time, identities []string, orgID string) ([]individualActiveHoursRow, error) {
+func fetchIndividualActiveHours(ctx context.Context, client QueryClient, startTS, endTS time.Time, identities []string, orgID string, ceiling teamscope.Ceiling) ([]individualActiveHoursRow, error) {
 	if len(identities) == 0 {
 		return nil, nil
 	}
 
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("git_commits.repo_id")
 	query := fmt.Sprintf(`
         SELECT
             toInt32(toDayOfWeek(author_when)) AS weekday,
@@ -457,16 +460,16 @@ func fetchIndividualActiveHours(ctx context.Context, client QueryClient, startTS
         WHERE git_commits.org_id = {org_id:String}
           AND author_when >= {start_ts:DateTime64(3, 'UTC')}
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
-          AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})
+          AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})%s
         GROUP BY weekday, hour
         %s
-    `, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+    `, ceilingSQL, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	}
+	}, ceilingBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -491,11 +494,12 @@ func fetchIndividualActiveHours(ctx context.Context, client QueryClient, startTS
 // fetchIndividualActiveEvidence ports fetch_individual_active_evidence
 // verbatim. identities empty returns (nil, nil) without querying,
 // matching Python's own `if not identities: return []` guard.
-func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, startTS, endTS time.Time, weekday, hour int, identities []string, limit int, orgID string) ([]IndividualActiveEvidenceItem, error) {
+func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, startTS, endTS time.Time, weekday, hour int, identities []string, limit int, orgID string, ceiling teamscope.Ceiling) ([]IndividualActiveEvidenceItem, error) {
 	if len(identities) == 0 {
 		return nil, nil
 	}
 
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("git_commits.repo_id")
 	query := fmt.Sprintf(`
         SELECT
             repos.repo AS repo,
@@ -511,12 +515,12 @@ func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, star
           AND author_when < {end_ts:DateTime64(3, 'UTC')}
           AND toDayOfWeek(author_when) = {weekday:UInt8}
           AND toHour(author_when) = {hour:UInt8}
-          AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})
+          AND (author_email IN {identities:Array(String)} OR author_name IN {identities:Array(String)})%s
         ORDER BY author_when DESC
         LIMIT {limit_n:UInt64}
         %s
-    `, settingsMaxExecutionTime())
-	bindings := []dhclickhouse.Binding{
+    `, ceilingSQL, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_ts", Value: startTS},
 		{Name: "end_ts", Value: endTS},
 		{Name: "weekday", Value: weekday},
@@ -524,7 +528,7 @@ func fetchIndividualActiveEvidence(ctx context.Context, client QueryClient, star
 		{Name: "identities", Value: identities},
 		{Name: "limit_n", Value: limit},
 		{Name: "org_id", Value: orgID},
-	}
+	}, ceilingBindings...)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

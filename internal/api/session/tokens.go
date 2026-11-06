@@ -68,41 +68,39 @@ func userAgent(r *http.Request) *string {
 	return &value
 }
 
-// accessClaims is create_token_pair's access-token arguments for user in
-// membership (org "" and role "member" without one).
-func accessClaims(user *userRow, orgID, role string) edgetoken.AccessClaims {
-	return edgetoken.AccessClaims{
-		UserID: user.ID.String(), Email: user.Email, OrgID: orgID, Role: role,
-		IsSuperuser: user.IsSuperuser, Username: user.Username, FullName: user.FullName,
-		TokenVersion: user.TokenVersion,
-	}
+// sessionsOffRoutes are the routes that hand out a token pair. go-api mints none itself: without a session
+// issuer (AUTH_PROXY_SESSIONS off) each answers sessionsOff.
+var sessionsOffRoutes = map[string]bool{
+	"/api/v1/auth/login":           true,
+	"/api/v1/auth/social-login":    true,
+	"/api/v1/auth/refresh":         true,
+	"/api/v1/auth/switch-org":      true,
+	"/api/v1/auth/change-password": true,
+	"/api/v1/auth/accept-invite":   true,
 }
 
-// mintPair is create_token_pair: an access token and a refresh token in a
-// new family.
-func (h handlers) mintPair(user *userRow, orgID, role string, now time.Time) (tokenPair, string, uuid.UUID, error) {
-	access, err := h.Signer.Access(accessClaims(user, orgID, role), now, h.NewUUID().String())
-	if err != nil {
-		return tokenPair{}, "", uuid.UUID{}, err
+// sessionsOffOr is local, or sessionsOff for a route that hands out a pair while no session issuer is set.
+func (h handlers) sessionsOffOr(pattern string, local http.HandlerFunc) http.Handler {
+	if h.Issuer == nil && sessionsOffRoutes[pattern] {
+		return http.HandlerFunc(h.sessionsOff)
 	}
-	family := h.NewUUID()
-	jti := h.NewUUID().String()
-	refresh, err := h.Signer.Refresh(edgetoken.RefreshClaims{UserID: user.ID.String(), OrgID: orgID, FamilyID: family.String()}, now, jti)
-	if err != nil {
-		return tokenPair{}, "", uuid.UUID{}, err
-	}
-	return tokenPair{access: access, refresh: refresh}, jti, family, nil
+	return local
 }
 
-// storeRefresh is create_refresh_token_record for a pair just minted at
-// now: expires_at is the token's own exp (whole seconds).
-func (h handlers) storeRefresh(ctx context.Context, tx pgx.Tx, r *http.Request, userID uuid.UUID, orgID *uuid.UUID,
-	jti string, family uuid.UUID, now time.Time) error {
-	return insertRefresh(ctx, tx, h.NewUUID(), refreshRecord{
-		UserID: userID, OrgID: orgID, FamilyID: family,
-		ExpiresAt: time.Unix(now.Add(edgetoken.RefreshLifetime).Unix(), 0).UTC(),
-		IPAddress: clientHost(r), UserAgent: userAgent(r),
-	}, hashToken(jti), now)
+// refreshNotLocal is the refresh route's local handler: go-api keeps no refresh credential. With sessions on the
+// proxy forwards the route and this never runs; without a session issuer it is sessionsOff.
+func (h handlers) refreshNotLocal(w http.ResponseWriter, r *http.Request) {
+	if h.Issuer == nil {
+		h.sessionsOff(w, r)
+		return
+	}
+	refuse(w, http.StatusServiceUnavailable, sessionissue.UnavailableText)
+}
+
+// sessionsOff answers 503 config_missing naming AUTH_PROXY_SESSIONS.
+func (h handlers) sessionsOff(w http.ResponseWriter, r *http.Request) {
+	h.Logger.ErrorContext(r.Context(), "session route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)
+	policy.WriteConfigMissing(w, sessionissue.SessionsOffText)
 }
 
 // amr of the sessions go-api's routes ask auth-service for: a password
@@ -153,25 +151,12 @@ func (h handlers) issueMembershipTokens(ctx context.Context, tx pgx.Tx, r *http.
 // revoke and it is issueMembershipTokens.
 func (h handlers) issueMembershipTokensSuperseding(ctx context.Context, tx pgx.Tx, r *http.Request, user *userRow, membership *membershipRow,
 	predecessor *uuid.UUID) (tokenPair, error) {
-	orgID, role := "", "member"
 	var orgUUID *uuid.UUID
 	if membership != nil {
-		orgID, role = membership.OrgID.String(), roleText(membership.Role)
 		id := membership.OrgID
 		orgUUID = &id
 	}
-	if h.Issuer != nil {
-		return h.issueSession(ctx, r, user.ID, orgUUID, amrPassword, predecessor)
-	}
-	now := h.Now()
-	pair, jti, family, err := h.mintPair(user, orgID, role, now)
-	if err != nil {
-		return tokenPair{}, err
-	}
-	if err := h.storeRefresh(ctx, tx, r, user.ID, orgUUID, jti, family, now); err != nil {
-		return tokenPair{}, err
-	}
-	return pair, nil
+	return h.issueSession(ctx, r, user.ID, orgUUID, amrPassword, predecessor)
 }
 
 func optionalText(value *string) pyjson.Value {

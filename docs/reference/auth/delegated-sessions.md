@@ -102,9 +102,8 @@ end path, because its end follows no switch.
 
 ## Tokens
 
-`exp` is the earlier of the token lifetime and the session's `expires_at`. Under
-`hs256_compat` the token carries `impersonating_user_id`, the actor's user id.
-Under eddsa the access token and the session-route token carry
+`exp` is the earlier of the token lifetime and the session's `expires_at`. The
+access token and the session-route token carry
 `act: {"sub": <actor principal>}`. A plain grant carries neither claim.
 
 ## What the bearer reaches
@@ -114,8 +113,7 @@ Under eddsa the access token and the session-route token carry
 it gates answers `403`, and a later caller of it is denied by default. The
 `delegated_bearer` field of the endpoint profile holds the same list.
 
-At go-api the token's actor (`impersonating_user_id` under `hs256_compat`,
-`act.sub` under eddsa) is the caller's `ImpersonatedBy`. The Guard refuses the
+At go-api the token's actor (`act.sub`) is the caller's `ImpersonatedBy`. The Guard refuses the
 bearer `403` on every row whose `delegated_bearer` is not `allowed`: no route
 under `/api/v1/admin` and no write admits it (see the endpoint profiles). At
 query-api the caller is `Delegated`: every GraphQL operation but a query is

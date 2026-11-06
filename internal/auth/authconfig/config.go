@@ -109,10 +109,10 @@ const (
 	// EnvLegacyJWTAudience is the audience of go-api's HS256 compatibility access token under the eddsa class.
 	EnvLegacyJWTAudience = "AUTH_LEGACY_JWT_AUDIENCE"
 	// EnvAccessTokenClass picks the one class of access token this service
-	// mints: hs256_compat (the default) or eddsa. Exact match, no fallback.
+	// mints: eddsa, the default. The retired value hs256_compat is refused at start. Exact match, no fallback.
 	EnvAccessTokenClass = "AUTH_ACCESS_TOKEN_CLASS"
 	// EnvAccessTokenLifetime is the eddsa access token's lifetime (exp - iat): whole minutes from 5 to 60, default 60
-	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting). Not used under hs256_compat.
+	// (ACP-ADR-03: EdDSA ships at 60 minutes, the 10-minute target is this setting).
 	EnvAccessTokenLifetime = "AUTH_ACCESS_TOKEN_LIFETIME"
 	// EnvSessionSuccessorKey is the 32-byte session successor key (base64url,
 	// no padding) that derives a rotated refresh credential (CHAOS-10207
@@ -329,23 +329,23 @@ type Config struct {
 	EnvOnlySettings []string
 }
 
-// Access token classes (EnvAccessTokenClass).
+// Access token classes (EnvAccessTokenClass). hs256_compat is a retired value: it is refused at start.
 const (
-	AccessClassHS256Compat = "hs256_compat" // gitleaks:allow
-	AccessClassEdDSA       = "eddsa"
+	AccessClassEdDSA = "eddsa"
+
+	retiredAccessClassHS256Compat = "hs256_compat" // gitleaks:allow
 )
 
 // SessionTokens are the session routes' secrets and the access token's iss
 // and aud.
 type SessionTokens struct {
 	Enabled bool
-	// AccessClass is AccessClassHS256Compat or AccessClassEdDSA.
+	// AccessClass is AccessClassEdDSA.
 	AccessClass    string
 	AccessSecret   secrets.Value
 	AccessIssuer   string
 	AccessAudience string
-	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime); go-api's 60 minutes under
-	// hs256_compat.
+	// AccessLifetime is the eddsa access token's exp - iat (EnvAccessTokenLifetime).
 	AccessLifetime time.Duration
 	// LegacyAudience is the audience of go-api's HS256 token under the eddsa class.
 	LegacyAudience string
@@ -737,17 +737,16 @@ func socialClients(lookup secrets.LookupEnv) (map[string]SocialClient, error) {
 	return out, nil
 }
 
-// accessTokenClass reads EnvAccessTokenClass: unset or empty is hs256_compat,
-// the two class names match exactly, anything else is refused (the value is
-// not echoed).
+// accessTokenClass reads EnvAccessTokenClass: unset or empty is eddsa, the class name matches exactly, the retired
+// hs256_compat is refused naming eddsa, anything else is refused (the value is not echoed).
 func accessTokenClass(lookup secrets.LookupEnv) (string, error) {
 	switch valueOf(lookup, EnvAccessTokenClass) {
-	case "", AccessClassHS256Compat:
-		return AccessClassHS256Compat, nil
-	case AccessClassEdDSA:
+	case "", AccessClassEdDSA:
 		return AccessClassEdDSA, nil
+	case retiredAccessClassHS256Compat:
+		return "", fmt.Errorf("%s=%s is retired: set %s (the default when it is unset)", EnvAccessTokenClass, retiredAccessClassHS256Compat, AccessClassEdDSA)
 	}
-	return "", fmt.Errorf("%s must be %s or %s", EnvAccessTokenClass, AccessClassHS256Compat, AccessClassEdDSA)
+	return "", fmt.Errorf("%s must be %s", EnvAccessTokenClass, AccessClassEdDSA)
 }
 
 // accessTokenLifetime reads EnvAccessTokenLifetime: unset is the access-token.v1 ceiling (60 minutes); a set value

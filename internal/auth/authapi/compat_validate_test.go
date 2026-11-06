@@ -143,10 +143,7 @@ func newValidateFixture(t *testing.T, eddsa bool) *validateFixture {
 		AuthTime: now.Add(-time.Hour), AMR: []string{"pwd"}, CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(7 * 24 * time.Hour),
 		LegacyTokenVersion: &pin}
 	admin, username := "admin", "ada"
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	hs256, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +222,7 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 		f.goAPIRouteAccess(auth, logger)
 	}
 	for _, route := range apisession.Routes(apisession.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Auth: auth,
-		Verifier: verifier, Signer: f.hs256, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
+		Verifier: verifier, Logger: logger, Limits: httpapi.NewMemoryCounters(nil)}) {
 		if route.Method == http.MethodPost && route.Pattern == PatternCompatValidate {
 			templates, err := httpapi.NewRouteTemplates([]httpapi.Route{route})
 			if err != nil {

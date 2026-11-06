@@ -94,7 +94,8 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	}
 	// The issuer shares the key, issuer and audience of the minted legacy tokens, so a refusal of one of them
 	// is the refresh gate's decision and not a signature mismatch.
-	issuer, err := NewIssuer(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience)
+	accessSigner, _, _ := fileSigner(t)
+	issuer, err := NewEdDSAIssuer(usertokens.Secret, usertokens.LegacyIssuer, usertokens.Audience, accessSigner, goldenIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -128,10 +128,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), org, id)
 	}
 
 	signer, _, _ := fileSigner(t)
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	route := func(users Users) http.Handler {
 		routes, err := compatRoutes(CompatDeps{
 			Sessions: store, Users: users, Issuer: issuer, Projector: &fakeProjector{}, Logger: slog.New(slog.DiscardHandler),

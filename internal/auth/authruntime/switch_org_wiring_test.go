@@ -37,7 +37,7 @@ func TestTheSwitchOrgRouteIsMountedOnItsEmbeddedProfileRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewJSONHandler(&logs, nil)), pool, schema, nil, mustLimits(t), nil)
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewJSONHandler(&logs, nil)), pool, schema, &stubSigner{}, mustLimits(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

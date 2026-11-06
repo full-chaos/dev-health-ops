@@ -86,7 +86,7 @@ func TestIssueSessionCreatesAnAuditedSessionAndAnswersThePair(t *testing.T) {
 	if body["refresh_token"] != created.issued.Credential.Reveal() || body["token_type"] != "bearer" || body["expires_in"] != float64(AccessExpiresIn) {
 		t.Fatalf("body %s", response.Body)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != created.issued.Session.ID || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token %+v %v, want the issued session", bearer, err)
 	}

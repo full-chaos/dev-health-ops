@@ -251,7 +251,7 @@ func TestSSOChartRequiredSetMatchesTheLoader(t *testing.T) {
 					if name == skip {
 						return "", false
 					}
-					return lookup(name)
+					return withDefaultIssuer(lookup)(name)
 				}})
 				if err != nil {
 					t.Fatalf("auth-service refuses the rendered settings: %v", err)
@@ -356,7 +356,7 @@ func TestSSOUnsetSaltDecryptsWhatTheOtherPlaneEncrypted(t *testing.T) {
 	if _, set := lookup(authconfig.EnvSettingsEncryptionSalt); set {
 		t.Fatal("the lookup carries a salt: the cell would not show the unset case")
 	}
-	cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: lookup})
+	cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: withDefaultIssuer(lookup)})
 	if err != nil {
 		t.Fatalf("auth-service refuses the rendered settings: %v", err)
 	}

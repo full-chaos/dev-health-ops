@@ -2,23 +2,17 @@ package edgetokenmint
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 const (
 	testOrg = "11111111-2222-4333-8444-555555555555"
-	testKey = "edge-token-unit-test-signing-key-0123456789"
 )
 
 var testNow = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -30,208 +24,6 @@ func testPrincipal() Principal {
 		OrgID:        testOrg,
 		Role:         "viewer",
 		TokenVersion: 3,
-	}
-}
-
-func clearIssuerAudienceEnv(t *testing.T) {
-	t.Helper()
-	t.Setenv(IssuerEnvVar, "")
-	t.Setenv(AudienceEnvVar, "")
-}
-
-func decodeSegment(t *testing.T, token string, index int) map[string]any {
-	t.Helper()
-	segments := strings.Split(token, ".")
-	if len(segments) != 3 {
-		t.Fatalf("token has %d segments, want 3", len(segments))
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(segments[index])
-	if err != nil {
-		t.Fatalf("decode segment %d: %v", index, err)
-	}
-	decoded := map[string]any{}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal segment %d: %v", index, err)
-	}
-	return decoded
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// The header and the claim set are exactly what auth.py's
-// create_access_token writes for a principal with no username or
-// full_name. There is no kid: the edge verifies with its one active
-// JWT_SECRET_KEY and never selects a key by id.
-func TestMintWritesExactlyTheClaimsTheEdgeReads(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	token, err := Mint([]byte(testKey), testPrincipal(), Options{TTL: 7 * time.Minute, Now: func() time.Time { return testNow }})
-	if err != nil {
-		t.Fatalf("Mint: %v", err)
-	}
-
-	header := decodeSegment(t, token, 0)
-	if !reflect.DeepEqual(header, map[string]any{"alg": "HS256", "typ": "JWT"}) {
-		t.Fatalf("header = %v, want exactly alg=HS256 typ=JWT and no kid", header)
-	}
-
-	payload := decodeSegment(t, token, 1)
-	wantKeys := []string{"aud", "email", "exp", "iat", "is_superuser", "iss", "jti", "org_id", "role", "sub", "tv", "type"}
-	if got := sortedKeys(payload); !reflect.DeepEqual(got, wantKeys) {
-		t.Fatalf("claim keys = %v, want %v", got, wantKeys)
-	}
-	checks := map[string]any{
-		"sub":          ProvePrincipalID,
-		"email":        "go-api-prove@service.dev-health.invalid",
-		"org_id":       testOrg,
-		"role":         "viewer",
-		"is_superuser": false,
-		"type":         "access",
-		"iss":          DefaultIssuer,
-		"aud":          DefaultAudience, // a STRING, as PyJWT writes it, not a one-element list
-		"tv":           float64(3),
-		"iat":          float64(testNow.Unix()),
-		"exp":          float64(testNow.Add(7 * time.Minute).Unix()),
-	}
-	for key, want := range checks {
-		if !reflect.DeepEqual(payload[key], want) {
-			t.Errorf("claim %s = %#v, want %#v", key, payload[key], want)
-		}
-	}
-	if _, err := uuid.Parse(payload["jti"].(string)); err != nil {
-		t.Errorf("jti is not a UUID: %v", err)
-	}
-}
-
-func TestMintDefaultsTTLAndReadsIssuerAndAudienceFromTheEdgeEnvNames(t *testing.T) {
-	t.Setenv(IssuerEnvVar, "issuer-from-env")
-	t.Setenv(AudienceEnvVar, "audience-from-env")
-	token, err := Mint([]byte(testKey), testPrincipal(), Options{Now: func() time.Time { return testNow }})
-	if err != nil {
-		t.Fatalf("Mint: %v", err)
-	}
-	payload := decodeSegment(t, token, 1)
-	if payload["iss"] != "issuer-from-env" || payload["aud"] != "audience-from-env" {
-		t.Fatalf("iss/aud = %v/%v, want the env values", payload["iss"], payload["aud"])
-	}
-	if got := int64(payload["exp"].(float64)) - int64(payload["iat"].(float64)); got != int64(DefaultTTL/time.Second) {
-		t.Fatalf("exp-iat = %ds, want the default TTL %s", got, DefaultTTL)
-	}
-}
-
-func parseForTest(token string, key []byte, at time.Time, issuer, audience string) error {
-	_, err := jwt.ParseWithClaims(token, &Claims{}, func(*jwt.Token) (any, error) { return key, nil },
-		jwt.WithValidMethods([]string{"HS256"}),
-		jwt.WithIssuer(issuer),
-		jwt.WithAudience(audience),
-		jwt.WithExpirationRequired(),
-		jwt.WithTimeFunc(func() time.Time { return at }),
-	)
-	return err
-}
-
-// A minted token verifies under the right key, issuer, audience and clock,
-// and under nothing else. The edge-side refusal of the same failures is the
-// live Python oracle's job; this pins the Go side's half.
-func TestTheMintedTokenVerifiesOnlyUnderTheRightKeyIssuerAudienceAndClock(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	token, err := Mint([]byte(testKey), testPrincipal(), Options{TTL: 5 * time.Minute, Now: func() time.Time { return testNow }})
-	if err != nil {
-		t.Fatalf("Mint: %v", err)
-	}
-	within := testNow.Add(time.Minute)
-	if err := parseForTest(token, []byte(testKey), within, DefaultIssuer, DefaultAudience); err != nil {
-		t.Fatalf("the token did not verify under its own key: %v", err)
-	}
-	for name, tc := range map[string]struct {
-		key      string
-		at       time.Time
-		issuer   string
-		audience string
-		want     error
-	}{
-		"wrong key":      {key: testKey + "-other", at: within, issuer: DefaultIssuer, audience: DefaultAudience, want: jwt.ErrTokenSignatureInvalid},
-		"expired":        {key: testKey, at: testNow.Add(6 * time.Minute), issuer: DefaultIssuer, audience: DefaultAudience, want: jwt.ErrTokenExpired},
-		"wrong audience": {key: testKey, at: within, issuer: DefaultIssuer, audience: "query-api", want: jwt.ErrTokenInvalidAudience},
-		"wrong issuer":   {key: testKey, at: within, issuer: "dev-health-ops-edge", audience: DefaultAudience, want: jwt.ErrTokenInvalidIssuer},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if err := parseForTest(token, []byte(tc.key), tc.at, tc.issuer, tc.audience); !errors.Is(err, tc.want) {
-				t.Fatalf("err = %v, want %v", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestMintRefusesWhatTheEdgeOrTheScopeMustNotSee(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	for name, tc := range map[string]struct {
-		key    string
-		mutate func(*Principal)
-		opts   Options
-	}{
-		"key one character short": {key: testKey[:MinSigningKeyLength-1]},
-		"non-UUID user id":        {key: testKey, mutate: func(p *Principal) { p.UserID = "admin@test.com" }},
-		"non-UUID org id":         {key: testKey, mutate: func(p *Principal) { p.OrgID = "70d529e0" }},
-		"empty email":             {key: testKey, mutate: func(p *Principal) { p.Email = " " }},
-		"owner role":              {key: testKey, mutate: func(p *Principal) { p.Role = "owner" }},
-		"admin role":              {key: testKey, mutate: func(p *Principal) { p.Role = "admin" }},
-		"empty role":              {key: testKey, mutate: func(p *Principal) { p.Role = "" }},
-		"TTL above the cap":       {key: testKey, opts: Options{TTL: MaxTTL + time.Second}},
-		"negative TTL":            {key: testKey, opts: Options{TTL: -time.Second}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			principal := testPrincipal()
-			if tc.mutate != nil {
-				tc.mutate(&principal)
-			}
-			token, err := Mint([]byte(tc.key), principal, tc.opts)
-			if err == nil {
-				t.Fatalf("minted %d bytes; want a refusal", len(token))
-			}
-			if strings.Contains(err.Error(), tc.key) {
-				t.Fatalf("the refusal carried the signing key: %v", err)
-			}
-		})
-	}
-	if _, err := Mint([]byte(testKey), testPrincipal(), Options{TTL: MaxTTL}); err != nil {
-		t.Fatalf("a TTL at the cap was refused: %v", err)
-	}
-	member := testPrincipal()
-	member.Role = "member"
-	if _, err := Mint([]byte(testKey), member, Options{}); err != nil {
-		t.Fatalf("the member role was refused: %v", err)
-	}
-}
-
-// Python's len() counts characters, not bytes. A 32-character key of
-// two-byte characters is accepted there, and a 31-character one is refused
-// even though it is 62 bytes long.
-func TestLoadSigningKeyCountsCharactersLikeTheEdge(t *testing.T) {
-	if _, err := LoadSigningKey(""); !errors.Is(err, ErrSigningKeyMissing) {
-		t.Fatalf("empty: err = %v", err)
-	}
-	short := strings.Repeat("k", MinSigningKeyLength-1)
-	if _, err := LoadSigningKey(short); !errors.Is(err, ErrSigningKeyTooShort) {
-		t.Fatalf("31 chars: err = %v", err)
-	} else if strings.Contains(err.Error(), short) {
-		t.Fatalf("the refusal carried the key: %v", err)
-	}
-	if _, err := LoadSigningKey(strings.Repeat("é", MinSigningKeyLength-1)); !errors.Is(err, ErrSigningKeyTooShort) {
-		t.Fatalf("31 two-byte chars: err = %v", err)
-	}
-	if key, err := LoadSigningKey(strings.Repeat("é", MinSigningKeyLength)); err != nil || len(key) != 2*MinSigningKeyLength {
-		t.Fatalf("32 two-byte chars: len=%d err=%v", len(key), err)
-	}
-	t.Setenv(SigningKeyEnvVar, testKey)
-	if key, err := LoadSigningKeyFromEnv(); err != nil || string(key) != testKey {
-		t.Fatalf("LoadSigningKeyFromEnv: err=%v", err)
 	}
 }
 
@@ -349,25 +141,6 @@ func TestLookupPrincipalRefusesANonUUIDOrgWithoutQuerying(t *testing.T) {
 	}
 }
 
-// The token carries the row's CURRENT token_version, so a bumped version
-// revokes outstanding tokens and the next mint follows it.
-func TestMintForProveCarriesTheRowTokenVersion(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	q := &fakeQuerier{row: principalRow(func(v []any) { v[4] = 9 })}
-	token, err := MintForProve(context.Background(), q, []byte(testKey), testOrg, Options{})
-	if err != nil {
-		t.Fatalf("MintForProve: %v", err)
-	}
-	if got := decodeSegment(t, token, 1)["tv"]; got != float64(9) {
-		t.Fatalf("tv = %v, want 9", got)
-	}
-
-	inactive := &fakeQuerier{row: principalRow(func(v []any) { v[2] = false })}
-	if token, err := MintForProve(context.Background(), inactive, []byte(testKey), testOrg, Options{}); err == nil || token != "" {
-		t.Fatalf("an inactive principal was minted for (token bytes=%d, err=%v)", len(token), err)
-	}
-}
-
 func adminPrincipal() Principal {
 	return Principal{
 		UserID:       AdminProofPrincipalID,
@@ -375,53 +148,6 @@ func adminPrincipal() Principal {
 		OrgID:        testOrg,
 		Role:         "admin",
 		TokenVersion: 5,
-	}
-}
-
-// The role a token may carry is decided per principal (CHAOS-6570): the
-// org-admin proof principal mints admin and nothing else; the read-level
-// proof principal is still refused admin; no other user id can ever carry
-// admin, whatever the caller asks for.
-func TestMintRoleIsDecidedPerPrincipal(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	otherID := "00000000-0000-4000-8000-00000000e0e3"
-	for name, tc := range map[string]struct {
-		userID, role string
-		want         bool
-	}{
-		"admin principal, admin":     {AdminProofPrincipalID, "admin", true},
-		"admin principal, viewer":    {AdminProofPrincipalID, "viewer", false},
-		"admin principal, member":    {AdminProofPrincipalID, "member", false},
-		"admin principal, owner":     {AdminProofPrincipalID, "owner", false},
-		"admin principal, empty":     {AdminProofPrincipalID, "", false},
-		"proof principal, admin":     {ProvePrincipalID, "admin", false},
-		"proof principal, viewer":    {ProvePrincipalID, "viewer", true},
-		"proof principal, member":    {ProvePrincipalID, "member", true},
-		"any other principal, admin": {otherID, "admin", false},
-		"any other principal, owner": {otherID, "owner", false},
-		"upper-case admin id, admin": {strings.ToUpper(AdminProofPrincipalID), "admin", false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			principal := testPrincipal()
-			principal.UserID, principal.Role = tc.userID, tc.role
-			token, err := Mint([]byte(testKey), principal, Options{Now: func() time.Time { return testNow }})
-			if tc.want {
-				if err != nil {
-					t.Fatalf("refused: %v", err)
-				}
-				claims := decodeSegment(t, token, 1)
-				if claims["role"] != tc.role || claims["sub"] != tc.userID {
-					t.Fatalf("claims role %v sub %v, want %s %s", claims["role"], claims["sub"], tc.role, tc.userID)
-				}
-				return
-			}
-			if !errors.Is(err, ErrRoleNotAllowed) || token != "" {
-				t.Fatalf("minted %d bytes / err %v; want ErrRoleNotAllowed", len(token), err)
-			}
-			if RoleAllowedFor(tc.userID, tc.role) {
-				t.Fatalf("RoleAllowedFor(%s, %q) = true", tc.userID, tc.role)
-			}
-		})
 	}
 }
 
@@ -479,24 +205,5 @@ func TestLookupAdminPrincipalReadsItsOwnRowAndRefusesEveryOtherShape(t *testing.
 	proofQ := &fakeQuerier{row: principalRow(nil)}
 	if _, err := LookupPrincipal(context.Background(), proofQ, testOrg, Options{}); err != nil || proofQ.args[0] != ProvePrincipalID {
 		t.Fatalf("proof lookup bound %v (err %v), want %s", proofQ.args, err, ProvePrincipalID)
-	}
-}
-
-func TestMintForAdminProveMintsTheAdminRoleAndCarriesTheRowTokenVersion(t *testing.T) {
-	clearIssuerAudienceEnv(t)
-	q := &fakeQuerier{row: adminRow(func(v []any) { v[4] = 11 })}
-	token, err := MintForAdminProve(context.Background(), q, []byte(testKey), testOrg, Options{})
-	if err != nil {
-		t.Fatalf("MintForAdminProve: %v", err)
-	}
-	claims := decodeSegment(t, token, 1)
-	if claims["role"] != "admin" || claims["sub"] != AdminProofPrincipalID || claims["org_id"] != testOrg || claims["tv"] != float64(11) || claims["is_superuser"] != false {
-		t.Fatalf("claims = %v", claims)
-	}
-
-	// The viewer entry point never mints admin, even when the row says so.
-	viewerQ := &fakeQuerier{row: principalRow(func(v []any) { v[7] = strPtr("admin") })}
-	if token, err := MintForProve(context.Background(), viewerQ, []byte(testKey), testOrg, Options{}); err == nil || token != "" {
-		t.Fatalf("MintForProve minted for an admin row (bytes=%d, err=%v)", len(token), err)
 	}
 }

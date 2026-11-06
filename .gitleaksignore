@@ -15,3 +15,7 @@ internal/auth/workloadexchange/service_account_key_test.go:generic-api-key:30
 # The same two findings sit in earlier commits of this branch on the same lines, so the rows are the commit-less file:rule:line form.
 internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:25
 internal/cigates/scripts/auth_flipback_sso_k3s_test.go:generic-api-key:155
+# The retired access token class name written as a string literal in two tests (deploy/helm/dev-health/auth_access_lifetime_test.go line 34,
+# internal/auth/authruntime/access_issuer_retired_test.go line 11): an env value the start must refuse, never a credential.
+deploy/helm/dev-health/auth_access_lifetime_test.go:generic-api-key:34
+internal/auth/authruntime/access_issuer_retired_test.go:generic-api-key:11

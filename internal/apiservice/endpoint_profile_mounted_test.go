@@ -51,10 +51,6 @@ func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mo
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/db?sslmode=disable")
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +64,7 @@ func mountedRoutesWith(t *testing.T, configure func(*policy.Authenticator)) []mo
 	if configure != nil {
 		configure(auth)
 	}
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
 	var out []mountedRoute
 	for _, route := range Routes(deps, quietLogger()) {
 		out = append(out, mountedRoute{"api", route.Method, route.Pattern, route.Handler})

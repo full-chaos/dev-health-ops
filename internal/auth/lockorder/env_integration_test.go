@@ -226,7 +226,7 @@ func newEnv(t *testing.T) (*env, error) {
 			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 		}
 	}
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard", "/api/v1/auth/refresh":
@@ -250,7 +250,7 @@ func newEnv(t *testing.T) (*env, error) {
 		return nil, err
 	}
 	issuerMux := http.NewServeMux()
-	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier, Signer: e.signer,
+	for _, route := range session.Routes(session.Deps{Pool: goPool, Guard: guard, Auth: auth, Verifier: verifier,
 		Mail: authmail.Config{LinkSecret: e.linkSecret}, Limits: httpapi.NewMemoryCounters(nil), Logger: logger, Issuer: issuer}) {
 		switch route.Pattern {
 		case "/api/v1/auth/accept-invite", "/api/v1/auth/onboard":

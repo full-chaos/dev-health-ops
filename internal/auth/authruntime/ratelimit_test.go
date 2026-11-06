@@ -157,10 +157,10 @@ func TestTheStoreErrorCounterIsOnTheServiceScrape(t *testing.T) {
 		t.Fatalf("limits %v, err %v", limits, err)
 	}
 	defer components[0].Shutdown(context.Background())
-	if _, err := sessionRoutes(cfg, discard(), pool, schema, nil, limits, nil); err != nil {
+	if _, err := sessionRoutes(cfg, discard(), pool, schema, &stubSigner{}, limits, nil); err != nil {
 		t.Fatal(err)
 	}
-	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits, nil)
+	_, credentialComponents, err := credentialRoutes(cfg, discard(), pool, schema, limits, &stubSigner{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -272,10 +272,7 @@ type fixture struct {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	return newFixtureWith(t, issuer)
 }
 
@@ -328,11 +325,20 @@ func (f *fixture) do(method, path, body string, header map[string]string) *httpt
 }
 
 func (f *fixture) bearer(grant Grant) map[string]string {
+	return map[string]string{"Authorization": "Bearer " + f.accessFor(grant)}
+}
+
+// accessFor is the bearer of grant: the EdDSA session token when the issuer checks EdDSA tokens (WithAccessCheck),
+// else go-api's HS256 token, the one the session routes verify without an access check.
+func (f *fixture) accessFor(grant Grant) string {
+	if f.issuer.access == nil {
+		return legacyAccess(f.t, grant)
+	}
 	token, err := f.issuer.Access(grant)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return map[string]string{"Authorization": "Bearer " + token}
+	return token
 }
 
 func (f *fixture) grant() Grant {
@@ -432,61 +438,6 @@ func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 	}
 }
 
-func TestRefreshMintsAGoAPIAccessTokenWithSidAndAnswersRefreshResponseV1(t *testing.T) {
-	f := newFixture(t)
-	rotated := credential()
-	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
-		Session: f.record, Credential: contracts.NewSecretString(rotated), ExpiresAt: time.Now().Add(7*24*time.Hour - time.Second),
-	}}
-	response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status %d: %s", response.Code, response.Body)
-	}
-	parsed, err := contracts.ParseRefreshResponse(repoRoot(t), response.Body.Bytes())
-	if err != nil {
-		t.Fatalf("not refresh-response.v1: %v", err)
-	}
-	if parsed.RefreshCredential.Reveal() != rotated || parsed.SessionID != session.WireSessionID(f.record.ID) ||
-		parsed.ExpiresIn != 3600 || parsed.RefreshExpiresIn < 1 || parsed.RefreshExpiresIn > 604800 {
-		t.Fatalf("response %+v", parsed)
-	}
-	if response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatal("a token response is cacheable")
-	}
-
-	// go-api's verifier (the same edgetoken decision query-api and go-api use)
-	// accepts it, and the claims are go-api's from the live user and role.
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claims, err := verifier.Verify(parsed.AccessToken.Reveal())
-	if err != nil {
-		t.Fatalf("go-api's verifier refused the token: %v", err)
-	}
-	want := map[string]any{
-		"sub": f.principal.String(), "email": "ada@example.com", "org_id": f.org.String(), "role": "admin",
-		"is_superuser": true, "type": "access", "iss": testIssuer, "aud": testAudience, "tv": float64(4),
-		"username": "ada", "sid": session.WireSessionID(f.record.ID),
-	}
-	for key, value := range want {
-		if claims[key] != value {
-			t.Errorf("claim %s = %v, want %v", key, claims[key], value)
-		}
-	}
-	if _, has := claims["full_name"]; has {
-		t.Error("an absent full_name was written")
-	}
-	if exp, iat := claims["exp"].(float64), claims["iat"].(float64); exp-iat != 3600 {
-		t.Errorf("lifetime = %v s, want 3600", exp-iat)
-	}
-	if strings.Contains(f.logs.String(), rotated) || strings.Contains(f.logs.String(), parsed.AccessToken.Reveal()) {
-		t.Fatal("a credential reached the log")
-	}
-}
-
-// A session whose organization has no membership row for its principal (the
-// member was removed or left) is refused and revoked; a superuser keeps it.
 func TestRefreshOfASessionWithoutAMembershipRefusesAndRevokes(t *testing.T) {
 	f := newFixture(t)
 	state := f.users.users[f.principal]
@@ -577,51 +528,6 @@ func TestRefreshRefusedByTheGuardAnswersNoToken(t *testing.T) {
 	}
 	if len(f.sessions.revoked) != 0 {
 		t.Fatalf("revoked %v, want nothing: the handler's reads allow the session", f.sessions.revoked)
-	}
-}
-
-func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
-	cases := map[string]struct {
-		org  bool
-		role *string
-		has  bool
-		want string
-	}{
-		"no organization":          {org: false, want: "member"},
-		"no membership, superuser": {org: true, has: false, want: "member"},
-		"NULL role":                {org: true, has: true, role: nil, want: "None"},
-		"membership role":          {org: true, has: true, role: ptr("owner"), want: "owner"},
-	}
-	for name, c := range cases {
-		f := newFixture(t)
-		record := f.record
-		if !c.org {
-			record.OrganizationID = nil
-		}
-		f.users.roles = map[[2]uuid.UUID]*string{}
-		if c.has {
-			f.users.roles[[2]uuid.UUID{f.principal, f.org}] = c.role
-		}
-		f.build()
-		f.sessions.result = session.Result{Reason: session.ReasonGraceReplay, Issued: session.Issued{
-			Session: record, Credential: contracts.NewSecretString(credential()), ExpiresAt: time.Now().Add(time.Hour)}}
-		response := f.do(http.MethodPost, PatternRefresh, refreshBody(credential()), nil)
-		if response.Code != 200 {
-			t.Fatalf("%s: %d %s", name, response.Code, response.Body)
-		}
-		var body map[string]any
-		_ = json.Unmarshal(response.Body.Bytes(), &body)
-		claims, _ := f.issuer.verifier.Verify(body["access_token"].(string))
-		if claims["role"] != c.want {
-			t.Errorf("%s: role = %v, want %q", name, claims["role"], c.want)
-		}
-		wantOrg := ""
-		if c.org {
-			wantOrg = f.org.String()
-		}
-		if claims["org_id"] != wantOrg {
-			t.Errorf("%s: org_id = %v, want %q", name, claims["org_id"], wantOrg)
-		}
 	}
 }
 

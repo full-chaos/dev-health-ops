@@ -75,12 +75,19 @@ func brokenEnvironment(t *testing.T, apiAddress, operatorAddress string) map[str
 	}
 }
 
+// lookupFrom reads values. The access token class is eddsa by default and needs the issuer URL, so a test that names
+// none gets testDefaultIssuerURL.
 func lookupFrom(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]
+		if !ok && key == authconfig.EnvTokenIssuerURL {
+			return testDefaultIssuerURL, true
+		}
 		return value, ok
 	}
 }
+
+const testDefaultIssuerURL = "https://auth.example.test"
 
 // safeBuffer is a concurrency-safe sink for the process's own log stream: the
 // service writes from its own goroutines while the test reads.
@@ -735,7 +742,7 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 		return cfg
 	}
 	mountedBy := func(cfg authconfig.Config) string {
-		mounted, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+		mounted, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
 		if err != nil {
 			t.Fatalf("sessionRoutes: %v", err)
 		}

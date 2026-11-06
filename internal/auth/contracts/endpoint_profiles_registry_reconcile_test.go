@@ -215,9 +215,9 @@ func TestTheReconcileGateRefusesPlantedMismatches(t *testing.T) {
 			anchor["line"] = anchor["line"].(float64) + 1
 		},
 		"the registry loses the auth-service issuer of the access token": func(rows []map[string]any, registry registryAnchors) {
-			for key := range registry.issuers["ops_access_token_hs256"] {
+			for key := range registry.issuers["user_access_token"] {
 				if strings.HasPrefix(key, authHTTPLayer) {
-					delete(registry.issuers["ops_access_token_hs256"], key)
+					delete(registry.issuers["user_access_token"], key)
 				}
 			}
 		},

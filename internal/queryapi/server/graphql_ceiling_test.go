@@ -25,6 +25,12 @@ import (
 // CHAOS-13161 (6.11b PR-2a): the eight GraphQL roots whose every read is keyed by repository serve an allowlist
 // decision as a repository ceiling (cells R2-R4 of PLAN-10865 on GraphQL, the REST form of CHAOS-13090).
 
+// The two repositories of the organization; ids unlike every org and user id of the fixtures.
+const (
+	gqlCeilingRepoA = "aaaaaaaa-0000-4000-8000-00000000000a"
+	gqlCeilingRepoB = "bbbbbbbb-0000-4000-8000-00000000000b"
+)
+
 // ceilingRoot is one N root and a document that reaches its reads.
 type ceilingRoot struct {
 	key, doc string
@@ -38,7 +44,7 @@ func ceilingRoots() []ceilingRoot {
 		{"Query.featureFlags", `query Q { featureFlags(orgId: "` + org + `") { __typename } }`},
 		{"Query.featureFlagEvents", `query Q { featureFlagEvents(orgId: "` + org + `") { __typename } }`},
 		{"Query.hotspots", `query Q { hotspots(input: {orgId: "` + org + `", ` + window + `}) { __typename } }`},
-		{"Query.pr", `query Q { pr(orgId: "` + org + `", id: "` + ceilingRepoA + `#12") { __typename } }`},
+		{"Query.pr", `query Q { pr(orgId: "` + org + `", id: "` + gqlCeilingRepoA + `#12") { __typename } }`},
 		{"Query.securityAlerts", `query Q { securityAlerts(orgId: "` + org + `") { __typename } }`},
 		{"Query.securityOverview", `query Q { securityOverview(orgId: "` + org + `") { __typename } }`},
 		{"Query.testopsRisk", `query Q { testopsRisk(orgId: "` + org + `", input: {startDate: "2026-01-01", endDate: "2026-01-15"}) { __typename } }`},
@@ -85,7 +91,7 @@ func runCeilingRoot(t *testing.T, doc string, obligations map[string]any) ceilin
 
 func runCeilingRootWith(t *testing.T, gate *pdp.Gate, doc string) ceilingGraphQLRun {
 	t.Helper()
-	client := &teamScopeReachClient{matcher: ceilingMatcherRows()}
+	client := &teamScopeReachClient{matcher: map[string][]string{"acme/a": {gqlCeilingRepoA}, "acme/b": {gqlCeilingRepoB}}}
 	server := newGraphQLServerWithLimits(&gqlpkg.Resolver{ClickHouse: client}, 1000, 10)
 	roots := 0
 	server.AroundRootFields(func(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
@@ -110,8 +116,8 @@ func allowlistOf(keys ...string) map[string]any {
 }
 
 // R4: an allowlist decision on an N root is served; one matcher statement, bound to the decided organization; every
-// repository-keyed read holds the ceiling of the allowed repository, bound as its id; the other repository is bound
-// nowhere.
+// repository-keyed read holds the ceiling of the allowed repository, bound as its id (a pull request's reads are keyed
+// to its one repository, held to the ceiling before any read); the other repository is bound nowhere.
 func TestGraphQLCeilingAllowlistServesOnlyTheAllowedRepository(t *testing.T) {
 	for _, root := range ceilingRoots() {
 		t.Run(root.key, func(t *testing.T) {
@@ -133,18 +139,26 @@ func TestGraphQLCeilingAllowlistServesOnlyTheAllowedRepository(t *testing.T) {
 			}
 			data := 0
 			for i, statement := range got.statements {
-				if mentionsValue(got.bindings[i], ceilingRepoB) || strings.Contains(statement, ceilingRepoB) {
+				if mentionsValue(got.bindings[i], gqlCeilingRepoB) || strings.Contains(statement, gqlCeilingRepoB) {
 					t.Fatalf("the other repository reached a statement:\n%s", statement)
 				}
 				if !isCeilingData(statement, got.bindings[i]) {
 					continue
 				}
 				data++
+				if root.key == "Query.pr" {
+					// Every pull request read is keyed to the one repository of the id; the resolver holds that
+					// repository to the ceiling before any read.
+					if ids := bindingStringValues(got.bindings[i], "repo_id"); !reflect.DeepEqual(ids, []string{gqlCeilingRepoA}) {
+						t.Fatalf("a pull request read is bound to %v, want the allowed repository [%s]:\n%s", ids, gqlCeilingRepoA, statement)
+					}
+					continue
+				}
 				if !strings.Contains(statement, "{"+teamscope.BindingCeilingIDs+":Array(String)}") {
 					t.Fatalf("a repository-keyed read has no ceiling term:\n%s", statement)
 				}
-				if ids := bindingStringValues(got.bindings[i], teamscope.BindingCeilingIDs); !reflect.DeepEqual(ids, []string{ceilingRepoA}) {
-					t.Fatalf("ceiling_ids = %v, want [%s]", ids, ceilingRepoA)
+				if ids := bindingStringValues(got.bindings[i], teamscope.BindingCeilingIDs); !reflect.DeepEqual(ids, []string{gqlCeilingRepoA}) {
+					t.Fatalf("ceiling_ids = %v, want [%s]", ids, gqlCeilingRepoA)
 				}
 			}
 			if data == 0 {
@@ -189,7 +203,7 @@ func TestGraphQLCeilingOrganizationScopeReadsAsToday(t *testing.T) {
 
 // A pull request of a repository outside the ceiling is answered as one that does not exist, with no read of its rows.
 func TestGraphQLCeilingPullRequestOutsideTheCeilingIsNotFound(t *testing.T) {
-	doc := `query Q { pr(orgId: "` + ecOrg.String() + `", id: "` + ceilingRepoB + `#12") { __typename } }`
+	doc := `query Q { pr(orgId: "` + ecOrg.String() + `", id: "` + gqlCeilingRepoB + `#12") { __typename } }`
 	got := runCeilingRoot(t, doc, allowlistOf("acme/a"))
 	if !strings.Contains(got.body, `"pr":null`) || strings.Contains(got.body, `"errors"`) {
 		t.Fatalf("answered %s, want pr null and no error", got.body)

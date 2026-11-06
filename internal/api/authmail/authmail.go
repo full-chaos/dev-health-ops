@@ -107,8 +107,9 @@ func (c Config) Try(ctx context.Context, to, subject, template string, values ma
 // Configured reports whether link tokens can be signed and accepted.
 func (c Config) Configured() bool { return c.LinkSecret != "" }
 
-// ConfigMissingDetail is the 503 body detail of a link route with no link secret.
-const ConfigMissingDetail = "config_missing: LINK_TOKEN_SECRET"
+// ConfigMissingMessage names the variable a link route with no link secret needs; the body is
+// {"detail":{"message":...,"reason_code":"config_missing"}}.
+const ConfigMissingMessage = "LINK_TOKEN_SECRET is not set"
 
 // RefuseUnconfigured answers 503 config_missing and reports true while no link
 // secret is set; a link route calls it before its first query.
@@ -116,6 +117,8 @@ func (c Config) RefuseUnconfigured(w http.ResponseWriter) bool {
 	if c.Configured() {
 		return false
 	}
-	policy.WriteDetail(w, http.StatusServiceUnavailable, ConfigMissingDetail, nil)
+	detail := policy.ErrorDetail(ConfigMissingMessage)
+	detail.Set("reason_code", "config_missing")
+	policy.WriteDetail(w, http.StatusServiceUnavailable, detail, nil)
 	return true
 }

@@ -35,7 +35,7 @@ func TestRefuseUnconfiguredAnswers503ConfigMissing(t *testing.T) {
 		if !c.RefuseUnconfigured(recorder) {
 			t.Fatalf("%s: RefuseUnconfigured = false", name)
 		}
-		if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"detail":"config_missing: LINK_TOKEN_SECRET"`) {
+		if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"reason_code":"config_missing"`) || !strings.Contains(recorder.Body.String(), "LINK_TOKEN_SECRET") {
 			t.Fatalf("%s: status %d body %q, want 503 config_missing", name, recorder.Code, recorder.Body.String())
 		}
 	}

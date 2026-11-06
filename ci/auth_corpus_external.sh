@@ -468,17 +468,15 @@ if [ "${LEG}" = "go-api" ]; then
     done
     COMPOSE_OWNS_USERS=1
   fi
-  # owned_seed_copy is leg go-api's hand-off when compose.yml has auth-service own users from the start: the corpus seeds
-  # its users into public.users as a superuser, behind auth-service, so the seeded users are copied into the auth schema
-  # (users-backfill, which refuses while AUTH_USERS_OWNED is true: the flag is false for that one command only), and
-  # auth-service is recreated on the copied users. Nothing else changes: go-api's flags are compose.yml's.
+  # owned_seed_copy is leg go-api's hand-off when compose.yml has auth-service own users from the start: compose.yml's
+  # auth-users-backfill one-shot copied the users before auth-service served, and the corpus then seeds its own users
+  # into public.users as a superuser, behind auth-service. The same one-shot copies them (AUTH_USERS_OWNED=false for
+  # that run only, auth-service's login), and auth-service is recreated on the copied users. go-api's flags are
+  # compose.yml's.
   owned_seed_copy() {
-    printf 'step 1e (go-api): users-backfill of the seeded users\n'
-    (
-      export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
-      timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
-        run --rm --no-deps -e AUTH_DATABASE_URI -e AUTH_USERS_OWNED=false migrate auth users-backfill
-    ) || die "users-backfill failed"
+    printf 'step 1e (go-api): auth-users-backfill of the seeded users\n'
+    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+      run --rm --no-deps auth-users-backfill || die "users-backfill failed"
     timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
       up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
   }

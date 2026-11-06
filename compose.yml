@@ -1579,6 +1579,43 @@ services:
       auth-migrate:
         condition: service_completed_successfully
 
+  # CHAOS-13107: one-shot `dho auth users-backfill`: copies public.users into the
+  # auth schema before auth-service serves. auth-service owns users
+  # (AUTH_USERS_OWNED) and its users_owned readiness check refuses while a
+  # public user has no auth user; a fresh install has one, the migrations'
+  # baseline service placeholder. Production copies the users before its flip;
+  # here every `up` copies them, with AUTH_USERS_OWNED=false for this run only
+  # (the verb refuses while the flag is on). auth-service mirrors the users it
+  # creates, their password and their verification into public.users, so a
+  # later copy rewrites an auth user only where public.users differs. It
+  # connects as auth-service's runtime login, after the schema and its grants.
+  auth-users-backfill:
+    image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
+    build:
+      context: .
+      dockerfile: docker/go-worker.Dockerfile
+      target: dho
+      args:
+        COMMIT: ${COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
+    command: ["auth", "users-backfill"]
+    networks: [auth_plane]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    environment:
+      AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
+      AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
+      AUTH_USERS_OWNED: "false"
+    depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
+      auth-grants:
+        condition: service_completed_successfully
+
   # One-shot: `auth-migrate restore-fence init -if-absent` writes the fence row of the live
   # timeline on a database that is NOT a restore (a fresh compose volume). auth-service is
   # not ready until a row exists for the timeline. -if-absent makes a repeat bring-up exit 0;
@@ -1763,6 +1800,9 @@ services:
       auth-grants:
         condition: service_completed_successfully
       auth-fence-init:
+        condition: service_completed_successfully
+      # CHAOS-13107: the users are copied before auth-service serves.
+      auth-users-backfill:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy

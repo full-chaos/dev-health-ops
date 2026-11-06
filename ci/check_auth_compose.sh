@@ -34,7 +34,7 @@ source "${SCRIPT_DIR}/lib/registry_retry.sh"
 # The suffix comes from /dev/urandom: the preflight below is check-then-use, and compose adopts a
 # resource that already carries the project name, so the name must not be guessable.
 PROJECT="${AUTH_COMPOSE_PROOF_PROJECT:-authproof$$-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')}"
-AUTH_SERVICES=(auth-service auth-fence-init auth-migrate auth-grants auth-owner-grants auth-provision auth-keys-init)
+AUTH_SERVICES=(auth-service auth-users-backfill auth-fence-init auth-migrate auth-grants auth-owner-grants auth-provision auth-keys-init)
 
 die() {
   printf 'ERROR: %s\n' "$1" >&2
@@ -115,7 +115,7 @@ health="$(docker inspect --format '{{.State.Health.Status}}' "$(compose --profil
 printf 'auth-service container health: %s\n' "${health}"
 [ "${health}" = "healthy" ] || die "auth-service container health is ${health}, want healthy"
 
-for one_shot in auth-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init; do
+for one_shot in auth-keys-init auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-users-backfill; do
   code="$(docker inspect --format '{{.State.ExitCode}}' "$(compose --profile auth ps -a -q "${one_shot}")")"
   printf '%s exit code: %s\n' "${one_shot}" "${code}"
   [ "${code}" = "0" ] || die "${one_shot} exited ${code}, want 0"

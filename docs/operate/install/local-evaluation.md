@@ -60,15 +60,10 @@ local CA:
 A browser does not call the issuer. To open the issuer URL in a browser, import
 `auth-issuer-ca.pem` into the browser's trust store.
 
-A database from before this change can hold users in `public.users` that are not in the auth schema.
-auth-service then does not become ready (`users_owned`). Copy them one time, with the flag off for that
-one command, then start the stack again:
-
-```bash
-docker compose run --rm --no-deps -e AUTH_USERS_OWNED=false \
-  -e "AUTH_DATABASE_URI=host=postgres port=5432 user=devhealth_auth password='devhealth_auth' dbname=postgres sslmode=disable" \
-  migrate auth users-backfill
-```
+Before auth-service serves, the `auth-users-backfill` job copies `public.users` into the auth schema
+(`dho auth users-backfill`, with `AUTH_USERS_OWNED=false` for that run only). Without the copy,
+auth-service does not become ready (`users_owned`): a fresh database already holds one service user,
+and a database from before this change can hold more. The job runs on every `docker compose up`.
 
 Known limit: the local stack uses the `session_compat` credential (`svc_authsess_`), not the
 workload credential of production. It stops working when `svc_authsess_` acceptance is removed

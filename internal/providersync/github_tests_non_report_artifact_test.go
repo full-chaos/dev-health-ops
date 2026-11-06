@@ -220,6 +220,21 @@ func TestGitHubTestsDigestArtifactsAreNotExcludedByDefault(t *testing.T) {
 	}
 }
 
+// CHAOS-13193: go-images-* are multi-hundred-MiB image tarballs, never report
+// candidates; go-test-* artifacts carry the JUnit XML and must stay selected.
+func TestGitHubTestsGoImagesArtifactsExcludedGoTestSelected(t *testing.T) {
+	for _, name := range []string{"go-images-api", "go-images-worker-3", "GO-IMAGES-x"} {
+		if selected, _ := githubTestsArtifactSelectionSeam(name); selected {
+			t.Fatalf("%s was selected, want excluded: image tarballs are not report candidates", name)
+		}
+	}
+	for _, name := range []string{"go-test-providersync-1", "go-test-json-race", "go-images"} {
+		if selected, reason := githubTestsArtifactSelectionSeam(name); !selected {
+			t.Fatalf("%s was excluded (reason=%s), want selected", name, reason)
+		}
+	}
+}
+
 // githubTestsTruncateArtifactName unit tests (codex round 1, P1): a
 // provider-supplied artifact name is unbounded (GitHub's own limit is 255
 // bytes), and up to githubTestsMaxSkippedArtifactRecords of them live in the

@@ -47,6 +47,40 @@ func TestQueryAPIImpersonationSwitchFollowsTheGoAPIValue(t *testing.T) {
 	}
 }
 
+// Below phase 2 the switch never renders for query-api (on, the render is refused); from phase 2 query-api's entry is
+// go-api's, for every value: absent, false and true.
+func TestQueryAPIImpersonationEqualsGoAPIByPhase(t *testing.T) {
+	for _, phase := range []string{"0", "1"} {
+		below := func(sets ...string) []string {
+			head := append(append([]string{}, authBase...), "--set", "goApi.enabled=true", "--set", "queryApi.enabled=true", "--set", "authService.phase="+phase)
+			return append(head, sets...)
+		}
+		docs, out, err := renderAuth(t, below()...)
+		if err != nil {
+			t.Fatalf("phase %s: render failed: %v\n%.400s", phase, err, out)
+		}
+		if value, ok := queryAPIEnvValue(t, docs, impersonationEnv); ok {
+			t.Errorf("phase %s: query-api %s=%q, want absent", phase, impersonationEnv, value)
+		}
+		if _, out, err := renderAuth(t, below("--set", "goApi.authProxy.impersonation=true")...); err == nil {
+			t.Errorf("phase %s: impersonation=true rendered; it must refuse\n%.400s", phase, out)
+		}
+	}
+	for _, phase := range []string{"2", "3", "4"} {
+		for _, sets := range [][]string{nil, {"--set", "goApi.authProxy.impersonation=false"}, {"--set", "goApi.authProxy.impersonation=true"}} {
+			docs, out, err := renderAuth(t, queryAPIImpersonationArgs(phase, sets...)...)
+			if err != nil {
+				t.Fatalf("phase %s %v: render failed: %v\n%.400s", phase, sets, err, out)
+			}
+			queryValue, querySet := queryAPIEnvValue(t, docs, impersonationEnv)
+			goValue, goSet := proxyEnv(t, docs)[impersonationEnv]
+			if queryValue != goValue || querySet != goSet {
+				t.Errorf("phase %s %v: query-api %s=%q (set %v), go-api %q (set %v); want equal", phase, sets, impersonationEnv, queryValue, querySet, goValue, goSet)
+			}
+		}
+	}
+}
+
 func TestQueryAPIExtraEnvRefusesTheImpersonationSwitch(t *testing.T) {
 	for _, name := range []string{impersonationEnv, strings.ToLower(impersonationEnv), " " + impersonationEnv + " "} {
 		t.Run(name, func(t *testing.T) {

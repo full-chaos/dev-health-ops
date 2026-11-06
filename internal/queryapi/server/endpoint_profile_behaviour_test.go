@@ -78,6 +78,10 @@ func newAccessStackRefusing(t *testing.T, store queryAPIUserStore, setup *access
 			return "development"
 		case proofRouteEnabledEnv, proofWriteRouteEnabledEnv:
 			return "true"
+		case impersonationProxyEnv:
+			if refuseLegacy {
+				return "true"
+			}
 		}
 		return ""
 	})

@@ -254,6 +254,8 @@ With `AUTH_SERVICE_INTERNAL_HTTP_ADDR` set, auth-service opens a third listener 
 
 The chart renders it from `authService.internal` (off by default): the arg, a Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits only the pods of `authService.internal.peers` (`web`, `query-api`, `go-api`) on `authService.internal.port` (default `8097`).
 
+`authService.networkPolicy.workloadClients` (default `[]`) adds workloads outside the release, for example acr-api, to that internal policy alone, as more `from` entries. Each entry is a non-empty `podSelector` and an optional non-empty `namespaceSelector`; any other key (a port, an `ipBlock`) fails the render, so an entry never opens the API port. It needs `authService.internal.enabled`; with it, `authService.internal.peers` may be empty, but not both lists. The network entry only opens the port: the exchange still refuses a ServiceAccount that is not registered.
+
 ## auth-migrate
 
 | Flag | Environment | Rule |

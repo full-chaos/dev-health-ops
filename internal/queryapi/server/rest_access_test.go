@@ -162,7 +162,7 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
 	orgless := m.mint(ecUser, map[string]any{"org_id": nil}, nil)
-	edgeOrgless := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
+	edgeOrgless := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
 	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	const userCarrier = "user token"
@@ -212,7 +212,7 @@ func TestQueryAPIRESTCountsEachClassOnTheRouteTemplate(t *testing.T) {
 	if got := f.do(http.MethodPost, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
 	}
-	if got := f.do(http.MethodGet, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
+	if got := f.do(http.MethodGet, ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
 		t.Fatalf("edge token: %+v, want 401", got)
 	}
 	want := map[string]int64{
@@ -273,7 +273,7 @@ func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
 	}
-	if got := f.do(http.MethodGet, ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
+	if got := f.do(http.MethodGet, ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
 		t.Fatalf("edge token with no edge secret: got %+v, want 401", got)
 	}
 	if got := f.reader.counts(t)[accessverify.RefusedMetric+"|profile=GET /api/v1/home,reason=alg_not_allowed,service=dev-health-query-api"]; got != 1 {
@@ -286,7 +286,7 @@ func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 func TestQueryAPIRESTIssuerSetDrift(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	edge := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	badSub := ecMintEdgeTokenRaw(t, map[string]any{"sub": 7, "org_id": ecOrg.String(), "tv": 5, "type": "access"})
 	for name, tc := range map[string]struct {
 		store      func(*accessStore)

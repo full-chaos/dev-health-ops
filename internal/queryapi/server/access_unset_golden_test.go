@@ -63,7 +63,7 @@ type unsetCase struct {
 
 func unsetCases(m *accessMinter) []unsetCase {
 	edge := func(c ecEdgeClaims) func(*testing.T, string) string {
-		return func(t *testing.T, _ string) string { return ecMintEdgeToken(t, c) }
+		return func(t *testing.T, _ string) string { return ecMintHS256Token(t, c) }
 	}
 	member := ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}
 	stale := member

@@ -63,7 +63,7 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	allow := func(context.Context, string) bool { return true }
-	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, allow)
+	handler := onPattern("/query/proof-write", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, auth, store, digest.KindMutation, allow)).ServeHTTP
 	post := func(token string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]string{"query": proofWriteMutation})
 		req := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(string(body)))
@@ -108,7 +108,7 @@ func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) 
 		w.WriteHeader(http.StatusOK)
 	}))
 	allow := func(context.Context, string) bool { return true }
-	handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, ecEdgeAuth(t, wstore), wstore, digest.KindMutation, allow)
+	handler := onPattern("/query/proof-write", newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(proofWriteMutation): "probe"}, nil, ecEdgeAuth(t, wstore), wstore, digest.KindMutation, allow)).ServeHTTP
 	body, _ := json.Marshal(map[string]string{"query": proofWriteMutation})
 	req := httptest.NewRequest(http.MethodPost, "/query/proof-write", strings.NewReader(string(body)))
 	req.Header.Set("Authorization", "Bearer "+delegated)

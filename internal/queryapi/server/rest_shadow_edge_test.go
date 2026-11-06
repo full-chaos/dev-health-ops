@@ -83,7 +83,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 				if tc.delegated {
 					claims.impersonatingUserID = delegate
 				}
-				token = ecMintEdgeToken(t, claims)
+				token = ecMintHS256Token(t, claims)
 			case "user":
 				extra := map[string]any{"act": map[string]any{"sub": wirePrincipal(uuid.MustParse(delegate))}}
 				if !tc.org {

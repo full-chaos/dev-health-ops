@@ -6,9 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
@@ -17,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 type paCarrier struct {
@@ -46,7 +45,7 @@ func paCarriers(store *fakeEdgeStore) []paCarrier {
 			auth := ecEdgeAuth(t, store)
 			verifier, _ := iaVerifier(t)
 			dispatch := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
-			path, handler := "/query", http.Handler(dispatch)
+			path, handler := "/query", onPattern("/query", dispatch)
 			if graphql {
 				path = "/graphql"
 				handler = onPattern("/graphql", graphQLEdgeChain(dispatch, graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes}))
@@ -115,15 +114,13 @@ func TestEdgeClaimsNeverTakeTheActionSetFromTheRequest(t *testing.T) {
 	store := paStore(false, nil)
 	for _, carrier := range paCarriers(store) {
 		t.Run(carrier.name, func(t *testing.T) {
-			forged := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-				"sub": ecUser.String(), "org_id": ecOrg.String(), "role": "member", "tv": 5,
-				"type": "access", "iss": ecIssuer, "aud": ecAudience, "exp": time.Now().Add(time.Hour).Unix(),
-				"platform": rule.PlatformActions, "actions": rule.PlatformActions, "is_superuser": true,
-			})
-			token, err := forged.SignedString([]byte(ecSecret))
-			if err != nil {
-				t.Fatal(err)
+			// A routed token naming actions or superuser in its claims is refused at the contract: nothing runs.
+			claimed := ecTokens.MustMint(t, edtokens.Claims{UserID: ecUser, OrgID: ecOrg.String(), TokenVersion: 5,
+				Extra: map[string]any{"platform": rule.PlatformActions, "actions": rule.PlatformActions, "is_superuser": true, "role": "member"}})
+			if recorder, seen := carrier.serve(t, claimed, nil); recorder.Code != http.StatusUnauthorized || len(seen) != 0 {
+				t.Fatalf("action claims: status %d, %d runs, want the 401 and no run", recorder.Code, len(seen))
 			}
+			token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 			recorder, seen := carrier.serve(t, token, map[string]string{"X-Platform-Actions": strings.Join(rule.PlatformActions, ","), "X-DH-Platform": "admin.stats"})
 			if recorder.Code != http.StatusOK || len(seen) != 1 {
 				t.Fatalf("status %d, %d runs", recorder.Code, len(seen))

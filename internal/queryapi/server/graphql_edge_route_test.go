@@ -678,7 +678,7 @@ func TestGraphQLEdgeAnswersAnOperationThatIsNotEnabledAsAGraphQLError(t *testing
 	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
 	request.Header.Set("Authorization", "Bearer "+member)
 	recorder := httptest.NewRecorder()
-	queryHandler(recorder, request)
+	onQueryPattern(queryHandler)(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Errorf("/query with the row off: %d, want the unchanged 404", recorder.Code)
 	}
@@ -749,7 +749,7 @@ func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testi
 		}))))
 		request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
 		request.Header.Set("Authorization", "Bearer "+member)
-		decided.ServeHTTP(recorder, request)
+		onPattern("/graphql", decided).ServeHTTP(recorder, request)
 		if outcome != tc.want {
 			t.Errorf("%s: outcome %d, want %d", name, outcome, tc.want)
 		}

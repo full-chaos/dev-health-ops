@@ -320,8 +320,10 @@ func TestEdgeCarrier_SuperuserFlagClearedInDatabaseOverridesAStaleToken(t *testi
 // platform dashboard 403" case one layer down (the claim this test pins).
 func TestEdgeCarrier_ImpersonatingSuperuserSetsImpersonationActive(t *testing.T) {
 	store := &fakeEdgeStore{
-		states:   map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
-		found:    map[uuid.UUID]bool{ecUser: true},
+		states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
+		found:  map[uuid.UUID]bool{ecUser: true},
+		// The token's own org holds a membership row: a routed token naming an org the user is not a member of is refused.
+		members:  map[[2]uuid.UUID]bool{{ecUser, uuid.MustParse("99999999-9999-9999-9999-999999999999")}: true},
 		sessions: map[uuid.UUID]*policy.Impersonation{ecUser: {TargetUserID: ecTarget, TargetOrgID: ecOrg, TargetRole: "viewer"}},
 	}
 	auth := ecEdgeAuth(t, store)

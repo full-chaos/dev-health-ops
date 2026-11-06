@@ -103,7 +103,9 @@ func iaDispatchWithEdge(t *testing.T, verifier *principal.Verifier, edgeAuth *po
 
 // onQueryPattern sets the pattern server.go's mux gives /query (the route profile "POST /query") on a request
 // a test hands the handler directly.
-func onQueryPattern(handler http.HandlerFunc) http.HandlerFunc { return onPattern("/query", handler).ServeHTTP }
+func onQueryPattern(handler http.HandlerFunc) http.HandlerFunc {
+	return onPattern("/query", handler).ServeHTTP
+}
 
 // onPattern sets pattern, the one server.go's mux matches for the route, on a request a test hands handler
 // directly, so the route profile is the served route's.

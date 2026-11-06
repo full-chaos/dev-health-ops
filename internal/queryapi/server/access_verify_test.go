@@ -190,7 +190,7 @@ func TestAccessClassOfSplitsTheBearerClassesByHeader(t *testing.T) {
 		want  principal.AccessClass
 	}{
 		"user access token":            {m.mint(ecUser, nil, nil), principal.AccessClassUser},
-		"edge token":                   {ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}), principal.AccessClassEdge},
+		"edge token":                   {ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5}), principal.AccessClassEdge},
 		"envelope typ JWT":             {m.mint(ecUser, nil, map[string]any{"typ": "JWT"}), principal.AccessClassOther},
 		"envelope without typ":         {m.mint(ecUser, nil, map[string]any{"typ": nil}), principal.AccessClassOther},
 		"typ in upper case":            {m.mint(ecUser, nil, map[string]any{"typ": "AT+JWT"}), principal.AccessClassOther},
@@ -361,7 +361,7 @@ func TestQueryAPIHS256IsRefusedOnEveryRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edge := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	edge := ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for _, profile := range []string{"GET /buildinfo", "GET /api/v1/meta", "GET /metrics", "PUT /api/v1/home"} {
 		if _, err := validator.Validate(context.Background(), queryAPIAccessService, profile, edge); !errors.Is(err, accessverify.ErrRefused) {
 			t.Errorf("%s: HS256 err = %v, want a refusal", profile, err)

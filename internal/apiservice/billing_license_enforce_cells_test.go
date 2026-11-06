@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -542,4 +544,16 @@ func TestBillingRowsWithoutAnActionAreNeverDecidedByThePDP(t *testing.T) {
 	if n := len(pdp.calls()); n != 0 {
 		t.Errorf("%d PDP calls on rows with no action, want 0", n)
 	}
+}
+
+// unreachableClickHouse is a ClickHouse connection that never connects: clickhouse.Open dials on first use, and nothing
+// listens on port 1. A tag-only test file takes it from here, so it does not import the driver's root package itself.
+func unreachableClickHouse(t *testing.T) driver.Conn {
+	t.Helper()
+	conn, err := clickhouse.Open(&clickhouse.Options{Addr: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }

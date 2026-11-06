@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/authverify"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/golang-jwt/jwt/v5"
@@ -307,11 +306,7 @@ VALUES ($1::uuid, $2::uuid, $3, 'cus_x', 'open', 100, 'usd', '{}', now(), now())
 		if err := auth.RouteAccess(routedAccessVerify{validator}, goAPIAccessService); err != nil {
 			t.Fatal(err)
 		}
-		clickHouse, err := clickhouse.Open(&clickhouse.Options{Addr: []string{"127.0.0.1:1"}, DialTimeout: time.Second})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = clickHouse.Close() })
+		clickHouse := unreachableClickHouse(t)
 		guard := policy.NewGuard(auth, quietLogger())
 		if enforcer != nil {
 			guard.SetEnforcer(enforcer)

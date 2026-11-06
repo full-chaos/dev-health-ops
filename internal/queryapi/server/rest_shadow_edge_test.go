@@ -71,7 +71,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			if tc.routed {
 				setup = testAccess(m.keys, nil, accessTestNow)
 			}
-			f := newRESTFixture(t, newAccessStore(), setup, true)
+			f := newRESTFixture(t, newAccessStore(), setup)
 			org := ""
 			if tc.org {
 				org = ecOrg.String()

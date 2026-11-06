@@ -123,10 +123,11 @@ func (validateStore) ReadsPlatformRoles() bool { return false }
 // accessverify.go and accessrows.go) over this route's one row: an HS256
 // token is refused alg_not_allowed (its class is retired), and the EdDSA user
 // token of audience dev-health-api is checked, its users row, session and
-// membership by go-api's accessTokenUser. The route mounts only with the
+// membership by go-api's accessTokenUser. The authenticator holds no HS256
+// verifier, so an unrouted call is refused. The route mounts only with the
 // EdDSA configuration (withValidateRoute).
 func newValidateAuth(deps CompatDeps) (*policy.Authenticator, error) {
-	auth, err := policy.NewAuthenticator(deps.Issuer.verifier, validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
+	auth, err := policy.NewAuthenticator(nil, validateStore{users: deps.Users, sessions: deps.Validate.Sessions}, deps.Logger)
 	if err != nil {
 		return nil, err
 	}
@@ -169,12 +170,7 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 	case err != nil:
 		return nil, err
 	}
-	switch {
-	case result.Class == accessverify.ClassLegacy:
-		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
-			return &policy.RoutedResult{Legacy: user}, nil
-		}
-	case result.Class == accessverify.ClassUser && result.Claims != nil:
+	if result.Class == accessverify.ClassUser && result.Claims != nil {
 		claims := result.Claims
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}

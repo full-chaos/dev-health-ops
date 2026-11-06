@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -30,7 +29,7 @@ func TestProofWriteRunsARegisteredMutationForAnAllowlistedOrgOnly(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, proofWrite, _, err := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	_, _, proofWrite, _, err := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -104,9 +104,11 @@ type Authenticator struct {
 }
 
 // NewAuthenticator builds an Authenticator.
+// A nil verifier is the EdDSA-only authenticator (HS256 retired): only a
+// routed decision (RouteAccess) accepts a token; the unrouted path refuses all.
 func NewAuthenticator(verifier *edgetoken.Verifier, store Store, logger *slog.Logger) (*Authenticator, error) {
-	if verifier == nil || store == nil {
-		return nil, errors.New("policy: authenticator needs a verifier and a store")
+	if store == nil {
+		return nil, errors.New("policy: authenticator needs a store")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -160,6 +162,10 @@ func (a *Authenticator) AuthenticateLegacy(ctx context.Context, token string) (*
 }
 
 func (a *Authenticator) authenticate(ctx context.Context, token string) (*User, error) {
+	if a.verifier == nil {
+		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", "no_hs256_verifier"))
+		return nil, errRejected
+	}
 	claims, err := a.verifier.Verify(token)
 	if err != nil {
 		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", edgetoken.ReasonOf(err)))

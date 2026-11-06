@@ -29,7 +29,7 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"writeRESTUnauthorized(", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure(", "authenticateRESTRouted("}, anyOf: []string{}},
 			{file: "rest_access.go", decl: "authenticateRESTRouted", needles: []string{"edgeVerifier.VerifyRouted(ctx, routeProfile(r), token)", "policy.WriteDetail(w, http.StatusForbidden, \"Organization context required\", nil)", "policy.WriteAuthFailure("}, anyOf: []string{}},
 			{file: "../principal/edge_access.go", decl: "AccessClassOf", needles: []string{"header.Typ == UserAccessTokenTyp"}, anyOf: []string{}},
-			{file: "../../auth/accessverify/accessverify.go", decl: "Validator.Validate", needles: []string{"if !row.LegacyHS256 {", "return nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)"}, anyOf: []string{}},
+			{file: "../../auth/accessverify/accessverify.go", decl: "Validator.Validate", needles: []string{"default:\n\t\treturn nil, v.refuse(ctx, row.Service, row.Profile, ReasonAlgNotAllowed)"}, anyOf: []string{}},
 			{file: "access_verify.go", decl: "accessFromEnv", needles: []string{"accessTokenIssuer(getenv)"}, anyOf: []string{}},
 			{file: "rest_error_response.go", decl: "writeRESTUnauthorized", needles: []string{"http.StatusUnauthorized"}, anyOf: []string{}},
 			{file: "../../api/policy/principal.go", decl: "WriteAuthFailure", needles: []string{"http.StatusServiceUnavailable", "WriteInternal(w)"}, anyOf: []string{}},

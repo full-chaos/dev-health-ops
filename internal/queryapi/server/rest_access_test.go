@@ -33,14 +33,14 @@ type restFixture struct {
 	priv     ed25519.PrivateKey
 }
 
-func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool) *restFixture {
+func newRESTFixture(t *testing.T, store *accessStore, setup *accessSetup) *restFixture {
 	t.Helper()
-	return newRESTFixtureServing(t, store, setup, legacyOn, nil)
+	return newRESTFixtureServing(t, store, setup, nil)
 }
 
 // newRESTFixtureServing is newRESTFixture with the handler behind authenticateRESTRequest replaced by serve (GET and
 // POST), which runs with the verified claims on the request context.
-func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup, legacyOn bool, serve http.HandlerFunc) *restFixture {
+func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup, serve http.HandlerFunc) *restFixture {
 	t.Helper()
 	verifier, priv := iaVerifier(t)
 	edge, err := principal.NewEdgeVerifier(ecSecret, ecIssuer, ecAudience, newQueryAPIUserStoreFrom(store))
@@ -50,7 +50,7 @@ func newRESTFixtureServing(t *testing.T, store *accessStore, setup *accessSetup,
 	f := &restFixture{priv: priv, envelope: iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})}
 	if setup != nil {
 		f.reader = setup.reader
-		if err := routeEdgeVerifier(edge, setup.opts, legacyOn); err != nil {
+		if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -148,7 +148,7 @@ func TestQueryAPIRESTUserTokenPath(t *testing.T) {
 			if tc.store != nil {
 				tc.store(store)
 			}
-			f := newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow), true)
+			f := newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow))
 			got := f.do(http.MethodGet, tc.token)
 			if got.Status != tc.status || got.Body != tc.body {
 				t.Fatalf("got %d %s, want %d %s", got.Status, got.Body, tc.status, tc.body)
@@ -164,7 +164,7 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	orgless := m.mint(ecUser, map[string]any{"org_id": nil}, nil)
 	edgeOrgless := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 	forbidden := answer{http.StatusForbidden, `{"detail":"Organization context required"}`}
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	const userCarrier = "user token"
 	if got := f.do(http.MethodGet, orgless); got != forbidden {
 		t.Errorf("%s with no org: got %+v, want %+v", userCarrier, got, forbidden)
@@ -174,7 +174,7 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 	}
 	super := newAccessStore()
 	super.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	f = newRESTFixture(t, super, testAccess(m.keys, nil, accessTestNow), true)
+	f = newRESTFixture(t, super, testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, orgless); got.Status != http.StatusOK || got.Body != `{"org":""}` {
 		t.Errorf("superuser %s with no org: got %+v, want 200 with no org", userCarrier, got)
 	}
@@ -188,7 +188,7 @@ func TestQueryAPIRESTOrgMissingIs403ForNonSuperuser(t *testing.T) {
 func TestQueryAPIRESTEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, f.envelope); got.Status != http.StatusOK || got.Body != `{"org":"`+ecOrg.String()+`"}` {
 		t.Fatalf("envelope: got %+v, want 200", got)
 	}
@@ -208,7 +208,7 @@ func TestQueryAPIRESTEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *tes
 func TestQueryAPIRESTCountsEachClassOnTheRouteTemplate(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodPost, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
 	}
@@ -230,11 +230,11 @@ func TestQueryAPIRESTCountsEachClassOnTheRouteTemplate(t *testing.T) {
 func TestQueryAPIRESTUserTokenJWKSOutageAnswers503(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, nil)); got.Status != http.StatusServiceUnavailable {
 		t.Fatalf("JWKS outage: got %+v, want 503", got)
 	}
-	f = newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f = newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, map[string]any{"kid": "rotated-away"})); got.Status != http.StatusUnauthorized || got.Body != restRefusal {
 		t.Fatalf("unknown kid: got %+v, want 401", got)
 	}
@@ -269,7 +269,7 @@ func ecMintEdgeTokenRaw(t *testing.T, claims map[string]any) string {
 func TestQueryAPIRESTIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), false)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := f.do(http.MethodGet, m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 		t.Fatalf("user token: %+v", got)
 	}
@@ -318,7 +318,7 @@ func TestQueryAPIRESTIssuerSetDrift(t *testing.T) {
 				if routed {
 					keys, want = m.keys, tc.set
 				}
-				got := newRESTFixture(t, store, testAccess(keys, nil, accessTestNow), true).do(tc.method, tc.token)
+				got := newRESTFixture(t, store, testAccess(keys, nil, accessTestNow)).do(tc.method, tc.token)
 				if got != want {
 					t.Errorf("issuer set %v: got %+v, want %+v", routed, got, want)
 				}

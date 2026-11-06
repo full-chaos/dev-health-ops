@@ -270,7 +270,52 @@ type fixture struct {
 	logs      *bytes.Buffer
 }
 
+// newFixture serves the session routes with the EdDSA issuer and its access
+// check: without the check the bearer routes are not mounted.
 func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	issuer := newEdDSAIssuer(t, signer, AccessTokenAudience)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newFixtureWith(t, issuer.WithAccessCheck(check))
+}
+
+// hs256WithAccessCheck is the hs256_compat issuer (the HS256 mint) with the
+// access check over a key set, and the EdDSA issuer of that key set that mints
+// the session-route bearer the check accepts.
+func hs256WithAccessCheck(t *testing.T) (*Issuer, *Issuer) {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer.WithAccessCheck(check), newEdDSAIssuer(t, signer, AccessTokenAudience)
+}
+
+// withSessionBearer gives issuer the access check over a key set of its own
+// (healthy whatever issuer signs with) and returns the EdDSA issuer of that key
+// set, which mints the session-route bearer the check accepts.
+func withSessionBearer(t *testing.T, issuer *Issuer) (*Issuer, *Issuer) {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer.WithAccessCheck(check), newEdDSAIssuer(t, signer, AccessTokenAudience)
+}
+
+// newHS256Fixture is the fixture of the hs256_compat class: the HS256 mint
+// (login, refresh, logout) and no access check, so no bearer route mounts.
+func newHS256Fixture(t *testing.T) *fixture {
 	t.Helper()
 	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
 	if err != nil {
@@ -433,7 +478,7 @@ func TestRefreshOfAStoreRefusedUserRevokesTheSession(t *testing.T) {
 }
 
 func TestRefreshMintsAGoAPIAccessTokenWithSidAndAnswersRefreshResponseV1(t *testing.T) {
-	f := newFixture(t)
+	f := newHS256Fixture(t)
 	rotated := credential()
 	f.sessions.result = session.Result{Reason: session.ReasonAccepted, Issued: session.Issued{
 		Session: f.record, Credential: contracts.NewSecretString(rotated), ExpiresAt: time.Now().Add(7*24*time.Hour - time.Second),
@@ -593,7 +638,7 @@ func TestRefreshTakesGoAPIsRoleRules(t *testing.T) {
 		"membership role":          {org: true, has: true, role: ptr("owner"), want: "owner"},
 	}
 	for name, c := range cases {
-		f := newFixture(t)
+		f := newHS256Fixture(t)
 		record := f.record
 		if !c.org {
 			record.OrganizationID = nil
@@ -708,18 +753,27 @@ func TestSessionRoutesRefuseEveryBearerTheyCannotTrust(t *testing.T) {
 	otherUser := base
 	otherUser.UserID = uuid.NewString()
 
+	foreignGrant := f.grant()
+	foreignGrant.SessionID = uuid.New()
+	otherGrant := f.grant()
+	otherGrant.PrincipalID = uuid.New()
+	// Every HS256 token is refused before any read (ops_access_token_hs256 is
+	// retired); the EdDSA rows keep their own reasons.
 	cases := map[string]struct {
 		header map[string]string
 		reason string
 	}{
-		"no header":              {nil, "malformed"},
-		"basic scheme":           {map[string]string{"Authorization": "Basic eDp5"}, "malformed"},
-		"alg none":               {map[string]string{"Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0."}, "bad_signature"},
-		"another key":            {map[string]string{"Authorization": "Bearer " + sign(other, base)}, "bad_signature"},
-		"refresh JWT":            {map[string]string{"Authorization": "Bearer " + refresh}, "type_mismatch"},
-		"go-api token, no sid":   {map[string]string{"Authorization": "Bearer " + sign(goAPI, noSID)}, "malformed"},
-		"unknown session":        {map[string]string{"Authorization": "Bearer " + sign(goAPI, withForeign)}, "session_revoked"},
-		"another user's session": {map[string]string{"Authorization": "Bearer " + sign(goAPI, otherUser)}, "malformed"},
+		"no header":                    {nil, "malformed"},
+		"basic scheme":                 {map[string]string{"Authorization": "Basic eDp5"}, "malformed"},
+		"alg none":                     {map[string]string{"Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ4In0."}, "malformed"},
+		"HS256, another key":           {map[string]string{"Authorization": "Bearer " + sign(other, base)}, "malformed"},
+		"HS256 refresh JWT":            {map[string]string{"Authorization": "Bearer " + refresh}, "malformed"},
+		"HS256 go-api token, no sid":   {map[string]string{"Authorization": "Bearer " + sign(goAPI, noSID)}, "malformed"},
+		"HS256 unknown session":        {map[string]string{"Authorization": "Bearer " + sign(goAPI, withForeign)}, "malformed"},
+		"HS256 another user's session": {map[string]string{"Authorization": "Bearer " + sign(goAPI, otherUser)}, "malformed"},
+		"HS256 live session":           {map[string]string{"Authorization": "Bearer " + sign(goAPI, base)}, "malformed"},
+		"EdDSA unknown session":        {f.bearer(foreignGrant), "session_revoked"},
+		"EdDSA another user's session": {f.bearer(otherGrant), "malformed"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {

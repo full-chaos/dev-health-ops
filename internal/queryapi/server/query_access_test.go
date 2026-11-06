@@ -70,7 +70,7 @@ func TestQueryAPIQueryAndGraphQLUserTokenPath(t *testing.T) {
 			if tc.store != nil {
 				tc.store(store)
 			}
-			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow), true)
+			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow))
 			for _, target := range targets {
 				got := stack.send(target.listener, target.method, target.path, "", tc.token)
 				switch {
@@ -88,7 +88,7 @@ func TestQueryAPIQueryAndGraphQLUserTokenPath(t *testing.T) {
 func TestQueryAPIQueryEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	if got := stack.send("query", http.MethodPost, "/query", "envelope", ""); got.Status != http.StatusOK {
 		t.Fatalf("envelope: %d %s", got.Status, got.Body)
 	}
@@ -106,7 +106,7 @@ func TestQueryAPIQueryEnvelopeStillReachesTheEnvelopeVerifierWhenIssuerSet(t *te
 func TestQueryAPIQueryAndGraphQLJWKSOutage(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	if got := stack.send("query", http.MethodPost, "/query", "", m.mint(ecUser, nil, nil)); got.Status != http.StatusUnauthorized {
 		t.Fatalf("/query: %d %s", got.Status, got.Body)
 	}
@@ -123,7 +123,7 @@ func TestQueryAPIQueryAndGraphQLJWKSOutage(t *testing.T) {
 func TestQueryAPIQueryAndGraphQLIssuerAloneServesOnlyTheUserToken(t *testing.T) {
 	quietStdLog(t)
 	m := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), false)
+	stack := newAccessStack(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	for _, path := range []string{"/query", "/graphql"} {
 		if got := stack.send("query", http.MethodPost, path, "", m.mint(ecUser, nil, nil)); got.Status != http.StatusOK {
 			t.Errorf("%s user token: %d %s", path, got.Status, got.Body)
@@ -164,7 +164,7 @@ func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testi
 				if routed {
 					keys, expect = m.keys, tc.set
 				}
-				stack := newAccessStack(t, store, testAccess(keys, nil, accessTestNow), true)
+				stack := newAccessStack(t, store, testAccess(keys, nil, accessTestNow))
 				if got := stack.send("query", http.MethodPost, "/query", "edge", ""); got.Status != expect.query {
 					t.Errorf("issuer set %v: /query %d, want %d", routed, got.Status, expect.query)
 				}
@@ -318,8 +318,8 @@ func TestA2CorpusThroughQueryAPI(t *testing.T) {
 				s.opts.issuer = manifest.Issuer
 				return s
 			}
-			rest := newRESTFixture(t, store, setup(), true)
-			stack := newAccessStack(t, store, setup(), true)
+			rest := newRESTFixture(t, store, setup())
+			stack := newAccessStack(t, store, setup())
 			answers := map[string]answer{
 				"rest":    rest.do(http.MethodGet, token),
 				"query":   stack.send("query", http.MethodPost, "/query", "", token),
@@ -379,9 +379,9 @@ func TestQueryAPIDelegatedTokenActorMustBeCanonical(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			token := m.mint(ecUser, map[string]any{"act": map[string]any{"sub": tc.actor}}, nil)
 			store := newAccessStore()
-			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow), true)
+			stack := newAccessStack(t, store, testAccess(m.keys, nil, accessTestNow))
 			answers := map[string]answer{
-				"rest":    newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow), true).do(http.MethodGet, token),
+				"rest":    newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow)).do(http.MethodGet, token),
 				"query":   stack.send("query", http.MethodPost, "/query", "", token),
 				"graphql": stack.send("query", http.MethodPost, "/graphql", "", token),
 			}

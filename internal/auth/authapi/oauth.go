@@ -150,13 +150,13 @@ func oauthRoutesRows(deps OAuthDeps, rows []byte) ([]httpapi.Route, error) {
 		logger: logger, requests: requests,
 	}
 	known := WellKnownDeps{JWKS: deps.JWKS, IssuerURL: deps.IssuerURL, Logger: logger}
-	return []httpapi.Route{
+	return mountBearerRoutes(deps.Session.Issuer, logger, "oauth-consent", []httpapi.Route{
 		{Method: http.MethodGet, Pattern: PatternOAuthAuthorize, Handler: http.HandlerFunc(h.authorize), EmptyBody: true},
 		{Method: http.MethodPost, Pattern: PatternOAuthAuthorize, Handler: http.HandlerFunc(h.decide), MaxBodyBytes: maxOAuthBody},
 		{Method: http.MethodGet, Pattern: PatternOAuthMetadata, Handler: http.HandlerFunc(h.metadata), EmptyBody: true, PublicClass: true},
 		{Method: http.MethodGet, Pattern: PatternOAuthDiscovery, Handler: http.HandlerFunc(known.serveDiscovery), EmptyBody: true, PublicClass: true},
 		{Method: http.MethodGet, Pattern: PatternOAuthJWKS, Handler: http.HandlerFunc(known.serveJWKS), EmptyBody: true, PublicClass: true},
-	}, nil
+	}, "POST "+PatternOAuthAuthorize), nil
 }
 
 // oauthRowsMissing names the first route with no row in raw, "" when all have one.

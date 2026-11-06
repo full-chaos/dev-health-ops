@@ -50,20 +50,20 @@ type behaviourStack struct {
 func newBehaviourStack(t *testing.T) *behaviourStack {
 	t.Helper()
 	minter := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(minter.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(minter.keys, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
 
 // newAccessStack is the real listener handlers over a fake store, with the
 // /query and /graphql authenticator routed by row when keys is set.
-func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup, legacyOn bool) *behaviourStack {
+func newAccessStack(t *testing.T, base *accessStore, setup *accessSetup) *behaviourStack {
 	t.Helper()
-	return newAccessStackOn(t, newQueryAPIUserStoreFrom(base), setup, legacyOn)
+	return newAccessStackOn(t, newQueryAPIUserStoreFrom(base), setup)
 }
 
 // newAccessStackOn is newAccessStack over a users store the caller wraps.
-func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup, legacyOn bool) *behaviourStack {
+func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup) *behaviourStack {
 	t.Helper()
 	getenv := getenvFunc(func(name string) string {
 		switch name {
@@ -79,7 +79,7 @@ func newAccessStackOn(t *testing.T, store queryAPIUserStore, setup *accessSetup,
 	var reader *accessReader
 	if setup != nil {
 		reader = setup.reader
-		if err := routeAuthenticator(auth, setup.opts, legacyOn); err != nil {
+		if err := routeAuthenticator(auth, setup.opts); err != nil {
 			t.Fatal(err)
 		}
 	}

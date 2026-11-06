@@ -37,7 +37,7 @@ func newGatedREST(t *testing.T, mode, base string, routed bool) *gatedREST {
 	if !routed {
 		setup = nil
 	}
-	f := newRESTFixture(t, newAccessStore(), setup, true)
+	f := newRESTFixture(t, newAccessStore(), setup)
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })

@@ -137,14 +137,9 @@ func newPushRig(t *testing.T, pool *pgxpool.Pool) *pushRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyVerifier(auth.AuthenticateLegacy)
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  realRows(t),
-		EdDSA: eddsa,
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			counts.add(&counts.legacy)
-			return legacy(ctx, token)
-		},
+		Rows:   realRows(t),
+		EdDSA:  eddsa,
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: logger,
 		Now:    func() time.Time { return probeNow },

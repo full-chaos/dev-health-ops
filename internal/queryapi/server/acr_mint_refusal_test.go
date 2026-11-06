@@ -93,7 +93,7 @@ func TestAnACRMintedTokenIsRefusedAtQueryAPIBeforeAnyRead(t *testing.T) {
 	for _, audience := range []string{contracts.ACRAPIAudience, contracts.ACRMCPAudience} {
 		t.Run(audience, func(t *testing.T) {
 			store := &acrQueryReads{accessStore: newAccessStore()}
-			stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: store}, testAccess(keys, nil, accessTestNow), true)
+			stack := newAccessStackOn(t, queryAPIUserStore{queryAPIStoreBase: store}, testAccess(keys, nil, accessTestNow))
 			for _, target := range targets {
 				store.reads = 0
 				if got := stack.send(target.listener, target.method, target.path, "", control.mint(ecUser, nil, nil)); got.Status != http.StatusOK || store.reads == 0 {

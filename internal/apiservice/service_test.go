@@ -51,6 +51,11 @@ func TestMain(m *testing.M) {
 	// configure refuses a bad TRUSTED_PROXIES at start: no test reads the outer value; a test sets its own.
 	_ = os.Unsetenv("TRUSTED_PROXIES")
 	_ = os.Unsetenv("TRUSTED_PROXIES_NETWORK_FENCED")
+	// configure refuses a start with a database and no access-token issuer (the only verifier); a test that needs it
+	// unset clears it.
+	if _, set := os.LookupEnv(envAccessTokenIssuer); !set {
+		_ = os.Setenv(envAccessTokenIssuer, "https://auth.example.test")
+	}
 	// RunTests is m.Run, and fails the run when a test that ran did not use its golden.
 	os.Exit(venueoracle.RunTests(m))
 }
@@ -347,10 +352,10 @@ func TestConfigureRefusesADatabaseWithoutAUsableSigningKey(t *testing.T) {
 	}
 }
 
-// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring:
-// a request carrying a valid token for a caller the (unreachable) database
-// cannot confirm fails in the org scope (503, the database is unavailable),
-// where a server without the scope would answer 404.
+// TestConfigureInstallsTheScopeMiddlewaresWithADatabase proves the wiring: a
+// user access token on a row route whose keys the (unreachable) issuer cannot
+// serve fails in the org scope (503, a dependency is unavailable), where a
+// server without the scope would answer 404.
 func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 	cfg := apiTestConfig()
 	components, err := configure(context.Background(), cfg, health.NewRegistry(time.Second), quietLogger())
@@ -368,13 +373,8 @@ func TestConfigureInstallsTheScopeMiddlewaresWithADatabase(t *testing.T) {
 			server = candidate
 		}
 	}
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": uuid.NewString(), "type": "access", "exp": time.Now().Add(time.Hour).Unix(),
-	}).SignedString([]byte(cfg.APIJWTSecret.Reveal()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/anything", nil)
+	token := newEdDSAMinter(t).mint(uuid.New(), nil)
+	request := httptest.NewRequest(http.MethodGet, probeAuthenticated, nil)
 	request.Header.Set("Authorization", "Bearer "+token)
 	recorder := httptest.NewRecorder()
 	server.Handler().ServeHTTP(recorder, request)

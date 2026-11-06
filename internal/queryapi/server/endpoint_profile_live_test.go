@@ -130,7 +130,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	if shape != nil {
 		shape(store)
 	}
-	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -139,7 +139,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 func liveStackKeyDown(t *testing.T) *behaviourStack {
 	t.Helper()
 	minter := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -306,7 +306,7 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()

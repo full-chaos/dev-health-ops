@@ -32,13 +32,10 @@ func Rows() ([]accessverify.Row, error) {
 func ParseRows(raw []byte) ([]accessverify.Row, error) {
 	var document struct {
 		Rows []struct {
-			Service               string   `json:"service"`
-			Method                string   `json:"method"`
-			Route                 string   `json:"route"`
-			AcceptedClasses       []string `json:"accepted_credential_classes"`
-			AccessTokenValidation *struct {
-				LegacyHS256 bool `json:"legacy_hs256"`
-			} `json:"access_token_validation"`
+			Service         string   `json:"service"`
+			Method          string   `json:"method"`
+			Route           string   `json:"route"`
+			AcceptedClasses []string `json:"accepted_credential_classes"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &document); err != nil {
@@ -62,7 +59,6 @@ func ParseRows(raw []byte) ([]accessverify.Row, error) {
 			Service:     Service,
 			Profile:     profile,
 			AcceptsUser: slices.Contains(entry.AcceptedClasses, accessverify.ClassUser),
-			LegacyHS256: entry.AccessTokenValidation != nil && entry.AccessTokenValidation.LegacyHS256,
 		})
 	}
 	if len(rows) == 0 {
@@ -88,12 +84,7 @@ func (r Adapter) Validate(ctx context.Context, service, profile, bearer string) 
 	case err != nil:
 		return nil, err
 	}
-	switch {
-	case result.Class == accessverify.ClassLegacy:
-		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
-			return &policy.RoutedResult{Legacy: user}, nil
-		}
-	case result.Class == accessverify.ClassUser && result.Claims != nil:
+	if result.Class == accessverify.ClassUser && result.Claims != nil {
 		claims := result.Claims
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}

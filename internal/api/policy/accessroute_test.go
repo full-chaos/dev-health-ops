@@ -29,20 +29,12 @@ type fakeValidator struct {
 	result   *RoutedResult
 	err      error
 	profiles []string
-	legacy   func(ctx context.Context, token string) (*User, error)
 }
 
 var errRefusedByValidator = errors.New("validator: refused")
 
 func (f *fakeValidator) Validate(ctx context.Context, service, profile, bearer string) (*RoutedResult, error) {
 	f.profiles = append(f.profiles, service+"|"+profile)
-	if f.legacy != nil {
-		user, err := f.legacy(ctx, bearer)
-		if err != nil {
-			return nil, errRefusedByValidator
-		}
-		return &RoutedResult{Legacy: user}, nil
-	}
 	return f.result, f.err
 }
 
@@ -189,7 +181,6 @@ func TestRoutedUserPath(t *testing.T) {
 		"membership read fails":   {result: userClaims(nil), adjust: func(s *accessStore) { s.errMember = ErrUnavailable }, err: ErrUnavailable},
 		"empty result":            {result: &RoutedResult{}},
 		"no result":               {result: nil},
-		"both set":                {result: &RoutedResult{Legacy: &User{}, Claims: &AccessTokenClaims{}}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -213,18 +204,6 @@ func TestRoutedUserPath(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestRoutedLegacyPathDoesNotRecurse: the legacy verifier the validator calls
-// is AuthenticateLegacy, which never goes back through the validator.
-func TestRoutedLegacyPathDoesNotRecurse(t *testing.T) {
-	validator := &fakeValidator{}
-	auth := routed(t, newAccessStore(), validator)
-	validator.legacy = auth.AuthenticateLegacy
-	user, err := auth.Authenticate(WithRouteProfile(context.Background(), "GET /p"), sign(t, claims(nil)))
-	if err != nil || user.ID != userID || len(validator.profiles) != 1 {
-		t.Fatalf("user %+v err %v calls %v", user, err, validator.profiles)
 	}
 }
 

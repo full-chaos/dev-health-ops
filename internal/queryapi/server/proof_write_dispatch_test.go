@@ -221,8 +221,8 @@ func TestNewQueryHandlerWiresTheEdgeAuthenticatorIntoEveryRoute(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 	getenv := func(key string) string {
-		if key == edgeJWTSecretEnvVar {
-			return ecSecret
+		if key == accessTokenIssuerEnvVar {
+			return accessTestIssuer
 		}
 		return ""
 	}

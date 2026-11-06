@@ -2,6 +2,7 @@ package apiservice
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,23 +58,19 @@ func (s *plantedStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (
 	return &policy.Impersonation{AdminUserID: s.superuser, TargetUserID: s.target, TargetOrgID: s.target}, nil
 }
 
-// countingRoutedValidator is the routed validator over the legacy path; it
-// records every bearer it is asked to validate.
+// countingRoutedValidator is a routed validator that refuses every bearer
+// (the planted tokens are HS256, a retired class); it records every bearer it
+// is asked to validate.
 type countingRoutedValidator struct {
 	mu      sync.Mutex
-	legacy  func(context.Context, string) (*policy.User, error)
 	bearers []string
 }
 
-func (v *countingRoutedValidator) Validate(ctx context.Context, _, _, bearer string) (*policy.RoutedResult, error) {
+func (v *countingRoutedValidator) Validate(_ context.Context, _, _, bearer string) (*policy.RoutedResult, error) {
 	v.mu.Lock()
 	v.bearers = append(v.bearers, bearer)
 	v.mu.Unlock()
-	user, err := v.legacy(ctx, bearer)
-	if err != nil {
-		return nil, err
-	}
-	return &policy.RoutedResult{Legacy: user}, nil
+	return nil, errors.New("hs256 refused")
 }
 
 const plantedRoute = "/api/v1/planted"
@@ -97,7 +94,7 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			validator := &countingRoutedValidator{legacy: auth.AuthenticateLegacy}
+			validator := &countingRoutedValidator{}
 			if mode == "routed" {
 				if err := auth.RouteAccess(validator, goAPIAccessService); err != nil {
 					t.Fatal(err)
@@ -143,11 +140,23 @@ func TestGlobalScopeNeverReadsAuthorizationOnAPlantedRoute(t *testing.T) {
 			if trapped != 1 {
 				t.Fatalf("trap ran %d times", trapped)
 			}
-			if recorder.Code != http.StatusForbidden || recorder.Header().Get("X-Impersonating") != "" {
+			// legacy: the caller's token passes and the scope refuses its org (403).
+			// routed: the validator refuses the caller's token, the planted route
+			// (no guard) answers with no org, and the validator saw only the
+			// caller's bearer. Either way the scope decides with the caller
+			// Principal read, never the swapped header.
+			wantCode, wantReads := http.StatusForbidden, []uuid.UUID{caller}
+			if mode == "routed" {
+				wantCode, wantReads = http.StatusOK, nil
+				if recorder.Body.String() != "org=" {
+					t.Fatalf("routed: body %q, want no org", recorder.Body.String())
+				}
+			}
+			if recorder.Code != wantCode || recorder.Header().Get("X-Impersonating") != "" {
 				t.Fatalf("%d %s %v: the scope did not decide with the caller", recorder.Code, recorder.Body.String(), recorder.Header())
 			}
-			if slices.Contains(store.userReads, swapUser) || !slices.Equal(store.userReads, []uuid.UUID{caller}) {
-				t.Fatalf("users reads %v: want exactly one, for the caller %s (swapped %s)", store.userReads, caller, swapUser)
+			if slices.Contains(store.userReads, swapUser) || !slices.Equal(store.userReads, wantReads) {
+				t.Fatalf("users reads %v: want %v, for the caller %s (swapped %s)", store.userReads, wantReads, caller, swapUser)
 			}
 			if slices.Contains(validator.bearers, swapped) || (mode == "routed" && !slices.Equal(validator.bearers, []string{original})) {
 				t.Fatalf("validated %d bearers, swapped included=%v", len(validator.bearers), slices.Contains(validator.bearers, swapped))

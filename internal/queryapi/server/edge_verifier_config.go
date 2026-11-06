@@ -37,7 +37,6 @@ func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principa
 	if !routed {
 		return nil, nil
 	}
-	const legacyOn = false
 	secret, issuer, audience := unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
 	// CHAOS-6290: an edge verifier that cannot read the live users row would
 	// accept the token of a deactivated user, so the secret without a store is
@@ -47,7 +46,7 @@ func buildEdgeVerifierFromEnv(getenv getenvFunc, users edgeUserStore) (*principa
 		return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 	}
 	if routed {
-		if err := routeEdgeVerifier(edgeVerifier, access, legacyOn); err != nil {
+		if err := routeEdgeVerifier(edgeVerifier, access); err != nil {
 			return nil, fmt.Errorf("build edge access-token verifier: %w", err)
 		}
 	}
@@ -135,7 +134,6 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 		}
 		return nil, nil, nil
 	}
-	const legacyOn = false
 	secret, issuer, audience := unusedEdgeSecret(), defaultEdgeJWTIssuer, defaultEdgeJWTAudience
 	verifier, err := edgetoken.New(secret, issuer, audience)
 	if err != nil {
@@ -155,7 +153,7 @@ func buildQueryEdgeAuthenticatorFromEnv(getenv getenvFunc, pool *pgxpool.Pool) (
 		return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 	}
 	if routed {
-		if err := routeAuthenticator(auth, access, legacyOn); err != nil {
+		if err := routeAuthenticator(auth, access); err != nil {
 			return nil, nil, fmt.Errorf("build query edge authenticator: %w", err)
 		}
 	}

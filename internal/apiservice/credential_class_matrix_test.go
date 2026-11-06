@@ -190,14 +190,9 @@ func newMatrixRig(t *testing.T, guarded, routed bool) *matrixRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := legacyVerifier(auth.AuthenticateLegacy)
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  realRows(t),
-		EdDSA: eddsa,
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			counts.add(&counts.legacy)
-			return legacy(ctx, token)
-		},
+		Rows:   realRows(t),
+		EdDSA:  eddsa,
 		Meter:  sdkmetric.NewMeterProvider().Meter("test"),
 		Logger: quietLogger(),
 		Now:    func() time.Time { return probeNow },

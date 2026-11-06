@@ -152,15 +152,8 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	}
 	const profile = "GET /api/v1/auth/me"
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: profile, AcceptsUser: true, LegacyHS256: true}},
+		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: profile, AcceptsUser: true}},
 		EdDSA: verifier, Meter: noop.NewMeterProvider().Meter("routed"),
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			user, err := auth.AuthenticateLegacy(ctx, token)
-			if errors.Is(err, policy.ErrUnavailable) {
-				return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-			}
-			return user, err
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -218,8 +211,8 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user, err := auth.Authenticate(routed, legacy); err != nil || user.ID != principal {
-		t.Fatalf("a legacy token on a legacy row: user %+v err %v", user, err)
+	if user, err := auth.Authenticate(routed, legacy); !policy.IsRefusal(err) || user != nil {
+		t.Fatalf("an HS256 token on a user row (its class is retired): user %+v err %v, want a refusal", user, err)
 	}
 }
 
@@ -234,9 +227,6 @@ func (r routedValidator) Validate(ctx context.Context, service, profile, bearer 
 	}
 	if err != nil {
 		return nil, err
-	}
-	if user, ok := result.Legacy.(*policy.User); ok {
-		return &policy.RoutedResult{Legacy: user}, nil
 	}
 	if claims := result.Claims; claims != nil {
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil

@@ -62,9 +62,6 @@ func buildAccessVerify(lookup func(string) (string, bool), auth *policy.Authenti
 		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
 		Logger: logger,
 	}
-	if auth != nil {
-		cfg.Legacy = legacyVerifier(auth.AuthenticateLegacy)
-	}
 	validator, err := accessverify.New(cfg)
 	return validator, keys, err
 }
@@ -126,23 +123,6 @@ func buildACRWorkload(lookup func(string) (string, bool), keys authverify.KeySou
 		return nil, err
 	}
 	return &acr.WorkloadAuth{Verifier: verifier, Subject: subject}, nil
-}
-
-// legacyVerifier maps the HS256 path's errors (acp D3): a refusal and a claim
-// of the wrong type are refusals (401); any other store failure is
-// unavailable (503), never a pass and never a refusal.
-func legacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
-	return func(ctx context.Context, token string) (any, error) {
-		user, err := authenticate(ctx, token)
-		switch {
-		case err == nil:
-			return user, nil
-		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-		}
-	}
 }
 
 func recordACRWorkloadSubjectInvalidSafe(invalid bool) {

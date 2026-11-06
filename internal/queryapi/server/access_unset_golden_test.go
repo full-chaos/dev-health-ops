@@ -119,10 +119,10 @@ func TestQueryAPIIssuerUnsetAnswersAreMainsAnswers(t *testing.T) {
 		key := tc.path + " " + tc.method + " " + tc.name
 		switch tc.path {
 		case "rest":
-			f := newRESTFixture(t, store, nil, true)
+			f := newRESTFixture(t, store, nil)
 			got[key] = f.do(tc.method, tc.bearer(t, f.envelope))
 		default:
-			stack := newAccessStack(t, store, nil, true)
+			stack := newAccessStack(t, store, nil)
 			path := "/query"
 			if tc.path == "graphql" {
 				path = graphQLEdgePath

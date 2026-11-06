@@ -92,7 +92,7 @@ func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) 
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 	store.members = nil
-	f := newRESTFixture(t, store, nil, false)
+	f := newRESTFixture(t, store, nil)
 	if got := f.do(http.MethodGet, delegated); got.Status != http.StatusOK || got.Body != `{"org":"`+ecOrg.String()+`"}` {
 		t.Fatalf("REST read: got %+v, want 200 in the claimed org", got)
 	}

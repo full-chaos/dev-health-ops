@@ -728,14 +728,16 @@ func TestRoutesAreEmptyWithoutTheSessionSecrets(t *testing.T) {
 			authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 			authconfig.EnvSigningKeyFile: "/nonexistent",
 			authconfig.EnvSigningKeyID:   "routes-test",
+			authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 		}))})
 		if err != nil {
 			t.Fatalf("load config: %v", err)
 		}
 		return cfg
 	}
+	signer := keySigner(t)
 	mountedBy := func(cfg authconfig.Config) string {
-		mounted, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+		mounted, err := sessionRoutes(cfg, logger, pool, schema, signer, mustLimits(t), nil)
 		if err != nil {
 			t.Fatalf("sessionRoutes: %v", err)
 		}

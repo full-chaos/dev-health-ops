@@ -129,7 +129,7 @@ func newShadowREST(t *testing.T, decider pep.Decider, env map[string]string) (*g
 	quietStdLog(t)
 	shadowCounters(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -246,7 +246,7 @@ func TestRESTShadowOffBuildsNothing(t *testing.T) {
 		quietStdLog(t)
 		before := shadowCounters(t)
 		m := newAccessMinter(t)
-		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 		gate := pdp.New(pdp.Config{Mode: mode, Decider: pepOf(t, srv.URL)})
 		if gate.Shadow() != nil {
 			t.Fatalf("mode %q built a shadow", mode)
@@ -369,7 +369,7 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				if !routed {
 					setup = nil
 				}
-				f := newRESTFixture(t, newAccessStore(), setup, true)
+				f := newRESTFixture(t, newAccessStore(), setup)
 				reader := sdkmetric.NewManualReader()
 				provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -616,7 +616,7 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow), true)
+	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow))
 	g.handler = planeHandler(g.f.handler.(*http.ServeMux), g.gate)
 	before := shadowCounters(t)
 	if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -672,7 +672,7 @@ func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t 
 		t.Helper()
 		m := newAccessMinter(t)
 		client := &recordingHomeClient{}
-		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true, newHomeGetHandler(client, nil))
+		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), newHomeGetHandler(client, nil))
 		mux := f.handler.(*http.ServeMux)
 		var handler http.Handler = mux
 		if gate != nil {

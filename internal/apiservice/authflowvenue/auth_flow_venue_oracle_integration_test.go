@@ -389,18 +389,13 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		if r.external && r.forwarded.Has(authrows.Sessions) {
 			// auth-service answers a sign-in with an opaque refresh credential, a sid claim and (for alice) her
 			// earliest organization: each ruled difference is classified by authrows, any other still differs.
-			pyCompared.Body = authrows.GoldenResponseBody(s.name, pyCompared.Body)
-			goProjected.Body = authrows.TargetResponseBody(goProjected.Body, r.goBlanked)
-			if _, ok := r.unvaluedAccessTokenUser(s.name); ok {
-				// The eddsa class's iss and prn_ sub differ from the HS256 recording by design: the member is compared
-				// by one place holder on both planes, its value was checked above.
-				pyUnvalued, pyOK := authrows.AccessTokenUnvalued(pyCompared.Body)
-				goUnvalued, goOK := authrows.AccessTokenUnvalued(goProjected.Body)
-				if pyOK && goOK {
-					pyCompared.Body, goProjected.Body = pyUnvalued, goUnvalued
-					if err := r.golden.Unvalued(authrows.AccessTokenPattern); err != nil {
-						r.t.Error(err)
-					}
+			// On the six sign-in steps the eddsa class's iss and prn_ sub differ from the HS256 recording by design: the
+			// access_token member is compared by one place holder on both planes, its value was checked above.
+			var unvalued bool
+			pyCompared.Body, goProjected.Body, unvalued = authrows.SignInBodies(s.name, pyCompared.Body, goProjected.Body, r.goBlanked)
+			if unvalued {
+				if err := r.golden.Unvalued(authrows.AccessTokenPattern); err != nil {
+					r.t.Error(err)
 				}
 			}
 		}

@@ -72,10 +72,14 @@ func TargetResponseBody(body string, goBlanked map[string]string) string {
 }
 
 // goBlankedKeys maps each "body $.<key>" pattern of goBlanked to its top-level key. A deeper path, a header or any
-// other pattern names no key.
+// other pattern names no key. AccessTokenPattern names none either: the recording holds access_token, so it is
+// compared unvalued on both planes (AccessTokenUnvalued), never dropped from one (CHAOS-13107, leg acp).
 func goBlankedKeys(goBlanked map[string]string) map[string]bool {
 	keys := map[string]bool{}
 	for pattern := range goBlanked {
+		if pattern == AccessTokenPattern {
+			continue
+		}
 		if key, ok := strings.CutPrefix(pattern, "body $."); ok && key != "" && !strings.ContainsAny(key, ".[") {
 			keys[key] = true
 		}

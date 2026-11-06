@@ -323,7 +323,9 @@ func TestGoldenDecisionPDPRowsReachTheirVerdict(t *testing.T) {
 	}
 	var missing []string
 	for _, r := range AllReasons() {
-		if reasons[r] == 0 {
+		// Catalog version 14 holds no filtered organization action (product rule 2), so no embedded-catalog question
+		// reaches this reason; filteredOrgEvaluator tests it.
+		if reasons[r] == 0 && r != ReasonRepositoryAllowlistTooLarge {
 			missing = append(missing, string(r))
 		}
 	}

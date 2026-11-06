@@ -473,7 +473,8 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 		"redaction class":                      {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "redaction": []string{"free_text"}}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"tenant mismatch":                      {testProfile, map[string]any{"tenant_scope": "other-org", "repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
 		"no tenant scope":                      {testProfile, map[string]any{"repository_scope": "organization"}, false, ReasonTenantMismatch, ResultNotCarriedOut},
-		"no repository member on filtered one": {testProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"no repository member on filtered one": {acrTestProfile, map[string]any{"tenant_scope": org}, false, ReasonNoRepositoryRule, ResultNotCarriedOut},
+		"tenant only on a metrics read":        {testProfile, map[string]any{"tenant_scope": org}, true, "", ResultAllow},
 		"minimum assurance":                    {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal2"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
 		"minimum assurance aal1":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal1"}, true, "", ResultAllow},
 		"minimum assurance aal3":               {testProfile, map[string]any{"tenant_scope": org, "repository_scope": "organization", "minimum_assurance": "aal3"}, false, ReasonNotCarriedOut, ResultNotCarriedOut},
@@ -488,8 +489,10 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 			srv := pdptest.New(t)
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org")
-			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, org)
+			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,org,acr")
+			g := New(cfg)
+			g.actions[acrTestProfile] = "acr.context.read"
+			_, err := g.Authorize(context.Background(), tc.profile, testBearer, org)
 			got := m.points(t, resultMetric)
 			if len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result="+tc.result] != 1 {
 				t.Fatalf("results %v, want one %s", got, tc.result)
@@ -508,9 +511,16 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}
 }
 
+// acrTestProfile is a test-only row of a filtered action: catalog version 14 keeps only the ACR reads filtered, and no
+// query-api row asks one.
+const acrTestProfile = "GET /acr-test"
+
 func actionOf(profile string) string {
 	if profile == "GET /buildinfo" {
 		return "org.read"
+	}
+	if profile == acrTestProfile {
+		return "acr.context.read"
 	}
 	return testAction
 }

@@ -210,6 +210,14 @@ func TestQueryAppliesASessionAsGoAPIsScopeDoes(t *testing.T) {
 		"non-superuser holder, legacy HS256 token":                                  {nonSuperuserHolderStore, staleClaim, false},
 		"live superuser, legacy token without the superuser claim, roles not owned": {func() *accessStore { return legacyStore(legacySession(), nil) }, staleClaim, false},
 	}
+	for _, route := range legacyQueryRoutes {
+		t.Run("non-superuser holder, user access token, switch on "+route.listener+" "+route.path, func(t *testing.T) {
+			s := legacyStack(t, minter, nonSuperuserHolderStore(), true)
+			if got, _ := legacyQuery(s, route.listener, route.path, minter.mint(ecUser, nil, nil)); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*s.seen) != 0 {
+				t.Fatalf("got %d %s, ran %d; want the legacy caller's 403 and no resolver", got.Status, got.Body, len(*s.seen))
+			}
+		})
+	}
 	for name, tc := range cases {
 		for _, route := range legacyQueryRoutes {
 			t.Run(name+" "+route.listener+" "+route.path, func(t *testing.T) {

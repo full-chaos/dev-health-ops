@@ -34,11 +34,12 @@ func actionOnlyHolderStore(session *policy.Impersonation, sessionErr error) *acc
 	return store
 }
 
+// actionOnlyHolderTokens is the caller's legacy HS256 token: with its user access token go-api's scope lets it
+// impersonate, so it is the legacy caller (TestQueryAppliesASessionAsGoAPIsScopeDoes).
 func actionOnlyHolderTokens(t *testing.T, minter *accessMinter) map[string]string {
 	t.Helper()
 	return map[string]string{
 		"HS256": ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5}),
-		"EdDSA": minter.mint(ecUser, nil, nil),
 	}
 }
 

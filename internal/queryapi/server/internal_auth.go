@@ -136,11 +136,11 @@ const (
 type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
 // liveScope is /query's scope: nothing in front of /query decided anything,
-// so the org is the token's own and the session is read here, once. A
-// session is applied only to a live superuser that holds admin.impersonate
-// now. A caller without the action acts as itself, and on the write door its
-// row is read and a live one refuses the write; any other caller (a
-// non-superuser, the action held or not) acts as itself, its row unread.
+// so the org is the token's own and the session is read here, once. As
+// go-api's scope does, a session is applied only to a caller that holds
+// admin.impersonate now and that the scope lets impersonate
+// (policy.User.MayImpersonate). A caller without the action acts as itself,
+// and on the write door its row is read and a live one refuses the write.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
 		if !user.Holds(policy.ActionAdminImpersonate) {
@@ -156,10 +156,12 @@ func liveScope(store policy.Store) edgeScope {
 			}
 			return user.OrgID, nil, nil
 		}
-		if !user.IsSuperuser {
-			// A holder that is not a superuser is served as itself; with the
-			// switch on, its live (or unreadable) row refuses its non-query
-			// documents in the dispatch.
+		if !user.MayImpersonate(store.ReadsPlatformRoles()) {
+			// A holder go-api's scope does not let impersonate (a legacy token
+			// with no superuser claim, unless the platform roles are owned and
+			// it is a live superuser) is served as itself; with the switch on,
+			// its live (or unreadable) row refuses its non-query documents in
+			// the dispatch.
 			if user.Holds(policy.ActionAdminImpersonate) && legacyImpersonationRefused(ctx) {
 				if session, err := store.ActiveImpersonation(ctx, user.ID); err != nil || session != nil {
 					markHolderRowLive(ctx)

@@ -29,6 +29,7 @@ type SunburstFilters struct {
 	ReposNamed         bool // the request names repositories (teamscope.NamedRepoRefs)
 	TeamScopeCondition string
 	TeamScopeBindings  []dhclickhouse.Binding
+	Ceiling            teamscope.Ceiling
 	// TeamIDs/TeamAsOf: the teams of the team scope and the instant their ownership is read at; each repository's
 	// effort is weighed by the share of it they hold (teamscope.RepoShare, CHAOS-9413, D5988). Empty = weight 1.
 	TeamIDs       []string
@@ -79,7 +80,7 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	categorySQL, categoryBindings := filters.categoryFilters().clause(
 		"splitByChar('.', subcategory_kv.1)[1]", "subcategory_kv.1",
 	)
-	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings, filters.Ceiling)
 	shareSQL, shareBindings := "1.0", []dhclickhouse.Binding(nil)
 	if sunburstScoped(scopeSQL) && len(filters.TeamIDs) > 0 {
 		asOf := filters.TeamAsOf

@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
@@ -81,7 +82,7 @@ SELECT '`+org+`', toDate('`+day+`'), 'repo', '`+row.id+`', `+row.score+`, 'eleva
 	mux := routeswitch.NewMux(documentRows)
 	mux.Register("compoundingRisk", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		served++
-		gqlServer.ServeHTTP(w, r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: org})))
+		gqlServer.ServeHTTP(w, r.WithContext(authctx.WithClaims(r.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org)})))
 	}))
 	dispatch := newDocumentDispatchHandler(func(string) string { return "" }, mux, byDigest, nil, nil, nil, "", nil)
 

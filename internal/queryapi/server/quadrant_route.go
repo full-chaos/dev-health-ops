@@ -151,6 +151,10 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "quadrant", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "quadrant", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		var validationErrors []pydanticErrorDetail
@@ -187,7 +191,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -198,7 +202,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		// people_summary_route.go and heatmap_route.go already check.
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "quadrant", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "quadrant", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
@@ -220,14 +224,14 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			params.EndDate = &endDate
 		}
 
-		resp, err := quadrant.BuildResponse(r.Context(), client, claims.OrgID, params)
+		resp, err := quadrant.BuildResponse(r.Context(), client, org, params)
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "quadrant", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "quadrant", org)
 				return
 			}
 			if reqErr, ok := quadrant.AsRequestError(err); ok {
-				writeRESTError(w, r, "quadrant", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "quadrant", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -236,7 +240,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			// (unknown type, invalid scope/bucket, unsupported metric)
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "quadrant", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "quadrant", org, err)
 			return
 		}
 
@@ -244,7 +248,7 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: quadrant: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, envelopeRequestID(r), encodeErr)
 			writeModelFailure(w)
 		}
 	}

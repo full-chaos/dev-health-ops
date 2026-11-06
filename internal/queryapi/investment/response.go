@@ -165,6 +165,8 @@ type Params struct {
 	ScopeIDs     []string
 	WhatRepos    []string
 	WorkCategory []string
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 func emptyResponse() *Response {
@@ -222,7 +224,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 	breakdownFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
-		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf, Ceiling: params.Ceiling,
 		Themes: themes, Subcategories: subcategories,
 		Measure: investmentexplain.RESTInvestmentMeasure, DatedByEnd: true,
 	}
@@ -241,7 +243,8 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 	qualityRow, found, err := reader.FetchInvestmentQualityStats(ctx, QualityStatsFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
-		Themes: themes, Subcategories: subcategories,
+		Ceiling: params.Ceiling,
+		Themes:  themes, Subcategories: subcategories,
 	})
 	if err != nil {
 		return nil, err
@@ -314,6 +317,8 @@ type SunburstParams struct {
 	// IssueSize reads the slices in ISSUE_SIZE (a unit weighs its issue size, an unsized unit counts 1) and returns the
 	// sizing coverage of the window's units with them (CHAOS-9873, D6027, D6032). False is the COUNT of the ported route.
 	IssueSize bool
+	// Ceiling is the repositories the caller may read (CHAOS-13090); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // SunburstSizing is the sizing coverage that travels with an ISSUE_SIZE sunburst: the share of the window's work
@@ -379,7 +384,7 @@ func BuildSunburst(ctx context.Context, reader *Reader, orgID string, params Sun
 	mockFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
-		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf, Ceiling: params.Ceiling,
 		Themes: themes, Subcategories: subcategories, DatedByEnd: true,
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
@@ -395,7 +400,7 @@ func BuildSunburst(ctx context.Context, reader *Reader, orgID string, params Sun
 	rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
 		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
-		TeamIDs: teamIDs, TeamAsOf: teamAsOf,
+		TeamIDs: teamIDs, TeamAsOf: teamAsOf, Ceiling: params.Ceiling,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
 		Measure: measure,
 	})

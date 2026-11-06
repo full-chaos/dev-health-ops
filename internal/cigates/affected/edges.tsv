@@ -207,6 +207,7 @@ internal/providersync	project_id_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/pdp	headers_switch_census_test.go	unexpressed
 internal/queryapi/pepgate	census_test.go	unexpressed
+internal/queryapi/pepgate	legacy_site_census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed
 internal/queryapi/scancensus	census_test.go	internal/queryapi/...
 internal/queryapi/scancensus	census_test.go	internal/storage/...
@@ -216,6 +217,7 @@ internal/queryapi/server	graphql_server_limits_documents_integration_test.go	une
 internal/queryapi/server	home_coverage_oracle_policy_guard_integration_test.go	unexpressed
 internal/queryapi/server	home_no_data_oracle_ledger_guard_integration_test.go	unexpressed
 internal/queryapi/server	mcp_class_parity_venue_oracle_integration_test.go	**/cmd/registrydump
+internal/queryapi/teamscope	census_test.go	unexpressed
 internal/storage/clickhouse	open_proxy_test.go	unexpressed
 internal/storage/clickhouse	param_types_census_test.go	cmd/...
 internal/storage/clickhouse	param_types_census_test.go	internal/...

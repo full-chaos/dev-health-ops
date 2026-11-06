@@ -141,14 +141,18 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 			writeRESTUnauthorized(w, r, "filteroptions", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "filteroptions", claims)
+		if !ok {
+			return
+		}
 
-		resp, err := filteroptions.BuildResponse(r.Context(), client, claims.OrgID)
+		resp, err := filteroptions.BuildResponse(r.Context(), client, org)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1466-1467) -- any ClickHouse
 			// failure degrades to a generic 503, never a raw error on the
 			// wire.
-			writeRESTDataUnavailable(w, r, "filteroptions", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "filteroptions", org, err)
 			return
 		}
 
@@ -156,7 +160,7 @@ func newFilterOptionsWorkHandler(client filteroptions.QueryClient) http.HandlerF
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: filteroptions: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, envelopeRequestID(r), encodeErr)
 			writeModelFailure(w)
 		}
 	}

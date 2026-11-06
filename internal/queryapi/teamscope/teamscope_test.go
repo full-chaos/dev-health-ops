@@ -257,7 +257,7 @@ func TestNarrowRepoScope(t *testing.T) {
 		if tc.team != "" {
 			tb = teamBindings
 		}
-		sql, bindings := NarrowRepoScope(tc.named, tc.explicit, eb, tc.team, tb)
+		sql, bindings := NarrowRepoScope(tc.named, tc.explicit, eb, tc.team, tb, NoCeiling(), "repo_id")
 		if sql != tc.wantSQL || len(bindings) != tc.wantBindings {
 			t.Errorf("%s: NarrowRepoScope = %q (%d bindings), want %q (%d)", tc.name, sql, len(bindings), tc.wantSQL, tc.wantBindings)
 		}
@@ -482,7 +482,7 @@ func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
 // repo_id); only a column that is already text compares as text on both sides.
 func TestNarrowRepoScopeTextColumnStaysText(t *testing.T) {
 	team, _ := RepoCondition("org-1", "toString(repo_id)", []string{"team-x"}, asOf)
-	got, _ := NarrowRepoScope(true, " AND toString(repo_id) IN {scope_ids:Array(String)}", nil, team, nil)
+	got, _ := NarrowRepoScope(true, " AND toString(repo_id) IN {scope_ids:Array(String)}", nil, team, nil, NoCeiling(), "toString(repo_id)")
 	if !strings.HasPrefix(got, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") || strings.Contains(got, "toUUIDOrNull") {
 		t.Errorf("a text column must compare as text on both sides:\n%s", got)
 	}

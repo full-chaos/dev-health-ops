@@ -83,7 +83,7 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 		if len(filter.TeamIDs) > 0 {
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repos.id", filter.TeamIDs, time.Now().UTC())
 		}
-		sql, bindings := teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings)
+		sql, bindings := teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), "repos.id")
 		if sql != "" {
 			out.scope = extraScope{SQL: "\n" + sql, Bindings: bindings}
 		}

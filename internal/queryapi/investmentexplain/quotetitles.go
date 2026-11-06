@@ -10,6 +10,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // quoteSource identifies the source an evidence quote came from.
@@ -24,7 +25,7 @@ type quoteSource struct {
 // has no title read and stays absent. Best effort: a failed lookup is logged
 // and the quotes keep their rows without a title. A source with no
 // displayable title is absent from the result.
-func (reader *Reader) quoteSourceTitles(ctx context.Context, orgID string, quotes []WorkUnitInvestmentQuoteRow) map[quoteSource]string {
+func (reader *Reader) quoteSourceTitles(ctx context.Context, orgID string, quotes []WorkUnitInvestmentQuoteRow, ceiling teamscope.Ceiling) map[quoteSource]string {
 	titles := map[quoteSource]string{}
 	var issueIDs []string
 	var prRepoIDs, prNumbers []string
@@ -56,7 +57,7 @@ func (reader *Reader) quoteSourceTitles(ctx context.Context, orgID string, quote
 		titles[quoteSource{SourceType: "issue", SourceID: id}] = title
 	}
 
-	prTitles, err := reader.fetchPullRequestTitles(ctx, orgID, prRepoIDs, prNumbers)
+	prTitles, err := reader.fetchPullRequestTitles(ctx, orgID, prRepoIDs, prNumbers, ceiling)
 	if err != nil {
 		log.Printf("query-api: work units quote titles: could not resolve pull request titles for sources=%d: %v", len(prKeys), err)
 		return titles
@@ -75,28 +76,29 @@ func (reader *Reader) quoteSourceTitles(ctx context.Context, orgID string, quote
 // pull request row and its repository sit inside the caller's organisation:
 // two organisations that sync one repository share its repo id, so the repo
 // filter alone would admit another organisation's title.
-func (reader *Reader) fetchPullRequestTitles(ctx context.Context, orgID string, repoIDs, numbers []string) (map[string]string, error) {
+func (reader *Reader) fetchPullRequestTitles(ctx context.Context, orgID string, repoIDs, numbers []string, ceiling teamscope.Ceiling) (map[string]string, error) {
 	repoIDs = uniqueNonEmpty(repoIDs)
 	numbers = uniqueNonEmpty(numbers)
 	if len(repoIDs) == 0 || len(numbers) == 0 {
 		return map[string]string{}, nil
 	}
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("pr.repo_id")
 	query := fmt.Sprintf(`
 SELECT toString(pr.repo_id) AS repo_id, toString(pr.number) AS number, pr.title AS title
 FROM git_pull_requests AS pr FINAL
 WHERE pr.org_id = {org_id:String}
   AND pr.repo_id IN (SELECT id FROM repos FINAL WHERE org_id = {org_id:String})
   AND toString(pr.repo_id) IN {repo_ids:Array(String)}
-  AND toString(pr.number) IN {numbers:Array(String)}
+  AND toString(pr.number) IN {numbers:Array(String)}%s
 %s
-`, settingsMaxExecutionTime())
+`, ceilingSQL, settingsMaxExecutionTime())
 	titles := map[string]string{}
 	for _, chunk := range chunkStrings(repoIDs, lookupChunkSize) {
-		rows, err := reader.client.Query(ctx, query, []dhclickhouse.Binding{
+		rows, err := reader.client.Query(ctx, query, append([]dhclickhouse.Binding{
 			{Name: "org_id", Value: orgID},
 			{Name: "repo_ids", Value: chunk},
 			{Name: "numbers", Value: numbers},
-		})
+		}, ceilingBindings...))
 		if err != nil {
 			return nil, fmt.Errorf("query pull request titles: %w", err)
 		}

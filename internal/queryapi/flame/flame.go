@@ -91,6 +91,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -161,6 +162,10 @@ func AsRequestError(err error) (*RequestError, bool) {
 type Params struct {
 	EntityType string
 	EntityID   string
+	// Ceiling is the repositories the caller may read (CHAOS-13085): a pull request or a deployment is read only in
+	// an allowed repository, an issue only when a linked pull request of an allowed repository exists. The zero
+	// value reads every entity.
+	Ceiling teamscope.Ceiling
 }
 
 // parseRepoEntity ports _parse_repo_entity (services/flame.py:51-61): the
@@ -573,7 +578,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			return nil, badRequest("PR id must be numeric")
 		}
 
-		pr, err := fetchPullRequest(ctx, client, repoID, number, orgID)
+		pr, err := fetchPullRequest(ctx, client, repoID, number, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
 		}
@@ -587,14 +592,14 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		return buildPRFlameResponse(repoID, number, *pr, reviews)
 
 	case "issue":
-		issue, err := fetchIssue(ctx, client, params.EntityID, orgID)
+		issue, err := fetchIssue(ctx, client, params.EntityID, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
 		}
 		if issue == nil {
 			return nil, notFound("Issue not found")
 		}
-		identity, err := fetchIssueIdentity(ctx, client, params.EntityID, orgID)
+		identity, err := fetchIssueIdentity(ctx, client, params.EntityID, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
 		}
@@ -606,7 +611,7 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		if err != nil {
 			return nil, err
 		}
-		deployment, err := fetchDeployment(ctx, client, repoID, deploymentID, orgID)
+		deployment, err := fetchDeployment(ctx, client, repoID, deploymentID, orgID, params.Ceiling)
 		if err != nil {
 			return nil, err
 		}

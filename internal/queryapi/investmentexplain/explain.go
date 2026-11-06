@@ -75,6 +75,10 @@ type ExplainInvestmentMixOptions struct {
 	// ReposNamed: see BreakdownFilters.ReposNamed.
 	ReposNamed        bool
 	TeamScopeBindings []dhclickhouse.Binding
+	// Ceiling is the repository ceiling of the request; BypassCache skips every cache read, write and org-wide
+	// data-version read (an allowlist caller must not read or fill an answer built over other repositories).
+	Ceiling     teamscope.Ceiling
+	BypassCache bool
 	// TeamIDs/TeamAsOf: see BreakdownFilters.TeamIDs.
 	TeamIDs  []string
 	TeamAsOf time.Time
@@ -184,6 +188,9 @@ func mixBreakdownFilters(opts ExplainInvestmentMixOptions) BreakdownFilters {
 		Subcategories: subcategoryFilters,
 		Measure:       opts.effectiveMeasure(),
 		DatedByEnd:    true,
+		// The ceiling holds whatever scope the request names: an organization-level request of an allowlist caller
+		// reads the allowed repositories only.
+		Ceiling: opts.Ceiling,
 	}
 	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
 	// reference does (investment.py:175: `if filters.scope.level in {"team",
@@ -516,11 +523,15 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		if sizing, fetchErr = reader.fetchMixSizing(ctx, opts); fetchErr != nil {
 			return InvestmentMixExplanation{}, fetchErr
 		}
-		dataVersion, versionErr := reader.FetchInvestmentDataVersion(ctx, opts.OrgID)
-		if versionErr != nil {
-			return InvestmentMixExplanation{}, versionErr
+		// The data version is an org-wide aggregate over every repository: an allowlist caller neither reads it nor
+		// shares a cached answer built over other repositories (CHAOS-13090).
+		if !opts.BypassCache {
+			dataVersion, versionErr := reader.FetchInvestmentDataVersion(ctx, opts.OrgID)
+			if versionErr != nil {
+				return InvestmentMixExplanation{}, versionErr
+			}
+			cacheFilters = mixCacheFilters(opts, themeDistribution, subcategoryDistribution, dataVersion)
 		}
-		cacheFilters = mixCacheFilters(opts, themeDistribution, subcategoryDistribution, dataVersion)
 	}
 	cacheKey, err := ComputeCacheKey(CacheKeyInput{
 		Filters:     cacheFilters,
@@ -533,7 +544,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	}
 
 	// A window the report cannot hold has no mix and so no versioned key: its raw-filter key would bypass the parser version.
-	if !opts.ForceRefresh && opts.LLMProvider != "mock" && opts.WindowErr == nil {
+	if !opts.ForceRefresh && opts.LLMProvider != "mock" && opts.WindowErr == nil && !opts.BypassCache {
 		cached, err := reader.ReadInvestmentExplanation(ctx, cacheKey, opts.OrgID)
 		if err == nil && cached != nil {
 			if explanation, decodeErr := DecodeInvestmentMixExplanation(cached.ExplanationJSON); decodeErr == nil {
@@ -581,6 +592,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 		ReposNamed:         opts.ReposNamed,
 		TeamScopeCondition: opts.TeamScopeCondition,
 		TeamScopeBindings:  opts.TeamScopeBindings,
+		Ceiling:            opts.Ceiling,
 		Limit:              200,
 		IncludeText:        true,
 		ThemeFilters:       themeFilters,
@@ -813,7 +825,7 @@ func (reader *Reader) explainInvestmentMix(ctx context.Context, writer *CacheWri
 	annotateFindings(&result, opts.effectiveMeasure(), themeDistribution, subcategoryDistribution)
 	applySizing(&result, sizing)
 
-	if opts.LLMProvider != "mock" && writer != nil {
+	if opts.LLMProvider != "mock" && writer != nil && !opts.BypassCache {
 		if explanationJSON, encodeErr := EncodeInvestmentMixExplanation(result); encodeErr == nil {
 			// llm_provider/llm_model here are the RAW request parameters
 			// (investment_mix_explain.py:544-545: `llm_provider=llm_provider,

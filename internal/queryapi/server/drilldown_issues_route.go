@@ -166,6 +166,10 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "drilldown_issues", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "drilldown_issues", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		scopeType := lastQueryValue(query, "scope_type")
@@ -202,7 +206,7 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -216,7 +220,7 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_issues", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_issues", org)
 			return
 		}
 
@@ -238,18 +242,25 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit: 50,
 		}
 
-		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, claims.OrgID, params)
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
+		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1044-1045).
-			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route (main.py:1041-1042),
 		// steering callers toward POST with an explicit filters body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeDrilldownIssuesResponse(w, r, claims.OrgID, resp)
+		writeDrilldownIssuesResponse(w, r, org, resp)
 	}
 }
 
@@ -269,13 +280,17 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "drilldown_issues", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "drilldown_issues", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
 			// A body-read I/O failure has no Python counterpart to match --
 			// see drilldown_prs_route.go's own POST handler for the same
 			// reasoning. Status unchanged, only the wire body's encoding.
-			writeRESTError(w, r, "drilldown_issues", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "drilldown_issues", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -284,17 +299,17 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// block reproduces verbatim.
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -329,7 +344,7 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 		if limit == 0 {
@@ -346,7 +361,7 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_issues", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_issues", org)
 			return
 		}
 
@@ -359,12 +374,19 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			BlockedOnly: blockedOnlyFromMetricFilter(filtersValue),
 		}
 
-		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, claims.OrgID, params)
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "drilldown_issues", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
 			return
 		}
-		writeDrilldownIssuesResponse(w, r, claims.OrgID, resp)
+		params.Ceiling = ceiling
+
+		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, org, params)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
+			return
+		}
+		writeDrilldownIssuesResponse(w, r, org, resp)
 	}
 }
 

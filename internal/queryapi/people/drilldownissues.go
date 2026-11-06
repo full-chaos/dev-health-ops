@@ -32,7 +32,9 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // primaryWorkItemTeamAttributionSourceForPerson inlines api/queries/
@@ -69,6 +71,10 @@ type DrilldownIssuesParams struct {
 	// (queries/people.py:274-275).
 	Cursor *time.Time
 	Now    time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13085): an item is served only when a linked pull
+	// request of an allowed repository exists, and the repositories it names are cut to the allowed ones. The zero
+	// value reads every item.
+	Ceiling teamscope.Ceiling
 }
 
 // IssueRow ports one IssueRow the response wraps (api/models/schemas.py:
@@ -137,7 +143,7 @@ LIMIT {limit_n:UInt64}
 
 // fetchPersonIssues runs fetchPersonIssuesQuery and scans every row, in
 // SELECT order.
-func fetchPersonIssues(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, limit int, cursor *time.Time, orgID string) ([]IssueRow, error) {
+func fetchPersonIssues(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, limit int, cursor *time.Time, orgID string, ceiling teamscope.Ceiling) ([]IssueRow, error) {
 	cursorFilter := ""
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -150,6 +156,10 @@ func fetchPersonIssues(ctx context.Context, client QueryClient, identities []str
 		cursorFilter = "AND wct.completed_at < {cursor:DateTime64(3, 'UTC')}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "cursor", Value: *cursor})
 	}
+
+	linkSQL, linkBindings := linkscope.ItemCondition(ceiling, "wct.work_item_id")
+	cursorFilter += linkSQL
+	bindings = append(bindings, linkBindings...)
 
 	query := fmt.Sprintf(fetchPersonIssuesQuery, primaryWorkItemTeamAttributionSourceForPerson, cursorFilter, settingsFinalTopNSafe())
 	rows, err := client.Query(ctx, query, bindings)
@@ -225,7 +235,7 @@ FROM (
     SELECT DISTINCT work_item_id, repo_id
     FROM work_graph_issue_pr FINAL
     WHERE org_id = {org_id:String}
-      AND work_item_id IN {ids:Array(String)}
+      AND work_item_id IN {ids:Array(String)}%s
 ) AS l
 INNER JOIN (
     SELECT id, trim(repo) AS repo
@@ -239,15 +249,16 @@ ORDER BY work_item_id ASC, repo_name ASC
 
 // fetchLinkedRepoNames returns {work_item_id: distinct repo names}. A failed
 // read is an error.
-func fetchLinkedRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string][]string, error) {
+func fetchLinkedRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string, ceiling teamscope.Ceiling) (map[string][]string, error) {
 	out := map[string][]string{}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := client.Query(ctx, fmt.Sprintf(linkedRepoNamesQuery, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+	cutSQL, cutBindings := ceiling.RepoTerm("toString(repo_id)")
+	rows, err := client.Query(ctx, fmt.Sprintf(linkedRepoNamesQuery, cutSQL, settingsMaxExecutionTime()), append([]dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "ids", Value: ids},
-	})
+	}, cutBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("people: linked repo names query: %w", err)
 	}
@@ -296,7 +307,7 @@ func BuildDrilldownIssuesResponse(ctx context.Context, reader *Reader, orgID str
 	}
 	identities := identityVariants(canonical, aliasList)
 
-	rows, err := fetchPersonIssues(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID)
+	rows, err := fetchPersonIssues(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID, params.Ceiling)
 	if err != nil {
 		return nil, err
 	}
@@ -305,11 +316,17 @@ func BuildDrilldownIssuesResponse(ctx context.Context, reader *Reader, orgID str
 	for _, row := range rows {
 		itemIDs = append(itemIDs, row.WorkItemID)
 	}
+	if params.Ceiling.Restricted() && len(rows) == 0 {
+		// A person with no item linked to an allowed repository answers as a person that does not exist: the
+		// identity lookup is org-wide, so the answer must not tell the two apart.
+		return nil, notFound("Person not found")
+	}
+
 	titles, err := fetchWorkItemTitles(ctx, reader.client, orgID, itemIDs)
 	if err != nil {
 		return nil, err
 	}
-	linked, err := fetchLinkedRepoNames(ctx, reader.client, orgID, itemIDs)
+	linked, err := fetchLinkedRepoNames(ctx, reader.client, orgID, itemIDs, params.Ceiling)
 	if err != nil {
 		return nil, err
 	}

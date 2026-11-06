@@ -3,6 +3,7 @@ package home
 import (
 	"context"
 	"log"
+	"strings"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -110,8 +111,16 @@ func scopeNames(ctx context.Context, client QueryClient, orgID string, f Filters
 	case "repo":
 		var uuids []string
 		names := map[string]string{}
+		allowed := map[string]bool{}
+		for _, id := range f.Ceiling.IDs() {
+			allowed[strings.ToLower(id)] = true
+		}
 		for _, id := range f.Scope.IDs {
 			if scopelabel.LooksLikeUUID(id) {
+				// A repository outside the ceiling is never named (CHAOS-13086).
+				if f.Ceiling.Restricted() && !allowed[strings.ToLower(id)] {
+					continue
+				}
 				uuids = append(uuids, id)
 			} else if name, ok := scopelabel.CleanName(id); ok {
 				names[id] = name

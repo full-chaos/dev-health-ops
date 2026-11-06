@@ -13,6 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -130,7 +131,7 @@ func TestNewFilterOptionsWorkHandlerRequiresAuthContext(t *testing.T) {
 func TestNewFilterOptionsWorkHandlerHappyPathShape(t *testing.T) {
 	handler := newFilterOptionsWorkHandler(emptyRowsFilterOptionsClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -166,7 +167,7 @@ func TestNewFilterOptionsWorkHandlerHappyPathShape(t *testing.T) {
 func TestNewFilterOptionsWorkHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newFilterOptionsWorkHandler(erroringFilterOptionsClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {

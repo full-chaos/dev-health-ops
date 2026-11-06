@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // repoFilterApplied says per metric whether the request's repository filter
@@ -138,7 +139,7 @@ func postDeltas(t *testing.T, client home.QueryClient, org, body string) map[str
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/home", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: org, Role: "owner"}))
+	req = req.WithContext(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 	rec := httptest.NewRecorder()
 	newHomePostHandler(client, nil)(rec, req)
 	if rec.Code != http.StatusOK {

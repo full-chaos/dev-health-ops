@@ -134,3 +134,29 @@ func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-13162: the key of a root is the operation's type and the field's name. A mutation that shares a query root's
+// field name never runs with the query root's decided scope. Driven the way the generated code calls the interceptor
+// (RootFieldContext.Object = the field's name).
+func TestOperationEnforceKeysTheRootScopeByTheOperationType(t *testing.T) {
+	org := "22222222-2222-2222-2222-222222222222"
+	scopes := map[string]pepgate.Scope{"Query.experiments": pepgate.Allowlist(org, []string{"acme/widgets"})}
+	run := func(kind ast.Operation, name string) authctx.Claims {
+		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org)})
+		ctx = graphql.WithOperationContext(ctx, &graphql.OperationContext{Operation: &ast.OperationDefinition{Operation: kind}})
+		ctx = context.WithValue(ctx, rootScopesKey{}, scopes)
+		ctx = graphql.WithRootFieldContext(ctx, &graphql.RootFieldContext{Object: name, Field: graphql.CollectedField{Field: &ast.Field{Name: name}}})
+		var seen authctx.Claims
+		OperationEnforce{}.InterceptRootField(ctx, func(ctx context.Context) graphql.Marshaler {
+			seen, _ = authctx.FromContext(ctx)
+			return graphql.Null
+		})
+		return seen
+	}
+	if got := run(ast.Query, "experiments"); got.Scope.Kind() != pepgate.KindAllowlist || len(got.Scope.RepoKeys()) != 1 {
+		t.Fatalf("Query.experiments ran with scope kind %v keys %v, want the decided allowlist", got.Scope.Kind(), got.Scope.RepoKeys())
+	}
+	if got := run(ast.Mutation, "experiments"); got.Scope.Kind() != pepgate.KindLegacy {
+		t.Fatalf("a mutation of the same name ran with scope kind %v, want the request's (Legacy)", got.Scope.Kind())
+	}
+}

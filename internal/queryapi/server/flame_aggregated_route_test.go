@@ -12,6 +12,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -121,7 +122,7 @@ func TestNewFlameAggregatedWorkHandlerRequiresAuthContext(t *testing.T) {
 func TestNewFlameAggregatedWorkHandlerRequiresMode(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -150,7 +151,7 @@ func TestNewFlameAggregatedWorkHandlerRequiresMode(t *testing.T) {
 func TestNewFlameAggregatedWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?start_date=bad&range_days=abc&limit=xyz&min_value=nope", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -181,7 +182,7 @@ func TestNewFlameAggregatedWorkHandlerAggregatesMultipleValidationErrors(t *test
 func TestNewFlameAggregatedWorkHandlerComparativeParamIs400(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput&rank=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -197,7 +198,7 @@ func TestNewFlameAggregatedWorkHandlerComparativeParamIs400(t *testing.T) {
 func TestNewFlameAggregatedWorkHandlerUnknownModeIs400(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=not_a_real_mode", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -214,7 +215,7 @@ func TestNewFlameAggregatedWorkHandlerUnknownModeIs400(t *testing.T) {
 func TestNewFlameAggregatedWorkHandlerHappyPathShape(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=throughput", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -244,7 +245,7 @@ func TestNewFlameAggregatedWorkHandlerHappyPathShape(t *testing.T) {
 func TestNewFlameAggregatedWorkHandlerClampsLimitAndMinValue(t *testing.T) {
 	handler := newFlameAggregatedWorkHandler(emptyRowsFlameAggregatedClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flame/aggregated?mode=code_hotspots&limit=5000&min_value=-5", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

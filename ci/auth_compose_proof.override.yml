@@ -14,6 +14,13 @@ services:
   clickhouse:
     container_name: !reset null
     ports: !reset []
+  # CHAOS-13107: auth-service waits for valkey (its session routes' rate-limit store), and go-api waits for
+  # auth-issuer (the local token issuer, fixed loopback port 8443): both drop their host-global name and port.
+  valkey:
+    container_name: !reset null
+    ports: !reset []
+  auth-issuer:
+    ports: !reset []
   migrate:
     container_name: !reset null
     environment:

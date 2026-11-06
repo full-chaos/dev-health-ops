@@ -164,9 +164,7 @@ ON CONFLICT (org_id, category, key) DO NOTHING`, uuid.New(), org.String(), llmCa
 	changes.Set("source", serviceModelSource)
 	changes.Set("old_enabled", before)
 	changes.Set("new_enabled", enabled)
-	if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
-		changes.Set("impersonated_by", *user.ImpersonatedBy)
-	}
+	setImpersonatedBy(changes, user)
 	encoded, err := pyjson.Marshal(changes)
 	if err != nil {
 		h.internalError(ctx, w, "encode prompt cache audit", err)

@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/authmail"
 	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
@@ -50,6 +53,17 @@ func inviteConfig(cfg config.Config, logger *slog.Logger, lookup func(string) (s
 	}
 	out.Mail = sender
 	return out
+}
+
+// startLegacyLinkCounter starts the counter of link tokens accepted with the
+// legacy chain key and installs it on the link flows.
+func startLegacyLinkCounter() error {
+	counter, err := authmail.NewLegacyLinkCounter(otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/authmail"), goAPIAccessService)
+	if err != nil {
+		return err
+	}
+	authmail.SetLegacyLinkAccepted(counter)
+	return nil
 }
 
 // unusableSender fails every send with the error that made the configured

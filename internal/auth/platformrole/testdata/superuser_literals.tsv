@@ -42,6 +42,7 @@ internal/queryapi/graph/generated.go	-	1	schema description text
 internal/queryapi/server/graphql_edge_route.go	authenticateGraphQLEdge	1	log key
 internal/storage/postgres/authschema/publicreads.go	PublicReadColumns	1	grant (auth runtime role reads public users)
 internal/storage/postgres/query_api_authorization.go	queryAPIPosture	1	grant (query-api role reads public users)
+internal/testsupport/authrows/accesstoken.go	-	1	test support claim key (checked absent: the eddsa access token carries none)
 internal/testsupport/pgseed/pgseed.go	SetUserState	1	test support write
 internal/testsupport/sessionscenario/sessionscenario.go	Run	1	test support read
 internal/testsupport/sessionscenario/sessionscenario.go	Seed	2	test support write and claim

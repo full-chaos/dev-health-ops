@@ -57,14 +57,16 @@ func overrideStored(stored func(key string) bool, purpose Purpose) bool {
 	return purpose != "" && stored(PurposeKey(purpose, keyProvider))
 }
 
-// inheritsDefaultKey: an override for the same provider as the default row
-// and with no api_key of its own uses the default row's key, so one provider
-// key serves several models. A different provider never inherits it.
+// inheritsDefaultKey: an override for the same provider and base_url as the
+// default row and with no api_key of its own uses the default row's key, so one
+// provider key serves several models. A different provider or base_url never
+// inherits it: the key would reach a target it was not written for.
 func inheritsDefaultKey(stored func(key string) bool, value func(key string) string, purpose Purpose) bool {
 	return overrideStored(stored, purpose) &&
 		!stored(PurposeKey(purpose, keyAPIKey)) &&
 		stored(keyAPIKey) &&
-		normalizeProvider(value(keyProvider)) == normalizeProvider(value(PurposeKey(purpose, keyProvider)))
+		normalizeProvider(value(keyProvider)) == normalizeProvider(value(PurposeKey(purpose, keyProvider))) &&
+		value(keyBaseURL) == value(PurposeKey(purpose, keyBaseURL))
 }
 
 // sourceKeys are the stored keys the effective config of purpose reads.
@@ -74,30 +76,34 @@ func sourceKeys(stored func(key string) bool, value func(key string) string, pur
 	}
 	keys := PurposeKeys(purpose)
 	if inheritsDefaultKey(stored, value, purpose) {
-		keys = append(keys, keyProvider, keyAPIKey)
+		keys = append(keys, keyProvider, keyBaseURL, keyAPIKey)
 	}
 	return keys
 }
 
 // project maps the effective source of purpose onto the default key names, so
-// every reader below it is unchanged.
+// every reader below it is unchanged. A key written for another provider than
+// its scope's (servedKey) is not projected.
 func project(settings orgSettings, purpose Purpose) orgSettings {
-	if purpose == "" {
-		return settings
-	}
 	stored := func(key string) bool { return settings[key] != "" }
 	value := func(key string) string { return settings[key] }
-	if !overrideStored(stored, purpose) {
-		return settings
+	if purpose == "" || !overrideStored(stored, purpose) {
+		return withServedDefaultKey(settings)
 	}
 	out := orgSettings{}
 	for _, field := range Fields {
-		if v := settings[PurposeKey(purpose, field)]; v != "" {
+		v := settings[PurposeKey(purpose, field)]
+		if field == keyAPIKey {
+			v = servedKey(settings, PurposeKey(purpose, field))
+		}
+		if v != "" {
 			out[field] = v
 		}
 	}
 	if inheritsDefaultKey(stored, value, purpose) {
-		out[keyAPIKey] = settings[keyAPIKey]
+		if v := servedKey(settings, keyAPIKey); v != "" {
+			out[keyAPIKey] = v
+		}
 	}
 	return out
 }

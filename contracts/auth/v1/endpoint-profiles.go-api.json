@@ -159,7 +159,7 @@
         "name": "EdDSA"
       },
       "classification": "protected",
-      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:576; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
+      "current_state_cache_behavior": "none: per-request read (internal/api/policy/request_reads.go:13); the route invalidates the in-process model list cache for the organization (internal/apiservice/admin/llmsettings.go:588; cache type internal/apiservice/admin/llmmodels.go:62) (not an authorization-decision cache)",
       "delegated_bearer": "denied",
       "disclosure_behavior": "no path resource id, behaviour today: the route acts only in the caller's effective organization; a caller without the admin role answers 403 (internal/api/policy/guard.go:180)",
       "gaps": [
@@ -15870,5 +15870,5 @@
     }
   ],
   "schema_version": "endpoint-profile.v1",
-  "source_commit": "5aef592574deff778bb0c572d9632f42f2570cc5"
+  "source_commit": "ad73c1cc123bed0f0142431bd0d4b0ef72ad90ba"
 }

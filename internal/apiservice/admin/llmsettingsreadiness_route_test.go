@@ -149,7 +149,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, adminUserID, "llmreadiness
 
 			row := func(org uuid.UUID, key, value string) {
 				exec(`INSERT INTO settings (id, org_id, category, key, value, is_encrypted, description, created_at, updated_at)
-VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), now())`, uuid.New(), org.String(), key, value)
+VALUES ($1, $2, 'llm', $3, $4, false, NULL, now(), timestamptz '2026-07-01 00:00:00+00')`, uuid.New(), org.String(), key, value)
 			}
 			for _, org := range []uuid.UUID{readyOrgID, failOrgID} {
 				row(org, "provider", "openai")

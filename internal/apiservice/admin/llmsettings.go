@@ -220,11 +220,7 @@ func (h *handlers) llmSettingsResponse(ctx context.Context, db pgExecer, orgID s
 	values := make(map[string]*string, len(llmSettingKeys))
 	var unreadable []string
 	for _, key := range llmSettingKeys {
-		row, err := settingByKeyOn(ctx, db, orgID, llmCategory, key)
-		if err != nil {
-			return nil, err
-		}
-		value, err := h.settingValue(row)
+		value, err := h.llmSettingValue(ctx, db, orgID, "", key)
 		if collectUndecryptable(err, &unreadable) {
 			continue
 		}
@@ -410,7 +406,11 @@ func (h *handlers) putLLMSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apiKey == nil || *apiKey == "" {
-			need, err := h.purposeNeedsKey(ctx, orgID, purpose, *provider)
+			next := keyTarget{provider: *provider}
+			if baseURL != nil {
+				next.baseURL = *baseURL
+			}
+			need, err := h.purposeNeedsKey(ctx, orgID, purpose, next)
 			if err != nil {
 				h.internalError(ctx, w, "check llm purpose key", err)
 				return
@@ -552,6 +552,13 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, key, value, encrypt, &description)
 		return err
 	}
+	keyStep, err := h.keyStepFor(ctx, tx, orgID, "", keyTarget{in.provider, baseURLText}, in.apiKey)
+	if err != nil {
+		return nil, nil, &llmStepError{"read llm key binding", err}
+	}
+	if keyStep == keyStepRefuse {
+		return nil, targetChangeRefusal(), nil
+	}
 	normalized := pythonparity.Lower(pythonparity.Strip(in.provider))
 	steps := []struct {
 		run func() error
@@ -559,14 +566,19 @@ func (h *handlers) applyLLMSettings(ctx context.Context, orgID string, in llmUps
 		{func() error { return set("provider", &normalized, false, "BYO LLM provider for this organization") }},
 		{func() error { return set("model", in.model, false, "BYO LLM model for this organization") }},
 	}
-	if in.apiKey != nil {
-		steps = append(steps, struct{ run func() error }{func() error {
-			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
-		}})
-	}
 	steps = append(steps, struct{ run func() error }{func() error {
 		return set("base_url", in.baseURL, false, "BYO LLM base URL for this organization")
 	}})
+	// The key is written after the provider and base_url rows: it is bound to them.
+	if keyStep == keyStepWrite {
+		steps = append(steps, struct{ run func() error }{func() error {
+			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key for this organization")
+		}})
+	} else {
+		steps = append(steps, struct{ run func() error }{func() error {
+			return h.applyKeyStep(ctx, tx, orgID, "", keyStep)
+		}})
+	}
 	if in.concurrency != nil {
 		text := in.concurrency.String()
 		steps = append(steps, struct{ run func() error }{func() error {

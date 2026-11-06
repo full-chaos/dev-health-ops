@@ -127,12 +127,12 @@ func TestAuthWebProxyProofStackHasNoHostGlobalName(t *testing.T) {
 
 // The proxy flags are ON only inside the proof's own override; the default stack and the chart
 // keep them OFF (chris: login does not switch to the control plane until social login works).
-// CHAOS-13107: compose.yml turns AUTH_PROXY_SESSIONS on (the local stack issues its sessions through
-// auth-service, as production does); every other flag stays off there.
+// CHAOS-13107: compose.yml turns production's set on (sessions, local login, credentials and social: the
+// local stack signs users in through auth-service, as production does); OIDC and SAML stay off there.
 func TestAuthProxyFlagsAreOffOutsideTheProofOverrides(t *testing.T) {
 	root := authProofRoot(t)
 	on := regexp.MustCompile(`(?im)^\s*AUTH_PROXY_(SESSIONS|LOCAL_LOGIN|CREDENTIALS|SOCIAL|OIDC|SAML)\s*[:=]\s*["']?(true|1|on)\b`)
-	onButSessions := regexp.MustCompile(`(?im)^\s*AUTH_PROXY_(LOCAL_LOGIN|CREDENTIALS|SOCIAL|OIDC|SAML)\s*[:=]\s*["']?(true|1|on)\b`)
+	onButSessions := regexp.MustCompile(`(?im)^\s*AUTH_PROXY_(OIDC|SAML)\s*[:=]\s*["']?(true|1|on)\b`)
 	for _, rel := range []string{"compose.yml", "ci/auth_compose_proof.override.yml", "deploy/helm/dev-health/values.yaml"} {
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {

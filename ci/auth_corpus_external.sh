@@ -432,19 +432,56 @@ if [ "${LEG}" = "acp" ]; then
   }
 fi
 
+# Whether auth-service owns users on this run: leg acp from step 1e (unless AUTH_CORPUS_USERS_UNOWNED=1); leg go-api as
+# compose.yml renders go-api's AUTH_USERS_OWNED (below).
+COMPOSE_OWNS_USERS=0
 if [ "${LEG}" = "go-api" ]; then
-  # CHAOS-13107: compose.yml can route go-api's sessions through auth-service (AUTH_PROXY_SESSIONS). Read the value as
-  # compose renders it for this leg (its override files and env): "true" hands the corpus the sessions aggregate, so it
-  # classifies auth-service's session answers (internal/testsupport/authrows); anything else leaves the set empty. Only
-  # that one key is read from the rendered config; nothing of it is printed.
+  # CHAOS-13107: compose.yml routes go-api's auth aggregates through auth-service, production's set (sessions, local login,
+  # credentials, social). Read each of go-api's AUTH_PROXY_* keys, one by one, as compose renders them for this leg (its
+  # override files and env): an aggregate whose key is "true" is handed to the corpus, so it classifies auth-service's
+  # answers (internal/testsupport/authrows); anything else leaves it out. go-api's own start-up rules hold here too: an
+  # aggregate without sessions, and users owned without sessions, local login and credentials, fail the leg by name, and
+  # OIDC and SAML have no corpus rows, so either one on fails it too. Only these keys are read; nothing else is printed.
   config_json="$(compose config --format json)" || die "could not render the compose config of leg go-api"
-  go_api_sessions="$(jq -r '.services["go-api"].environment.AUTH_PROXY_SESSIONS // ""' <<<"${config_json}")" \
-    || die "could not read go-api's AUTH_PROXY_SESSIONS from the rendered compose config"
-  unset config_json
-  printf 'leg go-api: go-api AUTH_PROXY_SESSIONS=%s\n' "${go_api_sessions:-unset}"
-  if [ "${go_api_sessions}" = "true" ]; then
-    FORWARDED=(sessions)
+  go_api_env() {
+    jq -r --arg key "$1" '.services["go-api"].environment[$key] // ""' <<<"${config_json}" \
+      || die "could not read go-api's $1 from the rendered compose config"
+  }
+  for aggregate in "${AGGREGATES[@]}"; do
+    key="AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}")"
+    value="$(go_api_env "${key}")"
+    printf 'leg go-api: go-api %s=%s\n' "${key}" "${value:-unset}"
+    [ "${value}" = "true" ] || continue
+    case "${aggregate}" in oidc | saml) die "go-api has ${key}=true: the corpus has no rows for it, and compose.yml keeps it off" ;; esac
+    FORWARDED+=("${aggregate}")
+  done
+  if [ "${#FORWARDED[@]}" -gt 0 ] && [ "${FORWARDED[0]}" != "sessions" ]; then
+    die "go-api has AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${FORWARDED[0]}")=true without AUTH_PROXY_SESSIONS: go-api refuses to start"
   fi
+  owned="$(go_api_env AUTH_USERS_OWNED)"
+  printf 'leg go-api: go-api AUTH_USERS_OWNED=%s\n' "${owned:-unset}"
+  unset config_json
+  if [ "${owned}" = "true" ]; then
+    for aggregate in sessions local_login credentials; do
+      [[ " ${FORWARDED[*]-} " == *" ${aggregate} "* ]] \
+        || die "go-api has AUTH_USERS_OWNED=true without AUTH_PROXY_$(tr '[:lower:]' '[:upper:]' <<<"${aggregate}"): go-api refuses to start"
+    done
+    COMPOSE_OWNS_USERS=1
+  fi
+  # owned_seed_copy is leg go-api's hand-off when compose.yml has auth-service own users from the start: the corpus seeds
+  # its users into public.users as a superuser, behind auth-service, so the seeded users are copied into the auth schema
+  # (users-backfill, which refuses while AUTH_USERS_OWNED is true: the flag is false for that one command only), and
+  # auth-service is recreated on the copied users. Nothing else changes: go-api's flags are compose.yml's.
+  owned_seed_copy() {
+    printf 'step 1e (go-api): users-backfill of the seeded users\n'
+    (
+      export "AUTH_DATABASE_URI=host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable"
+      timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+        run --rm --no-deps -e AUTH_DATABASE_URI -e AUTH_USERS_OWNED=false migrate auth users-backfill
+    ) || die "users-backfill failed"
+    timeout --kill-after=10 "${AUTH_CORPUS_UP_SECONDS:-1500}" docker compose -p "${PROJECT}" "${COMPOSE_FILES[@]}" --profile auth \
+      up --detach --no-deps --force-recreate --no-build --wait --wait-timeout 300 auth-service
+  }
 fi
 
 if [[ " ${FORWARDED[*]-} " == *" sessions "* ]]; then
@@ -468,12 +505,15 @@ export DEVHEALTH_AUTH_ORACLE_CLICKHOUSE_URI="clickhouse://${CLICKHOUSE_USER:-ch}
 export DEVHEALTH_AUTH_ORACLE_VALKEY_URI="redis://127.0.0.1:${VALKEY_PORT}/1"
 export DEVHEALTH_AUTH_ORACLE_SMTP_ADMIN="${SMTP_ADMIN}"
 export DEVHEALTH_AUTH_ORACLE_STUB_ADMIN="${STUB_ADMIN}"
-# The aggregates go-api forwarded, comma separated (empty on leg go-api): the corpus reads auth-service's rows for them
+# The aggregates go-api forwarded, comma separated (on leg go-api the ones compose.yml turns on): the corpus reads auth-service's rows for them
 # (internal/testsupport/authrows).
 DEVHEALTH_AUTH_ORACLE_FORWARDED="$(join_comma ${FORWARDED[@]+"${FORWARDED[@]}"})"
 export DEVHEALTH_AUTH_ORACLE_FORWARDED
-# Whether auth-service owns users on this leg (leg acp only, step 1e): the corpus expects the users rows of go-api's golden.
-if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
+# Whether auth-service owns users on this leg (leg acp from step 1e; leg go-api as compose.yml renders it): the corpus expects
+# the users rows of go-api's golden.
+OWNED_LEG=0
+if { [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; } || [ "${COMPOSE_OWNS_USERS}" = 1 ]; then
+  OWNED_LEG=1
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=true
 else
   export DEVHEALTH_AUTH_ORACLE_USERS_OWNED=false
@@ -482,8 +522,9 @@ fi
 # compose bring-up used part of the job.
 tmo="$(bash "${ROOT}/ci/check_go.sh" job-timeout 27)" || die "no job time budget left for the corpus test"
 TEST_CMD=(go test -trimpath -tags integration -count=1 -timeout="${tmo}" -v -run '^TestAuthFlowVenueOracle$' "${AUTH_CORPUS_TEST_PACKAGE}")
-if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
-  # The owned leg: the test seeds, signals, and waits; the flip (step 1e and 1f) runs once the users exist.
+if [ "${OWNED_LEG}" = 1 ]; then
+  # The owned leg: the test seeds, signals, and waits; the flip (leg acp: step 1e and 1f; leg go-api: the seeded users'
+  # copy) runs once the users exist.
   export DEVHEALTH_AUTH_ORACLE_SEEDED_FILE="${SEEDED_FILE}" DEVHEALTH_AUTH_ORACLE_FLIPPED_FILE="${FLIPPED_FILE}"
   # The test runs as its own compiled binary, so the pid kept here is the test itself and cleanup kills that pid and nothing else.
   TEST_BIN="${WORK}/authflowvenue.test"
@@ -496,7 +537,7 @@ if [ "${LEG}" = "acp" ] && [ -z "${AUTH_CORPUS_USERS_UNOWNED:-}" ]; then
     TEST_PID=""
     die "the corpus test ended before it seeded"
   fi
-  owned_flip
+  if [ "${LEG}" = "acp" ]; then owned_flip; else owned_seed_copy; fi
   join_comma ${FORWARDED[@]+"${FORWARDED[@]}"} >"${FLIPPED_FILE}.tmp"
   mv "${FLIPPED_FILE}.tmp" "${FLIPPED_FILE}"
   status=0

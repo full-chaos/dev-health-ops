@@ -1185,8 +1185,11 @@ services:
       # reads (rate-limit keys, audit rows): its fixed address on the planes
       # network, never a subnet. Every other peer is its own client.
       TRUSTED_PROXIES: *router-address
-      # Off unless the environment says so (the acp corpus leg only; helm go-api-deployment.yaml sets it from authService.usersOwned).
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      # CHAOS-13107: auth-service owns users, as production's phase 4 (helm
+      # go-api-deployment.yaml sets it from authService.usersOwned): every
+      # service below that reads it has the same default. go-api refuses it
+      # without sessions, local login and credentials forwarded (above).
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       # Observability: OpenTelemetry (traces and metrics to SigNoz). Off by
       # default.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
@@ -1207,14 +1210,21 @@ services:
       # signed under. A path, never the credential.
       AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
       AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
-      # CHAOS-13107: auth-service owns the sessions, as in production. go-api
-      # never mints a session pair itself: login, switch-org, accept-invite,
-      # change-password, social and SSO sign-in take their pair from
-      # auth-service's session issue route, and the access token is the EdDSA
-      # token auth-service signs. go-river-migrate reads the same flag (the api
-      # role's refresh_tokens grants follow it).
+      # CHAOS-13107: go-api forwards production's set of auth aggregates to
+      # auth-service: sessions, local login, credentials (sign-up, verify,
+      # password reset) and social sign-in; OIDC and SAML stay on go-api. go-api
+      # never mints a session pair itself: switch-org, accept-invite,
+      # change-password and SSO sign-in take their pair from auth-service's
+      # session issue route, and the access token is the EdDSA token
+      # auth-service signs. go-river-migrate reads the sessions flag (the api
+      # role's refresh_tokens grants follow it). Sessions without local login
+      # picks the earliest-join org at login and records the gateway IP
+      # (internal/cigates/workflows refuses it).
       AUTH_PROXY_URL: http://auth-service:8095
       AUTH_PROXY_SESSIONS: "true"
+      AUTH_PROXY_LOCAL_LOGIN: "true"
+      AUTH_PROXY_CREDENTIALS: "true"
+      AUTH_PROXY_SOCIAL: "true"
       # The session issue credential is session_compat (AUTH_SESSION_ISSUE_CREDENTIAL
       # unset): this auth-session-issuer service credential, whose SHA-256 the
       # auth-session-issue-seed one-shot writes to internal_service_credentials.
@@ -1516,7 +1526,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
@@ -1554,7 +1564,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
       AUTH_PUSH_LIFECYCLE_WRITER_ROLE: ${AUTH_PUSH_LIFECYCLE_WRITER_ROLE:-}
       AUTH_PUSH_LIFECYCLE_CALLER_ROLES: ${AUTH_PUSH_LIFECYCLE_CALLER_ROLES:-}
@@ -1586,7 +1596,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-grants:
@@ -1629,7 +1639,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     depends_on:
       auth-grants:
@@ -1649,7 +1659,7 @@ services:
     environment:
       AUTH_MIGRATION_DATABASE_URI: host=postgres port=5432 user=${AUTH_MIGRATION_DATABASE_ROLE:-devhealth_auth_migrator} password='${AUTH_MIGRATION_DATABASE_PASSWORD:-devhealth_auth_migrator}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_RUNTIME_DATABASE_ROLE: ${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth}
     volumes:
       - workload_bootstrap:/run/workload
@@ -1691,7 +1701,7 @@ services:
       AUTH_SERVICE_SHUTDOWN_TIMEOUT: 8s
       AUTH_DATABASE_URI: host=postgres port=5432 user=${AUTH_RUNTIME_DATABASE_ROLE:-devhealth_auth} password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-postgres} sslmode=disable
       AUTH_DATABASE_SCHEMA: ${AUTH_DATABASE_SCHEMA:-auth}
-      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-true}
       AUTH_SIGNING_KEY_FILE: /run/auth/signing/envelope-private-key.pem
       AUTH_SIGNING_KEY_ID: ${AUTH_SIGNING_KEY_ID:-auth-signing-local}
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
@@ -1717,6 +1727,21 @@ services:
       # Local valkey has no ACL users, so the URI carries none (the production
       # login is an ACL user limited to the auth_svc_ key prefix).
       AUTH_VALKEY_URI: ${AUTH_VALKEY_URI:-redis://valkey:6379/1}
+      # go-api forwards local login (AUTH_PROXY_LOCAL_LOGIN): auth-service
+      # mounts its login route only with the login lockout key (32 bytes,
+      # unpadded base64url). A local default, like the session keys above.
+      AUTH_LOGIN_LOCKOUT_KEY: ${AUTH_LOGIN_LOCKOUT_KEY:-local-dev-login-lockout-key-0123456789abcdw}
+      # auth-service owns users (AUTH_USERS_OWNED), so it sends the verify and
+      # reset mails of the credentials routes go-api forwards, and refuses to
+      # start without a usable mail setting. Locally the default is the console
+      # provider, as go-api's: AUTH_MAIL_ALLOW_CONSOLE allows it (and an http
+      # APP_BASE_URL); no mail is delivered. Set EMAIL_PROVIDER and its keys in
+      # .env for real mail.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_FROM_ADDRESS: ${EMAIL_FROM_ADDRESS:-noreply@example.com}
+      AUTH_MAIL_ALLOW_CONSOLE: "true"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     volumes:
       - type: volume
         source: auth_signing_keys

@@ -3,8 +3,10 @@
 # go-api in the proof needs to be private to its project: no fixed container_name, no published
 # host port, and no attachment to the `planes` network (its fixed subnet is host-global).
 #
-# compose.yml turns AUTH_PROXY_SESSIONS on for go-api since CHAOS-13107; the other proxy flags are ON here only.
-# The AUTH_PROXY_* names are D1's. Sign-up (credentials) stays on go-api until D3.
+# compose.yml forwards production's set for go-api since CHAOS-13107 (sessions, local login, credentials, social) with
+# auth-service owning users (AUTH_USERS_OWNED defaults true). This proof keeps its D1 posture: sign-up (credentials) and
+# social stay on go-api, so users are not owned here unless the caller exports AUTH_USERS_OWNED=true (the workload
+# overlay, which forwards credentials too): every service that reads the flag takes the same value, default false.
 services:
   valkey:
     container_name: !reset null
@@ -41,6 +43,7 @@ services:
       AUTH_PROXY_SOCIAL: "false"
       AUTH_PROXY_OIDC: "false"
       AUTH_PROXY_SAML: "false"
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
   auth-service:
     environment:
       AUTH_JWT_SECRET_KEY: ${JWT_SECRET_KEY:-local-dev-jwt-secret-key-0123456789abcdef}
@@ -50,6 +53,22 @@ services:
       # The login mounted above is a rate-limited route, so the service needs the shared store. The proof's Valkey
       # has no ACL users, so the URI carries none (the production login is an ACL user limited to its prefix).
       AUTH_VALKEY_URI: redis://valkey:6379/1
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
     depends_on:
       valkey:
         condition: service_healthy
+  auth-migrate:
+    environment:
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+  auth-grants:
+    environment:
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+  auth-fence-init:
+    environment:
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+  auth-workload-seed:
+    environment:
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}
+  auth-workload-bootstrap:
+    environment:
+      AUTH_USERS_OWNED: ${AUTH_USERS_OWNED:-false}

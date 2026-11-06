@@ -36,7 +36,8 @@ images (`docker-images.yml`). Pin by digest outside local use.
 ## Compose (local and self-hosted)
 
 Since CHAOS-13107 the services are part of the default stack of the repository
-`compose.yml`: go-api's sessions are auth-service's, so a plain `docker compose up`
+`compose.yml`: go-api forwards production's set (sessions, local login, credentials
+and social; phase 4 with `AUTH_USERS_OWNED=true`), so a plain `docker compose up`
 starts them. `--profile auth` still works and selects nothing more. The local
 issuer, the session keys and go-api's session credential are in
 [Evaluate locally](../../operate/install/local-evaluation.md).

@@ -790,30 +790,32 @@ func hasEnv(env []string, want string) bool {
 }
 
 // go-api and auth-service both send their mail to the corpus mail sink by its service name, and the sink is a service of
-// the leg's own project on the networks both reach: no address, no host gateway.
+// the leg's own project on the networks both reach: no address, no host gateway. CHAOS-13107: auth-service sends the
+// credentials mail on both legs (compose.yml forwards credentials on leg go-api too), so its mail settings and the
+// sink's two networks are the main override's.
 func TestAuthCorpusPlanesSendMailToTheSinkServiceByName(t *testing.T) {
 	mainText, acpText := readRepoFile(t, "ci", "auth_corpus_external.override.yml"), readRepoFile(t, "ci", "auth_corpus_external.acp.override.yml")
-	main, acp := parseOverride(t, mainText), parseOverride(t, acpText)
+	main := parseOverride(t, mainText)
 	if !hasEnv(main.Services["go-api"].Environment, "SMTP_HOST=smtpsink") || !hasEnv(main.Services["go-api"].Environment, "SMTP_PORT=2525") {
 		t.Errorf("go-api must send mail to smtpsink:2525: %v", main.Services["go-api"].Environment)
 	}
 	for _, want := range []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS", "SMTP_HOST=smtpsink", "SMTP_PORT=2525", "APP_BASE_URL=https://app.example.test/"} {
-		if !hasEnv(acp.Services["auth-service"].Environment, want) {
-			t.Errorf("auth-service environment lacks %q: %v", want, acp.Services["auth-service"].Environment)
+		if !hasEnv(main.Services["auth-service"].Environment, want) {
+			t.Errorf("auth-service environment lacks %q: %v", want, main.Services["auth-service"].Environment)
 		}
 	}
 	if _, ok := main.Services["smtpsink"]; !ok {
 		t.Fatal("the main override has no smtpsink service")
 	}
 	for _, name := range []string{"default", "auth_plane"} {
-		if networks, _ := acp.Services["smtpsink"].Networks.(map[string]any); networks == nil || !containsKey(networks, name) {
-			t.Errorf("smtpsink is not on the %s network in leg acp: %v", name, acp.Services["smtpsink"].Networks)
+		if networks, _ := main.Services["smtpsink"].Networks.(map[string]any); networks == nil || !containsKey(networks, name) {
+			t.Errorf("smtpsink is not on the %s network: %v", name, main.Services["smtpsink"].Networks)
 		}
 	}
 	for _, service := range []struct {
 		doc  overrideDoc
 		name string
-	}{{main, "go-api"}, {acp, "auth-service"}} {
+	}{{main, "go-api"}, {main, "auth-service"}} {
 		if _, ok := service.doc.Services[service.name].DependsOn["smtpsink"]; !ok {
 			t.Errorf("%s does not wait for smtpsink", service.name)
 		}
@@ -909,17 +911,25 @@ func TestAuthCorpusSetEnvOfTheAutoOrgVariableAlsoRecreatesAuthServiceOnLegAcp(t 
 	}
 }
 
-func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariableOnLegAcp(t *testing.T) {
+// CHAOS-13107: compose.yml forwards sign-up (AUTH_PROXY_CREDENTIALS) to auth-service on leg go-api too, so the auto-org
+// variable recreates auth-service on both legs; any other variable recreates go-api only.
+func TestAuthCorpusSetEnvRecreatesAuthServiceOnlyForTheAutoOrgVariable(t *testing.T) {
 	for name, c := range map[string]struct {
 		leg, variable string
-	}{"other variable on acp": {"acp", "X_NAME"}, "auto-org on the go-api leg": {"go-api", "AUTH_AUTO_CREATE_ORG_ON_REGISTER"}} {
+		touched       bool
+	}{
+		"other variable on acp":      {"acp", "X_NAME", false},
+		"other variable on go-api":   {"go-api", "X_NAME", false},
+		"auto-org on the go-api leg": {"go-api", "AUTH_AUTO_CREATE_ORG_ON_REGISTER", true},
+		"auto-org on the acp leg":    {"acp", "AUTH_AUTO_CREATE_ORG_ON_REGISTER", true},
+	} {
 		fake := newFakeDocker(t)
 		_, env := setEnvFixture(t, fake)
 		if out, code := runSetEnv(t, append(env, "AUTH_CORPUS_LEG="+c.leg), c.variable, "v"); code != 0 {
 			t.Fatalf("%s: exit %d: %s", name, code, out)
 		}
-		if calls := fake.calls(t); strings.Contains(calls, "auth-service") {
-			t.Errorf("%s: auth-service was touched; calls:\n%s", name, calls)
+		if calls := fake.calls(t); strings.Contains(calls, "auth-service") != c.touched {
+			t.Errorf("%s: auth-service touched = %v, want %v; calls:\n%s", name, !c.touched, c.touched, calls)
 		}
 	}
 }

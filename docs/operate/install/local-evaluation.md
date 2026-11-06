@@ -25,9 +25,17 @@ A local evaluation is not a production hardening, backup, availability, or scale
 The local stack signs users in as production does (CHAOS-13107). A plain `docker compose up` starts
 auth-service and its one-shot jobs, because go-api waits for them:
 
-- auth-service owns every session (go-api `AUTH_PROXY_SESSIONS=true`) and mints the EdDSA access
+- go-api forwards the auth aggregates production forwards to auth-service: sessions, local login,
+  credentials (sign-up, e-mail verification, password reset) and social sign-in
+  (`AUTH_PROXY_SESSIONS`, `AUTH_PROXY_LOCAL_LOGIN`, `AUTH_PROXY_CREDENTIALS` and `AUTH_PROXY_SOCIAL`
+  are `true`). OIDC and SAML sign-in stay on go-api. Sessions without local login is refused: it picks
+  the earliest-join organization at login and records the gateway IP.
+- auth-service owns users (`AUTH_USERS_OWNED=true`, production's phase 4) and mints the EdDSA access
   token (`AUTH_ACCESS_TOKEN_CLASS=eddsa`, audience `dev-health-api`). go-api does not mint an HS256
   session itself.
+- auth-service sends the verify and reset mail. The local default is the console provider
+  (`AUTH_MAIL_ALLOW_CONSOLE=true`), which delivers no mail. Set `EMAIL_PROVIDER` and its keys in
+  `.env` for real mail.
 - go-api asks auth-service for each session with the `session_compat` service credential
   `AUTH_SESSION_ISSUE_TOKEN`. compose.yml has a local default for it, and the
   `auth-session-issue-seed` job writes the credential's row.
@@ -51,6 +59,16 @@ local CA:
 
 A browser does not call the issuer. To open the issuer URL in a browser, import
 `auth-issuer-ca.pem` into the browser's trust store.
+
+A database from before this change can hold users in `public.users` that are not in the auth schema.
+auth-service then does not become ready (`users_owned`). Copy them one time, with the flag off for that
+one command, then start the stack again:
+
+```bash
+docker compose run --rm --no-deps -e AUTH_USERS_OWNED=false \
+  -e "AUTH_DATABASE_URI=host=postgres port=5432 user=devhealth_auth password='devhealth_auth' dbname=postgres sslmode=disable" \
+  migrate auth users-backfill
+```
 
 Known limit: the local stack uses the `session_compat` credential (`svc_authsess_`), not the
 workload credential of production. It stops working when `svc_authsess_` acceptance is removed

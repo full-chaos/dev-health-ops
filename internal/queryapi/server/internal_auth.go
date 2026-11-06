@@ -301,6 +301,7 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 		// member of it.
 		orgID = session.TargetOrgID.String()
 		role = session.TargetRole
+		logImpersonationApplied(r, session)
 	case orgID != "":
 		// One read of the membership row for the org the request acts in:
 		// its existence is the live membership check, its role is the

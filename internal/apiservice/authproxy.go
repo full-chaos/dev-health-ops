@@ -85,7 +85,7 @@ type AuthProxyConfig struct {
 	OrgProvisioning bool
 	// Impersonation is AUTH_PROXY_IMPERSONATION.
 	Impersonation bool
-	// impersonationInvalidLength is the length of an AUTH_PROXY_IMPERSONATION value that is neither true nor false
+	// impersonationInvalidLength is the length of an AUTH_PROXY_IMPERSONATION value strconv.ParseBool does not read
 	// (the switch is then off); 0 when the value is valid or unset.
 	impersonationInvalidLength int
 	// ClientAddrKey is AUTH_CLIENT_ADDR_SIGNING_KEY: with it every forward and every session issue carries a proof of
@@ -103,13 +103,13 @@ func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && 
 // ImpersonationOn reports whether go-api starts and ends the admin impersonation session through auth-service.
 func (c AuthProxyConfig) ImpersonationOn() bool { return c.Upstream != nil && c.Impersonation }
 
-// WarnInvalidImpersonation logs one WARN when AUTH_PROXY_IMPERSONATION held a value that is neither true nor false:
+// WarnInvalidImpersonation logs one WARN when AUTH_PROXY_IMPERSONATION held a value strconv.ParseBool does not read:
 // the switch is off and go-api starts (D6465). The line names the variable and the value's length, never the value.
 func (c AuthProxyConfig) WarnInvalidImpersonation(ctx context.Context, logger *slog.Logger) {
 	if c.impersonationInvalidLength == 0 {
 		return
 	}
-	logger.WarnContext(ctx, "AUTH_PROXY_IMPERSONATION is neither true nor false; the impersonation switch is off",
+	logger.WarnContext(ctx, "AUTH_PROXY_IMPERSONATION is not a boolean; the impersonation switch is off",
 		slog.String("env", EnvAuthProxyImpersonation), slog.Int("value_length", c.impersonationInvalidLength))
 }
 

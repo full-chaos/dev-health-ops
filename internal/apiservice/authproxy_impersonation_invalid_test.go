@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// Product rule 3 (no start refusal for config hygiene, D6465): a value of AUTH_PROXY_IMPERSONATION that is neither
-// true nor false does not stop go-api. The switch is off, and one WARN names the variable and the value's length,
-// never the value.
+// Product rule 3 (no start refusal for config hygiene, D6465): a value of AUTH_PROXY_IMPERSONATION strconv.ParseBool
+// does not read does not stop go-api. The switch is off, and one WARN names the variable and the value's length, never
+// the value.
 func TestAnInvalidImpersonationValueStartsWithTheSwitchOffAndOneWarning(t *testing.T) {
 	const bad = "yes-please"
 	for name, env := range map[string]map[string]string{
@@ -40,6 +40,33 @@ func TestAnInvalidImpersonationValueStartsWithTheSwitchOffAndOneWarning(t *testi
 		cfg.WarnInvalidImpersonation(context.Background(), slog.New(slog.NewJSONHandler(&out, nil)))
 		if out.Len() != 0 {
 			t.Errorf("value %q: logged %q, want nothing", value, out.String())
+		}
+	}
+}
+
+// The values strconv.ParseBool reads stay as for every AUTH_PROXY_* flag, with no warning: a true value turns the switch
+// on and needs AUTH_PROXY_URL (a missing required config is a start-up error), a false value leaves it off.
+func TestTheBooleanAliasesOfTheImpersonationSwitchLogNothing(t *testing.T) {
+	url := "http://auth-service:8095"
+	for _, value := range []string{"1", "t", "T", "TRUE", "true", "True", " 1 "} {
+		cfg := mustProxyConfig(t, map[string]string{EnvAuthProxyURL: url, EnvAuthProxyImpersonation: value})
+		var out bytes.Buffer
+		cfg.WarnInvalidImpersonation(context.Background(), slog.New(slog.NewJSONHandler(&out, nil)))
+		if !cfg.ImpersonationOn() || out.Len() != 0 {
+			t.Errorf("value %q: on %v, logged %q; want on, nothing", value, cfg.ImpersonationOn(), out.String())
+		}
+		if _, err := ParseAuthProxyConfig(lookupFrom(map[string]string{EnvAuthProxyImpersonation: value})); err == nil {
+			t.Errorf("value %q without %s: accepted, want the start-up error", value, EnvAuthProxyURL)
+		}
+	}
+	for _, value := range []string{"0", "f", "F", "FALSE", "false", "False", " 0 "} {
+		for _, env := range []map[string]string{{EnvAuthProxyURL: url, EnvAuthProxyImpersonation: value}, {EnvAuthProxyImpersonation: value}} {
+			cfg := mustProxyConfig(t, env)
+			var out bytes.Buffer
+			cfg.WarnInvalidImpersonation(context.Background(), slog.New(slog.NewJSONHandler(&out, nil)))
+			if cfg.ImpersonationOn() || out.Len() != 0 {
+				t.Errorf("value %q: on %v, logged %q; want off, nothing", value, cfg.ImpersonationOn(), out.String())
+			}
 		}
 	}
 }

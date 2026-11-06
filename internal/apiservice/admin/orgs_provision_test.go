@@ -334,7 +334,7 @@ var provisionRoutes = []provisionRoute{
 
 func newProvisionHandlers(db *provisionDB, auth authprovision.Provisioner) *handlers {
 	h := &handlers{store: pgStore{Pool: db, Now: func() time.Time { return provStamp }}, logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		audit: audit.PGWriter{Now: func() time.Time { return provStamp }}}
+		audit: audit.PGWriter{Now: func() time.Time { return provStamp }}, invites: InviteConfig{LinkSecret: "provision-test-link-secret"}}
 	if auth != nil {
 		h.orgProvision = auth
 	}
@@ -763,7 +763,7 @@ func TestProvisionReadBackFailureAfterSuccessIs503(t *testing.T) {
 		auth := &fakeProvisioner{db: db}
 		h := newProvisionHandlers(db, auth)
 		sent := &mailRecorder{}
-		h.invites = InviteConfig{Mail: sent}
+		h.invites = InviteConfig{Mail: sent, LinkSecret: "provision-test-link-secret"}
 		code, body := callRoute(h, route)
 		if code != http.StatusServiceUnavailable || body != provUnavailable || len(auth.calls) != 1 {
 			t.Fatalf("%s: %d %s calls %v, want 503 %s after one auth call", route.name, code, body, auth.calls, provUnavailable)
@@ -781,7 +781,7 @@ func TestProvisionInviteMailIsSentOnce(t *testing.T) {
 	db := &provisionDB{rows: provisionRowsFor()}
 	h := newProvisionHandlers(db, &fakeProvisioner{db: db})
 	sent := &mailRecorder{}
-	h.invites = InviteConfig{Mail: sent}
+	h.invites = InviteConfig{Mail: sent, LinkSecret: "provision-test-link-secret"}
 	if code, body := callRoute(h, provisionRoutes[4]); code != http.StatusCreated || len(sent.sent) != 1 {
 		t.Fatalf("%d %s, %d mails; want 201 and one mail", code, body, len(sent.sent))
 	}

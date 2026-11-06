@@ -12,7 +12,7 @@ const (
 	// calls with its service credential.
 	EnvMembershipRoutes = "AUTH_MEMBERSHIP_ROUTES"
 	// EnvInviteTokenSecret signs new invite tokens: go-api's link signing key
-	// (LINK_TOKEN_SECRET, else its JWT_SECRET_KEY chain). Secret: environment
+	// (LINK_TOKEN_SECRET). Secret: environment
 	// or _FILE only. Required while the membership routes mount.
 	EnvInviteTokenSecret = "AUTH_INVITE_TOKEN_SECRET"
 	// EnvInviteTokenSecretPrevious verifies invite tokens only, never signs:
@@ -33,22 +33,15 @@ type Provisioning struct {
 
 // InviteAcceptSecrets are the keys a presented invite token is checked
 // against, signing key first, as go-api's authmail.Config.AcceptSecrets: the
-// signing key, the previous key, then the JWT key (go-api's TokenSecret
-// chain, which signed links before a link key was set). Blanks and repeats are
-// left out. Nil when the routes are off.
+// signing key, then the previous key. No session or access key verifies an
+// invite. Blanks and repeats are left out. Nil when the routes are off.
 func (c Config) InviteAcceptSecrets() []string {
 	if !c.Provisioning.Routes {
 		return nil
 	}
 	out := []string{c.Provisioning.InviteSecret.Reveal()}
-	for _, secret := range []string{c.Provisioning.InviteSecretPrevious.Reveal(), c.Session.AccessSecret.Reveal()} {
-		seen := false
-		for _, have := range out {
-			seen = seen || have == secret
-		}
-		if secret != "" && !seen {
-			out = append(out, secret)
-		}
+	if previous := c.Provisioning.InviteSecretPrevious.Reveal(); previous != "" && previous != out[0] {
+		out = append(out, previous)
 	}
 	return out
 }

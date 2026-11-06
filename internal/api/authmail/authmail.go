@@ -10,11 +10,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"slices"
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/mail"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -25,21 +24,16 @@ import (
 // surfaced, exactly as in Python).
 const SendTimeout = 30 * time.Second
 
-// Config is the process's link-mail configuration. The zero value is a
-// working default for a test that does not care: no mail is sent, the token
-// secret is the Python last-resort fallback, and links point at the local web
-// app.
+// Config is the process's link-mail configuration. The zero value sends no
+// mail, has no link secret (every link route refuses) and points links at the
+// local web app.
 type Config struct {
 	// Mail sends the message. Nil means no message is sent (the failure is
 	// logged like any other send failure).
 	Mail mail.Sender
-	// TokenSecret is the HMAC key link tokens are signed with:
-	// _token_secret(), JWT_SECRET_KEY, else SETTINGS_ENCRYPTION_KEY, else
-	// the fallback. The caller resolves that chain; "" here also falls back
-	// to the last resort.
-	TokenSecret string
-	// LinkSecret is the link-token signing key (LINK_TOKEN_SECRET). Set, it
-	// signs every new link; unset, links are signed with the TokenSecret chain.
+	// LinkSecret is the link-token signing key (LINK_TOKEN_SECRET). It signs
+	// every new link and is the first key a presented link is checked against.
+	// Unset, no link is signed or accepted (RefuseUnconfigured).
 	LinkSecret string
 	// PreviousLinkSecret (LINK_TOKEN_SECRET_PREVIOUS) is a retired signing key
 	// that is still accepted while links signed with it are in flight.
@@ -52,26 +46,19 @@ type Config struct {
 	AppBaseURLSet bool
 }
 
-// Secret is the signing key for a new link token: the link secret when set,
-// else the TokenSecret chain with its last-resort default.
-func (c Config) Secret() string {
-	if c.LinkSecret != "" {
-		return c.LinkSecret
-	}
-	return signedtoken.Secret(c.TokenSecret, "")
-}
+// Secret is the signing key for a new link token: the link secret, "" when unset.
+func (c Config) Secret() string { return c.LinkSecret }
 
 // AcceptSecrets are the keys a presented link token is checked against, signing
-// key first: the signing key, the previous link secret, and the TokenSecret
-// chain value while one is configured (so links sent before the link secret
-// was set stay valid; removing that key ends their validity). Blanks and
-// repeats are left out.
+// key first: the link secret and the previous link secret. A previous secret
+// alone accepts nothing. No other key ever verifies a link.
 func (c Config) AcceptSecrets() []string {
-	out := []string{c.Secret()}
-	for _, secret := range []string{c.PreviousLinkSecret, c.TokenSecret} {
-		if secret != "" && !slices.Contains(out, secret) {
-			out = append(out, secret)
-		}
+	if c.LinkSecret == "" {
+		return nil
+	}
+	out := []string{c.LinkSecret}
+	if c.PreviousLinkSecret != "" && c.PreviousLinkSecret != c.LinkSecret {
+		out = append(out, c.PreviousLinkSecret)
 	}
 	return out
 }
@@ -118,7 +105,17 @@ func (c Config) Try(ctx context.Context, to, subject, template string, values ma
 }
 
 // Configured reports whether link tokens can be signed and accepted.
-func (c Config) Configured() bool { return true }
+func (c Config) Configured() bool { return c.LinkSecret != "" }
 
-// RefuseUnconfigured answers 503 config_missing and reports true while no link secret is set.
-func (c Config) RefuseUnconfigured(w http.ResponseWriter) bool { return false }
+// ConfigMissingDetail is the 503 body detail of a link route with no link secret.
+const ConfigMissingDetail = "config_missing: LINK_TOKEN_SECRET"
+
+// RefuseUnconfigured answers 503 config_missing and reports true while no link
+// secret is set; a link route calls it before its first query.
+func (c Config) RefuseUnconfigured(w http.ResponseWriter) bool {
+	if c.Configured() {
+		return false
+	}
+	policy.WriteDetail(w, http.StatusServiceUnavailable, ConfigMissingDetail, nil)
+	return true
+}

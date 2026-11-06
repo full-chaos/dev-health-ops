@@ -825,7 +825,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.goBase == "" {
-		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, TokenSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
+		r.goBase = startGoAPI(t, ctx, venue, admin.InviteConfig{Mail: goSender, LinkSecret: sessionscenario.Key, AppBaseURL: appBaseURL, AppBaseURLSet: true})
 	}
 	tok := venue.Tokens
 	const (

@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// testLinkSecret is the link secret of a handler under test that must pass the config check.
+const testLinkSecret = "unit-test-link-secret-0123456789abcdef"
+
 // With no LINK_TOKEN_SECRET every go-api route that signs or accepts a link
 // token answers 503 config_missing before it opens a transaction: the
 // handlers here have no Pool, so any query would panic.

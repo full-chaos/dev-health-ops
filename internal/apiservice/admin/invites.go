@@ -124,6 +124,9 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if h.orgProvision == nil && h.invites.RefuseUnconfigured(w) {
+		return
+	}
 	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}

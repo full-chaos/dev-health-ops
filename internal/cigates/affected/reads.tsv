@@ -40,6 +40,7 @@ internal/auth/pushlifecycle	test	contracts
 internal/auth/pushreconcile/reconcilejob	test	alerts
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
+internal/auth/repoidentityprojection	test	contracts
 internal/auth/revisionfeed	test	contracts
 internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci

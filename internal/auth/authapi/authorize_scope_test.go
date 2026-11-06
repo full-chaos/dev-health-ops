@@ -40,7 +40,7 @@ func TestAuthorizeBatchItemsKeepTheirOwnRepositoryMember(t *testing.T) {
 		t.Fatalf("%d decisions: %s", len(doc.Decisions), rec.Body)
 	}
 	want := []map[string]any{
-		{"tenant_scope": h.org, "repository_allowlist": []any{"acme/api"}},
+		{"tenant_scope": h.org},
 		{"tenant_scope": h.org},
 		nil,
 	}
@@ -51,10 +51,10 @@ func TestAuthorizeBatchItemsKeepTheirOwnRepositoryMember(t *testing.T) {
 	}
 }
 
-func TestACacheHitKeepsTheRepositoryScope(t *testing.T) {
+func TestACacheHitKeepsTheTenantScopeOfAnOrganizationWideRead(t *testing.T) {
 	c := newCacheFixture(t)
 	first, second := c.ask(), c.ask()
-	want := map[string]any{"tenant_scope": c.org, "repository_scope": "organization"}
+	want := map[string]any{"tenant_scope": c.org}
 	if !reflect.DeepEqual(first.Obligations, want) || !reflect.DeepEqual(second.Obligations, want) {
 		t.Fatalf("miss %v, hit %v, want %v", first.Obligations, second.Obligations, want)
 	}

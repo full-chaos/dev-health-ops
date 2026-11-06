@@ -4,19 +4,16 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "obligations": {
-      "repository_allowlist": [
-        "acme/m"
-      ],
       "tenant_scope": "org-a"
     },
-    "policy_revision": 13,
+    "policy_revision": 14,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },
-  "id": "org-filtered-grant-role-lacks-the-action-is-left-out",
+  "id": "org-wide-two-live-grants-read-org-wide",
   "layer": "pdp",
   "request": {
-    "action": "analytics.export",
+    "action": "analytics.read",
     "organization_id": "org-a",
     "resource_key": "",
     "resource_kind": "organization"
@@ -28,7 +25,7 @@
       {
         "expires_at": null,
         "org_id": "org-a",
-        "resource_key": "acme/v",
+        "resource_key": "acme/web",
         "resource_kind": "repository",
         "revoked": false,
         "role": "viewer"
@@ -36,10 +33,10 @@
       {
         "expires_at": null,
         "org_id": "org-a",
-        "resource_key": "acme/m",
+        "resource_key": "acme/api",
         "resource_kind": "repository",
         "revoked": false,
-        "role": "member"
+        "role": "viewer"
       }
     ],
     "grants_error": false,
@@ -59,5 +56,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "viewer lacks analytics.export, member holds it: only the member grant is in the allowlist."
+  "why": "two live repository grants do not become an allowlist: the read is org-wide."
 }

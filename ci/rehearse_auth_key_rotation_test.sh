@@ -154,7 +154,7 @@ probe_together() {
   # The stubs go to a file (printf, no here-document: CI scripts keep here-documents under 400 bytes).
   printf '%s\n' \
     "source \"${ROOT}/ci/lib/auth_rotation_probe.sh\"" \
-    'sleep() { SECONDS=$((SECONDS + 1)); }' \
+    "sleep() { SECONDS=\$((SECONDS + 1)); }" \
     "api_code() { local i; : >\"${T}/go.started\"; for i in \$(seq 1 30); do [ -e \"${T}/query.started\" ] && { printf 200; return; }; command sleep 0.1; done; printf 000; }" \
     "query_code() { local i; : >\"${T}/query.started\"; for i in \$(seq 1 30); do [ -e \"${T}/go.started\" ] && { printf 200; return; }; command sleep 0.1; done; printf 000; }" \
     "${probe_fn}" \

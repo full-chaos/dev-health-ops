@@ -288,7 +288,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 			g.logger.ErrorContext(ctx, "api enforcement: impersonation row lookup failed; refusing the request",
 				slog.String("route", r.Pattern), slog.String("namespace", namespace), slog.Bool("unavailable", isUnavailable(err)),
 				slog.String("missing_grant", MissingGrant(err)), slog.Any("error", err))
-			g.observeShadow(r, user, bearer, false)
+			// The session state is unknown: the shadow is not asked either.
 			return enforceSessionRowUnavailable
 		}
 		impersonating = session != nil
@@ -298,7 +298,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {
-		g.observeShadow(r, user, bearer, false)
+		g.observeShadowAs(r, user, bearer, false, true)
 	}
 	return verdict
 }

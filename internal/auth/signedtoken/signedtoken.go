@@ -21,29 +21,11 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
-// DevFallbackSecret is _token_secret()'s last resort when neither
-// JWT_SECRET_KEY nor SETTINGS_ENCRYPTION_KEY is set.
-const DevFallbackSecret = "dev-key-not-for-prod"
-
 // ErrNonASCIISignature is hmac.compare_digest's TypeError: Python refuses to
 // compare a str holding a non-ASCII character, so a token whose id parses and
 // whose signature part is not ASCII fails the request (the bare 500) instead
 // of being refused as invalid.
 var ErrNonASCIISignature = errors.New("signedtoken: signature holds a non-ASCII character")
-
-// Secret is _token_secret(): the first non-empty of jwtSecret and
-// settingsKey (Python's `or` chain skips an empty value), else
-// DevFallbackSecret.
-func Secret(jwtSecret, settingsKey string) string {
-	switch {
-	case jwtSecret != "":
-		return jwtSecret
-	case settingsKey != "":
-		return settingsKey
-	default:
-		return DevFallbackSecret
-	}
-}
 
 func idHex(id uuid.UUID) string { return strings.ReplaceAll(id.String(), "-", "") }
 

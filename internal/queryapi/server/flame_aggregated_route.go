@@ -35,6 +35,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -272,6 +273,12 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			minValue = 0
 		}
 
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "flame_aggregated", org, err)
+			return
+		}
+
 		resp, err := aggflame.BuildResponse(r.Context(), client, org, aggflame.Params{
 			Mode:        mode,
 			StartDay:    startDay,
@@ -282,6 +289,8 @@ func newFlameAggregatedWorkHandler(client aggflame.QueryClient) http.HandlerFunc
 			WorkScopeID: lastQueryValue(query, "work_scope_id"),
 			Limit:       limit,
 			MinValue:    minValue,
+			Ceiling:     ceiling,
+			Now:         time.Now().UTC(),
 		})
 		if err != nil {
 			if reqErr, ok := aggflame.AsRequestError(err); ok {

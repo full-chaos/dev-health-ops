@@ -104,6 +104,9 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -156,6 +159,10 @@ type Params struct {
 	WorkScopeID string
 	Limit       int
 	MinValue    int
+	// Ceiling is the repositories the request may read (CHAOS-13088); the zero value reads every repository, today's
+	// statements and body byte for byte. Now ends the last segment of an open item in the state recompute.
+	Ceiling teamscope.Ceiling
+	Now     time.Time
 }
 
 // Node is AggregatedFlameNode's wire shape (schemas.py:601-605). Children
@@ -197,6 +204,9 @@ type Response struct {
 	Unit string `json:"unit"`
 	Root Node   `json:"root"`
 	Meta Meta   `json:"meta"`
+	// NarrowedCounts (CHAOS-13088, Go-only, last, absent when empty): the tree of a caller held to a repository
+	// ceiling counts the work items linked to the allowed repositories only.
+	NarrowedCounts []linkscope.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // BuildResponse ports build_aggregated_flame_response (services/
@@ -206,16 +216,22 @@ type Response struct {
 // its own `type` query param, even though Python enforces the two checks
 // in different files.
 func BuildResponse(ctx context.Context, client QueryClient, orgID string, params Params) (*Response, error) {
+	var resp *Response
+	var err error
 	switch params.Mode {
 	case "cycle_breakdown":
-		return buildCycleBreakdown(ctx, client, orgID, params)
+		resp, err = buildCycleBreakdown(ctx, client, orgID, params)
 	case "code_hotspots":
-		return buildCodeHotspots(ctx, client, orgID, params)
+		resp, err = buildCodeHotspots(ctx, client, orgID, params)
 	case "throughput":
-		return buildThroughput(ctx, client, orgID, params)
+		resp, err = buildThroughput(ctx, client, orgID, params)
 	default:
 		return nil, badRequest("mode must be 'cycle_breakdown', 'code_hotspots', or 'throughput'")
 	}
+	if err == nil && params.Ceiling.Restricted() && params.Mode != "code_hotspots" {
+		resp.NarrowedCounts = []linkscope.NarrowedCount{{Kind: params.Mode, Scope: linkscope.ScopeRepositoryCeiling}}
+	}
+	return resp, err
 }
 
 func windowMeta(params Params, filters pyjson.OrderedMap[string], notes []string, approx ApproximationInfo) Meta {
@@ -231,7 +247,13 @@ func windowMeta(params Params, filters pyjson.OrderedMap[string], notes []string
 // buildCycleBreakdown ports build_aggregated_flame_response's
 // "cycle_breakdown" branch (services/aggregated_flame.py:309-370).
 func buildCycleBreakdown(ctx context.Context, client QueryClient, orgID string, params Params) (*Response, error) {
-	rows, err := fetchCycleBreakdown(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Provider, params.WorkScopeID)
+	var rows []cycleBreakdownRow
+	var err error
+	if params.Ceiling.Restricted() {
+		rows, err = linkedCycleBreakdown(ctx, client, orgID, params)
+	} else {
+		rows, err = fetchCycleBreakdown(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Provider, params.WorkScopeID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("aggflame: fetch_cycle_breakdown: %w", err)
 	}
@@ -276,7 +298,7 @@ func buildCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 // buildCodeHotspots ports build_aggregated_flame_response's
 // "code_hotspots" branch (services/aggregated_flame.py:372-412).
 func buildCodeHotspots(ctx context.Context, client QueryClient, orgID string, params Params) (*Response, error) {
-	rows, err := fetchCodeHotspots(ctx, client, orgID, params.StartDay, params.EndDay, params.RepoID, params.Limit, params.MinValue)
+	rows, err := fetchCodeHotspots(ctx, client, orgID, params.StartDay, params.EndDay, params.RepoID, params.Limit, params.MinValue, params.Ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("aggflame: fetch_code_hotspots: %w", err)
 	}
@@ -322,7 +344,7 @@ func buildCodeHotspots(ctx context.Context, client QueryClient, orgID string, pa
 // "cycle_breakdown"/"code_hotspots"; BuildResponse's own switch above
 // already restricts that to exactly "throughput".
 func buildThroughput(ctx context.Context, client QueryClient, orgID string, params Params) (*Response, error) {
-	rows, err := fetchThroughputByType(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Limit)
+	rows, err := fetchThroughputByType(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Limit, params.Ceiling)
 	if err != nil {
 		return nil, fmt.Errorf("aggflame: fetch_throughput_by_type: %w", err)
 	}
@@ -331,7 +353,7 @@ func buildThroughput(ctx context.Context, client QueryClient, orgID string, para
 	approx := ApproximationInfo{}
 
 	if len(rows) == 0 {
-		rows, err = fetchThroughput(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Limit)
+		rows, err = fetchThroughput(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Limit, params.Ceiling)
 		if err != nil {
 			return nil, fmt.Errorf("aggflame: fetch_throughput: %w", err)
 		}

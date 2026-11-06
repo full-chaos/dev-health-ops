@@ -109,7 +109,7 @@ func TestScopeFilterForMetricTeamScopeNeverRoundTripsForRepoIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x", "team-y"}, nil, "org-1", teamScopeAsOf)
+	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x", "team-y"}, nil, "org-1", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("scopeFilterForMetric: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestScopeFilterForMetricIntersectsExplicitReposWithTeamScope(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x"}, []string{resolvedRepoID}, "org-1", teamScopeAsOf)
+	filterSQL, bindings, err := reader.scopeFilterForMetric(context.Background(), "repo", "team", []string{"team-x"}, []string{resolvedRepoID}, "org-1", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("scopeFilterForMetric: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestScopeFilterForMetricRepoUsesRealOrgID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	_, _, err = reader.scopeFilterForMetric(context.Background(), "repo", "repo", []string{"acme/webapp"}, nil, "org-real", teamScopeAsOf)
+	_, _, err = reader.scopeFilterForMetric(context.Background(), "repo", "repo", []string{"acme/webapp"}, nil, "org-real", teamScopeAsOf, teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("scopeFilterForMetric: %v", err)
 	}

@@ -37,6 +37,10 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse read capability this package needs.
@@ -74,6 +78,14 @@ func NewReader(client QueryClient) (*Reader, error) {
 	return &Reader{client: client}, nil
 }
 
+// ResolveCeiling is the repository ceiling of a decision scope (CHAOS-13088), read over the reader's client.
+func (reader *Reader) ResolveCeiling(ctx context.Context, scope pepgate.Scope) (teamscope.Ceiling, error) {
+	if reader == nil || reader.client == nil {
+		return teamscope.Ceiling{}, ErrUnavailable
+	}
+	return teamscope.ResolveCeiling(ctx, reader.client, scope)
+}
+
 // Params is the already-resolved request shape both GET and POST
 // /api/v1/explain reduce to before calling BuildExplainResponse -- the
 // route file does the HTTP-shape-specific work (query-param defaults for
@@ -101,6 +113,10 @@ type Params struct {
 	ScopeLevel string
 	ScopeIDs   []string
 	WhatRepos  []string
+	// Ceiling is the repositories the request may read (CHAOS-13088); the zero value reads every repository, today's
+	// statements and body byte for byte. Now ends the last segment of an open item in the state recompute.
+	Ceiling teamscope.Ceiling
+	Now     time.Time
 }
 
 // Contributor ports api/models/schemas.py's Contributor model, plus two
@@ -166,7 +182,7 @@ type Response struct {
 	// "not_applicable_no_deployments". null when the window holds no stored
 	// counts at all, and for every other metric.
 	RateState *string `json:"rate_state"`
-	// EvidenceBasis (CHAOS-9621, Go-only, last) names what a measured change
+	// EvidenceBasis (CHAOS-9621, Go-only) names what a measured change
 	// failure rate stands on: "incident" (incidents tie to the scope, no
 	// deployment has a final status), "status" (no incident ties to the scope,
 	// and deployments with a final status stand for it, so the base of the
@@ -175,6 +191,9 @@ type Response struct {
 	// incident links. null for every other metric and for a rate that is not
 	// measured.
 	EvidenceBasis *string `json:"evidence_basis"`
+	// NarrowedCounts (CHAOS-13088, Go-only, last, absent when empty): a metric stored per team, for a caller held to a
+	// repository ceiling, is recomputed from the work items linked to the allowed repositories only.
+	NarrowedCounts []linkscope.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // safeFloat ports api/utils/numeric.py's safe_float for an already-float64

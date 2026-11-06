@@ -51,6 +51,8 @@ var readerRoles = map[string]struct{ role, why string }{
 	"internal/queryapi/people/scope.go":                                    {"names", "replaces the read of the per-person daily table with the recompute of the linked items under a repository ceiling (CHAOS-13087): it reads no row of the table"},
 	"internal/queryapi/quadrant/linkedrepo.go":                             {"names", "replaces the read of the per-person daily table with the recompute of the linked items under a repository ceiling (CHAOS-13087): it reads no row of the table"},
 	"internal/queryapi/aggflame/aggflame.go":                               {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},
+	"internal/queryapi/aggflame/ceiling.go":                                {"names", "replaces the read of the state table with the recompute of the linked items under a repository ceiling (CHAOS-13088): it reads no row of the table"},
+	"internal/queryapi/explain/ceiling.go":                                 {"names", "replaces the reads of the work-item daily tables with the recompute of the linked items under a repository ceiling (CHAOS-13088): it reads no row of the tables"},
 	"internal/queryapi/aggflame/clickhouse.go":                             {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/aianalytics/flow_opportunities.go":                  {"reader-sum", "sums rows of several work scopes: takes the org predicate (CHAOS-8863 PR2)"},
 	"internal/queryapi/analytics/timeseries.go":                            {"names", "guard, spec, grant, doc comment or fixture: no row read of its own"},

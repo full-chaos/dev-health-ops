@@ -14,6 +14,7 @@ import (
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
 )
 
@@ -78,10 +79,10 @@ func TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg(t *testin
 	start, end := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
 	readers := map[string]func(org, team string) ([]throughputRow, error){
 		"throughput": func(org, team string) ([]throughputRow, error) {
-			return fetchThroughput(ctx, client, org, start, end, team, 50)
+			return fetchThroughput(ctx, client, org, start, end, team, 50, teamscope.NoCeiling())
 		},
 		"throughput_by_type": func(org, team string) ([]throughputRow, error) {
-			return fetchThroughputByType(ctx, client, org, start, end, team, 50)
+			return fetchThroughputByType(ctx, client, org, start, end, team, 50, teamscope.NoCeiling())
 		},
 	}
 	items := float64(len(coOwnerItems))
@@ -151,10 +152,10 @@ VALUES (?, ?, ?, ?, ?, ?, 'issue_project', ?, 'high', 'issue_project_key=KEY', ?
 	start, end := day, day.Add(48*time.Hour)
 	readers := map[string]func(team string) ([]throughputRow, error){
 		"throughput": func(team string) ([]throughputRow, error) {
-			return fetchThroughput(ctx, client, org, start, end, team, 50)
+			return fetchThroughput(ctx, client, org, start, end, team, 50, teamscope.NoCeiling())
 		},
 		"throughput_by_type": func(team string) ([]throughputRow, error) {
-			return fetchThroughputByType(ctx, client, org, start, end, team, 50)
+			return fetchThroughputByType(ctx, client, org, start, end, team, 50, teamscope.NoCeiling())
 		},
 	}
 	for name, read := range readers {

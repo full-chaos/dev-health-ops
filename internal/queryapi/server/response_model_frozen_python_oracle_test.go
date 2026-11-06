@@ -432,6 +432,9 @@ var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"LinkTier", "*string", `json:"link_tier"`},
 	{"RateState", "*string", `json:"rate_state"`},
 	{"EvidenceBasis", "*string", `json:"evidence_basis"`},
+	// CHAOS-13088: a metric stored per team, for a caller held to a repository ceiling, says it is recomputed from the
+	// items linked to the allowed repositories (absent otherwise).
+	{"NarrowedCounts", "[]linkscope.NarrowedCount", `json:"narrowed_counts,omitempty"`},
 }
 
 func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -606,6 +609,11 @@ func withoutExplainGoOnlyFields(body string) (string, error) {
 		return "", err
 	}
 	for index, field := range explainGoOnlyResponseFields {
+		// An omitempty Go-only field (narrowed_counts, CHAOS-13088) is absent from an empty answer: the tail may end
+		// before it.
+		if strings.HasSuffix(field.tag, `,omitempty"`) && !decoder.More() {
+			break
+		}
 		key, err := decoder.Token()
 		if err != nil {
 			return "", err

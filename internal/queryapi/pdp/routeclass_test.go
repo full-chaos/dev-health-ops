@@ -23,8 +23,10 @@ import (
 var (
 	narrowableClasses = []string{"heatmap", "investment", "investment_sunburst", "investment_explain", "drilldown_prs",
 		"work_units", "work_unit_explain", "people_drilldown_prs", "drilldown_issues", "people_drilldown_issues", "flame", "home", "opportunities",
-		"quadrant", "people", "people_summary", "people_metric", "sankey", "filteroptions"}
-	mixedClasses = []string{"explain", "flame_aggregated"}
+		"quadrant", "people", "people_summary", "people_metric", "sankey", "filteroptions", "explain", "flame_aggregated"}
+	// mixedClasses is empty since CHAOS-13088: every route class narrows its reads to a ceiling. The refusal of an
+	// allowlist on an M route stays the gate's rule, tested on a test-only M route (asMixedRoute).
+	mixedClasses = []string{}
 )
 
 func restRows(t *testing.T) map[string]string {
@@ -93,8 +95,8 @@ func TestRouteClassKindsArePinned(t *testing.T) {
 	if kind, _ := ClassKind("heatmap"); kind != KindNarrowable {
 		t.Errorf("heatmap is %q, want N (Q1)", kind)
 	}
-	if kind, _ := ClassKind("explain"); kind != KindMixed {
-		t.Errorf("explain is %q, want M (Q1)", kind)
+	if kind, _ := ClassKind("explain"); kind != KindNarrowable {
+		t.Errorf("explain is %q, want N (CHAOS-13088: its work-item reads are recomputed from the linked items)", kind)
 	}
 	for profile, want := range map[string]string{"GET /api/v1/heatmap": "heatmap", "GET /api/v1/explain": "explain", "POST /api/v1/explain": "explain",
 		"POST /api/v1/work-units/{work_unit_id}/explain": "work_unit_explain", "GET /api/v1/people/{person_id}/drilldown/prs": "people_drilldown_prs"} {
@@ -142,14 +144,20 @@ func allClassGate(t *testing.T, rules ...pepfake.Rule) *Gate {
 // acp Q5: an allowlist caller on an M route is refused with the new closed reason, the class on the error (the
 // log line carries it), and a refusal is a local 503.
 func TestAllowlistOnAMixedRouteIsRefusedAsUnsupported(t *testing.T) {
-	for profile, action := range restRows(t) {
+	for profile := range restRows(t) {
 		class, _ := RouteClassOf(profile)
-		if kind, _ := ClassKind(class); kind != KindMixed {
-			continue
+		if kind, _ := ClassKind(class); kind == KindMixed {
+			t.Errorf("%s is M: no route class is M since CHAOS-13088", profile)
 		}
+	}
+	rows := restRows(t)
+	for _, profile := range []string{mixedProfile} {
+		action := rows[profile]
+		class := testMixedClass
 		for name, keys := range map[string][]string{"empty": {}, "one key": {"acme/a"}} {
 			t.Run(profile+"/"+name, func(t *testing.T) {
 				g := allClassGate(t, allowlistRule(action, keys))
+				asMixedRoute(t, g, profile)
 				scope, err := g.Authorize(context.Background(), profile, testBearer, seamOrg)
 				wantLocal(t, err, ReasonAllowlistRouteUnsupported)
 				wantNoScope(t, scope)
@@ -179,8 +187,8 @@ func TestAllowlistOnANarrowableRouteIsCarried(t *testing.T) {
 			}
 		})
 	}
-	if seen != 26 {
-		t.Fatalf("%d narrowable rows, want 26", seen)
+	if seen != 29 {
+		t.Fatalf("%d narrowable rows, want 29", seen)
 	}
 }
 
@@ -196,7 +204,7 @@ func TestNarrowedClassesAreExactlyTheNarrowable(t *testing.T) {
 			narrowed = append(narrowed, class)
 		}
 	}
-	if len(narrowable) != 19 || !slices.Equal(narrowable, narrowed) {
+	if len(narrowable) != 21 || !slices.Equal(narrowable, narrowed) {
 		t.Fatalf("narrowed %v, want the narrowable classes %v", narrowed, narrowable)
 	}
 }

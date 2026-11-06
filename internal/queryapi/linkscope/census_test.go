@@ -79,7 +79,7 @@ var workItemReads = map[string]censusFile{
 	"internal/queryapi/quadrant/quadrant.go": {false, map[string]string{
 		"teamScopedWorkItemTeamAttributionSourceFmt": "joined on the ids of workItemTeamQuadrantQuery, which carries the link condition of the selection",
 		"workItemTeamQuadrantQuery":                  "wct carries the link condition the selection splices into its WHERE (selected.attributedTeams)",
-	}},	// CHAOS-13088: the work-item reads of sankey and filter options. Under a ceiling the two daily aggregates with no
+	}}, // CHAOS-13088: the work-item reads of sankey and filter options. Under a ceiling the two daily aggregates with no
 	// item (work_item_metrics_daily, work_item_state_durations_daily) and the per-person aggregate are not read: their
 	// rows are recomputed from the linked items (linkeditems), or the list is read from the linked items' cycle times.
 	"internal/queryapi/sankey/builders.go": {true, map[string]string{}},
@@ -97,7 +97,21 @@ var workItemReads = map[string]censusFile{
 	}},
 	"internal/queryapi/linkeditems/statedaily.go": {false, map[string]string{
 		"transitionsStatement": "work_item_id IN Subquery: the transitions of the linked items only",
+	}}, // The aggregated flame: the throughput reads carry linkscope.ItemCondition; the state read is not run under a
+	// ceiling (linkedCycleBreakdown recomputes it).
+	"internal/queryapi/aggflame/clickhouse.go": {true, map[string]string{
+		"primaryWorkItemTeamAttributionSource":    "LEFT JOIN on the ids of the narrowed wct read; it adds no item",
+		"teamScopedWorkItemTeamAttributionSource": "LEFT JOIN on the ids of the narrowed wct read; it adds no item",
+		"fetchCycleBreakdown":                     "read only for an unrestricted ceiling; buildCycleBreakdown reads linkedCycleBreakdown (the recompute) for a restricted one",
+		"fetchThroughput":                         "wct carries linkscope.ItemCondition",
+		"fetchThroughputByType":                   "wct carries linkscope.ItemCondition",
 	}},
+	// Explain reads its metric's table by name (FROM %s, metricConfigs): no literal work-item read. Under a ceiling a
+	// metric stored per team never reaches those statements (BuildExplainResponse takes linkedTeamRows); a literal
+	// work-item read added to these files fails here.
+	"internal/queryapi/explain/metrics.go":      {false, map[string]string{}},
+	"internal/queryapi/explain/repositories.go": {false, map[string]string{}},
+	"internal/queryapi/explain/response.go":     {false, map[string]string{}},
 }
 
 var workItemTable = regexp.MustCompile(`FROM\s+(work_item_\w+|work_items)\b`)

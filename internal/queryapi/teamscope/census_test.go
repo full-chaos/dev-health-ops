@@ -18,7 +18,6 @@ import (
 // may be called only from the listed files: the mixed (M) route packages, whose whole route stays M and so refuses an
 // allowlist at the gate, and the dead heatmap helper. A new call, or a listed file that no longer calls it, fails.
 var noCeilingSites = []string{
-	"internal/queryapi/explain/response.go",
 	"internal/queryapi/heatmap/scopefilter.go",
 }
 

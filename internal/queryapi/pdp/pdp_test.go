@@ -29,7 +29,7 @@ import (
 const (
 	testProfile = "GET /api/v1/sankey"
 	testAction  = "analytics.read"
-	// mixedProfile is an M route (CHAOS-13088 moved sankey to N): an allowlist on it is the gate's own refusal.
+	// mixedProfile is made the route of an M class for a test (asMixedRoute): no route class is M since CHAOS-13088.
 	mixedProfile = "GET /api/v1/explain"
 	mixedAction  = "metrics.read"
 	testOrg      = "0B6A1C9E-55D4-4A43-9E34-6F4C1D2B3A10"
@@ -480,7 +480,11 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 			srv.Obligations(tc.obligation)
 			m, cfg := newMeter(t)
 			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("analytics,metrics,org")
-			_, err := New(cfg).Authorize(context.Background(), tc.profile, testBearer, org)
+			g := New(cfg)
+			if tc.profile == mixedProfile {
+				asMixedRoute(t, g, mixedProfile)
+			}
+			_, err := g.Authorize(context.Background(), tc.profile, testBearer, org)
 			got := m.points(t, resultMetric)
 			if len(got) != 1 || got["action="+actionOf(tc.profile)+",mode=enforce,result="+tc.result] != 1 {
 				t.Fatalf("results %v, want one %s", got, tc.result)
@@ -499,6 +503,28 @@ func TestPDPEnforceAppliesOrFailsClosedOnObligations(t *testing.T) {
 	}
 }
 
+// testMixedClass is the class asMixedRoute gives a route.
+const testMixedClass = "test_mixed"
+
+// asMixedRoute makes profile the route of an M class, not cut over on g, for one test. No production route class is M
+// since CHAOS-13088; the refusal of an allowlist on an M route (allowlist_route_unsupported) stays the gate's rule for
+// the next one that is.
+func asMixedRoute(t *testing.T, g *Gate, profile string) {
+	t.Helper()
+	previous, had := routeClassOf[profile]
+	routeClassOf[profile] = testMixedClass
+	routeClassKind[testMixedClass] = KindMixed
+	delete(g.carriesAllowlist, profile)
+	t.Cleanup(func() {
+		if had {
+			routeClassOf[profile] = previous
+		} else {
+			delete(routeClassOf, profile)
+		}
+		delete(routeClassKind, testMixedClass)
+	})
+}
+
 func actionOf(profile string) string {
 	switch profile {
 	case "GET /buildinfo":
@@ -510,14 +536,16 @@ func actionOf(profile string) string {
 }
 
 // A hand-built allow (the fake gives the default organization allow) with a repository allowlist on a route not cut
-// over is the case the reason is pinned to: the gate's own refusal, not the client's. mixedProfile is an M route, so
-// it names allowlist_route_unsupported.
+// over is the case the reason is pinned to: the gate's own refusal, not the client's. mixedProfile is made an M route,
+// so it names allowlist_route_unsupported.
 func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) {
 	srv := pdptest.New(t)
 	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
 	_, cfg := newMeter(t)
 	cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepClient(t, srv.URL), cells("metrics")
-	_, err := New(cfg).Authorize(context.Background(), mixedProfile, testBearer, strings.ToLower(testOrg))
+	g := New(cfg)
+	asMixedRoute(t, g, mixedProfile)
+	_, err := g.Authorize(context.Background(), mixedProfile, testBearer, strings.ToLower(testOrg))
 	denied, ok := err.(*DenyError)
 	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
 		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)

@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"slices"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -78,7 +80,10 @@ func metricStatusFilterSQL(status string) string {
 // change_failure_rate now actually narrows to the requested scope, where
 // Python's real endpoint today does not. Flagged in RISK-NOTES for a
 // follow-up ticket against the Python route while it still exists.
-func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope string, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
+//
+// ceiling (CHAOS-13088) ANDs the repositories the request may read with the repository scope of a metric stored per
+// repository; NoCeiling() is today's fragment byte for byte.
+func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope string, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time, ceiling teamscope.Ceiling) (filterSQL string, bindings []dhclickhouse.Binding, err error) {
 	if metricScope == "team" && scopeLevel == "team" {
 		filterSQL, bindings = scopeClauseTeam(scopeIDs)
 		return filterSQL, bindings, nil
@@ -97,7 +102,7 @@ func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope stri
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 		}
 
-		filterSQL, bindings = teamscope.NarrowRepoScope(len(repoRefs) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), "repo_id")
+		filterSQL, bindings = teamscope.NarrowRepoScope(len(repoRefs) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, ceiling, "repo_id")
 		return filterSQL, bindings, nil
 	}
 	return "", nil, nil
@@ -124,9 +129,18 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	// One instant for the whole response: the current and comparison windows
 	// below share one scope filter, so they must share one team membership.
 	asOf := time.Now().UTC()
-	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf)
+	scopeFilterSQL, scopeBindings, err := reader.scopeFilterForMetric(ctx, config.Scope, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID, asOf, params.Ceiling)
 	if err != nil {
 		return nil, err
+	}
+	// A metric stored per team has no repository: under a ceiling its rows are recomputed from the linked items, and
+	// every read of its table below is taken from them (CHAOS-13088).
+	linked := params.Ceiling.Restricted() && config.GroupBy == "team_id"
+	var linkedRows []teamRow
+	if linked {
+		if linkedRows, err = reader.linkedTeamRows(ctx, config, params, orgID); err != nil {
+			return nil, err
+		}
 	}
 	shareSQL := ""
 	if config.Scope == "repo" && config.Aggregator == "sum" && params.ScopeLevel == "team" {
@@ -162,6 +176,9 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		previousRaw, hasPriorData = floatOrZero(previousOutcome.Value), previousOutcome.State == changefailure.StateMeasured
 		rateState, linkTier = currentOutcome.StateOrNil(), currentOutcome.LinkTierOrNil()
 		evidenceBasis = currentOutcome.BasisOrNil()
+	} else if linked {
+		currentRaw, hasData = windowValue(linkedRows, config.Aggregator, params.StartDay, params.EndDay)
+		previousRaw, hasPriorData = windowValue(linkedRows, config.Aggregator, params.CompareStart, params.CompareEnd)
 	} else {
 		var err error
 		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
@@ -181,13 +198,16 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		pctChange = &safe
 	}
 
-	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL)
-	if err != nil {
-		return nil, err
-	}
-	contributors, err := reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL)
-	if err != nil {
-		return nil, err
+	var drivers, contributors []metricRow
+	if linked {
+		drivers, contributors = linkedDrivers(linkedRows, config.Aggregator, params), linkedContributors(linkedRows, config.Aggregator, params)
+	} else {
+		if drivers, err = reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID, shareSQL); err != nil {
+			return nil, err
+		}
+		if contributors, err = reader.fetchMetricContributors(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID, shareSQL); err != nil {
+			return nil, err
+		}
 	}
 
 	// Resolve scope ids -> display names server-side so labels never
@@ -241,7 +261,8 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 			if err != nil {
 				return nil, err
 			}
-			if found {
+			// A repository outside the ceiling is never named, not even by its URL (CHAOS-13088).
+			if found && (!params.Ceiling.Restricted() || slices.Contains(params.Ceiling.IDs(), id)) {
 				scopeRepoID = id
 				urlIDs = append(urlIDs, id)
 			}
@@ -266,7 +287,12 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	// A metric stored per team has no repository behind it: its source is the provider of the
 	// work items in the metric's own table, window and scope.
-	if config.GroupBy == "team_id" {
+	var narrowed []linkscope.NarrowedCount
+	switch {
+	case linked:
+		source = joinProviderNames(linkedProviders(linkedRows, params))
+		narrowed = []linkscope.NarrowedCount{{Kind: params.Metric, Scope: linkscope.ScopeRepositoryCeiling}}
+	case config.GroupBy == "team_id":
 		workItemProviders, err := reader.fetchWorkItemProviders(ctx, config.Table, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
 		if err != nil {
 			return nil, err
@@ -289,12 +315,13 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 			pyjson.KeyValue[string]{Key: "prs", Value: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s", params.Metric)},
 			pyjson.KeyValue[string]{Key: "issues", Value: fmt.Sprintf("/api/v1/drilldown/issues?metric=%s", params.Metric)},
 		),
-		Repositories:  repositories,
-		SourceURL:     sourceURL,
-		Source:        source,
-		LinkTier:      linkTier,
-		RateState:     rateState,
-		EvidenceBasis: evidenceBasis,
+		Repositories:   repositories,
+		SourceURL:      sourceURL,
+		Source:         source,
+		LinkTier:       linkTier,
+		RateState:      rateState,
+		EvidenceBasis:  evidenceBasis,
+		NarrowedCounts: narrowed,
 	}, nil
 }
 

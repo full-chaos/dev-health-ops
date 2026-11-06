@@ -7,7 +7,9 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -159,7 +161,9 @@ type hotspotRow struct {
 // aggregated_flame.py:77-124) -- see this package's own doc comment for
 // why the inner subquery uses argMax(churn, computed_at) GROUP BY
 // (repo_id, day, path) rather than Python's dedup_from() LIMIT-1-BY shape.
-func fetchCodeHotspots(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, repoID string, limit, minChurn int) ([]hotspotRow, error) {
+//
+// A ceiling (CHAOS-13088) holds the read to the allowed repositories, ANDed with the named one.
+func fetchCodeHotspots(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, repoID string, limit, minChurn int, ceiling teamscope.Ceiling) ([]hotspotRow, error) {
 	filter := ""
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -171,6 +175,10 @@ func fetchCodeHotspots(ctx context.Context, client QueryClient, orgID string, st
 	if repoID != "" {
 		filter = "\n              AND toString(repo_id) = {repo_id:String}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "repo_id", Value: repoID})
+	}
+	if term, termBindings := ceiling.RepoTerm("toString(repo_id)"); term != "" {
+		filter += "\n             " + term
+		bindings = append(bindings, termBindings...)
 	}
 
 	query := `
@@ -272,7 +280,7 @@ type throughputRow struct {
 // this port does not reproduce as query filters (repo_id/provider/
 // work_scope_id are never forwarded here by the only caller,
 // build_aggregated_flame_response's throughput branch).
-func fetchThroughput(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID string, limit int) ([]throughputRow, error) {
+func fetchThroughput(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID string, limit int, ceiling teamscope.Ceiling) ([]throughputRow, error) {
 	teamFilter := ""
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -285,6 +293,12 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
 		teamFilter = "\n          AND t.team_id = {team_id:String}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamID})
 		attributionSource = teamScopedWorkItemTeamAttributionSource
+	}
+	// A ceiling (CHAOS-13088) holds the read to the items linked to an allowed repository; the attribution join adds
+	// no item.
+	if term, termBindings := linkscope.ItemCondition(ceiling, "wct.work_item_id"); term != "" {
+		teamFilter += "\n         " + term
+		bindings = append(bindings, termBindings...)
 	}
 
 	query := `
@@ -332,7 +346,7 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
 // aggregated_flame.py:216-268) -- repo_id parameter dropped, see this
 // package's own doc comment (fetch_throughput_by_type's own WHERE clause
 // never references it either).
-func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID string, limit int) ([]throughputRow, error) {
+func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID string, limit int, ceiling teamscope.Ceiling) ([]throughputRow, error) {
 	teamFilter := ""
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -345,6 +359,12 @@ func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string
 		teamFilter = "\n          AND t.team_id = {team_id:String}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamID})
 		attributionSource = teamScopedWorkItemTeamAttributionSource
+	}
+	// A ceiling (CHAOS-13088) holds the read to the items linked to an allowed repository; the attribution join adds
+	// no item.
+	if term, termBindings := linkscope.ItemCondition(ceiling, "wct.work_item_id"); term != "" {
+		teamFilter += "\n         " + term
+		bindings = append(bindings, termBindings...)
 	}
 
 	query := `

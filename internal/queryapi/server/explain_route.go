@@ -322,6 +322,13 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			WhatRepos: nil,
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "explain", org, err)
+			return
+		}
+		params.Ceiling, params.Now = ceiling, time.Now().UTC()
+
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, org, params)
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "explain", org, err)
@@ -440,6 +447,13 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			ScopeIDs:     scopeIDs,
 			WhatRepos:    whatRepos,
 		}
+
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "explain", org, err)
+			return
+		}
+		params.Ceiling, params.Now = ceiling, time.Now().UTC()
 
 		resp, err := explain.BuildExplainResponse(r.Context(), reader, org, params)
 		if err != nil {

@@ -8,6 +8,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
@@ -142,7 +143,7 @@ func cycleBreakdownQueryForTest(teamID, provider, workScopeID string) string {
 func codeHotspotsQueryForTest(repoID string) string {
 	captured := ""
 	client := capturingClient{capture: &captured}
-	_, _ = fetchCodeHotspots(context.Background(), client, "org-1", time.Time{}, time.Time{}, repoID, 500, 1)
+	_, _ = fetchCodeHotspots(context.Background(), client, "org-1", time.Time{}, time.Time{}, repoID, 500, 1, teamscope.NoCeiling())
 	return captured
 }
 
@@ -156,13 +157,13 @@ func repoNamesQueryForTest() string {
 func throughputQueryForTest(teamID string) string {
 	captured := ""
 	client := capturingClient{capture: &captured}
-	_, _ = fetchThroughput(context.Background(), client, "org-1", time.Time{}, time.Time{}, teamID, 500)
+	_, _ = fetchThroughput(context.Background(), client, "org-1", time.Time{}, time.Time{}, teamID, 500, teamscope.NoCeiling())
 	return captured
 }
 
 func throughputByTypeQueryForTest(teamID string) string {
 	captured := ""
 	client := capturingClient{capture: &captured}
-	_, _ = fetchThroughputByType(context.Background(), client, "org-1", time.Time{}, time.Time{}, teamID, 500)
+	_, _ = fetchThroughputByType(context.Background(), client, "org-1", time.Time{}, time.Time{}, teamID, 500, teamscope.NoCeiling())
 	return captured
 }

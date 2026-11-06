@@ -113,7 +113,9 @@ func TestSeamAllowlistOnAMixedRouteIs503(t *testing.T) {
 			_, cfg := newMeter(t)
 			decider := &countingDecider{Decider: pepfake.New(rule)}
 			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, decider, cells("metrics")
-			scope, err := New(cfg).Authorize(context.Background(), mixedProfile, testBearer, seamOrg)
+			g := New(cfg)
+			asMixedRoute(t, g, mixedProfile)
+			scope, err := g.Authorize(context.Background(), mixedProfile, testBearer, seamOrg)
 			wantLocal(t, err, ReasonAllowlistRouteUnsupported)
 			wantNoScope(t, scope)
 			if decider.calls.Load() != 1 {
@@ -209,8 +211,8 @@ func TestSeamAllowlistOnACutOverRoute(t *testing.T) {
 // of its profiles is a row.
 func TestSeamOnlyTheNarrowedRowsCarryAnAllowlist(t *testing.T) {
 	g := New(Config{Mode: ModeOff})
-	if len(g.carriesAllowlist) != 26 {
-		t.Fatalf("cut-over registry holds %d profiles, want the 26 rows of the 19 narrowed classes", len(g.carriesAllowlist))
+	if len(g.carriesAllowlist) != 29 {
+		t.Fatalf("cut-over registry holds %d profiles, want the 29 rows of the 21 narrowed classes", len(g.carriesAllowlist))
 	}
 	for profile := range g.carriesAllowlist {
 		if _, known := g.actions[profile]; !known {

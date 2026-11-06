@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/storage/valkey"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
@@ -33,6 +34,11 @@ import (
 // extras) leaves apiservice.Deps exactly as it was before those fields
 // existed.
 type adminDepsExtra func(*apiservice.Deps)
+
+// withLinkSecret gives go-api the link signing key (LINK_TOKEN_SECRET): without it the invite route answers 503.
+func withLinkSecret(key string) adminDepsExtra {
+	return func(deps *apiservice.Deps) { deps.Invites = admin.InviteConfig{LinkSecret: key} }
+}
 
 // venueJWTIssuer/venueJWTAudience mirror config.go's unexported
 // defaultJWTIssuer/defaultJWTAudience and auth.py's own JWT_ISSUER/

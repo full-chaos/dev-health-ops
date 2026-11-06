@@ -4,17 +4,16 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "obligations": {
-      "repository_allowlist": [],
       "tenant_scope": "org-a"
     },
-    "policy_revision": 13,
+    "policy_revision": 14,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },
-  "id": "org-filtered-all-grants-dead-is-none",
+  "id": "org-wide-wildcard-grant-carries-the-tenant-scope-only",
   "layer": "pdp",
   "request": {
-    "action": "metrics.read",
+    "action": "analytics.read",
     "organization_id": "org-a",
     "resource_key": "",
     "resource_kind": "organization"
@@ -26,9 +25,17 @@
       {
         "expires_at": null,
         "org_id": "org-a",
+        "resource_key": "*",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
         "resource_key": "acme/api",
         "resource_kind": "repository",
-        "revoked": true,
+        "revoked": false,
         "role": "viewer"
       }
     ],
@@ -49,5 +56,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "every grant row is revoked: the pair has rows, none is live, so the allow carries an empty allowlist (none)."
+  "why": "a wildcard grant changes nothing: the allow carries the tenant scope alone."
 }

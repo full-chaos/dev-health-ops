@@ -4,19 +4,16 @@
     "cache_class": "",
     "expires_in_seconds": null,
     "obligations": {
-      "repository_allowlist": [
-        "acme/api"
-      ],
       "tenant_scope": "org-a"
     },
-    "policy_revision": 13,
+    "policy_revision": 14,
     "reason": "allowed_by_role",
     "wire_reason_code": "allowed_by_role"
   },
-  "id": "org-filtered-owner-with-a-grant-row-is-narrowed",
+  "id": "org-wide-grant-role-lacks-the-action-reads-org-wide",
   "layer": "pdp",
   "request": {
-    "action": "work_items.read",
+    "action": "analytics.export",
     "organization_id": "org-a",
     "resource_key": "",
     "resource_kind": "organization"
@@ -28,17 +25,25 @@
       {
         "expires_at": null,
         "org_id": "org-a",
-        "resource_key": "acme/api",
+        "resource_key": "acme/v",
         "resource_kind": "repository",
         "revoked": false,
         "role": "viewer"
+      },
+      {
+        "expires_at": null,
+        "org_id": "org-a",
+        "resource_key": "acme/m",
+        "resource_kind": "repository",
+        "revoked": false,
+        "role": "member"
       }
     ],
     "grants_error": false,
     "memberships": {
       "org-a": {
         "org_id": "org-a",
-        "role": "owner",
+        "role": "member",
         "status": "active"
       }
     },
@@ -51,5 +56,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "one row of any state ends the membership default for an owner too (evaluateRepository): the allowlist is the live grant."
+  "why": "the grant rows and their roles play no part: the read is org-wide."
 }

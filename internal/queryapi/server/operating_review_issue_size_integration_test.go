@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/crossorg"
 )
 
@@ -65,7 +66,7 @@ func TestOperatingReviewInvestmentIsIssueSizeOnlyForADocumentThatAsksForItsSizin
 		}
 		req := httptest.NewRequest(http.MethodPost, "/query", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org)}))
 		rec := httptest.NewRecorder()
 		server.ServeHTTP(rec, req)
 		var out struct {

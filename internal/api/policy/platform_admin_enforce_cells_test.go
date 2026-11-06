@@ -383,17 +383,28 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerForAnHS256Caller(t *testing.T) {
 	}
 }
 
-// GAP (flips in 10863 PR-1/PR-2): the platform-admin rows with no action are not judged by the decision point with
-// the admin cell on. A decision point that denies everything is never asked, and go-api's own superuser flag admits
-// the caller cross-org.
-func TestPlatformAdminGapRowsAreNotJudgedYet(t *testing.T) {
-	for pattern := range platformAdminGapRoutes {
+// The platform-admin rows with no action yet are not decided by a route question with the admin cell on (GAP: the
+// /admin/users rows join the batch when their profile rows name admin.users). Their guard keeps main's checks and asks
+// the decision point only the wrap's own admin.users: a superuser is admitted by main's User.IsAdmin with no question,
+// as on main; a platform admin of the decision point with no local flag is admitted after that one question.
+// The telemetry report row's guard is Authenticated; its handler asks (see the telemetry package).
+func TestPlatformAdminGapRowsKeepMainsAnswerAndAskTheWrapAction(t *testing.T) {
+	for pattern, level := range platformAdminGapRoutes {
 		t.Run(pattern, func(t *testing.T) {
 			rec := recordEnforce(t)
 			pdp := newTestPDP(t, denyWith("platform_role_absent"))
 			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin", "members")), pattern, cellBearer())
 			if got.status != http.StatusOK || len(pdp.calls()) != 0 || len(rec.snapshot()) != 0 {
-				t.Fatalf("GAP pin: %d %q, %d PDP calls, counted %v; today the legacy 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
+				t.Fatalf("superuser: %d %q, %d PDP calls, counted %v; want main's 200 with 0 calls", got.status, got.body, len(pdp.calls()), rec.snapshot())
+			}
+			if level == Authenticated {
+				return
+			}
+			allow := newTestPDP(t, evaluatorVerdict(pdpState{status: authorization.StatusActive, role: rule.PlatformAdmin}))
+			got = serveCell(cellHandler(t, legacyStore(false, "member"), userClaims(nil), productionEnforcer(t, allow, "admin", "members")), pattern, cellBearer())
+			want := pdpSeen{Principal: shadowBearer, Action: rule.ActionAdminUsers, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if calls := allow.calls(); got.status != http.StatusOK || len(calls) != 1 || calls[0] != want {
+				t.Fatalf("PDP platform_admin, no local flag: %d %q, PDP saw %+v; want 200 after the one question %+v", got.status, got.body, calls, want)
 			}
 		})
 	}

@@ -13,6 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -110,7 +111,7 @@ func TestNewSankeyGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewSankeyGetHandlerRangeDaysNotAnInt(t *testing.T) {
 	handler := newSankeyGetHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?range_days=nope", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -132,7 +133,7 @@ func TestNewSankeyGetHandlerRangeDaysNotAnInt(t *testing.T) {
 func TestNewSankeyGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 	handler := newSankeyGetHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?scope_type=not-a-level", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -148,7 +149,7 @@ func TestNewSankeyGetHandlerInvalidScopeTypeIs503(t *testing.T) {
 func TestNewSankeyGetHandlerSuccessSetsDeprecatedHeader(t *testing.T) {
 	handler := newSankeyGetHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sankey?mode=hotspot", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -177,7 +178,7 @@ func TestNewSankeyPostHandlerRequiresAuthContext(t *testing.T) {
 func TestNewSankeyPostHandlerEmptyBodyIsMissing(t *testing.T) {
 	handler := newSankeyPostHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader(nil))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -197,7 +198,7 @@ func TestNewSankeyPostHandlerEmptyBodyIsMissing(t *testing.T) {
 func TestNewSankeyPostHandlerMissingModeAndFilters(t *testing.T) {
 	handler := newSankeyPostHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -217,7 +218,7 @@ func TestNewSankeyPostHandlerMissingModeAndFilters(t *testing.T) {
 func TestNewSankeyPostHandlerInvalidModeLiteral(t *testing.T) {
 	handler := newSankeyPostHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{"mode":"nope","filters":{}}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -237,7 +238,7 @@ func TestNewSankeyPostHandlerInvalidModeLiteral(t *testing.T) {
 func TestNewSankeyPostHandlerSuccessNoDeprecatedHeader(t *testing.T) {
 	handler := newSankeyPostHandler(emptyRowsSankeyClient{})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sankey", bytes.NewReader([]byte(`{"mode":"state","filters":{}}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {

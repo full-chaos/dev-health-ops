@@ -28,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/people"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type restDelta struct {
@@ -44,7 +45,7 @@ type restDelta struct {
 func restSummaryDeltas(t *testing.T, mux *http.ServeMux, org, target string) map[string]restDelta {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, target, nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -253,7 +254,7 @@ func TestRESTPersonSummaryDeltasTellNoDataFromAMeasuredZero(t *testing.T) {
 func TestRESTHomeBodyStripsToTheFrozenShape(t *testing.T) {
 	_, client := startTeamScopeClickHouse(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "rest-home-strip", Role: "owner"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "rest-home-strip", Scope: pepgate.Legacy("rest-home-strip"), Role: "owner"}))
 	rec := httptest.NewRecorder()
 	newHomeGetHandler(client, nil)(rec, req)
 	if rec.Code != http.StatusOK {

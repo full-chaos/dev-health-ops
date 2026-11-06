@@ -571,6 +571,7 @@ func (handler GitHubTestsRouteHandler) Collect(
 			for _, observation := range reportIncomplete {
 				incomplete = mergeGitHubTestsIncomplete(incomplete, observation)
 			}
+			recordGitHubTestsNonReportMembers(client, claim, repo.FullName, pipeline.RunID, rows)
 			client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
 			if rows.DuplicateCases > 0 {
 				slog.Info(

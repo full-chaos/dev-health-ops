@@ -3,14 +3,13 @@ package providersync
 import (
 	"archive/zip"
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-
-	"log/slog"
 )
 
 // CHAOS-13193: members that are not reports (.xml/.info) are counted by a

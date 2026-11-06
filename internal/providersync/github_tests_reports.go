@@ -10,10 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 const (
@@ -106,6 +110,13 @@ type githubTestsReportRows struct {
 	Cases    []testCaseResultRow
 	Coverage []coverageSnapshotRow
 	Skipped  int
+	// ReportsParsed is the number of members read as reports. NonReportJSON and
+	// NonReportOther count members that are not .xml/.info (CHAOS-13193): they
+	// are observability only -- never an incomplete cause, so reports_complete
+	// and the watermark do not see them.
+	ReportsParsed  int
+	NonReportJSON  int
+	NonReportOther int
 	// SkippedArtifacts carries a durable GitHubTestsSkippedArtifact marker for
 	// every malformed/unreadable report member this artifact skipped
 	// (CHAOS-4592). The caller (github_tests_chunked_route.go,
@@ -905,7 +916,15 @@ func parseGitHubTestsArtifact(
 		}
 		name := member.Name
 		lower := strings.ToLower(name)
-		if member.FileInfo().IsDir() || (!strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info")) {
+		if member.FileInfo().IsDir() {
+			continue
+		}
+		if !strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info") {
+			if strings.HasSuffix(lower, ".json") {
+				result.NonReportJSON++
+			} else {
+				result.NonReportOther++
+			}
 			continue
 		}
 		if processed >= githubTestsMaxReportsPerRun {
@@ -937,6 +956,7 @@ func parseGitHubTestsArtifact(
 			continue
 		}
 		processed++
+		result.ReportsParsed++
 		switch kind {
 		case "junit":
 			suites, cases, err := parseJUnitRows(body, artifactID, repoID, runID, orgID, startedAt, finishedAt, normalizedAt, suiteOccurrence)
@@ -1639,4 +1659,24 @@ func coveragePercent(covered, total *int64) *float64 {
 	}
 	value := float64(*covered) / float64(*total) * 100
 	return &value
+}
+
+// recordGitHubTestsNonReportMembers counts the members of one parsed artifact
+// that are not reports (CHAOS-13193): a bounded counter by extension class and
+// one Info line, counts only. It never touches the incomplete list.
+func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, claim Claim, repo, runID string, rows githubTestsReportRows) {
+	if rows.NonReportJSON+rows.NonReportOther == 0 {
+		return
+	}
+	if client != nil {
+		client.Metrics.RecordNonReportMembersSkipped(claim.Provider, claim.Dataset, "json", rows.NonReportJSON)
+		client.Metrics.RecordNonReportMembersSkipped(claim.Provider, claim.Dataset, "other", rows.NonReportOther)
+	}
+	slog.Info(
+		"artifact members that are not test reports were skipped",
+		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
+		"repository", repo, logging.ProviderIDAttr("run", runID),
+		"reports_parsed", rows.ReportsParsed, "skipped_json", rows.NonReportJSON, "skipped_other", rows.NonReportOther,
+		"suites", len(rows.Suites),
+	)
 }

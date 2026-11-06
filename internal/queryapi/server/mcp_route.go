@@ -314,7 +314,7 @@ func newMCPGraphQLServer(es graphql.ExecutableSchema, limits mcpLimits) *gqlhand
 	gql.Use(depthLimit{Max: limits.depth})
 	gql.Use(mcpOperationGuard{})
 	gql.AroundFields(graph.RefuseNullForNonNullArguments)
-	gql.Use(graph.OperationOrgGuard{})
+	useGraphQLGuards(gql)
 	gql.AroundResponses(recordErrorCount)
 	gql.SetErrorPresenter(safeGraphQLErrorPresenter("mcp", func(ctx context.Context) {
 		if obs := mcpObservationFrom(ctx); obs != nil {
@@ -552,7 +552,7 @@ func (h *mcpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dispatched.Body = io.NopCloser(bytes.NewReader(body))
 
 	buffered := &mcpBufferedResponse{header: http.Header{}, status: http.StatusOK}
-	h.gql.ServeHTTP(buffered, dispatched)
+	serveMCPGraphQL(h.gql, buffered, dispatched)
 	req.clickHouse = obs.callCount()
 
 	if budget := obs.budgetReason(); budget != "" {

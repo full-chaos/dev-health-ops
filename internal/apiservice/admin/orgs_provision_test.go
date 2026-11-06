@@ -781,7 +781,8 @@ func TestProvisionInviteMailIsSentOnce(t *testing.T) {
 	db := &provisionDB{rows: provisionRowsFor()}
 	h := newProvisionHandlers(db, &fakeProvisioner{db: db})
 	sent := &mailRecorder{}
-	h.invites = InviteConfig{Mail: sent, LinkSecret: "provision-test-link-secret"}
+	// auth-service signs the token, so go-api needs no link secret on this path.
+	h.invites = InviteConfig{Mail: sent}
 	if code, body := callRoute(h, provisionRoutes[4]); code != http.StatusCreated || len(sent.sent) != 1 {
 		t.Fatalf("%d %s, %d mails; want 201 and one mail", code, body, len(sent.sent))
 	}

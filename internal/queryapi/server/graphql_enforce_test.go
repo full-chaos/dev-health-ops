@@ -634,7 +634,7 @@ func TestGraphQLEnforceReadsTheScopeOrganization(t *testing.T) {
 		t.Fatalf("cells off bound %v, want today's spelling %s", orgs, upper)
 	}
 	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
-	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", decider)
+	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics,metrics", decider)
 	_, _, orgs = runRootsAs(t, gate, decider, claims, subject, noArg)
 	for _, org := range orgs {
 		if org != canonical {
@@ -648,6 +648,18 @@ func TestGraphQLEnforceReadsTheScopeOrganization(t *testing.T) {
 	got, _, _ := runRootsAs(t, gate, decider, claims, subject, withArg)
 	if got.statements != 0 || !strings.Contains(got.body, `"errors"`) {
 		t.Fatalf("an orgId spelled unlike the scope org: %+v, want refused with no read", got)
+	}
+	// A root that reads the claims' org itself (no org helper; its orgId sits in an input the guard does not read)
+	// reads in the scope's org too.
+	claimsReader := `query Q { hotspots(input: {orgId: "` + upper + `", sinceUtc: "2026-01-01T00:00:00Z", untilUtc: "2026-01-15T00:00:00Z"}) { __typename } }`
+	_, _, orgs = runRootsAs(t, gate, decider, claims, subject, claimsReader)
+	if len(orgs) == 0 {
+		t.Fatal("the claims-reading root read nothing")
+	}
+	for _, org := range orgs {
+		if org != canonical {
+			t.Fatalf("a root reading the claims' org bound %v, want only the scope org %s", orgs, canonical)
+		}
 	}
 }
 

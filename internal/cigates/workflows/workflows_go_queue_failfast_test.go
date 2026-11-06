@@ -135,8 +135,8 @@ func bashRun(t *testing.T, script string, env []string, args ...string) (int, st
 }
 
 // aggregateExit runs the real go-storage-integration verdict step; 0 is green.
-func aggregateExit(t *testing.T, script, plan, legs, shard string) int {
-	code, _, _ := bashRun(t, script, []string{"PLAN_RESULT=" + plan, "PLAN_LEGS=" + legs, "SHARD_RESULT=" + shard})
+func aggregateExit(t *testing.T, script, plan, legs, shard, reason string) int {
+	code, _, _ := bashRun(t, script, []string{"PLAN_RESULT=" + plan, "PLAN_LEGS=" + legs, "SHARD_RESULT=" + shard, "SKIP_REASON=" + reason})
 	return code
 }
 
@@ -146,20 +146,29 @@ type aggRow struct {
 	shardLegs    []string
 	wantGreen    bool
 	wantMatrixIs string
+	reason       string // the plan's skip_reason (CHAOS-13075)
 }
 
 var aggRows = []aggRow{
-	{"all-success", "success", "3", []string{"success", "success", "success"}, true, "success"},
-	{"one-failure-rest-cancelled", "success", "3", []string{"failure", "cancelled", "cancelled"}, false, "failure"},
-	{"failure-then-skipped-and-cancelled", "success", "4", []string{"failure", "cancelled", "skipped", "skipped"}, false, "failure"},
-	{"all-cancelled", "success", "3", []string{"cancelled", "cancelled", "cancelled"}, false, "cancelled"},
-	{"success-and-cancelled", "success", "3", []string{"success", "cancelled", "success"}, false, "cancelled"},
-	{"one-skipped-where-required", "success", "3", []string{"success", "skipped", "success"}, false, "skipped"},
-	{"all-skipped-where-legs-required", "success", "3", []string{"skipped", "skipped", "skipped"}, false, "skipped"},
-	{"plan-selected-zero-legs-skipped", "success", "0", []string{}, true, ""},
-	{"plan-cancelled", "cancelled", "3", []string{"success", "success", "success"}, false, "success"},
-	{"plan-failure", "failure", "0", []string{}, false, ""},
-	{"plan-skipped", "skipped", "0", []string{}, false, ""},
+	{"all-success", "success", "3", []string{"success", "success", "success"}, true, "success", ""},
+	{"one-failure-rest-cancelled", "success", "3", []string{"failure", "cancelled", "cancelled"}, false, "failure", ""},
+	{"failure-then-skipped-and-cancelled", "success", "4", []string{"failure", "cancelled", "skipped", "skipped"}, false, "failure", ""},
+	{"all-cancelled", "success", "3", []string{"cancelled", "cancelled", "cancelled"}, false, "cancelled", ""},
+	{"success-and-cancelled", "success", "3", []string{"success", "cancelled", "success"}, false, "cancelled", ""},
+	{"one-skipped-where-required", "success", "3", []string{"success", "skipped", "success"}, false, "skipped", ""},
+	{"all-skipped-where-legs-required", "success", "3", []string{"skipped", "skipped", "skipped"}, false, "skipped", ""},
+	{"plan-selected-zero-legs-skipped", "success", "0", []string{}, true, "", "planner"},
+	{"docs-only-zero-legs-skipped", "success", "0", []string{}, true, "", "docs"},
+	{"queue-tested-zero-legs-skipped", "success", "0", []string{}, true, "", "queue"},
+	{"draft-zero-legs-not-run", "success", "0", []string{}, false, "", "draft"},
+	{"zero-legs-without-a-reason", "success", "0", []string{}, false, "", ""},
+	{"zero-legs-matrix-success-draft", "success", "0", []string{"success"}, false, "success", "draft"},
+	{"zero-legs-matrix-success-label", "success", "0", []string{"success"}, false, "success", "label"},
+	{"zero-legs-matrix-success-no-reason", "success", "0", []string{"success"}, false, "success", ""},
+	{"zero-legs-matrix-success-docs", "success", "0", []string{"success"}, false, "success", "docs"},
+	{"plan-cancelled", "cancelled", "3", []string{"success", "success", "success"}, false, "success", ""},
+	{"plan-failure", "failure", "0", []string{}, false, "", ""},
+	{"plan-skipped", "skipped", "0", []string{}, false, "", ""},
 }
 
 func aggregateRowResult(r aggRow) string {
@@ -178,13 +187,13 @@ func aggregateDefects(t *testing.T, doc yamlMap) []string {
 		if r.wantMatrixIs != "" && shard != r.wantMatrixIs {
 			t.Fatalf("test model: %s matrix result %s, want %s", r.id, shard, r.wantMatrixIs)
 		}
-		green := aggregateExit(t, script, r.plan, r.legs, shard) == 0
+		green := aggregateExit(t, script, r.plan, r.legs, shard, r.reason) == 0
 		if green != r.wantGreen {
 			out = append(out, fmt.Sprintf("%s: plan=%s legs=%s shard=%s -> green=%v, want %v", r.id, r.plan, r.legs, shard, green, r.wantGreen))
 		}
 	}
 	for _, shard := range []string{"cancelled", "failure", "skipped", ""} {
-		if aggregateExit(t, script, "success", "5", shard) == 0 {
+		if aggregateExit(t, script, "success", "5", shard, "docs") == 0 {
 			out = append(out, fmt.Sprintf("shard=%q with 5 legs planned was green", shard))
 		}
 	}
@@ -199,8 +208,15 @@ func TestIntegrationAggregateNeverGreenOnCancelledFailedOrSkippedShards(t *testi
 	for _, m := range []mutation{
 		{failFastGoYml, `if [ "${SHARD_RESULT}" != "success" ]; then`, `if [ "${SHARD_RESULT}" = "failure" ]; then`},
 		{failFastGoYml, `if [ "${SHARD_RESULT}" != "success" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
-		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ]; then`, `if [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `if [ "${PLAN_LEGS}" = "0" ]; then`, `if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then`},
+		{failFastGoYml, `            if [ "${SHARD_RESULT}" != "skipped" ]; then`, `            if false; then`},
 		{failFastGoYml, `if [ "${PLAN_RESULT}" != "success" ]; then`, `if [ "${PLAN_RESULT}" = "failure" ]; then`},
+		{failFastGoYml, `              docs | queue | planner)`, `              docs | queue | planner | draft)`},
+		{failFastGoYml, `              *)
+                echo "INTEGRATION NOT RUN: plan selected 0 shards`, `              ""|*)
+                exit 0
+                echo "INTEGRATION NOT RUN: plan selected 0 shards`},
 	} {
 		tmp := plantTree(t, root, []string{failFastGoYml}, m)
 		if d := aggregateDefects(t, loadWf(t, tmp, "go.yml")); len(d) == 0 {
@@ -239,7 +255,7 @@ func queueGateDefects(t *testing.T, aggScript, gateScript string) []string {
 	for _, r := range aggRows {
 		shard := aggregateRowResult(r)
 		integration := "failure"
-		if aggregateExit(t, aggScript, r.plan, r.legs, shard) == 0 {
+		if aggregateExit(t, aggScript, r.plan, r.legs, shard, r.reason) == 0 {
 			integration = "success"
 		}
 		for _, ev := range []string{"merge_group", "pull_request"} {
@@ -389,7 +405,7 @@ func TestRedShardNamingIsBestEffortAndNeverGatesTheVerdict(t *testing.T) {
 		t.Errorf("a failing gh must not fail the naming step; code=%d", code)
 	}
 	verdict := stepRun(t, doc, aggregateJobName, aggregateStepName)
-	if aggregateExit(t, verdict, "success", "3", "failure") == 0 || aggregateExit(t, verdict, "success", "3", "success") != 0 {
+	if aggregateExit(t, verdict, "success", "3", "failure", "") == 0 || aggregateExit(t, verdict, "success", "3", "success", "") != 0 {
 		t.Error("the verdict step must decide alone: failure red, success green")
 	}
 

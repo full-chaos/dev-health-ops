@@ -80,6 +80,7 @@ const (
 	ReasonAllowedByRepositoryGrant Reason = "allowed_by_repository_grant"
 	ReasonGrantAbsent              Reason = "grant_absent"
 	ReasonRepositoryNotGranted     Reason = "repository_not_granted"
+	ReasonRepositoryUnresolved     Reason = "repository_unresolved"
 	ReasonGrantExpired             Reason = "grant_expired"
 	ReasonGrantRevoked             Reason = "grant_revoked"
 	ReasonWorkloadAudienceDenied   Reason = "workload_audience_denied"
@@ -104,7 +105,7 @@ func AllReasons() []Reason {
 		ReasonAllowedByRole, ReasonInvalidRequest, ReasonUnknownAction, ReasonResourceMismatch,
 		ReasonPrincipalInactive, ReasonOrganizationInactive, ReasonNoMembership, ReasonOrgMismatch,
 		ReasonPlatformRoleAbsent, ReasonRoleUnknown, ReasonRoleScopeMismatch,
-		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted,
+		ReasonRoleLacksAction, ReasonAllowedByRepositoryGrant, ReasonGrantAbsent, ReasonRepositoryNotGranted, ReasonRepositoryUnresolved,
 		ReasonGrantExpired, ReasonGrantRevoked, ReasonWorkloadAudienceDenied,
 		ReasonWorkloadActionDenied, ReasonClockUnavailable, ReasonServiceAccountInactive,
 		ReasonAllowedByMembershipDefault, ReasonGrantReadFailed,

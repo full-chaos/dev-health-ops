@@ -1,8 +1,11 @@
+contracts/auth/v1
 contracts/auth/v1/vocabulary
 internal/api/policy
 internal/api/pybody
 internal/api/pyjson
 internal/api/pytime
+internal/apiservice/accessrouting
+internal/auth/accessverify
 internal/auth/acraudience
 internal/auth/edgetoken
 internal/auth/httpapi
@@ -30,6 +33,7 @@ internal/platform/errortext
 internal/platform/errortext/hardened
 internal/platform/fernet
 internal/platform/logging
+internal/platform/netaddr
 internal/platform/pgident
 internal/platform/queuecontrol
 internal/platform/secrets
@@ -57,6 +61,7 @@ internal/storage/clickhouse
 internal/storage/clickhouse/liverow
 internal/storage/postgres
 internal/storage/postgres/aclguard
+internal/storage/postgres/authschema
 internal/storage/postgres/ownermove
 internal/storage/river
 internal/storage/roleacl
@@ -66,13 +71,16 @@ internal/teamattribution
 internal/teamid
 internal/teamkeytables
 internal/testsupport/containers
+internal/testsupport/edtokens
 internal/testsupport/moduleroot
 internal/testsupport/programoracle
 internal/testsupport/pydanticecho
 internal/testsupport/venueoracle
+~contracts/auth/v1/jsonschema
 ~internal/chmigrate/baseline
 ~internal/chmigrate/sql
 ~internal/pgmigrate/archive
 ~internal/pgmigrate/baseline
 ~internal/pgmigrate/sql
 ~internal/pgmigrate/sql/down
+~internal/storage/postgres/authschema/migrations

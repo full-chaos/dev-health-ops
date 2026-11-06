@@ -55,6 +55,7 @@ func insertFixtures(ids map[string]string) []struct {
 		{"credential_projection_digest", `INSERT INTO auth.credential_projection_digest (domain_owner, external_reference, revision, digest, outcome) VALUES ('external_push', 'cap-cred', 1, decode(repeat('ab', 32), 'hex'), 'applied')`, nil},
 		{"projection_cursor", `INSERT INTO auth.projection_cursor (stream) VALUES ('external_push')`, nil},
 		{"projection_retry", `INSERT INTO auth.projection_retry (stream, outbox_id, aggregate_id, revision, body, last_outcome) VALUES ('external_push', 1, 'cap-cred', 2, '{}'::jsonb, 'gap')`, nil},
+		{"repository_identities", `INSERT INTO auth.repository_identities (organization_id, provider, provider_repo_id, current_path) VALUES ($1, 'github', '1', 'cap/r1')`, []any{ids["org"]}},
 		{"resource_grants", `INSERT INTO auth.resource_grants (principal_id, organization_id, role_key, resource_kind, resource_id) VALUES ($1, $2, 'cap.role', 'repository', 'cap/r1')`, []any{ids["principal"], ids["org"]}},
 		{"policy_revisions", `INSERT INTO auth.policy_revisions (revision, digest, document) VALUES (1, '\x01'::bytea, '{}'::jsonb)`, nil},
 		{"entitlement_snapshots", `INSERT INTO auth.entitlement_snapshots (organization_id, sequence, document, digest) VALUES ($1, 1, '{}'::jsonb, '\x02'::bytea)`, []any{ids["org"]}},

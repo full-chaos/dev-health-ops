@@ -114,16 +114,16 @@ docker compose logs -f router go-api query-api migrate
 
 ### Create the first admin
 
-A stack on empty volumes has no user. Create the first user and its organization with the admin verbs of the `dho` binary. Run them in the `migrate` service: its image is `dho` and it has the database login these verbs use. The password is read from standard input (the first line of a file here), never from an argument:
+A stack on empty volumes has no user. Compose runs with `AUTH_USERS_OWNED=true`, so auth-service owns users. Create the first user with `dho auth users-create` and its organization with `dho admin orgs create`. Run them in the `migrate` service: its image is `dho` and it has the logins these verbs use. The password is read from standard input (the first line of a file here), never from an argument:
 
 ```bash
-docker compose run --rm --no-deps -T migrate admin users create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
+docker compose run --rm --no-deps -T migrate auth users-create --email admin@example.com --full-name "Admin User" --password-stdin < password.txt
 docker compose run --rm --no-deps -T migrate admin orgs create --name "My Organization" --owner-email admin@example.com
 ```
 
-The first command prints `Created user: ...`, the second `Created organization: ...` and its owner. After the two commands `POST /api/v1/auth/login` on port 8000 answers 200 for that email and password. Remove the password file afterwards.
+The first command prints `user_created principal=<id>`, the second `Created organization: ...` and its owner. The user is verified and can sign in through auth-service with that email and password. `dho admin users create` refuses on this stack and names `dho auth users-create`. Remove the password file afterwards.
 
-The [CLI reference](../../reference/cli/index.md#admin-commands) describes these two verbs, `dho admin users create` and `dho admin orgs create`, and their options.
+The [CLI reference](../../reference/cli/index.md#admin-commands) describes these verbs and their options.
 
 Stop the stack without deleting data volumes:
 

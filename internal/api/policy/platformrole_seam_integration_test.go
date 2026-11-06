@@ -103,7 +103,8 @@ func TestImpersonationGateReadsTheAssignmentWhileOwned(t *testing.T) {
 	pgseed.ImpersonationSession(ctx, t, env.Admin, uuid.NewString(), admin.String(), target.String(), org.String(), "member", time.Now().Add(time.Hour), nil)
 	token := sign(t, claims(func(c jwt.MapClaims) { c["sub"] = admin.String() }))
 	for owned, impersonated := range map[bool]string{true: target.String(), false: ""} {
-		auth := authenticator(t, PGStore{Pool: env.Reader, AuthSchema: "auth", PlatformRolesOwned: owned})
+		// The auth session read is faked (pgAuthenticator): the subject is the platform role assignment, not session liveness.
+		auth := pgAuthenticator(t, PGStore{Pool: env.Reader, AuthSchema: "auth", PlatformRolesOwned: owned})
 		scope := NewScope(auth, quiet())
 		server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(echo))))
 		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/x", nil)

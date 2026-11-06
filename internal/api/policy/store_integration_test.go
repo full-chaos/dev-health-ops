@@ -282,7 +282,8 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 
 	// 5. One authenticated request through the org scope, impersonation and
 	// guard, over HTTP, as the api role.
-	auth := authenticator(t, store)
+	// The auth session read is faked (pgAuthenticator): this stand-in schema has no auth schema; the real session read is the pinrig cells'.
+	auth := pgAuthenticator(t, store)
 	scope := NewScope(auth, quiet())
 	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Admin, echo)))))
 	t.Cleanup(server.Close)

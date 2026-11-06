@@ -40,7 +40,8 @@ func TestTokenOrgMembershipIsTheLivePublicRow(t *testing.T) {
 	membership := uuid.NewString()
 	pgseed.Membership(ctx, t, pool, membership, user.String(), org.String(), "admin")
 
-	auth := authenticator(t, PGStore{Pool: pool})
+	// The auth session read is faked (pgAuthenticator): the subject is the token-org membership row, not session liveness.
+	auth := pgAuthenticator(t, PGStore{Pool: pool})
 	scope := NewScope(auth, quiet())
 	// go-api's scope declares rows; every route here is an org-scoped one.
 	scope.DeclaredRows(func(string) (BearerRow, bool) { return BearerRow{AccessToken: true}, true })

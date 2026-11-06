@@ -785,10 +785,8 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 // D6773 (chris 2026-11-06, 13:12Z): a platform admin never needs a membership row, and every token class gives the
 // same answer as the legacy path today, not stricter and not wider. With a user access token and no membership row
 // in the token org, each row must answer exactly what the legacy (HS256) token of the same caller gets for the same
-// request, on or off. Today the authenticator refuses it with 401 before the guard: a known defect that
-// CHAOS-13206 fixes.
+// request, on or off.
 func TestAdminConfigCellsPlatformAdminWithoutMembershipRowAnswersAsLegacy(t *testing.T) {
-	t.Skip("known defect, D6773, CHAOS-13206")
 	echoParityWithLegacy(t, cellPlatformNoRow, "platform admin + no membership")
 }
 
@@ -833,9 +831,8 @@ func echoParityWithLegacy(t *testing.T, user uuid.UUID, caller string) {
 
 // With the 6.8 cells off, the answer to each caller on each row is the same with no Enforcer and with an Enforcer
 // whose namespaces are other ones, and it is the legacy answer: the org admin, the platform admin with an org role
-// of member and the platform admin on a legacy token reach the handler, the org member gets the 403, the platform
-// admin with no membership row gets today's 401 (known defect D6773, CHAOS-13206: only byte-equality is checked for it
-// here). The decision point is never asked.
+// of member, the platform admin with no membership row (D6773) and the platform admin on a legacy token reach the
+// handler, the org member gets the 403. The decision point is never asked.
 func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	pdp := newCellPDP(t)
 	plain, plainMinter := adminConfigServerWith(t, nil, withPlatformAdmins)
@@ -849,7 +846,7 @@ func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	legacyAnswer := map[string]func(cellAnswer) bool{
 		"org admin":                      func(a cellAnswer) bool { return !isGuardRefusal(a) },
 		"platform admin + org member":    func(a cellAnswer) bool { return !isGuardRefusal(a) },
-		"platform admin + no membership": func(cellAnswer) bool { return true }, // D6773 known defect, CHAOS-13206
+		"platform admin + no membership": func(a cellAnswer) bool { return !isGuardRefusal(a) },
 		"org member":                     func(a cellAnswer) bool { return a.status == http.StatusForbidden && a.body == adminRequiredBody },
 	}
 	rows := 0

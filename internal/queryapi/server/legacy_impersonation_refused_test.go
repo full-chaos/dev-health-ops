@@ -229,9 +229,9 @@ func TestRefusesLegacyImpersonationReadsTheSwitchAsGoAPI(t *testing.T) {
 		if on != want.on || (err != nil) != want.err {
 			t.Errorf("%s=%q: got %v, %v; want %v, error %v", impersonationProxyEnv, raw, on, err, want.on, want.err)
 		}
-		deps, depsErr := newGraphQLEdgeDeps(getenv, lookup, nil, nil)
-		if deps.refuseLegacyImpersonation != want.on || (depsErr != nil) != want.err {
-			t.Errorf("%s=%q: /graphql deps refuse=%v error=%v; want %v, error %v", impersonationProxyEnv, raw, deps.refuseLegacyImpersonation, depsErr, want.on, want.err)
+		// A value that does not parse refuses (fail closed); it never stops the process.
+		if deps := newGraphQLEdgeDeps(getenv, lookup, nil, nil); deps.refuseLegacyImpersonation != (want.on || want.err) {
+			t.Errorf("%s=%q: /graphql deps refuse=%v; want %v", impersonationProxyEnv, raw, deps.refuseLegacyImpersonation, want.on || want.err)
 		}
 	}
 }

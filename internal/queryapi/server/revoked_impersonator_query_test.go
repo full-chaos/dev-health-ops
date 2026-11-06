@@ -179,6 +179,13 @@ func TestQueryServesANonSuperuserHolderAsItself(t *testing.T) {
 			t.Run(switchName+" "+signing+" write door", func(t *testing.T) {
 				door, seen := revokedWriteDoor(t, minter, nonSuperuserHolderStore(), on)
 				got := postProofWrite(door, token)
+				if on {
+					// #5848: with the switch on, the holder's live row refuses its mutation (it is still not the target).
+					if got.Code != http.StatusForbidden || strings.TrimSpace(got.Body.String()) != legacyRefusalBody || len(*seen) != 0 {
+						t.Fatalf("switch on: %d %q, ran %d; want 403 %s and no resolver", got.Code, got.Body.String(), len(*seen), legacyRefusalBody)
+					}
+					return
+				}
 				asItself(t, got.Code, got.Body.String(), *seen)
 			})
 		}

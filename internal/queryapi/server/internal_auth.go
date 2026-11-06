@@ -157,6 +157,14 @@ func liveScope(store policy.Store) edgeScope {
 			return user.OrgID, nil, nil
 		}
 		if !user.IsSuperuser {
+			// A holder that is not a superuser is served as itself; with the
+			// switch on, its live (or unreadable) row refuses its non-query
+			// documents in the dispatch.
+			if user.Holds(policy.ActionAdminImpersonate) && legacyImpersonationRefused(ctx) {
+				if session, err := store.ActiveImpersonation(ctx, user.ID); err != nil || session != nil {
+					markHolderRowLive(ctx)
+				}
+			}
 			return user.OrgID, nil, nil
 		}
 		session, err := store.ActiveImpersonation(ctx, user.ID)

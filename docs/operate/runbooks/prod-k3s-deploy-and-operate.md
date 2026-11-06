@@ -78,8 +78,6 @@ kubectl create secret generic <secret-name> --from-env-file=<cleaned.env> --dry-
 
 ## Safe rollouts on k3s
 
-<a id="batch-size-rule-trap-172"></a>
-
 ### Batch size rule
 
 **Never roll all Deployments at once.** On a 4-core node:
@@ -96,8 +94,6 @@ kubectl create secret generic <secret-name> --from-env-file=<cleaned.env> --dry-
 - 30-minute outage occurred when scaling to zero without re-enabling HPA.
 
 Alternative: scale the HPA's `minReplicas` instead, or scale a non-HPA workload.
-
-<a id="cpu-limit-sizing-trap-171"></a>
 
 ### CPU limit sizing
 

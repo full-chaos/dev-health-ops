@@ -182,3 +182,27 @@ func TestUnrestrictedScopeIsTodaysStatement(t *testing.T) {
 		}
 	}
 }
+
+// C13 at the fetch: a bound hit of the recompute is the error of the read. The org-wide daily table is never the
+// fallback.
+func TestFetchValueUnderACeilingNeverFallsBackToTheDailyTable(t *testing.T) {
+	var statements []string
+	client := fakeQueryClient{t: t, handler: func(_ *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		statements = append(statements, query)
+		if contains(query, "FROM work_items FINAL") {
+			return nil, errors.New("max_result_rows exceeded")
+		}
+		return emptyScan{}, nil
+	}}
+	scope := newReadScope(client, "org", ceilingOf(t, "11111111-1111-1111-1111-111111111111"), day(2026, 1, 1), day(2026, 1, 6))
+	_, _, err := fetchPersonMetricValue(context.Background(), client, "work_item_user_metrics_daily", "items_completed", "sum", "user_identity",
+		[]string{"alice"}, day(2026, 1, 1), day(2026, 1, 6), "", "org", scope)
+	if err == nil {
+		t.Fatal("a bound hit answered a value")
+	}
+	for _, statement := range statements {
+		if contains(statement, "work_item_user_metrics_daily") {
+			t.Fatalf("the daily table was read after a bound hit:\n%s", statement)
+		}
+	}
+}

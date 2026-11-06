@@ -306,6 +306,14 @@ func TestUserCeiling_NamedRepositoryAndTeamNeverWidenTheCeiling(t *testing.T) {
 					}
 				}
 			}
+			// A named repository outside the ceiling leaves nothing: no item and no repository-keyed read runs for it.
+			if strings.Contains(suffix, "repo_ids="+ceilingRepoB) {
+				for i, statement := range got.statements {
+					if readsAny(statement, userItemTables) || readsAny(statement, userRepoTables) {
+						t.Fatalf("a read ran for a named repository outside the ceiling (link %v):\n%s", boundIDs(got, i, linkBinding), statement)
+					}
+				}
+			}
 		})
 	}
 }

@@ -409,6 +409,12 @@ func TestGraphQLRevokedHolderUnregisteredAndUnparsable(t *testing.T) {
 			if got := legacyGraphQLRaw(write, http.MethodPost, "/graphql", post("\u00a0"+legacyMutationDocument+"\u3000"), token); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*write.seen) != 0 {
 				t.Fatalf("no-break spaces around the mutation: got %d %s, resolver ran %d; want 403 and no run", got.Status, got.Body, len(*write.seen))
 			}
+			// The scope classifies the bytes the resolver runs, not the digest's trimmed key: a no-break space does not
+			// parse, so the registered query behind one is not a read.
+			read := legacyStack(t, minter, live(), true)
+			if got := legacyGraphQLRaw(read, http.MethodPost, "/graphql", post("\u00a0"+iaDocument), token); got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*read.seen) != 0 {
+				t.Fatalf("no-break space before the query: got %d %s, resolver ran %d; want 403 and no run", got.Status, got.Body, len(*read.seen))
+			}
 		})
 		for name, document := range map[string]string{
 			"GET two operations":           "query LegacyOne { probe } query LegacyTwo { probe }",

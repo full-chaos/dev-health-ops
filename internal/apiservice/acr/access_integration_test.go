@@ -4,10 +4,13 @@ package acr
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +18,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -43,6 +48,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
+	"github.com/full-chaos/dev-health-ops/internal/token"
 )
 
 // authServiceStates is auth-service's session state route as auth-service
@@ -65,7 +71,21 @@ func authServiceStates(t *testing.T, ctx context.Context, admin *pgxpool.Pool, r
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	issuer, err := authapi.NewIssuer(random(), "dev-health-ops", "dev-health-api")
+	keyDir := t.TempDir()
+	_, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(keyDir, "k1.pem")
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signer := token.NewFileSigner(token.FileConfig{KeyPath: keyPath, KeyID: "k1"})
+	issuer, err := authapi.NewEdDSAIssuer(random(), "dev-health-ops", "dev-health-api", signer, "https://auth.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}

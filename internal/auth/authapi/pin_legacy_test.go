@@ -109,7 +109,7 @@ func TestCompatRefreshExchangesAGoAPIRefreshTokenForASession(t *testing.T) {
 	if body["refresh_token"] != credential() || body["token_type"] != "bearer" {
 		t.Fatalf("body %s, want the session's opaque credential", response.Body)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != f.record.ID {
 		t.Fatalf("access token %+v %v, want the new session's sid", bearer, err)
 	}
@@ -151,11 +151,7 @@ func TestCompatRefreshRefusesAGoAPIRefreshTokenItCannotVerify(t *testing.T) {
 			return legacyToken(t, f, f.org.String(), "another-key-0123456789abcdef-0123456")
 		},
 		"an access token": func(f *compatFixture) string {
-			access, err := f.issuer.Access(Grant{PrincipalID: f.principal, SessionID: f.record.ID, User: f.users.users[f.principal]})
-			if err != nil {
-				t.Fatal(err)
-			}
-			return access
+			return legacyAccess(t, Grant{PrincipalID: f.principal, SessionID: f.record.ID, User: f.users.users[f.principal]})
 		},
 		"three dots of nothing": func(*compatFixture) string { return "a.b.c" },
 	} {
@@ -184,10 +180,7 @@ func TestCompatRefreshRefusesAGoAPIRefreshTokenOfAnUnknownUserOrOrganization(t *
 }
 
 func TestVerifyLegacyRefreshReadsSubOrgAndJTI(t *testing.T) {
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	signer, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)

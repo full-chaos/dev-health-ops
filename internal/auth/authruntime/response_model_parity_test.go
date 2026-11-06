@@ -111,11 +111,11 @@ func parityRoutes(t *testing.T) []httpapi.Route {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, err := sessionRoutes(cfg, logger, pool, schema, nil, mustLimits(t), nil)
+	routes, err := sessionRoutes(cfg, logger, pool, schema, &stubSigner{}, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
-	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), nil)
+	credentials, components, err := credentialRoutes(cfg, logger, pool, schema, mustLimits(t), &stubSigner{})
 	if err != nil {
 		t.Fatalf("credentialRoutes: %v", err)
 	}

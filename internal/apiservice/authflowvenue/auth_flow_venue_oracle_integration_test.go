@@ -1121,10 +1121,6 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(sessionscenario.Key, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -1145,7 +1141,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 		t.Fatal(err)
 	}
 	deps := apiservice.Deps{Pool: pool, Valkey: valkeyClient, ClickHouse: ch, Auth: auth, Guard: policy.NewGuard(auth, logger),
-		Verifier: verifier, Signer: signer, Invites: mailConfig}
+		Verifier: verifier, Invites: mailConfig}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 // AUTH_PROXY_SESSIONS; go-api mints nothing itself (CHAOS-13155).
 func TestSessionsOffAnswers503NamingTheFlagOnEveryMintingRoute(t *testing.T) {
 	deps := completeDeps(t)
-	deps.Signer = nil
 	deps.Issuer = nil
 	locals := map[string]http.Handler{}
 	deps.Inner = func(pattern string, local http.Handler) http.Handler {

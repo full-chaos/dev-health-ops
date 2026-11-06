@@ -209,10 +209,6 @@ func proxyFixtureRoutesLogging(t *testing.T, cfg AuthProxyConfig, logger *slog.L
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(proxyTestKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(verifier, scopeStore{admin: uuid.New(), target: uuid.New(), targetOrg: uuid.New()}, quietLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +218,7 @@ func proxyFixtureRoutesLogging(t *testing.T, cfg AuthProxyConfig, logger *slog.L
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+	return Routes(Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 		AuthProxy: cfg, Limits: httpapi.NewMemoryCounters(time.Now)}, logger)
 }
 

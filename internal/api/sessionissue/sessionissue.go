@@ -53,6 +53,9 @@ const defaultTimeout = 10 * time.Second
 // issued, the text the auth proxy answers for an unreachable auth-service.
 const UnavailableText = "Authentication service unavailable"
 
+// SessionsOffText is the 503 detail of a route that needs auth-service sessions while AUTH_PROXY_SESSIONS is off.
+const SessionsOffText = "config_missing: AUTH_PROXY_SESSIONS is not on, so go-api cannot issue a session"
+
 // ErrUnavailable is every failure to obtain a pair: the route unreachable or
 // slow, a refusal, or an answer that is not a pair. A route answers it with
 // 503 and mints nothing.

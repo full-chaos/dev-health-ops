@@ -323,17 +323,15 @@ func (c *countingSigner) Check(ctx context.Context) error {
 	return c.inner.Check(ctx)
 }
 
-// NEVER BOTH: one issuer builds one class. The EdDSA issuer holds no HS256
-// signer and signs through its key set only; the HS256 issuer holds no
-// EdDSA minter and never calls a key-set signer.
-func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
+// The EdDSA issuer signs through its key set only; an issuer with no minter mints nothing.
+func TestAnIssuerMintsTheEdDSAClassOnly(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	counter := &countingSigner{inner: signer}
 	grant := Grant{PrincipalID: uuid.New(), SessionID: uuid.New(), Role: "member"}
 
 	ed := newEdDSAIssuer(t, counter, testAudience)
-	if ed.signer != nil || ed.eddsa == nil {
-		t.Fatal("an EdDSA issuer holds an HS256 signer")
+	if ed.eddsa == nil {
+		t.Fatal("an EdDSA issuer holds no EdDSA minter")
 	}
 	compact, err := ed.AccessContext(context.Background(), grant)
 	if err != nil {
@@ -350,31 +348,7 @@ func TestAnIssuerMintsExactlyOneClassNeverBoth(t *testing.T) {
 		t.Fatal("go-api's HS256 verifier accepted the EdDSA token")
 	}
 
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hs.eddsa != nil || hs.signer == nil {
-		t.Fatal("an HS256 issuer holds an EdDSA minter")
-	}
-	counter.calls = 0
-	compact, err = hs.AccessContext(context.Background(), grant)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counter.calls != 0 {
-		t.Fatal("the HS256 issuer called a key-set signer")
-	}
-	if _, verifyErr := hs.verifier.Verify(compact); verifyErr != nil {
-		t.Fatalf("HS256 token refused: %v", verifyErr)
-	}
-
-	both := &Issuer{signer: hs.signer, eddsa: ed.eddsa, verifier: hs.verifier, now: time.Now}
-	counter.calls = 0
-	if token, err := both.AccessContext(context.Background(), grant); err == nil || token != "" || counter.calls != 0 {
-		t.Fatalf("an issuer with both classes minted (%d bytes, err %v, %d signer calls)", len(token), err, counter.calls)
-	}
-	none := &Issuer{verifier: hs.verifier, now: time.Now}
+	none := &Issuer{verifier: ed.verifier, now: time.Now}
 	if token, err := none.AccessContext(context.Background(), grant); err == nil || token != "" {
 		t.Fatalf("an issuer with no class minted (%d bytes, err %v)", len(token), err)
 	}
@@ -443,8 +417,7 @@ func TestEdDSAIssuerRefusesWhatCannotFormAUserAccessToken(t *testing.T) {
 func TestRefreshRouteMintsOnlyTheSelectedClass(t *testing.T) {
 	signer, _, _ := fileSigner(t)
 	for class, issuer := range map[string]*Issuer{
-		"hs256_compat": func() *Issuer { i, _ := NewIssuer(testSecret, testIssuer, testAudience); return i }(),
-		"eddsa":        newEdDSAIssuer(t, signer, testAudience),
+		"eddsa": newEdDSAIssuer(t, signer, testAudience),
 	} {
 		t.Run(class, func(t *testing.T) {
 			f := newFixtureWith(t, issuer)
@@ -481,15 +454,8 @@ func TestRefreshRouteMintsOnlyTheSelectedClass(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, hsVerifyErr := verifier.Verify(compact)
-			switch class {
-			case "hs256_compat":
-				if h["alg"] != "HS256" || hsVerifyErr != nil {
-					t.Fatalf("hs256_compat minted header %v, HS256 verify err %v", h, hsVerifyErr)
-				}
-			case "eddsa":
-				if h["alg"] != "EdDSA" || h["typ"] != "at+jwt" || h["kid"] != "k1" || hsVerifyErr == nil {
-					t.Fatalf("eddsa minted header %v, HS256 verify err %v", h, hsVerifyErr)
-				}
+			if h["alg"] != "EdDSA" || h["typ"] != "at+jwt" || h["kid"] != "k1" || hsVerifyErr == nil {
+				t.Fatalf("%s minted header %v, HS256 verify err %v", class, h, hsVerifyErr)
 			}
 		})
 	}

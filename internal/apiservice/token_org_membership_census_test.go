@@ -194,7 +194,7 @@ func newTokenOrgCensus(t *testing.T) tokenOrgCensus {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = clickHouse.Close() })
-	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer}
+	deps := Deps{Pool: pool, ClickHouse: clickHouse, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier}
 	server, err := NewServer(apiTestConfig(), quietLogger(), Routes(deps, quietLogger()), auth.ReadOnce, scope.Principal, scope.OrgScope, scope.Impersonation)
 	if err != nil {
 		t.Fatal(err)

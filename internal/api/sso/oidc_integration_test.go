@@ -38,7 +38,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
 	"github.com/full-chaos/dev-health-ops/internal/api/sso"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
@@ -137,9 +136,8 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(testJWTKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
+	if issuer == nil {
+		issuer = stubIssuer{}
 	}
 	logs := &syncBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -158,7 +156,7 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 		// wiring's actual secret (deps.GitHubStateSigner.Secret, itself
 		// cfg.APIJWTSecret.Reveal()): reusing testJWTKey here mirrors that
 		// exactly, rather than a second, differently-named test constant.
-		StateSecret: testJWTKey, Signer: signer,
+		StateSecret: testJWTKey,
 		// The production default (defaultOIDCClient, oidc.go) dials over
 		// externalurl.GuardedTransport(), which -- correctly -- refuses a
 		// loopback address, exactly what every httptest.Server in this
@@ -168,16 +166,8 @@ func startStackWith(t *testing.T, ctx context.Context, issuer sessionissue.Issue
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
 		Issuer:     issuer,
 	})
-	// session.Routes mounts /api/v1/auth/refresh -- needed so a test can
-	// prove an OIDC-issued refresh_token is actually usable there (r1
-	// review, CHAOS-6658 P1: it wasn't, before oidc.go started storing a
-	// refresh_tokens row for it).
-	sessionRoutes := session.Routes(session.Deps{Pool: pool, Guard: guard, Auth: auth, Verifier: verifier, Signer: signer, Logger: logger, Now: clock.now})
 	mux := http.NewServeMux()
 	for _, route := range routes {
-		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
-	}
-	for _, route := range sessionRoutes {
 		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
 	}
 	server := httptest.NewServer(mux)
@@ -1004,51 +994,10 @@ func TestAFailedOIDCCallbackKeepsTheProviderActive(t *testing.T) {
 	}
 }
 
-// TestOIDCLoginRefreshTokenIsUsable pins the r1 review's second P1
-// (CHAOS-6658): an OIDC-issued refresh_token must actually work at
-// /api/v1/auth/refresh, the same DB-backed route password login uses --
-// not merely be a validly-signed JWT no refresh_tokens row backs.
-func TestOIDCLoginRefreshTokenIsUsable(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	idp := startFakeIdP(t)
+// stubIssuer stands in for auth-service's issue route when a stack names no issuer: it hands out an opaque pair and
+// writes nothing, so a login that needs a session still answers.
+type stubIssuer struct{}
 
-	orgID := seedOrg(t, ctx, st.pool, "enterprise")
-	config := fmt.Sprintf(`{"client_id":"test-client","issuer":%q,"token_endpoint":%q,"jwks_uri":%q,"userinfo_endpoint":%q,"scopes":["openid","email"]}`,
-		idp.server.URL, idp.server.URL+"/token", idp.server.URL+"/jwks", idp.server.URL+"/userinfo")
-	providerID := seedProvider(t, ctx, st.pool, orgID, providerOpts{
-		protocol: "oidc", status: "active", config: config, autoProvision: true,
-		clientSecretEncryptedFallback: "test-client-secret",
-	})
-
-	client := newCookieClient(t)
-	status, authResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/authorize", map[string]any{})
-	if status != http.StatusOK {
-		t.Fatalf("authorize: status=%d body=%v", status, authResp)
-	}
-	parsed, err := url.Parse(authResp["authorization_url"].(string))
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedMember(t, ctx, st.pool, orgID, "refresh.user@allowed.example", "oidc", "idp-subject-refresh")
-	idp.set(parsed.Query().Get("nonce"), "refresh.user@allowed.example", "Refresh User", "idp-subject-refresh")
-
-	status, cbResp := postJSONWithClient(t, client, st.server, "/api/v1/auth/oidc/"+providerID.String()+"/callback",
-		map[string]any{"code": "test-auth-code", "state": authResp["state"]})
-	if status != http.StatusOK {
-		t.Fatalf("callback: status=%d body=%v", status, cbResp)
-	}
-	refreshToken, _ := cbResp["refresh_token"].(string)
-	if refreshToken == "" {
-		t.Fatalf("callback: missing refresh_token in %v", cbResp)
-	}
-
-	status, refreshResp := postJSON(t, st.server, "/api/v1/auth/refresh", map[string]any{"refresh_token": refreshToken})
-	if status != http.StatusOK {
-		t.Fatalf("refresh: status=%d body=%v, want 200 (the refresh_token an OIDC login just issued must actually work)", status, refreshResp)
-	}
-	if refreshResp["access_token"] == "" || refreshResp["refresh_token"] == "" {
-		t.Fatalf("refresh: expected a fresh token pair, got %v", refreshResp)
-	}
+func (stubIssuer) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
+	return sessionissue.Pair{Access: "stub-access-" + uuid.NewString(), Refresh: "stub-refresh-" + uuid.NewString(), ExpiresIn: 3600}, nil
 }

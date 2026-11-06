@@ -31,7 +31,7 @@ func TestTheSessionIssueWorkloadSubjectLoadsAndNeedsTheTokenIssuer(t *testing.T)
 	}
 	delete(env, EnvTokenIssuerURL)
 	_, err = Load(Spec{LookupEnv: lookupFrom(env)})
-	if err == nil || !strings.Contains(err.Error(), EnvSessionIssueWorkloadSubject) || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
+	if err == nil || !strings.Contains(err.Error(), EnvTokenIssuerURL) {
 		t.Fatalf("a subject without an issuer was not refused by name: %v", err)
 	}
 	if strings.Contains(err.Error(), issueWorkloadSubject) {

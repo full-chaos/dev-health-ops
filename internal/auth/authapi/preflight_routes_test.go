@@ -205,7 +205,7 @@ func TestSocialLoginRefusesBeforeTheExchangeWhenSignerUnavailable(t *testing.T) 
 func credOnEdDSA(t *testing.T, signer AccessSigner) (*credFixture, map[string]string) {
 	t.Helper()
 	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, newEdDSAIssuer(t, signer, testAudience)))
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func TestAMintFailureAnswers503OnlyWhenTheSignerCannotSign(t *testing.T) {
 		},
 		"change password": func(t *testing.T, issuer *Issuer) *httptest.ResponseRecorder {
 			c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
-			hs, err := NewIssuer(testSecret, testIssuer, testAudience)
+			hs, err := newLegacyMinter(testSecret, testIssuer, testAudience)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -441,7 +441,7 @@ func TestOneCheckPerWindowAcrossTheRoutes(t *testing.T) {
 	f.issuer = issuer
 	f.buildCompat()
 	c := newCredFixtureOn(t, httpapi.NewMemoryCounters(nil), newFixtureWith(t, issuer))
-	hs, err := NewIssuer(testSecret, testIssuer, testAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, testAudience)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -125,7 +125,10 @@ func keyOrder(t *testing.T, body string) []string {
 			}
 		case string:
 			if expectKey {
-				keys = append(keys, strings.Repeat(".", depth-1)+v)
+				// session_access_token is the member the EdDSA answer adds to go-api's recorded wire.
+				if v != "session_access_token" || depth != 1 {
+					keys = append(keys, strings.Repeat(".", depth-1)+v)
+				}
 				expectKey = false
 				continue
 			}
@@ -499,7 +502,7 @@ func TestCompatRefreshAnswersGoAPIsBodyWithTheRotatedCredential(t *testing.T) {
 	if !reflect.DeepEqual(user, want) {
 		t.Fatalf("user %v, want %v", user, want)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != f.record.ID || bearer.PrincipalID != f.principal {
 		t.Fatalf("access token: %+v %v", bearer, err)
 	}
@@ -808,7 +811,7 @@ func TestCompatLoginStartsAnAuditedSessionAndAnswersGoAPIsLoginResponse(t *testi
 	if user["org_id"] != f.orgB.String() || user["role"] != "member" || user["username"] != "ada" {
 		t.Fatalf("user %v", user)
 	}
-	bearer, _, err := f.issuer.Verify(body["access_token"].(string))
+	bearer, _, err := eddsaBearer(t, body["access_token"].(string))
 	if err != nil || bearer.SessionID != created.issued.Session.ID {
 		t.Fatalf("access token %+v %v", bearer, err)
 	}

@@ -72,10 +72,6 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := edgetoken.NewSigner(probeKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	auth, err := policy.NewAuthenticator(verifier, newProbeStore(), quietLogger())
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +91,7 @@ func TestLimiterRoutesAnswerTheStoreFailureByItsKind(t *testing.T) {
 			{"Valkey availability reply", fmt.Errorf("rate limit script: %w", valkeyreply.Error(t, "LOADING Valkey is loading the dataset in memory")), http.StatusServiceUnavailable, `{"detail":{"message":"Authentication service unavailable"}}`},
 		} {
 			t.Run(route.name+"/"+c.kind, func(t *testing.T) {
-				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier, Signer: signer,
+				deps := Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, quietLogger()), Verifier: verifier,
 					Limits: failingLimitStore{failID: route.limitID, err: c.err}}
 				cfg := apiTestConfig()
 				cfg.CORSAllowedOrigins = []string{"https://app.example"}

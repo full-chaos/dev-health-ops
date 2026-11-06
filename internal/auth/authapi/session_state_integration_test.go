@@ -86,10 +86,7 @@ func TestSessionStateReadsAuthServicesOwnDecisionAgainstRealPostgres(t *testing.
 	absolute := create(store(life, 0), user, &org)
 	idle := create(store(0, life), user, &org)
 
-	issuer, err := NewIssuer(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	issuer := newTestIssuer(t)
 	rec, err := newRecorder(slog.New(slog.DiscardHandler), sdkmetric.NewMeterProvider().Meter("test"))
 	if err != nil {
 		t.Fatal(err)

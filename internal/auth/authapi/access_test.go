@@ -248,7 +248,7 @@ func (failingKeys) KeySet(context.Context) (token.KeySet, error) {
 }
 
 func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestTheLegacyHS256TokenIsAcceptedOnlyOnARowThatOptsIn(t *testing.T) {
 // is planted; the inventory's refusal is TestEveryHS256TokenIsRefusedOnTheSessionRows.
 func TestALegacyTokenKeepsItsOwnRefusalReason(t *testing.T) {
 	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
-	hs, err := NewIssuer(strings.Repeat("z", 40), testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(strings.Repeat("z", 40), testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,11 @@ func TestAnIssuerWithoutAnAccessCheckRefusesTheEdDSATokenAsBefore(t *testing.T) 
 	signer, _, _ := fileSigner(t)
 	issuer := newEdDSAIssuer(t, signer, AccessTokenAudience)
 	f := newFixtureWith(t, issuer)
-	r := f.do(http.MethodGet, "/v1/sessions/current", "", f.bearer(f.grant()))
+	token, err := f.issuer.Access(f.grant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := f.do(http.MethodGet, "/v1/sessions/current", "", map[string]string{"Authorization": "Bearer " + token})
 	expectError(t, r, http.StatusUnauthorized, "bad_signature")
 }
 
@@ -407,7 +411,7 @@ func TestEveryHS256TokenIsRefusedOnTheSessionRows(t *testing.T) {
 	api.Aud, api.Scope = "dev-health-api", "api:access"
 	expectError(t, a.do(http.MethodGet, "/v1/sessions/current", "", a.signClaims(api)), http.StatusUnauthorized, "audience")
 
-	hs, err := NewIssuer(testSecret, testIssuer, contracts.PlatformAPIAudience)
+	hs, err := newLegacyMinter(testSecret, testIssuer, contracts.PlatformAPIAudience)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +526,7 @@ func TestChangePasswordWithAnEdDSABearerReturnsAnEdDSATokenOfTheNewSession(t *te
 func TestUnderTheEdDSAClassTheLegacyTokenKeepsGoAPIsAudience(t *testing.T) {
 	a := newAccessFixtureWith(t, []accessverify.Row{{Service: AccessService, Profile: "GET /v1/sessions/current", AcceptsUser: true, LegacyHS256: true}}, nil)
 	for audience, want := range map[string]int{contracts.PlatformAPIAudience: http.StatusOK, "query-api": http.StatusUnauthorized, AccessTokenAudience: http.StatusUnauthorized} {
-		hs, err := NewIssuer(testSecret, testIssuer, audience)
+		hs, err := newLegacyMinter(testSecret, testIssuer, audience)
 		if err != nil {
 			t.Fatal(err)
 		}

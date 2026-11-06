@@ -10,20 +10,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
 // With no session issuer (AUTH_PROXY_SESSIONS off) the sign-in routes answer 503 naming AUTH_PROXY_SESSIONS;
 // go-api mints no login token pair itself (CHAOS-13155).
 func TestSessionsOffAnswers503NamingTheFlagOnEverySignInRoute(t *testing.T) {
-	signer, err := edgetoken.NewSigner("sso-off-test-signing-key-0123456789abcdef", "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
 	locals := map[string]http.Handler{}
 	routes := Routes(Deps{
 		Pool: &pgxpool.Pool{}, Guard: policy.NewGuard(&policy.Authenticator{}, slog.New(slog.DiscardHandler)),
-		StateSecret: "sso-off-test-state-secret-0123456789abcdef", Signer: signer,
+		StateSecret: "sso-off-test-state-secret-0123456789abcdef",
 		Inner: func(pattern string, local http.Handler) http.Handler {
 			locals[pattern] = local
 			return local

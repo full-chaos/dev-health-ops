@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
@@ -65,22 +66,6 @@ func teamKeyedMetricsDDL(t *testing.T) []string {
 		}
 	}
 	return statements
-}
-
-// TestSessionRoutesMatchGolden replays the session scenario against the Go
-// routes alone and compares every answer and row set with the Python
-// answers the venue oracle recorded.
-func TestSessionRoutesMatchGolden(t *testing.T) {
-	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
-	// the header's first hop. Trust this test's loopback peer so both planes agree.
-	t.Setenv("TRUSTED_PROXIES", "127.0.0.1,::1")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	pg, server, specs := st.pg, st.server, st.specs
-
-	target := sessionscenario.Target{BaseURL: server.URL, PostgresURI: pg.URI, ResetLimits: st.openWindows}
-	t.Log("\n" + sessionscenario.RunTarget(t, ctx, target, sessionscenario.MintTokens(t, specs)))
 }
 
 // TestSessionCorpusExternalTarget replays the same corpus against the server at
@@ -209,8 +194,11 @@ func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Conf
 	}
 	oauth := oauthprovider.NewClient()
 	oauth.Endpoints = sessionscenario.ProviderEndpoints(fake.URL)
+	if issuer == nil {
+		issuer = stubIssuer{}
+	}
 	routes := session.Routes(session.Deps{Pool: routesPool, Guard: policy.NewGuard(auth, logger), Auth: auth, Verifier: verifier,
-		Signer: signer, Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
+		Mail: mail, ClickHouse: chConn, Limits: httpapi.NewMemoryCounters(limiterNow), Write: apiservice.WriteError, OAuth: oauth, Logger: logger,
 		Issuer: issuer, Provision: provision})
 	mux := http.NewServeMux()
 	for _, route := range routes {
@@ -223,72 +211,10 @@ func startStackProvisioned(t *testing.T, ctx context.Context, mail authmail.Conf
 		openWindows: func() { limiterOffset.Add(int64(16 * time.Minute)) }}
 }
 
-// Concurrent refreshes of one token serialize on the token row (FOR
-// UPDATE, as find_by_hash_for_update): one request rotates it, every other
-// one waits, then finds it just rotated and answers the same successor.
-// Without the row lock several requests rotate it and hand out different
-// successors.
-func TestConcurrentRefreshesShareOneSuccessor(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	st := startStack(t, ctx)
-	post := func(path, body string) (int, string) {
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, st.server.URL+path, strings.NewReader(body))
-		if err != nil {
-			t.Error(err)
-			return 0, ""
-		}
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("X-Forwarded-For", "203.0.113.9")
-		response, err := http.DefaultClient.Do(request)
-		if err != nil {
-			t.Error(err)
-			return 0, ""
-		}
-		defer response.Body.Close()
-		raw, _ := io.ReadAll(response.Body)
-		return response.StatusCode, string(raw)
-	}
-	status, body := post("/api/v1/auth/login", `{"email": "alice@example.com", "password": "`+sessionscenario.Password+`"}`)
-	if status != http.StatusOK {
-		t.Fatalf("login: %d %s", status, body)
-	}
-	refresh := sessionscenario.Field(body, "refresh_token")
+// stubIssuer stands in for auth-service's issue route when a stack names no issuer: it hands out an opaque pair and
+// writes nothing, so a route that needs a session still answers.
+type stubIssuer struct{}
 
-	const racers = 8
-	jtis := make(chan string, racers)
-	start := make(chan struct{})
-	done := make(chan struct{}, racers)
-	for range racers {
-		go func() {
-			defer func() { done <- struct{}{} }()
-			<-start
-			status, body := post("/api/v1/auth/refresh", `{"refresh_token": "`+refresh+`"}`)
-			if status != http.StatusOK {
-				t.Errorf("refresh: %d %s", status, body)
-				return
-			}
-			jtis <- sessionscenario.JTIOf(sessionscenario.Field(body, "refresh_token"))
-		}()
-	}
-	close(start)
-	for range racers {
-		<-done
-	}
-	close(jtis)
-	seen := map[string]int{}
-	for jti := range jtis {
-		seen[jti]++
-	}
-	if len(seen) != 1 {
-		t.Fatalf("racing refreshes handed out %d different successors: %v", len(seen), seen)
-	}
-	var rows int
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM refresh_tokens rt JOIN users u ON u.id = rt.user_id
-WHERE u.email = 'alice@example.com'`).Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	if rows != 2 {
-		t.Fatalf("alice has %d refresh-token rows, want the original and one successor", rows)
-	}
+func (stubIssuer) Issue(context.Context, *http.Request, sessionissue.Request) (sessionissue.Pair, error) {
+	return sessionissue.Pair{Access: "stub-access-" + uuid.NewString(), Refresh: "stub-refresh-" + uuid.NewString(), ExpiresIn: 3600}, nil
 }

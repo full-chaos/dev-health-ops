@@ -44,7 +44,7 @@ func newDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: hs256Issuer(t)}
+	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: newTestIssuer(t)}
 	for _, user := range []uuid.UUID{l.actor, l.target} {
 		if _, err := p.admin.Exec(ctx, `INSERT INTO public.users
 	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
@@ -113,6 +113,14 @@ func (l *delegatedLive) bearerRoutes(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 	return serveRoutes(routes)
+}
+
+// legacyToken is go-api's retired HS256 token for the delegated session id: the bearer the session routes and go-api's
+// authenticator still verify.
+func (l *delegatedLive) legacyToken(t *testing.T, id uuid.UUID) string {
+	t.Helper()
+	return legacyAccess(t, Grant{PrincipalID: l.target, OrganizationID: &l.org, Role: "member", SessionID: id, Actor: &l.actor,
+		User: UserState{Email: "d-" + l.target.String()[:8] + "@example.test", IsActive: true, TokenVersion: delegatedTokenVersion}})
 }
 
 func (l *delegatedLive) body() string {
@@ -217,7 +225,8 @@ func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
 	server := l.server(t)
-	id, access := l.start(t, server)
+	id, _ := l.start(t, server)
+	access := l.legacyToken(t, id)
 	user, err := l.authenticator.Authenticate(ctx, access)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -237,7 +246,8 @@ func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
-	_, access := l.start(t, l.server(t))
+	id, _ := l.start(t, l.server(t))
+	access := l.legacyToken(t, id)
 	if _, err := l.store.Revoke(ctx, l.base, session.Actor{PrincipalID: &l.actor}); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
@@ -250,7 +260,8 @@ func TestADelegatedBearerIsDeniedOverARealRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	l := newDelegatedLive(t, ctx)
-	id, access := l.start(t, l.server(t))
+	id, _ := l.start(t, l.server(t))
+	access := l.legacyToken(t, id)
 	routes := l.bearerRoutes(t)
 	header := map[string]string{"Authorization": "Bearer " + access}
 	request := func(method, path string) int {

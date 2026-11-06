@@ -31,7 +31,7 @@ func TestAccessTokenLifetimeRendersForEdDSAOnly(t *testing.T) {
 	}
 
 	for name, args := range map[string][]string{
-		"hs256_compat with a lifetime": {"--set", "authService.accessToken.class=" + authconfig.AccessClassHS256Compat, "--set", "authService.accessToken.lifetime=10m"},
+		"hs256_compat with a lifetime": {"--set", "authService.accessToken.class=hs256_compat", "--set", "authService.accessToken.lifetime=10m"},
 		"eddsa with 4m":                append(append([]string{}, eddsa...), "--set", "authService.accessToken.lifetime=4m"),
 		"eddsa with 61m":               append(append([]string{}, eddsa...), "--set", "authService.accessToken.lifetime=61m"),
 		"eddsa with 90s":               append(append([]string{}, eddsa...), "--set", "authService.accessToken.lifetime=90s"),

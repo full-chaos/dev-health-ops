@@ -19,13 +19,11 @@ internal/api/policy/principal.go	User.Holds	1
 internal/api/session/changepassword.go	handlers.changePassword	1
 internal/api/session/login.go	handlers.loginInTx	1
 internal/api/session/onboarding.go	handlers.buildOnboardingState	2
-internal/api/session/refresh.go	refreshUserInfo	1
 internal/api/session/routes.go	handlers.me	1
 internal/api/session/routes.go	handlers.switchOrg	1
 internal/api/session/social.go	handlers.socialLogin	1
 internal/api/session/store.go	scanUsers	1
 internal/api/session/store.go	userRow.Holds	1
-internal/api/session/tokens.go	accessClaims	1
 internal/api/session/tokens.go	userInfo	1
 internal/apiservice/admin/guards.go	handlers.refuseSuperuserWrite	1
 internal/apiservice/admin/impersonation.go	handlers.startImpersonation	1
@@ -39,7 +37,6 @@ internal/apiservice/admin/userstore.go	pgStore.updateUser	4
 internal/apiservice/admin/userstore.go	scanFullUser	1
 internal/auth/authapi/compat.go	refreshUserInfo	1
 internal/auth/authapi/credentials.go	credentialHandlers.changed	1
-internal/auth/authapi/issuer.go	Issuer.hs256Access	1
 internal/auth/authapi/login.go	compatHandlers.loginSucceeded	1
 internal/auth/authapi/login.go	userInfo	1
 internal/auth/authapi/provisioning.go	provisioningHandlers.targetsRule	1

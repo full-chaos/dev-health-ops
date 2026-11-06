@@ -468,7 +468,11 @@ func TestChangePasswordRefusesAnImpersonatedBearer(t *testing.T) {
 	c := newCredFixture(t)
 	grant := c.grant()
 	other := uuid.NewString()
-	token, err := c.issuer.signer.Access(edgetoken.AccessClaims{
+	legacy, err := edgetoken.NewSigner(testSecret, testIssuer, testAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := legacy.Access(edgetoken.AccessClaims{
 		UserID: grant.PrincipalID.String(), Email: grant.User.Email, OrgID: grant.OrganizationID.String(), Role: grant.Role,
 		TokenVersion: grant.User.TokenVersion, SessionID: ptr(session.WireSessionID(grant.SessionID)), ImpersonatingUserID: &other,
 	}, time.Now(), uuid.NewString())

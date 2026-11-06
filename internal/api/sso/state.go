@@ -240,8 +240,7 @@ func pkceChallenge(verifier string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// newJTI is a random lowercase-hex identifier: the access/refresh tokens'
-// own jti (edgetoken.Signer.Access/Refresh), unrelated to oidcState.ID.
+// newJTI is a random lowercase-hex identifier, unrelated to oidcState.ID.
 func newJTI() (string, error) {
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/authconfig"
 )
 
 const hs256Issuer = "https://auth.example/v1"
@@ -75,36 +74,5 @@ func TestAuthServiceIssuerIsCheckedUnderEveryClass(t *testing.T) {
 				t.Errorf("class %q issuer %q: not refused (err %v)", class, issuer, err)
 			}
 		}
-	}
-}
-
-// auth-service starts with AUTH_WORKLOAD_EXCHANGE=true on the rendered hs256_compat issuer, and refuses without it.
-func TestAuthServiceStartsWithWorkloadExchangeOnHS256CompatIssuer(t *testing.T) {
-	exchange := map[string]string{
-		"AUTH_WORKLOAD_EXCHANGE":                     "true",
-		"AUTH_WORKLOAD_TRUST_DOMAIN":                 "cluster.example",
-		"AUTH_WORKLOAD_EXCHANGE_CLUSTER_ISSUER":      "https://kubernetes.default.svc",
-		"AUTH_WORKLOAD_EXCHANGE_KUBE_API_URL":        "https://kubernetes.default.svc",
-		"AUTH_WORKLOAD_EXCHANGE_KUBE_CA_FILE":        "/run/kube/ca.crt",
-		"AUTH_WORKLOAD_EXCHANGE_REVIEWER_TOKEN_FILE": "/run/kube/token",
-	}
-	load := func(docs []map[string]any) error {
-		service := authDoc(docs, "Deployment", "a-dev-health-auth-service")
-		lookup := containerLookup(t, service, "auth-service")
-		withExchange := func(name string) (string, bool) {
-			if v, ok := exchange[name]; ok {
-				return v, true
-			}
-			return lookup(name)
-		}
-		_, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: withExchange})
-		return err
-	}
-	if err := load(renderPhase(t, 2, issuerSets("hs256_compat", hs256Issuer)...)); err != nil {
-		t.Fatalf("auth-service refuses AUTH_WORKLOAD_EXCHANGE=true on the rendered issuer: %v", err)
-	}
-	err := load(renderPhase(t, 2, issuerSets("hs256_compat", "")...))
-	if err == nil || !strings.Contains(err.Error(), "AUTH_WORKLOAD_EXCHANGE=true needs AUTH_TOKEN_ISSUER_URL") {
-		t.Fatalf("without an issuer the start is not refused for it: %v", err)
 	}
 }

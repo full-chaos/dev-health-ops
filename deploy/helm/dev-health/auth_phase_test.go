@@ -367,6 +367,17 @@ func containerLookup(t *testing.T, doc map[string]any, container string) func(st
 	return func(name string) (string, bool) { v, ok := env[name]; return v, ok }
 }
 
+// withDefaultIssuer reads lookup, and answers the issuer URL a render without one leaves unset: the access token class
+// is eddsa by default and needs it, and the chart's own default names none.
+func withDefaultIssuer(lookup func(string) (string, bool)) func(string) (string, bool) {
+	return func(name string) (string, bool) {
+		if v, ok := lookup(name); ok || name != authconfig.EnvTokenIssuerURL {
+			return v, ok
+		}
+		return "https://auth.example", true
+	}
+}
+
 // authServiceOverrides maps the rendered auth-service args onto the settings they shadow, as the service's own flag
 // parser does (authconfig.Options); an unknown flag fails here as it fails the process.
 func authServiceOverrides(t *testing.T, doc map[string]any) map[string]string {
@@ -431,7 +442,7 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 				return
 			}
 			serviceLookup := containerLookup(t, service, "auth-service")
-			cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: serviceLookup})
+			cfg, err := authconfig.Load(authconfig.Spec{Overrides: authServiceOverrides(t, service), LookupEnv: withDefaultIssuer(serviceLookup)})
 			if err != nil {
 				t.Fatalf("auth-service refuses the rendered settings: %v", err)
 			}
@@ -474,7 +485,8 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 				}
 			}
 			issuer, _ := goLookup("AUTH_ACCESS_TOKEN_ISSUER")
-			if (cfg.Session.AccessClass == authconfig.AccessClassEdDSA) != (issuer != "") || (issuer != "" && issuer != cfg.TokenIssuerURL) {
+			renderedClass, _ := serviceLookup(authconfig.EnvAccessTokenClass)
+			if (renderedClass == authconfig.AccessClassEdDSA) != (issuer != "") || (issuer != "" && issuer != cfg.TokenIssuerURL) {
 				t.Errorf("token class %s with issuer %q, go-api verifies issuer %q", cfg.Session.AccessClass, cfg.TokenIssuerURL, issuer)
 			}
 		})

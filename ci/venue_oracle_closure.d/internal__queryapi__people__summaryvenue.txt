@@ -42,6 +42,7 @@ internal/pythonparity/emailvalidator
 internal/pythonparity/pyidna
 internal/pythonparity/pyunicodedata
 internal/queryapi/activeteams
+internal/queryapi/chclient
 internal/queryapi/deltarule
 internal/queryapi/linkeditems
 internal/queryapi/linkscope

@@ -13,7 +13,7 @@ The group `auth_push_projection` in `alerts/rules.yml` holds five rules on the p
 
 ## Before you start
 
-- The rules `PushProjectionParkedGap` and `PushProjectionFinalRows` read gauges that the projection reader publishes today. The rules `PushCredentialProjectionDrift`, `PushCredentialProjectionDriftLive` and `PushReconcileNotRunning` read series of the reconcile probe (`devhealth_auth_push_reconcile_drift` and `devhealth_auth_push_reconcile_runs_total`). The probe is off until `PUSH_RECONCILE_PROBE=on` is set on the worker. Until then these three rules read no data and stay inactive.
+- The rules `PushProjectionParkedGap` and `PushProjectionFinalRows` read the gauges `devhealth_auth_push_projection_parked_rows` and `devhealth_auth_push_projection_final_rows`. Only an auth-service replica with `AUTH_PUSH_PROJECTION=on` runs the projection reader and publishes them (the default is off). Until that flag is on, these two rules read no data and stay inactive. The rules `PushCredentialProjectionDrift`, `PushCredentialProjectionDriftLive` and `PushReconcileNotRunning` read series of the reconcile probe (`devhealth_auth_push_reconcile_drift` and `devhealth_auth_push_reconcile_runs_total`). The probe is off until `PUSH_RECONCILE_PROBE=on` is set on the worker. Until then these three rules read no data and stay inactive.
 - The notification policy of the SigNoz org must send alerts with the label `team = platform` to the `accounts-email` channel. The JSON names no channel.
 
 ## Step 1: load the five rules

@@ -84,11 +84,82 @@ func TestAuthGovulncheck(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), &out, &errb)
+			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), nil, &out, &errb)
 			if rc != c.rc || !strings.Contains(out.String(), c.stdout) || !strings.Contains(errb.String(), c.stderr) {
 				t.Fatalf("rc=%d out=%q err=%q", rc, out.String(), errb.String())
 			}
 		})
+	}
+}
+
+func TestAuthGovulncheckExceptions(t *testing.T) {
+	const hdr = `{"config":{}}` + "\n"
+	finding := func(osv, mod, ver, fixed string) string {
+		f := ""
+		if fixed != "" {
+			f = `"fixed_version":"` + fixed + `",`
+		}
+		return `{"finding":{"osv":"` + osv + `",` + f + `"trace":[{"module":"` + mod + `","version":"` + ver + `","function":"F"}]}}`
+	}
+	row := []cigates.VulnException{{OSV: "GO-9", Module: "m/saml", Version: "v0.5.1", Ticket: "CHAOS-1", Reason: "dark"}}
+	cases := []struct {
+		name, in string
+		rows     []cigates.VulnException
+		rc       int
+		stdout   string
+		stderr   string
+	}{
+		{"excepted id passes with a WARN", hdr + finding("GO-9", "m/saml", "v0.5.1", ""), row, 0, "0 reachable\nauth govulncheck: 1 excepted\n", "WARN excepted GO-9 m/saml@v0.5.1 (CHAOS-1)"},
+		{"same id at another version fails", hdr + finding("GO-9", "m/saml", "v0.5.2", ""), row, 1, "1 reachable", "reachable GO-9 m/saml@v0.5.2"},
+		{"same id in another module fails", hdr + finding("GO-9", "m/other", "v0.5.1", ""), row, 1, "1 reachable", "reachable GO-9 m/other@v0.5.1"},
+		{"unknown id fails", hdr + finding("GO-8", "m/saml", "v0.5.1", ""), row, 1, "1 reachable", "reachable GO-8"},
+		{"fixed version present fails", hdr + finding("GO-9", "m/saml", "v0.5.1", "v0.5.2"), row, 1, "1 reachable", "the exception (CHAOS-1) ends now"},
+		{"excepted plus unknown fails", hdr + finding("GO-9", "m/saml", "v0.5.1", "") + finding("GO-8", "m/x", "v1", ""), row, 1, "1 reachable", "reachable GO-8"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			rc := cigates.AuthGovulncheck(strings.NewReader(c.in), c.rows, &out, &errb)
+			if rc != c.rc || !strings.Contains(out.String(), c.stdout) || !strings.Contains(errb.String(), c.stderr) {
+				t.Fatalf("rc=%d out=%q err=%q", rc, out.String(), errb.String())
+			}
+		})
+	}
+}
+
+func TestReadVulnExceptions(t *testing.T) {
+	good := "# c\n\nGO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark\n"
+	rows, err := cigates.ReadVulnExceptions(strings.NewReader(good))
+	if err != nil || len(rows) != 1 || rows[0].OSV != "GO-9" || rows[0].Version != "v0.5.1" || rows[0].Ticket != "CHAOS-1" {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	for name, bad := range map[string]string{
+		"too few columns":  "GO-9\tm/saml\tv0.5.1\tCHAOS-1\n",
+		"too many columns": "GO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark\t2026-12-01\n",
+		"empty column":     "GO-9\tm/saml\t\tCHAOS-1\tdark\n",
+		"empty ticket":     "GO-9\tm/saml\tv0.5.1\t\tdark\n",
+		"missing ticket":   "GO-9\tm/saml\tv0.5.1\tdark\n",
+		"padded column":    "GO-9\t m/saml\tv0.5.1\tCHAOS-1\tdark\n",
+		"not a GO id":      "CVE-1\tm/saml\tv0.5.1\tCHAOS-1\tdark\n",
+		"duplicate row":    good + "GO-9\tm/saml\tv0.5.1\tCHAOS-2\tagain\n",
+		"spaces not tabs":  "GO-9 m/saml v0.5.1 CHAOS-1 dark\n",
+		"indented comment": " # not a whole-line comment\n",
+		"trailing comment": "GO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark # x\t\n",
+	} {
+		if _, err := cigates.ReadVulnExceptions(strings.NewReader(bad)); err == nil {
+			t.Errorf("%s: malformed rows must fail closed", name)
+		}
+	}
+}
+
+func TestAuthVulnExceptionsFileIsWellFormed(t *testing.T) {
+	f, err := os.Open("../../../ci/auth-vuln-exceptions.tsv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := cigates.ReadVulnExceptions(f); err != nil {
+		t.Fatal(err)
 	}
 }
 

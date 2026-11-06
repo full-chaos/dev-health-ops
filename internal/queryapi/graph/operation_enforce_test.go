@@ -134,3 +134,23 @@ func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-13161: a root field's repository ceiling comes from its scope. A request whose ingress set no scope reads
+// nothing (fail closed); Legacy and an organization-wide allow carry no ceiling.
+func TestRootCeilingFollowsTheScope(t *testing.T) {
+	ceiling := func(scope pepgate.Scope) (bool, int) {
+		c, err := rootCeiling(authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: scope}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Restricted(), len(c.IDs())
+	}
+	if restricted, ids := ceiling(pepgate.Scope{}); !restricted || ids != 0 {
+		t.Fatalf("no scope: restricted %t with %d ids, want restricted to nothing", restricted, ids)
+	}
+	for name, scope := range map[string]pepgate.Scope{"legacy": pepgate.Legacy("org-1"), "organization": pepgate.Organization("org-1")} {
+		if restricted, _ := ceiling(scope); restricted {
+			t.Fatalf("%s: restricted, want no ceiling", name)
+		}
+	}
+}

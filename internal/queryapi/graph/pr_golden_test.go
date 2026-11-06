@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 )
 
@@ -240,7 +241,7 @@ func TestPrMatchesTheFrozenGolden(t *testing.T) {
 
 			client := &prGoldenClient{c: tc}
 			r := &Resolver{ClickHouse: client}
-			ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+			ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 			got, err := r.Query().Pr(ctx, "org-argument-ignored", tc.ID)
 			if err != nil {
 				t.Fatalf("Pr: %v", err)

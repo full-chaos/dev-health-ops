@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 const testRepoID = "11111111-1111-1111-1111-111111111111"
@@ -168,7 +169,7 @@ func TestPr_RejectsEmptyOrgIDClaim(t *testing.T) {
 func TestPr_InvalidIDReturnsNilWithoutError(t *testing.T) {
 	ch := &fakePrCHClient{}
 	r := &Resolver{ClickHouse: ch}
-	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 	got, err := r.Query().Pr(ctx, "org-1", "not-a-valid-pr-id")
 	if err != nil {
 		t.Fatalf("expected no error for an unparsable id, got %v", err)
@@ -191,7 +192,7 @@ func TestPr_InvalidIDReturnsNilWithoutError(t *testing.T) {
 func TestPr_UnknownPRReturnsNilWithoutError(t *testing.T) {
 	ch := &fakePrCHClient{responses: []*fakePrRowScanner{emptyPrRowScanner}}
 	r := &Resolver{ClickHouse: ch}
-	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 	got, err := r.Query().Pr(ctx, "org-1", testRepoID+"#pr999")
 	if err != nil {
 		t.Fatalf("expected no error for an unknown PR, got %v", err)
@@ -229,7 +230,7 @@ func TestPr_FullyPopulatesEveryField(t *testing.T) {
 		}},
 	}}
 	r := &Resolver{ClickHouse: ch}
-	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+	ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 
 	got, err := r.Query().Pr(ctx, "org-1", testRepoID+"#pr42")
 	if err != nil {
@@ -343,7 +344,7 @@ func TestPr_FlagStates(t *testing.T) {
 				{rows: [][]any{{"issue:OPS-1", 0.9, "native", "token-a"}}}, // call 3: ResolveLinkedIssues
 			}}
 			r := &Resolver{ClickHouse: ch}
-			ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1"})
+			ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")})
 
 			got, err := r.Query().Pr(ctx, "org-1", testRepoID+"#pr42")
 			if err != nil {

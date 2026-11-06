@@ -208,3 +208,13 @@ func TestPoolRecordedClassesARefusedDialThroughTheDriver(t *testing.T) {
 		t.Fatalf("error = %v, want a dial_refused ReadError with no driver text", err)
 	}
 }
+
+func TestRetryBoundHoldsAStartAtMostEightSeconds(t *testing.T) {
+	var sum time.Duration
+	for _, d := range retryDelays {
+		sum += d
+	}
+	if retryBudget > 8*time.Second || sum >= retryBudget || len(retryDelays) == 0 {
+		t.Fatalf("budget %v, delays %v (sum %v): the retries must fit inside at most 8 s", retryBudget, retryDelays, sum)
+	}
+}

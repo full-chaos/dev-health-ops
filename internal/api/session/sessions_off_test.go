@@ -31,7 +31,7 @@ func TestSessionsOffAnswers503NamingTheFlagOnEveryMintingRoute(t *testing.T) {
 		}
 		rec := httptest.NewRecorder()
 		local.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, pattern, strings.NewReader("{}")))
-		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "AUTH_PROXY_SESSIONS") {
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "AUTH_PROXY_SESSIONS") || !strings.Contains(rec.Body.String(), `"reason_code":"config_missing"`) {
 			t.Errorf("%s: status %d body %q, want 503 naming AUTH_PROXY_SESSIONS", pattern, rec.Code, rec.Body.String())
 		}
 		if strings.Contains(rec.Body.String(), "access_token") {

@@ -291,7 +291,7 @@ func (h handlers) sessionsOff() bool { return h.StateSecret != "" && h.Issuer ==
 // refuseSessionsOff answers 503 config_missing naming AUTH_PROXY_SESSIONS: go-api mints no login token pair.
 func (h handlers) refuseSessionsOff(w http.ResponseWriter, r *http.Request) {
 	h.Logger.ErrorContext(r.Context(), "sso route refused: AUTH_PROXY_SESSIONS is not on", "path", r.Pattern)
-	policy.WriteDetail(w, http.StatusServiceUnavailable, policy.ErrorDetail(sessionissue.SessionsOffText), nil)
+	policy.WriteConfigMissing(w, sessionissue.SessionsOffText)
 }
 
 func newHandlers(deps Deps) handlers {

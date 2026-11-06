@@ -112,6 +112,8 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/jobs/report/query.go":                          {"dedupFromSource", "the map from a registry table name to its schema table; every chart source comes from dedupFromSource (sourceFrom)"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
 	"internal/queryapi/people/metricconfig.go":               {"liveWhere", "the person metric configs: every read of their tables takes its clause from liveWhere"},
+	"internal/queryapi/people/scope.go":                      {"liveWhere", "the ceiling term and the recompute switch of a read by table name (termFor, recomputed), no query: the person metric reads take their clause from liveWhere"},
+	"internal/queryapi/quadrant/linkedrepo.go":               {"quadrantMetricQuery", "isWorkItemUserSpec picks the specs a ceiling reads from the recompute (linkeditems), no query: the spec read is quadrantMetricQuery"},
 	"internal/queryapi/analytics/filtertranslation.go":       {"", "an error message that names the tables, no query"},
 }
 

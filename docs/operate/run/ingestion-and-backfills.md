@@ -73,10 +73,9 @@ A GitHub work-items unit lists issues in updated order, oldest first
 (`sort=updated&direction=asc` with `since`), and stops at the first issue
 updated at or after the window end, so a bounded window completes however many
 newer issues the repository holds; an issue updated exactly at the end belongs
-to the next window. This changes the order of the request compared with the
-frozen Python provider, which read GitHub's default order (created, newest first)
-and skipped the newer items without stopping; the issues written per window are
-the same. Because an update-ordered list changes while it is read (an edited
+to the next window. This changes the order of the request compared with GitHub's default order (created, newest first), which would
+read and skip every newer item without stopping; the issues written per window
+are the same. Because an update-ordered list changes while it is read (an edited
 issue moves to the end and shifts the rest up), the unit pages by key: each
 request asks for one page since the update time of the last issue it read
 (inclusive, repeats are de-duplicated by issue number), and only a tie of more
@@ -104,7 +103,7 @@ Consequences to expect when reading run state:
   The advancing watermark is the observable evidence of progress: read the
   dataset's latest successful source timestamp across consecutive runs rather
   than inferring coverage from run status. Surfacing this lag directly is
-  tracked separately as CHAOS-3430.
+  not yet surfaced directly.
 - Catch-up is paced by the sync schedule. A heavy dataset that is far behind
   does not accelerate; to close a wide historical span faster, run a bounded
   backfill for that period instead.

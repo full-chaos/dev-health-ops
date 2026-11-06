@@ -288,6 +288,59 @@ VALUES ($1, 'llmpurpose-admin@example.com', true, true, false, 0, now(), now())`
 		}
 	})
 
+	t.Run("typesafe is savable only as the categorize override, with a listed model, no base_url and its own key", func(t *testing.T) {
+		const tsKey = "placeholder-typesafe-key-0123456789"
+		const clefBase = "https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai"
+		const clefToken = "placeholder-clef-token-0123456789"
+		categorize := func(payload string) string {
+			return strings.Replace(payload, `{"provider"`, `{"purpose":"categorize","provider"`, 1)
+		}
+		ts := func(model, extra string) string {
+			return fmt.Sprintf(`{"provider":"typesafe","model":%q,"api_key":%q%s}`, model, tsKey, extra)
+		}
+		if status, resp := call("PUT", route, categorize(fmt.Sprintf(`{"provider":"clef","model":"clef","api_key":%q,"base_url":%q,"categorize_byo":true}`, clefToken, clefBase))); status != 200 {
+			t.Fatalf("categorize clef with the opt-in: %d %v", status, resp)
+		}
+		for _, c := range []struct {
+			name, payload, code string
+			status              int
+		}{
+			{"default row", ts("jev-1.13.0", ""), "provider_not_for_purpose", 400},
+			{"explain override", strings.Replace(ts("jev-1.13.0", ""), `{"provider"`, `{"purpose":"explain","provider"`, 1), "provider_not_for_purpose", 400},
+			{"latest alias", categorize(ts("jev-latest", "")), "categorize_byo_model_unsupported", 400},
+			{"preview alias", categorize(ts("jev-preview", "")), "categorize_byo_model_unsupported", 400},
+			{"unlisted model", categorize(ts("jev-1.14.0", "")), "categorize_byo_model_unsupported", 400},
+			{"base url", categorize(ts("jev-1.13.0", `,"base_url":"https://api.typesafe.ai"`)), "invalid_base_url", 400},
+		} {
+			status, resp := call("PUT", route, c.payload)
+			if status != c.status {
+				t.Fatalf("%s: status=%d body=%v, want %d", c.name, status, resp, c.status)
+			}
+			if c.code != "" {
+				if detail, _ := resp["detail"].(map[string]any); detail["error"] != c.code {
+					t.Fatalf("%s: body=%v, want %s", c.name, resp, c.code)
+				}
+			}
+		}
+		var provider string
+		if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'purpose:categorize:provider'`, org.String()).Scan(&provider); err != nil || provider != "clef" {
+			t.Fatalf("a refused typesafe write changed the override: %q %v", provider, err)
+		}
+		if status, resp := call("PUT", route, categorize(ts("jev-1.13.0", ""))); status != 200 || resp["provider"] != "typesafe" || resp["model"] != "jev-1.13.0" {
+			t.Fatalf("categorize typesafe with its key: %d %v", status, resp)
+		}
+		var secret string
+		if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE org_id = $1 AND category = 'llm' AND key = 'purpose:categorize:api_key'`, org.String()).Scan(&secret); err != nil || strings.Contains(secret, "placeholder-typesafe-key") {
+			t.Fatalf("the typesafe key is stored in the clear or missing: %v", err)
+		}
+		if status, resp := call("PUT", route, categorize(`{"provider":"typesafe","model":"jev-1.13.0"}`)); status != 200 {
+			t.Fatalf("same provider with no new key: %d %v, want 200", status, resp)
+		}
+		if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE org_id = $1 AND category = 'llm' AND (key LIKE 'purpose:categorize:%' OR key = 'categorize_byo_enabled')`, org.String()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("an unknown purpose is refused", func(t *testing.T) {
 		if status, _ := call("PUT", route, `{"purpose":"summarize","provider":"openai","model":"m"}`); status != 400 {
 			t.Fatalf("PUT status=%d, want 400", status)

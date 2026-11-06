@@ -13,7 +13,7 @@ import (
 // gatedPlaneHandler builds the process's one PDP gate from QUERY_API_PDP_MODE (off asks nothing; a bad setting never
 // fails the start, the gate then refuses every PDP-gated request) and the plane handler that carries it.
 func gatedPlaneHandler(lookup func(string) (string, bool), mux *http.ServeMux) (http.Handler, *pdp.Gate) {
-	gate := pdp.FromSettings(lookup, slog.Default())
+	gate := pdp.FromSettingsWithRows(lookup, slog.Default(), graphQLShadowRows())
 	return planeHandler(mux, gate), gate
 }
 

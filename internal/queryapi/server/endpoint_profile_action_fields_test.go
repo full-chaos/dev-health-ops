@@ -438,7 +438,7 @@ var allOrgRoles = []string{"admin", "member", "owner", "viewer"}
 
 var legacyGuards = map[string]legacyGuard{
 	"rest-org": {orgRoles: allOrgRoles, proofs: []claimProof{
-		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return authctx.Claims{OrgID: claims.OrgID}, true"}},
+		{file: "rest_error_response.go", decl: "authenticateRESTRequest", needles: []string{"return legacyClaims(claims.OrgID), true"}},
 	}},
 	"internal-org": {orgRoles: allOrgRoles, proofs: []claimProof{
 		{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"OrgID: claims.OrgID"}},
@@ -706,11 +706,15 @@ func queryAPIRoleReads(t *testing.T) map[string]int {
 // Each count was read against its file: the legacy gates are datahealth.RequireOperator (admin.stats or the admin, owner,
 // operator roles), producttelemetry.RequirePlatformAdmin (admin.telemetry, no impersonation), the org-less platform
 // admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the MCP elevated-role refusal in
-// mcp_route.go, and the plumbing that copies the role into the claims or logs it.
+// mcp_route.go, and the plumbing that copies the role into the claims or logs it. graph/field_precheck.go and
+// graph/operation_shadow.go only copy the verified claims into the shadow's pre-checks and observations (the shadow
+// changes no decision).
 var knownQueryAPIRoleReads = map[string]int{
 	"authctx/authctx.go":                   1,
 	"datahealth/datahealth.go":             3,
+	"graph/field_precheck.go":              3,
 	"graph/operation_org_guard.go":         2,
+	"graph/operation_shadow.go":            2,
 	"graph/schema.resolvers.go":            3,
 	"internalidentity/internalidentity.go": 1,
 	"producttelemetry/platform.go":         2,

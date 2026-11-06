@@ -29,6 +29,7 @@ internal/auth/pushreconcile
 internal/auth/pushreconcile/pagereader
 internal/auth/pushreconcile/projectionreader
 internal/auth/pushreconcile/reconcilejob
+internal/auth/repoidentityevent
 internal/auth/repokey
 internal/auth/sessionid
 internal/authzenforce

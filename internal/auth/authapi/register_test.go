@@ -254,10 +254,12 @@ func TestRegisterRouteLogsNoSecretOrAddress(t *testing.T) {
 func TestRegisterParityTableNamesTheDivergentRows(t *testing.T) {
 	registerEnv(t, "")
 	rows := registerParityRows(t)
-	for id, kind := range map[string]string{"public_audit_row_user_registered": "divergent", "password_over_72_bytes": "stricter"} {
+	// public_audit_row_user_registered is same since CHAOS-11400: auth-service writes go-api's row (identity/local
+	// TestRegisterWritesGoAPIsPublicAuditRow).
+	for id, kind := range map[string]string{"public_audit_row_user_registered": "same", "password_over_72_bytes": "stricter"} {
 		row, ok := rows[id]
-		if !ok || row.kind != kind || row.reason == "" || row.reason == "-" {
-			t.Fatalf("parity table lacks the named %s row %q with a reason", kind, id)
+		if !ok || row.kind != kind || (kind != "same" && (row.reason == "" || row.reason == "-")) {
+			t.Fatalf("parity table lacks the named %s row %q (a stricter or divergent row needs a reason)", kind, id)
 		}
 	}
 }

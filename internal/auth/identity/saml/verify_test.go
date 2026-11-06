@@ -249,3 +249,34 @@ func TestSAMLRequestIDComesOnlyFromSignedXML(t *testing.T) {
 	r.CreateAttr("InResponseTo", "_id-of-another-browser")
 	wantRefused(t, idp, serialize(t, doc), saml.ReasonInResponseTo)
 }
+
+func TestSAMLNameIDMustBeOneAssertionNamespaceElement(t *testing.T) {
+	idp := newTestIdP(t)
+	const foreignNS = "urn:example:foreign"
+	resign := func(t *testing.T, mutate func(subject *etree.Element)) []byte {
+		t.Helper()
+		doc, r, a := idp.build(t, resp{unsignedAssertion: true})
+		mutate(a.FindElement("./Subject"))
+		signed := idp.sign(t, a, dsig.RSASHA256SignatureMethod)
+		r.RemoveChild(a)
+		r.AddChild(signed)
+		return serialize(t, doc)
+	}
+	foreign := func(subject *etree.Element) {
+		el := subject.CreateElement("NameID")
+		el.CreateAttr("xmlns", foreignNS)
+		el.SetText("attacker@example.test")
+	}
+	t.Run("control: unmodified re-signed assertion is accepted", func(t *testing.T) {
+		mustVerify(t, idp, resign(t, func(*etree.Element) {}))
+	})
+	t.Run("only a foreign-namespace NameID", func(t *testing.T) {
+		wantRefused(t, idp, resign(t, func(s *etree.Element) {
+			s.RemoveChild(s.FindElement("./NameID"))
+			foreign(s)
+		}), saml.ReasonNameID)
+	})
+	t.Run("assertion-namespace NameID plus a foreign one", func(t *testing.T) {
+		wantRefused(t, idp, resign(t, foreign), saml.ReasonNameID)
+	})
+}

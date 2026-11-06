@@ -124,8 +124,9 @@ var searchWorkArmAll = `SELECT
 // searchWorkArmLinked is the work arm under a repository ceiling (CHAOS-13087): a person is listed only when an item
 // linked to an allowed repository names them as its assignee. The user daily table holds no item and no repository.
 func searchWorkArmLinked(itemTerm string) string {
+	// assignee is Nullable(String): coalesce keeps the union column String, as the *string scan needs.
 	return `SELECT
-        assignee AS identity,
+        coalesce(assignee, '') AS identity,
         max(day) AS last_seen
     FROM work_item_cycle_times FINAL
     WHERE assignee != ''

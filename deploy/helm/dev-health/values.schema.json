@@ -158,6 +158,22 @@
           "type": "string",
           "enum": ["", "goApi", "owned"]
         },
+        "sso": {
+          "description": "OIDC and SAML sign-in through auth-service. A switch on needs phase >= 2, secretName and every key name its protocol reads.",
+          "type": "object",
+          "properties": {
+            "secretName": { "type": "string" },
+            "keys": {
+              "type": "object",
+              "properties": {
+                "stateKey": { "type": "string" },
+                "appBaseURL": { "type": "string" },
+                "encryptionKey": { "type": "string" },
+                "encryptionSalt": { "type": "string" }
+              }
+            }
+          }
+        },
         "ssoJit": {
           "description": "Render AUTH_SSO_JIT=true on auth-service. true needs authService.phase 4 with usersOwnedStage=owned.",
           "type": "boolean"

@@ -1,0 +1,18 @@
+{
+  "schema_version": "repository-identity-event.v1",
+  "aggregate_type": "repository_identity",
+  "aggregate_id": "00000000-0000-4000-8000-000000000001/github/123456789",
+  "event_type": "repository_identity.observed",
+  "idempotency_key": "repository_identity:00000000-0000-4000-8000-000000000001/github/123456789:1",
+  "created_at": "2026-11-05T08:00:01.123456Z",
+  "payload": {
+    "revision": 1,
+    "organization_id": "00000000-0000-4000-8000-000000000001",
+    "change": {
+      "provider": "github",
+      "provider_repo_id": "123456789",
+      "path": "Example-Org/Example-Repo",
+      "observed_at": "2026-11-05T08:00:00.000000Z"
+    }
+  }
+}

@@ -253,8 +253,9 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"eddsa trailing slash":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example/"), "needs authService.accessToken.issuerURL"},
 		"eddsa upper-case host":   {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://Auth.example"), "needs authService.accessToken.issuerURL"},
 		"link routes below 2":     {phaseArgs(1, "--set", "authService.socialLinkRoutes=true"), "authService.socialLinkRoutes needs authService.phase >= 2"},
-		"oidc on":                 {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true is refused"},
-		"saml on":                 {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true is refused"},
+		"oidc on no secret":       {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true needs authService.sso.secretName"},
+		"saml on no secret":       {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true needs authService.sso.secretName"},
+		"oidc on below 2":         {phaseArgs(1, "--set", "authService.sso.oidc=true", "--set", "authService.sso.secretName=a-sso"), "authService.sso.oidc=true needs go-api to reach auth-service: authService.phase >= 2"},
 	}
 	for _, key := range []string{"authService.enabled", "authService.usersOwned", "authService.orgsOwned"} {
 		for _, value := range []string{"true", "false"} {
@@ -336,6 +337,12 @@ func fakeSecret(t *testing.T, ref string) string {
 		return "svc_fake_session_issuer_token"
 	case key == "AUTH_VALKEY_URI":
 		return "redis://auth:pw@valkey:6379/1"
+	case key == "AUTH_SSO_STATE_KEY":
+		return strings.Repeat("s", 40)
+	case key == "SETTINGS_ENCRYPTION_KEY":
+		return base64.URLEncoding.EncodeToString([]byte(strings.Repeat("e", 32)))
+	case key == "APP_BASE_URL":
+		return "https://app.example.test"
 	case strings.HasPrefix(key, "SOCIAL_"):
 		return "social-" + strings.ToLower(key)
 	}
@@ -359,7 +366,7 @@ func containerLookup(t *testing.T, doc map[string]any, container string) func(st
 			switch {
 			case strings.HasPrefix(value, "value:"):
 				env[name] = strings.TrimPrefix(value, "value:")
-			case strings.HasPrefix(value, "secret:") && (strings.HasPrefix(name, "AUTH_") || strings.HasPrefix(name, "SOCIAL_")):
+			case strings.HasPrefix(value, "secret:") && (strings.HasPrefix(name, "AUTH_") || strings.HasPrefix(name, "SOCIAL_") || name == "SETTINGS_ENCRYPTION_KEY" || name == "APP_BASE_URL"):
 				env[name] = fakeSecret(t, value)
 			}
 		}

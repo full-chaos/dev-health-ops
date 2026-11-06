@@ -2312,7 +2312,7 @@ services:
   auth-session-keys-init:
     cap_add: [CHOWN]
     cap_drop: [ALL]
-    command: ['f=/run/auth/session/successor-key; [ -s "$$f" ] || { umask 077; head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n" > "$$f"; }; chown 65532:65532 /run/auth/session "$$f"; chmod 0700 /run/auth/session; chmod 0600 "$$f"']
+    command: ['chown 0:0 /run/auth/session; f=/run/auth/session/successor-key; [ -s "$$f" ] || { umask 077; head -c 32 /dev/urandom | base64 | tr "+/" "-_" | tr -d "=\n" > "$$f"; }; chown 0:0 "$$f"; chmod 0700 /run/auth/session; chmod 0600 "$$f"; chown 65532:65532 "$$f"; chown 65532:65532 /run/auth/session']
     entrypoint: [/bin/sh, -eu, -c]
     image: ${BIGBOY_ACR_POSTGRES_IMAGE:?BIGBOY_ACR_POSTGRES_IMAGE is required (the acr image pin of ci/bigboy/images.env, kept in _records/images.env)}
     network_mode: none
@@ -2561,6 +2561,7 @@ services:
         condition: service_completed_successfully
     environment:
       AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_AUTHORIZE_CALLER_SUBJECTS: ${AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT:-}
       AUTH_DATABASE_SCHEMA: auth
       AUTH_DATABASE_URI: host=postgres port=5432 user=devhealth_auth password='${AUTH_RUNTIME_DATABASE_PASSWORD:-devhealth_auth}' dbname=${POSTGRES_DB:-devhealth} sslmode=disable
       AUTH_JWT_AUDIENCE: dev-health-api
@@ -2574,6 +2575,7 @@ services:
       AUTH_SIGNING_KEY_ID: auth-signing-bigboy
       AUTH_TOKEN_ISSUER_URL: https://auth.bigboy.internal:8443
       AUTH_USERS_OWNED: 'false'
+      AUTH_VALKEY_URI: redis://valkey:6379/1
       AUTH_WORKLOAD_BOOTSTRAP: 'true'
       OTEL_ENABLED: 'false'
     healthcheck:

@@ -27,6 +27,7 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 		gate := pdp.FromContext(r.Context())
 		if principal.AccessClassOf(token) != principal.AccessClassUser {
 			gate.CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
+			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
 			return authctx.Claims{OrgID: claims.OrgID}, true
 		}
 		authorize := gate.Authorize
@@ -37,11 +38,13 @@ func authenticateRESTRouted(w http.ResponseWriter, r *http.Request, edgeVerifier
 			writePDPDenied(w, r, component, denied)
 			return authctx.Claims{}, false
 		}
+		observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
 		return authctx.Claims{OrgID: claims.OrgID}, true
 	}
 	var orgRequired *principal.OrgRequiredError
 	switch {
 	case errors.As(err, &orgRequired):
+		observeRESTShadow(r, token, "", orgRequired.Caller, orgRequired.Delegated, false)
 		policy.WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 	case policy.IsRefusal(err):
 		writeRESTUnauthorized(w, r, component, "Invalid or expired token")

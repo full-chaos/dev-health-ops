@@ -1,8 +1,8 @@
 // Package pdp is query-api's policy enforcement point: it asks auth-service's PDP (POST /v1/authorize) whether the
 // caller of a REST route may perform the route's catalog action, presenting query-api's own workload token.
 //
-// QUERY_API_PDP_MODE selects off (no call), shadow (call, count and compare, never deny) or enforce (a deny refuses
-// the request). A bad value, or shadow/enforce with a missing input, never fails the start: one ERROR names the
+// QUERY_API_PDP_MODE selects off (no call), shadow (the 5.12 shadow core asks beside the legacy check, counts and
+// compares, never denies) or enforce (a deny refuses the request). A bad value, or shadow/enforce with a missing input, never fails the start: one ERROR names the
 // variable, the config-invalid gauge is 1, and every request that would ask the PDP is refused as unavailable.
 package pdp
 
@@ -15,8 +15,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
@@ -26,6 +24,7 @@ import (
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/authprovision"
+	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 )
@@ -50,9 +49,9 @@ const (
 	ClassEnvelope = "effective_principal_envelope"
 
 	callTimeout    = 2 * time.Second
-	shadowInFlight = 32
 	unknownAction  = "unknown"
 	profileService = "dev-health-query-api"
+	restPrefix     = "/api/v1/"
 	meterName      = "github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 
 	exemptMetric        = "dev_health_query_api_pdp_exempt_total"
@@ -69,10 +68,6 @@ const (
 	ResultAllow         = "allow"
 	ResultDeny          = "deny"
 	ResultUnavailable   = "unavailable"
-	ResultMatch         = "match"
-	ResultMismatch      = "mismatch"
-	ResultError         = "error"
-	ResultDropped       = "dropped"
 	ResultNotConfigured = "not_configured"
 )
 
@@ -96,6 +91,9 @@ type Config struct {
 	Logger *slog.Logger
 	// Meter records the counters and gauges; nil is the global meter.
 	Meter metric.Meter
+	// Lookup reads the 5.12 shadow knobs (AUTH_SHADOW_PDP_SAMPLE, _MAX_IN_FLIGHT, _HIGH_RISK) in shadow mode; nil
+	// reads none, so every knob has its default.
+	Lookup func(string) (string, bool)
 }
 
 // Gate is the PEP of one process. A nil Gate is off.
@@ -103,10 +101,8 @@ type Gate struct {
 	mode    string
 	decider pep.Decider
 	actions map[string]string
-	slots   chan struct{}
 	logger  *slog.Logger
-	wg      sync.WaitGroup
-	logGate atomic.Int64
+	shadow  *policy.Shadow
 
 	exempt  metric.Int64Counter
 	results metric.Int64Counter
@@ -131,7 +127,7 @@ func FromSettings(lookup func(string) (string, bool), logger *slog.Logger) *Gate
 	if decider == nil {
 		return invalid(Config{Logger: logger}, variable)
 	}
-	return New(Config{Mode: mode, Decider: decider, Logger: logger})
+	return New(Config{Mode: mode, Decider: decider, Logger: logger, Lookup: lookup})
 }
 
 // newDecider builds the PEP client in go-api's form (#5605): the workload client over the origin of AUTH_PROXY_URL,
@@ -167,6 +163,9 @@ func New(cfg Config) *Gate {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Mode == "" {
+		cfg.Mode = ModeOff
+	}
 	switch {
 	case cfg.Mode == ModeOff:
 	case cfg.Mode != ModeShadow && cfg.Mode != ModeEnforce:
@@ -190,7 +189,7 @@ func build(cfg Config) *Gate {
 	if meter == nil {
 		meter = otel.Meter(meterName)
 	}
-	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger, slots: make(chan struct{}, shadowInFlight)}
+	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger}
 	if g.logger == nil {
 		g.logger = slog.Default()
 	}
@@ -205,10 +204,13 @@ func build(cfg Config) *Gate {
 		g.mode, g.decider = modeInvalid, nil
 	}
 	g.actions = actions
+	if g.mode == ModeShadow {
+		g.shadow = buildShadow(cfg, actions, g.logger)
+	}
 	g.exempt, _ = meter.Int64Counter(exemptMetric,
 		metric.WithDescription("Accepted callers of a PDP-gated route whose credential class is on the exempt list, by class and row action"))
 	g.results, _ = meter.Int64Counter(resultMetric,
-		metric.WithDescription("PDP asks of query-api by mode (shadow, enforce, invalid), result and row action"))
+		metric.WithDescription("PDP asks of query-api by mode (enforce, invalid), result and row action; shadow counts on the 5.12 counters"))
 	enabled, _ := meter.Int64Gauge(enabledMetric, metric.WithDescription("1 while the PDP gate is built in shadow or enforce mode, else 0"))
 	invalidGauge, _ := meter.Int64Gauge(configInvalidMetric,
 		metric.WithDescription("1 when QUERY_API_PDP_MODE is bad or a mode that is on misses an input: PDP-gated requests are refused"))
@@ -237,9 +239,65 @@ func (g *Gate) Mode() string {
 	return g.mode
 }
 
+// Shadow is the 5.12 shadow core a shadow-mode gate holds; nil in every other mode, and in shadow mode when a knob is
+// bad. The REST authentication hooks call its Observe with the legacy answer.
+func (g *Gate) Shadow() *policy.Shadow {
+	if g == nil {
+		return nil
+	}
+	return g.shadow
+}
+
+// buildShadow builds the shadow over the REST rows and the gate's own decider; a bad 5.12 knob is nil, after the
+// core's one ERROR naming the variable and its config-invalid gauge. It never fails the start.
+func buildShadow(cfg Config, actions map[string]string, logger *slog.Logger) *policy.Shadow {
+	rows, err := shadowRowsOf(actions)
+	if err != nil {
+		logger.Error("query-api pdp: the shadow rows do not build; the shadow is off", slog.String("variable", "rows"))
+		return nil
+	}
+	lookup := cfg.Lookup
+	if lookup == nil {
+		lookup = func(string) (string, bool) { return "", false }
+	}
+	return policy.ShadowFromEnv(lookup, policy.ShadowEnvDeps{Rows: rows, Logger: logger, On: true,
+		NewDecider: func() (pep.Decider, error) { return cfg.Decider, nil }})
+}
+
+// RESTShadowRows are the shadow's rows of an endpoint-profile document: every protected row of the REST routes
+// (path under /api/v1/) that names a catalog action, keyed by "METHOD /route". The GraphQL, /query and /buildinfo
+// rows are not REST rows.
+func RESTShadowRows(raw []byte) (map[string]policy.ShadowRow, error) {
+	actions, err := parseActions(raw)
+	if err != nil {
+		return nil, err
+	}
+	return shadowRowsOf(actions)
+}
+
+func shadowRowsOf(actions map[string]string) (map[string]policy.ShadowRow, error) {
+	rows := map[string]policy.ShadowRow{}
+	for key, action := range actions {
+		_, route, _ := strings.Cut(key, " ")
+		if !strings.HasPrefix(route, restPrefix) {
+			continue
+		}
+		row, err := policy.ShadowRowFor(action)
+		if err != nil {
+			return nil, fmt.Errorf("pdp rows: %s: %w", key, err)
+		}
+		rows[key] = row
+	}
+	if len(rows) == 0 {
+		return nil, errors.New("pdp rows: no REST row names an action")
+	}
+	return rows, nil
+}
+
 // Authorize asks the PDP whether the user access token bearer may perform the action of the row profile
 // ("METHOD /route") in the verified organization orgID. It returns a *DenyError only in enforce mode, or when the gate
-// is misconfigured; off and shadow return nil. Shadow asks in the background and never changes the answer.
+// is misconfigured; off and shadow return nil. Shadow asks nothing here: the REST hooks hand the legacy answer to
+// Shadow().Observe, which asks in the background and never changes the answer.
 func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) error {
 	if g == nil || g.mode == ModeOff {
 		return nil
@@ -253,12 +311,11 @@ func (g *Gate) Authorize(ctx context.Context, profile, bearer, orgID string) err
 		g.count(ctx, modeInvalid, ResultNotConfigured, label)
 		return &DenyError{Reason: pep.ReasonNotConfigured, Local: true}
 	}
-	org := strings.ToLower(orgID)
-	request := pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopeOrganization, ResourceKey: org, OrganizationID: org}
 	if g.mode == ModeShadow {
-		g.shadow(ctx, request, known, label)
 		return nil
 	}
+	org := strings.ToLower(orgID)
+	request := pep.Request{PrincipalReference: bearer, Action: action, ResourceType: policycatalog.ScopeOrganization, ResourceKey: org, OrganizationID: org}
 	if !known {
 		g.count(ctx, ModeEnforce, ResultUnavailable, label)
 		return &DenyError{Reason: pep.ReasonInvalidRequest, Local: true}
@@ -317,57 +374,10 @@ func runsOrgWide(o pep.Obligations, org, action string) bool {
 	return err == nil && a.RepositoryScope == policycatalog.RepositoryScopeNone
 }
 
-// shadow compares the PDP's answer with the legacy one, which has already allowed this caller.
-func (g *Gate) shadow(ctx context.Context, request pep.Request, known bool, label string) {
-	if !known {
-		g.count(ctx, ModeShadow, ResultError, label)
-		return
-	}
-	select {
-	case g.slots <- struct{}{}:
-	default:
-		g.count(ctx, ModeShadow, ResultDropped, label)
-		return
-	}
-	detached := context.WithoutCancel(ctx)
-	g.wg.Add(1)
-	go func() {
-		defer g.wg.Done()
-		defer func() { <-g.slots }()
-		defer func() {
-			if recover() != nil {
-				g.count(detached, ModeShadow, ResultError, label)
-			}
-		}()
-		call, cancel := context.WithTimeout(detached, callTimeout)
-		defer cancel()
-		decision := g.decider.Decide(call, request)
-		switch {
-		case decision.Allowed():
-			g.count(detached, ModeShadow, ResultMatch, label)
-		case decision.Local():
-			g.count(detached, ModeShadow, ResultError, label)
-		default:
-			g.count(detached, ModeShadow, ResultMismatch, label)
-			if g.logAllowed() {
-				g.logger.WarnContext(detached, "query-api pdp shadow: the PDP denies a caller the legacy check allowed",
-					slog.String("action", label), slog.String("reason_code", string(decision.Reason())))
-			}
-		}
-	}()
-}
-
-// logAllowed lets one mismatch line per second through.
-func (g *Gate) logAllowed() bool {
-	now := time.Now().UnixNano()
-	last := g.logGate.Load()
-	return now-last >= int64(time.Second) && g.logGate.CompareAndSwap(last, now)
-}
-
 // Wait blocks until every shadow call in flight has ended.
 func (g *Gate) Wait() {
 	if g != nil {
-		g.wg.Wait()
+		g.shadow.Wait()
 	}
 }
 

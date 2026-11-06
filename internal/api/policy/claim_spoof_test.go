@@ -19,7 +19,9 @@ import (
 type spoofStore struct {
 	user, org, target uuid.UUID
 	superuser         bool
-	sessionReads      int
+	// noSession: the user holds no live impersonation row.
+	noSession    bool
+	sessionReads int
 }
 
 func (s *spoofStore) UserState(_ context.Context, id uuid.UUID) (policy.UserState, bool, error) {
@@ -40,7 +42,7 @@ func (s *spoofStore) OrgMembership(ctx context.Context, user, org uuid.UUID) (st
 
 func (s *spoofStore) ActiveImpersonation(_ context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
 	s.sessionReads++
-	if admin != s.user {
+	if admin != s.user || s.noSession {
 		return nil, nil
 	}
 	return &policy.Impersonation{ID: uuid.New(), AdminUserID: s.user, TargetUserID: s.target, TargetOrgID: s.org,
@@ -110,7 +112,10 @@ func TestASuperuserClaimOnAUserAccessTokenGivesNoSuperuserPower(t *testing.T) {
 				return rec
 			}
 
-			platform := serve(policy.NewGuard(auth, nil).WrapPlatform(policy.ActionAdminOrgs, ok))
+			// The platform row is judged with no live impersonation row: a live one refuses every platform action
+			// (12735, D6714), whatever the superuser source.
+			plain := &spoofStore{user: store.user, org: store.org, target: store.target, superuser: tc.row, noSession: true}
+			platform := serve(policy.NewGuard(issuer.AuthenticatorOver(t, plain, nil), nil).WrapPlatform(policy.ActionAdminOrgs, ok))
 			if platform.Code != tc.status {
 				t.Fatalf("platform row: %d %q, want %d", platform.Code, platform.Body.String(), tc.status)
 			}

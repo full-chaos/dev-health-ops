@@ -28,6 +28,17 @@ import (
 // superuser's global list and X-Org-Id scoping are unchanged, and an ended
 // session is not applied on the very next request.
 func TestImpersonatingSuperuserListsOnlyTheTargetOrgUsers(t *testing.T) {
+	impersonatingSuperuserListsOnlyTheTargetOrgUsers(t, false)
+}
+
+// D6773 (product rule 1): the same with root's token naming its own admin org, where root holds no membership row,
+// as the legacy (HS256) token did. The legacy answer, executed on origin/main, is this test there.
+func TestImpersonatingSuperuserWithAnOrgClaimWithoutMembershipListsOnlyTheTargetOrgUsers(t *testing.T) {
+	t.Skip("known defect, D6773, CHAOS-13206: the routed check refuses the token org without a membership row (401)")
+	impersonatingSuperuserListsOnlyTheTargetOrgUsers(t, true)
+}
+
+func impersonatingSuperuserListsOnlyTheTargetOrgUsers(t *testing.T, orgClaim bool) {
 	ctx := context.Background()
 	pool, _ := migratedPostgres(t, ctx)
 	exec := func(query string, args ...any) {
@@ -75,7 +86,11 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), m.org, ids[m.user], m
 	t.Cleanup(server.Close)
 
 	// The superuser is the users row and the session the impersonation row; the token carries only the subject.
-	root := tokens.MustMint(t, edtokens.Claims{UserID: ids["root"]})
+	claims := edtokens.Claims{UserID: ids["root"]}
+	if orgClaim {
+		claims.OrgID = adminOrg.String()
+	}
+	root := tokens.MustMint(t, claims)
 	list := func(xOrg string) []string {
 		t.Helper()
 		request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/api/v1/admin/users", nil)

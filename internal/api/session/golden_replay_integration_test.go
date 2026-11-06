@@ -86,13 +86,15 @@ func TestSessionRoutesMatchGolden(t *testing.T) {
 	pg, server, specs := st.pg, st.server, st.specs
 
 	replay, replayRows := routedReplay(t)
-	target := sessionscenario.Target{BaseURL: server.URL, PostgresURI: pg.URI, ResetLimits: st.openWindows, Replay: replay, ReplayRows: replayRows}
+	target := sessionscenario.Target{BaseURL: server.URL, PostgresURI: pg.URI, ResetLimits: st.openWindows, Replay: replay, ReplayRows: replayRows,
+		// D6773 (product rule 1(c)): bob is an org-less superuser with no membership row; the legacy (HS256) path's
+		// /me answer (role "member") stays the wanted answer. The routed path answers role "" today.
+		KnownDefects: map[string]string{"me: bob superuser": "D6773, CHAOS-13206"}}
 	t.Log("\n" + sessionscenario.RunTarget(t, ctx, target, sessionscenario.MintEdDSATokens(t, access, specs)))
 }
 
 // routedReplay re-judges the golden steps the routed go-api answers differently from the Python plane:
-//   - A (the answer came from an HS256 claim; the routed path reads the rows): /me role of an org-less
-//     superuser, /me username and full name, and the audit identity of an access token presented as a
+//   - A (the answer came from an HS256 claim; the routed path reads the rows): /me username and full name, and the audit identity of an access token presented as a
 //     refresh token (an EdDSA token has no email claim and its sub is the wire principal id).
 //   - Refusal: the local-login posture mints HS256 login tokens (tokens.go mintPair), which the routed
 //     go-api refuses, so /me and /validate refuse the own login token and a logout with it writes no
@@ -118,7 +120,6 @@ func routedReplay(t *testing.T) (map[string]func(sessionscenario.RecordedAnswer)
 	}
 	const invalid = `{"valid":false,"user_id":null,"email":null,"org_id":null,"role":null,"expires_at":null}`
 	answers := map[string]func(sessionscenario.RecordedAnswer) sessionscenario.RecordedAnswer{
-		"me: bob superuser":                       swap(`"org_id":"","role":"member"`, `"org_id":"","role":""`),
 		"me: carol viewer":                        swap(`"username":null,"full_name":null`, `"username":"carol","full_name":"Carol"`),
 		"me: own login token":                     refused(http.StatusUnauthorized, `{"detail":{"message":"Invalid or expired token"}}`),
 		"validate: own login token":               refused(http.StatusOK, invalid),

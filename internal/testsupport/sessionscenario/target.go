@@ -38,6 +38,8 @@ type Target struct {
 	// Replay and ReplayRows are Harness.Replay and Harness.ReplayRows (nil: every golden answer as recorded).
 	Replay     map[string]func(golden RecordedAnswer) RecordedAnswer
 	ReplayRows map[string]func(golden string) string
+	// KnownDefects is Harness.KnownDefects.
+	KnownDefects map[string]string
 }
 
 // Validate is an error unless the corpus can open fresh rate-limit windows on the target between batches.
@@ -174,6 +176,6 @@ func RunTarget(t *testing.T, ctx context.Context, tg Target, tokens map[string]s
 		},
 		Reset:  func() { tg.resetLimits(t, ctx) },
 		Rows:   func(query string) (string, string) { return "", TableRows(t, ctx, tg.PostgresURI, query) },
-		Replay: tg.Replay, ReplayRows: tg.ReplayRows,
+		Replay: tg.Replay, ReplayRows: tg.ReplayRows, KnownDefects: tg.KnownDefects,
 	})
 }

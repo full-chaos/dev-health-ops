@@ -137,10 +137,14 @@ func TestReadVulnExceptions(t *testing.T) {
 		"too few columns":  "GO-9\tm/saml\tv0.5.1\tCHAOS-1\n",
 		"too many columns": "GO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark\t2026-12-01\n",
 		"empty column":     "GO-9\tm/saml\t\tCHAOS-1\tdark\n",
+		"empty ticket":     "GO-9\tm/saml\tv0.5.1\t\tdark\n",
+		"missing ticket":   "GO-9\tm/saml\tv0.5.1\tdark\n",
 		"padded column":    "GO-9\t m/saml\tv0.5.1\tCHAOS-1\tdark\n",
 		"not a GO id":      "CVE-1\tm/saml\tv0.5.1\tCHAOS-1\tdark\n",
 		"duplicate row":    good + "GO-9\tm/saml\tv0.5.1\tCHAOS-2\tagain\n",
 		"spaces not tabs":  "GO-9 m/saml v0.5.1 CHAOS-1 dark\n",
+		"indented comment": " # not a whole-line comment\n",
+		"trailing comment": "GO-9\tm/saml\tv0.5.1\tCHAOS-1\tdark # x\t\n",
 	} {
 		if _, err := cigates.ReadVulnExceptions(strings.NewReader(bad)); err == nil {
 			t.Errorf("%s: malformed rows must fail closed", name)

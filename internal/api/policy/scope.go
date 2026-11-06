@@ -215,9 +215,9 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 // Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets in who holds
 // admin.impersonate, an active session makes the target's org the request's org, sets the
 // impersonation context, and stamps X-Impersonating / X-Impersonated-User-Id on the response;
-// with RefuseLegacyImpersonation on, it refuses the request with 403 instead, but on
-// legacySessionRoutes. The row it read is kept for the write and platform refusals
-// (Guard.sessionRow). A session lookup failure refuses with 503 (fail closed, logged).
+// with RefuseLegacyImpersonation on, it refuses a live row with 403 instead, but on
+// legacySessionRoutes (a non-holder's row is read on writes only). The row is kept for the
+// Guard refusals (Guard.sessionRow). A session lookup failure is 503 (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Every path below that calls next has decided; the refusals return
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || !user.Holds(ActionAdminImpersonate) {
+		if user == nil || (!user.Holds(ActionAdminImpersonate) && (readMethod(r.Method) || !s.refusesLegacyCaller(r))) {
 			next.ServeHTTP(w, r)
 			return
 		}

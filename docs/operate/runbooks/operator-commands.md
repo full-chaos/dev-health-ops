@@ -328,8 +328,6 @@ all on native or bridge-triggerable recompute paths today.
 - [Worker or queue failure](worker-or-queue-failure.md) -- symptom-driven triage and recovery.
 - [Run workers and jobs](../run/workers-and-jobs.md) -- starting/rolling out the Go worker fleet itself.
 - [Job recovery lifecycle](../run/job-recovery-lifecycle.md) -- when River rescues a stuck job on its own.
-- [Go migration matrix](../../go-migration-matrix.md) -- generated Go/Python executor status per family;
-  regenerate via `go run ./cmd/dev-health-migration-matrix -render`, never hand-edit its generated blocks.
 - [Team attribution architecture](../../contribute/architecture/team-attribution.md) -- precedence tiers and
   the full recovery narrative.
 - [Backup and restore](../maintain/backup-and-restore.md) -- `scripts/backup-standing.sh` covers the

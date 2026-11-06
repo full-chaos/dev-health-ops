@@ -19,7 +19,7 @@ auth-service mints one class of access token at a time. `hs256_compat` is the de
 that go-api minted before auth-service existed. `eddsa` mints the Ed25519 token of
 [access-token.v1](../../reference/auth/access-token-claims.md). This page says what each class means for
 every service, what must be true before the flip, and how to go back. The steps of the flip itself are in
-[Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md#access-token-class-eddsa-w3-d1). This page gives no prod context,
+[Auth sessions flip and rollback](auth-sessions-flip-and-rollback.md#access-token-class-eddsa). This page gives no prod context,
 no Secret value and no values path.
 
 ## What each class means

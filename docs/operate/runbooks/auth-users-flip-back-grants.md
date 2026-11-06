@@ -83,9 +83,9 @@ not hand-run a REVOKE.
      -o custom-columns='NAME:.metadata.name,HASH:.metadata.labels.pod-template-hash,OWNED:.spec.template.spec.containers[0].env[?(@.name=="AUTH_USERS_OWNED")].value'
    ```
 
-   After CHAOS-11519 has merged, the phase-4 pod template carries the label `dev-health.io/auth-users-owned="true"`.
-   The same check then becomes the one below. Its control requires at least one ReplicaSet with that label; until
-   CHAOS-11519 has merged no ReplicaSet has it, so this form stops: use the hash form above.
+   Where the build sets it, the phase-4 pod template carries the label `dev-health.io/auth-users-owned="true"`.
+   The same check then becomes the one below. Its control requires at least one ReplicaSet with that label; if no
+   ReplicaSet has it, this form stops: use the hash form above.
 
    ```bash
    (

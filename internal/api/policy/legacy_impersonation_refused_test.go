@@ -143,6 +143,40 @@ func TestLegacyImpersonationCallerIsRefusedUnderTheProxySwitch(t *testing.T) {
 	}
 }
 
+// revokedCallerStore is the legacy caller after its admin.impersonate was
+// revoked (another platform action still held): its go-api row stays live.
+func revokedCallerStore() *fakeStore {
+	store := legacyCallerStore()
+	store.users[userID] = UserState{IsActive: true, IsSuperuser: true, Platform: only(rule.ActionAdminBilling)}
+	return store
+}
+
+// The refusal follows the live row, not the caller's admin.impersonate: a
+// legacy caller whose action was revoked is refused like a holder, and after
+// the row ends the switch changes none of its answers.
+func TestRevokedLegacyImpersonationCallerIsRefusedUnderTheProxySwitch(t *testing.T) {
+	headers := bearer(t, superClaims)
+	for _, cell := range refusedLegacyCells[:5] {
+		t.Run(cell.name, func(t *testing.T) {
+			got := serveBody(legacyStack(t, revokedCallerStore(), &switchOn), cell.method, cell.path, headers)
+			if got.status != http.StatusForbidden || got.body != legacyRefusal {
+				t.Errorf("%s %s: %d %s, want 403 %s", cell.method, cell.path, got.status, got.body, legacyRefusal)
+			}
+			if got.header.Get("X-Impersonating") != "" || got.header.Get("X-Impersonated-User-Id") != "" {
+				t.Errorf("%s %s: the refusal carries the impersonation headers %v", cell.method, cell.path, got.header)
+			}
+			ended := revokedCallerStore()
+			delete(ended.sessions, userID)
+			on := serveBody(legacyStack(t, ended, &switchOn), cell.method, cell.path, headers)
+			off := serveBody(legacyStack(t, ended, nil), cell.method, cell.path, headers)
+			assertSameResponse(t, cell, on, off)
+			if on.body == legacyRefusal {
+				t.Errorf("%s %s: refused after the row ended: %d %s", cell.method, cell.path, on.status, on.body)
+			}
+		})
+	}
+}
+
 // Status and stop still apply the session to the legacy caller: the web
 // sends the admin's bearer to exactly these two.
 func TestLegacyImpersonationCallerReachesStatusAndStop(t *testing.T) {

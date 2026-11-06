@@ -21,13 +21,31 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
-// endableSessionStore is legacySessionStore whose session row can end.
+// endableSessionStore is legacySessionStore whose session row can end. A
+// non-nil platform replaces the admin's platform actions in the users row.
 type endableSessionStore struct {
 	legacySessionStore
-	ended atomic.Bool
+	ended    atomic.Bool
+	platform *rule.Platform
+}
+
+func (s *endableSessionStore) UserState(ctx context.Context, id uuid.UUID) (policy.UserState, bool, error) {
+	state, found, err := s.legacySessionStore.UserState(ctx, id)
+	if id == s.admin && s.platform != nil {
+		state.Platform = s.platform
+	}
+	return state, found, err
+}
+
+// revokedImpersonate is the admin's platform set after admin.impersonate was
+// revoked: another platform action is still held.
+func revokedImpersonate() *rule.Platform {
+	platform := rule.PlatformOf(rule.ActionAdminBilling)
+	return &platform
 }
 
 func (s *endableSessionStore) ActiveImpersonation(ctx context.Context, admin uuid.UUID) (*policy.Impersonation, error) {
@@ -41,16 +59,21 @@ const switchOrgRefusal = `{"detail":"Not allowed in an impersonation session"}`
 
 // TestSwitchOrgRefusesTheImpersonatingAdminBearer: POST /api/v1/auth/switch-org
 // refuses a caller whose go-api bearer has a live impersonation row with 403,
-// before auth-service is called, in every flag state; after the row ends the
-// same caller is served (forwarded when the sessions flag is on).
+// before auth-service is called, in every flag state, also after the caller's
+// admin.impersonate was revoked (the refusal follows the live row, not the
+// action); after the row ends the same caller is served (forwarded when the
+// sessions flag is on).
 func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 	states := []struct {
-		name                 string
-		sessions, impersonat bool
+		name                          string
+		sessions, impersonat, revoked bool
 	}{
-		{"sessions on, impersonation on", true, true},
-		{"sessions on, impersonation off", true, false},
-		{"sessions off", false, false},
+		{"sessions on, impersonation on", true, true, false},
+		{"sessions on, impersonation off", true, false, false},
+		{"sessions off", false, false, false},
+		{"admin.impersonate revoked, sessions on, impersonation on", true, true, true},
+		{"admin.impersonate revoked, sessions on, impersonation off", true, false, true},
+		{"admin.impersonate revoked, sessions off", false, false, true},
 	}
 	for _, state := range states {
 		t.Run(state.name, func(t *testing.T) {
@@ -64,6 +87,9 @@ func TestSwitchOrgRefusesTheImpersonatingAdminBearer(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := &endableSessionStore{legacySessionStore: legacySessionStore{admin: uuid.New(), target: uuid.New(), tOrg: uuid.New()}}
+			if state.revoked {
+				store.platform = revokedImpersonate()
+			}
 			auth, err := policy.NewAuthenticator(verifier, store, quietLogger())
 			if err != nil {
 				t.Fatal(err)
@@ -162,12 +188,15 @@ func (s *eddsaAdminStore) ActiveImpersonation(ctx context.Context, admin uuid.UU
 // mint), which is the admin bearer under AUTH_PROXY_SESSIONS in production.
 func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 	states := []struct {
-		name                 string
-		sessions, impersonat bool
+		name                          string
+		sessions, impersonat, revoked bool
 	}{
-		{"sessions on, impersonation on", true, true},
-		{"sessions on, impersonation off", true, false},
-		{"sessions off", false, false},
+		{"sessions on, impersonation on", true, true, false},
+		{"sessions on, impersonation off", true, false, false},
+		{"sessions off", false, false, false},
+		{"admin.impersonate revoked, sessions on, impersonation on", true, true, true},
+		{"admin.impersonate revoked, sessions on, impersonation off", true, false, true},
+		{"admin.impersonate revoked, sessions off", false, false, true},
 	}
 	for _, state := range states {
 		t.Run(state.name, func(t *testing.T) {
@@ -175,6 +204,11 @@ func TestSwitchOrgRefusesTheImpersonatingEdDSABearer(t *testing.T) {
 			probe := newProbeStore()
 			probe.members[[2]uuid.UUID{probeAdminUser, probeOrg}] = "member"
 			probe.sessions[adminSID] = policy.SessionRow{PrincipalID: probeAdminUser, LegacyTokenVersion: i64ptr(0)}
+			if state.revoked {
+				admin := probe.users[probeAdminUser]
+				admin.state.Platform = revokedImpersonate()
+				probe.users[probeAdminUser] = admin
+			}
 			store := &eddsaAdminStore{probeStore: probe}
 			verifier, err := edgetoken.New(probeKey, "dev-health-ops", "dev-health-api")
 			if err != nil {

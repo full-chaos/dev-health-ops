@@ -58,6 +58,10 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 			a.logger.WarnContext(ctx, "api user access token has an unusable actor", slog.String("user_id", id.String()))
 			return nil, errRejected
 		}
+		if actor == id {
+			a.logger.WarnContext(ctx, "api user access token names its subject as its actor", slog.String("user_id", id.String()))
+			return nil, errRejected
+		}
 		by := actor.String()
 		impersonatedBy = &by
 	}

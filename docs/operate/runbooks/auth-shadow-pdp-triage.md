@@ -60,6 +60,8 @@ A bad value never stops the service. The shadow stays off, the log has an ERROR 
 
 Zero mismatches is not "good" on its own. Read the results panel first: `error`, `dropped` and `skipped` calls produce no mismatch.
 
+For a count per route, read the go-api INFO log `api shadow pdp: result`. Each shadowed request writes one line with `route` (the row key, `METHOD /route`), `namespace`, `caller` and `result`. The line also carries `decision_id` when the decision point answered. A `match` with no `decision_id` was decided without a decision point call (the request names another organization), so it is not PDP evidence for the row.
+
 The `AuthShadowMismatchUnresolved` alert (`alerts/rules.yml`, group `auth_shadow`) fires on any increase of `class="unresolved"` within one hour. The dashboard "Dev Health - Auth Shadow Mismatch (production)" (`deploy/signoz/dashboards/auth-shadow-mismatch.json`) shows mismatches by namespace, caller and class. Setup and labels are in [Auth shadow mismatch](../observe/dashboards-and-alerts.md#auth-shadow-mismatch).
 
 ## Triage loop

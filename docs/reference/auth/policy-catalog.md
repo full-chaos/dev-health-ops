@@ -223,7 +223,7 @@ From `contracts/auth/v1/README.md`:
 
 An organization action can carry `platform_admin: allowed` (absent is `denied`). A principal whose platform role holds `admin.orgs` is then allowed the action in any active organization, also with no membership row. The allow has the owner's obligations: the tenant scope only. The internal reason is `allowed_by_platform_admin`, and the wire code is `allowed_by_role` (see [reason codes](reason-codes.md)). An inactive or unknown organization is still denied.
 
-The flag is on the organization actions of the go-api `policy.Admin` and `policy.AdminOrg` rows, which admit an `admin.orgs` holder before they read the membership: `billing.manage`, `integrations.read`, `integrations.write`, `members.invite`, `members.manage`, `members.read`, `settings.write` and `teams.write`. A test in `internal/auth/contracts` holds the flag equal to those rows. It also fails when another profile row asks a flagged action, or when a flagged action is `repository_scope: filtered` or has a redaction rule. `catalog_version` stays 13: no deny is cached.
+The flag is on the organization actions of the go-api `policy.Admin` and `policy.AdminOrg` rows, which admit an `admin.orgs` holder before they read the membership: `billing.manage`, `integrations.read`, `integrations.write`, `members.invite`, `members.manage`, `members.read`, `settings.write` and `teams.write`. A test in `internal/auth/contracts` holds the flag equal to those rows. It also fails when another profile row asks a flagged action, or when a flagged action is `repository_scope: filtered` or has a redaction rule. The platform_admin flag changes need no `catalog_version` bump: no deny is cached.
 
 ## Platform actions
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,10 +71,8 @@ func newHandoffID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
-func validHandoffID(id string) bool {
-	raw, err := base64.RawURLEncoding.Strict().DecodeString(id)
-	return err == nil && len(raw) == handoffIDBytes
-}
+// handoffIDPattern is the text of a handoff id: 32 bytes, unpadded base64url.
+var handoffIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
 // handoffRoutes is the consume route of the start handoff. It is not mounted yet: a new route lands first, its
 // endpoint-profile row and the mount follow.
@@ -107,7 +106,7 @@ func (h *handlers) consumeHandoff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if !validHandoffID(id) {
+	if !handoffIDPattern.MatchString(id) {
 		h.logger.WarnContext(ctx, "admin impersonate handoff: malformed id refused")
 		policy.WriteDetail(w, http.StatusConflict, msgHandoffRefused, nil)
 		return

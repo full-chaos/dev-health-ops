@@ -466,7 +466,7 @@ func TestHandoffConsumeBodyIsChecked(t *testing.T) {
 	for _, body := range []string{`{}`, `{"handoff_id":null}`, `{"handoff_id":5}`, `[]`, `null`} {
 		wantAnswer(t, body, consumeAs(c.h, c.admin, body), http.StatusUnprocessableEntity, "")
 	}
-	for _, id := range []string{"", "short", strings.Repeat("A", 42), strings.Repeat("A", 44), strings.Repeat("A", 42) + "+", strings.Repeat("A", 42) + "="} {
+	for _, id := range []string{"", "short", strings.Repeat("A", 42), strings.Repeat("A", 44), strings.Repeat("A", 42) + "+", strings.Repeat("A", 42) + "=", strings.Repeat("A", 42) + `\n`, strings.Repeat("A", 43) + `\n`, `\n` + strings.Repeat("A", 43)} {
 		wantAnswer(t, "id "+id, consumeAs(c.h, c.admin, consumeBody(id)), http.StatusConflict, refusedBody)
 	}
 	if n := len(f.commands()); n != 0 {

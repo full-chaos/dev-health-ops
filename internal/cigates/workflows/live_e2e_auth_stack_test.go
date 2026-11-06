@@ -291,6 +291,26 @@ func TestLiveE2EWithEnvAuthServicePassesTheRealSecrets(t *testing.T) {
 	}
 }
 
+// A side whose required variable is unset is refused: with-env runs no command. A process substitution would hide the
+// refusal of raw_env and run the command with half the environment.
+func TestLiveE2EWithEnvRefusesAHalfConfiguredSide(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	cmd := exec.Command("bash", filepath.Join(repoRoot(t), "ci", "live_e2e_auth_stack.sh"), "with-env", "auth-service", "/state", "--", "touch", marker)
+	cmd.Env = sentinelEnv()[:5:5] // no AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Errorf("FAIL: with-env ran the command on a half-configured auth-service side")
+	}
+	if err == nil {
+		t.Errorf("FAIL: with-env answered success for an auth-service side with a required variable unset")
+	}
+	if !strings.Contains(errb.String(), "AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT") {
+		t.Errorf("FAIL: with-env does not name the unset variable: %q", errb.String())
+	}
+}
+
 // assert-audit reads one row: total workload service_credential. Every delegated issue row must carry the workload
 // marker and no service credential marker.
 func TestLiveE2EAssertAuditCells(t *testing.T) {

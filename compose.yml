@@ -1585,10 +1585,11 @@ services:
   # public user has no auth user; a fresh install has one, the migrations'
   # baseline service placeholder. Production copies the users before its flip;
   # here every `up` copies them, with AUTH_USERS_OWNED=false for this run only
-  # (the verb refuses while the flag is on). auth-service mirrors the users it
-  # creates, their password and their verification into public.users, so a
-  # later copy rewrites an auth user only where public.users differs. It
-  # connects as auth-service's runtime login, after the schema and its grants.
+  # (the verb refuses while the flag is on). -insert-only: it creates the auth
+  # users that are missing and never changes an existing one, so a password or
+  # name changed through auth-service is never set back to a stale public.users
+  # value. It connects as auth-service's runtime login, after the schema and
+  # its grants.
   auth-users-backfill:
     image: ${DEV_HEALTH_GO_DHO_IMAGE:-ghcr.io/full-chaos/dev-health-go-dho:local}
     build:
@@ -1598,7 +1599,7 @@ services:
       args:
         COMMIT: ${COMMIT:-unknown}
         BUILD_TIME: ${BUILD_TIME:-1970-01-01T00:00:00Z}
-    command: ["auth", "users-backfill"]
+    command: ["auth", "users-backfill", "-insert-only"]
     networks: [auth_plane]
     restart: "no"
     read_only: true

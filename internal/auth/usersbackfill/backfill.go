@@ -110,6 +110,9 @@ func (r Report) SkippedTotal() int {
 // Lines renders the report as stable key=value lines.
 func (r Report) Lines() []string {
 	mode := "write"
+	if r.InsertOnly {
+		mode = "insert-only"
+	}
 	if r.DryRun {
 		mode = "dry-run"
 	}
@@ -119,6 +122,12 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("inserted=%d", r.Inserted),
 		fmt.Sprintf("updated=%d", r.Updated),
 		fmt.Sprintf("unchanged=%d", r.Unchanged),
+	}
+	if r.InsertOnly {
+		// Only an insert-only run has the line: the default run's report is as before.
+		lines = append(lines, fmt.Sprintf("kept=%d", r.Kept))
+	}
+	lines = append(lines,
 		fmt.Sprintf("identity_linked=%d", r.IdentityLinked),
 		fmt.Sprintf("identity_not_carried=%d", r.IdentityNotCarry),
 		fmt.Sprintf("identity_relink_pending=%d", r.IdentityRelinkPending),
@@ -129,7 +138,7 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("platform_role_revoked=%d", r.RoleRevoked),
 		fmt.Sprintf("platform_role_skipped_owned=%d", r.RoleSkippedOwned),
 		fmt.Sprintf("platform_role_expired_granted=%d", len(r.ExpiredGranted)),
-	}
+	)
 	expired := make([]string, 0, len(r.ExpiredGranted))
 	for _, id := range r.ExpiredGranted {
 		expired = append(expired, id.String())
@@ -169,7 +178,7 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 	if batch <= 0 {
 		batch = 500
 	}
-	rep := Report{DryRun: opts.DryRun, Skipped: map[string]int{}}
+	rep := Report{DryRun: opts.DryRun, InsertOnly: opts.InsertOnly, Skipped: map[string]int{}}
 	var after *uuid.UUID
 	for {
 		rows, err := src.Page(ctx, after, batch)
@@ -199,12 +208,15 @@ func Run(ctx context.Context, src Source, sink Sink, opts Options) (Report, erro
 				}
 			}
 			target.PlatformRolesOwned = opts.PlatformRolesOwned
+			target.InsertOnly = opts.InsertOnly
 			res, err := sink.BackfillUser(ctx, target, opts.DryRun)
 			if err != nil {
 				rep.Skipped[classify(err)]++
 				continue
 			}
 			switch {
+			case res.Kept:
+				rep.Kept++
 			case res.Inserted:
 				rep.Inserted++
 			case res.Updated:

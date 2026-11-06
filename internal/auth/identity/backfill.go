@@ -119,6 +119,11 @@ func (s *Store) BackfillUser(ctx context.Context, t BackfillTarget, dryRun bool)
 	if err != nil {
 		return res, err
 	}
+	if found && t.InsertOnly {
+		// auth-service owns this user: public.users may be stale, so nothing is written (CHAOS-13107).
+		res.Kept = true
+		return res, nil
+	}
 	src := source{email: t.Email, emailLower: storedLoginKey(t.Email), active: t.Active, verified: t.Verified}
 	if !found {
 		res.Inserted = true

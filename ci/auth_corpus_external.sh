@@ -470,8 +470,8 @@ if [ "${LEG}" = "go-api" ]; then
   fi
   # owned_seed_copy is leg go-api's hand-off when compose.yml has auth-service own users from the start: compose.yml's
   # auth-users-backfill one-shot copied the users before auth-service served, and the corpus then seeds its own users
-  # into public.users as a superuser, behind auth-service. The same one-shot copies them (AUTH_USERS_OWNED=false for
-  # that run only, auth-service's login), and auth-service is recreated on the copied users. go-api's flags are
+  # into public.users as a superuser, behind auth-service. The same one-shot copies them (insert-only, AUTH_USERS_OWNED=false
+  # for that run only, auth-service's login; the seeded users have no auth twin yet), and auth-service is recreated on the copied users. go-api's flags are
   # compose.yml's.
   owned_seed_copy() {
     printf 'step 1e (go-api): auth-users-backfill of the seeded users\n'

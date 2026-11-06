@@ -125,7 +125,7 @@ func TestLinkScope_OrganizationAndLegacyCarryNoLink(t *testing.T) {
 						hasBinding(got.bindings[i], teamscope.BindingCeilingKeys) || strings.Contains(statement, "ceiling_") {
 						t.Fatalf("a link or ceiling term reached an unrestricted statement:\n%s", statement)
 					}
-					if isWorkItemRead(statement) && strings.Contains(statement, "work_graph_issue_pr") {
+					if isWorkItemRead(statement) && (strings.Contains(statement, "work_graph_issue_pr") || strings.Contains(statement, "1 = 0")) {
 						t.Fatalf("a work-item read joins the link table in an unrestricted scope:\n%s", statement)
 					}
 				}

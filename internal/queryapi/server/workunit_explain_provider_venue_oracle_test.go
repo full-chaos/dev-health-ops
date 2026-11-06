@@ -100,7 +100,7 @@ VALUES ($1, $2, $2, 'team', 'stripe', true, now(), now())`, org.id, org.slug); e
 				}
 				for key, value := range settings {
 					if _, err := admin.Exec(ctx, `INSERT INTO settings (id, org_id, category, key, value, is_encrypted, created_at, updated_at)
-VALUES ($1, $2, 'llm', $3, $4, false, now(), now())`, uuid.New(), org.id.String(), key, value); err != nil {
+VALUES ($1, $2, 'llm', $3, $4, false, '2026-02-01T00:00:00+00:00', '2026-02-01T00:00:00+00:00')`, uuid.New(), org.id.String(), key, value); err != nil {
 						t.Fatalf("seed settings %s: %v", key, err)
 					}
 				}

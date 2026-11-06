@@ -27,6 +27,9 @@ import (
 // the source holds no credential-shaped literal.
 var jwtKey = "sso-venue-" + strings.Repeat("0123456789abcdef", 2)
 
+// ssoStateKey is go-api's own SSO_STATE_SECRET, as prod sets it; run-time assembled, distinct from jwtKey.
+var ssoStateKey = "sso-state-" + strings.Repeat("fedcba9876543210", 2)
+
 // Fixed ids, so rows and answers name the same subjects on both planes.
 const (
 	orgA         = "a0000000-0000-4000-8000-0000000000a1"
@@ -287,7 +290,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger)}
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), SSOStateSecret: ssoStateKey}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {

@@ -140,7 +140,8 @@ func adminFieldViolations(row map[string]any, scopes map[string]string, root str
 
 	// resource resolver, cache text and impersonation enum are always recorded.
 	resolver, _ := row["resource_resolver"].(string)
-	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
+	if !strings.HasPrefix(resolver, "organization_from_session:") && !strings.HasPrefix(resolver, "organization_from_path:") &&
+		!strings.HasPrefix(resolver, "organization_from_query_or_session:") && !strings.HasPrefix(resolver, "none:") && !nonSessionResolver(resolver) {
 		bad("resource_resolver does not start with a resolver kind: %q", resolver)
 	}
 	cache, _ := row["current_state_cache_behavior"].(string)

@@ -1619,6 +1619,9 @@
       "Principal": {
         "$ref": "../jsonschema/principal.v1.schema.json"
       },
+      "RepositoryIdentityEvent": {
+        "$ref": "../jsonschema/repository-identity-event.v1.schema.json"
+      },
       "ProvisioningEvent": {
         "$ref": "../jsonschema/provisioning-event.v1.schema.json"
       },

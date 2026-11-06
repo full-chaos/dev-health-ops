@@ -22,7 +22,9 @@ func TestOperationEnforceHandsEachRootItsScope(t *testing.T) {
 	run := func(name string) authctx.Claims {
 		ctx := authctx.WithClaims(context.Background(), authctx.Claims{OrgID: "22222222-2222-2222-2222-222222222222"})
 		ctx = context.WithValue(ctx, rootScopesKey{}, scopes)
-		ctx = graphql.WithRootFieldContext(ctx, &graphql.RootFieldContext{Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: name}}})
+		ctx = graphql.WithOperationContext(ctx, &graphql.OperationContext{Operation: &ast.OperationDefinition{Operation: ast.Query}})
+		// As gqlgen builds it: Object is the field's name.
+		ctx = graphql.WithRootFieldContext(ctx, &graphql.RootFieldContext{Object: name, Field: graphql.CollectedField{Field: &ast.Field{Name: name}}})
 		var seen authctx.Claims
 		OperationEnforce{}.InterceptRootField(ctx, func(ctx context.Context) graphql.Marshaler {
 			seen, _ = authctx.FromContext(ctx)

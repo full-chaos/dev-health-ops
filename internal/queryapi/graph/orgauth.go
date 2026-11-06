@@ -16,7 +16,7 @@ import (
 // passing a different orgId.
 func requireOwnOrg(ctx context.Context, orgID string) error {
 	claims, ok := authctx.FromContext(ctx)
-	if !ok || servedOrg(claims) == "" || servedOrg(claims) != orgID {
+	if !ok || claims.OrgID == "" || claims.OrgID != orgID || servedOrg(claims) != orgID {
 		return &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),
@@ -33,7 +33,7 @@ func requireOwnOrg(ctx context.Context, orgID string) error {
 // AUTHORIZATION_ERROR.
 func requestOrg(ctx context.Context) (string, error) {
 	claims, ok := authctx.FromContext(ctx)
-	if !ok || servedOrg(claims) == "" {
+	if !ok || claims.OrgID == "" || servedOrg(claims) == "" {
 		return "", &gqlerror.Error{
 			Message: "org_id is required for all analytics queries",
 			Path:    graphql.GetPath(ctx),

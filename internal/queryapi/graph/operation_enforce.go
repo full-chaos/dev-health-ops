@@ -78,10 +78,12 @@ func (e OperationEnforce) InterceptOperation(ctx context.Context, next graphql.O
 func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
 	scopes, _ := ctx.Value(rootScopesKey{}).(map[string]pepgate.Scope)
 	field := graphql.GetRootFieldContext(ctx)
-	if field == nil {
+	operation := graphql.GetOperationContext(ctx)
+	if field == nil || operation == nil || operation.Operation == nil {
 		return next(ctx)
 	}
-	if scope, ok := scopes[field.Object+"."+field.Field.Name]; ok {
+	// gqlgen's RootFieldContext.Object is the field's name, not its type: the key takes the operation's type.
+	if scope, ok := scopes[rootKey(operation.Operation.Operation, field.Field.Name)]; ok {
 		if claims, ok := authctx.FromContext(ctx); ok {
 			claims.Scope = scope
 			if org, decided := scope.OrgID(); decided && scope.Kind() != pepgate.KindLegacy {

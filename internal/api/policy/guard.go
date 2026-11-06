@@ -194,14 +194,14 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 			if r.Pattern != stopImpersonationPattern {
 				session, err := g.sessionRow(r, user.ID)
 				if err != nil {
-					g.observeShadow(r, caller, bearer, false)
+					// The session state is unknown: the shadow is not asked.
 					g.writeSessionRowFailure(w, r, err)
 					return
 				}
 				if session != nil {
 					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
 						slog.String("path", r.Pattern), slog.String("action", gt.action))
-					g.observeShadow(r, caller, bearer, false)
+					g.observeShadowAs(r, caller, bearer, false, true)
 					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
 					return
 				}

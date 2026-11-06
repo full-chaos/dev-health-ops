@@ -124,10 +124,10 @@ func (h *handlers) createOrgInvite(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.orgProvision == nil && h.invites.RefuseUnconfigured(w) {
+	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
 		return
 	}
-	if !h.ensureOrgAdminAccess(ctx, w, user, orgID) {
+	if h.orgProvision == nil && h.invites.RefuseUnconfigured(w) {
 		return
 	}
 	emailRaw, role := input.Email, input.Role

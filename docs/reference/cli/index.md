@@ -302,7 +302,7 @@ dho sync teams --provider linear --org "$ORG_ID" \
   --auth "$LINEAR_API_KEY"
 ```
 
-A Jira **project** is not a team. The automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`) writes the Jira `projects` rows and retires the project-as-team rows that earlier versions wrote (see [`providersync retire-jira-project-as-team`](#providersync-retire-jira-project-as-team-chaos-8888)). `--provider jira` here syncs the Atlassian Teams: they are the Jira teams.
+A Jira **project** is not a team. The automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`) writes the Jira `projects` rows and retires the project-as-team rows that earlier versions wrote (see [`providersync retire-jira-project-as-team`](#providersync-retire-jira-project-as-team)). `--provider jira` here syncs the Atlassian Teams: they are the Jira teams.
 
 - **`--provider jira`** syncs the organization's **Atlassian Teams** (structure, members, connected projects; `--structure`, `--members`, `--projects`; with none of the three, all are synced; `--allow-empty`). A team's projects are the Jira projects ("spaces") the team is connected to in Atlassian, one ownership row per link; a team with no member is synced too. A team row has `id` `jira:<team uuid>` and `native_team_key` the team's ARI. This verb writes what it reads and closes nothing: it has no integration census, so it cannot prove that it is the only Jira integration of the organization, and a row it does not hold may be a row of another site (the scope proof, architecture document section 0.4b; the GitHub and GitLab forms of this verb behave the same). Members and project links that a team no longer has are closed by the worker's sync, which has the census. An empty result is refused unless `--allow-empty`. When a team's link read fails, the run still writes the teams, the members and the links it read, and logs a warning (`atlassian team project links incomplete`). A Jira project link that gets no row (no readable project id, or no key) closes no link of its team in that run; the team's other links are written, and the run logs a warning (`atlassian team project links not written`). A gateway answer with a missing list or a missing `pageInfo` is a failed read, not an empty one. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in PostgreSQL (`POSTGRES_URI` or `--db`), the same integration row and credential that work-items sync and the worker's post-sync team auto-import use, decrypted with `SETTINGS_ENCRYPTION_KEY`. The integration's `atlassian_organization_id` config key is an **override only**: when absent, it is derived live from the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`). A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`). `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`, `JIRA_API_TOKEN` and `JIRA_BASE_URL` as fallbacks) each override the corresponding stored or resolved value. When `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline or test path only). The same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected (`auto_import_teams`, `auto_import_projects`, `auto_import_members`), so a normal scheduled jira sync produces Atlassian Teams rows on its own. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the result of the team catalog step (projects and legacy links). See `architecture/team-attribution.md` §0.2a.
 - **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
@@ -340,7 +340,7 @@ dho workers metrics daily-start --org <org-uuid> --day 2025-01-26 --to 2025-02-0
 dho workers metrics daily-start --org <org-uuid> --day 2025-02-01 --repo-id <uuid> --reason <code> --correlation-id <id>
 ```
 
-See [`metrics daily-start`](#metrics-daily-start-chaos-5055) for the full
+See [`metrics daily-start`](#metrics-daily-start) for the full
 contract.
 
 ### `metrics dora` / `complexity` / `capacity` / `release-impact` (deleted)
@@ -1417,7 +1417,7 @@ day computed before the fix sees zero rows, and no operator path could ever
 recompute that day once its partition read `'succeeded'`.
 
 `--org-stdin` replaces `--org` here too, with the same rules as for
-[`metrics daily-start`](#metrics-daily-start-chaos-5055).
+[`metrics daily-start`](#metrics-daily-start).
 
 ```bash
 dho workers metrics partition-recompute \
@@ -1825,7 +1825,7 @@ recompute that follows the carry.
 
 The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`, with the stdin rules of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
+[`metrics daily-start`](#metrics-daily-start). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `manual_members_folded`, `keyed_teams_activated`, `deleted_keyed_teams`, `memberships`, `project_ownership`, `repo_ownership`,
@@ -1913,7 +1913,7 @@ next pin readback after the step, on the GWC lead's word.
 **Pause the workers first.** No per-organization lease exists that the tool could take (the sync leases are per sync unit), so a write, `--apply` or `--restore-run ... --apply`, is refused unless `--workers-paused` is given: the operator's statement that the sync workers that write ownership rows are paused for the organization. As the data side of that pause, the write is also refused (`ownership_compaction_writes_active`) while a part of either ownership table was modified within `--quiet-seconds` (default 60; 0 turns the check off) by the server clock (provider timestamps are not monotonic, so the check reads the server's part times, of any organization, and the `updated_at` and `last_synced` of the organization's rows); a run with nothing to do is not stopped by it. A dry run needs neither.
 
 `--org-stdin` (one organization on stdin, rules of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055)) or `--all-orgs`
+[`metrics daily-start`](#metrics-daily-start)) or `--all-orgs`
 (every organization that holds a row of the source). A run always covers both
 ownership tables (there is no table option); `--batch-size` is the number of
 runs per insert (default 2000).
@@ -2037,7 +2037,7 @@ are closed when it has a Jira project link of that shape), the teams of the othe
 
 The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`. The stdin rules are those of
-[`metrics daily-start`](#metrics-daily-start-chaos-5055); empty stdin is a
+[`metrics daily-start`](#metrics-daily-start); empty stdin is a
 usage error (exit 2). The verb prints no organization id on stdout, stderr or
 in its own log lines; the audit row holds it. It prints counts only, under
 `retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,

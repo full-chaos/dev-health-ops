@@ -217,6 +217,32 @@ func TestRevokedLegacyImpersonationCallerReadsAsItselfUnderTheProxySwitch(t *tes
 	}
 }
 
+// With the switch off (set off or never set), the scope neither reads nor
+// applies the revoked caller's live row: a write answers as the caller itself,
+// byte-equal to the same caller without a row, and a failing row read changes
+// nothing.
+func TestRevokedLegacyImpersonationCallerWritesAsItselfWithTheSwitchOff(t *testing.T) {
+	headers := bearer(t, superClaims)
+	for _, cell := range revokedLegacyWriteCells {
+		t.Run(cell.name, func(t *testing.T) {
+			ended := revokedCallerStore()
+			delete(ended.sessions, userID)
+			self := serveBody(legacyStack(t, ended, nil), cell.method, cell.path, headers)
+			failing := revokedCallerStore()
+			failing.errSession = errors.New("session read failed")
+			for name, store := range map[string]*fakeStore{"live row": revokedCallerStore(), "failing row read": failing} {
+				for _, set := range []*bool{&switchOff, nil} {
+					got := serveBody(legacyStack(t, store, set), cell.method, cell.path, headers)
+					assertSameResponse(t, cell, got, self)
+					if got.header.Get("X-Impersonating") != "" || strings.Contains(got.body, targetOrgID.String()) {
+						t.Errorf("%s, %s: %d %s %v, want the caller's own answer", cell.name, name, got.status, got.body, got.header)
+					}
+				}
+			}
+		})
+	}
+}
+
 // A failed row read for the revoked caller on a write is the dependency
 // failure 503 under the switch.
 func TestRevokedLegacyImpersonationCallerSessionReadFailsClosedUnderTheProxySwitch(t *testing.T) {

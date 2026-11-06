@@ -11,8 +11,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/full-chaos/dev-health-go/pep"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -43,20 +45,22 @@ type enforceRun struct {
 	code       int
 	body       string
 	statements int
+	// roots is how many root fields ran (a resolver was entered).
+	roots int
 }
 
 func (r enforceRun) code503(t *testing.T, reason string) {
 	t.Helper()
 	if r.code != http.StatusServiceUnavailable || !strings.Contains(r.body, `"code":"SERVICE_UNAVAILABLE"`) ||
-		!strings.Contains(r.body, `"reason":"`+reason+`"`) || !strings.Contains(r.body, `"data":null`) || r.statements != 0 {
-		t.Fatalf("got %d %s with %d statements, want 503 SERVICE_UNAVAILABLE reason %s, data null, 0 statements", r.code, r.body, r.statements, reason)
+		!strings.Contains(r.body, `"reason":"`+reason+`"`) || !strings.Contains(r.body, `"data":null`) || r.statements != 0 || r.roots != 0 {
+		t.Fatalf("got %d %s with %d statements and %d root fields run, want 503 SERVICE_UNAVAILABLE reason %s, data null, 0 statements, 0 root fields", r.code, r.body, r.statements, r.roots, reason)
 	}
 }
 
 func (r enforceRun) forbidden(t *testing.T) {
 	t.Helper()
-	if r.code != http.StatusOK || !strings.Contains(r.body, `"code":"FORBIDDEN"`) || !strings.Contains(r.body, `"data":null`) || r.statements != 0 {
-		t.Fatalf("got %d %s with %d statements, want 200 FORBIDDEN, data null, 0 statements", r.code, r.body, r.statements)
+	if r.code != http.StatusOK || !strings.Contains(r.body, `"code":"FORBIDDEN"`) || !strings.Contains(r.body, `"data":null`) || r.statements != 0 || r.roots != 0 {
+		t.Fatalf("got %d %s with %d statements and %d root fields run, want 200 FORBIDDEN, data null, 0 statements, 0 root fields", r.code, r.body, r.statements, r.roots)
 	}
 }
 
@@ -106,6 +110,11 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 	}
 	client := &teamScopeReachClient{}
 	server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
+	var roots atomic.Int64
+	server.AroundRootFields(func(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
+		roots.Add(1)
+		return next(ctx)
+	})
 	subject := graphQLShadowSubject(newAccessMinter(t).mint(ecUser, nil, nil))
 	mux := routeswitch.NewMux(routeswitch.StaticSwitch{"gql": true})
 	mux.Register("gql", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +140,7 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 	gate.Wait()
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	return enforceRun{code: recorder.Code, body: recorder.Body.String(), statements: len(client.statements)}
+	return enforceRun{code: recorder.Code, body: recorder.Body.String(), statements: len(client.statements), roots: int(roots.Load())}
 }
 
 // runMCPEnforce sends one document through the MCP listener's GraphQL server, the header carrier: the org comes from
@@ -519,6 +528,11 @@ func runRootsAs(t *testing.T, gate *pdp.Gate, decider *countingDecider, claims a
 	t.Helper()
 	client := &teamScopeReachClient{}
 	server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
+	var roots atomic.Int64
+	server.AroundRootFields(func(ctx context.Context, next graphql.RootResolver) graphql.Marshaler {
+		roots.Add(1)
+		return next(ctx)
+	})
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":`+jsonQuote(t, document)+`}`))
 	req.Header.Set("Content-Type", "application/json")
 	ctx := graph.WithShadowSubject(authctx.WithClaims(req.Context(), claims), subject)
@@ -539,7 +553,7 @@ func runRootsAs(t *testing.T, gate *pdp.Gate, decider *countingDecider, claims a
 	if decider != nil {
 		asks = len(decider.requests())
 	}
-	return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements)}, asks, orgs
+	return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements), roots: int(roots.Load())}, asks, orgs
 }
 
 // D6714 (acp review of #5825, item 1): a legacy impersonation session (go-api's row, the admin's own user access
@@ -549,8 +563,8 @@ func TestGraphQLEnforceLegacyImpersonationIsRefused(t *testing.T) {
 	impersonating := enforceCaller{user: true, impersonate: true}
 	doc := `query Q { securityOverview(orgId: "` + servedOrgB.String() + `") { __typename } }`
 	legacy := runGraphQLEnforce(t, nil, impersonating, doc)
-	if legacy.code != http.StatusOK || strings.Contains(legacy.body, `"errors"`) || legacy.statements == 0 {
-		t.Fatalf("today's impersonated answer %+v, want served as the target org", legacy)
+	if legacy.code != http.StatusOK || strings.Contains(legacy.body, `"errors"`) || legacy.statements == 0 || legacy.roots != 1 {
+		t.Fatalf("today's impersonated answer %+v, want served as the target org, its one root field run", legacy)
 	}
 	srv := pdptest.New(t)
 	decider := &countingDecider{next: pepOf(t, srv.URL)}

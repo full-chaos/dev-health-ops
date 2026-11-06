@@ -19,6 +19,7 @@ import (
 const (
 	statusRoute     = "/api/v1/admin/impersonate/status"
 	stopRoute       = "/api/v1/admin/impersonate/stop"
+	consumeRoute    = "/api/v1/admin/impersonate/handoff/consume"
 	legacyRefusal   = `{"detail":"Not allowed in an impersonation session"}`
 	delegatedOKPath = "/delegated-ok"
 )
@@ -36,6 +37,8 @@ func legacyRoutes(guard *Guard) []httpapi.Route {
 		{Method: http.MethodGet, Pattern: delegatedOKPath, Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute, Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodPost, Pattern: stopRoute, Handler: guard.WrapPlatform(rule.ActionAdminImpersonate, echo)},
+		{Method: http.MethodPost, Pattern: consumeRoute, Handler: guard.WrapPlatform(rule.ActionAdminImpersonate, echo)},
+		{Method: http.MethodPost, Pattern: consumeRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute + "x", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodGet, Pattern: statusRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
 		{Method: http.MethodPost, Pattern: stopRoute + "/extra", Handler: guard.Wrap(Authenticated, echo)},
@@ -115,12 +118,15 @@ var refusedLegacyCells = []legacyCell{
 	{"stop other version", http.MethodPost, "/api/v2/admin/impersonate/stop"},
 	{"status under a prefix", http.MethodGet, "/prefix" + statusRoute},
 	{"start", http.MethodPost, "/api/v1/admin/impersonate"},
+	{"consume GET", http.MethodGet, consumeRoute},
+	{"consume child path", http.MethodPost, consumeRoute + "/extra"},
 	{"unknown path", http.MethodGet, "/nowhere"},
 }
 
 var admittedLegacyCells = []legacyCell{
 	{"status", http.MethodGet, statusRoute},
 	{"stop", http.MethodPost, stopRoute},
+	{"handoff consume", http.MethodPost, consumeRoute},
 }
 
 var switchOn, switchOff = true, false

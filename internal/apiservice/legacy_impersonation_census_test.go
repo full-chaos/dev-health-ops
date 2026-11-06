@@ -62,7 +62,7 @@ func (s *legacySessionStore) ReadsPlatformRoles() bool { return false }
 
 // legacyAdmitted are the only routes where the switch lets the legacy caller
 // through the scope in its session.
-var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api/v1/admin/impersonate/stop"}
+var legacyAdmitted = []string{"GET /api/v1/admin/impersonate/status", "POST /api/v1/admin/impersonate/handoff/consume", "POST /api/v1/admin/impersonate/stop"}
 
 // TestLegacyImpersonationCallerCensusUnderTheProxySwitch is the census of
 // every route the go-api listener mounts, on the real chain (ReadOnce,

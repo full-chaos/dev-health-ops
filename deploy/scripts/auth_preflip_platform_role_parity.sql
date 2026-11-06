@@ -1,6 +1,6 @@
 -- Pre-flip read for the go-api and query-api enforcement cells (CHAOS-13209, F7/F8/F9).
 -- Run it read-only, as one point-in-time read, before a cell turns on:
---   BEGIN TRANSACTION READ ONLY; \i ci/auth_preflip_platform_role_parity.sql ROLLBACK;
+--   BEGIN TRANSACTION READ ONLY; \i deploy/scripts/auth_preflip_platform_role_parity.sql ROLLBACK;
 -- Each row is (check, count). The flip needs every count but superusers to be 0:
 --   superusers_without_platform_admin: a public superuser go-api admits, with no active auth platform_admin row.
 --   platform_admin_not_superuser: an active auth platform_admin row on a user that is no public superuser.

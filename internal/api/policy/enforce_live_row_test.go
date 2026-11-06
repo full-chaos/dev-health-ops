@@ -194,3 +194,29 @@ func TestARevokedImpersonatorsRowRefusalAsksTheShadowNothing(t *testing.T) {
 		}
 	}
 }
+
+// The same rule on the guard's own platform refusal (enforce off, the shadow on): a refusal by the live row records
+// impersonation_refused unasked, and a failed row read asks the shadow nothing.
+func TestARevokedImpersonatorsLegacyPlatformRefusalAsksTheShadowNothing(t *testing.T) {
+	for name, readErr := range map[string]error{"live row": nil, "failing row read": errors.New("impersonation row read failed")} {
+		t.Run(name, func(t *testing.T) {
+			srec := recordShadow(t)
+			pdp := newTestPDP(t, allowAll)
+			sh, _ := newShadowFor(t, pdp.client(t), nil)
+			guard := NewGuard(routed(t, revokedImpersonatorStore(true, readErr), &fakeValidator{result: userClaims(nil)}), quiet())
+			guard.SetShadow(sh)
+			mux := http.NewServeMux()
+			mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(ActionAdminOrgs, echo))
+			got := enforceRequest(mux, http.MethodGet, "/api/v1/admin/orgs")
+			sh.wg.Wait()
+			want, wantBody, wantResults := http.StatusForbidden, impersonationRefusalBody, []string{"impersonation_refused"}
+			if readErr != nil {
+				want, wantBody, wantResults = http.StatusServiceUnavailable, sessionRowUnavailableBody, nil
+			}
+			_, results := srec.snapshot()
+			if got.status != want || strings.TrimSpace(got.body) != wantBody || !slices.Equal(results, wantResults) || len(pdp.calls()) != 0 {
+				t.Errorf("%d %s, shadow %v, %d PDP calls; want %d %s, %v, 0", got.status, got.body, results, len(pdp.calls()), want, wantBody, wantResults)
+			}
+		})
+	}
+}

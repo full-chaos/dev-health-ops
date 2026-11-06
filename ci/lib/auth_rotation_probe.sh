@@ -51,17 +51,21 @@ status_verdict() {
   esac
 }
 
-# A probe file holds "<n> <http code>" lines.
+# An overlap probe file holds "<n> <go-api code> <query-api code>" lines. go-api must answer 2xx; query-api must serve: 401,
+# 000 (no answer) and 5xx count as down, as query_serves judges it. A line without exactly three fields is malformed.
+# shellcheck disable=SC2016
+PROBE_AWK='NF != 3 { n++; mal++; next } { n++; if ($2 !~ /^2[0-9][0-9]$/) go++; if ($3 == 401 || $3 == "000" || $3 ~ /^5/) q++ }'
 probe_summary() {
-  awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { printf "probes=%d non2xx=%d\n", n, bad }' "$1"
+  awk "${PROBE_AWK}"' END { printf "probes=%d go_api_non2xx=%d query_api_down=%d malformed=%d\n", n, go, q, mal }' "$1"
 }
 
 probe_no_downtime() {
-  local n bad
-  read -r n bad < <(awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { print n + 0, bad + 0 }' "$1")
-  [ "${n}" -gt 0 ] && [ "${bad}" -eq 0 ]
+  local n go q mal
+  read -r n go q mal < <(awk "${PROBE_AWK}"' END { print n + 0, go + 0, q + 0, mal + 0 }' "$1")
+  [ "${n}" -gt 0 ] && [ "${go}" -eq 0 ] && [ "${q}" -eq 0 ] && [ "${mal}" -eq 0 ]
 }
 
+# A refusal probe file holds "<n> <http code>" lines.
 probe_all_refused() {
   local n ok
   read -r n ok < <(awk 'NF >= 2 { n++; if ($2 == 401 || $2 == 403) ok++ } END { print n + 0, ok + 0 }' "$1")

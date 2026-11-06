@@ -14,6 +14,8 @@ internal/auth/httpapi
 internal/auth/passwordhash
 internal/auth/platformrole/rule
 internal/auth/policycatalog
+internal/auth/repoidentityevent
+internal/auth/repokey
 internal/auth/sessionid
 internal/authzenforce
 internal/chmigrate

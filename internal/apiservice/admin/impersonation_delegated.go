@@ -103,6 +103,17 @@ func (h *handlers) startDelegatedImpersonation(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// The one-use record of the start handoff is written before any session starts: no record, no session.
+	handoffID, err := newHandoffID()
+	if err == nil {
+		err = h.handoffs.record(ctx, handoffID, adminUserID.String())
+	}
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin impersonate: handoff record write failed", slog.Any("error", err))
+		h.writeDelegatedUnavailable(w)
+		return
+	}
+
 	started, err := h.delegator.StartDelegated(ctx, r, sessionissue.DelegatedRequest{
 		BaseSessionID: *user.SessionID, TargetPrincipalID: targetUserID, OrganizationID: membership.OrgID,
 		Reason: sessionissue.ReasonAdminImpersonation,
@@ -139,6 +150,7 @@ func (h *handlers) startDelegatedImpersonation(w http.ResponseWriter, r *http.Re
 	if started.SessionAccess != "" {
 		response.Set("session_access_token", started.SessionAccess)
 	}
+	response.Set("handoff_id", handoffID)
 	policy.WriteModel(w, http.StatusOK, response, nil)
 }
 

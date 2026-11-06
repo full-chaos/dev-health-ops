@@ -21,6 +21,12 @@ internal/apiservice/admin/llmkeybinding_test.go:generic-api-key:112
 internal/apiservice/admin/llmkeybinding_test.go:generic-api-key:147
 internal/apiservice/admin/llmkeybinding_test.go:generic-api-key:148
 internal/llmorgsettings/keybinding_test.go:generic-api-key:65
+# The exception ledger's count keys (`count:legacy_hs256=<n>` after an endpoint-profile file name) match generic-api-key by shape;
+# they are row counts the census computes, never a credential. A TSV row holds no inline marker the branch's first commit lacks,
+# so the rows are the commit-less file:rule:line form.
+ci/auth_exception_ledger.tsv:generic-api-key:11
+ci/auth_exception_ledger.tsv:generic-api-key:12
+ci/auth_exception_ledger.tsv:generic-api-key:13
 # test-fake key constants, not secrets: the org TypeSafe key fixtures of the categorize unit cells; they sit in an earlier commit of this branch on the same lines (commit-less form).
 internal/jobs/investment/categorize/orgtypesafeclient_test.go:generic-api-key:13
 internal/llmorgsettings/typesafe_config_test.go:generic-api-key:11

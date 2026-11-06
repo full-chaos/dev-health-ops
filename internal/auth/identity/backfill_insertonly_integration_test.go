@@ -42,20 +42,17 @@ func TestInsertOnlyBackfillKeepsAnAuthUserChangedThroughAuthService(t *testing.T
 	if res, err := e.store.BackfillUser(ctx, stale, false); err != nil || !res.Inserted {
 		t.Fatalf("first insert-only run: %+v %v", res, err)
 	}
-	// auth-service changes the password and the name; the backfill target keeps the old values.
-	if err := e.owned.SetPasswordHash(ctx, id, *bcryptFor(t, "changed-through-auth-service"), Actor{}); err != nil {
-		t.Fatalf("change the password through auth-service: %v", err)
+	// auth-service changes the password and, in the same audit.Commit, the name; the backfill target keeps the old
+	// values. auth.principals is not a counted table, so the name rides on the password change's commit (its end).
+	rename := func(ctx context.Context, tx audit.TxOps) error {
+		tag, err := tx.Exec(ctx, `UPDATE auth.principals SET display_name = 'Changed Through Auth', updated_at = clock_timestamp() WHERE id = $1`, id)
+		if err == nil && tag.RowsAffected() != 1 {
+			t.Errorf("the rename touched %d principals, want 1", tag.RowsAffected())
+		}
+		return err
 	}
-	principal := id.String()
-	if err := audit.Commit(ctx, e.runtime, e.owned.schema, audit.Mutation{
-		Apply: func(ctx context.Context, tx audit.TxOps) error {
-			_, err := tx.Exec(ctx, `UPDATE auth.principals SET display_name = 'Changed Through Auth', updated_at = clock_timestamp() WHERE id = $1`, id)
-			return err
-		},
-		Audit:  localAudit("auth.principal.projection_updated", "principal_projected", principal, Actor{}),
-		Events: []audit.OutboxEvent{userEvent(principal, "user.credentials_changed")},
-	}); err != nil {
-		t.Fatalf("change the name through audit.Commit: %v", err)
+	if err := e.owned.SetPasswordHashWith(ctx, id, *bcryptFor(t, "changed-through-auth-service"), Actor{}, rename); err != nil {
+		t.Fatalf("change the password and the name through auth-service: %v", err)
 	}
 	before := e.authRows(t, ctx, id)
 	if !strings.Contains(before, "Changed Through Auth") {

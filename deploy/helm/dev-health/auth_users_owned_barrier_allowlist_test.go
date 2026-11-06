@@ -1,6 +1,9 @@
 package devhealth_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -139,6 +142,105 @@ func exampleEntries(t *testing.T, words ...string) string {
 	return strings.Join(out, "\n") + "\n"
 }
 
+// pyJSON renders a string list the way the fake kubectl prints it (python json.dumps, compact, ASCII); nil prints nothing.
+func pyJSON(v any) string {
+	if v == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[")
+	for i, x := range v.([]any) {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(`"`)
+		for _, r := range x.(string) {
+			switch {
+			case r == '"':
+				b.WriteString(`\"`)
+			case r == '\\':
+				b.WriteString(`\\`)
+			case r == '\n':
+				b.WriteString(`\n`)
+			case r == '\r':
+				b.WriteString(`\r`)
+			case r == '\t':
+				b.WriteString(`\t`)
+			case r < 0x20 || r > 0x7e:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			default:
+				b.WriteRune(r)
+			}
+		}
+		b.WriteString(`"`)
+	}
+	b.WriteString("]")
+	return b.String()
+}
+
+func sha(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
+
+// ctrHash: the sha256 of a container's command+args as the scan reads them (the `shell -c` entry field).
+func ctrHash(c map[string]any) string { return sha(pyJSON(c["command"]) + pyJSON(c["args"])) }
+
+// rowHash: the sha256 of a Job row after its third field (containers|initContainers|); its pod (no ephemeral container) gives
+// the same bytes (the `malformed row` entry field).
+func rowHash(spec map[string]any) string {
+	part := func(k string) string {
+		out := ""
+		if l, ok := spec[k].([]any); ok {
+			for _, x := range l {
+				c := x.(map[string]any)
+				out += c["name"].(string) + "@@" + c["image"].(string) + "@@" + pyJSON(c["command"]) + pyJSON(c["args"]) + "<<c>>"
+			}
+		}
+		return out
+	}
+	return sha(part("containers") + "|" + part("initContainers") + "|")
+}
+
+func grantKeys(h string, jobs ...string) map[string]string {
+	m := map[string]string{}
+	for _, j := range jobs {
+		m["pod|Job/"+j+"|-|malformed row"] = h
+		m["job|Job/"+j+"|-|malformed row"] = h
+	}
+	return m
+}
+
+const (
+	acrKey      = "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c"
+	exporterKey = "pod|Deployment/dev-health-ops-go-pgbouncer-transaction|exporter|shell -c"
+)
+
+// prodHashes: the content hash of each entry key, computed from the prod-shaped fixtures.
+func prodHashes() map[string]string {
+	m := grantKeys(rowHash(grantSpec(grantImage, grantScript)), "ch-m5-grant17", "ch-m5-grant17b", "ch-m5-grant17c")
+	m[acrKey] = ctrHash(acrInit(acrInitCmd))
+	m[exporterKey] = ctrHash(exporterCtr(exporterImage, exporterCmd))
+	return m
+}
+
+// pinnedEntries: the example entries (all, or those holding one of the words) with their unset sha256 written from
+// prodHashes, then from over: what an operator writes after the read-only review.
+func pinnedEntries(t *testing.T, over map[string]string, words ...string) string {
+	t.Helper()
+	h := prodHashes()
+	for k, v := range over {
+		h[k] = v
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(exampleEntries(t, words...)), "\n") {
+		f := strings.Split(line, "|")
+		if len(f) != 6 || f[5] != "unset" {
+			t.Fatalf("example entry is not `...|unset`: %s", line)
+		}
+		f[5] = h[strings.Join(f[:4], "|")]
+		out = append(out, strings.Join(f, "|"))
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
 func allowFile(t *testing.T, text string) []string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "allow.txt")
@@ -200,11 +302,25 @@ barrier FAILED: 2 check(s) failed; do not run the next step
 	}
 }
 
-// The example file clears the prod-shaped world in every mode: 9 lines (3 grant pods, 3 grant Jobs, 2 acr pods, 1 exporter
-// pod), the 8 keys of the file, nothing on stderr, and barrier_ok stays the last line.
+var hashMismatch = regexp.MustCompile(`(?m)^allowlist-hash-mismatch (.+) object=(\S+) sha256=([0-9a-f]{64})$`)
+
+// The example file pins no content yet (sha256 unset): on the prod-shaped world it STOPs and prints, for each of the 9 objects,
+// the hash of the content the scan read (equal to the hash of the fixture, computed here on its own). With those hashes written
+// in, it clears in every mode: 9 lines (3 grant pods, 3 grant Jobs, 2 acr pods, 1 exporter pod), the 8 keys of the file,
+// nothing on stderr, and barrier_ok stays the last line.
 func TestBarrierExampleAllowlistClearsTheProdShapedWorld(t *testing.T) {
+	r := runBarrier(t, allProd().files(), []string{"BARRIER_ALLOWLIST=" + exampleAllowlist}, "up-go-api")
+	m := hashMismatch.FindAllStringSubmatch(r.stderr, -1)
+	if r.rc == 0 || bwPassed(r) || len(m) != 9 || clearedLine.MatchString(r.stdout) {
+		t.Fatalf("the unset example file: rc=%d mismatch lines=%d stdout=%q stderr=%q", r.rc, len(m), r.stdout, r.stderr)
+	}
+	for _, x := range m {
+		if want := prodHashes()[x[1]]; x[3] != want {
+			t.Errorf("%s %s: printed sha256 %s, the fixture hashes to %s", x[1], x[2], x[3], want)
+		}
+	}
 	for _, mode := range []string{"up-go-api", "up-owned", "down-auth"} {
-		r := runBarrier(t, allProd().files(), allowFile(t, exampleEntries(t)), mode)
+		r := runBarrier(t, allProd().files(), allowFile(t, pinnedEntries(t, nil)), mode)
 		if !bwPassed(r) || r.stderr != "" {
 			t.Fatalf("%s: rc=%d stdout=%q stderr=%q", mode, r.rc, r.stdout, r.stderr)
 		}
@@ -216,11 +332,6 @@ func TestBarrierExampleAllowlistClearsTheProdShapedWorld(t *testing.T) {
 		if !strings.HasPrefix(lines[len(lines)-1], "barrier_ok mode="+mode+" ") {
 			t.Errorf("%s: barrier_ok is not the last line: %q", mode, r.stdout)
 		}
-	}
-	// the file the test reads is the file a person runs
-	r := runBarrier(t, allProd().files(), []string{"BARRIER_ALLOWLIST=" + exampleAllowlist}, "up-go-api")
-	if !bwPassed(r) {
-		t.Fatalf("the example file by path: rc=%d stderr=%q", r.rc, r.stderr)
 	}
 }
 
@@ -241,7 +352,7 @@ func TestBarrierAllowlistClearsEachClass(t *testing.T) {
 			if r := runBarrier(t, prodWorld(c.parts).files(), nil, "up-go-api"); r.rc == 0 {
 				t.Fatalf("control: the class does not STOP without an allowlist: %q", r.stdout)
 			}
-			entries := exampleEntries(t, c.word)
+			entries := pinnedEntries(t, nil, c.word)
 			r := runBarrier(t, prodWorld(c.parts).files(), allowFile(t, entries), "up-go-api")
 			if !bwPassed(r) || r.stderr != "" {
 				t.Fatalf("rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
@@ -294,97 +405,110 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 		pod := grantPodAt(w, job)
 		pod["spec"] = spec
 	}
+	withInit := grantSpec(grantImage, grantScript)
+	withInit["initContainers"] = []any{map[string]any{"name": "pre", "image": "registry.example/tool:1", "args": bwStrs("x")}}
+	changedArgs := "install -m 0444 /in/entitlement.jwt /out/entitlement.jwt"
+	changedScript := strings.Replace(grantScript, "TO otel_querylog", "TO otel_querylog2", 1)
+	// over: the entry hashes written for the changed content, so the cell meets the check it names and not the hash check
 	cases := []struct {
 		name string
 		mut  func(w *bworld)
 		want string
+		over map[string]string
 	}{
+		{"same image, changed args of an allowlisted shell -c container", func(w *bworld) { setAcrInit(w, changedArgs) },
+			"allowlist-hash-mismatch " + acrKey + " object=" + acrRS + "-g4424 sha256=" + ctrHash(acrInit(changedArgs)), nil},
+		{"same Job name and image, changed row bytes", func(w *bworld) { regrant(w, "ch-m5-grant17", grantImage, changedScript) },
+			"allowlist-hash-mismatch job|Job/ch-m5-grant17|-|malformed row object=ch-m5-grant17 sha256=" + rowHash(grantSpec(grantImage, changedScript)), nil},
+		{"an allowlisted Job with succeeded 0", func(w *bworld) {
+			j := grantJob("ch-m5-grant17c", grantSpec(grantImage, grantScript), 0, true)
+			j["status"].(map[string]any)["succeeded"] = 0
+			setJob(w, "ch-m5-grant17c", j)
+		}, "job ch-m5-grant17c: malformed row", nil},
 		{"changed image digest of the exporter", func(w *bworld) {
 			setExporter(w, "quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1"+zeroDigest, exporterCmd)
-		}, "zjwdn container exporter: runs a shell with -c"},
+		}, "zjwdn container exporter: runs a shell with -c", nil},
 		{"the exporter image without its digest", func(w *bworld) {
 			setExporter(w, "quay.io/prometheuscommunity/pgbouncer-exporter:v0.12.1", exporterCmd)
-		}, "zjwdn container exporter: runs a shell with -c"},
+		}, "zjwdn container exporter: runs a shell with -c", nil},
 		{"changed image digest of a grant Job and its pod", func(w *bworld) {
 			regrant(w, "ch-m5-grant17b", "clickhouse/clickhouse-server:26.6.8.7"+zeroDigest, grantScript)
-		}, "job ch-m5-grant17b: malformed row"},
+		}, "job ch-m5-grant17b: malformed row", grantKeys(rowHash(grantSpec("clickhouse/clickhouse-server:26.6.8.7"+zeroDigest, grantScript)), "ch-m5-grant17b")},
 		{"a second container on another image in a grant Job", func(w *bworld) {
-			spec := grantSpec(grantImage, grantScript)
-			spec["initContainers"] = []any{map[string]any{"name": "pre", "image": "registry.example/tool:1", "args": bwStrs("x")}}
-			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", spec, 0, true))
-		}, "job ch-m5-grant17: malformed row"},
+			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", withInit, 0, true))
+		}, "job ch-m5-grant17: malformed row", map[string]string{"job|Job/ch-m5-grant17|-|malformed row": rowHash(withInit)}},
 		{"a forged segment in the args does not hide a changed image", func(w *bworld) {
 			regrant(w, "ch-m5-grant17c", "registry.example/evil:1"+zeroDigest, "x<<c>>|grant@@"+grantImage+"@@y | z")
-		}, "job ch-m5-grant17c: malformed row"},
+		}, "job ch-m5-grant17c: malformed row", grantKeys(rowHash(grantSpec("registry.example/evil:1"+zeroDigest, "x<<c>>|grant@@"+grantImage+"@@y | z")), "ch-m5-grant17c")},
 		{"an allowlisted image with the segment separator appended", func(w *bworld) {
 			regrant(w, "ch-m5-grant17", grantImage+"@@x", grantScript)
-		}, "job ch-m5-grant17: malformed row"},
+		}, "job ch-m5-grant17: malformed row", grantKeys(rowHash(grantSpec(grantImage+"@@x", grantScript)), "ch-m5-grant17")},
 		{"a pod of an allowlisted Job labelled go-api", func(w *bworld) {
 			grantPodAt(w, "ch-m5-grant17")["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/component": "go-api"}
-		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		}, "pod ch-m5-grant17-6fnbg: malformed row", nil},
 		{"a pod of an allowlisted Job labelled auth-service", func(w *bworld) {
 			grantPodAt(w, "ch-m5-grant17")["metadata"].(map[string]any)["labels"] = map[string]any{"app.kubernetes.io/component": "auth-service"}
-		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		}, "pod ch-m5-grant17-6fnbg: malformed row", nil},
 		{"a new item", func(w *bworld) {
 			w.otherRS = append(w.otherRS, rsOwnedBy("other-5d9f", "other"))
 			w.otherPods = append(w.otherPods, bwOwned(bwPodAt("x1", "other", "", map[string]any{"containers": []any{
 				map[string]any{"name": "c", "image": acrInitImage, "command": bwStrs("sh", "-c", "sleep 1")}}}), "ReplicaSet", "other-5d9f"))
-		}, "pod x1 container c: runs a shell with -c"},
+		}, "pod x1 container c: runs a shell with -c", nil},
 		{"the allowlisted container on another Deployment", func(w *bworld) {
 			w.otherRS = append(w.otherRS, rsOwnedBy("dev-health-acr2-5d9f", "dev-health-acr2"))
 			w.otherPods = append(w.otherPods, bwOwned(bwPodAt("x1", "acr", "", map[string]any{"initContainers": []any{acrInit(acrInitCmd)},
 				"containers": []any{map[string]any{"name": "acr", "image": "ghcr.io/example/dev-health-acr:v1"}}}), "ReplicaSet", "dev-health-acr2-5d9f"))
-		}, "pod x1 container prepare-entitlement-token: runs a shell with -c"},
+		}, "pod x1 container prepare-entitlement-token: runs a shell with -c", nil},
 		{"another container name in an allowlisted Deployment pod", func(w *bworld) {
 			pod := acrPod(acrRS+"-x1", "acr", acrInit(acrInitCmd))
 			spec := pod["spec"].(map[string]any)
 			spec["initContainers"] = append(spec["initContainers"].([]any), map[string]any{"name": "second", "image": acrInitImage, "command": bwStrs("sh", "-c", acrInitCmd)})
 			w.otherPods = append(w.otherPods, pod)
-		}, "x1 container second: runs a shell with -c"},
+		}, "x1 container second: runs a shell with -c", nil},
 		{"a running pod of an allowlisted Job", func(w *bworld) {
 			bwPhase(grantPodAt(w, "ch-m5-grant17"), "Running")
 			setJob(w, "ch-m5-grant17", grantJob("ch-m5-grant17", grantSpec(grantImage, grantScript), 1, false))
-		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		}, "pod ch-m5-grant17-6fnbg: malformed row", nil},
 		{"a Pending pod of a finished allowlisted Job", func(w *bworld) {
 			bwPhase(grantPodAt(w, "ch-m5-grant17"), "Pending")
-		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		}, "pod ch-m5-grant17-6fnbg: malformed row", nil},
 		{"an allowlisted Job with active 1", func(w *bworld) {
 			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantScript), 1, true))
-		}, "job ch-m5-grant17c: malformed row"},
+		}, "job ch-m5-grant17c: malformed row", nil},
 		{"an allowlisted Job without completionTime", func(w *bworld) {
 			setJob(w, "ch-m5-grant17c", grantJob("ch-m5-grant17c", grantSpec(grantImage, grantScript), 0, false))
-		}, "job ch-m5-grant17c: malformed row"},
+		}, "job ch-m5-grant17c: malformed row", nil},
 		{"a pod of an allowlisted Job with a second owner", func(w *bworld) {
 			pod := grantPodAt(w, "ch-m5-grant17")
 			pod["metadata"].(map[string]any)["ownerReferences"] = []any{map[string]any{"kind": "Job", "name": "ch-m5-grant17"}, map[string]any{"kind": "Job", "name": "x"}}
-		}, "pod ch-m5-grant17-6fnbg: malformed row"},
+		}, "pod ch-m5-grant17-6fnbg: malformed row", nil},
 		{"dho in an allowlisted shell -c container", func(w *bworld) { setAcrInit(w, "dho version") },
-			"g4424 container prepare-entitlement-token: runs a shell with -c"},
+			"g4424 container prepare-entitlement-token: runs a shell with -c", map[string]string{acrKey: ctrHash(acrInit("dho version"))}},
 		{"DHO in upper case in an allowlisted shell -c container", func(w *bworld) { setAcrInit(w, "exec /opt/DHO/bin/tool") },
-			"g4424 container prepare-entitlement-token: runs a shell with -c"},
+			"g4424 container prepare-entitlement-token: runs a shell with -c", map[string]string{acrKey: ctrHash(acrInit("exec /opt/DHO/bin/tool"))}},
 		{"users and admin in an allowlisted shell -c container", func(w *bworld) {
 			setExporter(w, exporterImage, "while true; do tool --role=Admin --table=superUsers; sleep 5; done")
-		}, "zjwdn container exporter: runs a shell with -c"},
+		}, "zjwdn container exporter: runs a shell with -c", map[string]string{exporterKey: ctrHash(exporterCtr(exporterImage, "while true; do tool --role=Admin --table=superUsers; sleep 5; done"))}},
 		{"users and admin in an allowlisted Job", func(w *bworld) {
 			regrant(w, "ch-m5-grant17", grantImage, "GRANT ALL ON *.* TO admin; SELECT 1 FROM system.users | x")
-		}, "job ch-m5-grant17: malformed row"},
+		}, "job ch-m5-grant17: malformed row", grantKeys(rowHash(grantSpec(grantImage, "GRANT ALL ON *.* TO admin; SELECT 1 FROM system.users | x")), "ch-m5-grant17")},
 		{"dho in an allowlisted Job", func(w *bworld) { regrant(w, "ch-m5-grant17", grantImage, "SELECT 'dho' | x") },
-			"pod ch-m5-grant17-6fnbg: malformed row"},
+			"pod ch-m5-grant17-6fnbg: malformed row", grantKeys(rowHash(grantSpec(grantImage, "SELECT 'dho' | x")), "ch-m5-grant17")},
 		{"a substitution in an allowlisted shell -c container", func(w *bworld) { setAcrInit(w, "echo $(id)") },
-			"g4424 container prepare-entitlement-token: uses a command substitution"},
+			"g4424 container prepare-entitlement-token: uses a command substitution", map[string]string{acrKey: ctrHash(acrInit("echo $(id)"))}},
 		{"an allowlisted Deployment pod labelled go-api", func(w *bworld) {
 			w.otherPods = append(w.otherPods, acrPod(acrRS+"-x1", "go-api", acrInit(acrInitCmd)))
-		}, "x1 container prepare-entitlement-token: runs a shell with -c"},
+		}, "x1 container prepare-entitlement-token: runs a shell with -c", nil},
 		{"an allowlisted Deployment pod labelled auth-service", func(w *bworld) {
 			w.otherPods = append(w.otherPods, acrPod(acrRS+"-x1", "auth-service", acrInit(acrInitCmd)))
-		}, "x1 container prepare-entitlement-token: runs a shell with -c"},
+		}, "x1 container prepare-entitlement-token: runs a shell with -c", nil},
 		{"the acr ReplicaSet owned by two Deployments", func(w *bworld) {
 			for i, rs := range w.otherRS {
 				if rs.(map[string]any)["metadata"].(map[string]any)["name"] == acrRS {
 					w.otherRS[i] = rsOwnedBy(acrRS, "dev-health-acr", "dev-health-acr")
 				}
 			}
-		}, "g4424 container prepare-entitlement-token: runs a shell with -c"},
+		}, "g4424 container prepare-entitlement-token: runs a shell with -c", nil},
 		{"an allowlisted object is gone (entry unused)", func(w *bworld) {
 			kept := []any{}
 			for _, p := range w.otherPods {
@@ -393,13 +517,13 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 				}
 			}
 			w.otherPods = kept
-		}, "allowlist-unused pod|Deployment/dev-health-ops-go-pgbouncer-transaction|exporter|shell -c"},
+		}, "allowlist-unused pod|Deployment/dev-health-ops-go-pgbouncer-transaction|exporter|shell -c", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			w := allProd()
 			c.mut(w)
-			r := runBarrier(t, w.files(), allowFile(t, exampleEntries(t)), "up-go-api")
+			r := runBarrier(t, w.files(), allowFile(t, pinnedEntries(t, c.over)), "up-go-api")
 			if bwPassed(r) || r.rc == 0 || !strings.Contains(r.stderr, c.want) {
 				t.Fatalf("want a STOP with %q: rc=%d stdout=%q stderr=%q", c.want, r.rc, r.stdout, r.stderr)
 			}
@@ -416,7 +540,7 @@ func TestBarrierAllowlistStillStops(t *testing.T) {
 func TestBarrierAllowlistNeverTouchesTheGoAPIAndAuthServiceChecks(t *testing.T) {
 	w := allProd()
 	w.goPods[1] = bwPodAt("p2", "go-api", "", map[string]any{"containers": []any{bwServerGoAPI(map[string]any{"name": "X", "value": "1"})}})
-	r := runBarrier(t, w.files(), allowFile(t, exampleEntries(t)), "up-go-api")
+	r := runBarrier(t, w.files(), allowFile(t, pinnedEntries(t, nil)), "up-go-api")
 	want := "barrier check failed: go-api pod p2: AUTH_USERS_OWNED is not true\nbarrier check failed: go-api pod p2: AUTH_PROXY_CREDENTIALS is not true\nbarrier FAILED: 2 check(s) failed; do not run the next step\n"
 	if r.rc != 1 || r.stderr != want {
 		t.Fatalf("rc=%d stderr=%q", r.rc, r.stderr)
@@ -427,17 +551,17 @@ func TestBarrierAllowlistNeverTouchesTheGoAPIAndAuthServiceChecks(t *testing.T) 
 
 	w = allProd()
 	w.authPods[0] = bwAuthPod("a1", "true")
-	if r := runBarrier(t, w.files(), allowFile(t, exampleEntries(t)), "up-owned"); r.rc == 0 || !strings.Contains(r.stderr, "an auth-service pod is already owned") {
+	if r := runBarrier(t, w.files(), allowFile(t, pinnedEntries(t, nil)), "up-owned"); r.rc == 0 || !strings.Contains(r.stderr, "an auth-service pod is already owned") {
 		t.Fatalf("up-owned with an owned auth-service pod: rc=%d stderr=%q", r.rc, r.stderr)
 	}
 
 	for _, line := range []string{
-		"pod|Deployment/a-dev-health-go-api|go-api|shell -c|" + acrInitImage,
-		"pod|Deployment/dev-health-ops-go-api|sidecar|shell -c|" + acrInitImage,
-		"pod|Deployment/a-dev-health-auth-service|stage-signing-key|shell -c|" + acrInitImage,
-		"pod|Deployment/x|auth-service|shell -c|" + acrInitImage,
+		"pod|Deployment/a-dev-health-go-api|go-api|shell -c|" + acrInitImage + "|unset",
+		"pod|Deployment/dev-health-ops-go-api|sidecar|shell -c|" + acrInitImage + "|unset",
+		"pod|Deployment/a-dev-health-auth-service|stage-signing-key|shell -c|" + acrInitImage + "|unset",
+		"pod|Deployment/x|auth-service|shell -c|" + acrInitImage + "|unset",
 	} {
-		r := runBarrier(t, allProd().files(), allowFile(t, exampleEntries(t)+line+"\n"), "up-go-api")
+		r := runBarrier(t, allProd().files(), allowFile(t, pinnedEntries(t, nil)+line+"\n"), "up-go-api")
 		if r.rc == 0 || r.argv != "" || !strings.Contains(r.stderr, "go-api or auth-service") {
 			t.Errorf("%s: rc=%d argv=%q stderr=%q", line, r.rc, r.argv, r.stderr)
 		}
@@ -446,42 +570,50 @@ func TestBarrierAllowlistNeverTouchesTheGoAPIAndAuthServiceChecks(t *testing.T) 
 
 // A malformed file STOPs before any kubectl call; nothing is ignored, nothing is a pattern.
 func TestBarrierRefusesAMalformedAllowlist(t *testing.T) {
-	good := "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|" + acrInitImage
+	h := strings.Repeat("a", 64)
+	e := func(fields ...string) string { return strings.Join(fields, "|") + "|" + h }
+	good := e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", acrInitImage)
 	cases := map[string]string{
 		"4 fields":                                  "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c",
-		"6 fields":                                  good + "|x",
+		"5 fields (no sha256)":                      "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|" + acrInitImage,
+		"7 fields":                                  good + "|x",
+		"empty sha256":                              strings.TrimSuffix(good, h),
+		"a short sha256":                            good[:len(good)-1],
+		"upper case sha256":                         strings.TrimSuffix(good, h) + strings.Repeat("A", 64),
+		"a sha256 that is not hex":                  strings.TrimSuffix(good, h) + strings.Repeat("g", 64),
 		"duplicate key":                             good + "\n" + good,
 		"duplicate key with another image":          good + "\n" + strings.Replace(good, "9532d8c3", "9532d8c4", 1),
-		"empty digest":                              "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|",
-		"image without a digest":                    "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|docker.io/library/busybox:1.36",
-		"a short digest":                            good[:len(good)-1],
+		"duplicate key with another sha256":         good + "\n" + strings.TrimSuffix(good, h) + strings.Repeat("b", 64),
+		"empty digest":                              e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", ""),
+		"image without a digest":                    e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", "docker.io/library/busybox:1.36"),
+		"a short digest":                            e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", acrInitImage[:len(acrInitImage)-1]),
 		"upper case hex":                            strings.Replace(good, "9532d8c3", "9532D8C3", 1),
-		"an empty repository":                       "pod|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|" + zeroDigest,
-		"a wildcard owner":                          "job|Job/ch-m5-grant*|-|malformed row|" + grantImage,
-		"a wildcard container":                      "pod|Deployment/dev-health-acr|*|shell -c|" + acrInitImage,
-		"a question mark":                           "job|Job/ch-m5-grant1?|-|malformed row|" + grantImage,
-		"a bracket class":                           "job|Job/ch-m5-grant1[7]|-|malformed row|" + grantImage,
-		"a regex anchor":                            "job|Job/ch-m5-grant17$|-|malformed row|" + grantImage,
-		"kind cronjob":                              "cronjob|Job/ch-m5-grant17|-|malformed row|" + grantImage,
-		"kind deployment":                           "deployment|Deployment/dev-health-acr|prepare-entitlement-token|shell -c|" + acrInitImage,
-		"a reason that is never cleared":            "pod|Deployment/dev-health-acr|prepare-entitlement-token|mentions dho|" + acrInitImage,
-		"the full reason text":                      "pod|Deployment/dev-health-acr|prepare-entitlement-token|runs a shell with -c|" + acrInitImage,
-		"malformed row of a Deployment":             "pod|Deployment/dev-health-acr|-|malformed row|" + acrInitImage,
-		"malformed row with a container":            "pod|Job/ch-m5-grant17|grant|malformed row|" + grantImage,
-		"shell -c of a Job":                         "job|Job/ch-m5-grant17|grant|shell -c|" + grantImage,
-		"shell -c of a Job pod":                     "pod|Job/ch-m5-grant17|grant|shell -c|" + grantImage,
-		"shell -c without a container":              "pod|Deployment/dev-health-acr|-|shell -c|" + acrInitImage,
-		"an owner without a kind":                   "job|ch-m5-grant17|-|malformed row|" + grantImage,
-		"an owner kind StatefulSet":                 "pod|StatefulSet/x|c|shell -c|" + acrInitImage,
-		"an owner with an empty name":               "job|Job/|-|malformed row|" + grantImage,
-		"a container with upper case":               "pod|Deployment/dev-health-acr|Prepare|shell -c|" + acrInitImage,
+		"an empty repository":                       e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", zeroDigest),
+		"a wildcard owner":                          e("job", "Job/ch-m5-grant*", "-", "malformed row", grantImage),
+		"a wildcard container":                      e("pod", "Deployment/dev-health-acr", "*", "shell -c", acrInitImage),
+		"a question mark":                           e("job", "Job/ch-m5-grant1?", "-", "malformed row", grantImage),
+		"a bracket class":                           e("job", "Job/ch-m5-grant1[7]", "-", "malformed row", grantImage),
+		"a regex anchor":                            e("job", "Job/ch-m5-grant17$", "-", "malformed row", grantImage),
+		"kind cronjob":                              e("cronjob", "Job/ch-m5-grant17", "-", "malformed row", grantImage),
+		"kind deployment":                           e("deployment", "Deployment/dev-health-acr", "prepare-entitlement-token", "shell -c", acrInitImage),
+		"a reason that is never cleared":            e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "mentions dho", acrInitImage),
+		"the full reason text":                      e("pod", "Deployment/dev-health-acr", "prepare-entitlement-token", "runs a shell with -c", acrInitImage),
+		"malformed row of a Deployment":             e("pod", "Deployment/dev-health-acr", "-", "malformed row", acrInitImage),
+		"malformed row with a container":            e("pod", "Job/ch-m5-grant17", "grant", "malformed row", grantImage),
+		"shell -c of a Job":                         e("job", "Job/ch-m5-grant17", "grant", "shell -c", grantImage),
+		"shell -c of a Job pod":                     e("pod", "Job/ch-m5-grant17", "grant", "shell -c", grantImage),
+		"shell -c without a container":              e("pod", "Deployment/dev-health-acr", "-", "shell -c", acrInitImage),
+		"an owner without a kind":                   e("job", "ch-m5-grant17", "-", "malformed row", grantImage),
+		"an owner kind StatefulSet":                 e("pod", "StatefulSet/x", "c", "shell -c", acrInitImage),
+		"an owner with an empty name":               e("job", "Job/", "-", "malformed row", grantImage),
+		"a container with upper case":               e("pod", "Deployment/dev-health-acr", "Prepare", "shell -c", acrInitImage),
 		"a leading space":                           " " + good,
 		"a trailing space":                          good + " ",
 		"a tab":                                     strings.Replace(good, "|shell -c|", "|shell\t-c|", 1),
 		"a CRLF line end":                           good + "\r",
 		"only comments":                             "# nothing here",
 		"empty file":                                "",
-		"a bad line after good ones (none ignored)": exampleEntries(t) + "pod|Deployment/x|c|shell -c",
+		"a bad line after good ones (none ignored)": exampleEntries(t) + "pod|Deployment/x|c|shell -c|" + acrInitImage,
 	}
 	for name, text := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -501,7 +633,7 @@ func TestBarrierRefusesAMalformedAllowlist(t *testing.T) {
 
 // With an allowlist the run stays read-only (get -o jsonpath, request timeout) and reads the facts a clear needs.
 func TestBarrierAllowlistReadsOnlyWithGetJSONPath(t *testing.T) {
-	r := runBarrier(t, allProd().files(), allowFile(t, exampleEntries(t)), "up-go-api")
+	r := runBarrier(t, allProd().files(), allowFile(t, pinnedEntries(t, nil)), "up-go-api")
 	shape := regexp.MustCompile(`^-n dev-health --request-timeout=30s get (deploy|rs|pods|jobs|cronjobs|statefulsets) (-l app\.kubernetes\.io/instance=a\S* )?-o jsonpath=`)
 	for _, line := range strings.Split(strings.TrimSpace(r.argv), "\n") {
 		if !shape.MatchString(line) {
@@ -541,7 +673,7 @@ func TestBarrierAllowlistClearsAFinishedJobWhateverItsShell(t *testing.T) {
 				}
 				return w
 			}
-			allow := allowFile(t, exampleEntries(t, "ch-m5-grant"))
+			allow := allowFile(t, pinnedEntries(t, grantKeys(rowHash(grantSpec(grantImage, script)), "ch-m5-grant17", "ch-m5-grant17b", "ch-m5-grant17c"), "ch-m5-grant"))
 			r := runBarrier(t, world(0).files(), allow, "up-go-api")
 			if _, n := clearedKeys(r.stdout); !bwPassed(r) || n != 6 {
 				t.Fatalf("finished: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
@@ -551,5 +683,29 @@ func TestBarrierAllowlistClearsAFinishedJobWhateverItsShell(t *testing.T) {
 				t.Fatalf("running: rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
 			}
 		})
+	}
+}
+
+// A running pod whose row or container the scan cannot split is never cleared, even with an entry pinned to the hash of its
+// command+args: an argument that holds the scan's own separators (`|`, `@@`, `<<c>>`) makes the parse ambiguous. Fail closed,
+// as without an allowlist; only a finished Job's row is cleared that way (pinned by the row hash).
+func TestBarrierAllowlistNeverClearsARunningPodItCannotSplit(t *testing.T) {
+	for _, sep := range []string{"|", "@@", "<<c>>"} {
+		for _, where := range []string{"command", "args"} {
+			t.Run(sep+" in "+where, func(t *testing.T) {
+				c := acrInit("printf 'a" + sep + "b'")
+				if where == "args" {
+					c = map[string]any{"name": "prepare-entitlement-token", "image": acrInitImage, "command": bwStrs("sh", "-c"), "args": bwStrs("printf 'a" + sep + "b'")}
+				}
+				w := prodWorld(prodParts{acr: true})
+				for i, p := range w.otherPods {
+					w.otherPods[i] = acrPod(p.(map[string]any)["metadata"].(map[string]any)["name"].(string), "acr", c)
+				}
+				r := runBarrier(t, w.files(), allowFile(t, pinnedEntries(t, map[string]string{acrKey: ctrHash(c)}, "dev-health-acr")), "up-go-api")
+				if bwPassed(r) || r.rc == 0 || clearedLine.MatchString(r.stdout) || !strings.Contains(r.stderr, "allowlist-unused "+acrKey) {
+					t.Fatalf("rc=%d stdout=%q stderr=%q", r.rc, r.stdout, r.stderr)
+				}
+			})
+		}
 	}
 }

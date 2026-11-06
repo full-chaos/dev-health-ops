@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
@@ -23,22 +24,19 @@ import (
 // operation replaces it while a cell is on; a zero Scope there would serve nothing.
 
 // ingressSuccessForms is every accepted return of the GraphQL ingress authenticators, listed both ways: each form
-// found must be listed for its function, and each listed form must be found.
-//
-//	literal:<org>  an authctx.Claims literal whose Scope is pepgate.Legacy(<org>), <org> the literal's own OrgID
-//	assigned:<v>   the variable <v>, after <v>.Scope = pepgate.Legacy(<v>.OrgID)
-//	call:<f>       the claims of <f>, itself listed here
-//	legacyClaims   legacyClaims(org)
+// found must be listed for its function, and each listed form must be found. A form is "call:<f>": the claims are the
+// result of <f>, either withLegacyScope or legacyClaims (the legacy scope of the claims' own org) or another listed
+// authenticator. Anything else is "unlisted:<expression>".
 var ingressSuccessForms = map[string][]string{
-	"authenticateInternalRequest": {"assigned:claims", "call:authenticateEdgeCarrier", "literal:claims.OrgID"},
+	"authenticateInternalRequest": {"call:authenticateEdgeCarrier", "call:withLegacyScope", "call:withLegacyScope"},
 	"authenticateEdgeCarrier":     {"call:checkEdgeCarrier"},
-	"checkEdgeCarrier":            {"literal:orgID"},
+	"checkEdgeCarrier":            {"call:withLegacyScope"},
 	"authenticateGraphQLEdge":     {"call:authenticateEdgeTokenOnly"},
 	"authenticateEdgeTokenOnly":   {"call:checkEdgeCarrier"},
-	"mcpAuthenticate":             {"legacyClaims"},
+	"mcpAuthenticate":             {"call:legacyClaims"},
 }
 
-// accepted reports whether a return statement of fn is an accepted caller: its last result says so.
+// ingressAccepted reports whether a return statement of fn is an accepted caller: its last result says so.
 func ingressAccepted(fn string, results []ast.Expr) bool {
 	if len(results) == 1 {
 		_, call := results[0].(*ast.CallExpr)
@@ -80,23 +78,14 @@ func TestGraphQLIngressAuthenticatorsSetTheLegacyScope(t *testing.T) {
 			name := fn.Name.Name
 			found[name] = []string{}
 			calledInto := map[string]string{}
-			scoped := map[string]bool{}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				assign, ok := n.(*ast.AssignStmt)
-				if !ok || len(assign.Rhs) != 1 {
+				if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) == 0 {
 					return true
 				}
-				if call, ok := assign.Rhs[0].(*ast.CallExpr); ok && len(assign.Lhs) >= 1 {
+				if call, ok := assign.Rhs[0].(*ast.CallExpr); ok {
 					if callee, ok := call.Fun.(*ast.Ident); ok {
 						calledInto[src(assign.Lhs[0])] = callee.Name
-					}
-				}
-				if len(assign.Lhs) == 1 {
-					if sel, ok := assign.Lhs[0].(*ast.SelectorExpr); ok && sel.Sel.Name == "Scope" {
-						v := src(sel.X)
-						if src(assign.Rhs[0]) == "pepgate.Legacy("+v+".OrgID)" {
-							scoped[v] = true
-						}
 					}
 				}
 				return true
@@ -115,27 +104,10 @@ func TestGraphQLIngressAuthenticatorsSetTheLegacyScope(t *testing.T) {
 				case *ast.CallExpr:
 					if callee, ok := e.Fun.(*ast.Ident); ok {
 						form = "call:" + callee.Name
-						if callee.Name == "legacyClaims" {
-							form = "legacyClaims"
-						}
 					}
 				case *ast.Ident:
-					switch {
-					case scoped[e.Name]:
-						form = "assigned:" + e.Name
-					case calledInto[e.Name] != "":
+					if calledInto[e.Name] != "" {
 						form = "call:" + calledInto[e.Name]
-					}
-				case *ast.CompositeLit:
-					fields := map[string]string{}
-					for _, elt := range e.Elts {
-						if kv, ok := elt.(*ast.KeyValueExpr); ok {
-							fields[src(kv.Key)] = src(kv.Value)
-						}
-					}
-					org := fields["OrgID"]
-					if src(e.Type) == "authctx.Claims" && org != "" && fields["Scope"] == "pepgate.Legacy("+org+")" {
-						form = "literal:" + org
 					}
 				}
 				found[name] = append(found[name], form)
@@ -156,6 +128,22 @@ func TestGraphQLIngressAuthenticatorsSetTheLegacyScope(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("%s: accepted returns %v, want %v (an unlisted form hands the operation a claims Scope that is not the legacy scope of its org)", fn, got, want)
 		}
+	}
+}
+
+// withLegacyScope and legacyClaims, the two forms above, scope claims to their own org and change nothing else.
+func TestIngressScopeHelpersScopeTheClaimsOwnOrg(t *testing.T) {
+	in := authctx.Claims{OrgID: "org-1", Role: "admin", IsSuperuser: true, ImpersonationActive: true, Delegated: true}
+	want := in
+	want.Scope = pepgate.Legacy("org-1")
+	if got := withLegacyScope(in); got != want {
+		t.Errorf("withLegacyScope = %+v, want %+v", got, want)
+	}
+	if got := legacyClaims("org-2"); got != (authctx.Claims{OrgID: "org-2", Scope: pepgate.Legacy("org-2")}) {
+		t.Errorf("legacyClaims = %+v", got)
+	}
+	if got := withLegacyScope(authctx.Claims{}); got.Scope.Kind() != pepgate.KindNone {
+		t.Errorf("no org: scope kind %d, want none", got.Scope.Kind())
 	}
 }
 

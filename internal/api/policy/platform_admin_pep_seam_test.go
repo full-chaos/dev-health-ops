@@ -142,6 +142,14 @@ func seamMux(guard *Guard) *http.ServeMux {
 	mux.Handle("GET /api/v1/admin/orgs", guard.WrapPlatform(rule.ActionAdminOrgs, seamEcho(rule.ActionAdminOrgs)))
 	mux.Handle("POST /api/v1/telemetry/report", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminTelemetry)))
 	mux.Handle("GET /api/v1/admin/impersonate/status", guard.Wrap(Authenticated, seamEcho(rule.ActionAdminImpersonate)))
+	// An admin-or row whose handler asks no platform question (the X-Org-Id paths of the users handlers).
+	mux.Handle("GET /api/v1/admin/users/{user_id}", guard.WrapAdminOr(rule.ActionAdminUsers, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "served")
+	})))
+	// A handler that asks only whether a platform action stands in for organization power.
+	mux.Handle("GET /api/v1/admin/seam/bypass", guard.Wrap(Authenticated, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "bypass="+strconv.FormatBool(PlatformBypassesOrg(r.Context(), UserFrom(r.Context()), rule.ActionAdminOrgs)))
+	})))
 	return mux
 }
 
@@ -378,7 +386,9 @@ func TestPlatformQuestionsInAnImpersonationSessionAreRefusedWithTheAdminCellOn(t
 		{"admin-or row, org admin", "admin", "admin", http.MethodGet, "/api/v1/admin/users", 403, impersonationRefusalBody, 0},
 		{"handler question", "admin", "member", http.MethodPost, "/api/v1/telemetry/report", 403, impersonationRefusalBody, 0},
 		{"own session status", "admin", "member", http.MethodGet, "/api/v1/admin/impersonate/status", 200, "platform=true bypass=false", 1},
+		{"admin-or row the handler does not ask, org admin", "admin", "admin", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String(), 403, impersonationRefusalBody, 0},
 		{"admin-or row, cell off", "teams", "member", http.MethodGet, "/api/v1/admin/users", 200, "platform=true bypass=true", 0},
+		{"admin-or row the handler does not ask, cell off", "teams", "admin", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String(), 200, "served", 0},
 		{"handler question, cell off", "teams", "member", http.MethodPost, "/api/v1/telemetry/report", 200, "platform=true bypass=true", 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -386,6 +396,64 @@ func TestPlatformQuestionsInAnImpersonationSessionAreRefusedWithTheAdminCellOn(t
 				platformRule(rule.ActionAdminImpersonate))}
 			h := impersonating(seamHandler(t, legacyStore(true, c.role), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell)))
 			got := seamServe(h, c.method, c.path)
+			if got.status != c.status || got.body != c.body {
+				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			}
+			if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
+				t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
+			}
+		})
+	}
+}
+
+// With the admin cell on, a legacy HS256 caller gets no platform stand-in for organization power either: its
+// PlatformBypassesOrg is false, never go-api's own flag. With the cell off it is the flag.
+func TestAnHS256CallerGetsNoOrgBypassWithTheAdminCellOn(t *testing.T) {
+	for _, c := range []struct {
+		cell string
+		body string
+	}{
+		{"admin", "bypass=false"},
+		{"teams", "bypass=true"},
+	} {
+		t.Run(c.cell, func(t *testing.T) {
+			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminOrgs))}
+			store := newStore()
+			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
+			guard := NewGuard(authenticator(t, store), quiet())
+			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
+			got := serve(seamMux(guard), http.MethodGet, "/api/v1/admin/seam/bypass", bearer(t, superClaims))
+			if got.status != http.StatusOK || got.body != c.body {
+				t.Fatalf("%d %q, want 200 %q", got.status, got.body, c.body)
+			}
+			if singles, batches := decider.counts(); singles+batches != 0 {
+				t.Fatalf("%d questions, want none", singles+batches)
+			}
+		})
+	}
+}
+
+// With the admin cell on, an organization-less caller reaches an organization route only through the decision point's
+// answer at an admin-or or platform wrap, and never at a plain route, whatever go-api's own flag says. With the cell
+// off the flag decides.
+func TestAnOrglessCallerReachesOnlyByThePDPAnswerWithTheAdminCellOn(t *testing.T) {
+	const orgRequired = `{"detail":"Organization context required"}`
+	for _, c := range []struct {
+		name    string
+		cell    string
+		method  string
+		path    string
+		status  int
+		body    string
+		singles int
+	}{
+		{"admin-or row, PDP denies, flag on", "admin", http.MethodGet, "/api/v1/admin/users", 403, orgRequired, 1},
+		{"plain route, flag on", "admin", http.MethodPost, "/api/v1/telemetry/report", 403, orgRequired, 0},
+		{"plain route, cell off", "teams", http.MethodPost, "/api/v1/telemetry/report", 200, "platform=true bypass=true", 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			decider := &countingDecider{inner: newDenyingFake(t)}
+			got := seamServe(seamHandler(t, legacyStore(true, ""), orglessAccessClaims(), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell)), c.method, c.path)
 			if got.status != c.status || got.body != c.body {
 				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
 			}

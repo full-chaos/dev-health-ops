@@ -89,6 +89,7 @@ internal/auth/contracts	jwks_document_differential_test.go
 internal/auth/contracts	jwks_document_goldens_test.go
 internal/auth/contracts	llm_api_keys_anchor_test.go
 internal/auth/contracts	openapi_test.go
+internal/auth/contracts	platform_admin_actions_test.go
 internal/auth/contracts	principal_contract_goldens_test.go
 internal/auth/contracts	principal_wire_form_surface_test.go
 internal/auth/contracts	producer_columns_test.go
@@ -528,6 +529,7 @@ internal/queryapi/investmentexplain	repofilter_golden_test.go
 internal/queryapi/opportunities	response_test.go
 internal/queryapi/people	golden_test.go
 internal/queryapi/people	identity.go
+internal/queryapi/pepgate	census_test.go
 internal/queryapi/principal	verifier.go
 internal/queryapi/quadrant	golden_test.go
 internal/queryapi/quadrant	identity.go
@@ -583,6 +585,7 @@ internal/queryapi/server	registered_forecast_documents_test.go
 internal/queryapi/server	reports_write_proof_venue_oracle_integration_test.go
 internal/queryapi/server	rest_error_response_test.go
 internal/queryapi/server	rest_routes_test.go
+internal/queryapi/server	rest_scope_census_test.go
 internal/queryapi/server	result_row_bound_census_test.go
 internal/queryapi/server	schema_gate_test.go
 internal/queryapi/server	unrestricted_read_options_test.go

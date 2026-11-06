@@ -173,7 +173,7 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		countEnforce(ctx, row.Namespace, enforceOutcomeErrorDeny)
 		return enforceNoDecisionPoint
 	}
-	if o.impersonating && o.pattern != stopImpersonationPattern {
+	if o.impersonating && !liveRowExempt(o.pattern) {
 		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
@@ -280,7 +280,7 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 	// The session context is set for a holder of admin.impersonate only. On an enforced write or platform row the live
 	// row decides for any caller, as the guard's own refusals do (Guard.sessionRow): a caller whose admin.impersonate
 	// was revoked while its row is live is refused too. A read of any other row reads no row (the read limit).
-	if namespace, enforced := g.pdp.enforcer.decides(r.Pattern); enforced && !impersonating && r.Pattern != stopImpersonationPattern &&
+	if namespace, enforced := g.pdp.enforcer.decides(r.Pattern); enforced && !impersonating && !liveRowExempt(r.Pattern) &&
 		(platform || !readMethod(r.Method)) {
 		session, err := g.sessionRow(r, user.ID)
 		if err != nil {

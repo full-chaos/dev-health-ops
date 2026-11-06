@@ -30,6 +30,7 @@ var platformRouteActions = map[string][2]string{
 	"GET /platform/stats":                                   {"platform", "ActionAdminStats"},
 	"POST /impersonate":                                     {"platform", "ActionAdminImpersonate"},
 	"POST /impersonate/stop":                                {"platform", "ActionAdminImpersonate"},
+	"POST /impersonate/handoff/consume":                     {"platform", "ActionAdminImpersonate"},
 	"GET /users":                                            {"adminor", "ActionAdminUsers"},
 	"GET /users/{user_id}":                                  {"adminor", "ActionAdminUsers"},
 	"POST /users":                                           {"adminor", "ActionAdminUsers"},

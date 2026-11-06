@@ -422,6 +422,70 @@ func TestBillingClassARowsAreDecidedByThePDPWithTheSwitchOn(t *testing.T) {
 	}
 }
 
+// cellQueryOrgRows are the class A rows whose handler serves the organization an org_id query value names; the other
+// org rows name it in the {org_id} path segment.
+var cellQueryOrgRows = []string{
+	"GET /api/v1/billing/invoices", "GET /api/v1/billing/invoices/{invoice_id}", "POST /api/v1/billing/invoices/{invoice_id}/void",
+	"GET /api/v1/billing/subscriptions/list", "GET /api/v1/billing/subscriptions", "GET /api/v1/billing/subscriptions/history",
+	"POST /api/v1/billing/subscriptions/change-plan", "POST /api/v1/billing/subscriptions/cancel", "POST /api/v1/billing/subscriptions/reactivate",
+}
+
+// cellNamingOrg is the request of key that names org for its handler to serve: the org_id query value of a query
+// row, the {org_id} path segment of a path row.
+func cellNamingOrg(key string, org uuid.UUID, headers map[string]string) *http.Request {
+	request := cellRequest(key, headers)
+	if slices.Contains(cellQueryOrgRows, key) {
+		query := request.URL.Query()
+		query.Set("org_id", org.String())
+		request.URL.RawQuery = query.Encode()
+		return request
+	}
+	request.URL.Path = strings.Replace(request.URL.Path, probeOrg.String(), org.String(), 1)
+	return request
+}
+
+// Class A organization rows with their namespace on: a request that names another organization than the token's
+// (probeUser is a member of probeOtherOrg) is refused with a 403 and the level's body before any PDP call; naming
+// the token's own organization is decided by the PDP once, on that organization.
+func TestBillingClassAOrgRowsServeOnlyTheTokenOrganization(t *testing.T) {
+	var orgRows []string
+	for _, key := range classAKeys() {
+		if billingClassA[key] != "admin.billing" {
+			orgRows = append(orgRows, key)
+		}
+	}
+	if len(orgRows) != 11 {
+		t.Fatalf("class A organization rows %v, want the 9 query rows and the 2 {org_id} path rows", orgRows)
+	}
+	for _, key := range orgRows {
+		if !slices.Contains(cellQueryOrgRows, key) && !strings.Contains(key, "{org_id}") {
+			t.Fatalf("%s names its organization neither in org_id nor in {org_id}", key)
+		}
+		pdp := newCellPDP(t, "allow")
+		rig := newCellRig(t, cellAllNamespaces, pdp.client(t), false)
+		recorder := httptest.NewRecorder()
+		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOtherOrg, rig.userBearer()))
+		wantBody := `{"detail":"Access denied"}`
+		if b, ok := cellDenyBody[key]; ok {
+			wantBody = b
+		}
+		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); status != http.StatusForbidden || body != wantBody {
+			t.Errorf("%s naming another org: %d %s, want 403 %s", key, status, body, wantBody)
+		}
+		if n := len(pdp.calls()); n != 0 {
+			t.Errorf("%s naming another org: %d PDP calls, want 0", key, n)
+		}
+		recorder = httptest.NewRecorder()
+		rig.handler.ServeHTTP(recorder, cellNamingOrg(key, probeOrg, rig.userBearer()))
+		if status, body := recorder.Code, strings.TrimSpace(recorder.Body.String()); !handlerReached(status, body) {
+			t.Errorf("%s naming the token org: %d %s, want the handler reached", key, status, body)
+		}
+		if calls := pdp.calls(); len(calls) != 1 || calls[0].org != probeOrg.String() {
+			t.Errorf("%s naming the token org: PDP saw %+v, want one call on the token org", key, calls)
+		}
+	}
+}
+
 // Class A with its namespace on and no decision point client: every request is refused with a 503 and the reason
 // code, never served by the legacy check.
 func TestBillingClassARowsRefuseWithNoDecisionPoint(t *testing.T) {

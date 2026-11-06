@@ -42,7 +42,7 @@ var schemaDDL = []string{
 	`CREATE TABLE public.audit_logs (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.users (
 		id uuid PRIMARY KEY, email text NOT NULL UNIQUE,
-		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0)`,
+		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0, username text, full_name text)`,
 	`CREATE TABLE public.memberships (
 		id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES public.users(id),
 		org_id uuid NOT NULL REFERENCES public.organizations(id), role text)`,
@@ -293,6 +293,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 		c["sub"] = admUser.String()
 		c["is_superuser"] = true
 		c["tv"] = 2
+		delete(c, "org_id")
 	}))
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/x", nil)
 	request.Header.Set("Authorization", "Bearer "+token)

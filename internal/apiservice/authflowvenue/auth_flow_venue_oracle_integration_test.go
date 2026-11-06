@@ -288,6 +288,18 @@ type runner struct {
 	// goBlanked is the golden spec's GoBlanked (set on a leg that forwards sessions): authrows.TargetResponseBody
 	// drops only the keys it names.
 	goBlanked map[string]string
+	// seeded are the seed's user rows by name (the venue mints its tokens from them): the access token cell derives
+	// each sign-in step's principal from its user's row.
+	seeded map[string]map[string]any
+}
+
+// unvaluedAccessTokenUser is the seeded user of a sign-in step whose access token this leg compares unvalued: a leg
+// whose GoldenSpec.GoBlanked declares authrows.AccessTokenPattern (sessions forwarded), and only the six sign-in steps.
+func (r *runner) unvaluedAccessTokenUser(step string) (string, bool) {
+	if r.goBlanked[authrows.AccessTokenPattern] == "" || r.sessionIssuer == "" {
+		return "", false
+	}
+	return authrows.AccessTokenUser(step)
 }
 
 // retiredStep is the ruling that retired a step's Python answer and the pin of Go's answer.
@@ -330,6 +342,17 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 				r.t.Errorf("%s: %v", s.name, err)
 			}
 		}
+		if user, ok := r.unvaluedAccessTokenUser(s.name); ok {
+			// The eddsa access token of a sign-in step is compared unvalued (GoldenSpec.GoBlanked): its raw value is
+			// checked here, its sub against the principal of the step's own seeded user.
+			principal, err := authrows.PrincipalID(fmt.Sprint(r.seeded[user]["user_id"]))
+			if err == nil {
+				err = authrows.AccessTokenErr(goResponse.Body, r.sessionIssuer, principal)
+			}
+			if err != nil {
+				r.t.Errorf("%s: %v", s.name, err)
+			}
+		}
 		// The golden holds the Python answer projected (tokens to their claims,
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)
@@ -368,6 +391,18 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 			// earliest organization: each ruled difference is classified by authrows, any other still differs.
 			pyCompared.Body = authrows.GoldenResponseBody(s.name, pyCompared.Body)
 			goProjected.Body = authrows.TargetResponseBody(goProjected.Body, r.goBlanked)
+			if _, ok := r.unvaluedAccessTokenUser(s.name); ok {
+				// The eddsa class's iss and prn_ sub differ from the HS256 recording by design: the member is compared
+				// by one place holder on both planes, its value was checked above.
+				pyUnvalued, pyOK := authrows.AccessTokenUnvalued(pyCompared.Body)
+				goUnvalued, goOK := authrows.AccessTokenUnvalued(goProjected.Body)
+				if pyOK && goOK {
+					pyCompared.Body, goProjected.Body = pyUnvalued, goUnvalued
+					if err := r.golden.Unvalued(authrows.AccessTokenPattern); err != nil {
+						r.t.Error(err)
+					}
+				}
+			}
 		}
 		same, compared, pyShown, goShown := venueoracle.Compare(s.python, pyCompared, goProjected,
 			venueoracle.DiffOptions{Normalize: func(_ venueoracle.Request, body string) string { return normalize(body) },
@@ -744,7 +779,9 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	spec.Scrub, spec.KeyScrub = authScrub, requestKeyScrub
 	if sessionsForwardedLeg() {
 		// CHAOS-13107: auth-service's eddsa class adds session_access_token, a fresh token per run, to every token answer.
-		spec.GoBlanked = map[string]string{authrows.SessionAccessTokenPattern: authrows.SessionAccessTokenReason}
+		spec.GoBlanked = map[string]string{authrows.SessionAccessTokenPattern: authrows.SessionAccessTokenReason,
+			// The six sign-in steps' access token is auth-service's eddsa class (authrows.AccessTokenUser).
+			authrows.AccessTokenPattern: authrows.AccessTokenReason}
 	}
 	golden := venueoracle.OpenGolden(t, spec)
 	// CHAOS-7204: Go records the client IP behind a trusted peer only; Python records
@@ -779,6 +816,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		goSink = smtpcapture.StartAt(t, smtpcapture.DefaultListen)
 	}
 	pyHost, pyPort := pySink.HostPort(t)
+	var seeded map[string]map[string]any
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{External: external,
 		Golden: golden, Root: venueRoot(), JWTKey: sessionscenario.Key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		PythonEnv: []string{"EMAIL_PROVIDER=smtp", "EMAIL_FROM_ADDRESS=" + fromAddress,
@@ -788,6 +826,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 			seedAround(os.Getenv("DEVHEALTH_AUTH_ORACLE_SEEDED_FILE") != "",
 				func(ownedLeg bool) { tokens = seed(t, ctx, admin, venue, ownedLeg) },
 				func() { waitForUsersOwnedFlip(t, ctx) })
+			seeded = tokens
 			return tokens
 		},
 	})
@@ -826,7 +865,7 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	}
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails: map[string]map[string][]sentMail{"python": {}, "go": {}}, divergencesFired: map[string]int{},
-		goBase: externalBase, external: external != nil, goBlanked: spec.GoBlanked}
+		goBase: externalBase, external: external != nil, goBlanked: spec.GoBlanked, seeded: seeded}
 	var claimPin, rolePin *venueoracle.GoPin
 	if external == nil {
 		// orgClaimRuling: the in-process go-api verifies the venue's user access tokens (EdDSA); an external target

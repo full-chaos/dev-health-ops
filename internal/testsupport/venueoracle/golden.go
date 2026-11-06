@@ -69,10 +69,12 @@ type GoldenSpec struct {
 	// GoBlanked lists, by exact pattern ("body $.session_access_token"), a leaf the Go plane's answer has blanked
 	// on replay that the recording never blanked, with the reason its value is not stable (CHAOS-13107). The
 	// header's "blanked" is the recording's own count, inside the bytes SHA256 pins, so it is never edited: a
-	// Go-only blanked path is declared here, one path each. A pattern with a glob, an empty reason, a pattern the
-	// header already lists, or a golden whose header lists nothing, is refused when the golden opens; a pattern
-	// that blanked no leaf by Finish fails the test. A blanked value is not an unchecked one: the test that
-	// declares a pattern checks the value itself.
+	// Go-only blanked path is declared here, one path each. A pattern the header lists ("body $.access_token") is
+	// a leaf the recording projected whose Go projection differs by design: the test compares it by a place holder
+	// on both planes and reports each such comparison with Golden.Unvalued. A pattern with a glob, an empty reason,
+	// or a golden whose header lists nothing, is refused when the golden opens; a pattern that blanked no leaf (or,
+	// listed, was never compared unvalued) by Finish fails the test. A blanked value is not an unchecked one: the
+	// test that declares a pattern checks the value itself.
 	GoBlanked map[string]string
 }
 

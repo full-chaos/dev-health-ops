@@ -39,6 +39,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 const (
@@ -195,6 +196,13 @@ func newOpportunitiesGetHandler(client home.QueryClient) http.HandlerFunc {
 			f.Time.EndDate = &endDate
 		}
 
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
+			return
+		}
+		f.Ceiling = ceiling
+
 		resp, err := opportunities.BuildResponse(r.Context(), client, org, f, time.Now().UTC())
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -268,7 +276,15 @@ func newOpportunitiesPostHandler(client home.QueryClient) http.HandlerFunc {
 		// own payload (main.py:1211-1226) is the identical HomeRequest
 		// Pydantic model, so this is reuse of an already-reviewed
 		// function, not a parallel re-implementation.
-		resp, err := opportunities.BuildResponse(r.Context(), client, org, homeFiltersFromMap(filtersMap), time.Now().UTC())
+		f := homeFiltersFromMap(filtersMap)
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "opportunities", org, err)
+			return
+		}
+		f.Ceiling = ceiling
+
+		resp, err := opportunities.BuildResponse(r.Context(), client, org, f, time.Now().UTC())
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1218-1226).

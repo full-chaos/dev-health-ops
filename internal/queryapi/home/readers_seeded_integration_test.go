@@ -45,6 +45,7 @@ import (
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -279,7 +280,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		repoID, day1, tNew, seededOrgID))
 
 	t.Run("fetchLastIngestedAt", func(t *testing.T) {
-		got, err := fetchLastIngestedAt(ctx, client, seededOrgID)
+		got, err := fetchLastIngestedAt(ctx, client, seededOrgID, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("fetchLastIngestedAt: %v", err)
 		}
@@ -289,7 +290,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchCoverage_workItemCycleTimesFinalChangesTheAnswer", func(t *testing.T) {
-		got, err := fetchCoverage(ctx, client, startDay, endDay, seededOrgID)
+		got, err := fetchCoverage(ctx, client, startDay, endDay, seededOrgID, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("fetchCoverage: %v", err)
 		}
@@ -367,7 +368,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchSourceStatuses_dedupInvariantButMustExecute", func(t *testing.T) {
-		got, err := fetchSourceStatuses(ctx, client, startDay, seededOrgID)
+		got, err := fetchSourceStatuses(ctx, client, startDay, seededOrgID, teamscope.NoCeiling())
 		if err != nil {
 			t.Fatalf("fetchSourceStatuses: %v", err)
 		}

@@ -86,7 +86,7 @@ func TestFetchCoverageWorkItemCycleTimesReadsFinal(t *testing.T) {
 		captured = append(captured, query)
 		return &fixtureRowScanner{rows: [][]any{{0.0, 0.0}}}, nil
 	}}
-	if _, err := fetchCoverage(context.Background(), client, day(2024, 1, 1), day(2024, 1, 8), "org-1"); err != nil {
+	if _, err := fetchCoverage(context.Background(), client, day(2024, 1, 1), day(2024, 1, 8), "org-1", teamscope.NoCeiling()); err != nil {
 		t.Fatalf("fetchCoverage: %v", err)
 	}
 	var sawCycleTimesFinal bool
@@ -113,7 +113,7 @@ func TestFetchSourceStatusesReadsEveryTableFinal(t *testing.T) {
 		captured = query
 		return &fixtureRowScanner{}, nil
 	}}
-	if _, err := fetchSourceStatuses(context.Background(), client, day(2024, 1, 1), "org-1"); err != nil {
+	if _, err := fetchSourceStatuses(context.Background(), client, day(2024, 1, 1), "org-1", teamscope.NoCeiling()); err != nil {
 		t.Fatalf("fetchSourceStatuses: %v", err)
 	}
 	for _, marker := range []string{"FROM repos FINAL", "FROM work_items FINAL", "FROM ci_pipeline_runs FINAL"} {

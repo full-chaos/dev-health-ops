@@ -10,6 +10,7 @@ package home
 import (
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -55,6 +56,10 @@ type Filters struct {
 	// empty is the default (investmentexplain.HomeTileMeasure, COUNT). A caller sets ISSUE_SIZE only when the answer
 	// it builds carries the tile's sizing coverage (D6027).
 	TileMeasure string
+
+	// Ceiling is the repositories the caller may read (CHAOS-13086), set by the route from the decision scope and never
+	// by the request. The zero value reads every repository and every item: today's answer, byte for byte.
+	Ceiling teamscope.Ceiling
 }
 
 // DefaultFilters ports MetricFilter's own default_factory chain --

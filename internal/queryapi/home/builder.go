@@ -274,6 +274,16 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 // so threading now through is a Go-side testability improvement, not a
 // parity divergence).
 func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
+	response, err := buildResponse(ctx, chClient, pgClient, orgID, f, now)
+	if err != nil {
+		return nil, err
+	}
+	response.OmittedSignals = omittedSignals(f, response.Deltas)
+	response.NarrowedCounts = narrowedCounts(f)
+	return response, nil
+}
+
+func buildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
 	startDay, endDay, compareStart, compareEnd, err := TimeWindow(f, now)
 	if err != nil {
 		return nil, err
@@ -300,15 +310,15 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	wg.Add(6)
 	go func() {
 		defer wg.Done()
-		lastIngested, errIngested = fetchLastIngestedAt(ctx, chClient, orgID)
+		lastIngested, errIngested = fetchLastIngestedAt(ctx, chClient, orgID, f.Ceiling)
 	}()
 	go func() {
 		defer wg.Done()
-		coverage, errCoverage = fetchCoverage(ctx, chClient, startDay, endDay, orgID)
+		coverage, errCoverage = fetchCoverage(ctx, chClient, startDay, endDay, orgID, f.Ceiling)
 	}()
 	go func() {
 		defer wg.Done()
-		sources, errSources = fetchSourceStatuses(ctx, chClient, startDay, orgID)
+		sources, errSources = fetchSourceStatuses(ctx, chClient, startDay, orgID, f.Ceiling)
 	}()
 	go func() {
 		defer wg.Done()
@@ -408,7 +418,9 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		// D5900). DECLARED DIVERGENCE from the reference (home.py:1123 names the drivers of any
 		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
-		if namesDrivers(topDelta) {
+		// A work-item metric under a repository ceiling has no driver to name: the team daily table that names its
+		// drivers has no repository dimension, so the teams named would not be the ones of the ceiling.
+		if namesDrivers(topDelta) && !(f.Ceiling.Restricted() && metricScope(topDelta.Metric) == "team") {
 			scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
 			if err != nil {
 				return nil, err

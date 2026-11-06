@@ -61,6 +61,7 @@ func fetchThemeAllocationIn(ctx context.Context, client QueryClient, f Filters, 
 		ReposNamed: len(refs) > 0,
 		DatedByEnd: true,
 		Measure:    measure,
+		Ceiling:    f.Ceiling,
 	}
 	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
 		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", f.Scope.IDs, asOf)

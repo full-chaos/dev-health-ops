@@ -581,3 +581,68 @@ func TestHandoffConsumeRouteIsReachableWithALiveImpersonationRow(t *testing.T) {
 		t.Fatalf("touched db %v, records left %v", *touched, f.keys())
 	}
 }
+
+// Switch ON (the delegator is set, as AUTH_PROXY_IMPERSONATION sets it), through the mounted admin routes, the real
+// scope and guard: the holder's delegated start writes the handoff; with the holder's impersonation row live, the
+// consume route admits it once, and the non-exempt platform routes (start, orgs) are refused in the session.
+func TestHandoffSwitchOnConsumeAdmitsWithALiveRowAndRefusesOtherRoutes(t *testing.T) {
+	const key = "route-order-test-signing-key-32-bytes!!!!"
+	verifier, err := edgetoken.New(key, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := edgetoken.NewSigner(key, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth, err := policy.NewAuthenticator(verifier, impersonatingStore{active: true}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, f := newHandoffCase(t)
+	if c.h.delegator == nil {
+		t.Fatal("switch off: no delegator")
+	}
+	id := startHandoff(t, c)
+	c.h.guard = policy.NewGuard(auth, logger)
+	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: c.admin.String(), Email: "root@example.test", IsSuperuser: true}, time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range c.h.routes() {
+		mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+	}
+	scope := policy.NewScope(auth, logger)
+	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(mux))))
+	defer server.Close()
+	send := func(method, path, body string) (int, string) {
+		req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, strings.TrimSpace(string(b))
+	}
+	starts := len(c.delegator.started)
+	if status, body := send(http.MethodPost, "/api/v1/admin/impersonate/handoff/consume", consumeBody(id)); status != http.StatusOK || body != consumedBody {
+		t.Fatalf("switch on, consume with a live row: %d %s, want 200 %s", status, body, consumedBody)
+	}
+	if status, body := send(http.MethodPost, "/api/v1/admin/impersonate/handoff/consume", consumeBody(id)); status != http.StatusConflict || body != refusedBody {
+		t.Fatalf("switch on, replay: %d %s, want 409 %s", status, body, refusedBody)
+	}
+	if status, body := send(http.MethodPost, "/api/v1/admin/impersonate", `{"target_user_id":"`+uuid.NewString()+`"}`); status != http.StatusForbidden || body != impersonationRefusal {
+		t.Fatalf("switch on, start with a live row: %d %s, want 403 %s", status, body, impersonationRefusal)
+	}
+	if status, body := send(http.MethodGet, "/api/v1/admin/orgs", ""); status != http.StatusForbidden || body != impersonationRefusal {
+		t.Fatalf("switch on, orgs with a live row: %d %s, want 403 %s", status, body, impersonationRefusal)
+	}
+	if len(c.delegator.started) != starts || len(f.keys()) != 0 {
+		t.Fatalf("auth-service starts %d (want %d), records left %v", len(c.delegator.started), starts, f.keys())
+	}
+}

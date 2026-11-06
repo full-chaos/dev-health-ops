@@ -133,7 +133,7 @@ func seamEcho(action string) http.Handler {
 			http.Error(w, "the second ask disagreed", http.StatusInternalServerError)
 			return
 		}
-		_, _ = io.WriteString(w, "platform="+strconv.FormatBool(first)+" bypass="+strconv.FormatBool(PlatformBypassesOrg(r.Context(), user, rule.ActionAdminOrgs)))
+		_, _ = io.WriteString(w, "platform="+strconv.FormatBool(first))
 	})
 }
 
@@ -147,9 +147,9 @@ func seamMux(guard *Guard) *http.ServeMux {
 	mux.Handle("GET /api/v1/admin/users/{user_id}", guard.WrapAdminOr(rule.ActionAdminUsers, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "served")
 	})))
-	// A handler that asks only whether a platform action stands in for organization power.
-	mux.Handle("GET /api/v1/admin/seam/bypass", guard.Wrap(Authenticated, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "bypass="+strconv.FormatBool(PlatformBypassesOrg(r.Context(), UserFrom(r.Context()), rule.ActionAdminOrgs)))
+	// A plain admin route: no platform action of its own, so User.IsAdmin alone admits.
+	mux.Handle("GET /api/v1/admin/seam/plain", guard.Wrap(Admin, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "served")
 	})))
 	return mux
 }
@@ -178,11 +178,11 @@ func TestAdminOrRowsAskOneBatchAndKeepThePlatformAnswer(t *testing.T) {
 		body      string
 		batchSize int
 	}{
-		{"platform holder, org member", []pepfake.Rule{platformRule(rule.ActionAdminUsers)}, false, "member", userClaims(nil), 200, "platform=true bypass=false", 2},
-		{"org admin, no platform action", []pepfake.Rule{orgAdminRule()}, true, "admin", userClaims(nil), 200, "platform=false bypass=false", 2},
-		{"both", []pepfake.Rule{platformRule(rule.ActionAdminUsers), orgAdminRule()}, false, "admin", userClaims(nil), 200, "platform=true bypass=false", 2},
+		{"platform holder, org member", []pepfake.Rule{platformRule(rule.ActionAdminUsers)}, false, "member", userClaims(nil), 200, "platform=true", 2},
+		{"org admin, no platform action", []pepfake.Rule{orgAdminRule()}, true, "admin", userClaims(nil), 200, "platform=false", 2},
+		{"both", []pepfake.Rule{platformRule(rule.ActionAdminUsers), orgAdminRule()}, false, "admin", userClaims(nil), 200, "platform=true", 2},
 		{"neither, legacy superuser", nil, true, "admin", userClaims(nil), 403, `{"detail":"Admin access required"}`, 2},
-		{"org-less platform holder", []pepfake.Rule{platformRule(rule.ActionAdminUsers)}, true, "", orglessAccessClaims(), 200, "platform=true bypass=false", 1},
+		{"org-less platform holder", []pepfake.Rule{platformRule(rule.ActionAdminUsers)}, true, "", orglessAccessClaims(), 200, "platform=true", 1},
 		{"org-less, no platform action", nil, true, "", orglessAccessClaims(), 403, `{"detail":"Admin access required"}`, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -241,8 +241,8 @@ func TestAdminOrRowsFailClosedWithoutAVerdict(t *testing.T) {
 func TestHoldsPlatformReusesThePlatformRowsAnswer(t *testing.T) {
 	decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminOrgs))}
 	got := seamServe(seamHandler(t, legacyStore(false, "member"), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), "admin")), http.MethodGet, "/api/v1/admin/orgs")
-	if got.status != 200 || got.body != "platform=true bypass=false" {
-		t.Fatalf("%d %q, want 200 platform=true bypass=false", got.status, got.body)
+	if got.status != 200 || got.body != "platform=true" {
+		t.Fatalf("%d %q, want 200 platform=true", got.status, got.body)
 	}
 	if singles, batches := decider.counts(); singles != 1 || batches != 0 {
 		t.Fatalf("%d single and %d batch calls, want 1 and 0", singles, batches)
@@ -259,8 +259,8 @@ func TestHoldsPlatformAsksThePDPWithTheAdminCellOn(t *testing.T) {
 		status    int
 		body      string
 	}{
-		{"pdp allows, flag off", pepfake.New(platformRule(rule.ActionAdminTelemetry)), false, 200, "platform=true bypass=false"},
-		{"pdp denies, flag on", newDenyingFake(t), true, 200, "platform=false bypass=false"},
+		{"pdp allows, flag off", pepfake.New(platformRule(rule.ActionAdminTelemetry)), false, 200, "platform=true"},
+		{"pdp denies, flag on", newDenyingFake(t), true, 200, "platform=false"},
 		{"no verdict", panicDecider{}, true, 503, ""},
 		{"allow with an obligation", pepfake.New(pepfake.Rule{PrincipalReference: shadowBearer, Action: rule.ActionAdminTelemetry, ResourceType: "platform",
 			ResourceKey: shadowPlatformKey, TenantScope: ownOrg}), false, 503, ""},
@@ -304,7 +304,7 @@ func TestHoldsPlatformKeepsTheLocalSetWithTheAdminCellOff(t *testing.T) {
 		} {
 			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminTelemetry))}
 			got := seamServe(seamHandler(t, legacyStore(superuser, "member"), userClaims(nil), enf(decider)), http.MethodPost, "/api/v1/telemetry/report")
-			want := "platform=" + strconv.FormatBool(superuser) + " bypass=" + strconv.FormatBool(superuser)
+			want := "platform=" + strconv.FormatBool(superuser)
 			if got.status != 200 || got.body != want {
 				t.Fatalf("%s, superuser %v: %d %q, want 200 %q", name, superuser, got.status, got.body, want)
 			}
@@ -315,49 +315,64 @@ func TestHoldsPlatformKeepsTheLocalSetWithTheAdminCellOff(t *testing.T) {
 	}
 }
 
-const legacyCredentialBody = `{"detail":{"message":"` + legacyCredentialDetail + `","reason_code":"legacy_credential"}}`
+// mainAnswer is main's answer for the request: the same guard and handlers with the admin cell off (go-api's own set,
+// D6742: the cell-off predicates are main's).
+func mainAnswer(t *testing.T, serveWith func(cell string) response) response {
+	t.Helper()
+	return serveWith("teams")
+}
 
-// With the admin cell on, a caller the decision point cannot judge (a legacy HS256 token) is refused its platform
-// questions with a 403 legacy_credential, never answered from go-api's own set; with the cell off its answers are the
-// local set.
-func TestHoldsPlatformRefusesAnHS256CallerWithTheAdminCellOn(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		cell   []string
-		status int
-		body   string
-	}{
-		{"admin cell on", []string{"admin"}, http.StatusForbidden, legacyCredentialBody},
-		{"admin cell off", []string{"teams"}, http.StatusOK, "platform=true bypass=true"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminTelemetry))}
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell...))
-			got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, superClaims))
-			if got.status != c.status || got.body != c.body {
-				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
-			}
-			if singles, batches := decider.counts(); singles+batches != 0 {
-				t.Fatalf("%d questions, want none", singles+batches)
-			}
-		})
+// platformAdminFake is the decision point for a platform admin (13209: platform_admin holds every platform action,
+// with or without a membership row) and nothing else.
+func platformAdminFake(t *testing.T) pep.Decider {
+	t.Helper()
+	var rules []pepfake.Rule
+	for _, action := range rule.PlatformActions {
+		rules = append(rules, platformRule(action))
+	}
+	return newDenyingFake(t, rules...)
+}
+
+// equalToMain fails unless the admin-cell answer is main's answer, status and body.
+func equalToMain(t *testing.T, got, main response) {
+	t.Helper()
+	if got.status != main.status || got.body != main.body {
+		t.Fatalf("admin cell %d %q, main %d %q: want main's answer", got.status, got.body, main.status, main.body)
 	}
 }
 
-// PlatformBypassesOrg outside a guard (no decisions in the context) is go-api's own set.
-func TestPlatformBypassesOrgOutsideTheGuardIsTheLocalSet(t *testing.T) {
+// With the admin cell on, a caller the decision point cannot judge (a legacy HS256 token) keeps main's answer for its
+// platform questions, with no question asked (as on an enforced row: the legacy answer stands).
+func TestAnHS256CallerKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
+	for _, superuser := range []bool{true, false} {
+		serveWith := func(cell string) (response, int) {
+			decider := &countingDecider{inner: platformAdminFake(t)}
+			store := newStore()
+			store.users[userID] = UserState{IsActive: true, IsSuperuser: superuser}
+			guard := NewGuard(authenticator(t, store), quiet())
+			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), cell))
+			got := serve(seamMux(guard), http.MethodPost, "/api/v1/telemetry/report", bearer(t, func(m jwt.MapClaims) { m["is_superuser"] = superuser }))
+			singles, batches := decider.counts()
+			return got, singles + batches
+		}
+		got, asked := serveWith("admin")
+		main, _ := serveWith("teams")
+		equalToMain(t, got, main)
+		if asked != 0 {
+			t.Fatalf("superuser %v: %d questions, want none", superuser, asked)
+		}
+	}
+}
+
+// HoldsPlatform outside a guard (no decisions in the context) is go-api's own set; with a decision point in the context
+// it is that point's answer, and a non-platform action is no platform question.
+func TestHoldsPlatformOutsideTheGuardIsTheLocalSet(t *testing.T) {
 	ctx := context.Background()
-	if !PlatformBypassesOrg(ctx, &User{IsSuperuser: true}, rule.ActionAdminOrgs) || PlatformBypassesOrg(ctx, &User{}, rule.ActionAdminOrgs) {
+	if held, _ := HoldsPlatform(ctx, &User{IsSuperuser: true}, rule.ActionAdminOrgs); !held {
 		t.Fatal("no decisions in the context: want the local set")
 	}
 	decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminOrgs), platformRule("org.delete"))}
 	judged := WithPlatformDecider(ctx, decider, shadowBearer)
-	if PlatformBypassesOrg(judged, &User{IsSuperuser: true}, rule.ActionAdminOrgs) {
-		t.Fatal("a judged caller with the admin cell on: no platform action stands in for organization power")
-	}
 	if held, err := HoldsPlatform(judged, &User{}, rule.ActionAdminOrgs); err != nil || !held {
 		t.Fatalf("HoldsPlatform = %v, %v; want the decision point's allow", held, err)
 	}
@@ -369,174 +384,150 @@ func TestPlatformBypassesOrgOutsideTheGuardIsTheLocalSet(t *testing.T) {
 	}
 }
 
-// With the admin cell on, a live go-api impersonation row gets no platform action where the decision point does not
-// decide the row (D6714: the bearer is the admin's own, judged as the admin, not as the target). An admin-or row with
-// no action answers 403 before any question, whatever the admin's role; a handler's platform question is refused; the
-// session's own status question (admin.impersonate) is still asked. With the cell off the answer is main's.
-func TestPlatformQuestionsInAnImpersonationSessionAreRefusedWithTheAdminCellOn(t *testing.T) {
+// With the admin cell on, a live go-api impersonation row keeps main's answer on the rows the decision point does not
+// decide (13211 lists the only accepted narrowing; the /admin/users rows are not in it): the admin-or row and a
+// handler's platform question are answered for the admin's own bearer, as main answers them for the admin.
+func TestAnImpersonationSessionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		cell    string
-		role    string
-		method  string
-		path    string
-		status  int
-		body    string
-		singles int
+		name   string
+		role   string
+		method string
+		path   string
 	}{
-		{"admin-or row, member", "admin", "member", http.MethodGet, "/api/v1/admin/users", 403, impersonationRefusalBody, 0},
-		{"admin-or row, org admin", "admin", "admin", http.MethodGet, "/api/v1/admin/users", 403, impersonationRefusalBody, 0},
-		{"handler question", "admin", "member", http.MethodPost, "/api/v1/telemetry/report", 403, impersonationRefusalBody, 0},
-		{"own session status", "admin", "member", http.MethodGet, "/api/v1/admin/impersonate/status", 200, "platform=true bypass=false", 1},
-		{"admin-or row the handler does not ask, org admin", "admin", "admin", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String(), 403, impersonationRefusalBody, 0},
-		{"admin-or row, cell off", "teams", "member", http.MethodGet, "/api/v1/admin/users", 200, "platform=true bypass=true", 0},
-		{"admin-or row the handler does not ask, cell off", "teams", "admin", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String(), 200, "served", 0},
-		{"handler question, cell off", "teams", "member", http.MethodPost, "/api/v1/telemetry/report", 200, "platform=true bypass=true", 0},
+		{"admin-or row, member", "member", http.MethodGet, "/api/v1/admin/users"},
+		{"admin-or row, org admin", "admin", http.MethodGet, "/api/v1/admin/users"},
+		{"admin-or row the handler does not ask", "member", http.MethodGet, "/api/v1/admin/users/" + targetUserID.String()},
+		{"handler question", "member", http.MethodPost, "/api/v1/telemetry/report"},
+		{"own session status", "member", http.MethodGet, "/api/v1/admin/impersonate/status"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminUsers), platformRule(rule.ActionAdminTelemetry),
-				platformRule(rule.ActionAdminImpersonate))}
-			h := impersonating(seamHandler(t, legacyStore(true, c.role), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell)))
-			got := seamServe(h, c.method, c.path)
-			if got.status != c.status || got.body != c.body {
-				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
+			serveWith := func(cell string) response {
+				h := impersonating(seamHandler(t, legacyStore(true, c.role), userClaims(nil), seamEnforcer(t, platformAdminFake(t), productionGoAPIRows(t), cell)))
+				return seamServe(h, c.method, c.path)
 			}
-			if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
-				t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
-			}
-		})
-	}
-}
-
-// With the admin cell on, a legacy HS256 caller gets no platform stand-in for organization power either: its
-// PlatformBypassesOrg is false, never go-api's own flag. With the cell off it is the flag.
-func TestAnHS256CallerGetsNoOrgBypassWithTheAdminCellOn(t *testing.T) {
-	for _, c := range []struct {
-		cell string
-		body string
-	}{
-		{"admin", "bypass=false"},
-		{"teams", "bypass=true"},
-	} {
-		t.Run(c.cell, func(t *testing.T) {
-			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminOrgs))}
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
-			got := serve(seamMux(guard), http.MethodGet, "/api/v1/admin/seam/bypass", bearer(t, superClaims))
-			if got.status != http.StatusOK || got.body != c.body {
-				t.Fatalf("%d %q, want 200 %q", got.status, got.body, c.body)
-			}
-			if singles, batches := decider.counts(); singles+batches != 0 {
-				t.Fatalf("%d questions, want none", singles+batches)
+			got := serveWith("admin")
+			equalToMain(t, got, mainAnswer(t, serveWith))
+			if got.status != http.StatusOK {
+				t.Fatalf("%d %q: main serves the impersonating platform admin here", got.status, got.body)
 			}
 		})
 	}
 }
 
-// With the admin cell on, an organization-less caller reaches an organization route only through the decision point's
-// answer at an admin-or or platform wrap, and never at a plain route, whatever go-api's own flag says. With the cell
-// off the flag decides.
-func TestAnOrglessCallerReachesOnlyByThePDPAnswerWithTheAdminCellOn(t *testing.T) {
-	const orgRequired = `{"detail":"Organization context required"}`
-	for _, c := range []struct {
-		name    string
-		cell    string
-		method  string
-		path    string
-		status  int
-		body    string
-		singles int
-	}{
-		{"admin-or row, PDP denies, flag on", "admin", http.MethodGet, "/api/v1/admin/users", 403, orgRequired, 1},
-		{"plain route, flag on", "admin", http.MethodPost, "/api/v1/telemetry/report", 403, orgRequired, 0},
-		{"plain route, cell off", "teams", http.MethodPost, "/api/v1/telemetry/report", 200, "platform=true bypass=true", 0},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			decider := &countingDecider{inner: newDenyingFake(t)}
-			got := seamServe(seamHandler(t, legacyStore(true, ""), orglessAccessClaims(), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell)), c.method, c.path)
-			if got.status != c.status || got.body != c.body {
-				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
-			}
-			if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
-				t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
-			}
-		})
-	}
-}
-
-// With the admin cell on, the guard admits an HS256 superuser at an admin-or row by its membership row in the token's
-// organization, never by its role claim: platform actions skip no membership read. A member who claims admin is not
-// an admin, and its platform question is refused as a legacy credential. With the cell off the flag skips the read.
-func TestAnHS256SuperuserIsAdmittedByTheMembershipRoleWithTheAdminCellOn(t *testing.T) {
-	legacyBody := `{"detail":{"message":"` + legacyCredentialDetail + `","reason_code":"legacy_credential"}}`
-	for _, c := range []struct {
-		cell   string
-		status int
-		body   string
-	}{
-		{"admin", http.StatusForbidden, legacyBody},
-		{"teams", http.StatusOK, "served"},
-	} {
-		t.Run(c.cell, func(t *testing.T) {
-			decider := &countingDecider{inner: pepfake.New(platformRule(rule.ActionAdminUsers))}
-			store := newStore()
-			store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
-			guard := NewGuard(authenticator(t, store), quiet())
-			guard.SetEnforcer(seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
-			got := serve(seamMux(guard), http.MethodGet, "/api/v1/admin/users/"+targetUserID.String(), bearer(t, func(m jwt.MapClaims) {
-				superClaims(m)
-				m["role"] = "admin"
-			}))
-			if got.status != c.status || got.body != c.body {
-				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
-			}
-			if singles, batches := decider.counts(); singles+batches != 0 {
-				t.Fatalf("%d questions, want none", singles+batches)
-			}
-		})
-	}
-}
-
-// With the admin cell on, an organization-less caller reaches the impersonation status route only by the decision
-// point's admin.impersonate answer (in a live impersonation session too: the session's own status stays reachable); a
-// deny is the organization-less refusal and no verdict a 503. With the cell off, go-api's own flag decides, no question.
-func TestAnOrglessCallerReachesTheImpersonationStatusOnlyByThePDPAnswerWithTheAdminCellOn(t *testing.T) {
-	const orgRequired = `{"detail":"Organization context required"}`
+// With the admin cell on, an organization-less caller reaches a route as main lets it: a platform admin (no membership
+// row) reaches the admin-or row, a plain route and its own impersonation status; a caller with no platform role is
+// refused as on main.
+func TestAnOrglessCallerKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
 	for _, c := range []struct {
 		name          string
-		cell          string
-		decider       func(t *testing.T) pep.Decider
+		platformAdmin bool
 		impersonating bool
-		status        int
-		body          string
-		singles       int
+		method        string
+		path          string
 	}{
-		{"PDP allows", "admin", func(t *testing.T) pep.Decider { return pepfake.New(platformRule(rule.ActionAdminImpersonate)) }, false, 200, "platform=true bypass=false", 1},
-		{"PDP allows, impersonating", "admin", func(t *testing.T) pep.Decider { return pepfake.New(platformRule(rule.ActionAdminImpersonate)) }, true, 200, "platform=true bypass=false", 1},
-		{"PDP denies", "admin", func(t *testing.T) pep.Decider { return newDenyingFake(t) }, false, 403, orgRequired, 1},
-		{"no verdict", "admin", func(*testing.T) pep.Decider { return panicDecider{} }, false, 503, `{"detail":"Authorization service temporarily unavailable"}`, 0},
-		{"cell off", "teams", func(t *testing.T) pep.Decider { return newDenyingFake(t) }, false, 200, "platform=true bypass=true", 0},
+		{"platform admin, admin-or row", true, false, http.MethodGet, "/api/v1/admin/users"},
+		{"platform admin, plain route", true, false, http.MethodPost, "/api/v1/telemetry/report"},
+		{"platform admin, own status", true, false, http.MethodGet, "/api/v1/admin/impersonate/status"},
+		{"platform admin, own status while impersonating", true, true, http.MethodGet, "/api/v1/admin/impersonate/status"},
+		{"no platform role, admin-or row", false, false, http.MethodGet, "/api/v1/admin/users"},
+		{"no platform role, plain route", false, false, http.MethodPost, "/api/v1/telemetry/report"},
+		{"no platform role, status", false, false, http.MethodGet, "/api/v1/admin/impersonate/status"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			decider := &countingDecider{inner: c.decider(t)}
-			h := seamHandler(t, legacyStore(true, ""), orglessAccessClaims(), seamEnforcer(t, decider, productionGoAPIRows(t), c.cell))
-			if c.impersonating {
-				h = impersonating(h)
-			}
-			got := seamServe(h, http.MethodGet, "/api/v1/admin/impersonate/status")
-			if got.status != c.status || got.body != c.body {
-				t.Fatalf("%d %q, want %d %q", got.status, got.body, c.status, c.body)
-			}
-			if c.status == 503 && got.header.Get("Retry-After") != enforceRetryAfter {
-				t.Fatalf("503 without Retry-After")
-			}
-			if c.status != 503 {
-				if singles, batches := decider.counts(); singles != c.singles || batches != 0 {
-					t.Fatalf("%d single and %d batch calls, want %d and 0", singles, batches, c.singles)
+			serveWith := func(cell string) response {
+				decider := newDenyingFake(t)
+				if c.platformAdmin {
+					decider = platformAdminFake(t).(denyingFake)
 				}
+				h := seamHandler(t, legacyStore(c.platformAdmin, ""), orglessAccessClaims(), seamEnforcer(t, decider, productionGoAPIRows(t), cell))
+				if c.impersonating {
+					h = impersonating(h)
+				}
+				return seamServe(h, c.method, c.path)
+			}
+			equalToMain(t, serveWith("admin"), mainAnswer(t, serveWith))
+		})
+	}
+}
+
+// With the admin cell on, the guard admits a platform admin with no admin role in the token's organization at an
+// admin level, as main's User.IsAdmin does; a member with no platform role is refused as on main. A question the wrap
+// does ask (a member at an admin-or row) with no verdict is a 503: no fallback on a failure.
+func TestAdminAdmissionKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		platformAdmin bool
+		role          string
+		path          string
+		status        int
+	}{
+		{"platform admin, member row, admin-or row", true, "member", "/api/v1/admin/users/" + targetUserID.String(), 200},
+		{"platform admin, org admin, admin-or row", true, "admin", "/api/v1/admin/users/" + targetUserID.String(), 200},
+		{"member, no platform role, admin-or row", false, "member", "/api/v1/admin/users/" + targetUserID.String(), 403},
+		{"org admin, no platform role, admin-or row", false, "admin", "/api/v1/admin/users/" + targetUserID.String(), 200},
+		{"platform admin, member row, plain admin route", true, "member", "/api/v1/admin/seam/plain", 200},
+		{"member, no platform role, plain admin route", false, "member", "/api/v1/admin/seam/plain", 403},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			serveWith := func(cell string) response {
+				decider := newDenyingFake(t)
+				if c.platformAdmin {
+					decider = platformAdminFake(t).(denyingFake)
+				}
+				return seamServe(seamHandler(t, legacyStore(c.platformAdmin, c.role), userClaims(nil), seamEnforcer(t, decider, productionGoAPIRows(t), cell)),
+					http.MethodGet, c.path)
+			}
+			got := serveWith("admin")
+			equalToMain(t, got, mainAnswer(t, serveWith))
+			if got.status != c.status {
+				t.Fatalf("%d %q, want main's %d", got.status, got.body, c.status)
 			}
 		})
+	}
+	got := seamServe(seamHandler(t, legacyStore(false, "member"), userClaims(nil), seamEnforcer(t, panicDecider{}, productionGoAPIRows(t), "admin")),
+		http.MethodGet, "/api/v1/admin/users/"+targetUserID.String())
+	if got.status != http.StatusServiceUnavailable || got.header.Get("Retry-After") != enforceRetryAfter {
+		t.Fatalf("no verdict: %d %q, want 503 with Retry-After", got.status, got.body)
+	}
+}
+
+// With the admin cell on, an HS256 superuser who claims admin while its membership row says member keeps main's
+// answer at an admin-or row: main skips the membership read for a holder of admin.orgs, and the HS256 caller is not
+// judged by the decision point (no question).
+func TestAnHS256SuperuserKeepsMainsAdmissionWithTheAdminCellOn(t *testing.T) {
+	serveWith := func(cell string) response {
+		store := newStore()
+		store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
+		guard := NewGuard(authenticator(t, store), quiet())
+		guard.SetEnforcer(seamEnforcer(t, &countingDecider{inner: newDenyingFake(t)}, productionGoAPIRows(t), cell))
+		return serve(seamMux(guard), http.MethodGet, "/api/v1/admin/users/"+targetUserID.String(), bearer(t, func(m jwt.MapClaims) {
+			superClaims(m)
+			m["role"] = "admin"
+		}))
+	}
+	got := serveWith("admin")
+	equalToMain(t, got, mainAnswer(t, serveWith))
+	if got.status != http.StatusOK || got.body != "served" {
+		t.Fatalf("%d %q: main serves it", got.status, got.body)
+	}
+}
+
+// With the admin cell on, an HS256 superuser whose token names an organization it has no membership row in keeps
+// main's answer at an admin route: main skips the membership read for a holder of admin.orgs (product rule 1).
+func TestAnHS256SuperuserWithNoMembershipRowKeepsMainsAnswerWithTheAdminCellOn(t *testing.T) {
+	serveWith := func(cell string) response {
+		store := newStore()
+		store.users[userID] = UserState{IsActive: true, IsSuperuser: true}
+		guard := NewGuard(authenticator(t, store), quiet())
+		guard.SetEnforcer(seamEnforcer(t, &countingDecider{inner: newDenyingFake(t)}, productionGoAPIRows(t), cell))
+		return serve(seamMux(guard), http.MethodGet, "/api/v1/admin/seam/plain", bearer(t, func(m jwt.MapClaims) {
+			superClaims(m)
+			m["org_id"] = strangerOrg
+		}))
+	}
+	got := serveWith("admin")
+	equalToMain(t, got, mainAnswer(t, serveWith))
+	if got.status != http.StatusOK || got.body != "served" {
+		t.Fatalf("%d %q: main serves it", got.status, got.body)
 	}
 }

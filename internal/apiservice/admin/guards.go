@@ -41,10 +41,14 @@ func (h *handlers) ensureUserInScope(ctx context.Context, w http.ResponseWriter,
 // ensureOrgAdminAccess is common.py's _ensure_org_admin_access: a
 // non-superuser caller needs an owner/admin membership in orgID. Returns
 // false (and writes the 403) when access is refused; a superuser always
-// passes while the admin cell is off. With it on no platform action stands in
-// for the membership (policy.PlatformBypassesOrg).
+// passes (with the admin cell on, by the decision point's admin.orgs answer).
 func (h *handlers) ensureOrgAdminAccess(ctx context.Context, w http.ResponseWriter, user *policy.User, orgID uuid.UUID) bool {
-	if policy.PlatformBypassesOrg(ctx, user, rule.ActionAdminOrgs) {
+	held, err := policy.HoldsPlatform(ctx, user, rule.ActionAdminOrgs)
+	if err != nil {
+		policy.WritePlatformDecisionRefusal(w, err)
+		return false
+	}
+	if held {
 		return true
 	}
 	membership, err := h.store.membershipRole(ctx, orgID, user.ID)

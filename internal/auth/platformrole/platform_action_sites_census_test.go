@@ -30,12 +30,11 @@ func (s platformActionSite) key() string { return s.file + "\t" + s.function + "
 var actionTakingCalls = map[string]bool{
 	"Holds": true, "WrapPlatform": true, "WrapAdminOr": true, "BodyFirstPlatform": true, "BodyFirstAdminOr": true,
 	"bodyFirstPlatform": true, "bodyFirstAdminOr": true,
-	"HoldsPlatform": true, "PlatformBypassesOrg": true,
+	"HoldsPlatform": true,
 }
 
-// actionLastCalls name their action in the last argument: policy.HoldsPlatform(ctx, user, action) and
-// policy.PlatformBypassesOrg(ctx, user, action).
-var actionLastCalls = map[string]bool{"HoldsPlatform": true, "PlatformBypassesOrg": true}
+// actionLastCalls name their action in the last argument: policy.HoldsPlatform(ctx, user, action).
+var actionLastCalls = map[string]bool{"HoldsPlatform": true}
 
 // platformActionReads lists, per function, the actions it names in a Holds
 // call: x.Holds(<ActionAdmin*|actionAdmin*|rule.ActionAdmin*>).

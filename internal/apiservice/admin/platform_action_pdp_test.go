@@ -115,14 +115,14 @@ func TestPDPAction_UserInScopeIsTheDecisionPointsAdminUsers(t *testing.T) {
 	}
 }
 
-// Mix 3 with the admin cell on: no platform action stands in for an org admin membership (fail closed until the
-// superuser cross-org question is answered), whatever the decision point and the flag say.
-func TestPDPAction_OrgAdminAccessHasNoPlatformBypass(t *testing.T) {
+// Mix 3 with the admin cell on: an org the caller is no owner or admin of passes when the decision point says the
+// caller holds admin.orgs, as main passes a superuser; no verdict is a 503.
+func TestPDPAction_OrgAdminAccessIsTheDecisionPointsAdminOrgs(t *testing.T) {
 	for _, c := range pdpCases(rule.ActionAdminOrgs) {
 		w := httptest.NewRecorder()
 		user := &policy.User{ID: uuid.New(), IsSuperuser: c.superuser}
-		if got := newHandlers(t).ensureOrgAdminAccess(pdpCtx(t, c.allowed...), w, user, uuid.New()); got || w.Code != http.StatusForbidden {
-			t.Errorf("%s: access = %v (status %d), want false and 403", c.name, got, w.Code)
+		if got := newHandlers(t).ensureOrgAdminAccess(pdpCtx(t, c.allowed...), w, user, uuid.New()); got != c.want || c.statusWrong(w.Code) {
+			t.Errorf("%s: access = %v (status %d), want %v", c.name, got, w.Code, c.want)
 		}
 	}
 }
@@ -199,42 +199,58 @@ func TestPDPAction_ImpersonationStatusIsTheDecisionPointsAdminImpersonate(t *tes
 	}
 }
 
-// Where 6.10 meets the selection-only org rule: with the admin cell on, an admin of the token's org A who holds
-// members.manage there, asking about the members of another org B named in the path, is refused, whatever go-api's
-// own superuser flag says: no platform action stands in for an admin membership in B.
-func TestPDPAction_TokenOrgAdminIsRefusedAnotherPathOrg(t *testing.T) {
+// Where 6.10 meets the selection-only org rule, with the admin cell on, each caller gets main's answer: an admin of the
+// token's org A who holds members.manage there and no platform role is refused the members of another org B named in
+// the path; a platform admin (the decision point's admin.orgs, no membership row in B) is served, as main serves a
+// superuser.
+func TestPDPAction_PathOrgMembersKeepMainsAnswer(t *testing.T) {
 	tokenOrg, pathOrg := uuid.New(), uuid.New()
-	decider := pepfake.New(pepfake.Rule{PrincipalReference: pdpBearer, Action: "members.manage", ResourceType: "organization",
-		ResourceKey: tokenOrg.String(), OrganizationID: tokenOrg.String(), TenantScope: tokenOrg.String()})
+	orgAdmin := pepfake.Rule{PrincipalReference: pdpBearer, Action: "members.manage", ResourceType: "organization",
+		ResourceKey: tokenOrg.String(), OrganizationID: tokenOrg.String(), TenantScope: tokenOrg.String()}
+	platformAdmin := pepfake.Rule{PrincipalReference: pdpBearer, Action: rule.ActionAdminOrgs, ResourceType: "platform", ResourceKey: "platform"}
 	for _, superuser := range []bool{false, true} {
-		h, reads := newPlatformHandlers()
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodGet, "/orgs/"+pathOrg.String()+"/members", nil)
-		r.SetPathValue("org_id", pathOrg.String())
-		user := &policy.User{ID: uuid.New(), UserID: uuid.NewString(), OrgID: tokenOrg.String(), Role: "admin", IsSuperuser: superuser}
-		ctx := policy.WithUser(policy.WithPlatformDecider(context.Background(), decider, pdpBearer), user)
-		h.listMembers(w, r.WithContext(ctx))
-		if w.Code != http.StatusForbidden || *reads != 0 {
-			t.Errorf("superuser %v: %d %q, store reached %d times; want 403 and no list read", superuser, w.Code, w.Body.String(), *reads)
+		rules := []pepfake.Rule{orgAdmin}
+		if superuser {
+			rules = append(rules, platformAdmin)
+		}
+		serve := func(ctx context.Context) (int, int) {
+			h, reads := newPlatformHandlers()
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/orgs/"+pathOrg.String()+"/members", nil)
+			r.SetPathValue("org_id", pathOrg.String())
+			user := &policy.User{ID: uuid.New(), UserID: uuid.NewString(), OrgID: tokenOrg.String(), Role: "admin", IsSuperuser: superuser}
+			h.listMembers(w, r.WithContext(policy.WithUser(ctx, user)))
+			return w.Code, *reads
+		}
+		gotCode, gotReads := serve(policy.WithPlatformDecider(context.Background(), newDenyingFake(t, rules...), pdpBearer))
+		mainCode, mainReads := serve(context.Background())
+		if gotCode != mainCode || (gotReads > 0) != (mainReads > 0) {
+			t.Errorf("superuser %v: admin cell %d (store reached %d), main %d (%d); want main's answer", superuser, gotCode, gotReads, mainCode, mainReads)
+		}
+		if superuser == (gotCode == http.StatusForbidden) {
+			t.Errorf("superuser %v: %d; want a refusal only for the org admin of another org", superuser, gotCode)
 		}
 	}
 }
 
-// With the admin cell on, a live go-api impersonation row gets no platform action in the users handlers (D6714): even
-// when the decision point would allow the admin's own admin.users, a user outside the org is not in scope and the
-// caller's own org is not served; both answer 403 in an impersonation session.
-func TestPDPAction_ImpersonationSessionGetsNoAdminUsers(t *testing.T) {
+// With the admin cell on, a live go-api impersonation row keeps main's answer in the users handlers (13211 lists the
+// only accepted narrowing): the decision point's admin.users for the admin's own bearer puts a user outside the org in
+// scope and serves the caller's own org claim, as main's superuser flag does.
+func TestPDPAction_ImpersonationSessionKeepsMainsAdminUsers(t *testing.T) {
 	session := &policy.Impersonation{ID: uuid.New(), AdminUserID: uuid.New(), TargetUserID: uuid.New(), TargetOrgID: uuid.New(),
 		TargetRole: "member", ExpiresAt: time.Now().Add(time.Hour)}
 	user := &policy.User{ID: uuid.New(), IsSuperuser: true}
-	w := httptest.NewRecorder()
-	ctx := policy.WithImpersonation(pdpCtx(t, rule.ActionAdminUsers), session)
-	if got := newHandlers(t).ensureUserInScope(ctx, w, user, uuid.New(), uuid.New()); got || w.Code != http.StatusForbidden ||
-		!strings.Contains(w.Body.String(), "impersonation session") {
-		t.Errorf("user scope: in scope = %v, %d %q; want false and 403 in an impersonation session", got, w.Code, w.Body.String())
-	}
-	w = httptest.NewRecorder()
-	if _, got := orgIDForNonSuperuser(ctx, w, user); got || w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "impersonation session") {
-		t.Errorf("no org context: served = %v, %d %q; want false and 403 in an impersonation session", got, w.Code, w.Body.String())
+	for name, ctx := range map[string]context.Context{
+		"admin cell": policy.WithImpersonation(pdpCtx(t, rule.ActionAdminUsers), session),
+		"main":       policy.WithImpersonation(context.Background(), session),
+	} {
+		w := httptest.NewRecorder()
+		if got := newHandlers(t).ensureUserInScope(ctx, w, user, uuid.New(), uuid.New()); !got {
+			t.Errorf("%s: user scope: in scope = false, %d %q; want in scope", name, w.Code, w.Body.String())
+		}
+		w = httptest.NewRecorder()
+		if _, got := orgIDForNonSuperuser(ctx, w, user); !got {
+			t.Errorf("%s: no org context: served = false, %d %q; want served", name, w.Code, w.Body.String())
+		}
 	}
 }

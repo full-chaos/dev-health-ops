@@ -9,6 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // goAPIRows are the real go-api profile rows as go-api installs them.
@@ -161,5 +162,25 @@ func TestADelegatedReadWithAnAAL2AllowStaysUnavailable(t *testing.T) {
 	pdp.obligations = map[string]any{"tenant_scope": ownOrg, "minimum_assurance": "aal2"}
 	if got := delegatedBillingRead(t, pdp, true); got.status != http.StatusServiceUnavailable {
 		t.Fatalf("delegated read, aal2 allow: %d %q, want 503", got.status, got.body)
+	}
+}
+
+// An admin with a live go-api impersonation row reads an admin-or row (GET /api/v1/admin/users, WrapAdminOr, with the
+// row naming admin.users as adminUsersRows does): enforce-on answers as the cells-off guard, with no PDP call. The
+// impersonation clause runs before the admin-or batch.
+func TestAnImpersonatingAdminsReadOnAnAdminOrRowEqualsTheLegacyAnswer(t *testing.T) {
+	rows := adminUsersRows(t)
+	m := parityMount{"GET /api/v1/admin/users", func(g *Guard) http.Handler { return g.WrapAdminOr(rule.ActionAdminUsers, echo) }, "/api/v1/admin/users"}
+	auth := func() *Authenticator {
+		return routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)})
+	}
+	pdp := newTestPDP(t, allowAll)
+	legacy := enforceRequest(impersonating(parityMux(t, auth(), nil, m)), http.MethodGet, m.path)
+	enforced := enforceRequest(impersonating(parityMux(t, auth(), parityEnforcer(t, pdp, rows, "admin"), m)), http.MethodGet, m.path)
+	if enforced.status != legacy.status || enforced.body != legacy.body || legacy.status != http.StatusOK {
+		t.Errorf("enforce-on %d %q, cells-off %d %q: want the cells-off 200", enforced.status, enforced.body, legacy.status, legacy.body)
+	}
+	if n := len(pdp.calls()); n != 0 {
+		t.Errorf("%d PDP calls, want 0", n)
 	}
 }

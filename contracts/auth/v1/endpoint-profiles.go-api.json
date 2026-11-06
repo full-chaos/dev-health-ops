@@ -1,7 +1,14 @@
 {
   "credential_class_source": "contracts/auth/v1/credential-classes.json",
   "generated_at": "2026-10-21T00:00:00Z",
-  "rewritten_anchors": [],
+  "rewritten_anchors": [
+    {
+      "file": "internal/api/session/session.go",
+      "line": 148,
+      "now": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/auth/switch-org\", Handler: guard.BodyFirst(policy.Authenticated, guard.RefuseImpersonation(inner(\"/api/v1/auth/switch-org\", h.switchOrg)))},",
+      "was": "\t\t{Method: http.MethodPost, Pattern: \"/api/v1/auth/switch-org\", Handler: guard.BodyFirst(policy.Authenticated, inner(\"/api/v1/auth/switch-org\", h.switchOrg))},"
+    }
+  ],
   "rows": [
     {
       "accepted_credential_classes": [

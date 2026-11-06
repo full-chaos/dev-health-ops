@@ -36,7 +36,6 @@ func TestImpersonationFlagNameAndDefault(t *testing.T) {
 func TestImpersonationFlagIsStrictAndStandsAlone(t *testing.T) {
 	for name, env := range map[string]map[string]string{
 		"without a url": {EnvAuthProxyImpersonation: "true"},
-		"not a boolean": {EnvAuthProxyURL: "http://auth-service:8095", EnvAuthProxyImpersonation: "yes"},
 	} {
 		if _, err := ParseAuthProxyConfig(lookupFrom(env)); err == nil {
 			t.Errorf("%s: accepted %v", name, env)

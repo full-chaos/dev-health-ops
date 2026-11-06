@@ -182,6 +182,10 @@ func TestPlantedFailures(t *testing.T) {
 		{"P11 a permanent row with no reason", func(map[string]string) string {
 			return strings.Replace(baseLedger, "an operator input ruled permanent by D1", "kept", 1)
 		}, []string{"permanent-row", "states why it is permanent"}},
+		{"P13 an exact row does not cover a marker line that quotes its key", func(f map[string]string) string {
+			f["internal/queryapi/pdp/pdp.go"] = basePDP + "\n// TEMPORARY: ExemptClasses:ClassHS256 stays until the flip.\n"
+			return baseLedger
+		}, []string{"unregistered exception", "internal/queryapi/pdp/pdp.go:10"}},
 		{"P12 an interim comment in a single-file scope", func(f map[string]string) string {
 			f["internal/apiservice/accessverify.go"] = "package apiservice\n\n// An interim pin until the registry lands.\nvar C = 3\n"
 			return baseLedger
@@ -250,5 +254,23 @@ func TestMalformedLedgerRowsAreRefused(t *testing.T) {
 				t.Fatalf("no defect for %q", line)
 			}
 		})
+	}
+}
+
+func TestAProfileFileWithNoRowsFailsLoudly(t *testing.T) {
+	files := fixture()
+	files["contracts/auth/v1/endpoint-profiles.query-api.json"] = `{"rows":[]}`
+	root := t.TempDir()
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := exceptionledger.Check(root, []byte(baseLedger)); err == nil {
+		t.Fatal("a profile file with no rows was counted as zero exceptions")
 	}
 }

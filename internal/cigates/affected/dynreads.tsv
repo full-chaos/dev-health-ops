@@ -3,6 +3,7 @@ ci/tools/gotestfuncs	main.go
 cmd/auth-migrate	bootstrap.go
 cmd/auth-migrate	restorefence.go
 cmd/cigate	docs_prepare_refusals_test.go
+cmd/cigate	main.go
 cmd/cigate	main_test.go
 cmd/dev-health-migration-matrix	contract_test.go
 cmd/dev-health-migration-matrix	main.go
@@ -514,6 +515,7 @@ internal/queryapi/explain	golden_test.go
 internal/queryapi/flame	golden_test.go
 internal/queryapi/graph	field_action_map_test.go
 internal/queryapi/graph	field_precheck_parity_test.go
+internal/queryapi/graph	root_class_census_test.go
 internal/queryapi/graph/model	sdl_nullability_gate_test.go
 internal/queryapi/heatmap	identity.go
 internal/queryapi/home	golden_test.go

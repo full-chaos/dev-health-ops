@@ -152,6 +152,7 @@ internal/cigates/workflows	go_quality_legs_shape_test.go	unexpressed
 internal/cigates/workflows	go_workers_compose_proof_test.go	unexpressed
 internal/cigates/workflows	governance_context_test.go	unexpressed
 internal/cigates/workflows	image_reuse_exec_norace_test.go	unexpressed
+internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed
 internal/cigates/workflows	providersync_shard_budget_test.go	unexpressed
 internal/cigates/workflows	race_pool_routing_test.go	unexpressed
 internal/cigates/workflows	registry_retry_test.go	unexpressed
@@ -205,6 +206,7 @@ internal/providerfoundation	environment_proxy_test.go	unexpressed
 internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
+internal/queryapi/pdp	headers_switch_census_test.go	unexpressed
 internal/queryapi/pepgate	census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed
 internal/queryapi/scancensus	census_test.go	internal/queryapi/...

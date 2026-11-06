@@ -409,6 +409,7 @@ internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncdis
 internal/queryapi/datahealth	sourcehealth_stages_census_test.go	internal/syncreconciler	dir	*
 internal/queryapi/graph	field_precheck_parity_test.go	internal/queryapi/graph	dir	*
 internal/queryapi/graph	not_implemented_allowlist_test.go	internal/queryapi/graph/testdata/not_implemented	dir	*
+internal/queryapi/graph	operation_enforce_test.go	internal/queryapi/graph	dir	*
 internal/queryapi/graph/model	sdl_nullability_gate_test.go	unexpressed	-	-
 internal/queryapi/home	import_boundary_test.go	unexpressed	-	-
 internal/queryapi/investmentexplain	cache_key_golden_test.go	internal/queryapi/investmentexplain/testdata	dir	*

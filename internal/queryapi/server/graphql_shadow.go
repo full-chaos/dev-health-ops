@@ -14,20 +14,25 @@ import (
 )
 
 // graphQLShadow is the one interceptor both GraphQL servers use: it reads the process's shadow from the request's gate.
-// No gate, or a gate with no shadow (off, enforce, a bad knob), is off.
+// No gate, or a gate with no shadow (off, enforce, a bad knob), is off. A root the gate decides for a user caller is
+// not observed: it has no legacy answer.
 func graphQLShadow() graph.OperationShadow {
 	return graph.OperationShadow{Sink: func(ctx context.Context) graph.ShadowSink {
 		if shadow := pdp.FromContext(ctx).Shadow(); shadow != nil {
 			return shadow
 		}
 		return nil
+	}, Enforced: func(ctx context.Context, action string) bool {
+		return pdp.FromContext(ctx).RootEnforced(pdp.CallerUser, action)
 	}}
 }
 
-// useGraphQLGuards is the guard slot of every GraphQL server: the shadow first, then the org guard.
+// useGraphQLGuards is the guard slot of every GraphQL server: the shadow first, then the org guard, then the decision
+// (CHAOS-10865), which decides for the organization the guard admitted.
 func useGraphQLGuards(gql *gqlhandler.Server) {
 	gql.Use(graphQLShadow())
 	gql.Use(graph.OperationOrgGuard{})
+	gql.Use(graphQLEnforce())
 }
 
 // graphQLShadowRows are the shadow's rows of the GraphQL roots: "Query.name" and "Mutation.name", each the catalog row

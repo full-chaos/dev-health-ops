@@ -121,6 +121,8 @@ type Config struct {
 	Meter metric.Meter
 	// Switch is query-api's 5.17 cell set: a route is enforced only while the cell of its action namespace is on.
 	Switch authzenforce.Switch
+	// HeadersSwitch is the cell set of the header carrier's GraphQL operations (authzenforce.QueryAPIHeaders, D6721).
+	HeadersSwitch authzenforce.Switch
 	// Lookup reads the 5.12 shadow knobs (AUTH_SHADOW_PDP_SAMPLE, _MAX_IN_FLIGHT, _HIGH_RISK) in shadow mode; nil
 	// reads none, so every knob has its default.
 	Lookup func(string) (string, bool)
@@ -132,8 +134,11 @@ type Gate struct {
 	decider pep.Decider
 	actions map[string]string
 	cells   authzenforce.Switch
-	// carriesAllowlist is this gate's copy of allowlistCutOver.
+	// headerCells decide the header carrier's GraphQL roots.
+	headerCells authzenforce.Switch
+	// carriesAllowlist is this gate's copy of allowlistCutOver; carriesRoots of rootCutOver.
 	carriesAllowlist map[string]bool
+	carriesRoots     map[string]bool
 	logger           *slog.Logger
 	shadow           *policy.Shadow
 
@@ -154,19 +159,20 @@ func FromSettingsWithRows(lookup func(string) (string, bool), logger *slog.Logge
 	}
 	raw, _ := lookup(EnvMode)
 	cells := authzenforce.Load(authzenforce.QueryAPI, lookup, logger)
+	headerCells := authzenforce.Load(authzenforce.QueryAPIHeaders, lookup, logger)
 	mode := strings.TrimSpace(raw)
 	switch mode {
 	case "", ModeOff:
-		return build(Config{Mode: ModeOff, Logger: logger, Switch: cells})
+		return build(Config{Mode: ModeOff, Logger: logger, Switch: cells, HeadersSwitch: headerCells})
 	case ModeShadow, ModeEnforce:
 	default:
-		return invalid(Config{Logger: logger, Switch: cells}, EnvMode)
+		return invalid(Config{Logger: logger, Switch: cells, HeadersSwitch: headerCells}, EnvMode)
 	}
 	decider, variable := newDecider(lookup)
 	if decider == nil {
-		return invalid(Config{Logger: logger, Switch: cells}, variable)
+		return invalid(Config{Logger: logger, Switch: cells, HeadersSwitch: headerCells}, variable)
 	}
-	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, Lookup: lookup, ExtraShadowRows: extra})
+	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, HeadersSwitch: headerCells, Lookup: lookup, ExtraShadowRows: extra})
 }
 
 // newDecider builds the PEP client in go-api's form (#5605): the workload client over the origin of AUTH_PROXY_URL,
@@ -228,7 +234,8 @@ func build(cfg Config) *Gate {
 	if meter == nil {
 		meter = otel.Meter(meterName)
 	}
-	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger, cells: cfg.Switch, carriesAllowlist: maps.Clone(allowlistCutOver)}
+	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger, cells: cfg.Switch, headerCells: cfg.HeadersSwitch,
+		carriesAllowlist: maps.Clone(allowlistCutOver), carriesRoots: maps.Clone(rootCutOver)}
 	if g.logger == nil {
 		g.logger = slog.Default()
 	}
@@ -243,8 +250,10 @@ func build(cfg Config) *Gate {
 		g.mode, g.decider = modeInvalid, nil
 	}
 	g.actions = actions
-	if err := authzenforce.Register(meter, g.cells); err != nil {
-		g.logger.Error("query-api pdp: the authz enforcement gauges are not registered", slog.String("service", string(authzenforce.QueryAPI)))
+	for _, sw := range []authzenforce.Switch{g.cells, g.headerCells} {
+		if err := authzenforce.Register(meter, sw); err != nil {
+			g.logger.Error("query-api pdp: the authz enforcement gauges are not registered", slog.String("service", string(sw.Service())))
+		}
 	}
 	noClient := g.anyCellOn() && g.decider == nil
 	if noClient {
@@ -462,7 +471,7 @@ func (g *Gate) scopeOf(d pep.Decision, profile, action, orgID string) (pepgate.S
 		if slices.Contains(keys, "*") {
 			return pepgate.Organization(org), ""
 		}
-		if !g.carriesAllowlist[profile] {
+		if !g.carries(profile) {
 			return pepgate.Scope{}, ReasonNotCarriedOut
 		}
 		return pepgate.Allowlist(org, keys), ""

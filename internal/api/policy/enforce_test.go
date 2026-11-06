@@ -525,7 +525,7 @@ func TestAnEnforcedImpersonationRefusalIsAlsoAShadowResultOnEveryProfileRow(t *t
 	}
 	cells := 0
 	for pattern, row := range rows {
-		if pattern == stopImpersonationPattern {
+		if liveRowExempt(pattern) {
 			continue
 		}
 		cells++

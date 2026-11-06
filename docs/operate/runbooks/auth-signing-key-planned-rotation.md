@@ -30,7 +30,7 @@ A key-set manifest lists every key that must stay published: a registered key th
 
 1. Stage the new key file and add it to the manifest (an atomic rename of the manifest; a key file is immutable per kid). `register -kid NEW -apply`. The JWKS now lists the old and the new key.
 2. Wait 300 s. `activate -kid NEW` before that answers `refused: floor_not_reached (floor reached in <time>)` and changes nothing.
-3. `activate -kid NEW -apply`. New tokens carry `kid` NEW. Tokens signed by the old key stay accepted while it is `retiring` (the overlap). The rehearsal probes the old token on go-api across the change: no non-2xx.
+3. `activate -kid NEW -apply`. New tokens carry `kid` NEW. Tokens signed by the old key stay accepted while it is `retiring` (the overlap). The rehearsal probes the old token on go-api and on query-api every 0.5 s across the change: no go-api non-2xx answer and no query-api 401, 000 or 5xx answer. After the retire it checks a token that NEW signed on both.
 4. Back out inside the overlap with `rollback -kid OLD -apply`, and forward again with `rollback -kid NEW -apply`.
 5. Wait 4200 s from the last switch. `retire -kid OLD -apply`. OLD leaves the JWKS. Every token OLD signed has expired by then, so the refusal of an OLD token is by expiry and by absence from the JWKS together.
 

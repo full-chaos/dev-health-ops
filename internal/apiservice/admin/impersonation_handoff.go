@@ -74,8 +74,8 @@ func newHandoffID() (string, error) {
 // handoffIDPattern is the text of a handoff id: 32 bytes, unpadded base64url.
 var handoffIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
-// handoffRoutes is the consume route of the start handoff. It is not mounted yet: a new route lands first, its
-// endpoint-profile row and the mount follow.
+// handoffRoutes is the consume route of the start handoff, mounted with the other impersonation
+// routes; the policy package keeps it reachable while the caller's impersonation row is live.
 func (h *handlers) handoffRoutes() []httpapi.Route {
 	return []httpapi.Route{
 		{Method: http.MethodPost, Pattern: impersonationPrefix + "/impersonate/handoff/consume",

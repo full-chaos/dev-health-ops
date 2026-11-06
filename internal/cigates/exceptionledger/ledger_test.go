@@ -279,3 +279,21 @@ func TestAProfileFileWithNoRowsFailsLoudly(t *testing.T) {
 		t.Fatal("a profile file with no rows was counted as zero exceptions")
 	}
 }
+
+func TestAPDPFileWithoutTheExemptListFailsLoudly(t *testing.T) {
+	files := fixture()
+	files["internal/queryapi/pdp/pdp.go"] = "package pdp\n\nvar Exempt = []string{}\n"
+	root := t.TempDir()
+	for name, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := exceptionledger.Check(root, []byte(baseLedger)); err == nil {
+		t.Fatal("a pdp.go without ExemptClasses was read as an empty exempt list")
+	}
+}

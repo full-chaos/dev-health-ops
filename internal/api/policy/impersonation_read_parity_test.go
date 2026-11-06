@@ -105,7 +105,8 @@ func TestAnImpersonatingAdminsReadOnAnEnforcedRowEqualsTheLegacyAnswer(t *testin
 }
 
 // Every read (GET, HEAD) go-api profile row except the live-row exemptions, its namespace on, answers an impersonating
-// admin as the row does with its cell off, with no decision point call.
+// admin as the row does with its cell off, with no decision point call. A GET row also takes HEAD (net/http ServeMux),
+// which RefuseImpersonation reads as a read too.
 func TestEveryEnforcedReadRowAnswersAnImpersonatingAdminAsTheLegacyGuard(t *testing.T) {
 	rows := goAPIRows(t)
 	cells := 0
@@ -121,10 +122,12 @@ func TestEveryEnforcedReadRowAnswersAnImpersonatingAdminAsTheLegacyGuard(t *test
 				return routed(t, personaStore(personaSuperuser), &fakeValidator{result: userClaims(nil)})
 			}
 			pdp := newTestPDP(t, allowAll)
-			legacy := enforceRequest(impersonating(parityMux(t, auth(), nil, m)), method, m.path)
-			enforced := enforceRequest(impersonating(parityMux(t, auth(), parityEnforcer(t, pdp, rows, row.Namespace), m)), method, m.path)
-			if enforced.status != legacy.status || enforced.body != legacy.body {
-				t.Errorf("enforce-on %d %q, cells-off %d %q: want the cells-off answer", enforced.status, enforced.body, legacy.status, legacy.body)
+			for _, verb := range []string{method, http.MethodHead} {
+				legacy := enforceRequest(impersonating(parityMux(t, auth(), nil, m)), verb, m.path)
+				enforced := enforceRequest(impersonating(parityMux(t, auth(), parityEnforcer(t, pdp, rows, row.Namespace), m)), verb, m.path)
+				if enforced.status != legacy.status || enforced.body != legacy.body {
+					t.Errorf("%s: enforce-on %d %q, cells-off %d %q: want the cells-off answer", verb, enforced.status, enforced.body, legacy.status, legacy.body)
+				}
 			}
 			if n := len(pdp.calls()); n != 0 {
 				t.Errorf("%d PDP calls, want 0", n)

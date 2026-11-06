@@ -27,6 +27,10 @@ type AccessUserStore interface {
 
 const principalPrefix = "prn_"
 
+// nonMemberRole is the role of a caller with no membership row in the token
+// org: the HS256 token's role when it states none (userFromClaims).
+const nonMemberRole = "member"
+
 // parsePrincipalID reverses the session.v1 principal id form: "prn_" and the
 // unpadded base64url of the 16 id bytes. The principal id is the users id.
 func parsePrincipalID(wire string) (uuid.UUID, bool) {
@@ -43,8 +47,9 @@ func parsePrincipalID(wire string) (uuid.UUID, bool) {
 
 // accessTokenUser is the per-request half of a verified user access token:
 // the users row (found, active), the sid (a live session of the subject),
-// and the role from the membership in the org claim (Q4). Every failed read
-// is that error, never a pass.
+// and the role from the membership in the org claim (Q4); an admin.orgs
+// holder without that membership gets the HS256 path's principal. Every
+// failed read is that error, never a pass.
 func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessTokenClaims) (*User, error) {
 	id, ok := parsePrincipalID(claims.Subject)
 	if !ok {
@@ -99,8 +104,14 @@ func (a *Authenticator) accessTokenUser(ctx context.Context, claims *AccessToken
 			return nil, err
 		}
 		if !member {
-			a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
-			return nil, errRejected
+			// Parity with the HS256 path (D6773): an admin.orgs holder keeps
+			// a token org without a membership row (useTokenOrg, CheckTokenOrg
+			// in scope.go), with the role a non-member's token carries.
+			if !user.Holds(ActionAdminOrgs) {
+				a.logger.WarnContext(ctx, "api user access token for an org the user is not a member of", slog.String("user_id", user.UserID))
+				return nil, errRejected
+			}
+			role = nonMemberRole
 		}
 		user.OrgID, user.Role = *claims.OrgID, role
 	}

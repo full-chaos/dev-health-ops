@@ -37,12 +37,16 @@ type sqlOperandExemption struct {
 // fails the test, so a fixed or deleted call site cannot leave a silent hole.
 var sqlOperandExemptions = []sqlOperandExemption{
 	{
-		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterTables[table], ", ")`,
-		reason: "privilege keywords from the closed pushWriterTables map, not an identifier",
+		file: "push_lifecycle_writer.go", fn: "applyFunctionWriter", operand: `strings.Join(w.tables[table], ", ")`,
+		reason: "privilege keywords from the closed per-writer table maps (pushWriterTables, repoIdentityWriterTables), not an identifier",
 	},
 	{
-		file: "push_lifecycle_writer.go", fn: "applyPushLifecycleWriter", operand: `strings.Join(pushWriterSequences[sequence], ", ")`,
-		reason: "privilege keywords from the closed pushWriterSequences map, not an identifier",
+		file: "push_lifecycle_writer.go", fn: "applyFunctionWriter", operand: `strings.Join(w.sequences[sequence], ", ")`,
+		reason: "privilege keywords from the closed per-writer sequence maps (pushWriterSequences, repoIdentityWriterSequences), not an identifier",
+	},
+	{
+		file: "push_lifecycle_writer.go", fn: "applyFunctionWriter", operand: "function",
+		reason: "the quoted schema plus a function name and signature from the two closed functionWriter specs (PushLifecycleFunction, RepoIdentityFunction and their signature constants), not caller input",
 	},
 	{
 		file: "catalog_integration_test.go", fn: "TestPredefinedRoleReachableThroughAnIntermediaryIsDetected", operand: "testCase.grantOptions",

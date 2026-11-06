@@ -1285,6 +1285,29 @@ differ from the runtime login, and no caller repeats. Renders nothing.
 {{- end }}
 
 {{/*
+The repository identity writer settings (CHAOS-13057) of both auth-migrate Jobs, checked before either renders. The append
+function's owner is a NOLOGIN role of its own (writerRole), and exactly one login may execute it: the worker domain login of
+the provider sync (callerRoles, one entry). Both or neither; the writer differs from the runtime login, from the External
+Push writer and from the caller. Renders nothing.
+*/}}
+{{- define "dev-health.authRepoIdentity" -}}
+{{- $m := .Values.authService.migrate -}}
+{{- $writer := trim (toString (default "" $m.repoIdentity.writerRole)) -}}
+{{- $callers := default (list) $m.repoIdentity.callerRoles -}}
+{{- if and (not $writer) $callers }}{{- fail "authService.migrate.repoIdentity.callerRoles is set while writerRole is empty: the grant pass runs only with a writer role, so no caller would get EXECUTE; set repoIdentity.writerRole too" }}{{- end -}}
+{{- if $writer }}
+{{- if ne (len $callers) 1 }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles must list exactly one login (the worker domain login), got %d" (len $callers)) }}{{- end -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $writer) }}{{- fail (printf "authService.migrate.repoIdentity.writerRole %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $writer) }}{{- end -}}
+{{- if or (eq $writer (trim (toString $m.runtimeRole))) (eq $writer (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from authService.migrate.runtimeRole and from authService.migrate.pushLifecycle.writerRole" }}{{- end -}}
+{{- $raw := toString (first $callers) -}}
+{{- $c := trim $raw -}}
+{{- if not (regexMatch "^[a-z][a-z0-9_]{0,62}$" $raw) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q is not a valid role name (lower-case letters, digits and underscore, starting with a letter, at most 63 characters)" $raw) }}{{- end -}}
+{{- if or (eq $c $writer) (eq $c (trim (toString $m.runtimeRole))) (eq $c (trim (toString (default "" $m.pushLifecycle.writerRole)))) }}{{- fail (printf "authService.migrate.repoIdentity.callerRoles entry %q must differ from both writer roles and the runtime role" $c) }}{{- end -}}
+{{- range (default (list) $m.pushLifecycle.callerRoles) }}{{- if eq (trim (toString .)) $writer }}{{- fail "authService.migrate.repoIdentity.writerRole must differ from every authService.migrate.pushLifecycle caller" }}{{- end -}}{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 The auth schema owner pin (authService.migrate.ownerRole -> AUTH_SCHEMA_OWNER_ROLE) for both auth-migrate Jobs, or "".
 Empty renders nothing at every phase. Set, the role must differ from the runtime login, every session reader and every
 push lifecycle role, or the render fails (auth-migrate refuses the first two at run time as well).

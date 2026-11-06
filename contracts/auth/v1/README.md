@@ -491,6 +491,26 @@ validator and the writer; the event is a closed projection of lifecycle state.
   written by the system. `change.acr_class` (six values) and the optional
   opaque `change.owner_subject` ride on revision 1 events only.
 
+### Repository identity events: state transfer from the provider sync (CHAOS-13034)
+
+`repository-identity-event.v1` is one repository a provider sync observed. The
+worker appends it to the auth outbox through `append_repository_identity_event`
+(migration 0057), in the transaction that records the repository effect as
+committed; the auth service upserts `auth.repository_identities` from it.
+
+* **State transfer, one kind.** `repository_identity.observed` carries the full
+  current state (provider, provider id, live path, observed_at), so an add and a
+  rename are the same event. Removal and transfer out are not events here.
+* **Aggregate = one repository of one organization.** `aggregate_id` is
+  `<organization uuid>/<provider>/<provider id>`; the clients check that it names
+  the payload's repository and that the idempotency key is
+  `repository_identity:<aggregate_id>:<revision>`.
+* **Consumer rule.** An event at or below the revision the stored row was written
+  from is decided and changes nothing; a larger revision replaces the state
+  unless its `observed_at` is older than the stored one. There is no gap rule:
+  each event is the whole state.
+* **Closed at every level.** No other repository metadata rides on the event.
+
 ### JWKS and discovery: one issuer, one key use (CHAOS-4930)
 
 `jwks.v1` and `discovery.v1` are the two documents behind TRD §15's

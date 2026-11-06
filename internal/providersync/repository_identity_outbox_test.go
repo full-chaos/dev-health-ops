@@ -208,9 +208,10 @@ func TestParseRepositoryIdentityOutbox(t *testing.T) {
 	}
 }
 
-// TestRepositoryIdentityOutboxParsesLikeThePushLifecycleSwitch: the switch is parsed exactly as AUTH_PUSH_LIFECYCLE_EVENTS
-// (pushevent.ParsePushLifecycleEvents): unset or empty is off, strconv.ParseBool values, any other value a start error.
-func TestRepositoryIdentityOutboxParsesLikeThePushLifecycleSwitch(t *testing.T) {
+// TestRepositoryIdentityOutboxIsStricterThanThePushLifecycleSwitch: on purpose, the switch takes fewer spellings than
+// AUTH_PUSH_LIFECYCLE_EVENTS (pushevent.ParsePushLifecycleEvents): every value it accepts, that parser accepts with the
+// same result, and it refuses every other set value (empty, padded, ParseBool aliases) that one lets through.
+func TestRepositoryIdentityOutboxIsStricterThanThePushLifecycleSwitch(t *testing.T) {
 	type cell struct {
 		value string
 		set   bool
@@ -230,8 +231,12 @@ func TestRepositoryIdentityOutboxParsesLikeThePushLifecycleSwitch(t *testing.T) 
 		}
 		on, err := ParseRepositoryIdentityOutbox(lookup(EnvRepositoryIdentityOutbox))
 		pushOn, pushErr := pushevent.ParsePushLifecycleEvents(lookup(pushevent.EnvPushLifecycleEvents))
-		if on != pushOn || (err != nil) != (pushErr != nil) {
-			t.Fatalf("%q set=%v: repository identity on=%v err=%v; push lifecycle on=%v err=%v", c.value, c.set, on, err, pushOn, pushErr)
+		exact := !c.set || c.value == "true" || c.value == "false"
+		switch {
+		case exact && (err != nil || pushErr != nil || on != pushOn):
+			t.Fatalf("%q set=%v: both must accept it alike: on=%v err=%v; push on=%v err=%v", c.value, c.set, on, err, pushOn, pushErr)
+		case !exact && err == nil:
+			t.Fatalf("%q set=%v: accepted (on=%v); only unset, true and false are values", c.value, c.set, on)
 		}
 	}
 }

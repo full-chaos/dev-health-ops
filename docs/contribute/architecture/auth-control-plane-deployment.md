@@ -183,8 +183,8 @@ Roll order, each step before the next; every switch is off until its step:
    External Push writer, at every authService.phase).
 3. auth-service with `AUTH_REPO_IDENTITY_PROJECTION=on` (readiness check
    `repository_identity_projection_reader`). The reader is a no-op while the outbox holds none of these events.
-4. The worker with `WORKER_REPO_IDENTITY_OUTBOX=true` (parsed as `AUTH_PUSH_LIFECYCLE_EVENTS`: unset or empty is
-   off, `strconv.ParseBool` values, any other value stops start-up), only after steps 2 and 3. The commit of each `repos` effect of the github and gitlab
+4. The worker with `WORKER_REPO_IDENTITY_OUTBOX=true` (unset is off; a set value must be exactly `true` or `false`,
+   stricter than `AUTH_PUSH_LIFECYCLE_EVENTS` on purpose; any other value stops start-up), only after steps 2 and 3. The commit of each `repos` effect of the github and gitlab
    repo-metadata sync then appends one event per repository with a provider id, in the effect ledger's
    transaction, through the function of `AUTH_DATABASE_SCHEMA` (default `auth`). A row without a provider id
    (local git, External Push) gives none. The switch on before step 2 fails every repo-metadata unit (the

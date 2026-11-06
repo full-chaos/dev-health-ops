@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"strings"
 	"time"
 
@@ -86,7 +85,6 @@ const (
 	ReasonExpired             = "expired"
 	ReasonIssueInstant        = "issue_instant"
 	ReasonInResponseTo        = "in_response_to"
-	ReasonLibraryCheck        = "library_check"
 )
 
 // RefusedError is a response that failed a check. Reason is one of the Reason
@@ -236,9 +234,6 @@ func Verify(raw []byte, sp SP, now time.Time) (Verified, error) {
 	if err := checkAudiences(assertionEl, sp.EntityID); err != nil {
 		return Verified{}, err
 	}
-	if err := libraryCheck(raw, sp, out); err != nil {
-		return Verified{}, err
-	}
 	return out, nil
 }
 
@@ -370,36 +365,6 @@ func checkIssueInstant(t time.Time, now time.Time) error {
 	}
 	if t.Add(MaxIssueDelay).Before(now) || t.Add(-MaxClockSkew).After(now) {
 		return refused(ReasonIssueInstant, "IssueInstant %s", t)
-	}
-	return nil
-}
-
-// libraryCheck runs crewjam/saml over the same bytes as a second check. The
-// request id is matched by the caller against its store, so crewjam is told
-// the id this response carries.
-func libraryCheck(raw []byte, sp SP, v Verified) error {
-	acs, err := url.Parse(sp.ACSURL)
-	if err != nil {
-		return refused(ReasonLibraryCheck, "acs url")
-	}
-	cert := base64.StdEncoding.EncodeToString(sp.IdPCert.Raw)
-	provider := &crewsaml.ServiceProvider{
-		EntityID:          sp.EntityID,
-		AcsURL:            *acs,
-		IDPMetadata:       &crewsaml.EntityDescriptor{EntityID: sp.IdPEntityID},
-		IDPCertificate:    &cert,
-		AllowIDPInitiated: v.InResponseTo == "",
-	}
-	var possible []string
-	if v.InResponseTo != "" {
-		possible = []string{v.InResponseTo}
-	}
-	assertion, err := provider.ParseXMLResponse(raw, possible, *acs)
-	if err != nil {
-		return refused(ReasonLibraryCheck, "library check")
-	}
-	if assertion.ID != v.AssertionID {
-		return refused(ReasonLibraryCheck, "library chose another assertion")
 	}
 	return nil
 }

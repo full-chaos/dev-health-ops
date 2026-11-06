@@ -1,3 +1,4 @@
 internal/adminops	TestLLMSettingsMatchTheFrozenPythonOutput	60
 internal/adminops	TestLLMSettingsSetRefusesABYOProviderWithoutAModel	30
+internal/adminops	TestLLMSettingsSetRefusesAProviderChangeWithoutAKey	30
 internal/adminops	TestServiceCredentialsMatchTheFrozenPythonOutput	60

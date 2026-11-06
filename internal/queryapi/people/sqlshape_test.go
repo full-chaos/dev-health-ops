@@ -93,7 +93,7 @@ func TestFetchPersonMetricValueOrgIDAtSameDepthAsFinal(t *testing.T) {
 		captured = query
 		return &valueWithCountScanner{}, nil
 	}}
-	if _, _, err := fetchPersonMetricValue(context.Background(), client, "user_metrics_daily", "loc_touched", "sum", "identity_id", []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "", "org-1"); err != nil {
+	if _, _, err := fetchPersonMetricValue(context.Background(), client, "user_metrics_daily", "loc_touched", "sum", "identity_id", []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "", "org-1", readScope{}); err != nil {
 		t.Fatalf("fetchPersonMetricValue: %v", err)
 	}
 	if strings.Contains(captured, "LIMIT 1 BY") {
@@ -128,7 +128,7 @@ func TestFetchPersonBreakdownJoinsReposFinal(t *testing.T) {
 		return &breakdownRowScanner{}, nil
 	}}
 	cfg := *personMetrics[1].ByRepo // review_latency's by_repo config
-	if _, err := fetchPersonBreakdown(context.Background(), client, cfg, []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "org-1"); err != nil {
+	if _, err := fetchPersonBreakdown(context.Background(), client, cfg, []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "org-1", readScope{}); err != nil {
 		t.Fatalf("fetchPersonBreakdown: %v", err)
 	}
 	if !strings.Contains(captured, "INNER JOIN repos FINAL ON repos.id = user_metrics_daily.repo_id") {
@@ -150,7 +150,7 @@ func TestFetchCoverageWorkItemCycleTimesReadsFinal(t *testing.T) {
 		}
 		return &scalarFloatScanner{value: 1}, nil
 	}}
-	if _, err := fetchCoverage(context.Background(), client, day(2024, 6, 1), day(2024, 6, 15), "org-1"); err != nil {
+	if _, err := fetchCoverage(context.Background(), client, day(2024, 6, 1), day(2024, 6, 15), "org-1", readScope{}); err != nil {
 		t.Fatalf("fetchCoverage: %v", err)
 	}
 	found := 0
@@ -175,7 +175,7 @@ func TestFetchPersonWorkMixReadsWorkItemCycleTimesFinal(t *testing.T) {
 		captured = query
 		return &workMixScanner{}, nil
 	}}
-	if _, err := fetchPersonWorkMix(context.Background(), client, []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "org-1"); err != nil {
+	if _, err := fetchPersonWorkMix(context.Background(), client, []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "org-1", readScope{}); err != nil {
 		t.Fatalf("fetchPersonWorkMix: %v", err)
 	}
 	if !strings.Contains(captured, "FROM work_item_cycle_times FINAL") {

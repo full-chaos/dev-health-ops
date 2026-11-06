@@ -3,6 +3,7 @@ package quadrant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -55,12 +56,21 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 	switch scope {
 	case "team":
 		if filter.Named {
-			held, err := teamscope.HeldRepoIDs(ctx, client, orgID, filter.RepoIDs, filter.TeamIDs, time.Now().UTC())
+			// A ceiling ANDs with the named repositories: a repository outside it is never in the view (CHAOS-13087).
+			ids := filter.RepoIDs
+			if params.Ceiling.Restricted() {
+				ids = intersect(ids, params.Ceiling.IDs())
+			}
+			held, err := teamscope.HeldRepoIDs(ctx, client, orgID, ids, filter.TeamIDs, time.Now().UTC())
 			if err != nil {
 				return selection{}, err
 			}
-			out.linked = &linkedRepoScope{repoIDs: held}
+			out.linked = &linkedRepoScope{repoIDs: held, ceilinged: params.Ceiling.Restricted()}
 			out.emptyReason = teamscope.EmptyReasonText(filter.EmptyReason)
+		} else if params.Ceiling.Restricted() {
+			// No repository is named: the items read are those linked to the ceiling. A team scope narrows the points
+			// by team; it never widens the repositories (team ownership is not a repository link).
+			out.linked = &linkedRepoScope{repoIDs: params.Ceiling.IDs(), ceilinged: true}
 		}
 		if len(filter.TeamIDs) > 0 {
 			out.teams = filter.TeamIDs
@@ -83,11 +93,26 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 		if len(filter.TeamIDs) > 0 {
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repos.id", filter.TeamIDs, time.Now().UTC())
 		}
-		sql, bindings := teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), "repos.id")
+		sql, bindings := teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings, params.Ceiling, "repos.id")
 		if sql != "" {
 			out.scope = extraScope{SQL: "\n" + sql, Bindings: bindings}
 		}
 		out.emptyReason = teamscope.EmptyReasonText(filter.EmptyReason)
 	}
 	return out, nil
+}
+
+// intersect is the ids of a that b also holds, in a's order.
+func intersect(a, b []string) []string {
+	allowed := make(map[string]bool, len(b))
+	for _, id := range b {
+		allowed[strings.ToLower(id)] = true
+	}
+	out := []string{}
+	for _, id := range a {
+		if allowed[strings.ToLower(id)] {
+			out = append(out, id)
+		}
+	}
+	return out
 }

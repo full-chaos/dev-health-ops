@@ -34,14 +34,14 @@ func TestAPersonWhoseNewestRowIsARetractionIsNoPersonOnThePeoplePages(t *testing
 	}
 
 	for name, wantFound := range map[string]bool{"alice": true, "bob": false, "carol": true} {
-		identity, err := resolvePersonIdentity(ctx, client, personID(name), f.OrgA)
+		identity, err := resolvePersonIdentity(ctx, client, personID(name), f.OrgA, readScope{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if found := identity != ""; found != wantFound {
 			t.Errorf("resolvePersonIdentity(%s) found=%v, want %v: a person whose newest rows are retractions is no person", name, found, wantFound)
 		}
-		coverage, err := fetchIdentityCoverage(ctx, client, []string{person(name)}, f.OrgA)
+		coverage, err := fetchIdentityCoverage(ctx, client, []string{person(name)}, f.OrgA, readScope{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,7 +53,7 @@ func TestAPersonWhoseNewestRowIsARetractionIsNoPersonOnThePeoplePages(t *testing
 			{"work_item_user_metrics_daily", "items_completed", "user_identity"},
 		} {
 			value, hasData, err := fetchPersonMetricValue(ctx, client, table.table, table.column, "sum", table.identity,
-				[]string{person(name)}, day, day.AddDate(0, 0, 1), "", f.OrgA)
+				[]string{person(name)}, day, day.AddDate(0, 0, 1), "", f.OrgA, readScope{})
 			if err != nil {
 				t.Fatal(err)
 			}

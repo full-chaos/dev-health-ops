@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -40,6 +41,8 @@ type SearchParams struct {
 	// drilldown.PRParams.StartDay/EndDay's own "route computes, package
 	// consumes" division for a time-dependent value.
 	Now time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13087); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // SearchResult ports PersonSearchResult (api/models/schemas.py:361-374):
@@ -106,7 +109,33 @@ func boundedSearchLimit(limit int) int {
 // ORG SCOPE sits INSIDE each UNION branch's own WHERE, at the same
 // nesting depth as its FINAL source (pinned by sqlshape_test.go) -- never
 // a filter applied only after a cross-tenant merge/scan.
-var searchPeopleQuery = `
+var searchPeopleQuery = searchQuery("", searchWorkArmAll)
+
+// searchWorkArmAll is the work arm of the people list: every identity of the user daily table.
+var searchWorkArmAll = `SELECT
+        user_identity AS identity,
+        max(day) AS last_seen
+    FROM work_item_user_metrics_daily FINAL
+    WHERE user_identity != ''
+      AND org_id = {org_id:String}
+      AND ` + liverow.Predicate("work_item_user_metrics_daily", "") + `
+    GROUP BY user_identity`
+
+// searchWorkArmLinked is the work arm under a repository ceiling (CHAOS-13087): a person is listed only when an item
+// linked to an allowed repository names them as its assignee. The user daily table holds no item and no repository.
+func searchWorkArmLinked(itemTerm string) string {
+	// assignee is Nullable(String): coalesce keeps the union column String, as the *string scan needs.
+	return `SELECT
+        coalesce(assignee, '') AS identity,
+        max(day) AS last_seen
+    FROM work_item_cycle_times FINAL
+    WHERE assignee != ''
+      AND org_id = {org_id:String}` + itemTerm + `
+    GROUP BY assignee`
+}
+
+func searchQuery(codeTerm, workArm string) string {
+	return `
 SELECT
     identity AS identity_id,
     max(last_seen) AS last_seen
@@ -117,19 +146,12 @@ FROM (
     FROM user_metrics_daily FINAL
     WHERE identity_id != ''
       AND org_id = {org_id:String}
-      AND ` + liverow.Predicate("user_metrics_daily", "") + `
+      AND ` + liverow.Predicate("user_metrics_daily", "") + codeTerm + `
     GROUP BY identity_id
 
     UNION ALL
 
-    SELECT
-        user_identity AS identity,
-        max(day) AS last_seen
-    FROM work_item_user_metrics_daily FINAL
-    WHERE user_identity != ''
-      AND org_id = {org_id:String}
-      AND ` + liverow.Predicate("work_item_user_metrics_daily", "") + `
-    GROUP BY user_identity
+    ` + workArm + `
 ) AS identities
 WHERE identity != ''
   AND lower(identity) LIKE {query:String}
@@ -138,6 +160,7 @@ ORDER BY last_seen DESC
 LIMIT {limit_n:UInt64}
 %s
 `
+}
 
 // BuildSearchResponse is the Go port of search_people_response
 // (api/services/people.py:398-449): resolve the identity-alias map, run
@@ -168,6 +191,12 @@ func BuildSearchResponse(ctx context.Context, reader *Reader, orgID string, para
 		{Name: "org_id", Value: orgID},
 		{Name: "query", Value: "%" + strings.ToLower(trimmed) + "%"},
 		{Name: "limit_n", Value: limit},
+	}
+	if scope := (readScope{ceiling: params.Ceiling}); scope.restricted() {
+		codeTerm, codeBindings := scope.termFor("user_metrics_daily")
+		itemTerm, itemBindings := scope.itemTerm()
+		query = fmt.Sprintf(searchQuery(codeTerm, searchWorkArmLinked(itemTerm)), settingsMaxExecutionTime())
+		bindings = append(bindings, append(codeBindings, itemBindings...)...)
 	}
 
 	rows, err := reader.client.Query(ctx, query, bindings)

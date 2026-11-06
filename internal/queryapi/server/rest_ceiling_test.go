@@ -33,7 +33,7 @@ func ceilingCases() []restOrgCase {
 	var cases []restOrgCase
 	for _, tc := range append(restOrgCases(), restOrgPostCases()...) {
 		base := strings.TrimSuffix(tc.class, "_post")
-		if kind, _ := pdp.ClassKind(base); kind != pdp.KindNarrowable || isLinkScopeClass(tc.class) {
+		if kind, _ := pdp.ClassKind(base); kind != pdp.KindNarrowable || isLinkScopeClass(tc.class) || isUserScopeClass(tc.class) {
 			continue
 		}
 		cases = append(cases, tc)

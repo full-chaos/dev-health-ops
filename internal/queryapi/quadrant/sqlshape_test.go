@@ -8,6 +8,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
@@ -97,7 +98,7 @@ func TestOrgIDScopesResolvePersonIdentityAtTheSameNestingDepthAsFinal(t *testing
 		captured = query
 		return &fixtureRowScanner{}, nil
 	}}
-	if _, err := resolvePersonIdentity(context.Background(), client, "person-1", "org-1"); err != nil {
+	if _, err := resolvePersonIdentity(context.Background(), client, "person-1", "org-1", teamscope.NoCeiling()); err != nil {
 		t.Fatalf("resolvePersonIdentity: %v", err)
 	}
 

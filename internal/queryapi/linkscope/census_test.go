@@ -55,6 +55,31 @@ var workItemReads = map[string]censusFile{
 	"internal/queryapi/home/queries_metrics.go": {false, map[string]string{
 		"fetchBlockedHours": "reads work_item_state_durations_daily by team: unreachable under a ceiling, where blocked_work takes the repo-linked path (repoFilterRequested is true for a restricted ceiling)",
 	}},
+	// CHAOS-13087: the work-item reads of quadrant, people, people summary and people metric. Their narrowing is spliced
+	// in by readScope (people) and by the selection (quadrant), which call the selectors in scope.go and linkedrepo.go.
+	"internal/queryapi/people/scope.go":        {true, map[string]string{}},
+	"internal/queryapi/quadrant/linkedrepo.go": {true, map[string]string{}},
+	"internal/queryapi/people/summary.go": {false, map[string]string{
+		"fetchCoverage":            "both work_item_cycle_times reads carry readScope.itemTerm",
+		"fetchIdentityCoverage":    "under a ceiling the work arm reads the assignees of the linked items (readScope.itemTerm); the user daily arm is the unrestricted text",
+		"fetchPersonWorkMix":       "the work_item_cycle_times read carries readScope.itemTerm",
+		"fetchPersonFlowBreakdown": "both work_item_cycle_times reads carry readScope.itemTerm",
+		"fetchPersonCollaboration": "under a ceiling the work_item_user_metrics_daily branches are not in the statement: the handoff rows come from the recompute of the linked items",
+	}},
+	"internal/queryapi/people/search.go": {false, map[string]string{
+		"searchWorkArmAll":    "the unrestricted work arm: a restricted request builds searchWorkArmLinked instead",
+		"searchWorkArmLinked": "the assignees of the items linked to the ceiling's repositories (itemTerm)",
+	}},
+	"internal/queryapi/people/resolve.go": {false, map[string]string{
+		"resolvePersonIdentity": "under a ceiling the work arm is the assignee of a linked item (readScope.itemTerm), never the user daily table",
+	}},
+	"internal/queryapi/quadrant/identity.go": {false, map[string]string{
+		"resolvePersonIdentity": "under a ceiling the work arm is the assignee of a linked item (linkscope.ItemCondition), never the user daily table",
+	}},
+	"internal/queryapi/quadrant/quadrant.go": {false, map[string]string{
+		"teamScopedWorkItemTeamAttributionSourceFmt": "joined on the ids of workItemTeamQuadrantQuery, which carries the link condition of the selection",
+		"workItemTeamQuadrantQuery":                  "wct carries the link condition the selection splices into its WHERE (selected.attributedTeams)",
+	}},
 }
 
 var workItemTable = regexp.MustCompile(`FROM\s+(work_item_\w+|work_items)\b`)

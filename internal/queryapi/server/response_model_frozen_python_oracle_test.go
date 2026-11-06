@@ -799,6 +799,8 @@ func TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail(t *testing.T) {
 		{"RepoFilterApplied", "*bool", `json:"repo_filter_applied" pyjson:"nullable"`},
 		{"FilterEmptyReason", "*string", `json:"filter_empty_reason" pyjson:"nullable"`},
 	}
+	// CHAOS-13087: the quadrant also carries the Go-only omitted_signals of a caller held to a repository ceiling.
+	quadrantTail := append(append([]field{}, tail...), field{"OmittedSignals", "[]linkscope.OmittedSignal", `json:"omitted_signals,omitempty"`})
 	heatmapTail := []field{
 		{"RepoFilterApplied", "*bool", `json:"repo_filter_applied"`},
 		{"FilterEmptyReason", "*string", `json:"filter_empty_reason"`},
@@ -809,7 +811,7 @@ func TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail(t *testing.T) {
 		python     reflect.Type
 		tail       []field
 	}{
-		{"quadrant.Response", reflect.TypeOf(quadrant.Response{}), reflect.TypeOf(quadrantPythonResponse{}), tail},
+		{"quadrant.Response", reflect.TypeOf(quadrant.Response{}), reflect.TypeOf(quadrantPythonResponse{}), quadrantTail},
 		{"heatmap.Response", reflect.TypeOf(heatmap.Response{}), reflect.TypeOf(heatmapPythonResponse{}), heatmapTail},
 	} {
 		python := fieldsOf(tc.python)

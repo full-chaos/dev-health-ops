@@ -53,7 +53,10 @@ type teamScopeReachClient struct {
 	// matcher answers the stable-key matcher statement (CHAOS-13090): key -> the repository ids of that key.
 	matcher map[string][]string
 	// person, when set, is the identity every person lookup resolves to.
-	person     string
+	person string
+	// failOn, when set, is a statement fragment whose read fails with failErr (a planted bound of the store).
+	failOn     string
+	failErr    error
 	mu         sync.Mutex
 	statements []string
 	bindings   [][]dhclickhouse.Binding
@@ -65,6 +68,9 @@ func (c *teamScopeReachClient) Query(_ context.Context, statement string, bindin
 	c.bindings = append(c.bindings, bindings)
 	c.mu.Unlock()
 
+	if c.failOn != "" && strings.Contains(statement, c.failOn) {
+		return nil, c.failErr
+	}
 	switch {
 	case strings.Contains(statement, "identity_path") && hasBinding(bindings, teamscope.BindingCeilingKeys):
 		out := &ceilingMatcherScan{}

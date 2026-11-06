@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // TestPersonIDForIdentityMatchesPythonMD5 pins PersonIDForIdentity against
@@ -131,7 +133,7 @@ func TestResolveIdentityVariantsFoundIdentity(t *testing.T) {
 		return nil, nil
 	}}
 
-	got, err := resolveIdentityVariants(context.Background(), client, "9e26471d35a78862c17e467d87cddedf", "org-1")
+	got, err := resolveIdentityVariants(context.Background(), client, "9e26471d35a78862c17e467d87cddedf", "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("resolveIdentityVariants: %v", err)
 	}
@@ -155,7 +157,7 @@ func TestResolveIdentityVariantsNotFound(t *testing.T) {
 		return nil, nil
 	}}
 
-	got, err := resolveIdentityVariants(context.Background(), client, "deadbeef", "org-1")
+	got, err := resolveIdentityVariants(context.Background(), client, "deadbeef", "org-1", teamscope.NoCeiling())
 	if err != nil {
 		t.Fatalf("resolveIdentityVariants: %v", err)
 	}

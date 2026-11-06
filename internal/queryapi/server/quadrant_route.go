@@ -33,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
 
@@ -223,6 +224,13 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 		if endPresent {
 			params.EndDate = &endDate
 		}
+
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "quadrant", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := quadrant.BuildResponse(r.Context(), client, org, params)
 		if err != nil {

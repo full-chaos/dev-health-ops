@@ -200,12 +200,19 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 			}
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "people_metric", org, err)
+			return
+		}
+
 		resp, err := people.BuildMetricResponse(r.Context(), reader, org, people.MetricParams{
 			PersonID:    personID,
 			Metric:      metric,
 			RangeDays:   rangeDays,
 			CompareDays: compareDays,
 			Now:         time.Now().UTC(),
+			Ceiling:     ceiling,
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {

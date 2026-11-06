@@ -232,7 +232,7 @@ func BuildDrilldownPRsResponse(ctx context.Context, reader *Reader, orgID string
 	}
 	limit := boundedDrilldownLimit(params.Limit)
 
-	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)
+	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID, readScope{})
 	if err != nil {
 		return nil, err
 	}

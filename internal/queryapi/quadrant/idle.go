@@ -63,7 +63,7 @@ func listTeamsInScope(ctx context.Context, client QueryClient, orgID string, sel
 // a plotted point is added as a no-data point. A team with no work in the window
 // is a distinct "no data" answer, never an absent point and never a zero (check
 // 12). No-data points follow the plotted ones, ordered by label then id.
-func withCatalogTeams(ctx context.Context, client QueryClient, orgID string, selectedTeams []string, points []Point, startDay, endDay time.Time, evidence string) ([]Point, error) {
+func withCatalogTeams(ctx context.Context, client QueryClient, orgID string, selectedTeams []string, points []Point, startDay, endDay time.Time, evidence string, withIdle bool) ([]Point, error) {
 	teams, err := listTeamsInScope(ctx, client, orgID, selectedTeams)
 	if err != nil {
 		return nil, err
@@ -95,7 +95,7 @@ func withCatalogTeams(ctx context.Context, client QueryClient, orgID string, sel
 	})
 	idle := 0
 	for _, team := range teams {
-		if plotted[team.ID] {
+		if plotted[team.ID] || !withIdle {
 			continue
 		}
 		idle++

@@ -7,12 +7,15 @@ package linkeditems
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 )
 
 // RowQuerier is the read boundary of the loader.
@@ -163,7 +166,21 @@ WHERE org_id = {org_id:String} AND is_primary = 1
 // the stored row it is. The compute itself keeps the items that are relevant to the
 // day, as it does for the daily job.
 func RowsByDay(from, to time.Time, versions []Version, attributions map[Address]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.MetricsDailyRow {
-	out := map[time.Time][]workitemmetrics.MetricsDailyRow{}
+	return computeByDay(from, to, versions, attributions, func(day workitemmetrics.Triplet) []workitemmetrics.MetricsDailyRow {
+		return day.MetricsDaily
+	})
+}
+
+// UserRowsByDay is RowsByDay for the user grain: the same days, the same items and the same compute, taking the
+// per-person rows (work_item_user_metrics_daily) instead of the team rows (CHAOS-13087).
+func UserRowsByDay(from, to time.Time, versions []Version, attributions map[Address]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.UserMetricsDailyRow {
+	return computeByDay(from, to, versions, attributions, func(day workitemmetrics.Triplet) []workitemmetrics.UserMetricsDailyRow {
+		return day.UserMetricsDaily
+	})
+}
+
+func computeByDay[Row any](from, to time.Time, versions []Version, attributions map[Address]workitemmetrics.PrimaryAttribution, take func(workitemmetrics.Triplet) []Row) map[time.Time][]Row {
+	out := map[time.Time][]Row{}
 	if len(versions) == 0 {
 		return out
 	}
@@ -190,9 +207,50 @@ func RowsByDay(from, to time.Time, versions []Version, attributions map[Address]
 		if len(items) == 0 {
 			continue
 		}
-		if rows := workitemmetrics.ComputeStoredItemsDay(day, items, nil, dayAttributions).MetricsDaily; len(rows) > 0 {
+		if rows := take(workitemmetrics.ComputeStoredItemsDay(day, items, nil, dayAttributions)); len(rows) > 0 {
 			out[day] = rows
 		}
 	}
 	return out
+}
+
+// UserBudget is the per-statement SETTINGS clause of the user-grain recompute: 30 s and 200,000 rows, the bounds of
+// the Home repository view. A bound hit is an error of the read, never an answer over more items.
+const UserBudget = "\nSETTINGS max_execution_time = 30, max_result_rows = 200000"
+
+// ErrRecomputeBound is a read of the recompute that hit its bound (rows or time). The caller answers a typed error
+// with the stated reason, never an empty answer and never the organization-wide rows.
+var ErrRecomputeBound = errors.New("ceiling recompute bound exceeded")
+
+// UserDaily is the per-person daily rows of the items linked to a loader's repositories, read once for the window of
+// the loader and shared by every statement of one request (CHAOS-13087).
+type UserDaily struct {
+	loader Loader
+
+	once sync.Once
+	rows map[time.Time][]workitemmetrics.UserMetricsDailyRow
+	err  error
+}
+
+// NewUserDaily is the user-grain recompute of loader. It reads nothing when loader holds no repository.
+func NewUserDaily(loader Loader) *UserDaily { return &UserDaily{loader: loader} }
+
+// Rows are the recomputed rows of every day of [WindowStart, WindowEnd), by day.
+func (u *UserDaily) Rows(ctx context.Context) (map[time.Time][]workitemmetrics.UserMetricsDailyRow, error) {
+	u.once.Do(func() {
+		if len(u.loader.RepoIDs) == 0 {
+			u.rows = map[time.Time][]workitemmetrics.UserMetricsDailyRow{}
+			return
+		}
+		versions, attributions, err := u.loader.Read(ctx)
+		if err != nil {
+			u.err = err
+			if bound, _ := chclient.BoundHit(err); bound != chclient.BoundNone && ctx.Err() == nil {
+				u.err = fmt.Errorf("%w: %w", ErrRecomputeBound, err)
+			}
+			return
+		}
+		u.rows = UserRowsByDay(u.loader.WindowStart, u.loader.WindowEnd, versions, attributions)
+	})
+	return u.rows, u.err
 }

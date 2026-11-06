@@ -20,8 +20,10 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/rowview"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -56,6 +58,8 @@ type SummaryParams struct {
 	// 32-34), injected by the route file so this package's own tests can
 	// pin it -- matching SearchParams.Now's own doc comment.
 	Now time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13087); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // PersonIdentityWireModel ports PersonSummaryPerson (api/models/schemas.py:
@@ -163,20 +167,24 @@ type SummaryResponse struct {
 	Deltas              []PersonDelta           `json:"deltas"`
 	Narrative           []SummarySentence       `json:"narrative"`
 	Sections            PersonSummarySections   `json:"sections"`
+	// NarrowedCounts (CHAOS-13087, Go-only, last, absent when empty) names the counts held to the repositories of a
+	// ceiling. A caller with no ceiling gets no such key.
+	NarrowedCounts []linkscope.NarrowedCount `json:"narrowed_counts,omitempty"`
 }
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
 // freshness.py:30-49). repo_metrics_daily is ReplacingMergeTree
 // (computed_at) (migration 096) -- read FINAL, this package's own class
 // ruling (see metricconfig.go's own doc comment).
-func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string) (*time.Time, error) {
+func fetchLastIngestedAt(ctx context.Context, client QueryClient, orgID string, scope readScope) (*time.Time, error) {
+	term, termBindings := scope.repoTerm("toString(repo_id)")
 	query := fmt.Sprintf(`
         SELECT maxOrNull(computed_at) AS last_ingested_at
         FROM repo_metrics_daily FINAL
-        WHERE org_id = {org_id:String}
+        WHERE org_id = {org_id:String}%s
         %s
-    `, settingsMaxExecutionTime())
-	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
+    `, term, settingsMaxExecutionTime())
+	rows, err := client.Query(ctx, query, append([]dhclickhouse.Binding{{Name: "org_id", Value: orgID}}, termBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_last_ingested_at query: %w", err)
 	}
@@ -239,13 +247,16 @@ func scanNullableTime(rows dhclickhouse.RowScanner, t *time.Time, isNull *bool) 
 // different aggregate shapes, so normalizing at the SQL level, the same
 // fix internal/queryapi/quadrant/quadrant.go's own config-driven
 // `toFloat64(%s) AS value` already applies, is the simpler one here).
-func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string) (Coverage, error) {
+func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay time.Time, orgID string, scope readScope) (Coverage, error) {
+	reposTerm, reposBindings := scope.repoTerm("toString(id)")
+	metricsTerm, metricsBindings := scope.repoTerm("toString(repo_id)")
+	itemTerm, itemBindings := scope.itemTerm()
 	totalRepos, err := fetchScalarFloat(ctx, client, fmt.Sprintf(`
         SELECT toFloat64(countDistinct(id)) AS total
         FROM repos FINAL
-        WHERE org_id = {org_id:String}
+        WHERE org_id = {org_id:String}%s
         %s
-    `, settingsMaxExecutionTime()), []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
+    `, reposTerm, settingsMaxExecutionTime()), append([]dhclickhouse.Binding{{Name: "org_id", Value: orgID}}, reposBindings...))
 	if err != nil {
 		return Coverage{}, fmt.Errorf("people: fetch_coverage total_repos: %w", err)
 	}
@@ -254,13 +265,13 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
         SELECT toFloat64(countDistinct(repo_id)) AS covered
         FROM repo_metrics_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         %s
-    `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+    `, metricsTerm, settingsMaxExecutionTime()), append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},
-	})
+	}, metricsBindings...))
 	if err != nil {
 		return Coverage{}, fmt.Errorf("people: fetch_coverage covered: %w", err)
 	}
@@ -271,13 +282,13 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         %s
-    `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+    `, itemTerm, settingsMaxExecutionTime()), append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},
-	})
+	}, itemBindings...))
 	if err != nil {
 		return Coverage{}, fmt.Errorf("people: fetch_coverage pr_link: %w", err)
 	}
@@ -288,13 +299,13 @@ func fetchCoverage(ctx context.Context, client QueryClient, startDay, endDay tim
             toFloat64(count(*)) AS total
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         %s
-    `, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+    `, itemTerm, settingsMaxExecutionTime()), append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},
-	})
+	}, itemBindings...))
 	if err != nil {
 		return Coverage{}, fmt.Errorf("people: fetch_coverage cycle: %w", err)
 	}
@@ -365,7 +376,24 @@ func fetchScalarFloatPair(ctx context.Context, client QueryClient, query string,
 // and one 'work' row (if work_item_user_metrics_daily FINAL does) -- 0,
 // 1 or 2. Both branches read FINAL, matching resolvePersonIdentity's own
 // declared fix for the identical user_metrics_daily gap.
-func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities []string, orgID string) (int, error) {
+func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities []string, orgID string, scope readScope) (int, error) {
+	codeTerm, codeBindings := scope.termFor("user_metrics_daily")
+	workArm := fmt.Sprintf(`SELECT 'work' AS source
+            FROM work_item_user_metrics_daily FINAL
+            WHERE user_identity IN {identities:Array(String)}
+              AND org_id = {org_id:String}
+              AND %s
+            LIMIT 1`, liverow.Predicate("work_item_user_metrics_daily", ""))
+	var workBindings []dhclickhouse.Binding
+	if scope.restricted() {
+		var workTerm string
+		workTerm, workBindings = scope.itemTerm()
+		workArm = `SELECT 'work' AS source
+            FROM work_item_cycle_times FINAL
+            WHERE assignee IN {identities:Array(String)}
+              AND org_id = {org_id:String}` + workTerm + `
+            LIMIT 1`
+	}
 	query := fmt.Sprintf(`
         SELECT countDistinct(source) AS sources
         FROM (
@@ -373,24 +401,19 @@ func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities [
             FROM user_metrics_daily FINAL
             WHERE identity_id IN {identities:Array(String)}
               AND org_id = {org_id:String}
-              AND %[1]s
+              AND %[1]s%[4]s
             LIMIT 1
 
             UNION ALL
 
-            SELECT 'work' AS source
-            FROM work_item_user_metrics_daily FINAL
-            WHERE user_identity IN {identities:Array(String)}
-              AND org_id = {org_id:String}
-              AND %[2]s
-            LIMIT 1
+            %[2]s
         )
         %[3]s
-    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""), settingsMaxExecutionTime())
-	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
+    `, liverow.Predicate("user_metrics_daily", ""), workArm, settingsMaxExecutionTime(), codeTerm)
+	rows, err := client.Query(ctx, query, append([]dhclickhouse.Binding{
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	})
+	}, append(codeBindings, workBindings...)...))
 	if err != nil {
 		return 0, fmt.Errorf("people: fetch_identity_coverage query: %w", err)
 	}
@@ -419,7 +442,8 @@ func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities [
 // registered in neither of the reference's dedup tables). count() is
 // wrapped toFloat64() for the same UInt64-into-float64 scan reason as
 // fetchCoverage's own doc comment.
-func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string) ([]WorkMixItem, error) {
+func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string, scope readScope) ([]WorkMixItem, error) {
+	itemTerm, itemBindings := scope.itemTerm()
 	query := fmt.Sprintf(`
         SELECT
             lower(if(type = '' OR type IS NULL, 'unknown', type)) AS key,
@@ -428,17 +452,17 @@ func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []st
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND assignee IN {identities:Array(String)}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         GROUP BY key, name
         ORDER BY value DESC
         %s
-    `, settingsMaxExecutionTime())
-	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
+    `, itemTerm, settingsMaxExecutionTime())
+	rows, err := client.Query(ctx, query, append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	})
+	}, itemBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_work_mix query: %w", err)
 	}
@@ -468,7 +492,8 @@ func fetchPersonWorkMix(ctx context.Context, client QueryClient, identities []st
 // items never carry lead_time_hours, is unexceptional) -- so both
 // branches are wrapped `coalesce(toFloat64(...), 0)`, not just
 // toFloat64.
-func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string) ([]FlowStageItem, error) {
+func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string, scope readScope) ([]FlowStageItem, error) {
+	itemTerm, itemBindings := scope.itemTerm()
 	query := fmt.Sprintf(`
         SELECT
             'Active' AS stage,
@@ -477,7 +502,7 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND assignee IN {identities:Array(String)}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%[1]s
           AND cycle_time_hours IS NOT NULL
 
         UNION ALL
@@ -489,17 +514,17 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
         FROM work_item_cycle_times FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND assignee IN {identities:Array(String)}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%[1]s
           AND lead_time_hours IS NOT NULL
           AND cycle_time_hours IS NOT NULL
-        %s
-    `, settingsMaxExecutionTime())
-	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
+        %[2]s
+    `, itemTerm, settingsMaxExecutionTime())
+	rows, err := client.Query(ctx, query, append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	})
+	}, itemBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_flow_breakdown query: %w", err)
 	}
@@ -547,11 +572,12 @@ func fetchPersonFlowBreakdown(ctx context.Context, client QueryClient, identitie
 // temporary table, so four inlined copies of the same subquery is the
 // SAME execution shape the CTE form already had, not a behavioural or
 // performance regression.
-func fetchPersonCollaboration(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string) ([]struct {
+func fetchPersonCollaboration(ctx context.Context, client QueryClient, identities []string, startDay, endDay time.Time, orgID string, scope readScope) ([]struct {
 	Section string
 	Label   string
 	Value   float64
 }, error) {
+	codeTerm, codeBindings := scope.termFor("user_metrics_daily")
 	latestUserMetrics := `(
             SELECT
                 day,
@@ -564,10 +590,33 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
             FROM user_metrics_daily
             WHERE day >= {start_day:Date} AND day < {end_day:Date}
               AND identity_id IN {identities:Array(String)}
-              AND org_id = {org_id:String}
+              AND org_id = {org_id:String}` + codeTerm + `
             GROUP BY day, repo_id, author_email
             HAVING ` + liverow.NewestPredicate("user_metrics_daily", "") + `
         ) AS latest_user_metrics`
+	handoffBranches := fmt.Sprintf(`
+
+        UNION ALL
+
+        SELECT 'handoff_points' AS section, 'Items started' AS label, toFloat64(sum(items_started)) AS value
+        FROM work_item_user_metrics_daily FINAL
+        WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND user_identity IN {identities:Array(String)}
+          AND org_id = {org_id:String}
+          AND %[1]s
+
+        UNION ALL
+
+        SELECT 'handoff_points' AS section, 'Items completed' AS label, toFloat64(sum(items_completed)) AS value
+        FROM work_item_user_metrics_daily FINAL
+        WHERE day >= {start_day:Date} AND day < {end_day:Date}
+          AND user_identity IN {identities:Array(String)}
+          AND org_id = {org_id:String}
+          AND %[1]s`, rowview.OrgPredicate("work_item_user_metrics_daily", "")+" AND "+liverow.Predicate("work_item_user_metrics_daily", ""))
+	if scope.restricted() {
+		// Items started and completed of a person come from the recompute of the items linked to the ceiling.
+		handoffBranches = ""
+	}
 	query := fmt.Sprintf(`
         SELECT 'review_load' AS section, 'Reviews given' AS label, toFloat64(sum(reviews_given)) AS value FROM %[1]s
 
@@ -581,34 +630,15 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
 
         UNION ALL
 
-        SELECT 'review_load' AS section, 'PRs merged' AS label, toFloat64(sum(prs_merged)) AS value FROM %[1]s
-
-        UNION ALL
-
-        SELECT 'handoff_points' AS section, 'Items started' AS label, toFloat64(sum(items_started)) AS value
-        FROM work_item_user_metrics_daily FINAL
-        WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND user_identity IN {identities:Array(String)}
-          AND org_id = {org_id:String}
-          AND %[3]s
-
-        UNION ALL
-
-        SELECT 'handoff_points' AS section, 'Items completed' AS label, toFloat64(sum(items_completed)) AS value
-        FROM work_item_user_metrics_daily FINAL
-        WHERE day >= {start_day:Date} AND day < {end_day:Date}
-          AND user_identity IN {identities:Array(String)}
-          AND org_id = {org_id:String}
-          AND %[3]s
+        SELECT 'review_load' AS section, 'PRs merged' AS label, toFloat64(sum(prs_merged)) AS value FROM %[1]s%[3]s
         %[2]s
-    `, latestUserMetrics, settingsMaxExecutionTime(),
-		rowview.OrgPredicate("work_item_user_metrics_daily", "")+" AND "+liverow.Predicate("work_item_user_metrics_daily", ""))
-	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
+    `, latestUserMetrics, settingsMaxExecutionTime(), handoffBranches)
+	rows, err := client.Query(ctx, query, append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
-	})
+	}, codeBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("people: fetch_person_collaboration query: %w", err)
 	}
@@ -633,6 +663,19 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("people: fetch_person_collaboration: %w", err)
+	}
+	if scope.restricted() {
+		for _, handoff := range []struct{ label, column string }{{"Items started", "items_started"}, {"Items completed", "items_completed"}} {
+			value, _, err := scope.recomputedValue(ctx, handoff.column, "sum", identities, startDay, endDay)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, struct {
+				Section string
+				Label   string
+				Value   float64
+			}{Section: "handoff_points", Label: handoff.label, Value: value})
+		}
 	}
 	return out, nil
 }
@@ -770,7 +813,8 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		return SummaryResponse{}, windowErr
 	}
 
-	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)
+	scope := newReadScope(reader.client, orgID, params.Ceiling, minDay(startDay, compareStart), maxDay(endDay, compareEnd))
+	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
@@ -788,11 +832,11 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		Identities:  identitiesForPerson(canonical, aliasList),
 	}
 
-	lastIngested, err := fetchLastIngestedAt(ctx, reader.client, orgID)
+	lastIngested, err := fetchLastIngestedAt(ctx, reader.client, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
-	coverage, err := fetchCoverage(ctx, reader.client, startDay, endDay, orgID)
+	coverage, err := fetchCoverage(ctx, reader.client, startDay, endDay, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
@@ -809,7 +853,7 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		pyjson.KeyValue[string]{Key: "ci", Value: status},
 	)
 
-	coverageSources, err := fetchIdentityCoverage(ctx, reader.client, identityInputs, orgID)
+	coverageSources, err := fetchIdentityCoverage(ctx, reader.client, identityInputs, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
@@ -817,15 +861,15 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	deltas := make([]PersonDelta, 0, len(personMetrics))
 	for _, metric := range personMetrics {
-		currentValue, hasData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID)
+		currentValue, hasData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID, scope)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
-		previousValue, hasPriorData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, compareStart, compareEnd, metric.ExtraWhere, orgID)
+		previousValue, hasPriorData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, compareStart, compareEnd, metric.ExtraWhere, orgID, scope)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
-		series, err := fetchPersonMetricSeries(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID)
+		series, err := fetchPersonMetricSeries(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID, scope)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
@@ -852,17 +896,17 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 		})
 	}
 
-	workMixRows, err := fetchPersonWorkMix(ctx, reader.client, identityInputs, startDay, endDay, orgID)
+	workMixRows, err := fetchPersonWorkMix(ctx, reader.client, identityInputs, startDay, endDay, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
 
-	flowRows, err := fetchPersonFlowBreakdown(ctx, reader.client, identityInputs, startDay, endDay, orgID)
+	flowRows, err := fetchPersonFlowBreakdown(ctx, reader.client, identityInputs, startDay, endDay, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
 
-	collabRows, err := fetchPersonCollaboration(ctx, reader.client, identityInputs, startDay, endDay, orgID)
+	collabRows, err := fetchPersonCollaboration(ctx, reader.client, identityInputs, startDay, endDay, orgID, scope)
 	if err != nil {
 		return SummaryResponse{}, err
 	}
@@ -878,6 +922,14 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 
 	narrative := narrativeForDeltas(deltas, person.PersonID, params.RangeDays, params.CompareDays)
+
+	var narrowed []linkscope.NarrowedCount
+	if scope.restricted() {
+		narrowed = []linkscope.NarrowedCount{
+			{Kind: "coverage", Scope: linkscope.ScopeRepositoryCeiling},
+			{Kind: "identity_coverage", Scope: linkscope.ScopeRepositoryCeiling},
+		}
+	}
 
 	return SummaryResponse{
 		Person: person,
@@ -898,6 +950,7 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 				HandoffPoints: handoffPoints,
 			},
 		},
+		NarrowedCounts: narrowed,
 	}, nil
 }
 
@@ -922,4 +975,18 @@ func naiveLastIngested(value *time.Time) *pytime.NaiveDateTime {
 	}
 	naive := pytime.NaiveUTC(*value)
 	return &naive
+}
+
+func minDay(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+func maxDay(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }

@@ -26,7 +26,7 @@ func TestFetchPersonMetricValueHasDataCountsStoredValuesNotRows(t *testing.T) {
         VALUES (?, ?, ?, ?, ?, ?, NULL, now())`, f.OrgA, f.RepoID, day, f.Identity, f.Identity, uint32(1))
 	start, end := day, day.AddDate(0, 0, 1)
 
-	value, hasData, err := fetchPersonMetricValue(ctx, client, "user_metrics_daily", "pr_first_review_p50_hours", "avg", "identity_id", []string{f.Identity}, start, end, "", f.OrgA)
+	value, hasData, err := fetchPersonMetricValue(ctx, client, "user_metrics_daily", "pr_first_review_p50_hours", "avg", "identity_id", []string{f.Identity}, start, end, "", f.OrgA, readScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestFetchPersonMetricValueHasDataCountsStoredValuesNotRows(t *testing.T) {
 	crossorg.Exec(ctx, t, admin, `
         INSERT INTO user_metrics_daily (org_id, repo_id, day, author_email, identity_id, loc_touched, pr_first_review_p50_hours, computed_at)
         VALUES (?, ?, ?, ?, ?, ?, 4, now())`, f.OrgA, f.RepoID, day.AddDate(0, 0, -1), f.Identity, f.Identity, uint32(1))
-	value, hasData, err = fetchPersonMetricValue(ctx, client, "user_metrics_daily", "pr_first_review_p50_hours", "avg", "identity_id", []string{f.Identity}, start.AddDate(0, 0, -1), end, "", f.OrgA)
+	value, hasData, err = fetchPersonMetricValue(ctx, client, "user_metrics_daily", "pr_first_review_p50_hours", "avg", "identity_id", []string{f.Identity}, start.AddDate(0, 0, -1), end, "", f.OrgA, readScope{})
 	if err != nil {
 		t.Fatal(err)
 	}

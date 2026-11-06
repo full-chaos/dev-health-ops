@@ -32,3 +32,21 @@ func ItemConditionIDs(ids []string, column string) (string, []dhclickhouse.Bindi
 	}
 	return " AND " + column + " IN " + linkeditems.Subquery, []dhclickhouse.Binding{{Name: BindingLinkRepoIDs, Value: ids}}
 }
+
+// ScopeRepositoryCeiling is the scope of a count held to the repositories of a ceiling.
+const ScopeRepositoryCeiling = "repository ceiling"
+
+// ReasonNotScopedToRepositories is the reason of a signal whose rows carry no repository.
+const ReasonNotScopedToRepositories = "not scoped to repositories"
+
+// OmittedSignal says one signal was left out of an answer for a caller held to a ceiling, and the reason.
+type OmittedSignal struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
+// NarrowedCount says one count of an answer is held to a scope narrower than the organization.
+type NarrowedCount struct {
+	Kind  string `json:"kind"`
+	Scope string `json:"scope"`
+}

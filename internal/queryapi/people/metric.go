@@ -9,6 +9,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // MetricParams is GET /api/v1/people/{person_id}/metric's already-resolved
@@ -22,6 +24,8 @@ type MetricParams struct {
 	CompareDays int
 	// Now stands in for utc_today(), same role as SummaryParams.Now.
 	Now time.Time
+	// Ceiling is the repositories the caller may read (CHAOS-13087); the zero value reads every repository.
+	Ceiling teamscope.Ceiling
 }
 
 // MetricDefinition ports MetricDefinition (api/models/schemas.py:424-426).
@@ -133,7 +137,8 @@ func BuildMetricResponse(ctx context.Context, reader *Reader, orgID string, para
 		return MetricResponse{}, windowErr
 	}
 
-	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID)
+	scope := newReadScope(reader.client, orgID, params.Ceiling, startDay, endDay)
+	canonical, aliasList, err := resolveIdentityContext(ctx, reader.client, params.PersonID, orgID, scope)
 	if err != nil {
 		return MetricResponse{}, err
 	}
@@ -142,7 +147,7 @@ func BuildMetricResponse(ctx context.Context, reader *Reader, orgID string, para
 	}
 	identityInputs := identityVariants(canonical, aliasList)
 
-	seriesRows, err := fetchPersonMetricSeries(ctx, reader.client, cfg.Table, cfg.Column, cfg.Aggregator, cfg.IdentityColumn, identityInputs, startDay, endDay, cfg.ExtraWhere, orgID)
+	seriesRows, err := fetchPersonMetricSeries(ctx, reader.client, cfg.Table, cfg.Column, cfg.Aggregator, cfg.IdentityColumn, identityInputs, startDay, endDay, cfg.ExtraWhere, orgID, scope)
 	if err != nil {
 		return MetricResponse{}, err
 	}
@@ -160,21 +165,21 @@ func BuildMetricResponse(ctx context.Context, reader *Reader, orgID string, para
 		ByStage:    []MetricBreakdownItem{},
 	}
 	if cfg.ByRepo != nil {
-		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByRepo, identityInputs, startDay, endDay, orgID)
+		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByRepo, identityInputs, startDay, endDay, orgID, scope)
 		if err != nil {
 			return MetricResponse{}, err
 		}
 		breakdowns.ByRepo = toBreakdownItems(rows, cfg.ByRepo.Transform)
 	}
 	if cfg.ByWorkType != nil {
-		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByWorkType, identityInputs, startDay, endDay, orgID)
+		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByWorkType, identityInputs, startDay, endDay, orgID, scope)
 		if err != nil {
 			return MetricResponse{}, err
 		}
 		breakdowns.ByWorkType = toBreakdownItems(rows, cfg.ByWorkType.Transform)
 	}
 	if cfg.ByStage != nil {
-		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByStage, identityInputs, startDay, endDay, orgID)
+		rows, err := fetchPersonBreakdown(ctx, reader.client, *cfg.ByStage, identityInputs, startDay, endDay, orgID, scope)
 		if err != nil {
 			return MetricResponse{}, err
 		}

@@ -224,10 +224,17 @@ func newPeopleSearchHandler(reader *people.Reader) http.HandlerFunc {
 		// own doc comment for why this port applies the bound only once,
 		// inside BuildSearchResponse, rather than reproducing the
 		// redundant double-clamp here.
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "people", org, err)
+			return
+		}
+
 		resp, err := people.BuildSearchResponse(r.Context(), reader, org, people.SearchParams{
-			Query: q,
-			Limit: limit,
-			Now:   time.Now().UTC(),
+			Query:   q,
+			Limit:   limit,
+			Now:     time.Now().UTC(),
+			Ceiling: ceiling,
 		})
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,

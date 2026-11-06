@@ -20,7 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // writeBarrier holds the first statement whose SQL starts with prefix until
@@ -103,20 +103,9 @@ func TestASuperuserGrantCannotLandBetweenTheGuardAndTheWrite(t *testing.T) {
 	}
 	t.Cleanup(gated.Close)
 
-	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: gated, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") || strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
@@ -140,16 +129,11 @@ func TestASuperuserGrantCannotLandBetweenTheGuardAndTheWrite(t *testing.T) {
 	rootID := uuid.New()
 	exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'race-root@example.com', true, true, true, 0, now(), now())`, rootID)
-	token := func(id uuid.UUID, org string, superuser bool) string {
-		t.Helper()
-		signed, err := signer.Access(edgetoken.AccessClaims{UserID: id.String(), Email: id.String() + "@example.com",
-			OrgID: org, Role: "admin", IsSuperuser: superuser}, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return signed
+	// The role is the membership row and the superuser the users row; the token carries only the subject and org.
+	token := func(id uuid.UUID, org string) string {
+		return tokens.MustMint(t, edtokens.Claims{UserID: id, OrgID: org})
 	}
-	root := token(rootID, "", true)
+	root := token(rootID, "")
 	send := func(bearer, method, path, body string) int {
 		request, err := http.NewRequestWithContext(ctx, method, server.URL+path, strings.NewReader(body))
 		if err != nil {
@@ -246,7 +230,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 			barrier.Arm(wr.firstWrite)
 			adminDone := make(chan int, 1)
 			go func() {
-				adminDone <- send(token(adminID, orgID.String(), false), wr.method, replace.Replace(wr.path), replace.Replace(wr.body))
+				adminDone <- send(token(adminID, orgID.String()), wr.method, replace.Replace(wr.path), replace.Replace(wr.body))
 			}()
 			select {
 			case <-barrier.reached:
@@ -326,20 +310,9 @@ func TestOppositeOwnershipTransfersBothFinish(t *testing.T) {
 	}
 	t.Cleanup(gated.Close)
 
-	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: gated, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
@@ -367,11 +340,7 @@ VALUES (gen_random_uuid(), $1, $3, 'owner', now(), now(), now()), (gen_random_uu
 			t.Fatalf("seed: %v", err)
 		}
 	}
-	root, err := signer.Access(edgetoken.AccessClaims{UserID: rootID.String(), Email: "xfer-root@example.com", Role: "admin", IsSuperuser: true},
-		time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	root := tokens.MustMint(t, edtokens.Claims{UserID: rootID})
 	transfer := func(org, to uuid.UUID) int {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/admin/orgs/"+org.String()+"/transfer-ownership",
 			strings.NewReader(fmt.Sprintf(`{"new_owner_user_id":%q}`, to)))

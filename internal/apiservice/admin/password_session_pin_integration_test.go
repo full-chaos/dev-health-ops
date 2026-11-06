@@ -4,8 +4,6 @@ package admin_test
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -20,7 +18,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pinrig"
 )
 
@@ -53,24 +51,9 @@ VALUES ($1, $2, $3, true, true, $4, 0, now(), now())`, id, "pin-"+name+"@example
 		}
 	}
 
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-	secret := base64.RawURLEncoding.EncodeToString(key)
-	verifier, err := edgetoken.New(secret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(secret, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") {
@@ -79,11 +62,7 @@ VALUES ($1, $2, $3, true, true, $4, 0, now(), now())`, id, "pin-"+name+"@example
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: users["root"].String(), Email: "pin-root@example.com", IsSuperuser: true},
-		time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: users["root"]})
 
 	oldRoute := rig.SignIn(t, ctx, users["route"])
 	check("route: before", users["route"], oldRoute, false)

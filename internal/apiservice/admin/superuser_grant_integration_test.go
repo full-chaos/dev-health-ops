@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -21,9 +20,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 type lockedBuffer struct {
@@ -90,22 +89,10 @@ VALUES ($1, $2, $2, 'community', 'stripe', true, now(), now())`, id, slug)
 VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), m.org, users[m.user], m.role)
 	}
 
-	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
-	const issuer, audience = "dev-health-ops", "dev-health-api"
-	verifier, err := edgetoken.New(jwtKey, issuer, audience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, issuer, audience)
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") || strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
@@ -115,17 +102,12 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), m.org, users[m.user],
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 
-	token := func(name, org, role string) string {
-		t.Helper()
-		signed, err := signer.Access(edgetoken.AccessClaims{UserID: users[name].String(), Email: "su-" + name + "@example.com",
-			OrgID: org, Role: role, IsSuperuser: superusers[name]}, time.Now(), uuid.NewString())
-		if err != nil {
-			t.Fatal(err)
-		}
-		return signed
+	// The role is the membership row and the superuser the users row; the token carries only the subject and org.
+	token := func(name, org string) string {
+		return tokens.MustMint(t, edtokens.Claims{UserID: users[name], OrgID: org})
 	}
-	orgAdmin := token("admin", orgID.String(), "admin")
-	root := token("root", "", "member")
+	orgAdmin := token("admin", orgID.String())
+	root := token("root", "")
 
 	send := func(bearer, method, path, body string) int {
 		t.Helper()
@@ -445,21 +427,10 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), orgID, adm
 		t.Fatal("the restricted login can read users, so the target read cannot fail")
 	}
 
-	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: noUsers, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
@@ -468,11 +439,7 @@ VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), orgID, adm
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	token, err := signer.Access(edgetoken.AccessClaims{UserID: adminID.String(), Email: "su-read-admin@example.com",
-		OrgID: orgID.String(), Role: "admin"}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	token := tokens.MustMint(t, edtokens.Claims{UserID: adminID, OrgID: orgID.String()})
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/admin/orgs/"+orgID.String()+"/members",
 		strings.NewReader(fmt.Sprintf(`{"user_id":%q,"role":"member"}`, targetID)))
 	if err != nil {

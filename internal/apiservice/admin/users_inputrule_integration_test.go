@@ -10,13 +10,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 // Admin user create and update refuse a bad text form with 422 and write nothing: the row count and the stored values do not change.
@@ -30,20 +29,9 @@ VALUES ($1, $2, 'x', 'Before', 'https://example.test/before.png', true, true, $3
 			t.Fatal(err)
 		}
 	}
-	const jwtKey = "admin-input-rule-test-signing-key-32-bytes!!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	mux := http.NewServeMux()
 	for _, route := range admin.Routes(admin.Deps{Pool: pool, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
 		if strings.HasPrefix(route.Pattern, "/api/v1/admin/users") {
@@ -52,10 +40,7 @@ VALUES ($1, $2, 'x', 'Before', 'https://example.test/before.png', true, true, $3
 	}
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	bearer, err := signer.Access(edgetoken.AccessClaims{UserID: root.String(), Email: "ir-root@example.com", IsSuperuser: true}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	bearer := tokens.MustMint(t, edtokens.Claims{UserID: root})
 	send := func(method, path, body string) int {
 		t.Helper()
 		request, err := http.NewRequestWithContext(ctx, method, server.URL+path, strings.NewReader(body))

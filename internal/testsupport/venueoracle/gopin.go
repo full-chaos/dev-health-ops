@@ -141,6 +141,25 @@ func (p *GoPin) finish() error {
 	return nil
 }
 
+// FinishPins finishes every pin and fails once with every pin's error, so a
+// recording run writes each pin's file.
+func FinishPins(t *testing.T, pins ...*GoPin) {
+	t.Helper()
+	if err := finishPins(pins); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func finishPins(pins []*GoPin) error {
+	var problems []error
+	for _, pin := range pins {
+		if err := pin.finish(); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	return errors.Join(problems...)
+}
+
 // PinText is the text a GoPin stores for one response: the status and the
 // body, as Diff compares them.
 func PinText(response Response) string {

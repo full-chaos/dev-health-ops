@@ -27,12 +27,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	valkeygo "github.com/valkey-io/valkey-go"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/usersowned"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
+	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/signedtoken"
 	mailpkg "github.com/full-chaos/dev-health-ops/internal/mail"
@@ -276,6 +279,15 @@ type runner struct {
 	registers bool
 	// signUpLength is the content-length of the first uniform sign-up answer of the run.
 	signUpLength string
+	// retired maps a step whose Python answer a ruling retired to that ruling and the pin that holds Go's answer
+	// (in-process run only).
+	retired map[string]retiredStep
+}
+
+// retiredStep is the ruling that retired a step's Python answer and the pin of Go's answer.
+type retiredStep struct {
+	ruling string
+	pin    *venueoracle.GoPin
 }
 
 // batch opens fresh rate-limit windows, answers steps on both planes, and
@@ -292,7 +304,13 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		pyRequests[index] = s.python
 	}
 	pyResponses := r.golden.Python(r.t, r.venue, pyRequests)
-	r.golden.Consumed(r.t, pyResponses...)
+	for index, s := range steps {
+		if retired, ok := r.retired[s.name]; ok {
+			r.golden.Retired(r.t, retired.ruling, pyResponses[index])
+		} else {
+			r.golden.Consumed(r.t, pyResponses[index])
+		}
+	}
 	out := map[string][2]venueoracle.Response{}
 	fmt.Fprintf(&r.receipt, "-- %s\n", label)
 	for index, s := range steps {
@@ -303,6 +321,14 @@ func (r *runner) batch(label string, steps []step) map[string][2]venueoracle.Res
 		// The golden holds the Python answer projected (tokens to their claims,
 		// generated ids and times blanked); the Go answer is compared the same way.
 		goProjected := r.golden.Project(r.t, goResponse)
+		if retired, ok := r.retired[s.name]; ok {
+			pinned := goProjected
+			pinned.Body = normalize(pinned.Body)
+			same := retired.pin.Check(r.t, s.name, venueoracle.PinText(pinned))
+			fmt.Fprintf(&r.receipt, "%-70s retired     go=%d %s\n", s.name, goProjected.Status, venueoracle.Mark(same))
+			out[s.name] = [2]venueoracle.Response{pyResponses[index], goResponse}
+			continue
+		}
 		pyCompared := pyResponses[index]
 		if s.python.Path == "/api/v1/auth/resend-verification" || s.python.Path == "/api/v1/auth/forgot-password" {
 			r.registers = true
@@ -775,6 +801,18 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 	r := &runner{golden: golden, t: t, ctx: ctx, venue: venue, pySink: pySink, goSink: goSink,
 		mails: map[string]map[string][]sentMail{"python": {}, "go": {}}, divergencesFired: map[string]int{},
 		goBase: externalBase, external: external != nil}
+	var claimPin, rolePin *venueoracle.GoPin
+	if external == nil {
+		// orgClaimRuling: the in-process go-api verifies the venue's user access tokens (EdDSA); an external target
+		// keeps its own token path, so its answers still compare.
+		claimPin = venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim.go-pin.json", SHA256: authFlowOrgClaimPinSHA256, Ruling: orgClaimRuling})
+		r.retired = map[string]retiredStep{}
+		for _, name := range []string{"state: alice, org she is not in", "state: alice, org claim not a uuid", "skip: org claim not a uuid", "skip: not a member"} {
+			r.retired[name] = retiredStep{ruling: orgClaimRuling, pin: claimPin}
+		}
+		rolePin = venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/roleclaim.go-pin.json", SHA256: authFlowRoleClaimPinSHA256, Ruling: roleClaimRuling})
+		r.retired["state: alice, admin role"] = retiredStep{ruling: roleClaimRuling, pin: rolePin}
+	}
 	if external != nil {
 		if r.forwarded, err = authrows.FromEnv(); err != nil {
 			t.Fatal(err)
@@ -1039,6 +1077,9 @@ func TestAuthFlowVenueOracle(t *testing.T) {
 		_ = os.WriteFile(path, []byte(receipt), 0o600)
 	}
 	t.Log("\n" + receipt)
+	if claimPin != nil {
+		venueoracle.FinishPins(t, claimPin, rolePin)
+	}
 	golden.SkipDiff(t)
 	golden.Finish(t)
 	venueoracle.WriteGoOnlyProof(t, "Go auth flow, e-mail and rows against the Python plane's answers frozen on build "+venuePythonBuild)
@@ -1088,6 +1129,7 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	if err != nil {
 		t.Fatal(err)
 	}
+	routeVenueTokens(t, ctx, venue, auth, logger)
 	valkeyClient, err := valkey.Open(ctx, valkey.DefaultConfig(venue.ValkeyURI))
 	if err != nil {
 		t.Fatal(err)
@@ -1112,6 +1154,37 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue, mai
 	ts := httptest.NewServer(server.Handler())
 	t.Cleanup(ts.Close)
 	return ts.URL
+}
+
+// routeVenueTokens routes auth by the go-api endpoint-profile rows: the venue's tokens verify as user access
+// tokens of its issuer (their sessions live in the Go copy's auth schema, venueoracle.WriteAuthSessions), and the
+// HS256 tokens the go-api session routes mint in this flow verify on the rows that list legacy_hs256.
+func routeVenueTokens(t *testing.T, ctx context.Context, venue *venueoracle.Venue, auth *policy.Authenticator, logger *slog.Logger) {
+	t.Helper()
+	venue.WriteAuthSessions(t, ctx)
+	rows, err := accessrouting.Rows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := func(ctx context.Context, token string) (any, error) {
+		user, err := auth.AuthenticateLegacy(ctx, token)
+		switch {
+		case err == nil:
+			return user, nil
+		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
+			return nil, err
+		default:
+			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
+		}
+	}
+	validator, err := accessverify.New(accessverify.Config{Rows: rows, EdDSA: venue.TokenIssuer.Verifier(t), Legacy: legacy,
+		Meter: noop.NewMeterProvider().Meter("venue"), Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(accessrouting.Adapter{Validator: validator}, accessrouting.Service); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // venueRoot is the repository root, where the venue finds the Python api.
@@ -1259,3 +1332,17 @@ func (r *runner) socialRow() {
 	}
 	fmt.Fprintf(&r.receipt, "social: github new user through the provider stub: status %d, stub github requests %d %s\n", answer.Status, len(requests), venueoracle.Mark(r.t != nil && !r.t.Failed()))
 }
+
+// orgClaimRuling retires the Python answer of a step whose bearer's org claim names an organization the user holds
+// no live membership in, or is not a UUID.
+const orgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+
+// authFlowOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
+const authFlowOrgClaimPinSHA256 = "13c6ce271ed450afde122bb9d2367a4acecec3315a16ef780c39a8103364ba67"
+
+// roleClaimRuling retires the Python answer of a step whose bearer's role claim differs from the user's membership
+// role: the membership row is the authority (D6651).
+const roleClaimRuling = "EdDSA access path takes the role from the membership row (policy/accessroute_user.go:101) and ignores the token's role claim; HS256 trusted the claim"
+
+// authFlowRoleClaimPinSHA256 is the digest of testdata/roleclaim.go-pin.json.
+const authFlowRoleClaimPinSHA256 = "55d19b2a46f16bf625f9122685528a36bde63558c6ed9c2a9247ab12c93602b0"

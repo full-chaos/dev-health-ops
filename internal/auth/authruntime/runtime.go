@@ -363,7 +363,9 @@ func Execute(parent context.Context, args []string, lookup secrets.LookupEnv, st
 //  2. operator-http  -- /healthz, /readyz, /metrics. Second so the operator
 //     surface answers while later components are still starting, and stops
 //     only after the API has drained.
-//  3. auth-api-http  -- the API listener.
+//  3. auth-api-http  -- the API listener, then the internal listener when
+//     AUTH_SERVICE_INTERNAL_HTTP_ADDR is set (it starts after the API and
+//     stops before it).
 //  4. readiness-gate -- opens admission only once every component above has
 //     started, and closes it FIRST on the way down so a load balancer sees
 //     not-ready before the API stops accepting.
@@ -615,10 +617,25 @@ func configureWithRoutes(
 	logAPIRoutes(ctx, logger, cfg, routes, len(extra))
 	routes = append(routes, extra...)
 
-	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, routes))
+	if err := checkInternalOnlyRoutes(routes); err != nil {
+		closeStore()
+		return nil, err
+	}
+	apiHTTP, err := httpapi.NewServer(apiServerOptions(cfg, logger, publicRoutes(routes)))
 	if err != nil {
 		closeStore()
 		return nil, err
+	}
+	var listeners []lifecycle.Component
+	listeners = append(listeners, announcedListener{listener: apiHTTP, logger: logger, budget: cfg.ShutdownTimeout * 3 / 4})
+	if cfg.InternalAddress != "" {
+		internalHTTP, err := httpapi.NewServer(internalServerOptions(cfg, logger, routes))
+		if err != nil {
+			closeStore()
+			return nil, err
+		}
+		// No reserved budget: an equal share, so the API listener keeps its three quarters and the rest theirs.
+		listeners = append(listeners, announcedListener{listener: internalHTTP, logger: logger})
 	}
 
 	loopConfig := audit.DefaultLoopConfig(schemaID, registry)
@@ -639,18 +656,21 @@ func configureWithRoutes(
 		closeStore()
 		return nil, err
 	}
+	repoIdentityComponents, err := repoIdentityProjection(cfg, logger, store.Pool(), schemaID, registry, projectOrg)
+	if err != nil {
+		closeStore()
+		return nil, err
+	}
 
 	components := []lifecycle.Component{store, keyStatesComponent{states: keyStates}, jwks}
 	components = append(components, limitComponents...)
 	components = append(components, credComponents...)
 	components = append(components, feed.components...)
 	components = append(components, projectionComponents...)
-	return append(components,
-		outboxLoop,
-		announcedListener{listener: operatorHTTP, logger: logger},
-		announcedListener{listener: apiHTTP, logger: logger, budget: cfg.ShutdownTimeout * 3 / 4},
-		health.Gate{Registry: registry},
-	), nil
+	components = append(components, repoIdentityComponents...)
+	components = append(components, outboxLoop, announcedListener{listener: operatorHTTP, logger: logger})
+	components = append(components, listeners...)
+	return append(components, health.Gate{Registry: registry}), nil
 }
 
 // keyStatesComponent ends the key-state read in flight on shutdown, before the

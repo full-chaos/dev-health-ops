@@ -33,8 +33,8 @@ func TestServiceCredentialVerbsRefuseBeforeTheDatabase(t *testing.T) {
 		want string
 	}{
 		"create no scope":          {"create", nil, cli.ExitUsage, "the following arguments are required: --scope"},
-		"create unknown flag":      {"create", []string{"--scope", "x", "--nope"}, cli.ExitUsage, "unrecognized arguments: --nope"},
-		"create positional":        {"create", []string{"--scope", "entitlements:read", "extra"}, cli.ExitUsage, "unrecognized arguments"},
+		"create unknown flag":      {"create", []string{"--scope", "x", "--nope"}, cli.ExitUsage, "unrecognized arguments (1)"},
+		"create positional":        {"create", []string{"--scope", "entitlements:read", "extra"}, cli.ExitUsage, "unrecognized arguments (1)"},
 		"create bad service":       {"create", []string{"--service", "bogus", "--scope", "x"}, cli.ExitUsage, "invalid choice"},
 		"create bad scope":         {"create", []string{"--scope", "nope"}, cli.ExitFailure, "unsupported internal service credential scope"},
 		"create other's scope":     {"create", []string{"--service", "worker-operator", "--scope", "entitlements:read"}, cli.ExitFailure, "service worker-operator is retired"},
@@ -44,9 +44,9 @@ func TestServiceCredentialVerbsRefuseBeforeTheDatabase(t *testing.T) {
 		"create past expiry":       {"create", []string{"--scope", "entitlements:read", "--expires-at", "2001-01-01T00:00:00+00:00"}, cli.ExitFailure, "must be in the future"},
 		"create bad creator":       {"create", []string{"--scope", "entitlements:read", "--created-by-user-id", "bad"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
 		"list bad service":         {"list", []string{"--service", "bogus"}, cli.ExitUsage, "invalid choice"},
-		"list positional":          {"list", []string{"x"}, cli.ExitUsage, "unrecognized arguments"},
+		"list positional":          {"list", []string{"x"}, cli.ExitUsage, "unrecognized arguments (1)"},
 		"rotate no id":             {"rotate", []string{"--scope", "entitlements:read"}, cli.ExitUsage, "the following arguments are required: credential_id"},
-		"rotate two ids":           {"rotate", []string{id, id, "--scope", "entitlements:read"}, cli.ExitUsage, "unrecognized arguments"},
+		"rotate two ids":           {"rotate", []string{id, id, "--scope", "entitlements:read"}, cli.ExitUsage, "unrecognized arguments (1)"},
 		"rotate no scope":          {"rotate", []string{id}, cli.ExitUsage, "the following arguments are required: --scope"},
 		"rotate overlap not int":   {"rotate", []string{id, "--scope", "entitlements:read", "--overlap-seconds", "abc"}, cli.ExitUsage, "--overlap-seconds"},
 		"rotate overlap empty":     {"rotate", []string{id, "--scope", "entitlements:read", "--overlap-seconds", ""}, cli.ExitUsage, "--overlap-seconds"},
@@ -58,22 +58,22 @@ func TestServiceCredentialVerbsRefuseBeforeTheDatabase(t *testing.T) {
 		"rotate id before scope":   {"rotate", []string{"xyz", "--scope", "nope"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
 		"revoke no id":             {"revoke", nil, cli.ExitUsage, "the following arguments are required: credential_id"},
 		"revoke bad id":            {"revoke", []string{"not-a-uuid"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
-		"revoke unknown flag":      {"revoke", []string{id, "--nope"}, cli.ExitUsage, "unrecognized arguments: --nope"},
+		"revoke unknown flag":      {"revoke", []string{id, "--nope"}, cli.ExitUsage, "unrecognized arguments (1)"},
 		// "--" ends the options: what follows is positional, flag-looking or not (argparse).
-		"rotate flags after the terminator": {"rotate", []string{"--scope", "entitlements:read", "--", id, "--overlap-seconds", "60"}, cli.ExitUsage, "unrecognized arguments"},
+		"rotate flags after the terminator": {"rotate", []string{"--scope", "entitlements:read", "--", id, "--overlap-seconds", "60"}, cli.ExitUsage, "unrecognized arguments (2)"},
 		"rotate id after the terminator":    {"rotate", []string{"--scope", "nope", "--", id}, cli.ExitFailure, "unsupported internal service credential scope"},
 		"revoke id after the terminator":    {"revoke", []string{"--", "not-a-uuid"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
 		"revoke terminator after the id":    {"revoke", []string{"not-a-uuid", "--"}, cli.ExitFailure, "badly formed hexadecimal UUID string"},
 		"create terminator as a value":      {"create", []string{"--scope", "--"}, cli.ExitUsage, "expected one argument"},
-		"create bare terminator":            {"create", []string{"--scope", "entitlements:read", "--"}, cli.ExitUsage, "unrecognized arguments: --"},
-		"list bare terminator":              {"list", []string{"--"}, cli.ExitUsage, "unrecognized arguments: --"},
+		"create bare terminator":            {"create", []string{"--scope", "entitlements:read", "--"}, cli.ExitUsage, "unrecognized arguments (1)"},
+		"list bare terminator":              {"list", []string{"--"}, cli.ExitUsage, "unrecognized arguments (1)"},
 		// What round 2 found: argparse, not Go's flag package, decides what a command line means.
 		"single-dash long option":            {"create", []string{"-scope", "entitlements:read"}, cli.ExitUsage, "the following arguments are required: --scope"},
 		"a dash-led value is an option":      {"create", []string{"--scope", "-not-a-scope"}, cli.ExitUsage, "expected one argument"},
 		"a bad earlier service is refused":   {"create", []string{"--service", "bogus", "--service", "acr", "--scope", "entitlements:read"}, cli.ExitUsage, "invalid choice"},
 		"a bad earlier overlap is refused":   {"rotate", []string{id, "--scope", "entitlements:read", "--overlap-seconds", "abc", "--overlap-seconds", "5"}, cli.ExitUsage, "invalid int value"},
-		"a trailing terminator after the id": {"rotate", []string{id, "--scope", "entitlements:read", "--"}, cli.ExitUsage, "unrecognized arguments: --"},
-		"an ambiguous abbreviation":          {"create", []string{"--s", "x"}, cli.ExitUsage, "ambiguous option: --s could match --service, --scope"},
+		"a trailing terminator after the id": {"rotate", []string{id, "--scope", "entitlements:read", "--"}, cli.ExitUsage, "unrecognized arguments (1)"},
+		"an ambiguous abbreviation":          {"create", []string{"--s", "x"}, cli.ExitUsage, "ambiguous option: could match --service, --scope"},
 		"an abbreviation names its option":   {"create", []string{"--sc", "nope"}, cli.ExitFailure, "unsupported internal service credential scope"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -153,7 +153,7 @@ func TestParseCredentialArgsFacts(t *testing.T) {
 		}
 	}
 	for _, line := range [][]string{{"--s", "-h"}, {"--s", "x", "ID"}} {
-		if _, err := parseCredentialArgs("rotate", line); err == nil || !strings.Contains(err.Msg, "ambiguous option: --s could match") {
+		if _, err := parseCredentialArgs("rotate", line); err == nil || !strings.Contains(err.Msg, "ambiguous option: could match") {
 			t.Errorf("rotate %v: %v, want the ambiguity error", line, err)
 		}
 	}

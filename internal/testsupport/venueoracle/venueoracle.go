@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pydanticecho"
 	"io"
 	"log/slog"
@@ -94,6 +95,17 @@ type Options struct {
 	// JWTKey is JWT_SECRET_KEY on the Python plane; the Go api must be given
 	// the same key.
 	JWTKey string
+	// LegacyHS256Tokens mints the seed's tokens as HS256 access tokens under
+	// JWTKey, as the recording's were, for a Go plane that still verifies only
+	// that class (the query-api edge). Unset, they are user access tokens of
+	// TokenIssuer.
+	LegacyHS256Tokens bool
+	// OrglessSuperusers names superuser seeds whose org claim names an
+	// organization the user holds no membership in: their user access token
+	// carries no org claim, as auth-service login mints one for a user without a
+	// membership (auth/authapi/login.go:184-190). The recorded request is keyed as
+	// recorded. A named seed that is not a superuser is refused.
+	OrglessSuperusers []string
 	// PythonEnv is the Python plane's settings the golden was recorded under,
 	// for example SETTINGS_ENCRYPTION_KEY: the Go ports of the substrate
 	// (gosubstrate.go) read them.
@@ -121,7 +133,10 @@ type Venue struct {
 	Root string
 	// Tokens are the minted access tokens, by seed name.
 	Tokens map[string]string
-	// Roles are the provisioned role names: domain, queue, coordinator, api.
+	// TokenIssuer minted Tokens; a test api verifies them with TokenIssuer.Authenticator.
+	TokenIssuer *edtokens.Issuer
+	// Roles are the provisioned role names: domain, queue, coordinator, api, and auth_runtime once
+	// WriteAuthSessions ran.
 	Roles map[string]string
 	// SourceDB is the Python plane's database; GoDB is its copy.
 	SourceDB, GoDB string
@@ -139,6 +154,13 @@ type Venue struct {
 	clickHouseURI, clickHouseHTTPURI     string
 	PythonClickHouseDB, GoClickHouseDB   string
 	clickHouseAPIRole, clickHouseAPIPass string
+
+	// authRuntimeRole is the auth runtime role name WriteAuthSessions provisions.
+	authRuntimeRole string
+	// legacyTokenKey, when set, is the key mintGo signs HS256 tokens under (Options.LegacyHS256Tokens).
+	legacyTokenKey string
+	// orglessSuperusers are Options.OrglessSuperusers.
+	orglessSuperusers map[string]bool
 
 	// frozen is a venue built for a frozen golden or a Go-only test. Every
 	// venue is one: no Python plane can be served.
@@ -172,6 +194,15 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 		t.Fatal("venue: a venue needs its golden (Options.Golden) or Options.GoOnly: no Python plane can be served")
 	}
 	v := &Venue{Root: options.Root, Tokens: map[string]string{}, Roles: map[string]string{}, frozen: true, pythonEnv: planeEnv(options)}
+	if options.LegacyHS256Tokens {
+		v.legacyTokenKey = options.JWTKey
+	}
+	for _, name := range options.OrglessSuperusers {
+		if v.orglessSuperusers == nil {
+			v.orglessSuperusers = map[string]bool{}
+		}
+		v.orglessSuperusers[name] = true
+	}
 	if options.External != nil {
 		return startExternal(t, ctx, options, v)
 	}
@@ -260,7 +291,7 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 	}
 	admin.Close()
 	if len(specs) > 0 {
-		v.Tokens = v.mintGo(t, options.JWTKey, specs)
+		v.Tokens = v.mintGo(t, specs)
 	}
 
 	// 2. Two identical copies: Python serves the source, Go serves the copy.
@@ -288,6 +319,9 @@ func Start(t *testing.T, ctx context.Context, options Options) *Venue {
 			t.Fatal(err)
 		}
 		v.Roles[name] = role
+	}
+	if v.authRuntimeRole, err = authRuntimeRoleName(instance); err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		// The roles hold privileges inside the Go copy; DROP ROLE fails while
@@ -437,6 +471,9 @@ type DiffOptions struct {
 	// and declares the Python answer retired (Golden.Retired), uncompared.
 	Retire func(request Request) bool
 	Pin    *GoPin
+	// Retirements are more rulings' retired requests, each with its own Pin,
+	// handled as Retire is; the first that matches a request wins, after Retire.
+	Retirements []Retirement
 	// OrglessTokens are the access tokens (not their labels) of the seeded callers that carry no organization
 	// and are not superusers. Only a request sent with one of them can be a D6145 org-less refusal
 	// (intendedOrglessRefusal); nil turns the rule off.
@@ -463,6 +500,25 @@ type DiffOptions struct {
 	// must come from it (or be a Volatile header or content-length); nil refuses the rule, so a direct Compare call
 	// cannot skip headers without it.
 	orglessHeaderNames map[string]bool
+}
+
+// Retirement is one ruling's retired requests (DiffOptions.Retirements).
+type Retirement struct {
+	Match func(request Request) bool
+	Pin   *GoPin
+}
+
+// retiringPin is the Pin of the ruling that retired request's Python answer, or nil.
+func (o DiffOptions) retiringPin(request Request) *GoPin {
+	if o.Retire != nil && o.Retire(request) {
+		return o.Pin
+	}
+	for _, retirement := range o.Retirements {
+		if retirement.Match(request) {
+			return retirement.Pin
+		}
+	}
+	return nil
 }
 
 // OrglessRefusalBody is the exact answer D6145 gives a caller with no organization on a guarded route.
@@ -492,6 +548,11 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 	}
 	if (options.Retire != nil) != (options.Pin != nil) || (options.Retire != nil && options.Golden == nil) {
 		t.Fatal("diff: Retire needs a Pin and a Golden")
+	}
+	for _, retirement := range options.Retirements {
+		if retirement.Match == nil || retirement.Pin == nil || options.Golden == nil {
+			t.Fatal("diff: a Retirement needs a Match, a Pin and a Golden")
+		}
 	}
 	var receipt strings.Builder
 	orglessRefused := 0
@@ -545,13 +606,13 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			}
 			pythonResponse, goResponse = projectedPython, projectedGo
 		}
-		if options.Retire != nil && options.Retire(request) {
+		if pin := options.retiringPin(request); pin != nil {
 			pinned := goResponse
 			if options.Normalize != nil {
 				pinned.Body = options.Normalize(request, pinned.Body)
 			}
-			options.Golden.retireBound(python[index], options.Pin.spec.Ruling)
-			same := options.Pin.Check(t, request.Name, PinText(pinned))
+			options.Golden.retireBound(python[index], pin.spec.Ruling)
+			same := pin.Check(t, request.Name, PinText(pinned))
 			fmt.Fprintf(&receipt, "%-58s retired     go=%d %s\n", request.Name, goResponse.Status, pinMark(same))
 			continue
 		}

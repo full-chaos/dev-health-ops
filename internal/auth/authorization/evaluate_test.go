@@ -457,6 +457,7 @@ func TestReasonSetIsClosed(t *testing.T) {
 		"grant_expired", "grant_revoked", "workload_audience_denied",
 		"workload_action_denied", "clock_unavailable", "service_account_inactive",
 		"allowed_by_membership_default", "grant_read_failed", "impersonation_denied", "delegation_invalid",
+		"repository_unresolved",
 		"repository_allowlist_too_large",
 	}
 	got := AllReasons()
@@ -593,6 +594,7 @@ func TestEvaluate_EveryDenyPathCarriesTheCatalogVersion(t *testing.T) {
 		{"clock unavailable", repoRequest("acme/api"), noClock(repoSnapshot("member", liveGrant("acme/api"))), ReasonClockUnavailable, plantedEvaluator()},
 		{"service account inactive", repoRequest("acme/api"), inactiveSA(), ReasonServiceAccountInactive, plantedEvaluator()},
 		{"grant read failed", repoRequest("acme/api"), readFails(repoSnapshot("member")), ReasonGrantReadFailed, plantedEvaluator()},
+		{"repository unresolved", repoRequest("acme/api"), repoSnapshot("member", idGrant("acme/api", "github:1")), ReasonRepositoryUnresolved, plantedEvaluator()},
 		{"impersonation denied", orgRequest("org.delete"), delegated("owner", []string{"org.delete"}, ""), ReasonImpersonationDenied, nil},
 		{"delegation invalid", orgRequest("org.read"), delegated("owner", nil, "").withChain(nil), ReasonDelegationInvalid, nil},
 	}

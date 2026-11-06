@@ -223,38 +223,47 @@ func TestPDPEnforceDownIsATypedLocalDeny(t *testing.T) {
 	}
 }
 
-// Shadow asks, counts and compares, and never denies: not for a PDP deny, not for a PDP that is down.
-func TestPDPShadowCountsAndNeverDenies(t *testing.T) {
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closedURL := closed.URL
-	closed.Close()
-	allow := pdptest.New(t)
-	deny := pdptest.New(t)
-	deny.Deny("no_membership")
+// Shadow-mode Authorize asks nothing, counts nothing on the #5679 counter and never denies: the 5.12 core asks and
+// counts (internal/queryapi/server/rest_shadow_test.go).
+func TestPDPShadowAuthorizeAsksNothingAndCountsNothing(t *testing.T) {
+	srv := pdptest.New(t)
+	m, cfg := newMeter(t)
+	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
+	g := New(cfg)
+	if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
+		t.Fatalf("shadow refused: %v", err)
+	}
+	g.Wait()
+	if n := len(srv.Requests()); n != 0 {
+		t.Fatalf("shadow Authorize asked %d times, want 0", n)
+	}
+	if got := m.points(t, resultMetric); len(got) != 0 {
+		t.Fatalf("results %v, want none", got)
+	}
+}
+
+// Only shadow mode builds the 5.12 shadow, from the same decider; off, enforce and an invalid gate build none.
+func TestPDPGateShadowIsBuiltOnlyInShadowMode(t *testing.T) {
+	srv := pdptest.New(t)
 	for name, tc := range map[string]struct {
-		base   string
-		result string
-		calls  func() int
+		cfg  Config
+		want bool
 	}{
-		"allow": {allow.URL, ResultMatch, func() int { return len(allow.Requests()) }},
-		"deny":  {deny.URL, ResultMismatch, func() int { return len(deny.Requests()) }},
-		"down":  {closedURL, ResultError, func() int { return 1 }},
+		"off":     {Config{Mode: ModeOff, Decider: pepClient(t, srv.URL)}, false},
+		"shadow":  {Config{Mode: ModeShadow, Decider: pepClient(t, srv.URL)}, true},
+		"enforce": {Config{Mode: ModeEnforce, Decider: pepClient(t, srv.URL)}, false},
+		"bad":     {Config{Mode: "banana"}, false},
+		"no pdp":  {Config{Mode: ModeShadow}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			m, cfg := newMeter(t)
-			cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, tc.base)
-			g := New(cfg)
-			if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
-				t.Fatalf("shadow refused: %v", err)
-			}
-			g.Wait()
-			if tc.calls() != 1 {
-				t.Fatalf("shadow asked %d times, want 1", tc.calls())
-			}
-			if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result="+tc.result] != 1 || len(got) != 1 {
-				t.Fatalf("results %v, want one %s", got, tc.result)
+			if got := New(tc.cfg).Shadow() != nil; got != tc.want {
+				t.Fatalf("shadow built = %t, want %t", got, tc.want)
 			}
 		})
+	}
+	var nilGate *Gate
+	if nilGate.Shadow() != nil {
+		t.Fatal("a nil gate has a shadow")
 	}
 }
 
@@ -393,7 +402,7 @@ func TestPDPLabelsAreClosed(t *testing.T) {
 	}
 	actions := []string{"analytics.read", "metrics.read", "work_items.read", "git.read", "org.read", "unknown"}
 	closed := map[string][]string{
-		"mode": {"shadow", "enforce", "invalid"}, "result": {"allow", "deny", "unavailable", "match", "mismatch", "error", "dropped", "not_configured", "not_carried_out", "no_decision_point"},
+		"mode": {"enforce", "invalid"}, "result": {"allow", "deny", "unavailable", "not_configured", "not_carried_out", "no_decision_point"},
 		"class": ExemptClasses, "action": actions,
 	}
 	for _, name := range []string{resultMetric, exemptMetric} {
@@ -515,21 +524,5 @@ func TestPDPEnforceAllowlistIsRefusedByTheGateWithTheClosedReason(t *testing.T) 
 	denied, ok := err.(*DenyError)
 	if !ok || !denied.Local || denied.Reason != ReasonAllowlistRouteUnsupported {
 		t.Fatalf("answered %#v, want a local DenyError allowlist_route_unsupported", err)
-	}
-}
-
-// Shadow never changes an answer: an allow that carries an allowlist is still a match and still passes.
-func TestPDPShadowIgnoresObligations(t *testing.T) {
-	srv := pdptest.New(t)
-	srv.Obligations(map[string]any{"tenant_scope": strings.ToLower(testOrg), "repository_allowlist": []string{"acme/widgets"}})
-	m, cfg := newMeter(t)
-	cfg.Mode, cfg.Decider = ModeShadow, pepClient(t, srv.URL)
-	g := New(cfg)
-	if _, err := g.Authorize(context.Background(), testProfile, testBearer, testOrg); err != nil {
-		t.Fatalf("shadow refused: %v", err)
-	}
-	g.Wait()
-	if got := m.points(t, resultMetric); got["action=analytics.read,mode=shadow,result=match"] != 1 || len(got) != 1 {
-		t.Fatalf("results %v, want one match", got)
 	}
 }

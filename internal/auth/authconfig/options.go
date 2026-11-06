@@ -116,6 +116,11 @@ var optionRegistry = []Option{
 		Usage: "host:port for the operator surface (/healthz, /readyz, /metrics)",
 	},
 	{
+		Flag: "internal-http-addr", Env: EnvInternalAddress, Kind: KindString, Group: GroupHTTP,
+		Usage: "host:port for the internal listener: the workload-token exchange and the authorize routes alone, " +
+			"with no trusted proxy; empty turns it off",
+	},
+	{
 		Flag: "request-timeout", Env: EnvRequestTimeout, Kind: KindDuration,
 		Default: defaultRequestTimeout.String(), Group: GroupHTTP,
 		Usage: "per-request handler deadline applied to every API route",
@@ -300,6 +305,10 @@ var optionRegistry = []Option{
 	{
 		Flag: "push-projection", Env: EnvPushProjection, Kind: KindString, Default: "off", Group: GroupSession,
 		Usage: "on runs the External Push projection reader on this replica: it projects the external_push_credential rows of the auth outbox into external_source principals and credential_registry rows; off (default) runs none. Mounts no route",
+	},
+	{
+		Flag: "repo-identity-projection", Env: EnvRepoIdentityProjection, Kind: KindString, Default: "off", Group: GroupSession,
+		Usage: "on runs the repository identity projection reader on this replica: it upserts repository_identities from the repository_identity rows of the auth outbox (the provider sync's events); off (default) runs none. Mounts no route",
 	},
 	{
 		Flag: "revision-feed", Env: EnvRevisionFeed, Kind: KindString, Default: "off", Group: GroupSession,

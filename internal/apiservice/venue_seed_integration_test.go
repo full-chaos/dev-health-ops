@@ -672,3 +672,7 @@ func upper(s string) string {
 	}
 	return string(out)
 }
+
+// protectedOrglessSuperusers are the superuser seeds whose org claim (orgB) names an organization they hold no
+// membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190).
+var protectedOrglessSuperusers = []string{"superuser", "impersonator"}

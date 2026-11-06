@@ -264,10 +264,8 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 	}
 	base := startVenueAPI(t, ctx, cfg, venue)
 	requests := credentialRequests(seed, venue.Tokens)
-	orglessPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/credential-admin-orgless.go-pin.json", SHA256: credentialAdminOrglessPinSHA256, Ruling: credentialOrglessRuling})
 	receipt := venueoracle.Diff(t, base, requests, golden.Python(t, venue, requests), venueoracle.DiffOptions{
-		Golden:      golden,
-		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return credentialAdminOrglessRetired[request.Name] }, Pin: orglessPin}},
+		Golden: golden,
 		Normalize: func(_ venueoracle.Request, body string) string {
 			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
 			body = strings.ReplaceAll(body, `"last_test_at":"2026-09-01T10:00:00Z"`, `"last_test_at":"<time>"`)
@@ -338,27 +336,18 @@ func TestVenueOracleCredentialAdmin(t *testing.T) {
 		return strings.Join(lines, "\n")
 	}
 	goRendered := renderPlane(planes[1])
-	// credentialOrglessRuling: the org-less superuser's create and delete in org B do not happen on Go, so its rows are pinned.
-	golden.RetireRows(t, "python integration_credentials rows decrypted", credentialOrglessRuling)
-	if goRendered == "" {
-		t.Error("integration_credentials rows are empty after the writes")
+	rendered := map[string]string{
+		"python": golden.CompareRows(t, "python integration_credentials rows decrypted", goRendered),
+		"go":     goRendered,
 	}
-	same := orglessPin.Check(t, "integration_credentials rows decrypted", goRendered)
+	same := rendered["python"] == rendered["go"] && rendered["go"] != ""
+	if !same {
+		t.Errorf("integration_credentials rows differ after the writes:\n python:\n%s\n go:\n%s", rendered["python"], rendered["go"])
+	}
 	t.Log("\n" + receipt + "integration_credentials rows (decrypted): " + venueoracle.Mark(same) + "\n")
-	orglessPin.Finish(t)
 	golden.Finish(t)
 }
 
-// credentialOrglessSuperusers is the "superuser" seed: its org claim (orgB) names an organization it holds no
-// membership in. auth-service login mints such a user's access token with no org claim (auth/authapi/login.go:184-190).
-var credentialOrglessSuperusers = []string{"superuser"}
-
-// credentialOrglessRuling is orglessSuperuserRuling at the AdminOrg credentials routes.
-const credentialOrglessRuling = orglessSuperuserRuling + " (api/policy/guard.go:183-186, AdminOrg)"
-
-// credentialAdminOrglessRetired are the requests credentialOrglessRuling retired.
-var credentialAdminOrglessRetired = map[string]bool{"list: other org sees its own": true, "create: same name in another org is separate": true,
-	"delete: other org admin sees only its own row": true, "list: other org after its delete": true}
-
-// credentialAdminOrglessPinSHA256 is the digest of testdata/venue/credential-admin-orgless.go-pin.json.
-const credentialAdminOrglessPinSHA256 = "2b60909fea1a957bc4ddfe8a4563bb614f4475ab49bf3c95e4724be7fa67fa13"
+// credentialOrglessSuperusers names no seed: the "superuser" seed (org claim orgB, no membership row there) keeps its
+// recorded org claim, and its user access token gets the recorded (HS256) answer (product rule 1, D6773).
+var credentialOrglessSuperusers []string

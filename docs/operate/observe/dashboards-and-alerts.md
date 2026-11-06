@@ -76,7 +76,7 @@ The file is the text of record: no Prometheus loads it in production. The produc
 
 ## Issue-PR fallback invariant rule
 
-`alerts/rules.yml` carries an `issue_pr_fallback_invariant` group with one rule, `IssuePRFallbackInvariantBreached`: any increase of `workgraph_issue_pr_fallback_beside_native_rows_total` in 24 hours (`increase(...[24h]) > 0`, no `for`). After every work-graph build the pre-step `issue_pr_fallback_invariant` adds the number of `explicit_text` and `heuristic` rows the native-first rule forbids to that counter, 0 included, so the first breach of a worker's life is an increase. The counters carry no label; the organization is in the WARN log line `issue-pr fallback invariant breached`. The three per-side counters (`..._beside_native_pull_request_rows_total`, `..._beside_native_issue_rows_total`, `..._pull_request_issue_side_rows_total`) say which side breached. Labels: `team = platform`, `severity = warning`. The check reports and repairs nothing: a breach is a link writer regression. Background: [data and storage](../../contribute/architecture/data-and-storage.md). As PromQL rules do not evaluate on this SigNoz (D6417), the production rule is a builder threshold rule made by hand from this text.
+`alerts/rules.yml` carries an `issue_pr_fallback_invariant` group with one rule, `IssuePRFallbackInvariantBreached`: any increase of `workgraph_issue_pr_fallback_beside_native_rows_total` in 24 hours (`increase(...[24h]) > 0`, no `for`). After every work-graph build the pre-step `issue_pr_fallback_invariant` adds the number of `explicit_text` and `heuristic` rows the native-first rule forbids to that counter, 0 included, so the first breach of a worker's life is an increase. The counters carry no label; the organization is in the WARN log line `issue-pr fallback invariant breached`. The three per-side counters (`..._beside_native_pull_request_rows_total`, `..._beside_native_issue_rows_total`, `..._pull_request_issue_side_rows_total`) say which side breached. Labels: `team = platform`, `severity = warning`. The check reports and repairs nothing: a breach is a link writer regression. Background: [data and storage](../../contribute/architecture/data-and-storage.md). PromQL rules do not evaluate on this SigNoz, so the production rule is a builder threshold rule made by hand from this text.
 
 ## Org activity rules
 
@@ -85,7 +85,7 @@ The file is the text of record: no Prometheus loads it in production. The produc
 - `OrgActivityRefreshFailed`: any increase of `daily_finalize_org_activity_refresh_failed_total` in 24 hours. The counter is created and seeded at 0 when the finalize handler gets its refresher, so the first failure of a worker's life is an increase and not a first sample. A failure inside the first export interval (60 seconds after the worker starts) is still folded into the first exported value.
 - `OrgActivityStale`: `dev_health_org_activity_refresh_age_seconds`, the age of the newest row (`now() - max(refreshed_at)`), above two days for fifteen minutes. SigNoz cannot read Postgres, so the worker exports the number: one database read per minute (two second timeout), no sample and never 0 when the read fails or the table is empty. `dev_health_org_activity_refresh_age_read_failed_total` counts the failed reads, so a gauge that stopped reporting can be told from a fresh table.
 
-PromQL rules do not evaluate on this SigNoz (D6417), so the production rules are builder threshold rules. Both name the `accounts-email` channel explicitly and do not use the notification policy (`usePolicy` is false), as the production rule `OrgActivityRefreshFailed` does; the labels are `team = platform` and `severity = warning`.
+PromQL rules do not evaluate on this SigNoz, so the production rules are builder threshold rules. Both name the `accounts-email` channel explicitly and do not use the notification policy (`usePolicy` is false), as the production rule `OrgActivityRefreshFailed` does; the labels are `team = platform` and `severity = warning`.
 
 ```json
 {
@@ -221,7 +221,7 @@ Checks after import: query `dev_health_org_activity_refresh_age_seconds` and `da
 
 ## Auth shadow mismatch
 
-The go-api shadow harness runs the new policy decision next to the legacy guard and counts every difference (CHAOS-10849). The dashboard source is `deploy/signoz/dashboards/auth-shadow-mismatch.json` ("Dev Health - Auth Shadow Mismatch (production)"); the alert is `AuthShadowMismatchUnresolved` in `alerts/rules.yml`, group `auth_shadow`.
+The go-api shadow harness runs the new policy decision next to the legacy guard and counts every difference. The dashboard source is `deploy/signoz/dashboards/auth-shadow-mismatch.json` ("Dev Health - Auth Shadow Mismatch (production)"); the alert is `AuthShadowMismatchUnresolved` in `alerts/rules.yml`, group `auth_shadow`.
 
 **The signal is not live yet.** The mismatch and result panels show no data and the rule is inert until the shadow is wired into go-api (the pull request that adds the `AUTH_SHADOW_PDP` switch) and `AUTH_SHADOW_PDP` is on. The two status panels differ: once the shadow is wired, `dev_health_api_shadow_enabled` and `dev_health_api_shadow_config_invalid` report data even with the switch off (0 and 0 when off; 0 and 1 when the shadow settings are invalid). The counters are lazy: an OpenTelemetry counter has no series until its first `Add`, so an absent series means nothing happened. The rule has no absent-data alert. Do not read an applied rule as proof that the shadow is armed; the check is `dev_health_api_shadow_enabled` = 1 in SigNoz.
 
@@ -234,7 +234,7 @@ What to read:
 - Zero mismatches is not "good" by itself: read the results panel, because error, dropped or skipped calls produce no mismatch.
 - The metric says where; the go-api WARN log "api shadow pdp: mismatch with the legacy guard" says what (action, route, reason_code, decision_id). The log is limited to one line per second per class: use it for samples, never for counts.
 
-PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a builder threshold rule that names the `accounts-email` channel and does not use the notification policy (`usePolicy` is false):
+PromQL rules do not evaluate on this SigNoz, so the production rule is a builder threshold rule that names the `accounts-email` channel and does not use the notification policy (`usePolicy` is false):
 
 ```json
 {
@@ -310,7 +310,7 @@ PromQL rules do not evaluate on this SigNoz (D6417), so the production rule is a
 
 ## Auth service SLO alerts
 
-The table of targets, windows and sources is in the [auth readiness and SLO reference](../../reference/auth/readiness-and-slo.md) (CHAOS-11220). Four rules in `alerts/rules.yml`, group `auth_slo`, evaluate it: PDP p95 above 25 ms, PDP p99 above 75 ms, session issue or refresh p95 above 200 ms, and the oldest pending outbox event above 300 seconds. Each fires when the condition holds for five minutes. The latency rules read `dev_health_api_http_request_duration_seconds` filtered by `route`; 25 ms, 75 ms and 200 ms are bucket edges of that histogram, so the quantile is not rounded up to the next edge. Availability is not a rule of this group: `AuthService5xx` (any 5xx in five minutes, live) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for ten minutes, in `alerts/rules.yml`, not yet created in SigNoz) cover it, and no burn-rate rule exists.
+The table of targets, windows and sources is in the [auth readiness and SLO reference](../../reference/auth/readiness-and-slo.md). Four rules in `alerts/rules.yml`, group `auth_slo`, evaluate it: PDP p95 above 25 ms, PDP p99 above 75 ms, session issue or refresh p95 above 200 ms, and the oldest pending outbox event above 300 seconds. Each fires when the condition holds for five minutes. The latency rules read `dev_health_api_http_request_duration_seconds` filtered by `route`; 25 ms, 75 ms and 200 ms are bucket edges of that histogram, so the quantile is not rounded up to the next edge. Availability is not a rule of this group: `AuthService5xx` (any 5xx in five minutes, live) and `AuthServiceHighServerErrorRate` (5xx ratio above 5% for ten minutes, in `alerts/rules.yml`, not yet created in SigNoz) cover it, and no burn-rate rule exists.
 
 These four blocks are derived from `alerts/rules.yml` and are not yet imported. Before you save a rule, run its query over the last hour in SigNoz: "no data" (and not 0) means the series does not reach SigNoz yet (the auth-service series is empty until go-api forwards routes to it), so stop and report. The notification channel is `accounts-email`; the policy is not used.
 
@@ -608,7 +608,7 @@ These four blocks are derived from `alerts/rules.yml` and are not yet imported. 
 
 ## Auth service SLO dashboard
 
-The dashboard source is `deploy/signoz/dashboards/auth-slo.json` ("Dev Health - Auth Service SLO (production)", CHAOS-11221). It has panels only. The alert rules and the SLO numbers are in the SLO table change (`docs/reference/auth/readiness-and-slo.md`, group `auth_slo` in `alerts/rules.yml`); the dashboard draws their lines and holds no second copy of a rule. A signal with no set number has a panel and no alert.
+The dashboard source is `deploy/signoz/dashboards/auth-slo.json` ("Dev Health - Auth Service SLO (production)"). It has panels only. The alert rules and the SLO numbers are in the SLO table change (`docs/reference/auth/readiness-and-slo.md`, group `auth_slo` in `alerts/rules.yml`); the dashboard draws their lines and holds no second copy of a rule. A signal with no set number has a panel and no alert.
 
 **No data yet.** The auth-service series is empty until the auth service takes traffic (phase 2); until then go-api serves the auth routes. The panels show no data and the rules stay inactive, as for the shadow dashboard.
 
@@ -617,7 +617,7 @@ What it shows:
 - Requests by `status_class`, the 5xx count, and the p95 and p99 of the routes `/v1/authorize` and `/v1/authorize:batch` (lines at 25 ms and 75 ms), the p95 of `/internal/v1/sessions` and `/v1/token/refresh` (line at 200 ms), JWKS and the exchange route (rate and p95; no target is set). All read `dev_health_api_http_requests_total` and `dev_health_api_http_request_duration_seconds` filtered to `listener = 'auth-api-http'` and the `route` set of the alert it draws (the `route` label is the registered path pattern, with no method). Each line is a bucket edge of the histogram, so a percentile resolves to its edge. A guard pins each line, route set and metric to its alert.
 - Workload exchanges by `outcome` and `reason` (`auth.workload.exchanges`; `subject` and `audience` are never a group-by), refresh exchanges by `reason_code`, access tokens refused by `reason` and `profile`, decision cache lookups by `result`.
 - Outbox: oldest pending age (line at 300 s), delivered rate, delivery failures by `reason`, and `publisher_enabled` (0 means no sink).
-- Revision feed events by `disposition`, resyncs by `cause`, subscription up, and push projection lag, parked and final rows. The push projection lag counts outbox ids, not seconds, and stays above 0 for up to one hour (the reader horizon) after a decided event, so no alert reads it. These are proxies for revocation propagation, not seconds of effect: the revocation lag metric does not exist yet (CHAOS-12917), so there is no panel and no alert for it.
+- Revision feed events by `disposition`, resyncs by `cause`, subscription up, and push projection lag, parked and final rows. The push projection lag counts outbox ids, not seconds, and stays above 0 for up to one hour (the reader horizon) after a decided event, so no alert reads it. These are proxies for revocation propagation, not seconds of effect: the revocation lag metric does not exist yet, so there is no panel and no alert for it.
 - Legacy ingest audit failures by `reason`.
 
 Not covered, because the service emits no metric for it: the JWKS cache age at the verifiers, a PDP outage seen at the caller, and revocation lag in seconds.

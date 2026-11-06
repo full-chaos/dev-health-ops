@@ -763,6 +763,12 @@ jobs:
       - name: Run isolated storage integration shard ${{ matrix.target }} ${{ matrix.shard }}
         run: bash ci/check_go.sh integration-shard "${{ matrix.target }}" "${{ matrix.shard }}"
 
+      - name: Write JUnit XML next to the per-test json
+        continue-on-error: true
+        if: always() && matrix.target == 'providersync'
+        # CHAOS-13193: the product tests sync reads .xml and .info members only; the .json stays for the shard weights.
+        run: bash ci/go_test_json_to_junit.sh go-test-json
+
       - name: Upload per-test timing json
         continue-on-error: true
         if: always() && matrix.target == 'providersync'

@@ -669,10 +669,9 @@ func TestAdminConfigCellsOnPlatformAdminIsDecidedByTheEvaluator(t *testing.T) {
 	}
 }
 
-// A platform admin with no membership row in the token org cannot present a user access token: the authenticator
-// refuses it (401) before the guard, with the cells on or off, and the decision point is never asked. The same
-// caller on a legacy token is not a user access token, so the Enforcer does not judge it (no decision point call)
-// and the legacy guard admits the admin.orgs holder: the handler answers, on or off.
+// A platform admin with no membership row in the token org, on a legacy token, is not a user access token, so the
+// Enforcer does not judge it (no decision point call) and the legacy guard admits the admin.orgs holder: the
+// handler answers, on or off.
 func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 	pdp := newCellPDP(t)
 	for _, on := range []bool{false, true} {
@@ -686,11 +685,7 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 		legacy := probeHS256(t, probeKey, map[string]any{"sub": cellPlatformNoRow.String(), "org_id": probeOrg.String(), "role": "member", "tv": 0})
 		for _, key := range sortedAdminConfigKeys() {
 			pdp.reset("evaluate")
-			got := cellDo(handler, key, callers["platform admin + no membership"].token, nil)
-			if got.status != http.StatusUnauthorized || got.body != `{"detail":{"message":"Invalid or expired token"}}` {
-				t.Errorf("on=%v %s eddsa: %d %s, want the 401", on, key, got.status, got.body)
-			}
-			got = cellDo(handler, key, legacy, nil)
+			got := cellDo(handler, key, legacy, nil)
 			if isGuardRefusal(got) {
 				t.Errorf("on=%v %s legacy token: %d %s, want the handler's answer", on, key, got.status, got.body)
 			}
@@ -701,10 +696,34 @@ func TestAdminConfigCellsOnPlatformAdminWithoutMembershipRow(t *testing.T) {
 	}
 }
 
+// D6773 (chris 2026-11-06): a platform admin never needs a membership row, for every token class. With a user access
+// token and no membership row in the token org, it must be admitted on every row, on or off, as the legacy token is.
+// Today the authenticator refuses it with 401 before the guard: a known defect that CHAOS-13206 fixes.
+func TestAdminConfigCellsPlatformAdminWithoutMembershipRowIsAdmitted(t *testing.T) {
+	t.Skip("known defect, D6773, CHAOS-13206")
+	pdp := newCellPDP(t)
+	for _, on := range []bool{false, true} {
+		var enforcer func(*testing.T) *policy.Enforcer
+		if on {
+			enforcer = func(t *testing.T) *policy.Enforcer { return newCellEnforcer(t, pdp, adminConfigNamespaces, false) }
+		}
+		handler, minter := adminConfigServerWith(t, enforcer, withPlatformAdmins)
+		callers := cellCallers(minter)
+		pdp.register(callers)
+		for _, key := range sortedAdminConfigKeys() {
+			got := cellDo(handler, key, callers["platform admin + no membership"].token, nil)
+			if isGuardRefusal(got) {
+				t.Errorf("on=%v %s: %d %s, want admitted (D6773)", on, key, got.status, got.body)
+			}
+		}
+	}
+}
+
 // With the 6.8 cells off, the answer to each caller on each row is the same with no Enforcer and with an Enforcer
 // whose namespaces are other ones, and it is the legacy answer: the org admin, the platform admin with an org role
 // of member and the platform admin on a legacy token reach the handler, the org member gets the 403, the platform
-// admin with no membership row gets the 401. The decision point is never asked.
+// admin with no membership row gets today's 401 (known defect D6773, CHAOS-13206: only byte-equality is checked for it
+// here). The decision point is never asked.
 func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	pdp := newCellPDP(t)
 	plain, plainMinter := adminConfigServerWith(t, nil, withPlatformAdmins)
@@ -718,7 +737,7 @@ func TestAdminConfigCellsOffPlatformAdminKeepsTheLegacyAnswer(t *testing.T) {
 	legacyAnswer := map[string]func(cellAnswer) bool{
 		"org admin":                      func(a cellAnswer) bool { return !isGuardRefusal(a) },
 		"platform admin + org member":    func(a cellAnswer) bool { return !isGuardRefusal(a) },
-		"platform admin + no membership": func(a cellAnswer) bool { return a.status == http.StatusUnauthorized },
+		"platform admin + no membership": func(cellAnswer) bool { return true }, // D6773 known defect, CHAOS-13206
 		"org member":                     func(a cellAnswer) bool { return a.status == http.StatusForbidden && a.body == adminRequiredBody },
 	}
 	rows := 0

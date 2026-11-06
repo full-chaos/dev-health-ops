@@ -308,7 +308,8 @@ func TestImpersonationGateReadsTheVerifiedClaimOnly(t *testing.T) {
 // switch is owned, a legacy token whose verified is_superuser claim is false
 // still gets the full impersonation check when the live read says superuser
 // (a newly granted admin is not held back until token renewal). A true claim
-// with no live role reads the session of nobody.
+// with no live role reads the caller's row (writes are refused while it is
+// live) but acts as nobody.
 func TestImpersonationGateReadsTheLiveRoleWhileOwned(t *testing.T) {
 	unverifiable, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims(func(c jwt.MapClaims) { c["is_superuser"] = true })).SignedString([]byte(strings.Repeat("other-key-", 4)))
 	if err != nil {
@@ -324,7 +325,7 @@ func TestImpersonationGateReadsTheLiveRoleWhileOwned(t *testing.T) {
 		{name: "unverifiable superuser claim, live role", token: func(*testing.T) string { return unverifiable }, live: true},
 		{name: "verified claim false, live role", token: func(t *testing.T) string { return sign(t, claims(nil)) }, live: true, impersonated: true, sessionReads: 1},
 		{name: "verified claim true, live role", token: superuserToken, live: true, impersonated: true, sessionReads: 1},
-		{name: "verified claim true, no live role", token: superuserToken},
+		{name: "verified claim true, no live role", token: superuserToken, sessionReads: 1},
 		{name: "verified claim false, no live role", token: func(t *testing.T) string { return sign(t, claims(nil)) }},
 	}
 	for _, tc := range cases {

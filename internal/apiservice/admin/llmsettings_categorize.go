@@ -129,9 +129,7 @@ func (h *handlers) auditCategorizeOptIn(ctx context.Context, tx pgx.Tx, r *http.
 	changes.Set("source", serviceModelSource)
 	changes.Set("old_enabled", before)
 	changes.Set("new_enabled", after)
-	if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
-		changes.Set("impersonated_by", *user.ImpersonatedBy)
-	}
+	setImpersonatedBy(changes, user)
 	encoded, err := pyjson.Marshal(changes)
 	if err != nil {
 		return err

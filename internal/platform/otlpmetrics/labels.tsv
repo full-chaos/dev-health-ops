@@ -42,6 +42,7 @@ devhealth_api_auth_proxy_requests_total	aggregate,outcome	code: internal/apiserv
 devhealth_api_auth_proxy_upstream_duration_seconds	aggregate	code: internal/apiservice/authproxy.go
 devhealth_auth_access_token_accepted_total	class,profile,service	code: internal/auth/accessverify/accessverify.go
 devhealth_auth_access_token_refused_total	profile,reason,service	code: internal/auth/accessverify/accessverify.go
+devhealth_auth_legacy_logout_accepted_total	class,service	code: internal/auth/accessverify/logout.go
 devhealth_auth_refresh_token_accepted_total	class,service	code: internal/auth/accessverify/refresh.go
 dev_health_api_acr_workload_subject_config_invalid		code: internal/apiservice/accessverify.go
 dev_health_api_http_request_duration_seconds	listener,method,route,status_class	code: internal/auth/httpapi/accesslog.go
@@ -51,7 +52,7 @@ dev_health_api_legacy_path_total	kind,surface	code: internal/api/policy/legacyco
 dev_health_api_shadow_config_invalid		code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_enabled		code: internal/api/policy/shadowcounters.go
 dev_health_api_shadow_mismatch_total	caller,class,namespace	code: internal/api/policy/shadowcounters.go
-dev_health_api_shadow_results_total	result	code: internal/api/policy/shadowcounters.go
+dev_health_api_shadow_results_total	reason,result	code: internal/api/policy/shadowcounters.go
 dev_health_query_api_pdp_config_invalid		code: internal/queryapi/pdp/pdp.go
 dev_health_query_api_pdp_enabled		code: internal/queryapi/pdp/pdp.go
 dev_health_query_api_pdp_exempt_total	action,class	code: internal/queryapi/pdp/pdp.go
@@ -69,6 +70,9 @@ devhealth_auth_push_projection_parked_rows		code: internal/auth/pushprojection/r
 devhealth_auth_outbox_delivered_total		code: internal/audit/publisher.go
 devhealth_auth_outbox_delivery_failures_total	reason	code: internal/audit/publisher.go
 devhealth_auth_outbox_oldest_pending_age_seconds		code: internal/audit/outboxloop.go
+devhealth_auth_repository_identity_projection_final_rows		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_lag		code: internal/auth/repoidentityprojection/reader.go
+devhealth_auth_repository_identity_projection_parked_rows		code: internal/auth/repoidentityprojection/reader.go
 devhealth_auth_revision_feed_events_total	disposition	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_resync_total	cause	code: internal/auth/revisionfeed/consumer.go
 devhealth_auth_revision_feed_subscription_up		code: internal/auth/revisionfeed/subscriber.go

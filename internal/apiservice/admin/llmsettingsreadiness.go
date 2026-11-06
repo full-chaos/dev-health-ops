@@ -157,7 +157,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 	// block_impersonated_write (settings.py:401-407) -- same shape as
 	// putLLMSettings' budget-limit-change guard, applied unconditionally
 	// here (every readiness run is a write: it certifies and persists).
-	if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
+	if _, delegated := user.ActorChain(); delegated {
 		llmDetail(http.StatusForbidden, w,
 			"error", "impersonated_write_forbidden",
 			"message", "BYO LLM readiness checks are unavailable while impersonating")

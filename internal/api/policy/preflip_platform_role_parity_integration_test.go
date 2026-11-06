@@ -16,7 +16,7 @@ import (
 )
 
 // preflipQuery is the file the enforcement turn-on step of docs/operate/runbooks/auth-pdp-outage-and-rollback.md runs.
-const preflipQuery = "ci/auth_preflip_platform_role_parity.sql"
+const preflipQuery = "deploy/scripts/auth_preflip_platform_role_parity.sql"
 
 // The pre-flip read sees the one state where go-api's platform flag (rule.HoldsSQL: the auth principal not disabled)
 // and the PDP's snapshot (rule.PublicHoldsSQL: public.users active) disagree, which the D6651 pins keep apart: an

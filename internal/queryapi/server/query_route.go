@@ -6934,12 +6934,11 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 			}
 			claims = authenticated
 		}
+		// The bearer the caller authenticated with, on /graphql and /query alike; the header carrier has none.
 		var shadowSubject *graph.ShadowSubject
-		if edge {
-			if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
-				subject := graphQLShadowSubject(token)
-				shadowSubject = &subject
-			}
+		if token, ok := bearerToken(r.Header.Get("Authorization")); ok {
+			subject := graphQLShadowSubject(token)
+			shadowSubject = &subject
 		}
 
 		var query string

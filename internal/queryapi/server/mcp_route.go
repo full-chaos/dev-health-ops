@@ -619,7 +619,7 @@ func mcpAuthenticate(r *http.Request) (authctx.Claims, int, string) {
 			"caller_class", mcpCallerClass, "claims", strings.Join(elevated, ","), "remote_addr", r.RemoteAddr)
 		return authctx.Claims{}, http.StatusForbidden, mcpReasonElevatedClaim
 	}
-	return authctx.Claims{OrgID: claims.OrgID}, 0, ""
+	return legacyClaims(claims.OrgID), 0, ""
 }
 
 // mcpRootFields lists the operation's root field names in order, following

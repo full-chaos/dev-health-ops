@@ -259,7 +259,7 @@ func authenticateGraphQLEdge(w http.ResponseWriter, r *http.Request) (authctx.Cl
 			slog.String("org_id", claims.OrgID), slog.String("role", claims.Role),
 			slog.Bool("is_superuser", claims.IsSuperuser), slog.Bool("impersonation_active", claims.ImpersonationActive),
 			slog.String("request_id", envelopeRequestID(r)))
-		return withIngressScope(claims), true
+		return claims, true
 	case edgeUnavailable:
 		policy.WriteInternal(w)
 	default:

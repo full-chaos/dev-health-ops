@@ -1,76 +1,42 @@
 # Leg acp of ci/auth_corpus_external.sh (CHAOS-10160): go-api forwards the six auth aggregates to auth-service.
 # Added to the main override for that leg only. AUTH_PROXY_URL, and the AUTH_PROXY_* flag of each aggregate the running
 # auth-service serves, come from the project state file, so ci/auth_corpus_set_env.sh keeps them across a recreate.
+# The auth network, go-api's pinned address on it, and what auth-service needs for the corpus's rows (mail sink,
+# provider stub, trusted proxy) are the main override's: both legs talk to auth-service since CHAOS-13107.
 #
-# go-api also joins the auth network here, and a request from the runner may reach it through either network's
-# gateway: the auth network's subnet is pinned too (outside the default network's 10.199.90.0/24 and compose.yml's
-# planes network 10.199.81.0/28) and go-api trusts both gateways.
-networks:
-  auth_plane:
-    ipam:
-      config:
-        - subnet: 10.199.91.0/24
-          gateway: 10.199.91.1
+# CHAOS-13107: compose.yml has auth-service own users (AUTH_USERS_OWNED defaults true). This leg owns them only from
+# step 1e, after the seed and the backfill: every service that reads the flag takes it from the state file or the
+# step's own command, default false.
 
 services:
   go-api:
-    networks:
-      default:
-      planes:
-      auth_plane:
-        ipv4_address: 10.199.91.20
     environment:
-      - TRUSTED_PROXIES=10.199.90.1,10.199.91.1
       - AUTH_PROXY_URL
       - AUTH_PROXY_SESSIONS
-      - AUTH_SESSION_ISSUE_TOKEN
+      - AUTH_SESSION_ISSUE_CREDENTIAL
       - AUTH_PROXY_LOCAL_LOGIN
       - AUTH_PROXY_CREDENTIALS
       - AUTH_PROXY_SOCIAL
       - AUTH_PROXY_OIDC
       - AUTH_PROXY_SAML
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
+  # CHAOS-13107: go-river-migrate grants the api role the manifest of AUTH_PROXY_SESSIONS (internal/rivermigrate), and
+  # go-api's readiness checks the manifest of its own flag. compose.yml turns the flag on for both; this leg takes go-api's
+  # from the state file (above), so the grant pass takes the same one: both unset until step 1d turns sessions on.
+  go-river-migrate:
+    environment:
+      - AUTH_PROXY_SESSIONS
   # The API listener too, on an ephemeral loopback port: ci/auth_corpus_external.sh asks the running auth-service which
   # proxied routes it serves (OPTIONS: 405 served, 404 not) before it turns an aggregate's flag on.
   auth-service:
     ports: !override ["127.0.0.1::8096", "127.0.0.1::8095"]
-    # auth-service reaches the provider hostnames at the stub on its own network and trusts the stub's CA; the corpus's
-    # throwaway social client settings and the session keys below let it serve sessions, local login and social.
-    depends_on:
-      providerstub:
-        condition: service_started
-      smtpsink:
-        condition: service_started
-      valkey:
-        condition: service_healthy
-    extra_hosts:
-      - "api.github.com:10.199.91.10"
-      - "github.com:10.199.91.10"
     environment:
-      - SSL_CERT_FILE=/run/corpus-stub/ca.pem
       # The session keys come from the project state file only when the leg makes them (ci/auth_corpus_external.sh);
       # unset they stay unset, and auth-service mounts no session route.
       - AUTH_JWT_SECRET_KEY
       - AUTH_SESSION_SUCCESSOR_KEY
       - AUTH_LOGIN_LOCKOUT_KEY
-      # auth-service reads it on every register request, as go-api does; ci/auth_corpus_set_env.sh recreates it on a change.
-      - AUTH_AUTO_CREATE_ORG_ON_REGISTER
-      # The login's rate limits live in the same Valkey database as go-api's (/1; authconfig requires it), under the
-      # auth_svc_ key prefix. The venue's Valkey has no ACL users, so the URI carries none.
-      - AUTH_VALKEY_URI=redis://valkey:6379/1
-      # go-api forwards the client address; auth-service trusts X-Forwarded-For from go-api's pinned address only.
-      - AUTH_SERVICE_TRUSTED_PROXIES=10.199.91.20/32
-      - SOCIAL_GITHUB_CLIENT_ID=gh-client
-      - SOCIAL_GITHUB_CLIENT_SECRET=gh-secret
-      # The credentials flows of auth-service mail through the corpus's sink, the smtpsink service of this project,
-      # which joins auth_plane below and is reached by its service name.
-      # EMAIL_FROM_ADDRESS comes from the project state file, the value go-api's mail carries.
-      - EMAIL_PROVIDER=smtp
-      - EMAIL_FROM_ADDRESS
-      - SMTP_HOST=smtpsink
-      - SMTP_PORT=2525
-      - APP_BASE_URL=https://app.example.test/
-    volumes:
-      - ${AUTH_CORPUS_STUB_DIR}:/run/corpus-stub:ro
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
   # auth-service counts the login's rate limits in the venue's Valkey, which it reaches over auth_plane.
   valkey:
     networks: !override [default, auth_plane]
@@ -78,15 +44,17 @@ services:
   auth-migrate:
     environment:
       - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
   auth-grants:
     environment:
       - AUTH_SESSION_READER_ROLES=devhealth_api,devhealth_query_api
-  providerstub:
-    networks:
-      auth_plane:
-        ipv4_address: 10.199.91.10
-  # The sink is on both networks: go-api reaches it on the project's default network, auth-service on auth_plane.
-  smtpsink:
-    networks:
-      default:
-      auth_plane:
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
+  auth-fence-init:
+    environment:
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
+  auth-workload-seed:
+    environment:
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}
+  auth-workload-bootstrap:
+    environment:
+      - AUTH_USERS_OWNED=${AUTH_USERS_OWNED:-false}

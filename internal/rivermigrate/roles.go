@@ -68,11 +68,8 @@ func ExecuteRoles(
 		defaultUsage()
 		fmt.Fprint(stderr, rolesEnvironment)
 	}
-	if err := flags.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		return 2
+	if code, ok := cli.ParseFlags(flags, stderr, args); !ok {
+		return code
 	}
 	if flags.NArg() != 0 {
 		fmt.Fprintln(stderr, "argument error: positional arguments are not accepted")

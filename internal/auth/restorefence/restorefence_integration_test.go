@@ -31,7 +31,9 @@ type fenceDB struct {
 	runtime     *pgxpool.Pool
 	runtimeRole string
 	writerRole  string
-	schema      authschema.ValidatedIdentifier
+	// ridWriter owns the repository identity append function (0057).
+	ridWriter string
+	schema    authschema.ValidatedIdentifier
 }
 
 func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
@@ -69,7 +71,16 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, statement := range []string{fmt.Sprintf("CREATE ROLE %q NOLOGIN", writer), fmt.Sprintf("CREATE ROLE %q NOLOGIN", caller)} {
+	peer, err := containers.RoleName("fence_push_peer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ridWriter, err := containers.RoleName("fence_rid_writer", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{fmt.Sprintf("CREATE ROLE %q NOLOGIN", writer), fmt.Sprintf("CREATE ROLE %q NOLOGIN", caller), fmt.Sprintf("CREATE ROLE %q NOLOGIN", peer),
+		fmt.Sprintf("CREATE ROLE %q NOLOGIN", ridWriter)} {
 		if _, err := admin.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
@@ -77,9 +88,12 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 	t.Cleanup(func() {
 		containers.DropRole(admin, writer, t.Logf)
 		containers.DropRole(admin, caller, t.Logf)
+		containers.DropRole(admin, peer, t.Logf)
+		containers.DropRole(admin, ridWriter, t.Logf)
 	})
 	if _, err := authschema.Apply(ctx, admin, authschema.Options{Schema: "auth", RuntimeRole: role,
-		PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller}}); err != nil {
+		PushLifecycleWriterRole: writer, PushLifecycleCallerRoles: []string{caller, peer},
+		RepoIdentityWriterRole: ridWriter, RepoIdentityCallerRoles: []string{peer}}); err != nil {
 		t.Fatalf("authschema.Apply: %v", err)
 	}
 	schema, err := authschema.NewValidatedIdentifier("auth")
@@ -95,7 +109,7 @@ func newFenceDB(t *testing.T, ctx context.Context) *fenceDB {
 		t.Fatal(err)
 	}
 	t.Cleanup(runtime.Close)
-	return &fenceDB{admin: admin, runtime: runtime, runtimeRole: role, writerRole: writer, schema: schema}
+	return &fenceDB{admin: admin, runtime: runtime, runtimeRole: role, writerRole: writer, ridWriter: ridWriter, schema: schema}
 }
 
 func fenceOrgID(i int) uuid.UUID {
@@ -577,12 +591,13 @@ func securityDefinerViolations(t *testing.T, ctx context.Context, db *fenceDB) [
 			t.Fatal(err)
 		}
 		count++
-		if name != authschema.PushLifecycleFunction {
-			violations = append(violations, fmt.Sprintf("auth.%s is a SECURITY DEFINER function that is not %s", name, authschema.PushLifecycleFunction))
+		want, allowed := map[string]string{authschema.PushLifecycleFunction: db.writerRole, authschema.RepoIdentityFunction: db.ridWriter}[name]
+		if !allowed {
+			violations = append(violations, fmt.Sprintf("auth.%s is a SECURITY DEFINER function that is not %s or %s", name, authschema.PushLifecycleFunction, authschema.RepoIdentityFunction))
 			continue
 		}
-		if owner != db.writerRole || canLogin || owner == db.runtimeRole {
-			violations = append(violations, fmt.Sprintf("auth.%s is owned by %q (login=%v), want the NOLOGIN writer role %q", name, owner, canLogin, db.writerRole))
+		if owner != want || canLogin || owner == db.runtimeRole {
+			violations = append(violations, fmt.Sprintf("auth.%s is owned by %q (login=%v), want the NOLOGIN writer role %q", name, owner, canLogin, want))
 		}
 		pinned := false
 		for _, entry := range config {
@@ -597,15 +612,15 @@ func securityDefinerViolations(t *testing.T, ctx context.Context, db *fenceDB) [
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		violations = append(violations, fmt.Sprintf("the auth schema holds %d SECURITY DEFINER function(s), want exactly 1 (%s)", count, authschema.PushLifecycleFunction))
+	if count != 2 {
+		violations = append(violations, fmt.Sprintf("the auth schema holds %d SECURITY DEFINER function(s), want exactly 2 (%s, %s)", count, authschema.PushLifecycleFunction, authschema.RepoIdentityFunction))
 	}
 	return violations
 }
 
 // TestTheAuthSchemaHoldsExactlyTheOnePinnedSecurityDefinerFunction: readiness
-// still reads the timeline as the runtime role, and the one allowed function
-// does not touch the fence. Two mutants prove the check can fail: a second
+// still reads the timeline as the runtime role, and the allowed functions (the
+// push lifecycle and the repository identity append) do not touch the fence. Two mutants prove the check can fail: a second
 // SECURITY DEFINER function, and the function's search_path removed. A changed
 // owner is held by the writer posture check (pushWriterViolations,
 // authschema TestPushWriterHoldsExactlyTheDeclaredSet and the audit
@@ -636,6 +651,14 @@ func TestTheAuthSchemaHoldsExactlyTheOnePinnedSecurityDefinerFunction(t *testing
 			t.Fatal("the append function without a pinned search_path was accepted")
 		}
 		t.Logf("FAIL (killed): %s", strings.Join(violations, "; "))
+	})
+	t.Run("mutant: the repository identity function owned by the push writer", func(t *testing.T) {
+		fn := "auth." + authschema.RepoIdentityFunction + authschema.RepoIdentityFunctionSignature
+		db.must(t, ctx, `ALTER FUNCTION `+fn+` OWNER TO `+authschema.Quote(mustIdentifier(t, db.writerRole)))
+		defer db.must(t, ctx, `ALTER FUNCTION `+fn+` OWNER TO `+authschema.Quote(mustIdentifier(t, db.ridWriter)))
+		if len(securityDefinerViolations(t, ctx, db)) == 0 {
+			t.Fatal("the repository identity function owned by the push writer was accepted")
+		}
 	})
 	t.Run("mutant: another owner", func(t *testing.T) {
 		fn := "auth." + authschema.PushLifecycleFunction + authschema.PushLifecycleFunctionSignature

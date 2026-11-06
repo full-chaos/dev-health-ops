@@ -18,7 +18,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/venueoracle"
@@ -27,6 +26,9 @@ import (
 // jwtKey is JWT_SECRET_KEY on both planes. It is assembled at run time so
 // the source holds no credential-shaped literal.
 var jwtKey = "sso-venue-" + strings.Repeat("0123456789abcdef", 2)
+
+// ssoStateKey is go-api's own SSO_STATE_SECRET, as prod sets it; run-time assembled, distinct from jwtKey.
+var ssoStateKey = "sso-state-" + strings.Repeat("fedcba9876543210", 2)
 
 // Fixed ids, so rows and answers name the same subjects on both planes.
 const (
@@ -236,8 +238,12 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 	}
 	python := golden.Python(t, venue, requests)
 	var orglessRefused []string
+	// The owner's tokens with an org claim it holds no membership in (another org, not a UUID).
+	claimPin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/orgclaim.go-pin.json", SHA256: ssoOrgClaimPinSHA256, Ruling: ssoOrgClaimRuling})
+	claimRetired := map[string]bool{"activate: token of the other org": true, "activate: org claim not a uuid": true}
 	receipt := venueoracle.Diff(t, startGoAPI(t, ctx, venue), requests, python, venueoracle.DiffOptions{
-		Golden: golden,
+		Golden:      golden,
+		Retirements: []venueoracle.Retirement{{Match: func(request venueoracle.Request) bool { return claimRetired[request.Name] }, Pin: claimPin}},
 		// D6145: the token without an org is refused 403 where Python answered 500 (activate).
 		OrglessTokens: map[string]bool{venue.Tokens["noorg"]: true}, MaxOrglessRefusals: 1,
 		OnOrglessRefused: func(request venueoracle.Request) { orglessRefused = append(orglessRefused, request.Name) },
@@ -245,6 +251,7 @@ func TestSSORoutesVenueOracle(t *testing.T) {
 			return updatedAtPattern.ReplaceAllString(body, `"updated_at":"<stamped>"`)
 		},
 	})
+	claimPin.Finish(t)
 	if len(orglessRefused) != 1 {
 		t.Errorf("org-less refusals declared: %v, want exactly 1", orglessRefused)
 	}
@@ -278,19 +285,12 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	if os.Getenv("DEV_HEALTH_VENUE_GO_LOG") != "" {
 		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := venue.TokenIssuer.Authenticator(t, policy.PGStore{Pool: pool}, logger)
 	cfg, err := config.Load(config.Spec{Service: config.APIServiceName, LookupEnv: func(string) (string, bool) { return "", false }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger)}
+	deps := apiservice.Deps{Pool: pool, Auth: auth, Guard: policy.NewGuard(auth, logger), SSOStateSecret: ssoStateKey}
 	scope := policy.NewScope(auth, logger)
 	server, err := apiservice.NewServer(cfg, logger, apiservice.Routes(deps, logger), scope.Layers()...)
 	if err != nil {
@@ -300,6 +300,13 @@ func startGoAPI(t *testing.T, ctx context.Context, venue *venueoracle.Venue) str
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
+
+// ssoOrgClaimRuling retires the Python answer of a request whose bearer's org claim names an organization the user
+// holds no live membership in.
+const ssoOrgClaimRuling = "EdDSA access path needs a live membership for the org claim (policy/accessroute_user.go:90-102); HS256 trusted the claim; prod runs EdDSA since 2026-11-03"
+
+// ssoOrgClaimPinSHA256 is the digest of testdata/orgclaim.go-pin.json.
+const ssoOrgClaimPinSHA256 = "7a2edb56f1b47ebf630d0e5ac820670842e3432889356ac708fc89abd4be485a"
 
 // venueRoot is the repository root, where the venue finds the Python api.
 func venueRoot() string {

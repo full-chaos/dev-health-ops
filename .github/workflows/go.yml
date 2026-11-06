@@ -353,6 +353,10 @@ permissions:
   # packages are private or public, so CI does not depend on their visibility.
   packages: read
 
+# CHAOS-12858: "|" falls back to direct on ANY proxy error; the default "," only on 404/410.
+env:
+  GOPROXY: https://proxy.golang.org|direct
+
 jobs:
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
@@ -472,6 +476,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       legs: ${{ steps.plan.outputs.legs }}
       docs_only: ${{ steps.docs.outputs.docs_only }}
+      skip_reason: ${{ steps.skip.outputs.reason }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -523,6 +528,7 @@ jobs:
           out="${RUNNER_TEMP}/affected.txt"
           printf 'NONE\n' > "${out}"
           echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+          echo "INTEGRATION_SKIP_REASON=docs" >> "${GITHUB_ENV}"
           echo "::notice title=INTEGRATION SHARDS SKIPPED: DOCS-ONLY CHANGE::ci/codeql_docs_only.sh (from the base commit) classified this change docs-only"
 
       - name: Set up Go
@@ -532,7 +538,8 @@ jobs:
           cache-dependency-path: '**/go.sum'
 
       # CHAOS-9947: a pull request runs only the integration shards whose test
-      # binaries a change can reach: `cmd/cigate plan-verdict` (one verdict with
+      # binaries a change can reach (CHAOS-13075: a ready pull request, or any pull request with a ci:integration or
+      # ci:full label; a draft without one runs none, and the aggregate reports that as INTEGRATION NOT RUN): `cmd/cigate plan-verdict` (one verdict with
       # go-quality.yml) selects the changed Go packages' reverse closure plus the packages that
       # read a changed non-Go path (NONE when none does). A path in no declared class, a shared
       # change or any failure here selects the FULL suite;
@@ -545,18 +552,23 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_NAME: ${{ github.event_name }}
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -uo pipefail
           out="${RUNNER_TEMP}/affected.txt"
+          skip=""
           full() { printf 'FULL %s\n' "$1" > "${out}"; echo "::warning title=INTEGRATION SELECTION FELL BACK TO THE FULL SUITE::$1"; }
           if ! bash ci/go_relevant_diff.sh > "${RUNNER_TEMP}/changed.txt"; then
             full "could not compute the changed-file list"
-          # A pull request runs shards only with the ci:integration or ci:full label; the merge queue runs them for every
-          # entry that is not docs-only. A label change starts no run (no `labeled` trigger): it applies at the next push.
-          # Any script failure (bad labels JSON, malformed list) falls through to the planner.
+          # A draft pull request skips the shards unless it has the ci:integration or ci:full label; ready_for_review starts
+          # the run. No pull request skips for the merge queue (CHAOS-13075: the repository's merge-queue variable said
+          # enabled with no queue on main). A label change starts no run (no `labeled` trigger): it applies at the next push.
+          # Any script failure (bad labels JSON, bad PR_DRAFT, malformed list) falls through to the planner.
           elif scope="$(PR_LABELS_JSON="${PR_LABELS_JSON}" bash ci/integration_pr_scope.sh "${RUNNER_TEMP}/changed.txt")" && [ "${scope%% *}" = skip ]; then
             printf "NONE\n" > "${out}"
-            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST::${scope#skip } (label ci:integration or ci:full, with the reason in the PR body, runs them here)"
+            skip="${scope#skip }"
+            skip="${skip%% *}"
+            echo "::notice title=INTEGRATION SHARDS SKIPPED ON THIS PULL REQUEST (${skip})::${scope#skip } (label ci:integration or ci:full, with the reason in the PR body, runs them here)"
           elif ! bash ci/check_go.sh integration-coverage | sed -n 's/^  RUN  //p' > "${RUNNER_TEMP}/keys.txt" \
             || [ ! -s "${RUNNER_TEMP}/keys.txt" ]; then
             full "could not list the integration packages"
@@ -571,8 +583,13 @@ jobs:
             --root "${GITHUB_WORKSPACE}" --base "${BASE_SHA}" > "${out}"; then
             full "selection program failed"
           fi
+          # A NONE that no skip wrote is the planner's own verdict: no integration test binary reaches the change.
+          if [ -z "${skip}" ] && [ "$(head -n1 "${out}")" = NONE ]; then
+            skip=planner
+          fi
           cat "${out}"
           echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+          [ -z "${skip}" ] || echo "INTEGRATION_SKIP_REASON=${skip}" >> "${GITHUB_ENV}"
 
       - name: Skip the integration shards on a main push that the merge queue already tested
         if: github.event_name == 'push' && vars.MERGE_QUEUE == 'enabled'
@@ -583,6 +600,7 @@ jobs:
             out="${RUNNER_TEMP}/affected.txt"
             printf 'NONE\n' > "${out}"
             echo "INTEGRATION_AFFECTED_FILE=${out}" >> "${GITHUB_ENV}"
+            echo "INTEGRATION_SKIP_REASON=queue" >> "${GITHUB_ENV}"
             echo "::notice title=INTEGRATION SHARDS SKIPPED ON THE MAIN PUSH::the merge queue ran go.yml green on this sha"
           else
             echo "::notice title=INTEGRATION SHARDS RUN ON THE MAIN PUSH::no green merge_group run of go.yml for this sha (a push that did not come through the queue)"
@@ -591,6 +609,13 @@ jobs:
       - name: Validate and emit deterministic integration shards
         id: plan
         run: bash ci/check_go.sh integration-shard-plan
+
+      # CHAOS-13075: why a NONE selection runs no shard (docs, queue = a main push the merge queue ran green, planner, draft;
+      # empty when no step wrote NONE).
+      # The go-storage-integration aggregate passes a zero-leg plan only for docs, queue and planner.
+      - name: Name why no integration shard runs
+        id: skip
+        run: echo "reason=${INTEGRATION_SKIP_REASON:-}" >> "${GITHUB_OUTPUT}"
 
   # Runner contract v1.6 (signed 2026-09-03, chris via CF team-lead,
   # /Users/chris/projects/full-chaos/dev-health/.remember/lanes/
@@ -833,6 +858,7 @@ jobs:
       PLAN_RESULT: ${{ needs.go-storage-integration-plan.result }}
       SHARD_RESULT: ${{ needs.go-storage-integration-shard.result }}
       PLAN_LEGS: ${{ needs.go-storage-integration-plan.outputs.legs }}
+      SKIP_REASON: ${{ needs.go-storage-integration-plan.outputs.skip_reason }}
     # The names of the shards that ended at their time limit ("" when none). Written by the naming step, which runs on
     # every red verdict (its `if: failure()` holds whenever the verdict step above exits 1), so go-queue-gate can read it.
     outputs:
@@ -845,10 +871,27 @@ jobs:
             echo "integration plan result: ${PLAN_RESULT}" >&2
             exit 1
           fi
-          if [ "${PLAN_LEGS}" = "0" ] && [ "${SHARD_RESULT}" = "skipped" ]; then
-            # CHAOS-9947: the plan selected no package (no integration test binary
-            # contains the change). Skipped is valid ONLY with an explicit zero.
-            echo "plan selected 0 integration shards; none ran"
+          if [ "${PLAN_LEGS}" = "0" ]; then
+            # CHAOS-9947: skipped is valid ONLY with an explicit zero. CHAOS-13075: a zero-leg plan always meets the reason
+            # check first, whatever the matrix result: it passes only for a reason that stands for a run elsewhere or for no
+            # reachable test (docs-only, merge-queue-tested, the planner's own NONE) and a skipped matrix. A draft skip, any
+            # other or missing reason, or a matrix that did not skip ran nothing this plan stands for and is never success.
+            case "${SKIP_REASON:-}" in
+              docs | queue | planner) ;;
+              draft)
+                echo "INTEGRATION NOT RUN: draft (a draft pull request without a ci:integration or ci:full label; mark it ready or add the label and push)" >&2
+                exit 1
+                ;;
+              *)
+                echo "INTEGRATION NOT RUN: plan selected 0 shards with reason '${SKIP_REASON:-}'" >&2
+                exit 1
+                ;;
+            esac
+            if [ "${SHARD_RESULT}" != "skipped" ]; then
+              echo "INTEGRATION NOT RUN: plan selected 0 shards but the shard result is '${SHARD_RESULT}'" >&2
+              exit 1
+            fi
+            echo "plan selected 0 integration shards; none ran (reason: ${SKIP_REASON})"
             exit 0
           fi
           if [ "${SHARD_RESULT}" != "success" ]; then

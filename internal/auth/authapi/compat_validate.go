@@ -77,6 +77,7 @@ func (s validateStore) UserState(ctx context.Context, id uuid.UUID) (policy.User
 	if err != nil || !found {
 		return policy.UserState{}, false, err
 	}
+	revokedSeenOf(ctx).subject(id)
 	return policy.UserState{IsActive: state.IsActive, TokenVersion: state.TokenVersion}, true, nil
 }
 
@@ -85,6 +86,7 @@ func (s validateStore) AccessUser(ctx context.Context, id uuid.UUID) (policy.Acc
 	if err != nil || !found {
 		return policy.AccessUserRow{}, false, err
 	}
+	revokedSeenOf(ctx).subject(id)
 	return policy.AccessUserRow{
 		State: policy.UserState{IsActive: state.IsActive, TokenVersion: state.TokenVersion},
 		Email: state.Email, Username: state.Username, FullName: state.FullName,
@@ -100,7 +102,11 @@ func (s validateStore) Membership(ctx context.Context, userID, orgID uuid.UUID) 
 }
 
 func (s validateStore) SessionState(ctx context.Context, id uuid.UUID) (policy.SessionRow, bool, error) {
-	return s.sessions.SessionState(ctx, id)
+	row, found, err := s.sessions.SessionState(ctx, id)
+	if err == nil && found && row.Revoked {
+		revokedSeenOf(ctx).revokedRow(id, row.PrincipalID)
+	}
+	return row, found, err
 }
 
 func (validateStore) OrgMembership(context.Context, uuid.UUID, uuid.UUID) (string, bool, bool, error) {
@@ -188,7 +194,7 @@ func (v validateRouted) Validate(ctx context.Context, service, profile, bearer s
 		}
 	case result.Class == accessverify.ClassUser && result.Claims != nil:
 		claims := result.Claims
-		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
+		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID, Actor: claims.ActorSubject}}, nil
 	}
 	return nil, errValidateResult
 }
@@ -275,9 +281,11 @@ func (h validateHandler) compatValidate(w http.ResponseWriter, r *http.Request) 
 	if !admit(w, r, goAPIRefusal, PatternCompatValidate, charge{h.limiter, key}) {
 		return
 	}
-	user, err := h.auth.Authenticate(policy.WithRouteProfile(ctx, validateProfile), token)
+	seen := &revokedSeen{}
+	user, err := h.auth.Authenticate(policy.WithRouteProfile(withRevokedSeen(ctx, seen), validateProfile), token)
 	switch {
 	case policy.IsRefusal(err):
+		h.observeOwnRowRevocation(ctx, seen)
 		h.refuseToken(w, r, reasonInvalidCredentials)
 		return
 	case err != nil:
@@ -294,6 +302,7 @@ func (h validateHandler) compatValidate(w http.ResponseWriter, r *http.Request) 
 			h.unavailableCompat(w, r, opCompatValidate, err)
 			return
 		case record.RevokedAt != nil:
+			h.rec.observeRevocationLag(ctx, record.RevokedAt, h.Issuer.now())
 			h.refuseToken(w, r, reasonSessionRevoked)
 			return
 		case !record.ExpiresAt.After(h.Issuer.now()):

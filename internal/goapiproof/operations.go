@@ -798,15 +798,16 @@ var operationSpecs = map[string]OperationSpec{
 	// evidenceQualityStats is in investmentBreakdown's registered document
 	// and absent from investmentFull's, so declaring it on both would leave
 	// a permanently-stale entry on one of them.
-	"investmentBreakdown": {
-		ResponseRoot: "analytics",
-		Variables:    investmentVariables,
-		Parity: Options{FloatTierB: map[string]string{
-			"data.analytics.evidenceQualityStats.mean":   "avgIf(evidence_quality) -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:250, CHAOS-5451)",
-			"data.analytics.evidenceQualityStats.stddev": "stddevPopIf(evidence_quality) -- ClickHouse float aggregate; 20 identical runs over 5M rows gave 9 distinct values (investmentquality.go:251, CHAOS-5451)",
-			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
-		}},
-	},
+	"investmentBreakdown": investmentBreakdownSpec(),
+	// CHAOS-12698: acr's team-scoped and repository-scoped names for the
+	// investmentBreakdown body (query_route.go registers the same text under
+	// each name). Same document body, same root, same request and the same
+	// declarations, so each takes investmentBreakdown's spec unchanged.
+	"investmentBreakdownTeam":       investmentBreakdownSpec(),
+	"investmentBreakdownRepository": investmentBreakdownSpec(),
+	// CHAOS-13017: acr's work-item team breakdown, the same body under its own name, read on the
+	// work-item path (dimension TEAM, useInvestment false), so its own spec.
+	"teamWorkItemBreakdown": teamWorkItemBreakdownSpec(),
 	// CHAOS-8104's dedicated browser document selects only the persisted
 	// quality means grouped by the supplied investment dimension. Keep its
 	// input distinct from investmentBreakdown: the operation would otherwise
@@ -1430,7 +1431,55 @@ func flowMatrixInvestmentVariant(dimension string) Variant {
 	}
 }
 
-// investmentVariables builds investmentBreakdown's request only.
+// investmentBreakdownSpec is the spec of every operation whose registered
+// document is the investmentBreakdown body: investmentBreakdown itself and
+// acr's scoped names for it (investmentBreakdownTeam,
+// investmentBreakdownRepository, CHAOS-12698). A function, not a shared
+// value, so no two entries share one FloatTierB map.
+func investmentBreakdownSpec() OperationSpec {
+	return OperationSpec{
+		ResponseRoot: "analytics",
+		Variables:    investmentVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.evidenceQualityStats.mean":   "avgIf(evidence_quality) -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:250, CHAOS-5451)",
+			"data.analytics.evidenceQualityStats.stddev": "stddevPopIf(evidence_quality) -- ClickHouse float aggregate; 20 identical runs over 5M rows gave 9 distinct values (investmentquality.go:251, CHAOS-5451)",
+			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
+		}},
+	}
+}
+
+// teamWorkItemBreakdownSpec is the spec of teamWorkItemBreakdown (CHAOS-13017): the investmentBreakdown body asked
+// for the work-item basis, TEAM x CYCLE_TIME_HOURS with useInvestment false (resolveUseInvestment,
+// analytics/investment.go:487-507). It does not take investmentBreakdownSpec: that spec sends WORK_TYPE and
+// useInvestment true, the investment path, so a proof or parity run under this name would measure the wrong basis.
+// The evidence-quality paths of the investment spec are absent here: that selection is computed only on the
+// investment path, so declaring them would be vacuous. items.value is declared a float aggregate by CHAOS-5451's
+// rule (an average over work_item_cycle_times), not by an observed divergence.
+func teamWorkItemBreakdownSpec() OperationSpec {
+	return OperationSpec{
+		ResponseRoot: "analytics",
+		Variables:    teamWorkItemBreakdownVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.breakdowns.items.value": "CYCLE_TIME_HOURS is an average over completed work items (a ClickHouse float aggregate). Derived from CHAOS-5451's rule rather than an observed divergence",
+		}},
+	}
+}
+
+// teamWorkItemBreakdownVariables builds teamWorkItemBreakdown's request: TEAM x CYCLE_TIME_HOURS on the
+// work-item path (useInvestment false, as acr forces it).
+func teamWorkItemBreakdownVariables(orgID string, w Window) map[string]any {
+	return map[string]any{"orgId": orgID, "batch": map[string]any{
+		"breakdowns": []any{map[string]any{
+			"dimension": "TEAM", "measure": "CYCLE_TIME_HOURS",
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"topN":      10,
+		}},
+		"useInvestment": false,
+	}}
+}
+
+// investmentVariables builds investmentBreakdown's request only (through
+// investmentBreakdownSpec, which its scoped names share).
 //
 // It used to be shared with investmentFull, which was the bug: this
 // function's batch carries a `breakdowns` sub-request and nothing else, so

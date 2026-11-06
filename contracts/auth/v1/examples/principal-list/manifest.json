@@ -12,6 +12,10 @@
     {
       "file": "valid-empty.json",
       "why": "No principals is a valid list."
+    },
+    {
+      "file": "valid-service-account-and-workload-without-membership.json",
+      "why": "A user item holds its membership; a service account and a workload item hold none, as their organization binding is their own row."
     }
   ],
   "reject": [
@@ -68,6 +72,18 @@
       "expect_instance_location": "/",
       "expect_keyword": "additionalProperties",
       "why": "Closed object."
+    },
+    {
+      "file": "invalid-item-service-account-with-membership.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "not",
+      "why": "A service account has no membership: its organization binding is its own row, so a membership beside it is invented."
+    },
+    {
+      "file": "invalid-item-workload-with-membership.json",
+      "expect_instance_location": "/items/0",
+      "expect_keyword": "not",
+      "why": "A workload has no membership: its organization binding is its own row, so a membership beside it is invented."
     }
   ]
 }

@@ -1,3 +1,4 @@
+internal/apiservice/admin	TestAProviderChangeNeverKeepsTheOldVendorsKey	30
 internal/apiservice/admin	TestAuditLogDisplayNamesVenueOracle	60
 internal/apiservice/admin	TestCreateOrgInviteVenueOracle	62
 internal/apiservice/admin	TestCredentialDeleteVenueOracle	61
@@ -13,6 +14,7 @@ internal/apiservice/admin	TestLLMSettingsRoutesVenueOracle	91
 internal/apiservice/admin	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	69
 internal/apiservice/admin	TestLLMSettingsStatusRouteVenueOracle	88
 internal/apiservice/admin	TestLLMSettingsUndecryptableAfterKeyRotation	60
+internal/apiservice/admin	TestLocalMemberRoleChangeLastOwnerGuard	30
 internal/apiservice/admin	TestMemberListServesUserNamesVenueOracle	60
 internal/apiservice/admin	TestOrgCRUDMatchesThePythonAPI	63
 internal/apiservice/admin	TestOrgDeletionFailsClosedWithoutAUsableClickHouse	70

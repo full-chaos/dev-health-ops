@@ -44,11 +44,7 @@ func (h *handlers) llmPurposeObject(ctx context.Context, db pgExecer, orgID stri
 	values := map[string]*string{}
 	var unreadable []string
 	for _, field := range llmorgsettings.Fields {
-		row, err := settingByKeyOn(ctx, db, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, field))
-		if err != nil {
-			return nil, err
-		}
-		value, err := h.settingValue(row)
+		value, err := h.llmSettingValue(ctx, db, orgID, purpose, llmorgsettings.PurposeKey(purpose, field))
 		if collectUndecryptable(err, &unreadable) {
 			continue
 		}
@@ -129,12 +125,19 @@ type llmPurposeUpsert struct {
 	purpose         llmorgsettings.Purpose
 	provider, model string
 	apiKey, baseURL *string
+	// baseURLKey: the body held a base_url key in any case, null value included.
+	baseURLKey bool
 	// inTx runs inside the write transaction before it commits; nil is none.
 	inTx func(ctx context.Context, tx pgx.Tx) error
 }
 
+// decisionRefusal is the rule of the two decision providers for this write.
+func (in llmPurposeUpsert) decisionRefusal() *llmRefusal {
+	return decisionProviderRefusal(in.provider, in.purpose, true, in.model, in.baseURL, in.baseURLKey)
+}
+
 func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurposeUpsert) (*pyjson.Object, *llmRefusal, error) {
-	if refusal := clefRefusal(in.provider, in.purpose, true, in.model, in.baseURL); refusal != nil {
+	if refusal := in.decisionRefusal(); refusal != nil {
 		return nil, refusal, nil
 	}
 	baseURLText := ""
@@ -183,20 +186,30 @@ func (h *handlers) applyLLMPurpose(ctx context.Context, orgID string, in llmPurp
 		_, err := h.upsertSetting(ctx, tx, orgID, llmCategory, llmorgsettings.PurposeKey(in.purpose, field), value, encrypt, &description)
 		return err
 	}
+	keyStep, err := h.keyStepFor(ctx, tx, orgID, in.purpose, keyTarget{in.provider, baseURLText}, in.apiKey)
+	if err != nil {
+		return nil, nil, &llmStepError{"read llm key binding", err}
+	}
+	if keyStep == keyStepRefuse {
+		return nil, targetChangeRefusal(), nil
+	}
 	provider := pythonparity.Lower(pythonparity.Strip(in.provider))
 	model := in.model
 	steps := []func() error{
 		func() error { return set("provider", &provider, false, "BYO LLM provider override for one purpose") },
 		func() error { return set("model", &model, false, "BYO LLM model override for one purpose") },
 	}
-	if in.apiKey != nil {
-		steps = append(steps, func() error {
-			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key override for one purpose")
-		})
-	}
 	steps = append(steps, func() error {
 		return set("base_url", in.baseURL, false, "BYO LLM base URL override for one purpose")
 	})
+	// The key is written after the provider and base_url rows: it is bound to them.
+	if keyStep == keyStepWrite {
+		steps = append(steps, func() error {
+			return set("api_key", in.apiKey, true, "Encrypted BYO LLM API key override for one purpose")
+		})
+	} else {
+		steps = append(steps, func() error { return h.applyKeyStep(ctx, tx, orgID, in.purpose, keyStep) })
+	}
 	for _, step := range steps {
 		if err := step(); err != nil {
 			return nil, nil, &llmStepError{"write llm purpose override", err}
@@ -223,8 +236,8 @@ func (h *handlers) storedPurposeAPIKey(ctx context.Context, orgID string, purpos
 	if h.storedPurposeKey != nil {
 		return h.storedPurposeKey(ctx, orgID, purpose)
 	}
-	text, err := h.settingText(ctx, orgID, llmCategory, llmorgsettings.PurposeKey(purpose, "api_key"))
-	return orEmpty(text), err
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, purpose, false, true)
+	return key.ForChecks(), err
 }
 
 // deleteLLMPurposeRows removes one override and returns how many rows existed.
@@ -260,28 +273,38 @@ func (h *handlers) deleteLLMPurpose(w http.ResponseWriter, r *http.Request, orgI
 
 // purposeNeedsKey is whether a purpose write without an api_key must be
 // refused: the provider needs a key, the override has none stored, and the
-// default row does not supply one (same provider, key stored).
-func (h *handlers) purposeNeedsKey(ctx context.Context, orgID string, purpose llmorgsettings.Purpose, providerName string) (bool, error) {
-	provider := llmorgsettings.NormalizeProvider(providerName)
-	if llmorgsettings.CredentialsComplete(provider, "") {
+// default row does not supply one (same provider and base_url, key bound). An
+// override that stores a key is the write's provider/base_url rule instead.
+func (h *handlers) purposeNeedsKey(ctx context.Context, orgID string, purpose llmorgsettings.Purpose, next keyTarget) (bool, error) {
+	if llmorgsettings.CredentialsComplete(llmorgsettings.NormalizeProvider(next.provider), "") {
 		return false, nil
 	}
-	has := func(key string) (bool, *string, error) {
-		row, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, key)
-		if err != nil || row == nil || row.Value == nil || *row.Value == "" {
-			return false, nil, err
-		}
-		return true, row.Value, nil
-	}
-	if ok, _, err := has(llmorgsettings.PurposeKey(purpose, "api_key")); err != nil || ok {
+	own, err := h.scopeKey(ctx, h.store.Pool, orgID, purpose, false, false)
+	if err != nil || own.Stored() {
 		return false, err
 	}
-	if ok, _, err := has("api_key"); err != nil || !ok {
-		return true, err
-	}
-	_, defaultProvider, err := has("provider")
+	def, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, false)
 	if err != nil {
 		return false, err
 	}
-	return defaultProvider == nil || llmorgsettings.NormalizeProvider(*defaultProvider) != provider, nil
+	return !suppliesKeyFor(def, next), nil
+}
+
+// llmSettingValue is one llm row of a scope, opened: the api_key through
+// scopeKey (the stored key, bound or not, for the masked display), any other
+// field directly.
+func (h *handlers) llmSettingValue(ctx context.Context, db pgExecer, orgID string, purpose llmorgsettings.Purpose, key string) (*string, error) {
+	if isLLMKeyRow(key) {
+		scoped, err := h.scopeKey(ctx, db, orgID, purpose, false, true)
+		if err != nil || !scoped.Stored() {
+			return nil, err
+		}
+		value := scoped.ForChecks()
+		return &value, nil
+	}
+	row, err := settingByKeyOn(ctx, db, orgID, llmCategory, key)
+	if err != nil {
+		return nil, err
+	}
+	return h.settingValue(row)
 }

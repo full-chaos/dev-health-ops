@@ -212,6 +212,7 @@ func TestDelegatedStartUnderEdDSAAddsTheSessionToken(t *testing.T) {
 }
 
 func TestDelegatedStartRefusalMap(t *testing.T) {
+	t.Parallel()
 	forbidden := []error{
 		session.ErrNotOwned, session.ErrActorNotAuthorized, session.ErrActorUnavailable, session.ErrNestedDelegation, session.ErrTargetIsActor,
 		session.ErrTargetUnavailable, session.ErrTargetPlatformRole, session.ErrTargetNotMember, session.ErrTargetRoleUnknown,

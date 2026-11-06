@@ -29,6 +29,11 @@ const (
 	Ceiling       = 3600
 )
 
+// DelegatedActor is the act.sub of the delegated vectors: the canonical
+// principal id ("prn_" and the unpadded base64url of the 16 id bytes) of
+// 00000000-0000-4000-8000-000000000002, as session.WirePrincipalID writes it.
+const DelegatedActor = "prn_AAAAAAAAQACAAAAAAAAAAg"
+
 type member struct{ key, raw string }
 
 func object(members ...member) string {
@@ -220,9 +225,10 @@ func Generate(random io.Reader) (*Corpus, error) {
 	b.add("invalid-aud-auth-token-at-api", good, auth.text(), edSigner(activeKey),
 		reject(now, AudienceAPI, ReasonAudience, "A valid auth-service token presented to dev-health-api."))
 	delegated, delegatedAuth := api, auth
-	delegated.act, delegatedAuth.act = `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB"}`, `{"sub":"prn_BBBBBBBBBBBBBBBBBBBBBB"}`
-	b.add("valid-act-api", good, delegated.text(), edSigner(activeKey),
-		accept(now, AudienceAPI, "A delegated token: sub is the effective subject, act.sub the real actor."))
+	delegated.act = fmt.Sprintf(`{"sub":%q}`, DelegatedActor)
+	delegatedAuth.act = delegated.act
+	b.add("valid-act-canonical", good, delegated.text(), edSigner(activeKey),
+		accept(now, AudienceAPI, "A delegated token: sub is the effective subject, act.sub the real actor in the canonical principal id form every issuer writes."))
 	b.add("valid-act-auth-service", good, delegatedAuth.text(), edSigner(activeKey),
 		accept(now, AudienceAuth, "A delegated token at auth-service's own session routes."))
 	for _, c := range []struct{ name, raw, why string }{

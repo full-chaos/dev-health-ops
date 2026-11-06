@@ -102,7 +102,7 @@ var (
 // The evaluator reads the target org from Delegation: it is the record's org.
 func TestOwnerExemptsTheFloorThroughTheRealEvaluator(t *testing.T) {
 	a, _, _ := rig(t, record(), owner)
-	s, err := a.Snapshot(context.Background(), in(inner{}))
+	s, err := a.Snapshot(context.Background(), in(grantInner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestOwnerExemptsTheFloorThroughTheRealEvaluator(t *testing.T) {
 
 func TestAdminWithThePowerIsNotOwner(t *testing.T) {
 	a, _, _ := rig(t, record(), admin)
-	s, err := a.Snapshot(context.Background(), in(inner{}))
+	s, err := a.Snapshot(context.Background(), in(grantInner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestRowShapesAreInvalid(t *testing.T) {
 
 func TestClaimMatchAndPlainRow(t *testing.T) {
 	a, _, _ := rig(t, record(), owner)
-	i := in(inner{})
+	i := in(grantInner{})
 	i.ClaimedActor = &actor
 	s, err := a.Snapshot(context.Background(), i)
 	if err != nil {
@@ -278,5 +278,97 @@ func TestNewAndNilInner(t *testing.T) {
 	a, _, _ := rig(t, record(), owner)
 	if _, err := a.Snapshot(context.Background(), Input{SessionID: sessID}); err == nil {
 		t.Fatal("nil inner accepted")
+	}
+}
+
+func factsOf() Facts {
+	o := orgID
+	return Facts{Actor: actor, Organization: &o, AMR: []string{"pwd"}, PermittedActions: []string{ordinary}, ActorMayImpersonate: true}
+}
+
+func TestDelegationBuildsTheChainFromTheFacts(t *testing.T) {
+	d := Delegation(factsOf())
+	if len(d.Chain) != 1 || d.Chain[0].ActorPrincipalID != actor.String() || len(d.Chain[0].PermittedActions) != 1 ||
+		d.TargetOrganizationID != orgID.String() || d.Assurance != "aal1" || d.ActorPlatformRole != "" {
+		t.Fatalf("%+v", d)
+	}
+	f := factsOf()
+	f.ActorOwner = true
+	if got := Delegation(f).ActorPlatformRole; got != platformrole.PlatformOwner {
+		t.Fatalf("owner role %q", got)
+	}
+}
+
+func TestDelegationIsEmptyWhenTheRowCannotBeDecided(t *testing.T) {
+	for name, mod := range map[string]func(*Facts){
+		"no actor":         func(f *Facts) { f.Actor = uuid.Nil },
+		"no organization":  func(f *Facts) { f.Organization = nil },
+		"actor not active": func(f *Facts) { f.ActorMayImpersonate = false },
+	} {
+		f := factsOf()
+		mod(&f)
+		if d := Delegation(f); len(d.Chain) != 0 {
+			t.Errorf("%s: %+v, want the empty chain", name, d)
+		}
+	}
+}
+
+func TestDelegationOfABadAMRHasNoAssurance(t *testing.T) {
+	f := factsOf()
+	f.AMR = []string{"nope"}
+	if got := Delegation(f).Assurance; got != "" {
+		t.Fatalf("assurance %q", got)
+	}
+}
+
+func TestDelegationCopiesThePermittedActions(t *testing.T) {
+	f := factsOf()
+	d := Delegation(f)
+	f.PermittedActions[0] = "changed"
+	if len(d.Chain) != 1 || d.Chain[0].PermittedActions[0] != ordinary {
+		t.Fatalf("%+v", d)
+	}
+}
+
+type grantInner struct{ inner }
+
+func (grantInner) Grants(string) ([]authorization.Grant, error) { return nil, nil }
+func (grantInner) Workload() (authorization.WorkloadLimits, bool) {
+	return authorization.WorkloadLimits{}, false
+}
+func (grantInner) ServiceAccount(string) (authorization.ServiceAccount, bool) {
+	return authorization.ServiceAccount{}, false
+}
+func (grantInner) NowUnixNano() int64 { return now.UnixNano() }
+
+func TestDelegatedSnapshotKeepsTheGrantsOfAGrantsReportingInner(t *testing.T) {
+	a, _, _ := rig(t, record(), owner)
+	s, err := a.Snapshot(context.Background(), in(grantInner{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.(authorization.GrantSnapshot); !ok {
+		t.Fatal("a delegated snapshot over a grants-reporting inner is not a GrantSnapshot")
+	}
+	d := eval(s, ordinary)
+	if !d.Allowed || d.Obligations == nil || d.Obligations.RepositoryScope != authorization.RepositoryScopeOrganization {
+		t.Fatalf("ordinary: %+v", d)
+	}
+	if _, ok := s.(authorization.DelegationSnapshot); !ok {
+		t.Fatal("not a DelegationSnapshot")
+	}
+}
+
+func TestDelegatedSnapshotOverAPlainInnerStaysPlain(t *testing.T) {
+	a, _, _ := rig(t, record(), owner)
+	s, err := a.Snapshot(context.Background(), in(inner{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.(authorization.GrantSnapshot); ok {
+		t.Fatal("a plain inner became a GrantSnapshot")
+	}
+	if d := eval(s, ordinary); d.Allowed || d.Reason != authorization.ReasonGrantAbsent {
+		t.Fatalf("%+v", d)
 	}
 }

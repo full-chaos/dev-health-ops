@@ -8,7 +8,9 @@ cmd/dho	test	.env.example
 cmd/dho	test	compose.yml
 cmd/dho	test	deploy
 cmd/gqlgen-guard	test	contracts
+deploy/helm/dev-health	test	ci
 deploy/helm/dev-health	test	compose.yml
+deploy/helm/dev-health	test	contracts
 deploy/helm/dev-health	test	deploy
 deploy/helm/dev-health	test	docs
 internal/api/githubapp	test	ci
@@ -35,8 +37,10 @@ internal/auth/identity/oidc	test	ci
 internal/auth/identity/saml	test	ci
 internal/auth/identity/social	test	ci
 internal/auth/pushlifecycle	test	contracts
+internal/auth/pushreconcile/reconcilejob	test	alerts
 internal/auth/ratelimitvalkey	test	deploy
 internal/auth/ratelimitvalkey	test	docs
+internal/auth/repoidentityprojection	test	contracts
 internal/auth/revisionfeed	test	contracts
 internal/bigboycompose	test	.env.example
 internal/bigboycompose	test	ci
@@ -100,6 +104,9 @@ internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile
 internal/cigates/docstools	test	ci
+internal/cigates/exceptionledger	code	ci
+internal/cigates/exceptionledger	code	contracts
+internal/cigates/exceptionledger	code	deploy
 internal/cigates/gitleaksignore	test	.gitleaksignore
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci

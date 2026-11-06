@@ -30,10 +30,9 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/audit"
-	"github.com/full-chaos/dev-health-ops/internal/auth/contracts/provisioning"
+	"github.com/full-chaos/dev-health-ops/internal/auth/copyproject"
 	"github.com/full-chaos/dev-health-ops/internal/auth/delegationend"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 )
 
@@ -42,10 +41,10 @@ var (
 	// key (go-api answers that case with an unhandled error, a 500).
 	ErrMultipleUsers = errors.New("identity: more than one user matches the email")
 	// ErrUserNotFound reports a Project of an id public.users does not hold.
-	ErrUserNotFound = errors.New("identity: user not found")
+	ErrUserNotFound = copyproject.ErrUserNotFound
 	// ErrEmailCollision reports a projection whose login key another
 	// principal already holds. Nothing is merged and nothing is written.
-	ErrEmailCollision = errors.New("identity: the email belongs to another principal")
+	ErrEmailCollision = copyproject.ErrEmailCollision
 	// ErrPrincipalKind reports a projection onto a principal id that is not a
 	// user.
 	ErrPrincipalKind = errors.New("identity: the principal is not a user")
@@ -66,10 +65,6 @@ type Config struct {
 	// public.users columns, and HasPassword reads public.users. On, auth.users
 	// is the authority and no public table is read.
 	UsersOwnedByAuth bool
-	// OrgsOwnedByAuth is the organizations switch. Off (the default), ProjectOrganization
-	// copies public.organizations onto auth.organizations. On, auth.organizations is
-	// the authority: the projection reads no public table and writes nothing.
-	OrgsOwnedByAuth bool
 	// Meter registers the projection and link counters; nil uses the process
 	// meter.
 	Meter metric.Meter
@@ -81,8 +76,6 @@ type Store struct {
 	schema      authschema.ValidatedIdentifier
 	q           string
 	ownsUsers   bool
-	ownsOrgs    bool
-	orgDB       orgDB
 	logger      *slog.Logger
 	projections metric.Int64Counter
 	links       metric.Int64Counter
@@ -97,7 +90,7 @@ func New(cfg Config) (*Store, error) {
 	if cfg.Schema.String() == "" {
 		return nil, errors.New("identity: no auth schema")
 	}
-	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, ownsOrgs: cfg.OrgsOwnedByAuth, orgDB: cfg.Pool, logger: cfg.Logger}
+	s := &Store{pool: cfg.Pool, schema: cfg.Schema, q: authschema.Quote(cfg.Schema), ownsUsers: cfg.UsersOwnedByAuth, logger: cfg.Logger}
 	if s.logger == nil {
 		s.logger = slog.Default()
 	}
@@ -293,16 +286,13 @@ func (s *Store) readSource(ctx context.Context, userID uuid.UUID) (source, error
 // claim, and EmailStr refuses special-use domains), so a refused address keeps
 // Python strip(lower()) as its key instead of failing the projection.
 func storedLoginKey(email string) string {
-	if key, err := NormalizeEmail(email); err == nil {
-		return key
-	}
-	return pythonparity.Strip(pythonparity.Lower(email))
+	return copyproject.LoginKey(email)
 }
 
 // errPrincipalExists ends a first projection whose principal row already
 // exists (an earlier or a concurrent projection); Project then compares and
 // updates instead.
-var errPrincipalExists = errors.New("identity: principal already projected")
+var errPrincipalExists error = &concurrentProjection{"identity: principal already projected"}
 
 // insertProjection inserts the principal and user rows when the principal is
 // new, in one audit.Commit with one audit row (reason principal_projected)
@@ -328,26 +318,22 @@ func (s *Store) insertProjection(ctx context.Context, id uuid.UUID, src source) 
 	err := audit.Commit(ctx, s.pool, s.schema, audit.Mutation{
 		Apply: func(ctx context.Context, tx audit.TxOps) error {
 			var inserted uuid.UUID
-			err := tx.QueryRow(ctx, `INSERT INTO `+s.q+`.principals (id, kind, disabled_at)
-VALUES ($1, 'user', CASE WHEN $2::boolean THEN NULL ELSE clock_timestamp() END)
-ON CONFLICT (id) DO NOTHING
-RETURNING id`, id, src.active).Scan(&inserted)
+			err := tx.QueryRow(ctx, copyproject.InsertPrincipalSQL(s.q), id, src.active).Scan(&inserted)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return errPrincipalExists
 			}
 			if err != nil {
 				return err
 			}
-			_, err = tx.Exec(ctx, `INSERT INTO `+s.q+`.users (principal_id, email, email_lower, email_verified_at)
-VALUES ($1, $2, $3, CASE WHEN $4::boolean THEN clock_timestamp() ELSE NULL END)`,
-				id, src.email, src.emailLower, src.verified)
+			_, err = tx.Exec(ctx, copyproject.InsertUserSQL(s.q), id, src.email, src.emailLower, src.verified)
 			return err
 		},
 		Audit: audit.AuditEvent{
 			EventType: "auth.principal.projected", Outcome: audit.OutcomeAllowed, SubjectPrincipalID: &principal,
 			Attributes: map[string]any{"reason_code": "principal_projected", "target_kind": "principal", "target_id": principal},
 		},
-		Events: events,
+		Events:   events,
+		Refusals: []error{errPrincipalExists},
 	})
 	switch {
 	case err == nil:
@@ -480,17 +466,12 @@ func projectionEvents(principal string, src source, changed []string) []audit.Ou
 
 // principalEvent is a principal event carrying the status after it.
 func principalEvent(principal, verb string, active bool) audit.OutboxEvent {
-	status := "disabled"
-	if active {
-		status = "active"
-	}
-	return audit.OutboxEvent{AggregateType: "principal", AggregateID: provisioning.WireID("principal", principal),
-		EventType: verb, Change: map[string]any{"status": status}}
+	return copyproject.PrincipalEvent(principal, verb, active)
 }
 
 // userEvent is a user event; a user event carries no change member.
 func userEvent(principal, verb string) audit.OutboxEvent {
-	return audit.OutboxEvent{AggregateType: "user", AggregateID: provisioning.WireID("user", principal), EventType: verb}
+	return copyproject.UserEvent(principal, verb)
 }
 
 func projectionOutcome(err error) string {

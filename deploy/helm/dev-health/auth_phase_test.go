@@ -218,7 +218,7 @@ func TestAuthPhase5Refused(t *testing.T) {
 				if err == nil {
 					t.Fatal("rendered; phase 5 must be refused")
 				}
-				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) needs its own public-table writer leaf (D6358)", phase)) {
+				if !strings.Contains(out, fmt.Sprintf("authService.phase %d: phase 5 (orgs owned) is cancelled (D6651)", phase)) {
 					t.Fatalf("the refusal does not name the decision: %.400s", out)
 				}
 			})
@@ -237,7 +237,7 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"phase 6":                 {phaseArgs(1, "--set", "authService.phase=6"), "/authService/phase"},
 		"phase string":            {phaseArgs(1, "--set-string", "authService.phase=1"), "/authService/phase"},
 		"phase fraction":          {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=1.5"), "/authService/phase"},
-		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 5"},
+		"phase null":              {withoutPhase(phaseArgs(1), "--set-json", "authService.phase=null"), "authService.phase must be a whole number from 0 to 4"},
 		"phase 3 without lockout": {phaseArgs(3, "--set", "authService.sessionKeys.loginLockout.secretName="), "needs authService.sessionKeys.loginLockout.secretName"},
 		"phase 3 without social":  {phaseArgs(3, "--set", "authService.social.secretName="), "needs authService.social.secretName"},
 		"token class below 2":     {phaseArgs(1, "--set", "authService.accessToken.class=hs256_compat"), "authService.accessToken.class needs authService.phase >= 2"}, // gitleaks:allow
@@ -253,8 +253,9 @@ func TestAuthPhaseRefusesHandSetFlags(t *testing.T) {
 		"eddsa trailing slash":    {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://auth.example/"), "needs authService.accessToken.issuerURL"},
 		"eddsa upper-case host":   {phaseArgs(2, "--set", "authService.accessToken.class=eddsa", "--set", "authService.accessToken.issuerURL=https://Auth.example"), "needs authService.accessToken.issuerURL"},
 		"link routes below 2":     {phaseArgs(1, "--set", "authService.socialLinkRoutes=true"), "authService.socialLinkRoutes needs authService.phase >= 2"},
-		"oidc on":                 {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true is refused"},
-		"saml on":                 {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true is refused"},
+		"oidc on no secret":       {phaseArgs(3, "--set", "authService.sso.oidc=true"), "authService.sso.oidc=true needs authService.sso.secretName"},
+		"saml on no secret":       {phaseArgs(3, "--set", "authService.sso.saml=true"), "authService.sso.saml=true needs authService.sso.secretName"},
+		"oidc on below 2":         {phaseArgs(1, "--set", "authService.sso.oidc=true", "--set", "authService.sso.secretName=a-sso"), "authService.sso.oidc=true needs go-api to reach auth-service: authService.phase >= 2"},
 	}
 	for _, key := range []string{"authService.enabled", "authService.usersOwned", "authService.orgsOwned"} {
 		for _, value := range []string{"true", "false"} {
@@ -336,6 +337,12 @@ func fakeSecret(t *testing.T, ref string) string {
 		return "svc_fake_session_issuer_token"
 	case key == "AUTH_VALKEY_URI":
 		return "redis://auth:pw@valkey:6379/1"
+	case key == "AUTH_SSO_STATE_KEY":
+		return strings.Repeat("s", 40)
+	case key == "SETTINGS_ENCRYPTION_KEY":
+		return base64.URLEncoding.EncodeToString([]byte(strings.Repeat("e", 32)))
+	case key == "APP_BASE_URL":
+		return "https://app.example.test"
 	case strings.HasPrefix(key, "SOCIAL_"):
 		return "social-" + strings.ToLower(key)
 	}
@@ -359,7 +366,7 @@ func containerLookup(t *testing.T, doc map[string]any, container string) func(st
 			switch {
 			case strings.HasPrefix(value, "value:"):
 				env[name] = strings.TrimPrefix(value, "value:")
-			case strings.HasPrefix(value, "secret:") && (strings.HasPrefix(name, "AUTH_") || strings.HasPrefix(name, "SOCIAL_")):
+			case strings.HasPrefix(value, "secret:") && (strings.HasPrefix(name, "AUTH_") || strings.HasPrefix(name, "SOCIAL_") || name == "SETTINGS_ENCRYPTION_KEY" || name == "APP_BASE_URL"):
 				env[name] = fakeSecret(t, value)
 			}
 		}
@@ -459,8 +466,8 @@ func TestAuthPhaseStartupAgrees(t *testing.T) {
 					t.Errorf("auth-service mounts %s, but go-api does not forward it", aggregate)
 				}
 			}
-			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers || cfg.OrgsOwned {
-				t.Errorf("%s: owned switches auth-service users=%v orgs=%v, go-api users=%v; want users=%v and orgs=false", name, cfg.UsersOwned, cfg.OrgsOwned, goUsersOwned, wantUsers)
+			if wantUsers := v.phase >= 4; cfg.UsersOwned != wantUsers || goUsersOwned != wantUsers {
+				t.Errorf("%s: owned switches auth-service users=%v, go-api users=%v; want users=%v", name, cfg.UsersOwned, goUsersOwned, wantUsers)
 			}
 			for _, job := range []string{"a-dev-health-auth-migrate", "a-dev-health-auth-grants"} {
 				doc := authDoc(docs, "Job", job)
@@ -534,7 +541,7 @@ func TestAuthServiceExtraEnvRefusesEveryRenderedName(t *testing.T) {
 			}
 		}
 	}
-	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED from phase 5 (refused at render), so the renders above show neither.
+	// AUTH_USERS_OWNED renders from phase 4 and AUTH_ORGS_OWNED is removed (D6651), so the renders above show neither.
 	for _, name := range []string{"AUTH_USERS_OWNED", "AUTH_ORGS_OWNED"} {
 		names[name] = configs["phase 3 with link routes"]
 	}

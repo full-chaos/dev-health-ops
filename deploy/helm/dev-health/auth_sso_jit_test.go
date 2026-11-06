@@ -26,22 +26,6 @@ func TestSSOJITOffRendersNothing(t *testing.T) {
 	}
 }
 
-// True needs orgs owned: every phase the chart renders today refuses it.
-func TestSSOJITTrueNeedsOrgsOwned(t *testing.T) {
-	const on = "authService.ssoJit=true"
-	for name, args := range map[string][]string{
-		"phase 2":       phaseArgs(2, "--set", on),
-		"phase 3":       phaseArgs(3, "--set", on),
-		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
-		"phase 4 owned": phaseArgs(4, "--set", on),
-	} {
-		_, out, err := renderAuth(t, args...)
-		if err == nil || !strings.Contains(out, "authService.ssoJit needs orgs owned") {
-			t.Errorf("%s: rendered: err=%v out=%.300s", name, err, out)
-		}
-	}
-}
-
 // The check runs on every render, so it holds when auth-service does not render.
 func TestSSOJITIsCheckedWithNoConsumerRendered(t *testing.T) {
 	base := []string{"--set", "web.enabled=false", "--set", "authService.phase=0", "--set", "goApi.enabled=false", "--set", "queryApi.enabled=false"}
@@ -68,9 +52,8 @@ func TestSSOJITCannotBeSetThroughExtraEnv(t *testing.T) {
 	}
 }
 
-// Phase 5 does not render yet, so the rendered env line is pinned by text: only
-// auth-service carries it, behind the one read of the switch. The phase 5 lift
-// proves the render.
+// The env line is pinned by text as well as by render: only auth-service
+// carries it, behind the one read of the switch.
 func TestSSOJITLineSitsOnAuthServiceOnly(t *testing.T) {
 	want := "{{- if eq (include \"dev-health.ssoJit\" .) \"true\" }}\n            - name: AUTH_SSO_JIT\n              value: \"true\"\n"
 	entries, err := filepath.Glob("templates/*")
@@ -92,5 +75,61 @@ func TestSSOJITLineSitsOnAuthServiceOnly(t *testing.T) {
 	}
 	if carriers != 1 {
 		t.Fatalf("%d templates carry the env line, want 1", carriers)
+	}
+}
+
+// ssoJit=true renders only where users are owned: phase 4 with usersOwnedStage=owned.
+func TestSSOJITRendersAtPhase4Owned(t *testing.T) {
+	docs, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.ssoJit=true")...)
+	if err != nil {
+		t.Fatalf("phase 4 owned: %v\n%.400s", err, out)
+	}
+	if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), ssoJITEnv); !set || value != "true" {
+		t.Errorf("auth-service %s=%q set=%v; want true", ssoJITEnv, value, set)
+	}
+	for _, target := range []struct{ kind, name string }{
+		{"Deployment", "a-dev-health-go-api"},
+		{"Deployment", "a-dev-health-query-api"},
+		{"Job", "a-dev-health-auth-migrate"},
+		{"Job", "a-dev-health-auth-grants"},
+		{"Job", "a-dev-health-migrate"},
+	} {
+		doc := authDoc(docs, target.kind, target.name)
+		if doc == nil {
+			continue
+		}
+		if value, set := containerEnvValue(t, doc, ssoJITEnv); set {
+			t.Errorf("%s sets %s=%q; want it on auth-service only", target.name, ssoJITEnv, value)
+		}
+	}
+}
+
+// Below users owned the render is refused and the text names the stage that allows it.
+func TestSSOJITRefusedBelowOwned(t *testing.T) {
+	const on = "authService.ssoJit=true"
+	for name, args := range map[string][]string{
+		"phase 2":       phaseArgs(2, "--set", on),
+		"phase 3":       phaseArgs(3, "--set", on),
+		"phase 4 goApi": phaseArgs(4, "--set", "authService.usersOwnedStage=goApi", "--set", on),
+	} {
+		_, out, err := renderAuth(t, args...)
+		if err == nil || !strings.Contains(out, "authService.usersOwnedStage=owned") {
+			t.Errorf("%s: rendered or wrong refusal: err=%v out=%.300s", name, err, out)
+		}
+	}
+}
+
+// One writer: whenever the sign-in join runs in auth-service, go-api carries AUTH_USERS_OWNED, and its own join and
+// account create refuse on it (internal/api/sso/provision.go createAccountAndMembership and membershipOrJoin).
+func TestSSOJITGoApiSingleWriter(t *testing.T) {
+	docs, out, err := renderAuth(t, phaseArgs(4, "--set", "authService.ssoJit=true")...)
+	if err != nil {
+		t.Fatalf("render: %v\n%.400s", err, out)
+	}
+	if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-go-api"), "AUTH_USERS_OWNED"); !set || value != "true" {
+		t.Errorf("go-api AUTH_USERS_OWNED=%q set=%v with ssoJit on; want true", value, set)
+	}
+	if value, set := containerEnvValue(t, authDoc(docs, "Deployment", "a-dev-health-auth-service"), "AUTH_USERS_OWNED"); !set || value != "true" {
+		t.Errorf("auth-service AUTH_USERS_OWNED=%q set=%v with ssoJit on; want true", value, set)
 	}
 }

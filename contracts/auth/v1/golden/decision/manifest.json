@@ -19,6 +19,16 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-member-writes-org-settings.json",
+      "id": "allow-platform-admin-member-writes-org-settings",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-org-integrations.json",
+      "id": "allow-platform-admin-no-membership-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
       "file": "cross-org-grant-in-a-leaves-b-on-the-default.json",
       "id": "cross-org-grant-in-a-leaves-b-on-the-default",
       "layer": "pdp"
@@ -131,6 +141,51 @@
     {
       "file": "org-action-service-account-is-no-membership.json",
       "id": "org-action-service-account-is-no-membership",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-all-grants-dead-is-none.json",
+      "id": "org-filtered-all-grants-dead-is-none",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-allowlist-over-the-bound-is-denied.json",
+      "id": "org-filtered-allowlist-over-the-bound-is-denied",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-grant-role-lacks-the-action-is-left-out.json",
+      "id": "org-filtered-grant-role-lacks-the-action-is-left-out",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-member-default-is-organization-scope.json",
+      "id": "org-filtered-member-default-is-organization-scope",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-owner-with-a-grant-row-is-narrowed.json",
+      "id": "org-filtered-owner-with-a-grant-row-is-narrowed",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-plain-snapshot-denies.json",
+      "id": "org-filtered-plain-snapshot-denies",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-two-live-grants-sorted.json",
+      "id": "org-filtered-two-live-grants-sorted",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-filtered-wildcard-grant-is-organization-scope.json",
+      "id": "org-filtered-wildcard-grant-is-organization-scope",
+      "layer": "pdp"
+    },
+    {
+      "file": "org-unfiltered-allow-carries-only-the-tenant-scope.json",
+      "id": "org-unfiltered-allow-carries-only-the-tenant-scope",
       "layer": "pdp"
     },
     {
@@ -329,6 +384,11 @@
       "layer": "pdp"
     },
     {
+      "file": "repo-id-grant-path-unresolved.json",
+      "id": "repo-id-grant-path-unresolved",
+      "layer": "pdp"
+    },
+    {
       "file": "repo-live-grant-exact-key.json",
       "id": "repo-live-grant-exact-key",
       "layer": "pdp"
@@ -401,6 +461,11 @@
     {
       "file": "repo-service-account-without-grants.json",
       "id": "repo-service-account-without-grants",
+      "layer": "pdp"
+    },
+    {
+      "file": "repo-wildcard-key-is-refused.json",
+      "id": "repo-wildcard-key-is-refused",
       "layer": "pdp"
     },
     {

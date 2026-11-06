@@ -74,6 +74,16 @@ func (l *lazyStore) Peek(ctx context.Context, hit httpapi.Hit) (int64, error) {
 	return store.Peek(ctx, hit)
 }
 
+func (l *lazyStore) Refund(ctx context.Context, hit httpapi.Hit) error {
+	store, _, err := l.open(ctx)
+	if err != nil {
+		return err
+	}
+	return store.Refund(ctx, hit)
+}
+
+var _ httpapi.Refunder = (*lazyStore)(nil)
+
 func (l *lazyStore) Backend() string { return "redis" }
 
 func (l *lazyStore) ping(ctx context.Context) error {

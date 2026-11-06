@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 type contextKey struct{}
@@ -32,9 +33,17 @@ type Claims struct {
 	// ImpersonationActive is copied from the verified envelope: true while the
 	// effective identity is an impersonated user.
 	ImpersonationActive bool
+	// Delegated is true for a delegated session's bearer: the token is the
+	// target's, issued to a real actor (policy.User.ImpersonatedBy). Every
+	// GraphQL operation but a query is refused for it.
+	Delegated bool
 	// Platform is the platform action set held when it is not the one
 	// IsSuperuser means; nil carries only the flag.
 	Platform *rule.Platform
+	// Scope is what a REST read may serve: the enforced PDP decision's
+	// organization and repository ceiling, or the legacy path's organization.
+	// Only the REST authenticator sets it; the zero value serves nothing.
+	Scope pepgate.Scope
 }
 
 // Holds reports whether the caller holds the platform action now.

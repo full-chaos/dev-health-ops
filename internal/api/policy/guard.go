@@ -79,7 +79,7 @@ func WithImpersonation(ctx context.Context, session *Impersonation) context.Cont
 type Guard struct {
 	auth   *Authenticator
 	logger *slog.Logger
-	shadow *Shadow
+	pdp    pdpHooks
 }
 
 // NewGuard builds a Guard over auth.
@@ -148,8 +148,17 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 		// never changes the answer.
 		caller := user
 		bearer := ""
-		if g.shadow != nil {
+		if g.pdp.shadow != nil || g.pdp.enforcer != nil {
 			bearer, _ = BearerToken(r.Header.Get("Authorization"))
+		}
+		// A route whose namespace is switched on is decided by the decision point, not by the legacy checks below.
+		switch verdict := g.enforceVerdict(r, user, bearer, level == Superuser && gt.kind == gatePlatform); verdict {
+		case enforceDeny, enforceUnavailable, enforceNoDecisionPoint, enforceImpersonationRefused, enforceSessionRowUnavailable:
+			writeEnforceRefusal(w, level, verdict)
+			return
+		case enforceAllow:
+			next.ServeHTTP(w, r.WithContext(WithUser(r.Context(), user)))
+			return
 		}
 		if user.OrgID == "" && !user.Holds(gt.orglessAction()) && !OrglessMayReach(r.Method, r.URL.Path) {
 			g.observeShadow(r, caller, bearer, false)
@@ -181,6 +190,21 @@ func (g *Guard) wrap(level Authz, gt gate, next http.Handler) http.Handler {
 				g.observeShadow(r, caller, bearer, false)
 				WriteDetail(w, http.StatusForbidden, "Superuser access required", nil)
 				return
+			}
+			if !liveRowExempt(r.Pattern) {
+				session, err := g.sessionRow(r, user.ID)
+				if err != nil {
+					// The session state is unknown: the shadow is not asked.
+					g.writeSessionRowFailure(w, r, err)
+					return
+				}
+				if session != nil {
+					g.logger.WarnContext(r.Context(), "api guard: platform action refused in an impersonation session",
+						slog.String("path", r.Pattern), slog.String("action", gt.action))
+					g.observeShadowAs(r, caller, bearer, false, true)
+					WriteDetail(w, http.StatusForbidden, msgImpersonationDenied, nil)
+					return
+				}
 			}
 		}
 		g.observeShadow(r, caller, bearer, true)
@@ -220,6 +244,9 @@ func (g *Guard) currentUser(w http.ResponseWriter, r *http.Request, level Authz,
 				slog.String("path", r.Pattern), slog.Bool("unavailable", isUnavailable(err)))
 		}
 		authFailure(w, "Invalid or expired token", err)
+		return nil, false
+	}
+	if g.RefuseDelegated(w, r, user) {
 		return nil, false
 	}
 	switch {
@@ -276,6 +303,9 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 	user, err := g.auth.Authenticate(g.auth.routeCtx(r), token)
 	switch {
 	case err == nil:
+		if g.RefuseDelegated(w, r, user) {
+			return nil, false
+		}
 		return user, true
 	case isRefusal(err):
 		return nil, true
@@ -286,3 +316,23 @@ func (g *Guard) optionalUser(w http.ResponseWriter, r *http.Request) (*User, boo
 		return nil, false
 	}
 }
+
+// msgImpersonationDenied is the detail of a platform wrap's refusal of a
+// request that holds an impersonation session.
+const msgImpersonationDenied = "Not allowed in an impersonation session"
+
+// stopImpersonationPattern is the platform route that ends an impersonation
+// session.
+const stopImpersonationPattern = "POST /api/v1/admin/impersonate/stop"
+
+// ImpersonationHandoffConsumePattern is the platform route that admits the
+// start handoff of the caller's own impersonation session, once. The session
+// row is live when it is called.
+const ImpersonationHandoffConsumePattern = "POST /api/v1/admin/impersonate/handoff/consume"
+
+// liveRowExemptPatterns are the platform routes that stay reachable while the
+// caller's impersonation row is live. Every live-row refusal reads this set
+// through liveRowExempt.
+var liveRowExemptPatterns = map[string]bool{stopImpersonationPattern: true, ImpersonationHandoffConsumePattern: true}
+
+func liveRowExempt(pattern string) bool { return liveRowExemptPatterns[pattern] }

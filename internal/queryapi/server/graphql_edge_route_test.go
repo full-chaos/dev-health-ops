@@ -712,13 +712,13 @@ func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 		}
 	}
 	// A user-state read that fails: the org-scope middleware reads the caller
-	// first and refuses with the same 500, before the pipeline is reached.
+	// first and refuses with the guard's 503 (D6666), before the pipeline is reached.
 	store := &fakeEdgeStore{errUserState: policy.ErrUnavailable}
 	handler, ran, member, _, _ := edgeHarnessWith(t, store, routeswitch.StaticSwitch{"probe": true})
 	c := edgeCell{method: http.MethodPost, carrier: "member", document: "query"}
 	recorder := serveEdge(handler, c, edgeRequest(t, c, member, "", ""))
-	if recorder.Code != http.StatusInternalServerError || len(*ran) != 0 {
-		t.Errorf("user state unavailable: %d ran=%v, want 500", recorder.Code, *ran)
+	if recorder.Code != http.StatusServiceUnavailable || len(*ran) != 0 {
+		t.Errorf("user state unavailable: %d ran=%v, want 503", recorder.Code, *ran)
 	}
 }
 
@@ -753,8 +753,12 @@ func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testi
 		if outcome != tc.want {
 			t.Errorf("%s: outcome %d, want %d", name, outcome, tc.want)
 		}
-		if answered || recorder.Code != http.StatusInternalServerError {
-			t.Errorf("%s: answered %d, want 500", name, recorder.Code)
+		wantCode := http.StatusInternalServerError
+		if name == "user state" {
+			wantCode = http.StatusServiceUnavailable
+		}
+		if answered || recorder.Code != wantCode {
+			t.Errorf("%s: answered %d, want %d", name, recorder.Code, wantCode)
 		}
 	}
 }
@@ -889,7 +893,8 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 }
 
 // TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead: the middleware's session
-// read failing refuses with the unhandled 500 before anything runs.
+// read failing refuses with 503 Database temporarily unavailable before
+// anything runs.
 func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:     map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -900,8 +905,8 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	handler, seen := edgeClaimsHarness(t, store)
 	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
 	recorder := edgePostAs(t, handler, token)
-	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` || len(*seen) != 0 {
-		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != restUnavailable || len(*seen) != 0 {
+		t.Fatalf("%d %q ran=%v, want the 503 and nothing run", recorder.Code, recorder.Body.String(), *seen)
 	}
 }
 

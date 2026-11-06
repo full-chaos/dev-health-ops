@@ -38,6 +38,10 @@
       "why": "A deny for an action asked about the wrong resource kind."
     },
     {
+      "file": "decision-valid-reason-repository-unresolved.json",
+      "why": "A deny for a repository path that no repository identity of the organization resolves."
+    },
+    {
       "file": "decision-valid-reason-principal-inactive.json",
       "why": "A deny for a principal that is not active."
     },
@@ -52,10 +56,6 @@
     {
       "file": "decision-valid-reason-org-mismatch.json",
       "why": "A deny for a membership of another organization."
-    },
-    {
-      "file": "decision-valid-reason-membership-inactive.json",
-      "why": "A deny for a membership that is not active."
     },
     {
       "file": "decision-valid-reason-role-unknown.json",
@@ -110,6 +110,10 @@
       "why": "A member limited to several repositories: sorted, unique canonical keys."
     },
     {
+      "file": "decision-valid-allowlist-nested-keys.json",
+      "why": "Allowlist keys nest groups: 2 to 20 segments."
+    },
+    {
       "file": "decision-valid-allow-redaction-every-class.json",
       "why": "Every registered redaction class in one decision (contracts/auth/v1/vocabulary/redaction-classes.v1.json)."
     },
@@ -120,6 +124,14 @@
     {
       "file": "decision-valid-allowlist-at-the-bound.json",
       "why": "256 keys is the largest allowlist the schema admits."
+    },
+    {
+      "file": "decision-valid-allow-repository-scope-organization.json",
+      "why": "A principal that reads every repository of the organization: repository_scope organization plus the tenant scope. The decision point never states it as an allowlist wildcard or as a missing member."
+    },
+    {
+      "file": "decision-valid-reason-repository-allowlist-too-large.json",
+      "why": "A deny for a principal that can read more repositories than an allowlist may hold (256): the list is never truncated."
     }
   ],
   "reject": [
@@ -226,6 +238,24 @@
       "why": "Canonical lowercase keys only."
     },
     {
+      "file": "decision-invalid-allowlist-21-segments.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "pattern",
+      "why": "21 segments is one past the deepest key."
+    },
+    {
+      "file": "decision-invalid-allowlist-256-bytes.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "maxLength",
+      "why": "256 bytes is one past the key bound."
+    },
+    {
+      "file": "decision-invalid-allowlist-trailing-slash.json",
+      "expect_instance_location": "/obligations/repository_allowlist/0",
+      "expect_keyword": "pattern",
+      "why": "A trailing slash leaves the last segment empty."
+    },
+    {
       "file": "decision-invalid-deny-with-obligations.json",
       "expect_instance_location": "/",
       "expect_keyword": "not",
@@ -290,6 +320,18 @@
       "expect_instance_location": "/obligations/redaction",
       "expect_keyword": "uniqueItems",
       "why": "A repeated redaction class is malformed, as a repeated allowlist key is."
+    },
+    {
+      "file": "decision-invalid-repository-scope-and-allowlist.json",
+      "expect_instance_location": "/obligations",
+      "expect_keyword": "not",
+      "why": "repository_scope and repository_allowlist say the same thing two ways; a decision carries one."
+    },
+    {
+      "file": "decision-invalid-repository-scope-unknown-value.json",
+      "expect_instance_location": "/obligations/repository_scope",
+      "expect_keyword": "enum",
+      "why": "The member is closed to organization; an unknown scope makes the decision invalid and the consumer denies."
     }
   ],
   "reject_by_client": [

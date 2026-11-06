@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
@@ -28,13 +29,37 @@ import (
 const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 
 type actorStub struct {
+	mu     sync.Mutex
 	refuse bool
 	err    error
 	calls  int
 	got    [2]uuid.UUID
 }
 
+// set programs the answer under the lock.
+func (a *actorStub) set(refuse bool, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refuse, a.err = refuse, err
+}
+
+// reset clears the answer and the record under the lock.
+func (a *actorStub) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.refuse, a.err, a.calls, a.got = false, nil, 0, [2]uuid.UUID{}
+}
+
+// lastGot is the arguments of the latest call, read under the lock.
+func (a *actorStub) lastGot() [2]uuid.UUID {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.got
+}
+
 func (a *actorStub) ImpersonatingActor(_ context.Context, principal, sessionID uuid.UUID) (bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.calls++
 	a.got = [2]uuid.UUID{principal, sessionID}
 	return a.refuse, a.err
@@ -520,19 +545,19 @@ func TestApproveHonoursTheActorCheck(t *testing.T) {
 			set  func()
 			want error
 		}{
-			"an actor":    {func() { e.actors.refuse = true }, ErrActorRefused},
-			"a read fail": {func() { e.actors.err = errors.New("read failed") }, ErrActorUnavailable},
+			"an actor":    {func() { e.actors.set(true, nil) }, ErrActorRefused},
+			"a read fail": {func() { e.actors.set(false, errors.New("read failed")) }, ErrActorUnavailable},
 		} {
 			t.Run(class+" "+name, func(t *testing.T) {
 				f := e.flow(t, ctx, class)
-				*e.actors = actorStub{}
+				e.actors.reset()
 				tc.set()
-				t.Cleanup(func() { *e.actors = actorStub{} })
+				t.Cleanup(func() { e.actors.reset() })
 				if _, err := e.store.Approve(ctx, f.decision()); !errors.Is(err, tc.want) {
 					t.Fatalf("Approve: %v, want %v", err, tc.want)
 				}
-				if e.actors.got != [2]uuid.UUID{f.principal, f.web} {
-					t.Fatalf("the check read %v", e.actors.got)
+				if e.actors.lastGot() != [2]uuid.UUID{f.principal, f.web} {
+					t.Fatalf("the check read %v", e.actors.lastGot())
 				}
 				e.nothingApproved(t, ctx, f)
 			})
@@ -916,4 +941,50 @@ func TestTheSchemaHoldsTheRequestAndGrantShapes(t *testing.T) {
 	if _, err := e.runtime.Exec(ctx, `DELETE FROM auth.oauth_grants WHERE id = $1`, approved.GrantID); err == nil {
 		t.Error("the runtime role deleted a grant")
 	}
+}
+
+// The session store's CurrentWithClientClass names the class of the session's live grant, for the
+// session state answer (acp condition 8 on CHAOS-12251): present for a live grant of
+// each class, absent on the web session that has none, and absent once the grant is
+// revoked. It runs as the runtime role auth-service runs.
+func TestCurrentNamesTheClassOfALiveGrantOnly(t *testing.T) {
+	ctx := testContext(t)
+	e := newEnv(t, ctx)
+	for _, class := range []string{ClassBrowser, ClassMCP} {
+		t.Run(class, func(t *testing.T) {
+			f := e.flow(t, ctx, class)
+			approved, err := e.store.Approve(ctx, f.decision())
+			if err != nil {
+				t.Fatalf("Approve: %v", err)
+			}
+			if got := current(t, ctx, e, approved.SessionID); got != class {
+				t.Fatalf("a live %s grant: client class %q", class, got)
+			}
+			if got := current(t, ctx, e, f.web); got != "" {
+				t.Fatalf("the web session, with no grant of its own: client class %q", got)
+			}
+			if err := audit.Commit(ctx, e.admin, e.schema, audit.Mutation{
+				Apply: func(ctx context.Context, tx audit.TxOps) error {
+					_, err := tx.Exec(ctx, `UPDATE auth.oauth_grants SET revoked_at = clock_timestamp() WHERE id = $1`, approved.GrantID)
+					return err
+				},
+				Audit:     audit.AuditEvent{EventType: "oauth.grant.revoked", Outcome: audit.OutcomeAllowed},
+				OffStream: audit.OffStreamSessionLifecycle,
+			}); err != nil {
+				t.Fatalf("revoke the grant: %v", err)
+			}
+			if got := current(t, ctx, e, approved.SessionID); got != "" {
+				t.Fatalf("a revoked %s grant: client class %q", class, got)
+			}
+		})
+	}
+}
+
+func current(t *testing.T, ctx context.Context, e *env, id uuid.UUID) string {
+	t.Helper()
+	record, class, err := e.sessions.CurrentWithClientClass(ctx, id)
+	if err != nil || record.ID != id {
+		t.Fatalf("CurrentWithClientClass: %v %v", record.ID, err)
+	}
+	return class
 }

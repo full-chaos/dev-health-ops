@@ -49,7 +49,7 @@ func renderChart(t *testing.T, chartValues m) chartRender {
 	chartValues["web"] = m{"env": m{"BACKEND_URL": "http://backend.example"}, "authSecret": m{"secretName": "web-auth-placeholder"}}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, helm, "template", "differential", chart, "-f", "-", "--show-only", "templates/ingress.yaml")
+	cmd := exec.CommandContext(ctx, helm, "template", "--namespace", "default", "differential", chart, "-f", "-", "--show-only", "templates/ingress.yaml")
 	cmd.Stdin = bytes.NewReader(dump(t, chartValues))
 	var so, se bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &so, &se

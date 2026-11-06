@@ -332,7 +332,8 @@ func TestGoWorkflowGatesShardsOnLegsAndAggregatorAcceptsOnlyExplicitZero(t *test
 		t.Fatal("go-storage-integration has no steps")
 	}
 	run := storage.Steps[0].Run
-	if !strings.Contains(run, `"${PLAN_LEGS}" = "0"`) || !strings.Contains(run, `"${SHARD_RESULT}" = "skipped"`) {
-		t.Fatalf("the aggregator's first step must accept only an explicit PLAN_LEGS=0 with a skipped shard, got:\n%s", run)
+	// CHAOS-13075: a zero-leg plan meets the skip-reason check first and passes only with a skipped matrix.
+	if !strings.Contains(run, `"${PLAN_LEGS}" = "0"`) || !strings.Contains(run, `"${SHARD_RESULT}" != "skipped"`) || !strings.Contains(run, `case "${SKIP_REASON:-}" in`) {
+		t.Fatalf("the aggregator's first step must accept only an explicit PLAN_LEGS=0 with an allowed skip reason and a skipped shard, got:\n%s", run)
 	}
 }

@@ -118,9 +118,13 @@ func (e *Evaluator) Evaluate(r Request, s Snapshot) Decision {
 			Action: r.Action, Reason: AuditReasonOwnerExempt,
 		}
 	}
-	d.Obligations = &Obligations{TenantScope: r.OrganizationID, MinimumAssurance: del.Assurance}
+	if d.Obligations == nil {
+		d.Obligations = &Obligations{}
+	}
+	d.Obligations.TenantScope, d.Obligations.MinimumAssurance = r.OrganizationID, del.Assurance
 	if r.ResourceKind == resourceRepository {
 		d.Obligations.RepositoryAllowlist = []string{r.ResourceKey}
+		d.Obligations.RepositoryRestricted = true
 	}
 	return d
 }

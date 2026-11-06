@@ -36,6 +36,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/google/uuid"
 )
@@ -273,6 +274,7 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				// as a pass, and the cause is logged before the response.
 				var orgRequired *principal.OrgRequiredError
 				if errors.As(err, &orgRequired) {
+					observeRESTShadow(r, token, "", orgRequired.Caller, orgRequired.Delegated, false)
 					policy.WriteDetail(w, http.StatusForbidden, "Organization context required", nil)
 					return authctx.Claims{}, false
 				}
@@ -286,7 +288,9 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 				writeRESTUnauthorized(w, r, component, "Invalid or expired token")
 				return authctx.Claims{}, false
 			}
-			return authctx.Claims{OrgID: claims.OrgID}, true
+			pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassHS256, routeProfile(r))
+			observeRESTShadow(r, token, claims.OrgID, claims.Caller, claims.Delegated, true)
+			return legacyClaims(claims.OrgID), true
 		}
 	}
 
@@ -296,7 +300,9 @@ func authenticateRESTRequest(w http.ResponseWriter, r *http.Request, verifier *p
 		writeRESTUnauthorized(w, r, component, "Invalid or expired token")
 		return authctx.Claims{}, false
 	}
-	return authctx.Claims{OrgID: claims.OrgID}, true
+	pdp.FromContext(r.Context()).CountExempt(r.Context(), pdp.ClassEnvelope, routeProfile(r))
+	observeRESTShadow(r, token, claims.OrgID, policy.ShadowCallerMember, claims.ImpersonationActive || (claims.ImpersonatedBy != nil && *claims.ImpersonatedBy != ""), true)
+	return legacyClaims(claims.OrgID), true
 }
 
 // echoRequestID puts the caller's X-Request-Id on the response so an operator

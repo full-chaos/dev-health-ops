@@ -35,14 +35,18 @@ images (`docker-images.yml`). Pin by digest outside local use.
 
 ## Compose (local and self-hosted)
 
-The services are behind the `auth` profile of the repository `compose.yml`, so a
-plain `docker compose up` starts none of them.
+Since CHAOS-13107 the services are part of the default stack of the repository
+`compose.yml`: go-api forwards production's set (sessions, local login, credentials
+and social; phase 4 with `AUTH_USERS_OWNED=true`), so a plain `docker compose up`
+starts them. `--profile auth` still works and selects nothing more. The local
+issuer, the session keys and go-api's session credential are in
+[Evaluate locally](../../operate/install/local-evaluation.md).
 
 ```bash
-docker compose --profile auth up --build --wait auth-service
+docker compose up --build --wait auth-service
 ```
 
-That runs seven services in order:
+That runs these services in order:
 
 | Service | Job |
 | --- | --- |
@@ -52,6 +56,7 @@ That runs seven services in order:
 | `auth-migrate` | One-shot. Applies the auth schema as the migration login, which owns the schema (`AUTH_SCHEMA_OWNER_ROLE` pins that), and grants the runtime login its table privileges. Run it again after an upgrade. `auth-migrate grants` is the grant-only pass: the Helm chart runs it after the ops migrate Job and it fails when a listed public table is missing. |
 | `auth-grants` | One-shot. Runs `auth-migrate grants` (the grant-only pass) after `auth-migrate`, as the same elevated login, so the runtime login's table privileges, including those on the public tables, are current before auth-service starts. |
 | `auth-fence-init` | One-shot, dev compose only. `auth-migrate restore-fence init -if-absent` writes the first restore-fence row of the fresh database (timeline 1) so that auth-service is ready; a repeat bring-up exits 0 without writing. Never run it on a restored volume (use `restore-fence apply`), and the Helm chart has no such Job: a production database is initialised once by hand (see the first roll below). |
+| `auth-users-backfill` | One-shot, dev compose only (CHAOS-13107). Runs `dho auth users-backfill -insert-only` (creates the missing auth users, never changes an existing one) as the runtime login with `AUTH_USERS_OWNED=false` for that run only, after `auth-migrate` and `auth-grants`, so `public.users` (on a fresh install, the migrations' service placeholder) is in the auth schema before auth-service, which owns users, serves. Every bring-up runs it. |
 | `auth-service` | The service, started last as the unprivileged login. The signing key is mounted read-only from the `private/` subpath of the volume. |
 
 Things that are easy to get wrong:
@@ -59,8 +64,9 @@ Things that are easy to get wrong:
 - **Network.** `auth-provision`, `auth-migrate`, `auth-grants`, `auth-fence-init` and `auth-service` join only
   the `auth_plane` network, which `postgres` also joins; `auth-keys-init` needs
   no network at all (`network_mode: none`, it only writes a file into its
-  volume). None of them can reach any other stack service. The only effect on the
-  default stack is that `postgres` has two networks instead of one.
+  volume). Since CHAOS-13107 `valkey` (auth-service's rate-limit store), go-api
+  (it calls the session issue route) and `auth-issuer` (it forwards the
+  discovery document and the JWKS) join `auth_plane` too.
 - **DSNs are keyword form** (`host=postgres port=5432 user=... password='...'`).
   A URI would need every reserved character of the password percent-encoded,
   which Compose cannot do. Any password works except one containing a single
@@ -82,7 +88,8 @@ curl -fsS http://127.0.0.1:8096/readyz        # {"status":"ok"}
 docker compose --profile auth run --rm --no-deps auth-migrate --check
 ```
 
-Roll it back (nothing else depends on it):
+Roll it back (go-api and query-api depend on it since CHAOS-13107: stop them
+first):
 
 ```bash
 docker compose --profile auth rm --stop --force \
@@ -111,7 +118,9 @@ database would mark it fenced without applying any revocation. A restored databa
 
 go-api writes External Push credential lifecycle events to the auth outbox in the
 same transaction as the token change, behind `AUTH_PUSH_LIFECYCLE_EVENTS` (go-api,
-default off). Its login holds no table privilege in the auth schema: it holds
+default off). The expiry sweeper (`internal/jobs/pushexpiry`) writes expired events through the
+same function as the worker's domain login. Each of the two logins (go-api's `devhealth_api` and
+the worker's `devhealth_domain`) holds no table privilege in the auth schema: it holds
 `EXECUTE` on one function, `append_external_push_lifecycle_event`, which runs as a
 dedicated `NOLOGIN` owner holding exactly `INSERT` on `auth_outbox_events`,
 `SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions` and `USAGE` on the outbox
@@ -119,20 +128,35 @@ sequence. A posture check in every `auth-migrate` run pins that set.
 
 Roll order, each step before the next:
 
-1. **Privileged, by whoever creates the logins** (compose: `auth-provision` does it
+1. **Privileged, by whoever creates the logins** (production creates the auth logins by hand; the chart's
+   provision-roles hook does not create this role. Compose: `auth-provision` does it
    when `AUTH_PUSH_LIFECYCLE_WRITER_ROLE` is set; bigboy and production: the postgres superuser, through `kubectl exec` on the postgres pod, the same step that provisions `devhealth_auth`):
-   `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. The
+   `CREATE ROLE <writer> NOLOGIN;` and `GRANT <writer> TO <migration login>;`. Production:
+   `CREATE ROLE devhealth_auth_push_writer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`
+   and `GRANT devhealth_auth_push_writer TO devhealth_auth_migrator;`. Read back before the next step:
+   `rolcanlogin` is false and `pg_has_role('devhealth_auth_migrator', 'devhealth_auth_push_writer', 'MEMBER')` is true. The
    migration login (not a superuser) cannot do this itself, and it needs the
    membership for `ALTER FUNCTION ... OWNER TO`. A missing role, a role that can log in,
    or a missing membership stops `auth-migrate` with a message naming this step.
 2. `auth-migrate` with `AUTH_PUSH_LIFECYCLE_WRITER_ROLE=<writer>` and
-   `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>` (Helm:
-   `authService.migrate.pushLifecycle`; both the migrate and the grants Job). Migration
+   `AUTH_PUSH_LIFECYCLE_CALLER_ROLES=<go-api login>,<worker domain login>` (production:
+   `devhealth_api,devhealth_domain`; Helm: `authService.migrate.pushLifecycle.writerRole` and
+   `callerRoles`, both the migrate and the grants Job; the chart refuses callers without a writer
+   role, a writer without callers, any caller count other than two, a blank or invalid caller, and a repeated or colliding role, at every authService.phase). Both logins must exist.
+   The change is values only: no migration adds the grant, and a plain SQL `GRANT` would be revoked by
+   the next grant pass, which keeps `EXECUTE` on exactly the callers (a session reader that is not a
+   caller is revoked, and a holder that is not a caller fails the posture check). Migration
    0044 creates the function and widens the revision table's two CHECKs, 0047 replaces its body; the grant
    pass hands the function to the writer, with `CREATE` on the schema granted and
    revoked inside one transaction, and gives `EXECUTE` to the callers only.
+   Before and after the Jobs, read the pods' posture (PODSNAP: go-api, the worker, the sweeper's
+   worker pod): every pod stays Ready, no `excess privileges` and no `missing` line. The grant is in
+   the auth schema, which `CheckRolePosture` (public and River schemas only) never reads, so an
+   image from before this change keeps its readiness; the role-posture manifests do not change.
 3. Only then roll go-api with `AUTH_PUSH_LIFECYCLE_EVENTS=true`. With the flag on and
-   the grants missing, token writes fail as 500 and roll back.
+   the grants missing, token writes fail as 500 and roll back. Then the
+   `push-lifecycle backfill-created` verb (dry run, `-apply`, read-only readback), and only
+   after that the expiry sweeper's schedule row.
 
 Organization-wide tokens (no source) emit events too (CHAOS-12358). Every event
 carries a required `binding`: `source` (with `source_id`) or `organization`
@@ -144,9 +168,39 @@ migration login to hold the writer's privileges, so the membership granted in st
 1 must **inherit** (`GRANT <writer> TO <migration login> WITH INHERIT TRUE`, the
 default); a `SET`-only membership fails the migration with a permission error.
 
+### Provider id copy events: the writer role and the roll order (CHAOS-13057)
+
+Migration 0057 adds `append_repository_identity_event`, the provider sync's only door to the auth outbox
+for its id copy events. It runs as a `NOLOGIN` writer role of its own (`AUTH_REPO_IDENTITY_WRITER_ROLE`,
+production `devhealth_auth_repo_identity_writer`) that holds exactly `INSERT` on `auth_outbox_events`,
+`USAGE` on its sequence and `SELECT`/`INSERT`/`UPDATE` on `aggregate_revisions`, and no privilege on the
+id copy table (the auth service writes that table). Exactly one login holds `EXECUTE`: the worker domain
+login of the provider sync (`AUTH_REPO_IDENTITY_CALLER_ROLES`, production `devhealth_domain`); go-api
+holds none. A posture check in every `auth-migrate` run pins that set.
+
+Roll order, each step before the next; every switch is off until its step:
+
+1. **Privileged**, the same step as the External Push writer above: `CREATE ROLE
+   devhealth_auth_repo_identity_writer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`
+   and `GRANT devhealth_auth_repo_identity_writer TO devhealth_auth_migrator;` (compose: `auth-provision`
+   does it when `AUTH_REPO_IDENTITY_WRITER_ROLE` is set). Read back `rolcanlogin` false and the membership.
+2. `auth-migrate` with `AUTH_REPO_IDENTITY_WRITER_ROLE` and `AUTH_REPO_IDENTITY_CALLER_ROLES=devhealth_domain`
+   (Helm: `authService.migrate.repoIdentity.writerRole` and `callerRoles`, both Jobs; the chart refuses one
+   without the other, any caller count other than one, and a writer equal to the runtime login or to the
+   External Push writer, at every authService.phase).
+3. auth-service with `AUTH_REPO_IDENTITY_PROJECTION=on` (readiness check
+   `repository_identity_projection_reader`). The reader is a no-op while the outbox holds none of these events.
+4. The worker with `WORKER_REPO_IDENTITY_OUTBOX=true` (unset is off; a set value must be exactly `true` or `false`,
+   stricter than `AUTH_PUSH_LIFECYCLE_EVENTS` on purpose; any other value stops start-up), only after steps 2 and 3. The commit of each `repos` effect of the github and gitlab
+   repo-metadata sync then appends one event per repository with a provider id, in the effect ledger's
+   transaction, through the function of `AUTH_DATABASE_SCHEMA` (default `auth`). A row without a provider id
+   (local git, External Push) gives none. The switch on before step 2 fails every repo-metadata unit (the
+   commit refuses without the function) rather than losing an event, and the worker logs
+   `repository_identity_outbox_not_ready` once at start; turning it off again is the rollback.
+
 ### The migration login owns the auth schema and is not a superuser
 
-The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) that owns the auth schema and every object in it. A superuser owner would lend superuser authority to any owner path in the schema. The pin, the environment variable `AUTH_SCHEMA_OWNER_ROLE` (Helm: `authService.migrate.ownerRole`, empty by default and allowed empty at every phase) of the `auth-migrate` and `auth-grants` Jobs, names that role; with it set, every `auth-migrate` and `auth-grants` run checks, before any GRANT, that the schema and every object in it has that owner (the one append function of the push lifecycle, owned by its writer role, is the only exception) and that the role holds none of the five attributes. Unset, the check is off (the dev Compose stack migrates as a superuser).
+The login of `authService.migrate.secretName` is a dedicated role (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) that owns the auth schema and every object in it. A superuser owner would lend superuser authority to any owner path in the schema. The pin, the environment variable `AUTH_SCHEMA_OWNER_ROLE` (Helm: `authService.migrate.ownerRole`, empty by default and allowed empty at every phase) of the `auth-migrate` and `auth-grants` Jobs, names that role; with it set, every `auth-migrate` and `auth-grants` run checks, before any GRANT, that the schema and every object in it has that owner (the append functions of the push lifecycle and of the provider id copy, each owned by its writer role, are the only exceptions) and that the role holds none of the five attributes. Unset, the check is off (the dev Compose stack migrates as a superuser).
 
 1. **Privileged, once, by the postgres superuser** (`kubectl exec` on the postgres pod; the password goes in on stdin and never on a command line): create the login; for a fresh database also `CREATE SCHEMA auth AUTHORIZATION <login>`. The login needs no `CREATE` on the database: `auth-migrate` does not run `CREATE SCHEMA` on a schema that exists.
 2. **An existing database whose schema a superuser owns:** run `auth-migrate owner-move -from <old owner> -to <login> -runtime-role <runtime login>` with the old owner's DSN (it must be a superuser). It prints counts only; add `-apply` to make the change. It moves the schema and every object the old owner owns in one transaction under the same locks as the grants pass, gives the login the privileges of the grants pass in the ops schema WITH GRANT OPTION, and re-grants the runtime login's rows in that schema as the login before it revokes the old grantor's rows, so a reader of the runtime login sees no gap. It is safe to run again. A restore from a backup taken before the move brings the old owner back: the pin fails and names this step.
@@ -183,7 +237,7 @@ rollback is the phase minus 1.
 | 2 | Sessions | Phase 1 plus `AUTH_PROXY_URL`, `AUTH_PROXY_SESSIONS` and `AUTH_SESSION_ISSUE_TOKEN` on go-api (from phase 2 every `AUTH_PROXY_*` flag is rendered `"true"` or `"false"`, so an env entry beats `goApi.envFrom`), `AUTH_PROXY_SESSIONS` on query-api, the migrate Job and the River hooks, the session keys on auth-service, and the auth-service API port open to go-api only. Needs the session readers, the successor key and the rate-limit store. |
 | 3 | Login and social sign-in | Phase 2 plus `AUTH_PROXY_LOCAL_LOGIN` and `AUTH_PROXY_SOCIAL` on go-api (two stages, `authService.loginStage`: `authService` first, then `goApi`), and on auth-service `AUTH_LOGIN_LOCKOUT_KEY` (`authService.sessionKeys.loginLockout`) and the six optional `SOCIAL_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` keys (`authService.social.secretName`). |
 | 4 | Users owned | Phase 3 plus `AUTH_PROXY_CREDENTIALS` and `AUTH_USERS_OWNED` (go-api, auth-service, the migrate, grants and backfill Jobs). Needs `authService.usersOwnedStage`: `goApi` (go-api only) first, then `owned` (everything else), with the barrier script between them ([runbook](../../operate/runbooks/auth-users-owned-flip-and-rollback.md)). Renders (D6358). |
-| 5 | Orgs owned | Unsupported. Do not set it (D6651). The chart refuses it at render. |
+| 5 | Orgs owned | **Cancelled (D6651).** Refused at render. `AUTH_ORGS_OWNED` is removed. |
 
 Phase 4 means (D6358, D6652) that auth-service owns the user write path and writes `public.users` in the same
 transaction. `public.users` is the authoritative user record (D6651). `auth.users` holds the auth-only data
@@ -191,7 +245,7 @@ transaction. `public.users` is the authoritative user record (D6651). `auth.user
 
 Phase 5 is cancelled (D6651). `public.organizations` and `public.memberships` are the authority, and the `auth`
 copies are never a decision input. Do not set phase 5 or `AUTH_ORGS_OWNED`: both are unsupported, and the chart
-refuses phase 5 at render.
+refuses phase 5 and `AUTH_ORGS_OWNED` (in any `extraEnv` list) at render.
 The credential routes move with users owned, not with login: go-api refuses
 `AUTH_USERS_OWNED` unless the credential routes go to auth-service. auth-service
 mounts them from phase 2 and answers 503 until users are owned.

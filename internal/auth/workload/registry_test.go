@@ -32,12 +32,60 @@ func TestDefaultRegistryIsTheFiveSeededWorkloads(t *testing.T) {
 	}
 	for _, s := range specs {
 		switch s.Name {
-		case "web", "query-api", "auth-service":
+		case "auth-service":
 			if len(s.Audiences) != 0 {
 				t.Errorf("%q is a registry identity and holds no workload audience, got %v", s.Name, s.Audiences)
 			}
 		}
 	}
+}
+
+// web is a PEP: its workload token is for auth-service alone (the authorize routes), with no action.
+func TestTheWebWorkloadCarriesTheAuthServiceAudienceAlone(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name != "web" {
+			continue
+		}
+		if !reflect.DeepEqual(s.Audiences, []string{"auth-service"}) || len(s.AllowedActions) != 0 {
+			t.Fatalf("web row = audiences %v, actions %v; want [auth-service] and none", s.Audiences, s.AllowedActions)
+		}
+		return
+	}
+	t.Fatal("no web row")
+}
+
+func TestDefaultRegistryEveryRowHasAnOwner(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Owner != "platform-operations" {
+			t.Errorf("registry row %q owner = %q, want platform-operations", s.Name, s.Owner)
+		}
+	}
+}
+
+// query-api asks auth-service's PDP with its own workload token, so its row holds the auth-service audience (and
+// only it): a row with no audience is never resolved by the exchange.
+func TestQueryAPIRowHoldsTheAuthServiceAudience(t *testing.T) {
+	specs, err := DefaultRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name == "query-api" {
+			if !reflect.DeepEqual(s.Audiences, []string{"auth-service"}) || len(s.AllowedActions) != 0 {
+				t.Fatalf("query-api row: audiences %v actions %v, want [auth-service] and none", s.Audiences, s.AllowedActions)
+			}
+			return
+		}
+	}
+	t.Fatal("no query-api row")
 }
 
 func TestRegistryAudiencesAreOnlyWorkloadTokenAudiences(t *testing.T) {
@@ -71,16 +119,21 @@ func registryWith(t *testing.T, workloads string) []byte {
 func TestLoadRegistryRefusesEveryDefect(t *testing.T) {
 	cat := policycatalog.Default()
 	cases := map[string]string{
-		"audience that is not a workload_token audience": `[{"name":"x1","audiences":["query-api"],"allowed_actions":[]}]`,
-		"unknown audience":        `[{"name":"x1","audiences":["nope"],"allowed_actions":[]}]`,
-		"unknown action":          `[{"name":"x1","audiences":[],"allowed_actions":["a.b"]}]`,
-		"wildcard action":         `[{"name":"x1","audiences":[],"allowed_actions":["*"]}]`,
-		"duplicate name":          `[{"name":"x1","audiences":[],"allowed_actions":[]},{"name":"x1","audiences":[],"allowed_actions":[]}]`,
-		"bad name":                `[{"name":"X","audiences":[],"allowed_actions":[]}]`,
-		"missing audiences":       `[{"name":"x1","allowed_actions":[]}]`,
-		"missing allowed_actions": `[{"name":"x1","audiences":[]}]`,
-		"duplicate audience":      `[{"name":"x1","audiences":["auth-service","auth-service"],"allowed_actions":[]}]`,
-		"unknown member":          `[{"name":"x1","audiences":[],"allowed_actions":[],"secret":"s"}]`,
+		"audience that is not a workload_token audience": `[{"name":"x1","owner":"platform-operations","audiences":["query-api"],"allowed_actions":[]}]`,
+		"missing owner":           `[{"name":"x1","audiences":[],"allowed_actions":[]}]`,
+		"empty owner":             `[{"name":"x1","owner":"","audiences":[],"allowed_actions":[]}]`,
+		"owner with a capital":    `[{"name":"x1","owner":"Platform","audiences":[],"allowed_actions":[]}]`,
+		"owner with a space":      `[{"name":"x1","owner":"platform operations","audiences":[],"allowed_actions":[]}]`,
+		"owner that is an email":  `[{"name":"x1","owner":"a@b.c","audiences":[],"allowed_actions":[]}]`,
+		"unknown audience":        `[{"name":"x1","owner":"platform-operations","audiences":["nope"],"allowed_actions":[]}]`,
+		"unknown action":          `[{"name":"x1","owner":"platform-operations","audiences":[],"allowed_actions":["a.b"]}]`,
+		"wildcard action":         `[{"name":"x1","owner":"platform-operations","audiences":[],"allowed_actions":["*"]}]`,
+		"duplicate name":          `[{"name":"x1","owner":"platform-operations","audiences":[],"allowed_actions":[]},{"name":"x1","owner":"platform-operations","audiences":[],"allowed_actions":[]}]`,
+		"bad name":                `[{"name":"X","owner":"platform-operations","audiences":[],"allowed_actions":[]}]`,
+		"missing audiences":       `[{"name":"x1","owner":"platform-operations","allowed_actions":[]}]`,
+		"missing allowed_actions": `[{"name":"x1","owner":"platform-operations","audiences":[]}]`,
+		"duplicate audience":      `[{"name":"x1","owner":"platform-operations","audiences":["auth-service","auth-service"],"allowed_actions":[]}]`,
+		"unknown member":          `[{"name":"x1","owner":"platform-operations","audiences":[],"allowed_actions":[],"secret":"s"}]`,
 		"no workloads":            `[]`,
 	}
 	for name, body := range cases {
@@ -93,7 +146,7 @@ func TestLoadRegistryRefusesEveryDefect(t *testing.T) {
 	if _, err := LoadRegistry([]byte(`{"schema_version":"workload-registry.v2","workloads":[]}`), vocabulary.Audiences, cat); !errors.Is(err, ErrRegistryInvalid) {
 		t.Fatalf("wrong schema_version accepted: %v", err)
 	}
-	good := `[{"name":"x1","audiences":["auth-service"],"allowed_actions":["org.read"]}]`
+	good := `[{"name":"x1","owner":"platform-operations","audiences":["auth-service"],"allowed_actions":["org.read"]}]`
 	if _, err := LoadRegistry(registryWith(t, good), vocabulary.Audiences, cat); err != nil {
 		t.Fatalf("the accepting row was refused: %v", err)
 	}

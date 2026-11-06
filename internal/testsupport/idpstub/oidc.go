@@ -1,6 +1,7 @@
 package idpstub
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -450,7 +451,15 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if override != nil {
-		writeJSON(w, http.StatusOK, override)
+		answer, err := copyClaims(override)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if edit := o.currentOverride(); edit != nil {
+			edit(answer)
+		}
+		writeJSON(w, http.StatusOK, answer)
 		return
 	}
 	if !known {
@@ -462,4 +471,20 @@ func (o *OIDC) serveUserinfo(w http.ResponseWriter, r *http.Request) {
 		edit(answer)
 	}
 	writeJSON(w, http.StatusOK, answer)
+}
+
+// copyClaims copies the claims through JSON: the stub answers JSON, so the wire form is the truth.
+func copyClaims(m map[string]any) (map[string]any, error) {
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	// UseNumber: a float64 round trip would change large integers and refuse numbers past its range.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var out map[string]any
+	if err := dec.Decode(&out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

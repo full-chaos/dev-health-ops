@@ -183,10 +183,10 @@ func (w *workloadIssueFixture) requireSuccessReasonsAreClosed() {
 // users read, no projection, no session.
 func (w *workloadIssueFixture) nothingRead(name string) {
 	w.t.Helper()
-	if len(w.creds.seen) != 0 || w.users.calls != 0 || len(w.sessions.created) != 0 ||
+	if len(w.creds.checked()) != 0 || w.users.calls != 0 || len(w.sessions.created) != 0 ||
 		len(w.projector.userCalls) != 0 || len(w.projector.orgCalls) != 0 {
 		w.t.Fatalf("%s: a refusal read stores: checks %d users %d sessions %d projections %d/%d", name,
-			len(w.creds.seen), w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
+			len(w.creds.checked()), w.users.calls, len(w.sessions.created), len(w.projector.userCalls), len(w.projector.orgCalls))
 	}
 }
 
@@ -229,8 +229,8 @@ func TestIssueSessionAcceptsTheGoAPIWorkloadToken(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", response.Code, response.Body)
 	}
-	if len(w.creds.seen) != 0 {
-		t.Fatalf("the workload path checked a service credential: %v", w.creds.seen)
+	if len(w.creds.checked()) != 0 {
+		t.Fatalf("the workload path checked a service credential: %v", w.creds.checked())
 	}
 	if len(w.sessions.created) != 1 {
 		t.Fatalf("%d sessions created", len(w.sessions.created))
@@ -331,6 +331,7 @@ func issuePreKeyRefusals() map[string]func(*workloadIssueFixture) map[string]str
 // request_id and occurred_at differ), and no store is read.
 // The prefix, shape, typ, audience and subject refusals also read no key set.
 func TestIssueSessionRefusesWrongCredentialsBeforeAnyRead(t *testing.T) {
+	t.Parallel()
 	var golden string
 	for name, build := range issuePreKeyRefusals() {
 		w := newWorkloadIssueFixture(t)
@@ -404,6 +405,7 @@ func issueVerifierRefusals() map[string]func(*workloadIssueFixture) map[string]s
 // T10: a token that passes the class, audience and subject peek but fails the
 // verifier is refused: no store is read, and the body is the same.
 func TestIssueSessionRefusesATokenTheVerifierRefuses(t *testing.T) {
+	t.Parallel()
 	var golden string
 	for name, build := range issueVerifierRefusals() {
 		w := newWorkloadIssueFixture(t)
@@ -437,8 +439,8 @@ func TestIssueSessionCountsAcceptedServiceCredentialUse(t *testing.T) {
 			t.Fatalf("status %d: %s", response.Code, response.Body)
 		}
 	}
-	if len(w.creds.seen) != 2 || w.creds.seen[0] != issuerToken {
-		t.Fatalf("checks %v", w.creds.seen)
+	if len(w.creds.checked()) != 2 || w.creds.checked()[0] != issuerToken {
+		t.Fatalf("checks %v", w.creds.checked())
 	}
 	if got, _ := w.counter(compatCounterName, map[string]string{"class": authsessClass}); got != 2 {
 		t.Fatalf("compat uses = %d, want 2", got)
@@ -600,6 +602,7 @@ func TestNewSessionIssueWorkloadRefusesBadConfigurationNamingNoValue(t *testing.
 // The log line names why a bearer was refused, so an operator can tell a
 // class refusal from a verifier refusal. The answer never does.
 func TestIssueSessionLogsWhyABearerWasRefused(t *testing.T) {
+	t.Parallel()
 	forty3 := strings.Repeat("A", 43)
 	for name, tc := range map[string]struct {
 		build func(*workloadIssueFixture) map[string]string
@@ -734,7 +737,7 @@ func TestTheRouteRechecksTheVerifiedClaimsAfterVerify(t *testing.T) {
 		if len(w.sessions.created) != before {
 			t.Fatalf("%s: a session was created on claims the route must refuse", name)
 		}
-		if len(w.creds.seen) != 0 || w.users.calls != usersBefore {
+		if len(w.creds.checked()) != 0 || w.users.calls != usersBefore {
 			t.Fatalf("%s: a refusal read stores", name)
 		}
 	}

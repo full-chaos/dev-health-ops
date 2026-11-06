@@ -20,8 +20,9 @@ const longRunningRestart = "unless-stopped"
 
 // oneShotServices run to their end and must not restart; every other service is long-running.
 var oneShotServices = []string{
-	"acr-db-acl", "acr-db-init", "acr-migrate",
-	"go-contractcheck", "go-river-provision",
+	"acr-db-acl", "acr-db-init", "acr-migrate", "acr-workload-bootstrap", "acr-workload-volume",
+	"auth-fence-init", "auth-grants", "auth-keys-init", "auth-migrate", "auth-owner-grants", "auth-provision", "auth-session-keys-init", "auth-workload-seed",
+	"go-api-workload-bootstrap", "go-api-workload-volume", "go-contractcheck", "go-river-provision",
 	"go-sync-dispatch-route-activate", "go-sync-finalize-route-activate", "go-sync-post-route-activate", "go-sync-reference-route-activate",
 	"go-worker-consumers-ready", "go-worker-migrate", "go-worker-ready", "go-worker-route-activate",
 	"migrate",

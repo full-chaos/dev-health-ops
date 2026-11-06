@@ -21,6 +21,7 @@ func TestGoldenFixturesCrossDecodeAndReencode(t *testing.T) {
 		{KindDimensionFold, "examples/system.dimension_fold.v1.json", DimensionFoldPayload{ScheduledFor: "2026-08-12T12:00:00Z"}},
 		{KindLLMBudgetStaleReservations, "examples/system.llm_budget_stale_reservations.v1.json", LLMBudgetStaleReservationsPayload{ScheduledFor: "2026-10-13T12:00:00Z"}},
 		{KindProviderOAuthRevocations, "examples/sync.provider_oauth_revocations.v1.json", ProviderOAuthRevocationsPayload{ScheduledFor: "2026-10-30T12:00:00Z"}},
+		{KindExternalPushExpirySweep, "examples/sync.external_push_expiry_sweep.v1.json", ExternalPushExpirySweepPayload{ScheduledFor: "2026-11-03T12:00:00Z"}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v1.json", RetentionCleanupPayload{BatchSize: 250, DeleteBefore: "2026-07-14T12:00:00Z", RetentionPolicy: RetentionWorkerTerminal}},
 		{KindRetentionCleanup, "examples/system.retention_cleanup.v3.json", RetentionCleanupPayload{BatchSize: 500, DeleteBefore: "2026-07-28T05:30:00Z", RetentionPolicy: RetentionAskDevConversations}},
 		{KindReportExecuteOnDemand, "examples/report.execute_on_demand.v1.json", OnDemandReportExecutionPayload{ReportID: "00000000-0000-4000-8000-000000000002"}},

@@ -3,7 +3,13 @@
     "allowed": true,
     "cache_class": "resource_revision_bound",
     "expires_in_seconds": 30,
-    "policy_revision": 11,
+    "obligations": {
+      "repository_allowlist": [
+        "acme/api"
+      ],
+      "tenant_scope": "org-a"
+    },
+    "policy_revision": 13,
     "reason": "allowed_by_membership_default",
     "wire_reason_code": "allowed_by_membership_default"
   },

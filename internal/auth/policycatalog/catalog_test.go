@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	actionsSHA = "0cbbb590cab09eedb93fda0f1ef12a4ebab3c3f5a8c12af6497edaea317f6a32"
-	rolesSHA   = "b882640884c42aec660fda0fab492a7ec71c1cc1da5f10fa32b0bbaab7de82bb"
+	actionsSHA = "8c132ca02089efa1db2d93c80f95803b32ec671a15d756e676aca48c4ce80200"
+	rolesSHA   = "00a5bec4fffed8e56e7918727d3521efed8aa1c0fb7fc4d3dae60895904ba485"
 )
 
 func repoRoot(t *testing.T) string {
@@ -222,7 +222,7 @@ func TestEmbeddedFilesValidateAgainstTheirSchemas(t *testing.T) {
 // internal/api/session/permissions.go. Catalog-only = not served in /auth/me
 // until a web-reviewed change adds it there; every other catalog action must
 // still equal a session permission.
-var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "acr.evidence.read": true, "acr.credential.issue": true,
+var catalogOnly = map[string]bool{"admin.impersonate": true, "billing.read": true, "billing.manage": true, "license.read": true, "members.update": true, "authz.decide": true, "acr.context.read": true, "reports.write": true, "acr.evidence.read": true, "acr.credential.issue": true,
 	"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true,
 	"credentials.project": true,
 }
@@ -394,6 +394,31 @@ func TestCatalogHoldsTheBillingAndLicenseActions(t *testing.T) {
 	}
 }
 
+// reports.write covers the saved-report writes query-api serves as the GraphQL mutations createSavedReport, updateSavedReport,
+// deleteSavedReport, cloneSavedReport and triggerReport. Parity with today's guard: the only check on those writes is
+// requireMutationOrg (internal/queryapi/graph/reports_mutations.go:38), which reads the organization and no role, so
+// every organization role that can read can write; the platform roles hold no organization action.
+func TestReportsWriteIsHeldByEveryOrganizationRoleAsTodaysWritersAre(t *testing.T) {
+	c := Default()
+	a, err := c.Action("reports.write")
+	if err != nil {
+		t.Fatalf("action reports.write: %v", err)
+	}
+	if a.Scope != ScopeOrganization || a.ResourceKind != "organization" || a.RiskClass != RiskHigh || a.CacheClass != CacheNone || a.Impersonation != ImpersonationDenied {
+		t.Errorf("reports.write = %+v, want organization scope and kind, high risk, cache none, impersonation denied", a)
+	}
+	var got []string
+	for _, r := range c.Roles() {
+		if c.Allows(r.ID, "reports.write") {
+			got = append(got, r.ID)
+		}
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "admin,member,owner,viewer" {
+		t.Errorf("reports.write is held by %v, want admin,member,owner,viewer", got)
+	}
+}
+
 // acr.context.read is the first repository-kind action: organization scope, a repository as its resource.
 func TestEmbeddedCatalogHoldsAcrContextReadAsARepositoryAction(t *testing.T) {
 	a, err := Default().Action("acr.context.read")
@@ -468,12 +493,12 @@ func TestImpersonationIsDeniedOnTheG51List(t *testing.T) {
 	want := map[string]bool{
 		"admin.users": true, "admin.orgs": true, "admin.impersonate": true,
 		"admin.billing": true, "admin.flags": true, "admin.audit": true, "admin.telemetry": true, "admin.stats": true, "members.invite": true, "members.manage": true,
-		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true,
+		"org.write": true, "org.delete": true, "billing.manage": true, "settings.write": true, "integrations.write": true, "reports.write": true,
 		"members.update": true, "authz.decide": true, "acr.credential.issue": true, "credentials.project": true,
 	}
 	actions := Default().Actions()
-	if len(actions) != 37 {
-		t.Fatalf("%d actions, want 37", len(actions))
+	if len(actions) != 38 {
+		t.Fatalf("%d actions, want 38", len(actions))
 	}
 	for _, a := range actions {
 		denied := a.Impersonation == ImpersonationDenied
@@ -638,5 +663,48 @@ func TestNoRoleHoldsAcrEvidenceReadOrCredentialIssue(t *testing.T) {
 				t.Errorf("role %s holds %s", r.ID, id)
 			}
 		}
+	}
+}
+
+func TestLoadReadsPlatformAdminOnlyOnAnOrganizationAction(t *testing.T) {
+	const roles = `{"schema_version":"roles.v1","catalog_version":1,"description":"d","roles":[{"role":"r","scope":"organization","actions":["a.b"]}]}`
+	load := func(scope, kind, member string) (*Catalog, error) {
+		actions := `{"schema_version":"actions.v1","catalog_version":1,"description":"d","actions":[` +
+			`{"action":"a.b","scope":"organization","resource_kind":"organization","risk_class":"low","cache_class":"none","impersonation":"denied"},` +
+			`{"action":"a.c","scope":"` + scope + `","resource_kind":"` + kind + `","risk_class":"low","cache_class":"none","impersonation":"denied"` + member + `}]}`
+		return Load([]byte(actions), []byte(roles))
+	}
+	for member, want := range map[string]bool{``: false, `,"platform_admin":"denied"`: false, `,"platform_admin":"allowed"`: true} {
+		c, err := load("organization", "organization", member)
+		if err != nil {
+			t.Fatalf("%q: %v", member, err)
+		}
+		if a, _ := c.Action("a.c"); a.PlatformAdmin != want {
+			t.Errorf("%q: PlatformAdmin %v, want %v", member, a.PlatformAdmin, want)
+		}
+	}
+	for name, c := range map[string][3]string{
+		"unknown value":       {"organization", "organization", `,"platform_admin":"maybe"`},
+		"platform action":     {"platform", "platform", `,"platform_admin":"allowed"`},
+		"repository resource": {"organization", "repository", `,"platform_admin":"allowed"`},
+	} {
+		if _, err := load(c[0], c[1], c[2]); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Load = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestThePlatformAdminActionsAreTheEightOrganizationActionsOfTheAdminGuard(t *testing.T) {
+	var got []string
+	for _, a := range Default().Actions() {
+		if a.PlatformAdmin {
+			got = append(got, a.ID)
+		}
+	}
+	sort.Strings(got)
+	want := []string{"billing.manage", "integrations.read", "integrations.write", "members.invite", "members.manage",
+		"members.read", "settings.write", "teams.write"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("platform_admin actions %v, want %v", got, want)
 	}
 }

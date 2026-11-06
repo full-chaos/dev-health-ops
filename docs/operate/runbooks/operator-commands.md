@@ -173,52 +173,74 @@ resolution (admin override in `identities`/`teams.manual_members`, else provider
 `team_memberships`) → `linked_issue` inheritance → `author_membership` → `manual_fallback`.
 9 total precedence tiers; `docs/contribute/architecture/team-attribution.md` §0.1/§0.2 is authoritative.
 
-## Workerctl on Kubernetes (Trap #169, amended)
+## `dho workers` on Kubernetes: the one-off operator Pod (Trap #169, amended 2026-11-03)
 
-**No pod on k8s carries both `dho workers` AND the coordinator DSN it needs.** The workerctl binary ships only in the go-worker image, but `COORDINATOR_DATABASE_URI` is set only on scheduler and reconciler Deployments.
+`dho workers` needs `COORDINATOR_DATABASE_URI`. The chart gives that DSN only to the
+coordinator groups, `reconciler` and `scheduler` (`deploy/helm/dev-health/templates/go-workers.yaml:4`,
+`:317-318`). Every other group gets it blank (`go-workers.yaml:297-303`; the names are in
+`dev-health.goWorkerDSNNames`, `templates/_helpers.tpl:1223-1225`). An exec in a worker pod such as
+go-heavy therefore stops with `{"error":{"code":"configuration_error","detail":"COORDINATOR_DATABASE_URI is required"}}`.
+The coordinator pods do carry both the binary and the DSN, but they run their own pinned build, which may
+not have the verb or the fix you need, and they are serving pods.
 
-**Solution: one-off corrective Pod.** Apply a temporary Pod manifest with secrets via `secretKeyRef` (never flags/argv — Trap #121, R167):
+**Solution: one one-off Pod per verb** (CHAOS-12562 R4, prod 2026-11-03). Build it from the LIVE
+Deployment of the build that has the verb (go-heavy below), not from a hand-written manifest:
 
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: dho-workers-oneoff
-  namespace: default
-spec:
-  serviceAccountName: default
-  imagePullSecrets:
-  - name: ghcr-pull
-  containers:
-  - name: workerctl
-    image: gcr.io/full-chaos/dev-health-go-operator:sha-<COMMIT>
-    restartPolicy: Never
-    env:
-    - name: COORDINATOR_DATABASE_URI
-      valueFrom:
-        secretKeyRef:
-          name: dev-health-ops-migrate
-          key: POSTGRES_URI
-    command:
-    - workerctl
-    - metrics
-    - finalize-redrive
-    - --org
-    - <uuid>
-    - --from
-    - <date>
-    - --to
-    - <date>
-    - --review-evidence
-    - <text>
-```
+- namespace `dev-health`;
+- image: the exact `ghcr.io/full-chaos/dev-health-go-operator@sha256:<digest>` of that Deployment
+  (check that the digest is the build you need before you apply);
+- the Deployment's `serviceAccountName`, `env`, `imagePullSecrets`, pod and container
+  `securityContext` and `resources`, copied unchanged; from `envFrom` only the `configMapRef` entries
+  (a `secretRef` entry, for example from `goWorkers.extraEnvFrom`, would pass a whole Secret into the Pod:
+  the generator refuses it, so add a needed key by `secretKeyRef` instead);
+- plus `COORDINATOR_DATABASE_URI` from Secret `dev-health-ops-go-pgbouncer`, key `COORDINATOR_DATABASE_URI`,
+  by `secretKeyRef` (the key the coordinator groups use). Never put a DSN in args, flags or a file
+  (Trap #121, R167);
+- labels: `app.kubernetes.io/name: ops`, `app.kubernetes.io/instance: dev-health`,
+  `app.kubernetes.io/component: go-worker` (the pgbouncer NetworkPolicies admit this component), and
+  `dev-health.io/worker-group: operator-oneoff`, so no ReplicaSet adopts the Pod;
+- no container ports and no probes; `restartPolicy: Never`; `activeDeadlineSeconds: 3600`;
+- `args` = the `dho` verb (the image `ENTRYPOINT` is `/usr/local/bin/dho`, `docker/go-worker.Dockerfile:118-121`).
 
-**Critical**: use the **`dev-health-go-operator` image, NOT `go-worker`.** The go-worker image lacks sync-dispatch contracts and will fail with `{"error":{"code":"contract_registry_invalid"}}` (Trap #169 amended, CHAOS-5614).
-
-The runtime is distroless (no shell); one Pod per verb. Delete after completion:
 ```bash
-kubectl delete pod dho-workers-oneoff
+kubectl -n dev-health get deploy dev-health-ops-go-heavy -o json > heavy.json
+python3 - heavy.json r4-org1 '["workers","metrics","finalize-redrive","--org","<uuid>","--from","<YYYY-MM-DD>","--to","<YYYY-MM-DD>","--dry-run"]' > pod.json <<'EOF'
+import sys, json
+d = json.load(open(sys.argv[1])); name, args = sys.argv[2], json.loads(sys.argv[3])
+ps = d["spec"]["template"]["spec"]; c = ps["containers"][0]
+assert all(set(x) <= {"configMapRef", "prefix"} for x in c.get("envFrom", [])), "envFrom holds a non-ConfigMap source: refuse"
+env = [e for e in c.get("env", []) if e["name"] != "COORDINATOR_DATABASE_URI"]
+env.append({"name": "COORDINATOR_DATABASE_URI", "valueFrom": {"secretKeyRef": {"name": "dev-health-ops-go-pgbouncer", "key": "COORDINATOR_DATABASE_URI"}}})
+labels = {k: v for k, v in d["spec"]["template"]["metadata"]["labels"].items()
+          if k in ("app.kubernetes.io/name", "app.kubernetes.io/instance", "app.kubernetes.io/component")}
+labels["dev-health.io/worker-group"] = "operator-oneoff"
+json.dump({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name, "namespace": "dev-health", "labels": labels},
+  "spec": {"restartPolicy": "Never", "activeDeadlineSeconds": 3600, "serviceAccountName": ps.get("serviceAccountName"),
+           "imagePullSecrets": ps.get("imagePullSecrets", []), "securityContext": ps.get("securityContext", {}),
+           "containers": [{"name": "dho", "image": c["image"], "imagePullPolicy": "IfNotPresent", "args": args,
+                           "env": env, "envFrom": c.get("envFrom", []), "securityContext": c.get("securityContext", {}),
+                           "resources": c.get("resources", {})}]}}, sys.stdout)
+EOF
 ```
+
+Before `kubectl apply`, check that no selector in the namespace matches the Pod labels: every
+Deployment, ReplicaSet, StatefulSet, DaemonSet and Job `spec.selector` (matchLabels and
+matchExpressions), and every Service `spec.selector`. Any match = do not apply. Then:
+
+```bash
+kubectl -n dev-health apply -f pod.json
+# wait for .status.phase Succeeded or Failed
+kubectl -n dev-health logs r4-org1 > r4-org1.log   # keep the log as the record
+kubectl -n dev-health delete pod r4-org1
+```
+
+Use the `dev-health-go-operator` image (the one prod pins for every dho service). Both the `operator`
+and the `dho` targets stage `contracts/jobs/v1`, `contracts/sync-dispatch/v1` and
+`deploy/go-workers/deployment.json` (`docker/go-worker.Dockerfile:62-98`); a target without them stops
+the CLI: a missing job or sync-dispatch registry with `{"error":{"code":"contract_registry_invalid"}}` and a
+missing `deploy/go-workers/deployment.json` with `{"error":{"code":"deployment_contract_invalid"}}`
+(`internal/workersctl/main.go:486-501`, CHAOS-5614). The runtime is distroless (no shell), so the Pod takes one verb: one Pod per verb, and
+one org per Pod.
 
 **Required**: `--review-evidence` is REQUIRED on trigger verbs **even with `--dry-run`** (unlike `finalize-redrive` where dry-run omits it). Never use `--daily-redrive` on already-succeeded days.
 

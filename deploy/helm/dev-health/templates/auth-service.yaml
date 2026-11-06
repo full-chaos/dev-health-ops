@@ -23,11 +23,21 @@ stage-signing-key init container exists.
 {{- $eddsaIssuer := include "dev-health.authEdDSAIssuer" . }}
 {{- $tokenIssuer := include "dev-health.authTokenIssuer" . }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
+{{- $internalOn := eq (include "dev-health.authInternal" .) "true" }}
+{{- include "dev-health.authWorkloadClients" (dict "context" . "internalOn" (ternary "true" "" $internalOn)) }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
 {{- include "dev-health.authConnectionBudget" . }}
 {{- $loginOn := eq (include "dev-health.authOn" (dict "flag" "localLogin" "context" .)) "true" }}
 {{- $socialOn := eq (include "dev-health.authOn" (dict "flag" "social" "context" .)) "true" }}
+{{- $ssoOidc := eq (include "dev-health.authSSOOn" (dict "flag" "oidc" "context" .)) "true" }}
+{{- $ssoOn := or $ssoOidc (eq (include "dev-health.authSSOOn" (dict "flag" "saml" "context" .)) "true") }}
+{{- $sso := default dict $a.sso }}
+{{- $ssoKeys := default dict $sso.keys }}
+{{- $mailOwned := eq (include "dev-health.authOn" (dict "flag" "usersOwned" "context" .)) "true" }}
+{{- /* APP_BASE_URL has one source. Below phase 4 the SSO Secret renders it. From phase 4 the mail block renders it, and the SSO setting must name the same Secret key. */}}
+{{- $sameBase := and (eq (toString $sso.secretName) (toString (default dict $a.mail).secretName)) (eq (toString $ssoKeys.appBaseURL) (toString (default dict (default dict $a.mail).keys).appBaseURL)) }}
+{{- if and $ssoOn $mailOwned (not $sameBase) }}{{- fail "APP_BASE_URL has two sources: authService.sso (secretName, keys.appBaseURL) and authService.mail (secretName, keys.appBaseURL) name different Secret keys; set both to the same Secret key" }}{{- end }}
 {{- $tokenClass := (default dict $a.accessToken).class | default "" }}
 {{- if and $loginOn (not (trim (toString $a.sessionKeys.loginLockout.secretName))) }}{{- fail "authService.phase >= 3 (login) needs authService.sessionKeys.loginLockout.secretName: without the lockout key auth-service mounts no login route, and go-api would forward sign-in to a 404" }}{{- end }}
 {{- if and $socialOn (not (trim (toString $a.social.secretName))) }}{{- fail "authService.phase >= 3 (social sign-in) needs authService.social.secretName: the Secret with the SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET keys go-api reads, so auth-service signs in with the same providers" }}{{- end }}
@@ -49,6 +59,10 @@ stage-signing-key init container exists.
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.trustedProxies) }}{{- fail "authService.trustedProxies is required while go-api forwards auth routes to it (authService.phase >= 2): without it every proxied caller is keyed by go-api's pod address, one rate-limit bucket for all users" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") $a.networkPolicy.allowedFrom }}{{- fail "authService.networkPolicy.allowedFrom must be empty while go-api forwards auth routes to it (authService.phase >= 2): the API port admits go-api only while go-api forwards to it, because auth-service trusts the forwarded client address from that peer set" }}{{- end }}
 {{- if and (eq (include "dev-health.authProxyOn" .) "true") (not $a.networkPolicy.enabled) }}{{- fail "authService.networkPolicy.enabled must stay true while go-api forwards auth routes to it (authService.phase >= 2): trusted proxies are safe only while the auth-service NetworkPolicy admits go-api alone; turn the policy on, or go back to phase 1" }}{{- end }}
+{{- /* CHAOS-12662: a batch costs its decision count, so a burst under the largest batch (maxAuthorizationBatchItems, 100) refuses that batch for ever; checked here, never at service start (D6465). auth_pdp_rate_limit_test.go ties 100 to that source. */}}
+{{- $pdp := default dict $a.pdpRateLimit }}
+{{- if lt (int ($pdp.callerBurst | default 0)) 100 }}{{- fail "authService.pdpRateLimit.callerBurst must be at least 100, the largest authorize batch: a batch costs its decision count against the caller's bucket" }}{{- end }}
+{{- if lt (int ($pdp.routeBurst | default 0)) 100 }}{{- fail "authService.pdpRateLimit.routeBurst must be at least 100, the largest authorize batch: a batch costs its decision count against the route's bucket" }}{{- end }}
 {{- include "dev-health.trustedProxyList" (dict "key" "authService.trustedProxies" "entries" $a.trustedProxies "ackKey" "authService.trustedProxiesWideAccepted" "ack" (eq (toString $a.trustedProxiesWideAccepted) "true") "peer" "the API port past the go-api pod selector") }}
 {{- $ks := $a.keySet }}
 {{- $ksOn := and $ks $ks.enabled }}
@@ -107,6 +121,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- fail (printf "authService.terminationGracePeriodSeconds=%s is below authService.drain.preStopSeconds (%d) + authService.shutdownTimeout (%d) + 5 = %d: kubelet counts the preStop hook inside the grace period and kills the pod when it ends, so the ordered shutdown would be cut" $graceRaw $sleep $shutdown $minGrace) }}
 {{- end }}
 {{- range $a.extraArgs }}
+{{- if eq (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) "internal-http-addr" }}{{- fail "authService.extraArgs must not set internal-http-addr: use authService.internal, which renders the listener with its own NetworkPolicy" }}{{- end }}
 {{- if has (regexSplit "[=[:space:]]" (trimAll "-" (lower (trim (toString .)))) -1 | first) (list "signing-key-file" "signing-key-id" "signing-keyset-file" "database-max-conns" "shutdown-timeout") }}{{- fail (printf "authService.extraArgs must not set %s: the chart renders the signing key flags (authService.signingKey or authService.keySet) and the pool bound (authService.database.maxConns), and authService.shutdownTimeout owns --shutdown-timeout (the grace-period guard reads that value)" .) }}{{- end }}
 {{- end }}
 {{- if and $ksOn $a.podAnnotations (hasKey $a.podAnnotations "checksum/keyset") }}{{- fail "authService.podAnnotations must not set checksum/keyset: the chart sets it from the key-set manifest" }}{{- end }}
@@ -122,6 +137,7 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- end }}
 {{- end }}
 {{- range $a.extraEnv }}
+{{- if eq (upper (trim (toString .name))) "AUTH_SERVICE_INTERNAL_HTTP_ADDR" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_INTERNAL_HTTP_ADDR: use authService.internal, which renders the listener with its own NetworkPolicy" }}{{- end }}
 {{- if eq .name "AUTH_SERVICE_TRUSTED_PROXIES" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_TRUSTED_PROXIES: use authService.trustedProxies, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_VALKEY_URI" }}{{- fail "authService.extraEnv must not set AUTH_VALKEY_URI: use authService.valkey, which reaches the container by secretKeyRef" }}{{- end }}
 {{- if has .name (list "AUTH_JWT_SECRET_KEY" "AUTH_SESSION_SUCCESSOR_KEY") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.sessionKeys, which reaches the container by secretKeyRef" .name) }}{{- end }}
@@ -129,11 +145,12 @@ binary): the native sleep action, a Kubernetes >= 1.30 feature. Same shape as go
 {{- if eq (upper (trim .name)) "AUTH_SERVICE_SHUTDOWN_TIMEOUT" }}{{- fail "authService.extraEnv must not set AUTH_SERVICE_SHUTDOWN_TIMEOUT: authService.shutdownTimeout owns it, and the grace-period guard reads that value" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_DATABASE_MAX_CONNS" }}{{- fail "authService.extraEnv must not set AUTH_DATABASE_MAX_CONNS: use authService.database.maxConns, which the render checks" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_REVISION_FEED" }}{{- fail "authService.extraEnv must not set AUTH_REVISION_FEED: authService.revisionFeed.enabled renders it, past the rate-limit store check" }}{{- end }}
-{{- if eq (upper (trim .name)) "AUTH_SSO_JIT" }}{{- fail "authService.extraEnv must not set AUTH_SSO_JIT: authService.ssoJit renders it, past the orgs-owned check" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_SSO_JIT" }}{{- fail "authService.extraEnv must not set AUTH_SSO_JIT: authService.ssoJit renders it (true needs authService.phase 4 with usersOwnedStage=owned)" }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_PLATFORM_ROLES_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_PLATFORM_ROLES_OWNED: authService.platformRolesOwned renders it, for go-api, query-api and the auth Jobs too" }}{{- end }}
-{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: authService.phase renders it, for the backfill Job too" }}{{- end }}
+{{- if eq (upper (trim .name)) "AUTH_ORGS_OWNED" }}{{- fail "authService.extraEnv must not set AUTH_ORGS_OWNED: AUTH_ORGS_OWNED is removed (D6651), orgs owned (phase 5) is cancelled and no workload reads it" }}{{- end }}
 {{- if has (upper (trim .name)) (list "AUTH_ACCESS_TOKEN_CLASS" "AUTH_ACCESS_TOKEN_LIFETIME" "AUTH_TOKEN_ISSUER_URL" "AUTH_JWT_AUDIENCE") }}{{- fail (printf "authService.extraEnv must not set %s: use authService.accessToken, which go-api reads too" .name) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_LOGIN_LOCKOUT_KEY" }}{{- fail "authService.extraEnv must not set AUTH_LOGIN_LOCKOUT_KEY: use authService.sessionKeys.loginLockout, which reaches the container by secretKeyRef" }}{{- end }}
+{{- if and $ssoOn (has (upper (trim .name)) (list "AUTH_SSO_STATE_KEY" "APP_BASE_URL" "SETTINGS_ENCRYPTION_KEY" "SETTINGS_ENCRYPTION_SALT")) }}{{- fail (printf "authService.extraEnv must not set %s: authService.sso renders it by secretKeyRef" (upper (trim .name))) }}{{- end }}
 {{- if eq (upper (trim .name)) "AUTH_SOCIAL_LINK_ROUTES" }}{{- fail "authService.extraEnv must not set AUTH_SOCIAL_LINK_ROUTES: use authService.socialLinkRoutes, which the render checks" }}{{- end }}
 {{- if eq .name "AUTH_SIGNING_KEY" }}{{- fail "authService.extraEnv must not set AUTH_SIGNING_KEY: direct-value signing material is rejected by the service (ACP-ADR-02 §4); use authService.signingKey" }}{{- end }}
 {{- if has (upper (trim (toString .name))) (include "dev-health.authServiceEnvNames" $ | fromJsonArray) }}{{- fail (printf "authService.extraEnv must not set %s: the chart renders it for auth-service, and a later entry would shadow the rendered value (a Secret reference included)" .name) }}{{- end }}
@@ -212,6 +229,9 @@ spec:
           args:
             - {{ printf "--http-addr=:%v" $a.port | quote }}
             - {{ printf "--operator-http-addr=:%v" $a.operatorPort | quote }}
+            {{- if $internalOn }}
+            - {{ printf "--internal-http-addr=:%d" (int $a.internal.port) | quote }}
+            {{- end }}
             - {{ printf "--shutdown-timeout=%s" $shutdownRaw | quote }}
             - {{ printf "--database-schema=%s" (include "dev-health.authDatabaseSchema" .) | quote }}
             - {{ printf "--database-max-conns=%s" (include "dev-health.authMaxConns" .) | quote }}
@@ -231,6 +251,11 @@ spec:
             - name: operator
               containerPort: {{ $a.operatorPort }}
               protocol: TCP
+            {{- if $internalOn }}
+            - name: internal
+              containerPort: {{ int $a.internal.port }}
+              protocol: TCP
+            {{- end }}
           env:
             - name: AUTH_DATABASE_URI
               valueFrom: {secretKeyRef: {name: {{ $a.database.secretName | quote }}, key: {{ $a.database.secretKey | quote }}}}
@@ -250,6 +275,20 @@ spec:
             - name: {{ printf "SOCIAL_%s_%s" $provider $suffix }}
               valueFrom: {secretKeyRef: {name: {{ $a.social.secretName | quote }}, key: {{ printf "SOCIAL_%s_%s" $provider $suffix | quote }}, optional: true}}
           {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if $ssoOn }}
+          {{- if $ssoOidc }}
+            - name: AUTH_SSO_STATE_KEY
+              valueFrom: {secretKeyRef: {name: {{ $sso.secretName | quote }}, key: {{ $ssoKeys.stateKey | quote }}}}
+          {{- end }}
+            - name: SETTINGS_ENCRYPTION_KEY
+              valueFrom: {secretKeyRef: {name: {{ $sso.secretName | quote }}, key: {{ $ssoKeys.encryptionKey | quote }}}}
+            - name: SETTINGS_ENCRYPTION_SALT
+              valueFrom: {secretKeyRef: {name: {{ $sso.secretName | quote }}, key: {{ $ssoKeys.encryptionSalt | quote }}, optional: true}}
+          {{- if not $mailOwned }}
+            - name: APP_BASE_URL
+              valueFrom: {secretKeyRef: {name: {{ $sso.secretName | quote }}, key: {{ $ssoKeys.appBaseURL | quote }}}}
           {{- end }}
           {{- end }}
           {{- if $linkRoutes }}
@@ -313,10 +352,6 @@ spec:
             - name: APP_BASE_URL
               valueFrom: {secretKeyRef: {name: {{ $m.secretName | quote }}, key: {{ $mk.appBaseURL | quote }}}}
           {{- end }}
-          {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
-            - name: AUTH_ORGS_OWNED
-              value: "true"
-          {{- end }}
           {{- if $a.valkey.secretName }}
             - name: AUTH_VALKEY_URI
               valueFrom: {secretKeyRef: {name: {{ $a.valkey.secretName | quote }}, key: {{ $a.valkey.secretKey | quote }}}}
@@ -325,6 +360,14 @@ spec:
             - name: AUTH_REVISION_FEED
               value: "on"
           {{- end }}
+            - name: AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_PER_SECOND
+              value: {{ toString $pdp.callerPerSecond | quote }}
+            - name: AUTH_SERVICE_PDP_CALLER_RATE_LIMIT_BURST
+              value: {{ toString (int $pdp.callerBurst) | quote }}
+            - name: AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_PER_SECOND
+              value: {{ toString $pdp.routePerSecond | quote }}
+            - name: AUTH_SERVICE_PDP_ROUTE_RATE_LIMIT_BURST
+              value: {{ toString (int $pdp.routeBurst) | quote }}
           {{- if $a.trustedProxies }}
             - name: AUTH_SERVICE_TRUSTED_PROXIES
               value: {{ join "," $a.trustedProxies | quote }}
@@ -415,6 +458,26 @@ spec:
       targetPort: operator
       protocol: TCP
     {{- end }}
+{{- if $internalOn }}
+---
+{{- /* The internal listener's own Service: an internal-only name for the PEPs, never an Ingress backend. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+  ports:
+    - name: internal
+      port: {{ int $a.internal.port }}
+      targetPort: internal
+      protocol: TCP
+{{- end }}
 {{- if $ksOn }}
 ---
 apiVersion: v1
@@ -435,6 +498,11 @@ data:
 {{- range $i, $peer := $a.networkPolicy.egress.mail.to }}
 {{- $problem := include "dev-health.authMailPeerProblem" (dict "peer" $peer "ports" $a.networkPolicy.egress.mail.ports) }}
 {{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.mail.to[%d] %s" $i $problem) }}{{- end }}
+{{- end }}
+{{- if and $ssoOn (not $a.networkPolicy.egress.sso.to) }}{{- fail "authService.networkPolicy.egress.sso.to is required while a switch of authService.sso is on and authService.networkPolicy.enabled: the auth pods get no egress but DNS and the listed peers, and the identity providers could not be reached" }}{{- end }}
+{{- range $i, $peer := $a.networkPolicy.egress.sso.to }}
+{{- $problem := include "dev-health.authMailPeerProblem" (dict "peer" $peer "ports" (list (dict "protocol" "TCP" "port" 443))) }}
+{{- if $problem }}{{- fail (printf "authService.networkPolicy.egress.sso.to[%d] %s" $i $problem) }}{{- end }}
 {{- end }}
 {{- $wide := 0 }}
 {{- range $a.networkPolicy.egress.mail.to }}{{- if eq (include "dev-health.authMailPeerClass" .) "wide" }}{{- $wide = add1 $wide }}{{- end }}{{- end }}
@@ -544,6 +612,14 @@ spec:
       ports:
         {{- toYaml $a.networkPolicy.egress.mail.ports | nindent 8 }}
     {{- end }}
+    {{- if and $ssoOn $a.networkPolicy.egress.sso.to }}
+    # The identity providers (OIDC discovery and token, SAML metadata), HTTPS only
+    - to:
+        {{- toYaml $a.networkPolicy.egress.sso.to | nindent 8 }}
+      ports:
+        - protocol: TCP
+          port: 443
+    {{- end }}
     {{- if eq (include "dev-health.authWorkloadExchange" $) "true" }}
     # The Kubernetes API server (TokenReview of the workload tokens), and nothing else
     - to:
@@ -568,5 +644,45 @@ spec:
         - protocol: TCP
           port: {{ $a.networkPolicy.egress.otlp.port }}
     {{- end }}
+{{- if $internalOn }}
+---
+{{- /*
+CHAOS-12661: the internal port's own boundary. It admits the pods of authService.internal.peers and of
+authService.networkPolicy.workloadClients (CHAOS-13130) on that port and nothing else; it adds no egress, and the policy above stays the API port's whole ingress. NetworkPolicies are
+additive, so this one only opens the internal port.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dev-health.fullname" . }}-auth-service-internal
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "auth-service" "context" $) | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dev-health.componentSelectorLabels" (dict "component" "auth-service" "context" $) | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range $a.internal.peers }}
+        - podSelector:
+            matchLabels:
+              {{- include "dev-health.componentSelectorLabels" (dict "component" . "context" $) | nindent 14 }}
+        {{- end }}
+        {{- /* CHAOS-13130: the named workloads outside this release (acr-api), on this port alone (dev-health.authWorkloadClients). */}}
+        {{- range $a.networkPolicy.workloadClients }}
+        - podSelector:
+            {{- toYaml .podSelector | nindent 12 }}
+          {{- with .namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ int $a.internal.port }}
+{{- end }}
 {{- end }}
 {{- end }}

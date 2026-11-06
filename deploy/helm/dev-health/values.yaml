@@ -33,6 +33,17 @@ goApi:
   sessionIssue:
     secretName: ""
     secretKey: AUTH_SESSION_ISSUE_TOKEN
+    # -- CHAOS-13039: go-api presents its workload token on the session issue route instead of AUTH_SESSION_ISSUE_TOKEN. Off by
+    #    default, and off renders nothing. On (sessions on, authService.accessToken.issuerURL set, secretName set) the chart renders
+    #    AUTH_SESSION_ISSUE_CREDENTIAL=workload, AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/api.bootstrap and AUTH_WORKLOAD_ISSUER
+    #    (the access-token issuer), mounts secretName/secretKey read-only at /run/workload, and renders no AUTH_SESSION_ISSUE_TOKEN.
+    #    The Secret holds the bootstrap credential of the api workload (auth-migrate workloads bootstrap-create); the operator makes it.
+    #    auth-service needs AUTH_WORKLOAD_BOOTSTRAP=true and AUTH_SESSION_ISSUE_WORKLOAD_SUBJECT (the api workload's prn_ id) in
+    #    authService.extraEnv. goApi.extraEnv cannot set the three names while this is on.
+    workloadBootstrap:
+      enabled: false
+      secretName: ""
+      secretKey: api.bootstrap
   # -- CHAOS-11858, CHAOS-10988: the one goApi.authProxy key. orgProvisioning=true renders AUTH_PROXY_ORG_PROVISIONING=true:
   #    go-api's PATCH /api/v1/admin/orgs/{org_id} with is_active=true, its member add, role change, removal and
   #    ownership transfer, its invite create, invite accept (accept-invite, onboard join_org), its organization
@@ -43,6 +54,13 @@ goApi:
   #    The key is absent by default (an empty goApi.authProxy map is refused like any other hand-set flag map):
   #    authProxy:
   #      orgProvisioning: true
+  # -- CHAOS-12914: the second goApi.authProxy key. impersonation=true renders AUTH_PROXY_IMPERSONATION=true: go-api starts
+  #    and ends the admin impersonation session at auth-service (a delegated session, 15 minutes, no refresh). Needs
+  #    authService.phase 2 or higher (sessions owned by auth-service): the render refuses it below. Do not turn it on before
+  #    the web change that swaps the browser session to the delegated token (CHAOS-12913) is live. Absent or false renders
+  #    nothing (docs/reference/auth/configuration.md).
+  #    authProxy:
+  #      impersonation: true
   # -- The api listener (requests). The Service targets this port.
   port: 8000
   # -- The operator listener: /healthz, /readyz and /metrics. Probes use it.
@@ -179,10 +197,9 @@ authService:
   #      4  users owned: the credential routes too (AUTH_PROXY_CREDENTIALS) and
   #         AUTH_USERS_OWNED. Meaning (D6358): auth-service writes the existing
   #         public users table; no auth-schema copy, no projection.
-  #      5  orgs owned: AUTH_ORGS_OWNED too. Meaning (D6358): auth-service writes
-  #         the existing public organizations and memberships tables.
-  #    Phase 5 is refused at render: orgs owned needs its own public-table writer
-  #    leaf. Phase 4 renders. Rollback from phase 4 is NOT one upgrade: stage goApi,
+  #      5  cancelled (D6651): public.organizations and public.memberships stay the
+  #         authority. Phase 5 and AUTH_ORGS_OWNED (any extraEnv list) are refused at render.
+  #    Phase 4 is the highest phase. Rollback from phase 4 is NOT one upgrade: stage goApi,
   #    then deploy/scripts/auth-users-owned-barrier.sh down-auth, then phase 3 (runbook
   #    docs/operate/runbooks/auth-users-owned-flip-and-rollback.md). The chart refuses the keys this replaces (goApi.authProxy,
   #    authService.enabled, authService.usersOwned, authService.orgsOwned).
@@ -208,9 +225,17 @@ authService:
   #    to auth.platform_role_assignments. Refused unless users are owned (phase 4, usersOwnedStage owned).
   #    Runbook: docs/operate/runbooks/auth-platform-roles-flip-and-rollback.md.
   platformRolesOwned: false
+  # -- Enforcement switch, per action namespace and service. goApi lists the namespaces whose routes the policy
+  #    decision point decides instead of go-api's legacy guard, rendered as GO_API_AUTHZ_ENFORCE (one comma list).
+  #    Empty renders nothing: every namespace is off. Dark: turning a namespace on is its own decision, after the shadow
+  #    harness shows no mismatch and the decision point holds a per-caller limit. Needs go-api to reach auth-service
+  #    (phase 2 or higher) and the workload credential inputs go-api's startup names. Rollback: remove the name from
+  #    the list and roll go-api; no policy data changes. goApi.extraEnv cannot set the variable.
+  enforce:
+    goApi: []
   # -- Federated sign-in join: renders AUTH_SSO_JIT=true on auth-service, so an OIDC, OAuth or SAML sign-in can join a
-  #    known account to the provider's organization and create a new account. Refused unless orgs are owned
-  #    (phase 5): below it go-api's own sign-in join still writes, and two writers would race.
+  #    known account to the provider's organization and create a new account. true needs users owned (authService.phase 4
+  #    with usersOwnedStage=owned): below it go-api's own sign-in join still writes, and two writers would race.
   ssoJit: false
   # -- Revision feed: renders AUTH_REVISION_FEED=on on auth-service, so its audit outbox publisher sends each
   #    committed revision to the rate-limit store (database 1) and every replica subscribes to the feed. It needs
@@ -259,12 +284,22 @@ authService:
   # -- AUTH_SOCIAL_LINK_ROUTES: mounts the bearer-only social link and unlink
   #    routes. Needs phase >= 2 (the session secrets).
   socialLinkRoutes: false
-  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML).
-  #    true is refused: the chart does not render auth-service's SSO settings yet,
-  #    so its OIDC and SAML routes would not mount.
+  # -- OIDC and SAML sign-in through auth-service (AUTH_PROXY_OIDC / AUTH_PROXY_SAML on go-api).
+  #    A switch on needs phase >= 2 and a complete set of settings: secretName and every key name its protocol reads
+  #    (oidc: stateKey, appBaseURL, encryptionKey, encryptionSalt; saml: the same without stateKey). The render fails and
+  #    names the key otherwise. auth-service gets AUTH_SSO_STATE_KEY, APP_BASE_URL, SETTINGS_ENCRYPTION_KEY and
+  #    SETTINGS_ENCRYPTION_SALT by secretKeyRef from that Secret, never a value. The encryption key and salt must be
+  #    go-api's own (it encrypted the provider secrets). The salt key may be absent from the Secret: the pod then derives the
+  #    key with the built-in default salt, as go-api does. Both switches off (the default) render nothing.
   sso:
     oidc: false
     saml: false
+    secretName: ""
+    keys:
+      stateKey: AUTH_SSO_STATE_KEY
+      appBaseURL: APP_BASE_URL
+      encryptionKey: SETTINGS_ENCRYPTION_KEY
+      encryptionSalt: SETTINGS_ENCRYPTION_SALT
   # -- The social sign-in client settings of auth-service, from phase 3: one
   #    existing Secret holding SOCIAL_<PROVIDER>_CLIENT_ID and _CLIENT_SECRET for
   #    github, gitlab and google, the names go-api reads. Each key is optional:
@@ -276,6 +311,20 @@ authService:
   # -- The operator listener: /healthz, /readyz, /metrics. Probes use it, never
   #    the API port.
   operatorPort: 8096
+  # -- The internal listener (CHAOS-12661, --internal-http-addr): the service-to-service routes alone
+  #    (POST /internal/v1/token/exchange, /v1/authorize and /v1/authorize:batch), for the policy enforcement
+  #    points. It trusts no forwarded address (authService.trustedProxies is the API port's alone): each caller is
+  #    identified by its own token. Off by default. On, the chart renders the arg, a named `internal` containerPort,
+  #    a ClusterIP Service `<fullname>-auth-service-internal` and a NetworkPolicy of the same name that admits the
+  #    pods of the listed peers and of authService.networkPolicy.workloadClients on this port and nothing else. The API port, its Service and its policy do not
+  #    change. Needs authService.phase >= 1 and authService.networkPolicy.enabled.
+  internal:
+    enabled: false
+    # -- A whole number from 1 to 65535, not port or operatorPort.
+    port: 8097
+    # -- The workloads of this release admitted on the internal port, by name: web, query-api, go-api. Each name
+    #    once. While enabled, this list or authService.networkPolicy.workloadClients must be non-empty.
+    peers: []
   image:
     # -- docker/go-worker.Dockerfile target `auth-service`. Non-local profiles
     #    pin `repository@sha256:<digest>` (immutable release artifact).
@@ -395,6 +444,16 @@ authService:
     loginLockout:
       secretName: ""
       secretKey: AUTH_LOGIN_LOCKOUT_KEY
+  # -- CHAOS-12662: the rate limits of the policy decision point routes (/v1/authorize and /v1/authorize:batch), per pod.
+  #    callerPerSecond/callerBurst: the token bucket of ONE caller workload on ONE route; the effective per-caller limit
+  #    is that times authService.replicas. A batch costs its decision count (at most 100), so callerBurst and routeBurst
+  #    must be at least 100: the render refuses less. routePerSecond/routeBurst: the ceiling of all callers together
+  #    (from the 5.19 load test; revisit with CHAOS-12705). They render AUTH_SERVICE_PDP_*_RATE_LIMIT_*.
+  pdpRateLimit:
+    callerPerSecond: 150
+    callerBurst: 300
+    routePerSecond: 2000
+    routeBurst: 4000
   # -- CHAOS-11648: the old pod keeps serving for preStopSeconds while its endpoint is removed, then
   #    gets SIGTERM (the go-api drain, CHAOS-10718). 0 renders no hook, maximum 600. Native sleep
   #    action: Kubernetes >= 1.30 (the image has no shell).
@@ -470,15 +529,32 @@ authService:
     #    (AUTH_SESSION_READER_ROLES). Each must already exist. Empty grants none:
     #    a token auth-service issued is then refused by go-api and query-api.
     sessionReaderRoles: []
+    # -- CHAOS-13063: the logins granted SELECT on the External Push credential projection (auth.credential_projection:
+    #    domain_owner, organization_id, external_reference, revision, status, expires_at, scopes, source_id), for the worker
+    #    reconcile drift probe (PUSH_RECONCILE_PROBE=on reads it through the worker's domain login). Rendered as
+    #    AUTH_PROJECTION_READER_ROLES on the auth-migrate and auth-grants Jobs, only when listed. Each must already exist and
+    #    must differ from the migration login and runtimeRole. Empty grants none: the probe then logs SQLSTATE 42501.
+    projectionReaderRoles: []
     # -- CHAOS-10895: the External Push lifecycle append function. writerRole is a
     #    NOLOGIN role that owns it (AUTH_PUSH_LIFECYCLE_WRITER_ROLE) and
-    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE
-    #    only; AUTH_PUSH_LIFECYCLE_CALLER_ROLES). The writer role must exist and
+    #    callerRoles the logins that may execute it (go-api's API_DATABASE_ROLE and
+    #    the worker domain login of the expiry sweeper; AUTH_PUSH_LIFECYCLE_CALLER_ROLES).
+    #    Both or neither: the render refuses one without the other, and callerRoles lists exactly two logins (CHAOS-12828). The writer role must exist and
     #    the migration login must be a member of it BEFORE this Job runs: a
     #    privileged step, see docs/contribute/architecture/auth-control-plane-deployment.md.
     #    Empty leaves the function unexecutable (go-api's AUTH_PUSH_LIFECYCLE_EVENTS
     #    must stay off).
     pushLifecycle:
+      writerRole: ""
+      callerRoles: []
+    # -- CHAOS-13057: the repository identity append function (migration 0057). writerRole is
+    #    a NOLOGIN role that owns it (AUTH_REPO_IDENTITY_WRITER_ROLE) and holds only the outbox
+    #    and revision privileges, none on repository_identities; callerRoles is exactly one login,
+    #    the worker domain login of the provider sync (AUTH_REPO_IDENTITY_CALLER_ROLES). Both or
+    #    neither. The writer role must exist and the migration login must be a member of it
+    #    BEFORE this Job runs (the same privileged step as pushLifecycle). Empty leaves the
+    #    function unexecutable (the worker's WORKER_REPO_IDENTITY_OUTBOX must stay off).
+    repoIdentity:
       writerRole: ""
       callerRoles: []
     # -- The logins that must read auth sessions from phase 2 (sessions): go-api's API_DATABASE_ROLE and query-api's registry login. Both
@@ -539,7 +615,7 @@ authService:
     runId: ""
     activeDeadlineSeconds: 1800
     ttlSecondsAfterFinished: 86400
-    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED are refused here.
+    # -- Tuning env only. AUTH_USERS_OWNED and AUTH_ORGS_OWNED (removed, D6651) are refused here.
     extraEnv: []
     resources:
       requests:
@@ -562,6 +638,15 @@ authService:
     # -- Pod selectors allowed to scrape the operator port (/metrics). Empty admits
     #    nobody (kubelet probes are not subject to NetworkPolicy).
     metricsFrom: []
+    # -- CHAOS-13130: workloads outside this release admitted on the INTERNAL port (authService.internal.port) alone,
+    #    as more `from` entries of the <fullname>-auth-service-internal policy; needs authService.internal.enabled.
+    #    The API port is not opened. Each entry: `podSelector` (required, a non-empty matchLabels or
+    #    matchExpressions) and an optional `namespaceSelector` (non-empty; omit it for this release's namespace).
+    #    Any other key (a port, an ipBlock) fails the render. For acr-api:
+    #    `[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"acr","app.kubernetes.io/component":"api"}},`
+    #    `"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"<acr namespace>"}}}]`.
+    #    A pod admitted here still gets a workload token only when its ServiceAccount is registered for the exchange.
+    workloadClients: []
     # -- Labels of the ingress controller pods admitted to the API port, only while an ingress.hosts entry routes
     #    to `service: auth-service` (the issuer's two public documents; CHAOS-12359). The namespace is
     #    networkPolicy.ingressControllerNamespace. No such host renders no rule for the controller.
@@ -612,6 +697,12 @@ authService:
         ports:
           - protocol: TCP
             port: 443
+      # -- Peers of the identity providers (OIDC discovery and token calls, SAML metadata), `to` entries; TCP 443
+      #    is fixed. REQUIRED while a switch of authService.sso is on and the policy is on; nothing renders with
+      #    both switches off. The peer forms are the mail ones (an ipBlock of one CIDR, or the whole-internet form
+      #    with the private ranges excepted).
+      sso:
+        to: []
       # -- Peers of the OTLP/gRPC trace collector, `to` entries plus port. Rendered only while
       #    authService.tracing.enabled, and then required when the policy is on. An ipBlock (the node
       #    InternalIP of a hostPort collector) and a podSelector/namespaceSelector are both accepted;
@@ -770,6 +861,9 @@ queryApi:
   #    its own embedded SDL and an operator-supplied value can only disagree
   #    with the binary.
   extraEnv: []
+  # -- Extra pod volumes and query-api container mounts (for example a projected serviceAccountToken), added after the envelope-jwks volume and mount. Empty adds nothing.
+  extraVolumes: []
+  extraVolumeMounts: []
   # -- Optional envFrom sources (list of {configMapRef: {name: ...}} /
   #    {secretRef: {name: ...}} entries), same shape as goWorkers.extraEnvFrom.
   #    Empty by default: this container inherits NOTHING from the platform Secret/
@@ -1256,6 +1350,8 @@ web:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  # -- Extra web env ({name, value} or {name, valueFrom}). CHAOS-12928: AUTH_SSO_ENABLED on ("true"/"1", or by
+  #    valueFrom) fails the render unless AUTH_ACCESS_TOKEN_CLASS is the literal value eddsa (web.env sets neither name).
   extraEnv: []
   # -- CHAOS-6188: mount extra volumes into web in every environment (e.g. the
   #    Secret volume carrying the ACR web-assertion Ed25519 signing key).
@@ -1855,7 +1951,7 @@ valkey:
   #    it, exactly as today) and the auth-service rate-limit user with a HASHED
   #    password:
   #      user default on nopass ~* &* +@all
-  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
+  #      user auth-service-ratelimit on #<sha256 hex of the password> resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +decr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)
   #    The rule after the hash is internal/auth/ratelimitvalkey ACLRules. LIMIT: the
   #    default user keeps access to every key, the auth rate-limit counters
   #    (dho:rl:auth_svc_*) included, so what bounds who can touch them is the

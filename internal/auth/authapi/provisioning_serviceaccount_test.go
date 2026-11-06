@@ -99,6 +99,7 @@ func serviceAccountCases() []routeCase {
 }
 
 func TestServiceAccountActorRule(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	for _, c := range serviceAccountCases() {
@@ -126,6 +127,7 @@ func TestServiceAccountActorRule(t *testing.T) {
 }
 
 func TestServiceAccountActorRuleRunsAgainUnderTheLocks(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.inTx = &fakeProvUsers{states: f.users.states, roles: map[[2]uuid.UUID]string{{f.admin, f.org}: "viewer"}}
 	for _, c := range serviceAccountCases() {
@@ -140,6 +142,7 @@ func TestServiceAccountActorRuleRunsAgainUnderTheLocks(t *testing.T) {
 // A non-superuser actor may not name a superuser as an owner (create, owner), nor move an account off one (owner):
 // the rule reads the new owner and, for an owner change, the owner the verb locked. Disable and enable name no owner.
 func TestServiceAccountTargetsRule(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	cases := serviceAccountCases()
 	f.users.states[f.target] = UserState{IsActive: true, IsSuperuser: true}
@@ -197,6 +200,7 @@ func TestServiceAccountTargetsRule(t *testing.T) {
 }
 
 func TestServiceAccountUnknownAccountIsNamedOnlyToASuperuser(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	for _, c := range serviceAccountCases()[1:] {
@@ -233,6 +237,7 @@ func TestServiceAccountUnknownAccountIsNamedOnlyToASuperuser(t *testing.T) {
 // shows whether the row exists: the same status and reason_code. An active superuser alone tells them apart (404 on an
 // unknown id, the verb on a foreign account); an inactive or unknown actor gets the same refusal in both cases.
 func TestServiceAccountUnknownAndForeignAccountAnswerAlike(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	f.users.states[f.x] = UserState{IsActive: false, IsSuperuser: true}
 	foreign := serviceaccount.Info{ID: uuid.New(), OrgID: uuid.New(), Name: "elsewhere", Active: true, Owner: f.owner}
@@ -276,6 +281,7 @@ func TestServiceAccountUnknownAndForeignAccountAnswerAlike(t *testing.T) {
 }
 
 func TestServiceAccountAnswersAndWhatTheVerbIsGiven(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	decode := func(c routeCase, actor uuid.UUID) map[string]any {
 		t.Helper()
@@ -319,6 +325,7 @@ func sameJSON(a, b map[string]any) bool {
 }
 
 func TestServiceAccountRefusalAnswers(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for err, want := range map[error]struct {
 		status int
@@ -350,13 +357,14 @@ func TestServiceAccountRefusalAnswers(t *testing.T) {
 // The routes take the go-api workload token (its audience and configured subject) as the other workload operations do,
 // hand the verb the workload principal and the token's jti as the caller, and refuse a token of any other subject.
 func TestServiceAccountRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testing.T) {
+	t.Parallel()
 	f := newProvWorkloadFixture(t)
 	want := uuidOfWire(t, f.w.subject)
 	for _, c := range serviceAccountCases() {
 		if !workloadOperations[c.op] {
 			t.Fatalf("%s is not a workload operation", c.op)
 		}
-		if classes := admittedClasses(c.path, true); !slices.Equal(slices.Sorted(slices.Values(classes)), []string{serviceSessionIssuerClass, workloadTokenClass}) {
+		if classes := admittedClasses(c.path); !slices.Equal(slices.Sorted(slices.Values(classes)), []string{serviceSessionIssuerClass, workloadTokenClass}) {
 			t.Fatalf("%s admits %v, want the session issuer credential and the workload token", c.op, classes)
 		}
 		header, jti := f.w.mint("workload+jwt", nil)
@@ -380,6 +388,7 @@ func TestServiceAccountRoutesTakeTheGoAPIWorkloadTokenAndNoOtherSubject(t *testi
 var serviceAccountPatterns = []string{PatternServiceAccountCreate, PatternServiceAccountDisable, PatternServiceAccountEnable, PatternServiceAccountOwner}
 
 func TestServiceAccountRoutesAreOnTheStartupGate(t *testing.T) {
+	t.Parallel()
 	f := newProvFixture(t)
 	for _, c := range serviceAccountCases() {
 		if !slices.Contains(provisioningPatterns, c.path) || provisioningRouteOps[c.op] != c.path {
@@ -395,6 +404,7 @@ func TestServiceAccountRoutesAreOnTheStartupGate(t *testing.T) {
 }
 
 func TestServiceAccountRoutesAreServedWithTheEmbeddedDocument(t *testing.T) {
+	t.Parallel()
 	f := newProvFixtureWith(t, nil)
 	for _, c := range serviceAccountCases() {
 		if response := f.post(c.path, encode(c.body(f, f.super)), nil); response.Code != http.StatusOK {

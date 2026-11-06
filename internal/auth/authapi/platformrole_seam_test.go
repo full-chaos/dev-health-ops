@@ -20,7 +20,7 @@ func TestStateOnSQLIsByteEqualWhileNotOwned(t *testing.T) {
 		t.Errorf("off: %q", got)
 	}
 	want := `
-		SELECT email, username, full_name, COALESCE(is_active, false), ` + rule.HoldsSQL(`"acp"`, "public.users.id", "'platform_admin'") + `,
+		SELECT email, username, full_name, COALESCE(is_active, false), ` + rule.PublicHoldsSQL(`"acp"`, "public.users.id", "'platform_admin'") + `,
 		       COALESCE(token_version, 0), auth_provider
 		FROM public.users WHERE id = $1`
 	if got := (PGUsers{AuthSchema: schema, PlatformRolesOwned: true}).stateSQL(); got != want {

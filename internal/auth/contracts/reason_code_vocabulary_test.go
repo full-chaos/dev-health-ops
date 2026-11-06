@@ -181,6 +181,7 @@ func TestSchemaEnumsEqualTheVocabularyFile(t *testing.T) {
 var approvedRevokedReasons = []string{
 	"compromised",
 	"domain_revoked",
+	"org_deprovisioned",
 	"owner_request",
 }
 
@@ -194,6 +195,7 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"allowed_by_repository_grant", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-allow-with-obligations.json"},
 	{"grant_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-deny.json"},
 	{"repository_not_granted", "deny", "contracts/auth/v1/examples/authorization_batch_response/batch-response-valid-items-disagree.json"},
+	{"repository_unresolved", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-repository-unresolved.json"},
 	{"platform_role_absent", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-platform-decision-null-org.json"},
 	{"allowed_by_role", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-role.json"},
 	{"invalid_request", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-invalid-request.json"},
@@ -203,7 +205,6 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"organization_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-organization-inactive.json"},
 	{"no_membership", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-no-membership.json"},
 	{"org_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-org-mismatch.json"},
-	{"membership_inactive", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-membership-inactive.json"},
 	{"role_unknown", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-unknown.json"},
 	{"role_scope_mismatch", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-scope-mismatch.json"},
 	{"role_lacks_action", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-role-lacks-action.json"},
@@ -215,6 +216,7 @@ var decisionReasonSources = []struct{ Code, Outcome, Source string }{
 	{"allowed_by_membership_default", "allow", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-allowed-by-membership-default.json"},
 	{"impersonation_denied", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-impersonation-denied.json"},
 	{"delegation_invalid", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-delegation-invalid.json"},
+	{"repository_allowlist_too_large", "deny", "contracts/auth/v1/examples/authorization_decision/decision-valid-reason-repository-allowlist-too-large.json"},
 }
 
 var approvedDecisionReasonCodes = func() []string {
@@ -240,6 +242,7 @@ var approvedAuditReasonCodes = []string{
 	"internal_error",
 	"compromised",
 	"domain_revoked",
+	"org_deprovisioned",
 	"owner_request",
 	"role_granted",
 	"role_revoked",

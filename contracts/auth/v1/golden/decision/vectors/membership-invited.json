@@ -3,9 +3,10 @@
     "allowed": false,
     "cache_class": "none",
     "expires_in_seconds": null,
-    "policy_revision": 11,
-    "reason": "membership_inactive",
-    "wire_reason_code": "membership_inactive"
+    "obligations": null,
+    "policy_revision": 13,
+    "reason": "no_membership",
+    "wire_reason_code": "no_membership"
   },
   "id": "membership-invited",
   "layer": "pdp",
@@ -20,13 +21,7 @@
     "clock": "2027-01-15T08:00:00Z",
     "grants": [],
     "grants_error": false,
-    "memberships": {
-      "org-a": {
-        "org_id": "org-a",
-        "role": "member",
-        "status": "invited"
-      }
-    },
+    "memberships": {},
     "organizations": {
       "org-a": "active"
     },
@@ -36,5 +31,5 @@
     "snapshot": "grant",
     "workload": null
   },
-  "why": "a membership in status invited is not active."
+  "why": "public.memberships holds a row or none (D6651): a pair whose go-api membership is invited or gone has no row, and no row is no membership."
 }

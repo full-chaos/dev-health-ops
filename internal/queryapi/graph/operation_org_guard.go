@@ -81,13 +81,43 @@ func operationOrgViolation(ctx context.Context, operation *graphql.OperationCont
 // the operation may run) and, when a verified, non-impersonating superuser named
 // an org other than their own, that org (the operation then runs against it).
 func operationOrgDecision(ctx context.Context, operation *graphql.OperationContext) (message, rebindTo string) {
+	if claims, ok := authctx.FromContext(ctx); ok && claims.Delegated && operation.Operation.Operation != ast.Query {
+		return msgDelegatedOperation, ""
+	}
 	if claims, ok := authctx.FromContext(ctx); ok && orglessPlatformCaller(claims) {
 		if !orglessOperationAllowed(claims, operation) {
 			return "Authorization required", ""
 		}
 	}
-	var requested []string
-	invalid := false
+	requested, invalid := collectOrgArguments(operation)
+	if invalid {
+		return "A valid organization ID is required", ""
+	}
+	if len(requested) == 0 {
+		return "", ""
+	}
+	first := requested[0]
+	for _, other := range requested[1:] {
+		if other != first {
+			return "Only one organization may be queried per operation", ""
+		}
+	}
+	claims, ok := authctx.FromContext(ctx)
+	if !ok || claims.OrgID == "" {
+		return "Authorization required", ""
+	}
+	if claims.OrgID == first {
+		return "", ""
+	}
+	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
+		return "", first
+	}
+	return "Access denied: cannot query org '" + first + "'", ""
+}
+
+// collectOrgArguments is every orgId/org_id argument the operation names, in document order, and whether any is not a
+// non-empty, unpadded string. It walks fields, inline fragments and fragment spreads (each spread once).
+func collectOrgArguments(operation *graphql.OperationContext) (requested []string, invalid bool) {
 	visited := map[string]bool{}
 	var collect func(set ast.SelectionSet)
 	collect = func(set ast.SelectionSet) {
@@ -120,29 +150,7 @@ func operationOrgDecision(ctx context.Context, operation *graphql.OperationConte
 		}
 	}
 	collect(operation.Operation.SelectionSet)
-	if invalid {
-		return "A valid organization ID is required", ""
-	}
-	if len(requested) == 0 {
-		return "", ""
-	}
-	first := requested[0]
-	for _, other := range requested[1:] {
-		if other != first {
-			return "Only one organization may be queried per operation", ""
-		}
-	}
-	claims, ok := authctx.FromContext(ctx)
-	if !ok || claims.OrgID == "" {
-		return "Authorization required", ""
-	}
-	if claims.OrgID == first {
-		return "", ""
-	}
-	if claims.Holds(rule.ActionAdminOrgs) && !claims.ImpersonationActive {
-		return "", first
-	}
-	return "Access denied: cannot query org '" + first + "'", ""
+	return requested, invalid
 }
 
 // orglessPlatformCaller is a caller with no organization and no superuser flag
@@ -209,3 +217,7 @@ func orgArgumentValue(value *ast.Value, variables map[string]any) (string, bool)
 	}
 	return "", false
 }
+
+// msgDelegatedOperation refuses every operation but a query to a delegated
+// session's caller.
+const msgDelegatedOperation = "Not allowed in an impersonation session"

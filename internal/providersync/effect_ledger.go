@@ -385,7 +385,7 @@ func (repository *PostgresRepository) BeginEffect(
 ) error {
 	return repository.transitionEffect(
 		ctx, claim, index, digest, now,
-		GenerationBlockPending, GenerationBlockWriting,
+		GenerationBlockPending, GenerationBlockWriting, nil,
 	)
 }
 
@@ -398,7 +398,27 @@ func (repository *PostgresRepository) CommitEffect(
 ) error {
 	return repository.transitionEffect(
 		ctx, claim, index, digest, now,
+		GenerationBlockWriting, GenerationBlockCommitted, nil,
+	)
+}
+
+// CommitEffectRows is CommitEffect given the batch the effect wrote. When the
+// effect really flips to Committed, the batch's repository identity events are
+// appended in the same transaction (see appendRepositoryIdentities).
+func (repository *PostgresRepository) CommitEffectRows(
+	ctx context.Context,
+	claim Claim,
+	index int,
+	digest string,
+	batch EffectBatch,
+	now time.Time,
+) error {
+	return repository.transitionEffect(
+		ctx, claim, index, digest, now,
 		GenerationBlockWriting, GenerationBlockCommitted,
+		func(tx pgx.Tx, entry EffectLedgerEntry) error {
+			return repository.appendRepositoryIdentities(ctx, tx, claim, entry, batch)
+		},
 	)
 }
 
@@ -410,10 +430,45 @@ func (repository *PostgresRepository) ResolveEffect(
 	resolution GenerationBlockResolution,
 	now time.Time,
 ) error {
+	return repository.resolveEffect(ctx, claim, index, digest, resolution, now, nil)
+}
+
+// MarkEffectCommittedRows is ResolveEffect(GenerationBlockMarkCommitted) given
+// the batch the readback found exact: the recovery flip appends the batch's
+// repository identity events in its transaction, as CommitEffectRows does.
+func (repository *PostgresRepository) MarkEffectCommittedRows(
+	ctx context.Context,
+	claim Claim,
+	index int,
+	digest string,
+	batch EffectBatch,
+	now time.Time,
+) error {
+	return repository.resolveEffect(
+		ctx, claim, index, digest, GenerationBlockMarkCommitted, now,
+		func(tx pgx.Tx, entry EffectLedgerEntry) error {
+			return repository.appendRepositoryIdentities(ctx, tx, claim, entry, batch)
+		},
+	)
+}
+
+// effectFlipHook runs in the ledger transaction after an effect is checked to
+// flip to Committed and before the ledger is written.
+type effectFlipHook func(pgx.Tx, EffectLedgerEntry) error
+
+func (repository *PostgresRepository) resolveEffect(
+	ctx context.Context,
+	claim Claim,
+	index int,
+	digest string,
+	resolution GenerationBlockResolution,
+	now time.Time,
+	onCommit effectFlipHook,
+) error {
 	if index < 0 || digest == "" || now.IsZero() {
 		return ErrInvalidConfiguration
 	}
-	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+	return repository.mutateGenerationJournalTx(ctx, claim, now, func(tx pgx.Tx, document map[string]json.RawMessage) error {
 		state, err := decodeEffectLedgerState(document[effectLedgerResultKey])
 		if err != nil || index >= len(state.Effects) ||
 			state.Effects[index].ContentDigest != digest {
@@ -428,6 +483,11 @@ func (repository *PostgresRepository) ResolveEffect(
 			}
 			if effect.Status != GenerationBlockWriting {
 				return ErrEffectLedgerConflict
+			}
+			if onCommit != nil {
+				if err := onCommit(tx, *effect); err != nil {
+					return err
+				}
 			}
 			effect.Status = GenerationBlockCommitted
 			effect.CommittedAt = &now
@@ -585,11 +645,12 @@ func (repository *PostgresRepository) transitionEffect(
 	now time.Time,
 	from GenerationBlockStatus,
 	to GenerationBlockStatus,
+	onCommit effectFlipHook,
 ) error {
 	if index < 0 || digest == "" || now.IsZero() {
 		return ErrInvalidConfiguration
 	}
-	return repository.mutateGenerationJournal(ctx, claim, now, func(document map[string]json.RawMessage) error {
+	return repository.mutateGenerationJournalTx(ctx, claim, now, func(tx pgx.Tx, document map[string]json.RawMessage) error {
 		state, err := decodeEffectLedgerState(document[effectLedgerResultKey])
 		if err != nil || index >= len(state.Effects) ||
 			state.Effects[index].ContentDigest != digest {
@@ -613,6 +674,11 @@ func (repository *PostgresRepository) transitionEffect(
 		case GenerationBlockWriting:
 			effect.StartedAt = &now
 		case GenerationBlockCommitted:
+			if onCommit != nil {
+				if err := onCommit(tx, *effect); err != nil {
+					return err
+				}
+			}
 			effect.CommittedAt = &now
 		default:
 			return ErrInvalidConfiguration

@@ -356,6 +356,11 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 	if !ok {
 		t.Fatal("sync.provider_oauth_revocations descriptor missing")
 	}
+	// sync.external_push_expiry_sweep (CHAOS-12332) is on queue "sync" too.
+	pushExpirySpec, ok := runtimeRegistry.Descriptor(jobcontract.KindExternalPushExpirySweep)
+	if !ok {
+		t.Fatal("sync.external_push_expiry_sweep descriptor missing")
+	}
 	database := &fakeWorkerDatabase{}
 	sources := productionWorkerDependencySources
 	sources.openDatabase = func(context.Context, config.Config) (workerDatabase, error) {
@@ -368,7 +373,7 @@ func TestLaunchDarklyReadinessRequiresConcreteProviderHandlerRegistration(
 		jobruntime.Observer, *slog.Logger, *river.Workers,
 	) (workerFamily, error) {
 		return workerFamily{
-			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec},
+			handlers: []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec, pushExpirySpec},
 			queues:   []jobruntime.QueueBudget{{Queue: syncCoordinatorQueue, MaxWorkers: 4}},
 		}, nil
 	}
@@ -1239,7 +1244,7 @@ func TestPreclaimReadinessRetriesTimeoutsUntilPostureClientRecovers(t *testing.T
 	if count := strings.Count(logs.String(), "preclaim readiness timed out, retrying"); count != wantSuccessAttempt-1 {
 		t.Fatalf("retry log count = %d, want %d (one per timed-out attempt)", count, wantSuccessAttempt-1)
 	}
-	if got, want := clock.recordedWaits(), []time.Duration{preclaimReadinessInitialBackoff, 2 * preclaimReadinessInitialBackoff}; !slices.Equal(got, want) {
+	if got, want := clock.recordedWaits(), []time.Duration{2 * time.Second, 4 * time.Second}; !slices.Equal(got, want) {
 		t.Fatalf("backoff waits = %v, want %v (doubling from the initial backoff)", got, want)
 	}
 	if strings.Contains(logs.String(), "preclaim readiness refused") {
@@ -1332,10 +1337,10 @@ func TestPreclaimReadinessExitsAfterBudgetExhaustedOnPersistentTimeout(t *testin
 		t.Fatalf("Start() error = %v, want preclaim dependency refusal once the budget is spent", err)
 	}
 	// With a 5s budget and a 2s initial backoff the loop waits 2s, then the
-	// 3s that remain, and gives up on the third attempt.
+	// 3s that remain, and gives up there: no attempt starts at the budget.
 	finalAttempts := attempts.Load()
-	if finalAttempts != 3 {
-		t.Fatalf("queue check ran %d times, want exactly 3 (retried twice, then gave up)", finalAttempts)
+	if finalAttempts != 2 {
+		t.Fatalf("queue check ran %d times, want exactly 2 (retried once, then gave up at the budget)", finalAttempts)
 	}
 	if got, want := clock.recordedWaits(), []time.Duration{2 * time.Second, 3 * time.Second}; !slices.Equal(got, want) {
 		t.Fatalf("backoff waits = %v, want %v (the second wait is clamped to the remaining budget)", got, want)
@@ -2811,6 +2816,10 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 	if !ok {
 		t.Fatal("sync.provider_oauth_revocations descriptor missing")
 	}
+	pushExpirySpec, ok := runtimeRegistry.Descriptor(jobcontract.KindExternalPushExpirySweep)
+	if !ok {
+		t.Fatal("sync.external_push_expiry_sweep descriptor missing")
+	}
 
 	syncConfig := config.Config{
 		Queues:                 []string{"sync", "sync_provider"},
@@ -2861,7 +2870,7 @@ func TestSelectedQueueCapabilityIsValidatedAcrossBuilderFamilies(t *testing.T) {
 			) (workerFamily, error) {
 				family := workerFamily{}
 				if test.reported {
-					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec}
+					family.handlers = []jobruntime.HandlerSpec{autoimportSpec, teamRepoOwnershipSpec, providerRevocationsSpec, pushExpirySpec}
 					family.queues = []jobruntime.QueueBudget{
 						{Queue: "sync", MaxWorkers: 4},
 					}

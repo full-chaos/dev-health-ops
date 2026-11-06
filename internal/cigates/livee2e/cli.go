@@ -2,19 +2,22 @@ package livee2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/envelopemint"
 )
 
 const usage = `usage: cigate live-e2e <verb>
   assert-health FILE | assert-meta FILE | assert-home FILE
+  assert-login-token FILE ISSUER KID     (FILE holds the login answer; prints one proof line)
   edge-request DOCUMENTS OPERATION ORG
-  mint-token                             (env E2E_USER_ID, E2E_ORG_ID, SETTINGS_ENCRYPTION_KEY)
-  jwt-secret                             (env ENC_KEY_INPUT)
+  mint-token                             (env E2E_SESSION_ID, E2E_ISSUER_URL, E2E_ISSUER_KEY_FILE; optional E2E_USER_ID, E2E_ORG_ID, E2E_ISSUER_KID)
   valkey-ping                            (env REDIS_URL)
 `
 
@@ -58,6 +61,20 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 			return fail(err)
 		}
 		return 0
+	case "assert-login-token":
+		if !need(3) {
+			return 2
+		}
+		payload, err := os.ReadFile(args[1])
+		if err != nil {
+			return fail(err)
+		}
+		line, err := AssertLoginToken(payload, args[2], args[3], time.Now())
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintln(stdout, line)
+		return 0
 	case "edge-request":
 		if !need(3) {
 			return 2
@@ -72,33 +89,35 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		}
 		_, _ = stdout.Write(body)
 		return 0
-	case "jwt-secret":
-		if !need(0) {
-			return 2
-		}
-		key := getenv("ENC_KEY_INPUT")
-		if key == "" {
-			return fail(fmt.Errorf("ENC_KEY_INPUT is not set"))
-		}
-		fmt.Fprintln(stdout, JWTSecret(key))
-		return 0
 	case "mint-token":
 		if !need(0) {
 			return 2
 		}
-		userID := getenv("E2E_USER_ID")
-		if userID == "" {
-			userID = E2EUserID
+		userID, err := uuidEnv(getenv, "E2E_USER_ID", E2EUserID)
+		if err != nil {
+			return fail(err)
 		}
-		orgID := getenv("E2E_ORG_ID")
-		if orgID == "" {
-			orgID = DefaultOrgID
+		orgID, err := uuidEnv(getenv, "E2E_ORG_ID", DefaultOrgID)
+		if err != nil {
+			return fail(err)
 		}
-		key := getenv("SETTINGS_ENCRYPTION_KEY")
-		if key == "" {
-			key = DefaultEncryptionKey
+		sessionID, err := uuidEnv(getenv, "E2E_SESSION_ID", "")
+		if err != nil {
+			return fail(err)
 		}
-		token, err := MintToken(JWTSecret(key), userID, orgID, time.Now().UTC(), uuid.NewString())
+		issuer := getenv("E2E_ISSUER_URL")
+		if issuer == "" {
+			return fail(errors.New("E2E_ISSUER_URL is not set"))
+		}
+		kid := getenv("E2E_ISSUER_KID")
+		if kid == "" {
+			kid = DefaultIssuerKeyID
+		}
+		key, err := envelopemint.LoadPrivateKeyFromFile(getenv("E2E_ISSUER_KEY_FILE"))
+		if err != nil {
+			return fail(err)
+		}
+		token, err := MintToken(key, kid, issuer, userID, orgID, sessionID, time.Now().UTC(), uuid.NewString())
 		if err != nil {
 			return fail(err)
 		}
@@ -115,4 +134,20 @@ func Run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
+}
+
+// uuidEnv reads name as a UUID; an unset name takes fallback, and an empty fallback makes it required.
+func uuidEnv(getenv func(string) string, name, fallback string) (uuid.UUID, error) {
+	raw := getenv(name)
+	if raw == "" {
+		raw = fallback
+	}
+	if raw == "" {
+		return uuid.UUID{}, fmt.Errorf("%s is not set", name)
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.UUID{}, fmt.Errorf("%s is not a UUID", name)
+	}
+	return id, nil
 }

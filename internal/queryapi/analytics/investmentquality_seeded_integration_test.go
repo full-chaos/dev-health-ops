@@ -138,6 +138,22 @@ CREATE TABLE work_unit_supersessions (
 ORDER BY (org_id, superseded_work_unit_id);
 `
 
+// seededQualityIssueSizeDDL is work_unit_issue_size as production declares it (ordered by org and unit). The
+// evidence-quality stats read joins it (CHAOS-12999), so a test that runs the stats creates it beside
+// seededQualitySchemaDDL; the sankey tests get it from seededCoverageExtraDDL instead.
+const seededQualityIssueSizeDDL = `
+CREATE TABLE work_unit_issue_size (
+    org_id String,
+    work_unit_id String,
+    issue_size Float64,
+    sized_issue_count UInt32,
+    issue_count UInt32,
+    categorization_run_id String,
+    computed_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, work_unit_id);
+`
+
 // seededQualityRow is one seeded work_unit_investments row -- only the
 // columns compileInvestmentQualityStats's SELECT actually reads carry
 // meaningful values; every other NOT NULL column gets an arbitrary but
@@ -213,7 +229,7 @@ func TestResolveEvidenceQualityStats_SeededRealClickHouse_ExactAggregate(t *test
 	}
 	defer func() { _ = conn.Close() }()
 
-	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL) {
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededQualityIssueSizeDDL) {
 		if err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}
@@ -228,6 +244,15 @@ func TestResolveEvidenceQualityStats_SeededRealClickHouse_ExactAggregate(t *test
 		{workUnitID: "wu-very-low", evidence: 0.05, band: "very_low"},
 		{workUnitID: "wu-unknown", evidence: 0.00, band: ""}, // evidence_quality is NOT NULL per DDL, so "unknown" here comes from the empty band, not a NULL value -- exactly what CHAOS-4723's own SQL's countIf(evidence_quality IS NULL OR evidence_quality_band = '') expresses.
 	})
+
+	// CHAOS-12999: two units carry a positive issue size, one carries 0 (a unit with no sized issue is
+	// "unsized"), and the other three have no size row at all: SizedUnitCount counts only the first two.
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO work_unit_issue_size (org_id, work_unit_id, issue_size, sized_issue_count, issue_count, categorization_run_id, computed_at) VALUES
+		('%[1]s', 'wu-high', 5, 2, 2, 'run', toDateTime64('2026-01-06 00:00:00',3)),
+		('%[1]s', 'wu-moderate-1', 3, 1, 2, 'run', toDateTime64('2026-01-06 00:00:00',3)),
+		('%[1]s', 'wu-low', 0, 0, 1, 'run', toDateTime64('2026-01-06 00:00:00',3))`, orgID)); err != nil {
+		t.Fatalf("seed work_unit_issue_size: %v", err)
+	}
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
 	if err != nil {
@@ -258,6 +283,9 @@ func TestResolveEvidenceQualityStats_SeededRealClickHouse_ExactAggregate(t *test
 
 	if got.Total != 6 {
 		t.Errorf("Total = %d, want 6", got.Total)
+	}
+	if got.SizedUnitCount == nil || *got.SizedUnitCount != 2 {
+		t.Errorf("SizedUnitCount = %v, want 2 (wu-high and wu-moderate-1 carry a positive issue size)", got.SizedUnitCount)
 	}
 
 	var bands map[string]int

@@ -39,7 +39,8 @@ func (s *probeStore) AccessUser(_ context.Context, id uuid.UUID) (policy.AccessU
 }
 
 // routedFixture is the api listener with the profile-routed validator over
-// rows, an EdDSA verifier over keys, and the real HS256 legacy path.
+// rows, an EdDSA verifier over keys, the real HS256 legacy path and the real
+// delegated-bearer rows.
 type routedFixture struct {
 	handler http.Handler
 	reader  *sdkmetric.ManualReader
@@ -49,8 +50,13 @@ type routedFixture struct {
 func newRoutedFixture(t *testing.T, store policy.Store, rows []accessverify.Row, issuer string, keys authverify.KeySource, denied []string, now time.Time) *routedFixture {
 	t.Helper()
 	f := &routedFixture{reader: sdkmetric.NewManualReader()}
+	delegated, err := goAPIDelegatedRows()
+	if err != nil {
+		t.Fatal(err)
+	}
 	f.handler = probeServer(t, store, func(auth *policy.Authenticator) {
 		f.auth = auth
+		auth.DelegatedRows(delegated)
 		cfg := accessverify.Config{
 			Rows:   rows,
 			Legacy: legacyVerifier(auth.AuthenticateLegacy),
@@ -304,8 +310,8 @@ func TestIssuerSetUserTokenPath(t *testing.T) {
 			}
 		}},
 		{name: "x-org-id of a non-member org", path: probeAuthenticated, token: user(nil), headers: map[string]string{"X-Org-Id": probeTargetOrg.String()}, status: http.StatusForbidden},
-		{name: "superuser from the users row, impersonating", path: probeSuperuser, token: minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(adminSID), "org_id": nil}), status: http.StatusOK, check: func(t *testing.T, body map[string]any) {
-			if body["impersonating"] != probeTarget.String() || body["org"] != probeTargetOrg.String() || userWith(body)["is_superuser"] != true {
+		{name: "superuser from the users row, impersonating, platform route refused", path: probeSuperuser, token: minter.mint(probeAdminUser, map[string]any{"sid": sessionid.Wire(adminSID), "org_id": nil}), status: http.StatusForbidden, check: func(t *testing.T, body map[string]any) {
+			if body["detail"] != "Not allowed in an impersonation session" {
 				t.Errorf("impersonation %v", body)
 			}
 		}},
@@ -365,6 +371,13 @@ type corpusManifest struct {
 // the same clock: the dev-health-api token in its window is good; expired, not
 // yet valid, another issuer, an auth-service token and an ACR token are
 // refused.
+// corpusDelegatedAtGoAPI are the go-api decisions of the corpus's delegated
+// tokens at its audience (CHAOS-10991): go-api maps the canonical act.sub to
+// the caller's ImpersonatedBy and serves the token. The run must reach each.
+var corpusDelegatedAtGoAPI = map[string]string{
+	"valid-act-canonical.json": "accept",
+}
+
 var corpusAtAnotherAudience = map[string]string{
 	"invalid-aud-api-token-at-auth-service.json":     "accept",
 	"invalid-order-audience-over-expiry.json":        "reject",
@@ -403,10 +416,14 @@ func TestA2CorpusThroughGoAPI(t *testing.T) {
 	subPattern := regexp.MustCompile(`"sub":"(prn_[A-Za-z0-9_-]+)"`)
 	sidPattern := regexp.MustCompile(`"sid":"(ses_[A-Za-z0-9_-]+)"`)
 	accepted := 0
+	delegated := map[string]bool{}
 	for _, row := range manifest.Vectors {
 		t.Run(strings.TrimSuffix(row.File, ".json"), func(t *testing.T) {
 			expect := row.Expect
-			if row.Audience != accessTokenAudienceAPI {
+			if decided, known := corpusDelegatedAtGoAPI[row.File]; known {
+				expect = decided
+				delegated[row.File] = true
+			} else if row.Audience != accessTokenAudienceAPI {
 				var known bool
 				if expect, known = corpusAtAnotherAudience[row.File]; !known {
 					t.Fatalf("a corpus row decided at %s that this test does not place at go-api", row.Audience)
@@ -452,6 +469,32 @@ func TestA2CorpusThroughGoAPI(t *testing.T) {
 	}
 	if len(manifest.Vectors) < 40 || accepted < 8 {
 		t.Fatalf("%d vectors, %d accepted: the corpus did not run", len(manifest.Vectors), accepted)
+	}
+	for file := range corpusDelegatedAtGoAPI {
+		if !delegated[file] {
+			t.Errorf("the corpus has no %s", file)
+		}
+	}
+}
+
+// TestIssuerSetDelegatedTokenActorMustBeCanonical: go-api refuses a delegated
+// token whose act.sub is not a canonical principal id (non-zero trailing bits)
+// with the generic 401, as it refuses such a sub; a canonical actor is served.
+func TestIssuerSetDelegatedTokenActorMustBeCanonical(t *testing.T) {
+	minter := newEdDSAMinter(t)
+	f := newRoutedFixture(t, newProbeStore(), userRows(t), probeIssuer, minter.keys, nil, probeNow)
+	for _, tc := range []struct {
+		name, actor string
+		status      int
+	}{
+		{"non-canonical actor", "prn_BBBBBBBBBBBBBBBBBBBBBB", http.StatusUnauthorized},
+		{"canonical actor", wirePrincipal(probeAdminUser), http.StatusOK},
+	} {
+		token := minter.mint(probeUser, map[string]any{"act": map[string]any{"sub": tc.actor}})
+		got := probeDo(f.handler, probeRequest{tc.name, http.MethodGet, probeAuthenticated, bearer(token)})
+		if got.Status != tc.status || (tc.status == http.StatusUnauthorized && got.Body != genericRefusal) {
+			t.Errorf("%s: %d %s, want %d", tc.name, got.Status, got.Body, tc.status)
+		}
 	}
 }
 
@@ -555,7 +598,7 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 			user++
 		}
 	}
-	if legacy != 196 || user != 196 {
+	if legacy != 198 || user != 198 {
 		t.Errorf("%d legacy rows, %d user rows", legacy, user)
 	}
 }
@@ -635,11 +678,10 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 	}
 }
 
-// TestIssuerSetCallerLookupOutageIsTheListener500: a store outage behind the
-// validator answers through the api listener exactly as with the issuer
-// unset: OrgScope runs first and answers the generic 500 (OrgIdMiddleware
-// parity); the 503 of the guard is not reached on this listener.
-func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
+// TestIssuerSetCallerLookupOutageIsTheListener503 is D6666: a store outage
+// behind the validator answers through the api listener exactly as with the
+// issuer unset: OrgScope runs first and answers the guard's 503.
+func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
 	downSID := uuid.MustParse("00000000-0000-4000-8000-0000000000c7")
@@ -647,7 +689,7 @@ func TestIssuerSetCallerLookupOutageIsTheListener500(t *testing.T) {
 	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
 	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
 	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})
-	if unset.Status != http.StatusInternalServerError {
+	if unset.Status != http.StatusServiceUnavailable || unset.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
 		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
 	}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)

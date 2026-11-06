@@ -212,8 +212,8 @@ func registerFlags() (*flag.FlagSet, *flags) {
 
 func parseFlags(args []string) (flags, error) {
 	fs, fp := registerFlags()
-	if err := fs.Parse(args); err != nil {
-		return *fp, cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(fs, flagOutput, args); err != nil {
+		return *fp, err
 	}
 	f := *fp
 	f.parsed = true

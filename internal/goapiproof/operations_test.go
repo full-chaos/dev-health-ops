@@ -39,7 +39,7 @@ var registeredOperations = []string{
 	"capacityForecast", "capacityCompletionDistribution", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "home", "hotspots",
 	"releaseImpact",
-	"investmentBreakdown", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
+	"investmentBreakdown", "investmentBreakdownTeam", "investmentBreakdownRepository", "teamWorkItemBreakdown", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
 	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "coverageScopeBaseline", "sourceHealth", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
@@ -371,14 +371,15 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 			sharedRoots++
 		}
 	}
-	// flowMatrix, investmentBreakdown, investmentEvidenceQuality and investmentFull all select
+	// flowMatrix, investmentBreakdown, investmentBreakdownTeam, investmentBreakdownRepository,
+	// investmentEvidenceQuality and investmentFull all select
 	// `analytics`; catalogValues and acrRepositoryScopes both select
 	// `catalog`; releaseImpact selects `workGraphEdges`; capacityCompletionDistribution selects `capacityForecast`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 16 {
-		t.Fatalf("expected 16 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 19 {
+		t.Fatalf("expected 19 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 
@@ -722,5 +723,26 @@ func TestWorkUnitTeamAttributionsRequestsMatchTheView(t *testing.T) {
 	}
 	if echo := team.Instance.Echo("team-1"); len(echo) != 1 || echo[0].Fields[0] != "teamId" || echo[0].Value != "team-1" {
 		t.Fatalf("TEAM_OWNS_UNITS echo %+v", echo)
+	}
+}
+
+// CHAOS-13017: teamWorkItemBreakdown's proof request is on the work-item basis, not the investment basis the
+// investmentBreakdown spec sends (WORK_TYPE, useInvestment true).
+func TestTeamWorkItemBreakdownSpecAsksForTheWorkItemBasis(t *testing.T) {
+	spec, ok := operationSpecs["teamWorkItemBreakdown"]
+	if !ok {
+		t.Fatal("teamWorkItemBreakdown has no spec")
+	}
+	vars := spec.Variables("org", Window{SinceDate: "2026-08-06", UntilDate: "2026-11-04"})
+	batch := vars["batch"].(map[string]any)
+	breakdown := batch["breakdowns"].([]any)[0].(map[string]any)
+	if breakdown["dimension"] != "TEAM" || breakdown["measure"] != "CYCLE_TIME_HOURS" {
+		t.Fatalf("breakdown = %v, want TEAM x CYCLE_TIME_HOURS", breakdown)
+	}
+	if use, present := batch["useInvestment"]; !present || use != false {
+		t.Fatalf("batch.useInvestment = %v (present %v), want false: the investment path would be measured", use, present)
+	}
+	if _, vacuous := spec.Parity.FloatTierB["data.analytics.evidenceQualityStats.mean"]; vacuous {
+		t.Fatal("a vacuous evidence-quality declaration: that selection exists only on the investment path")
 	}
 }

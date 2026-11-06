@@ -345,7 +345,7 @@ run_providersync_bounded() {
 usage() {
   # Backticks in the literal help text document commands; they are not substitutions.
   # shellcheck disable=SC2016
-  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
+  printf '%s\n' 'Usage: ci/check_go.sh [auth [STAGE]|fmt|vet|test|race|venue-oracles [SHARD COUNT]|venue-oracle-plan COUNT|ci-leg LEG [SHARD COUNT]|ci-leg-warm test|race SHARD COUNT|test-shard-plan SHARD COUNT|race-shard-plan SHARD COUNT|race-excluded-shard-plan SHARD COUNT|race-excluded-receipts JSON...|test-shard-wall-guard SHARD COUNT WALL LOGFILE|test-shard-unweighted-guard SHARD COUNT LOGFILE|security-fresh-receipt RAN JSON...|security-fresh-split PKG...|build|contract|ratchets|race-weights-rows|multi-replica-workers|job-timeout MINUTES|job-start|census-ops|integration-vet|integration-coverage|race-excluded-ran|integration-shard-plan|integration-prepull|integration-shard|integration|fast|ci|all]
 
   auth   (CHAOS-4887) The Auth Control Plane gates over the auth packages ALONE: gofmt, vet, test,
          -race, the production-middleware stack test (G-69, must log its marker), one fuzz run per
@@ -456,6 +456,10 @@ usage() {
          Print CHECK_GO_JOB_START, the job start of the deadline (taken here when
          CHECK_GO_JOB_CAP_MIN is set and no earlier call took it), or an empty
          line without a cap. ci/check_golden_drift.sh takes it once for its rows.
+  census-ops
+         (CHAOS-12939) The ops census: go test -count=1 over ./internal/cigates/... ./internal/testsupport/...
+         ./internal/httpguard/... with the -timeout of cigates_go_test_timeout (20m while the cigates packages
+         are listed).
   job-timeout MINUTES
          Print the go test -timeout, in seconds, of one integration call whose
          own limit is MINUTES: min(MINUTES, CHECK_GO_JOB_CAP_MIN - elapsed - 3 min).
@@ -842,6 +846,18 @@ cigates_go_test_timeout() {
     esac
   done
   printf '10m\n'
+}
+
+# check_census_ops: the ops census (CHAOS-12939): go test over the cigates, testsupport and httpguard packages with the
+# -timeout of cigates_go_test_timeout, so a caller with no -timeout of its own never meets the 10m default in internal/cigates/scripts.
+check_census_ops() {
+  local modpath cmd=(go test -mod=readonly -trimpath -count=1)
+  [ "$#" -eq 0 ] || die "census-ops accepts no arguments"
+  modpath="$(awk '$1 == "module" { print $2; exit }' "${ROOT}/go.mod")"
+  [ -n "${modpath}" ] || die "no module line in ${ROOT}/go.mod"
+  cmd+=(-timeout "$(cigates_go_test_timeout "${modpath}/internal/cigates/..." "${modpath}/internal/testsupport/..." "${modpath}/internal/httpguard/...")")
+  cmd+=(./internal/cigates/... ./internal/testsupport/... ./internal/httpguard/...)
+  (cd "${ROOT}" && "${GO_ENV_OFF[@]}" GOENV=off GOWORK=off "${cmd[@]}")
 }
 
 # go_test_json_run JSON_FILE LOG_FILE PKG...: go_test_json_run_t with the 10m go test -timeout.
@@ -2423,6 +2439,13 @@ go_run_name_ok() {
   [[ ! "${rest}" =~ [[:print:][:cntrl:]] ]]
 }
 
+# byte_len STRING: sets BYTE_LEN to the length of STRING in bytes. ${#var} counts characters under a UTF-8 locale, and the
+# -run budget is in bytes (Linux refuses one argument over 128 KiB).
+byte_len() {
+  local LC_ALL=C
+  BYTE_LEN=${#1}
+}
+
 # go_test_name_ok NAME: go_run_name_ok for a "Test" name.
 go_test_name_ok() {
   case "$1" in Test*) go_run_name_ok "$1" ;; *) return 1 ;; esac
@@ -2651,7 +2674,8 @@ run_integration_packages() {
       [ -n "${name}" ] || continue
       [ -z "${seen[${name}]+set}" ] || continue
       seen["${name}"]=1
-      names_len=$((names_len + ${#name} + 1))
+      byte_len "${name}"
+      names_len=$((names_len + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     [ $((names_len + 4)) -le "${regex_max}" ] \
       || die "${label}: the selected test names of ${key} alone exceed the ${regex_max}-byte -run budget"
@@ -2678,7 +2702,7 @@ run_integration_packages() {
       while IFS= read -r name; do
         [ -n "${name}" ] || continue
         if [ -n "${skipped_in[${group}|${name}]+set}" ]; then fits=0 why="collision ${name} ${skipped_in[${group}|${name}]}"; break; fi
-        [ -n "${selected_in[${group}|${name}]+set}" ] || size=$((size + ${#name} + 1))
+        if [ -z "${selected_in[${group}|${name}]+set}" ]; then byte_len "${name}"; size=$((size + BYTE_LEN + 1)); fi
       done <<<"${select_names[${pkg}]}"
       if [ "${fits}" -eq 1 ] && [ "${size}" -gt "${regex_max}" ]; then fits=0 why="budget ${size}"; fi
       if [ "${fits}" -eq 1 ]; then
@@ -2699,7 +2723,8 @@ run_integration_packages() {
       [ -z "${selected_in[${group}|${name}]+set}" ] || continue
       selected_in["${group}|${name}"]="${key}"
       group_regex[group]+="${group_regex[${group}]:+|}${name}"
-      group_size[group]=$((group_size[group] + ${#name} + 1))
+      byte_len "${name}"
+      group_size[group]=$((group_size[group] + BYTE_LEN + 1))
     done <<<"${select_names[${pkg}]}"
     while IFS= read -r name; do
       [ -n "${name}" ] || continue
@@ -4702,6 +4727,9 @@ AUTH_PACKAGES=(
   ./contracts/auth/v1/...
   ./internal/audit/...
   ./internal/storage/postgres/authschema/...
+  ./internal/authzenforce/...
+  ./internal/jobs/pushexpiry/...
+  ./internal/workerservice/...
   ./internal/token/...
 )
 # One fuzz target per parser, each its own corpus (the target's f.Add seeds plus
@@ -4790,9 +4818,34 @@ check_auth_history() {
     || die "auth history: no inventory was verified (the proof marker never printed)"
 }
 
+# auth_race_timeout_min (CHAOS-12938): the per-package go test -timeout of the auth race leg, in whole minutes: the heaviest race
+# weight (ci/go_race_weights.d) of a package under AUTH_PACKAGES, times 1.5, rounded up, never under 10. The go default of 10 min
+# timed out internal/auth/authapi (hosted race runs of 459 to 600 s). No row under AUTH_PACKAGES refuses: the budget has no source.
+auth_race_timeout_min() {
+  local pkg pat rows heaviest
+  local -a pats=()
+  for pkg in "${AUTH_PACKAGES[@]}"; do
+    pat="${pkg#./}"
+    case "${pat}" in */...) pat="${pat%/...}/" ;; *) pat="${pat}"$'\t' ;; esac
+    pats+=("${pat}")
+  done
+  rows="$(race_weights_rows)" || return 2
+  heaviest="$(printf '%s\n' "${rows}" | awk -F'\t' -v pats="$(printf '%s\n' "${pats[@]}")" '
+    BEGIN { n = split(pats, p, "\n") }
+    $2 ~ /^[0-9]+$/ { for (i = 1; i <= n; i++) { k = $1 (substr(p[i], length(p[i])) == "\t" ? "\t" : "/"); if (index(k, p[i]) == 1 && $2 + 0 > max) max = $2 + 0 } }
+    END { print max + 0 }')"
+  [ "${heaviest}" -gt 0 ] || die "auth race: no race weight row under AUTH_PACKAGES in ci/go_race_weights.d; the go test -timeout has no source"
+  local min=$(((heaviest * 3 + 119) / 120))
+  [ "${min}" -ge 10 ] || min=10
+  printf '%s\n' "${min}"
+}
+
 check_auth_race() {
-  printf 'auth go test -race\n'
-  auth_go test -mod=readonly -trimpath -count=1 -race "${AUTH_PACKAGES[@]}"
+  local min tmo
+  min="$(auth_race_timeout_min)" || return 2
+  tmo="$(job_go_test_timeout "${min}")" || return 2
+  printf 'auth go test -race (per-package -timeout %s)\n' "${tmo}"
+  auth_go test -mod=readonly -trimpath -count=1 -race -timeout="${tmo}" "${AUTH_PACKAGES[@]}"
 }
 
 # check_auth_race_integration (CHAOS-10207): auth concurrency proofs need BOTH
@@ -4880,9 +4933,11 @@ check_auth_fuzz() {
   [ "${ran}" -gt 0 ] || die "auth fuzz: no target ran (TARGET=${only:-all})"
 }
 
-# check_auth_vuln: govulncheck over the auth packages only, pinned. ANY
-# reachable finding fails the gate: there is no ignore list, so a pull request
-# cannot whitelist a vulnerability.
+# check_auth_vuln: govulncheck over the auth packages only, pinned. Any
+# reachable finding fails the gate, except a row of ci/auth-vuln-exceptions.tsv
+# that matches its advisory id, module and version exactly. A row ends when the
+# advisory has a fixed version: the gate then fails until the row is removed.
+# A row is reviewed in the pull request (no date field).
 check_auth_vuln() {
   local report
   report="$(mktemp)"
@@ -4895,7 +4950,7 @@ check_auth_vuln() {
     die "govulncheck failed to run"
   fi
   rm -f "${report}.err"
-  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
+  auth_go run -trimpath -mod=readonly ./cmd/cigate govulncheck --exceptions "${ROOT}/ci/auth-vuln-exceptions.tsv" <"${report}" || { rm -f "${report}"; die "auth govulncheck gate failed"; }
   rm -f "${report}"
 }
 
@@ -4986,7 +5041,7 @@ auth_relevant() {
 auth_path_relevant() {
   local file="$1" closure="$2" dir
   case "${file}" in
-    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
+    cmd/auth-service/*|cmd/auth-migrate/*|internal/auth/*|internal/audit/*|internal/storage/postgres/authschema/*|contracts/auth/*|go.mod|go.sum|ci/check_go.sh|cmd/cigate/*|internal/cigates/*|ci/auth_gate_scope_exempt.txt|ci/auth_closure_allow.tsv|ci/auth-vuln-exceptions.tsv|ci/auth_queue_relevance.sh|ci/auth_corpus_queue_relevance.sh|ci/auth_corpus_paths.txt|.github/workflows/go-auth-service.yml)
       return 0
       ;;
   esac
@@ -5222,6 +5277,10 @@ case "${1:-all}" in
     ;;
   integration-vet)
     check_integration_vet
+    ;;
+  census-ops)
+    shift
+    check_census_ops "$@"
     ;;
   integration-coverage)
     check_integration_coverage

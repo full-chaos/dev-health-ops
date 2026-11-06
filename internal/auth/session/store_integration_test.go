@@ -119,7 +119,28 @@ func (e *env) principal(t *testing.T, ctx context.Context) uuid.UUID {
 	if _, err := e.admin.Exec(ctx, `INSERT INTO auth.principals (id, kind, display_name) VALUES ($1, 'user', 'session-test')`, id.String()); err != nil {
 		t.Fatalf("seed principal: %v", err)
 	}
+	if _, err := e.admin.Exec(ctx, `INSERT INTO public.users (id, email, username, full_name, token_version) VALUES ($1, $2, $3, 'Session Test', 0)`,
+		id, "s-"+id.String()+"@example.test", "s-"+id.String()); err != nil {
+		t.Fatalf("seed public.users: %v", err)
+	}
 	return id
+}
+
+// deactivate is go-api's deactivation: public.users.is_active, the row that
+// decides (D6651). The auth copy is left as it is.
+func (e *env) deactivate(t *testing.T, ctx context.Context, id uuid.UUID) {
+	t.Helper()
+	if _, err := e.admin.Exec(ctx, `UPDATE public.users SET is_active = false WHERE id = $1`, id.String()); err != nil {
+		t.Fatalf("deactivate public.users: %v", err)
+	}
+}
+
+// wantCreatedRows checks the auth.session.created rows: Create writes one per session.
+func (e *env) wantCreatedRows(t *testing.T, ctx context.Context, want int) {
+	t.Helper()
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.created'`); n != want {
+		t.Fatalf("%d auth.session.created rows, want %d", n, want)
+	}
 }
 
 func (e *env) create(t *testing.T, ctx context.Context, principal uuid.UUID) Issued {
@@ -280,8 +301,10 @@ func TestRaceParallelExchangeOfOneCredentialRotatesOnce(t *testing.T) {
 	if live := e.liveCredentials(t, ctx, issued.Session.ID); live != 1 {
 		t.Fatalf("%d live credentials, want 1", live)
 	}
-	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none.
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
+	// One rotation, one auth.session.refreshed row (CHAOS-11400); the grace replays write none. Create wrote the
+	// session's auth.session.created row.
+	e.wantCreatedRows(t, ctx, 1)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type NOT IN ('auth.session.refreshed', 'auth.session.created')`); n != 0 {
 		t.Fatalf("%d audit rows after a clean rotation, want 0", n)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
@@ -553,7 +576,9 @@ func TestGraceWithAChangedKeyIsRetryableAndRevokesNothing(t *testing.T) {
 		t.Fatal("a key mismatch revoked the session or its successor")
 	}
 	// The first exchange's accepted rotation wrote its auth.session.refreshed row (CHAOS-11400); the mismatch adds none.
-	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type <> 'auth.session.refreshed'`); n != 0 {
+	// Create wrote the session's auth.session.created row.
+	e.wantCreatedRows(t, ctx, 1)
+	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type NOT IN ('auth.session.refreshed', 'auth.session.created')`); n != 0 {
 		t.Fatalf("%d audit rows after a key mismatch, want 0", n)
 	}
 	if n := e.count(t, ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.session.refreshed'`); n != 1 {
@@ -586,7 +611,7 @@ func TestRefusalsWriteNothing(t *testing.T) {
 	e.guarded(t, ctx, `UPDATE auth.sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, expiredSession.Session.ID.String())
 	disabledPrincipal := e.principal(t, ctx)
 	disabled := e.create(t, ctx, disabledPrincipal)
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, disabledPrincipal.String())
+	e.deactivate(t, ctx, disabledPrincipal)
 	revoked := e.create(t, ctx, e.principal(t, ctx))
 	if ok, err := e.store.Revoke(ctx, revoked.Session.ID, Actor{}); !ok || err != nil {
 		t.Fatalf("Revoke: %v %v", ok, err)
@@ -653,7 +678,7 @@ func TestCreateRefusesDisabledPrincipalsAndBadAMR(t *testing.T) {
 	if _, err := e.store.Create(ctx, uuid.New(), nil, []string{"pwd"}); !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Errorf("unknown principal: %v", err)
 	}
-	e.guarded(t, ctx, `UPDATE auth.principals SET disabled_at = now() WHERE id = $1`, principal.String())
+	e.deactivate(t, ctx, principal)
 	if _, err := e.store.Create(ctx, principal, nil, []string{"pwd"}); !errors.Is(err, ErrPrincipalUnavailable) {
 		t.Errorf("disabled principal: %v", err)
 	}
@@ -699,8 +724,8 @@ func TestDefaultSessionHasNoAbsoluteCapAndRolls(t *testing.T) {
 	if !issued.Session.ExpiresAt.Equal(issued.ExpiresAt) {
 		t.Fatalf("session expiry %v, its only credential expires %v", issued.Session.ExpiresAt, issued.ExpiresAt)
 	}
-	if got := issued.ExpiresAt.Sub(issued.Session.CreatedAt); got < defaultRefreshTTL-time.Minute || got > defaultRefreshTTL+time.Minute {
-		t.Fatalf("first credential lives %v, want about %v", got, defaultRefreshTTL)
+	if got := issued.ExpiresAt.Sub(issued.Session.CreatedAt); got < DefaultRefreshTTL-time.Minute || got > DefaultRefreshTTL+time.Minute {
+		t.Fatalf("first credential lives %v, want about %v", got, DefaultRefreshTTL)
 	}
 	time.Sleep(10 * time.Millisecond)
 	child := e.exchange(t, ctx, e.store, issued.Credential)

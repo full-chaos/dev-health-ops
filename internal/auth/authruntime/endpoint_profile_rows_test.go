@@ -110,7 +110,7 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t))
+	routes, err := sessionRoutes(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), pool, schema, nil, mustLimits(t), nil)
 	if err != nil {
 		t.Fatalf("sessionRoutes: %v", err)
 	}
@@ -125,6 +125,9 @@ func servedAuthRoutesWithIssuer(t *testing.T, issuer string) map[string]bool {
 		registered["api"] = append(registered["api"], workloadexchange.Pattern)
 	}
 	registered["api"] = append(registered["api"], authapi.PatternAuthorize, authapi.PatternAuthorizeBatch)
+	// The OAuth authorization server's routes (O3b) mount only with the issuer, the key set and every endpoint-profile row.
+	registered["api"] = append(registered["api"], authapi.PatternOAuthAuthorize, authapi.PatternOAuthMetadata,
+		authapi.PatternOAuthDiscovery, authapi.PatternOAuthJWKS)
 	seenWellKnown := map[string]bool{}
 	for _, route := range authapi.WellKnownRoutes(authapi.WellKnownDeps{IssuerURL: issuer}) {
 		if !seenWellKnown[route.Pattern] {
@@ -236,11 +239,45 @@ func plantedMissingRow(t *testing.T, served map[string]bool, other string) {
 	}
 }
 
+// TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute takes every route
+// from the probed route table, removes its row in memory and requires the
+// comparison to name exactly that route: no other route missing, no row stale.
+func TestTheRowGateRefusesAPlantedMissingRowForEveryServedRoute(t *testing.T) {
+	served := servedAuthRoutes(t)
+	if len(served) != servedAuthRouteCount {
+		t.Fatalf("%d served routes found, want %d: a mount was dropped or added without a row", len(served), servedAuthRouteCount)
+	}
+	keys := make([]string, 0, len(served))
+	for key := range served {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	rows := loadAuthServiceRows(t)
+	for _, key := range keys {
+		var kept []map[string]any
+		for _, row := range rows {
+			id, _ := row["id"].(string)
+			if match := authRowID.FindStringSubmatch(id); match != nil && match[1]+" "+match[2]+"@"+match[3] == key {
+				continue
+			}
+			kept = append(kept, row)
+		}
+		if len(kept) != len(rows)-1 {
+			t.Errorf("%s: %d rows removed, want exactly one: no row, or more than one, carries this route", key, len(rows)-len(kept))
+			continue
+		}
+		missing, stale := compareServedToRows(t, served, kept)
+		if len(missing) != 1 || missing[0] != key || len(stale) != 0 {
+			t.Errorf("rows without %s: missing %v stale %v, want exactly it missing", key, missing, stale)
+		}
+	}
+}
+
 // servedAuthRouteCount is every route the probe serves: four session routes, two social link routes,
 // four compatibility routes, the validate route, the switch-org route, the session issue route, the session state route, the two delegated session routes, the eight federated sign-in routes, the six credentials routes,
-// the twenty-five provisioning routes, the two authorize routes and the three operator paths on GET and HEAD, and GET and HEAD of the JWKS and the
-// discovery document.
-const servedAuthRouteCount = 68
+// the twenty-five provisioning routes, the eight read routes, the two authorize routes and the three operator paths on GET and HEAD, GET and HEAD of the JWKS and the
+// discovery document, and the five OAuth authorization server routes.
+const servedAuthRouteCount = 81
 
 // compareServedToRows returns the served routes with no row and the rows for
 // routes nothing serves, per method and listener.
@@ -360,13 +397,17 @@ func TestAuthEndpointProfileAnchorsStillPointAtTheirSymbols(t *testing.T) {
 		"/internal/v1/memberships/add": "PatternMembershipAdd", "/internal/v1/memberships/role": "PatternMembershipRole",
 		"/internal/v1/memberships/remove": "PatternMembershipRemove", "/internal/v1/memberships/transfer": "PatternMembershipTransfer",
 		"/internal/v1/invites/create": "PatternInviteCreate", "/internal/v1/invites/accept": "PatternInviteAccept",
-		"/internal/v1/organizations/deprovision": "PatternOrgDeprovision",
-		"/internal/v1/organizations/reactivate":  "PatternOrgReactivate",
-		"/internal/v1/invites/revoke":            "PatternInviteRevoke",
-		"/internal/v1/organizations/suspend":     "PatternOrgSuspend",
-		"/internal/v1/organizations/state":       "PatternOrgState",
-		"/internal/v1/organizations/onboard":     "PatternOrgOnboard",
-		"/internal/v1/organizations/create":      "PatternOrgCreate",
+		"/internal/v1/organizations/deprovision":        "PatternOrgDeprovision",
+		"/internal/v1/organizations/reactivate":         "PatternOrgReactivate",
+		"/internal/v1/invites/revoke":                   "PatternInviteRevoke",
+		"/internal/v1/organizations/suspend":            "PatternOrgSuspend",
+		"/internal/v1/organizations/state":              "PatternOrgState",
+		"/internal/v1/organizations/onboard":            "PatternOrgOnboard",
+		"/internal/v1/organizations/create":             "PatternOrgCreate",
+		"/oauth/authorize":                              "PatternOAuthAuthorize",
+		"/.well-known/oauth-authorization-server/oauth": "PatternOAuthMetadata",
+		"/oauth/.well-known/openid-configuration":       "PatternOAuthDiscovery",
+		"/oauth/.well-known/jwks.json":                  "PatternOAuthJWKS",
 	}
 	checked := 0
 	var walk func(node any, where string)
@@ -514,8 +555,8 @@ func TestTheRowGateRefusesAPlantedMissingRowForEachWellKnownRoute(t *testing.T) 
 func TestWithoutAnIssuerTheDiscoveryRowsAreStale(t *testing.T) {
 	served := servedAuthRoutesWithIssuer(t, "")
 	missing, stale := compareServedToRows(t, served, loadAuthServiceRows(t))
-	// The workload-token exchange needs the issuer too, so its row is stale as well.
-	wantStale := []string{"GET /.well-known/openid-configuration@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api"}
+	// The workload-token exchange and the OAuth authorization server need the issuer too, so their rows are stale as well.
+	wantStale := []string{"GET /.well-known/oauth-authorization-server/oauth@api", "GET /.well-known/openid-configuration@api", "GET /oauth/.well-known/jwks.json@api", "GET /oauth/.well-known/openid-configuration@api", "GET /oauth/authorize@api", "HEAD /.well-known/openid-configuration@api", "POST /internal/v1/token/exchange@api", "POST /oauth/authorize@api"}
 	if len(missing) != 0 || strings.Join(stale, ",") != strings.Join(wantStale, ",") {
 		t.Errorf("without an issuer: missing %v stale %v, want stale %v", missing, stale, wantStale)
 	}

@@ -51,17 +51,21 @@ status_verdict() {
   esac
 }
 
-# A probe file holds "<n> <http code>" lines.
+# An overlap probe file holds "<n> <go-api code> <query-api code>" lines. go-api must answer 2xx; query-api must serve: 401,
+# 000 (no answer) and 5xx count as down, as query_serves judges it. A line without exactly three fields is malformed.
+# shellcheck disable=SC2016
+PROBE_AWK='NF != 3 { n++; mal++; next } { n++; if ($2 !~ /^2[0-9][0-9]$/) go++; if ($3 == 401 || $3 == "000" || $3 ~ /^5/) q++ }'
 probe_summary() {
-  awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { printf "probes=%d non2xx=%d\n", n, bad }' "$1"
+  awk "${PROBE_AWK}"' END { printf "probes=%d go_api_non2xx=%d query_api_down=%d malformed=%d\n", n, go, q, mal }' "$1"
 }
 
 probe_no_downtime() {
-  local n bad
-  read -r n bad < <(awk 'NF >= 2 { n++; if ($2 !~ /^2[0-9][0-9]$/) bad++ } END { print n + 0, bad + 0 }' "$1")
-  [ "${n}" -gt 0 ] && [ "${bad}" -eq 0 ]
+  local n go q mal
+  read -r n go q mal < <(awk "${PROBE_AWK}"' END { print n + 0, go + 0, q + 0, mal + 0 }' "$1")
+  [ "${n}" -gt 0 ] && [ "${go}" -eq 0 ] && [ "${q}" -eq 0 ] && [ "${mal}" -eq 0 ]
 }
 
+# A refusal probe file holds "<n> <http code>" lines.
 probe_all_refused() {
   local n ok
   read -r n ok < <(awk 'NF >= 2 { n++; if ($2 == 401 || $2 == 403) ok++ } END { print n + 0, ok + 0 }' "$1")
@@ -91,15 +95,31 @@ keys_list_state() {
   printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { print $2; found = 1 } END { exit found ? 0 : 1 }'
 }
 
+# valid_run_id VALUE: the CI run id is digits only (1-20) or empty; the one operator-supplied value a record carries.
+valid_run_id() {
+  [[ -z "$1" || "$1" =~ ^[0-9]{1,20}$ ]]
+}
+
 # Records: noclobber, one file per scenario, PASS/FAIL lines.
 REC_FILE=""
 rec_open() {
   REC_FILE="$1"
   ( set -o noclobber; printf '# %s\n' "$2" >"${REC_FILE}" ) 2>/dev/null || { REC_FILE=""; return 1; }
 }
+# rec_line redacts by FIELD: a whitespace-separated token is refused when its key names a secret (key=value with a
+# password/secret/token/credential/private key name) or when it is shaped like one (a URL with credentials, a PEM header,
+# a JWT). Plain text that merely contains a word such as "password" (a namespace name) is not a secret.
 rec_line() {
   [ -n "${REC_FILE}" ] || return 1
-  if grep -Eqi '://[^ /]*:[^ @]*@|password|BEGIN [A-Z ]*PRIVATE|eyJ[A-Za-z0-9_-]{8,}' <<<"$1"; then
+  local tok key
+  for tok in $1; do
+    key="${tok%%=*}"
+    if [ "${key}" != "${tok}" ] && grep -Eqi '^(.*[-_.])?(password|passwd|secret|token|credential|apikey|api[-_]key|private[-_]?key)([-_.].*)?$' <<<"${key}"; then
+      printf 'refused: record line looks like a secret\n' >&2
+      return 1
+    fi
+  done
+  if grep -Eqi '://[^ /]*:[^ @]*@|BEGIN [A-Z ]*PRIVATE|eyJ[A-Za-z0-9_-]{8,}' <<<"$1"; then
     printf 'refused: record line looks like a secret\n' >&2
     return 1
   fi

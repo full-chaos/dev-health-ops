@@ -13,6 +13,8 @@ the ops tables.
 {{- if and (eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true") .Values.authService.migrate.enabled .Values.authService.migrate.grantsHook.enabled .Values.migrations.hook.enabled }}
 {{- $a := .Values.authService }}
 {{- $m := $a.migrate }}
+{{- include "dev-health.authPushLifecycle" . }}
+{{- include "dev-health.authRepoIdentity" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -62,16 +64,16 @@ spec:
             - name: AUTH_USERS_OWNED
               value: "true"
             {{- end }}
-            {{- if eq (include "dev-health.authOn" (dict "flag" "orgsOwned" "context" .)) "true" }}
-            - name: AUTH_ORGS_OWNED
-              value: "true"
-            {{- end }}
             {{- if eq (include "dev-health.platformRolesOwned" .) "true" }}
             - name: AUTH_PLATFORM_ROLES_OWNED
               value: "true"
             {{- end }}
             {{- with $m.sessionReaderRoles }}
             - name: AUTH_SESSION_READER_ROLES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- with $m.projectionReaderRoles }}
+            - name: AUTH_PROJECTION_READER_ROLES
               value: {{ join "," . | quote }}
             {{- end }}
             {{- with include "dev-health.authSchemaOwnerRole" . }}
@@ -83,6 +85,12 @@ spec:
               value: {{ . | quote }}
             - name: AUTH_PUSH_LIFECYCLE_CALLER_ROLES
               value: {{ join "," $m.pushLifecycle.callerRoles | quote }}
+            {{- end }}
+            {{- with $m.repoIdentity.writerRole }}
+            - name: AUTH_REPO_IDENTITY_WRITER_ROLE
+              value: {{ . | quote }}
+            - name: AUTH_REPO_IDENTITY_CALLER_ROLES
+              value: {{ join "," $m.repoIdentity.callerRoles | quote }}
             {{- end }}
           resources:
             {{- toYaml $m.resources | nindent 12 }}

@@ -114,8 +114,8 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	org := fs.String("org", "", "org id (UUID) to mint the token for; the principal must hold its membership in it (read-level for proof, admin for admin-proof)")
 	principal := fs.String("principal", principalProof, "which dedicated service principal to mint for: proof (read-level, the default) or admin-proof (the org-admin principal, admin role only)")
 	ttl := fs.Duration("ttl", edgetokenmint.DefaultTTL, fmt.Sprintf("token lifetime, at most %s; dho goapi prove re-runs this helper as the token ages", edgetokenmint.MaxTTL))
-	if err := fs.Parse(args); err != nil {
-		return cli.WrapFlagParseError(err)
+	if err := cli.ParseFlagsError(fs, flagErrOutput, args); err != nil {
+		return err
 	}
 	if *principal != principalProof && *principal != principalAdminProof {
 		return fmt.Errorf("-principal must be %s or %s", principalProof, principalAdminProof)
@@ -131,8 +131,21 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	}
 
 	// The key is checked before the database is opened, so a pod missing
-	// its secretKeyRef fails without a connection attempt.
-	signingKey, err := edgetokenmint.LoadSigningKeyFromEnv()
+	// its key fails without a connection attempt. A key file selects the
+	// EdDSA mode (CI, no HS256 secret read); without one the HS256 mode
+	// runs, for the bigboy prover until the HS256 verifier is removed.
+	var (
+		signingKey []byte
+		signer     edgetokenmint.EdDSASigner
+		eddsa      bool
+		err        error
+	)
+	if keyFile, _ := envsecrets.ProcessLookup(edgetokenmint.SigningKeyFileEnvVar); strings.TrimSpace(keyFile) != "" {
+		eddsa = true
+		signer, err = edgetokenmint.EdDSASignerFromEnv(envsecrets.ProcessLookup)
+	} else {
+		signingKey, err = edgetokenmint.LoadSigningKeyFromEnv()
+	}
 	if err != nil {
 		return err
 	}
@@ -153,12 +166,18 @@ func run(ctx context.Context, args []string, stdout, flagErrOutput io.Writer, op
 	}
 	defer closeDB()
 
-	mint := edgetokenmint.MintForProve
-	if *principal == principalAdminProof {
-		mint = edgetokenmint.MintForAdminProve
+	opts := edgetokenmint.Options{TTL: *ttl, PlatformRolesOwned: platformRolesOwned, AuthSchema: strings.TrimSpace(authSchema)}
+	var token string
+	switch {
+	case eddsa && *principal == principalAdminProof:
+		token, err = edgetokenmint.MintForAdminProveEdDSA(ctx, db, signer, *org, opts)
+	case eddsa:
+		token, err = edgetokenmint.MintForProveEdDSA(ctx, db, signer, *org, opts)
+	case *principal == principalAdminProof:
+		token, err = edgetokenmint.MintForAdminProve(ctx, db, signingKey, *org, opts)
+	default:
+		token, err = edgetokenmint.MintForProve(ctx, db, signingKey, *org, opts)
 	}
-	token, err := mint(ctx, db, signingKey, *org, edgetokenmint.Options{TTL: *ttl,
-		PlatformRolesOwned: platformRolesOwned, AuthSchema: strings.TrimSpace(authSchema)})
 	if err != nil {
 		return err
 	}

@@ -8,8 +8,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +24,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 )
 
 type doc = map[string]any
@@ -254,36 +256,38 @@ func EdgeRequest(documents []byte, operation, org string) ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
-// JWTSecret is the signing key the e2e token and the api share: the hex sha256 of the settings encryption key.
-func JWTSecret(encKey string) string {
-	sum := sha256.Sum256([]byte(encKey))
-	return hex.EncodeToString(sum[:])
-}
-
 // E2E identities the access token names.
 const (
 	E2EUserID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	e2eEmail  = "e2e@test.local"
 	// DefaultOrgID is the organization the harness seeds and measures.
 	DefaultOrgID = "11111111-2222-4333-8444-555555555555"
-	// DefaultEncryptionKey is the settings encryption key the harness runs with when none is set.
-	DefaultEncryptionKey = "dev-key-not-for-prod"
+	// DefaultIssuerKeyID is the kid of the CI issuer stub's key (internal/testsupport/issuerstub).
+	DefaultIssuerKeyID = "ci-e2e-1"
+	// AccessTokenAudience is the audience go-api verifies user access tokens for.
+	AccessTokenAudience = "dev-health-api"
 )
 
-// MintToken signs the e2e admin access token (HS256, one hour).
-func MintToken(secret, userID, orgID string, now time.Time, jti string) (string, error) {
-	claims := jwt.MapClaims{
-		"sub":          userID,
-		"email":        e2eEmail,
-		"org_id":       orgID,
-		"role":         "admin",
-		"is_superuser": false,
-		"type":         "access",
-		"exp":          now.Add(time.Hour).Unix(),
-		"iat":          now.Unix(),
-		"jti":          jti,
+// MintToken signs the e2e user access token: an access-token.v1 token (EdDSA, one hour) for the user, in the
+// organization, bound to the live session sessionID, issued by the CI issuer stub whose key is key.
+func MintToken(key ed25519.PrivateKey, kid, issuer string, userID, orgID, sessionID uuid.UUID, now time.Time, jti string) (string, error) {
+	if len(key) != ed25519.PrivateKeySize {
+		return "", errors.New("signing key is not an Ed25519 private key")
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(secret))
+	header, err := json.Marshal(map[string]string{"alg": "EdDSA", "typ": "at+jwt", "kid": kid})
+	if err != nil {
+		return "", err
+	}
+	claims, err := json.Marshal(map[string]any{
+		"iss": issuer, "aud": AccessTokenAudience, "sub": "prn_" + base64.RawURLEncoding.EncodeToString(userID[:]),
+		"principal_type": "human", "sid": sessionid.Wire(sessionID), "jti": jti,
+		"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(time.Hour).Unix(),
+		"org_id": orgID.String(), "scope": "api:access",
+	})
+	if err != nil {
+		return "", err
+	}
+	signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
+	return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, []byte(signing))), nil
 }
 
 // ValkeyPing answers whether the Valkey at the redis:// URL replies PONG.
@@ -448,4 +452,77 @@ func number(v any) (float64, error) {
 		return f, nil
 	}
 	return 0, fmt.Errorf("not a number: %v", v)
+}
+
+// apiAudience is the audience of auth-service's access token under the eddsa class.
+const apiAudience = "dev-health-api"
+
+// AssertLoginToken checks the access token of a login answer: EdDSA, the kid of the auth-service key, the issuer of
+// auth-service, the API audience, a lifetime within one hour and not yet expired. It reads the claims without
+// verifying the signature (the services verify it) and returns one line that names the checked claims and never the
+// token.
+func AssertLoginToken(payload []byte, issuer, kid string, now time.Time) (string, error) {
+	var answer struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(payload, &answer); err != nil {
+		return "", errors.New("the login answer is not JSON")
+	}
+	if answer.AccessToken == "" {
+		return "", errors.New("the login answer has no access_token")
+	}
+	parts := strings.Split(answer.AccessToken, ".")
+	if len(parts) != 3 {
+		return "", errors.New("the access token does not have three parts")
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	var claims struct {
+		Iss string `json:"iss"`
+		Aud any    `json:"aud"`
+		Iat int64  `json:"iat"`
+		Exp int64  `json:"exp"`
+	}
+	for i, into := range []any{&header, &claims} {
+		raw, err := base64.RawURLEncoding.DecodeString(parts[i])
+		if err != nil || json.Unmarshal(raw, into) != nil {
+			return "", errors.New("the access token header or claims are not base64url JSON")
+		}
+	}
+	if header.Alg != "EdDSA" {
+		return "", fmt.Errorf("the access token alg is %q, want EdDSA", header.Alg)
+	}
+	if header.Kid != kid {
+		return "", fmt.Errorf("the access token kid is %q, want %q", header.Kid, kid)
+	}
+	if claims.Iss != issuer {
+		return "", fmt.Errorf("the access token iss is %q, want %q", claims.Iss, issuer)
+	}
+	if !audienceHas(claims.Aud, apiAudience) {
+		return "", fmt.Errorf("the access token aud does not carry %s", apiAudience)
+	}
+	lifetime := claims.Exp - claims.Iat
+	if lifetime <= 0 || lifetime > 3600 {
+		return "", fmt.Errorf("the access token lifetime is %d s, want 1 to 3600", lifetime)
+	}
+	if claims.Exp <= now.Unix() {
+		return "", errors.New("the access token is expired")
+	}
+	return fmt.Sprintf("login token alg=EdDSA kid=%s iss=%s aud=%s lifetime=%ds", header.Kid, claims.Iss, apiAudience, lifetime), nil
+}
+
+func audienceHas(aud any, want string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == want
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == want {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -107,15 +107,16 @@ type readinessBYOConfig struct {
 	model    string
 	apiKey   secrets.Hidden
 	baseURL  string
+	// staleKey is the stored key when it was written for an earlier provider:
+	// never served, still checked against the base url.
+	staleKey secrets.Hidden
 }
 
 func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (readinessBYOConfig, error) {
 	var cfg readinessBYOConfig
-	var apiKey string
 	for key, dest := range map[string]*string{
 		"provider": &cfg.provider,
 		"model":    &cfg.model,
-		"api_key":  &apiKey,
 		"base_url": &cfg.baseURL,
 	} {
 		row, err := settingByKeyOn(ctx, h.store.Pool, orgID, llmCategory, key)
@@ -128,14 +129,17 @@ func (h *handlers) loadReadinessBYOConfig(ctx context.Context, orgID string) (re
 		}
 		*dest = strOrEmpty(value)
 	}
-	cfg.apiKey = secrets.NewHidden(apiKey)
-	return cfg, nil
+	key, err := h.scopeKey(ctx, h.store.Pool, orgID, "", false, true)
+	if err != nil {
+		return readinessBYOConfig{}, err
+	}
+	return cfg.bindDefaultKey(key), nil
 }
 
 // readinessURLValid vets the saved base url against the saved key and the SSRF
 // guard before any prober (OpenAI or Anthropic) sees it.
 func (h *handlers) readinessURLValid(ctx context.Context, cfg readinessBYOConfig) (bool, error) {
-	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal())
+	valid, _, _, err := h.checkBaseURL(ctx, cfg.baseURL, cfg.apiKey.Reveal(), cfg.staleKey.Reveal())
 	return valid, err
 }
 
@@ -153,7 +157,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 	// block_impersonated_write (settings.py:401-407) -- same shape as
 	// putLLMSettings' budget-limit-change guard, applied unconditionally
 	// here (every readiness run is a write: it certifies and persists).
-	if user.ImpersonatedBy != nil && *user.ImpersonatedBy != "" {
+	if _, delegated := user.ActorChain(); delegated {
 		llmDetail(http.StatusForbidden, w,
 			"error", "impersonated_write_forbidden",
 			"message", "BYO LLM readiness checks are unavailable while impersonating")
@@ -209,6 +213,7 @@ func (h *handlers) postLLMSettingsReadiness(w http.ResponseWriter, r *http.Reque
 		SafeErrorCode:    result.SafeErrorCode,
 		ErrorParam:       result.ErrorParam,
 		ErrorCode:        result.ErrorCode,
+		ErrorMessage:     result.ErrorMessage,
 		DroppedParams:    result.DroppedParams,
 	}
 	payload, err := json.Marshal(record)

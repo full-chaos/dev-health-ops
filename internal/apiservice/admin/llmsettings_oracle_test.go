@@ -48,6 +48,31 @@ const llmModelRuling = "CHAOS-10538 D6107: BYO provider without a model is refus
 // keyed mode: with no key at all both planes still answer 500.
 const llmUndecryptableRuling = "CHAOS-12172: a stored BYO key the configured key cannot decrypt answers 409 llm_settings_undecryptable"
 
+// llmDelegatedRuling retires the Python reference of the answers to the
+// "impersonating" token (CHAOS-10991): a token carrying impersonating_user_id
+// is a delegated session's bearer, and go-api's Guard refuses it on every
+// /api/v1/admin row (403). The Python plane served it. Go's answers are pinned,
+// and TestDelegatedBearerIsRefusedOnEveryWrap and the delegated_bearer row
+// contract own the rule.
+// llmTargetChangeRuling names why four keyed answers the model rule already
+// retired changed again (CHAOS-13096): a provider or base_url change with a
+// stored key and no new key is refused, and the later reads of that org see the
+// rows the refusal kept. Go's answers are pinned; nothing more leaves the Python
+// compare, and TestAProviderChangeNeverKeepsTheOldVendorsKey owns the rule.
+const llmTargetChangeRuling = "CHAOS-13096 (D6711): provider/base_url change without a key is refused; Python accepted it, that acceptance is the defect"
+
+const llmDelegatedRuling = "CHAOS-10991: a delegated session's bearer (impersonating_user_id) is refused on /api/v1/admin rows (403)"
+
+// llmDelegatedRetired names the requests the delegated deny retires: the
+// "impersonating" token's three PUTs, and the write org's final read, which no
+// longer sees the model the refused PUT used to write.
+var llmDelegatedRetired = map[string]bool{
+	"W budget impersonated refused":                     true,
+	"W budget impersonated bad url still refused first": true,
+	"W impersonated without budget":                     true,
+	"W get final write org":                             true,
+}
+
 // llmUndecryptableRetired names the keyed requests that read the "bad" org's
 // undecryptable api_key row (a PUT reaches it on its response read and rolls
 // back, as Python's 500 did, so later rows and requests are unchanged).
@@ -132,22 +157,22 @@ const (
 )
 
 func TestLLMSettingsRoutesVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "d71afb4e7c813bb3c27febd89ee65ed1aa6bc9fbf15ad5aa10ce8651e2a5e309")
+	runLLMSettingsOracle(t, true, "keyed", llmSettingsRoutesEncryptedGoldenDigest, "2dab59c634c1c16a91d5a7557eb9fe90582002f0daf17d51a39af4d7d483cff9")
 }
 
 // TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle runs the same routes on
 // planes with no SETTINGS_ENCRYPTION_KEY: encrypting or decrypting raises in
 // Python, an unhandled 500.
 func TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle(t *testing.T) {
-	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "f6c7691ce9e1927c8ccdf2c06cb6c50021de61ce55315273891ebf9194349c46")
+	runLLMSettingsOracle(t, false, "nokey", llmSettingsRoutesNoEncryptionGoldenDigest, "7b8466149502d8fe46c8520d93fa4d0e9d2ba80c307320d7f0c1f02c941904fc")
 }
 
 func runLLMSettingsOracle(t *testing.T, withKey bool, mode, digest, pinDigest string) {
 	ctx := context.Background()
 	golden := venueoracle.OpenGolden(t, governanceGolden("llmsettings_"+mode, t.Name(), digest))
-	ruling := llmModelRuling
+	ruling := llmModelRuling + "; " + llmDelegatedRuling
 	if withKey {
-		ruling = llmModelRuling + "; " + llmUndecryptableRuling
+		ruling = llmModelRuling + "; " + llmUndecryptableRuling + "; " + llmDelegatedRuling + "; " + llmTargetChangeRuling
 	}
 	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/governance/llmsettings_" + mode + ".go-pin.json", SHA256: pinDigest, Ruling: ruling})
 	root := repoRoot(t)
@@ -460,12 +485,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, '2026-02-01T00:00:00+00:00', '2026-02-01T00:
 			deps.Decryptor = decryptor
 		}
 	})
+	claimRetirement, claimPin := orgClaimRetirement(t, "testdata/orgclaim/llmsettings_"+mode+".go-pin.json", llmSettingsOrgClaimPinSHA256[mode],
+		"get org id not a uuid", "get org missing", "W put org not a uuid", "W put org missing", "W put 422 beats org check",
+		"W delete org not a uuid", "W delete org missing")
 	receipt := venueoracle.Diff(t, goBase, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		Retire: func(request venueoracle.Request) bool {
-			return llmModelRetired[request.Name] || (withKey && llmUndecryptableRetired[request.Name])
+			return llmModelRetired[request.Name] || llmDelegatedRetired[request.Name] || (withKey && llmUndecryptableRetired[request.Name])
 		},
-		Pin: pin,
+		Pin:         pin,
+		Retirements: []venueoracle.Retirement{claimRetirement},
 	})
 	t.Log(receipt)
 
@@ -485,7 +514,7 @@ FROM settings ORDER BY org_id, category, key`)
 	if withKey {
 		checkBudgetLockSerializes(t, ctx, venue, goBase, orgs["empty"].id, venue.Tokens["empty"])
 	}
-	pin.Finish(t)
+	venueoracle.FinishPins(t, pin, claimPin)
 	golden.Finish(t)
 }
 

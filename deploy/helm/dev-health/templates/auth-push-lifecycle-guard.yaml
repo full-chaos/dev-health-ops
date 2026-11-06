@@ -1,0 +1,6 @@
+{{- /*
+Runs the authService.migrate.pushLifecycle and repoIdentity checks on every render, so a values file that sets the pair wrong fails even
+when no auth-migrate Job renders (authService.phase 0). The two Jobs run the same helper. Renders nothing.
+*/ -}}
+{{- $_ := include "dev-health.authPushLifecycle" . }}
+{{- $_ := include "dev-health.authRepoIdentity" . }}

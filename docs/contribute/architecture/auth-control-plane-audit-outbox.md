@@ -163,7 +163,7 @@ channel.
   for the catch-up read, granted by a **selector** that names the one hash, so
   `HGETALL` of any other `auth_svc_` key is refused; the selector needs Valkey 7 or
   later, the chart's Valkey is 9):
-  `resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)`.
+  `resetkeys ~dho:rl:auth_svc_* resetchannels &auth_svc_* -@all +hello +select +ping +get +eval +incr +decr +pexpire +hget +hset +publish +subscribe +client|tracking (~dho:rl:auth_svc_rev_hwm +hgetall)`.
   The key `dho:rl:auth_svc_rev_hwm` and the channel `auth_svc_rev` sit under the
   existing `auth_svc_` prefixes; the ACL prefix is the separation, not the
   database number. Roll the ACL (chart `valkey.acl`, or `ACL SETUSER`) **before**

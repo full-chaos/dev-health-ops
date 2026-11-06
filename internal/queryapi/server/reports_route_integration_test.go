@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +52,7 @@ func TestSavedReportRoutes_ThroughTheSignedEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(emptyCHClient{}, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := func(org string) string {
 		return signDataHealthEnvelope(t, priv, principal.Claims{OrgID: org, Role: "member"}, time.Now().Add(time.Hour))
 	}

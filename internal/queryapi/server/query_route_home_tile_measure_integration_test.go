@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -64,7 +63,7 @@ func TestHomeInvestmentTileIsIssueSizeOnlyForADocumentThatAsksForItsCoverage(t *
 	} {
 		t.Run(name, func(t *testing.T) {
 			ch := &statementRecordingHomeCH{}
-			handler, _, _, _, _ := newQueryHandler(ch, pool, verifier, itTestSchemaDigest, os.Getenv)
+			handler, _, _, _, _ := newQueryHandler(ch, pool, verifier, itTestSchemaDigest, withIssuer)
 			rec := postGraphQLWithVariables(t, handler, tc.document, token, homeVariables())
 			if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"errors"`) {
 				t.Fatalf("got %d %s", rec.Code, rec.Body.String())

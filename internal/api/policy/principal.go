@@ -12,7 +12,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
@@ -94,24 +93,24 @@ var errRejected = errors.New("policy: credential refused")
 
 // Authenticator is AuthService.authenticate_access_token.
 type Authenticator struct {
-	verifier *edgetoken.Verifier
-	store    Store
-	logger   *slog.Logger
-	routed   *routedAccess
+	store  Store
+	logger *slog.Logger
+	routed *routedAccess
 	// delegated is the delegated_bearer lookup DelegatedRows set; nil
 	// admits a delegated session's bearer on no row.
 	delegated func(profile string) bool
 }
 
-// NewAuthenticator builds an Authenticator.
-func NewAuthenticator(verifier *edgetoken.Verifier, store Store, logger *slog.Logger) (*Authenticator, error) {
-	if verifier == nil || store == nil {
-		return nil, errors.New("policy: authenticator needs a verifier and a store")
+// NewAuthenticator builds an Authenticator. Only a routed decision
+// (RouteAccess) accepts a token: HS256 access verify is retired.
+func NewAuthenticator(store Store, logger *slog.Logger) (*Authenticator, error) {
+	if store == nil {
+		return nil, errors.New("policy: authenticator needs a store")
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Authenticator{verifier: verifier, store: store, logger: logger}, nil
+	return &Authenticator{store: store, logger: logger}, nil
 }
 
 // BearerToken is extract_token_from_header: exactly two whitespace-separated
@@ -127,45 +126,41 @@ func BearerToken(authorization string) (string, bool) {
 	return parts[1], true
 }
 
-// Authenticate verifies token and checks the users row. It returns
-// (nil, errRejected) for every case Python answers with None, and a wrapped
-// store error (ErrUnavailable or other) when the lookup fails. After
-// RouteAccess the request's endpoint-profile row picks the validator.
-func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
-	if a.routed != nil {
-		return a.authenticateRouted(ctx, token)
-	}
-	return a.AuthenticateLegacy(ctx, token)
-}
-
-// AuthenticateLegacy is the HS256 ops access-token path: the token is
-// verified with the go-api key and the users row checked.
+// Authenticate verifies token against the request's endpoint-profile row
+// (RouteAccess) and checks the users row. It returns (nil, errRejected) for
+// every case Python answers with None, and a wrapped store error
+// (ErrUnavailable or other) when the lookup fails. Without RouteAccess every
+// token is refused.
 //
 // A request bound to a (ReadOnce) gets the answer of its first
-// Authenticate of the same token: the token is verified and the users row
-// read once for the whole request.
-func (a *Authenticator) AuthenticateLegacy(ctx context.Context, token string) (*User, error) {
-	reads := a.readsFor(ctx)
-	if reads == nil {
-		return a.authenticate(ctx, token)
-	}
-	reads.mu.Lock()
-	defer reads.mu.Unlock()
-	if got, ok := reads.users[token]; ok {
-		return copyUser(got.user), got.err
-	}
-	user, err := a.authenticate(ctx, token)
-	reads.users[token] = userRead{user: copyUser(user), err: err}
-	return user, err
-}
-
-func (a *Authenticator) authenticate(ctx context.Context, token string) (*User, error) {
-	claims, err := a.verifier.Verify(token)
-	if err != nil {
-		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", edgetoken.ReasonOf(err)))
+// Authenticate of the same token on the same route row: the token is
+// verified and the users row read once for the whole request.
+func (a *Authenticator) Authenticate(ctx context.Context, token string) (*User, error) {
+	if a.routed == nil {
+		a.logger.DebugContext(ctx, "api access token refused", slog.String("reason", "no_access_check"))
 		return nil, errRejected
 	}
-	return a.CheckClaims(ctx, claims)
+	reads := a.readsFor(ctx)
+	if reads == nil {
+		return a.authenticateRouted(ctx, token)
+	}
+	key := RouteProfileFrom(ctx) + "\x00" + token
+	reads.mu.Lock()
+	got, ok := reads.users[key]
+	reads.mu.Unlock()
+	if ok {
+		return copyUser(got.user), got.err
+	}
+	// Not under reads.mu: the routed check reads the membership through the
+	// same record.
+	user, err := a.authenticateRouted(ctx, token)
+	reads.mu.Lock()
+	defer reads.mu.Unlock()
+	if got, ok := reads.users[key]; ok {
+		return copyUser(got.user), got.err
+	}
+	reads.users[key] = userRead{user: copyUser(user), err: err}
+	return user, err
 }
 
 // CheckClaims is Authenticate's second half: the live users-row checks on

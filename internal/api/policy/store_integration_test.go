@@ -42,7 +42,7 @@ var schemaDDL = []string{
 	`CREATE TABLE public.audit_logs (id uuid PRIMARY KEY)`,
 	`CREATE TABLE public.users (
 		id uuid PRIMARY KEY, email text NOT NULL UNIQUE,
-		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0)`,
+		is_active boolean, is_superuser boolean, token_version integer NOT NULL DEFAULT 0, username text, full_name text)`,
 	`CREATE TABLE public.memberships (
 		id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES public.users(id),
 		org_id uuid NOT NULL REFERENCES public.organizations(id), role text)`,
@@ -282,7 +282,8 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 
 	// 5. One authenticated request through the org scope, impersonation and
 	// guard, over HTTP, as the api role.
-	auth := authenticator(t, store)
+	// The auth session read is faked (pgAuthenticator): this stand-in schema has no auth schema; the real session read is the pinrig cells'.
+	auth := pgAuthenticator(t, store)
 	scope := NewScope(auth, quiet())
 	server := httptest.NewServer(scope.Principal(scope.OrgScope(scope.Impersonation(wrapLevel(NewGuard(auth, quiet()), Admin, echo)))))
 	t.Cleanup(server.Close)
@@ -292,6 +293,7 @@ func TestAPIRoleEndToEnd(t *testing.T) {
 		c["sub"] = admUser.String()
 		c["is_superuser"] = true
 		c["tv"] = 2
+		delete(c, "org_id")
 	}))
 	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/x", nil)
 	request.Header.Set("Authorization", "Bearer "+token)

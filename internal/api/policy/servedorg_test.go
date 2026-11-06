@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
@@ -25,7 +24,8 @@ type servedOrgCensusRow struct {
 }
 
 // servedOrgCensus is every go-api action row whose handler serves another organization than the session's: the 8
-// organization_from_path rows and the 9 billing rows whose handler reads an org_id query parameter (resolveOrg).
+// organization_from_path rows and the 9 billing organization_from_query_or_session rows, whose handler reads an org_id
+// query parameter (resolveOrg).
 var servedOrgCensus = []servedOrgCensusRow{
 	{"GET /api/v1/admin/orgs/{org_id}/members", Admin, false},
 	{"POST /api/v1/admin/orgs/{org_id}/members", Admin, false},
@@ -128,21 +128,6 @@ func servedOrgServe(t *testing.T, row servedOrgCensusRow, setup servedOrgSetup, 
 		setup.shadow.wg.Wait()
 	}
 	return got
-}
-
-// servedOrgServeHS256 serves row to a legacy HS256 admin token of org A.
-func servedOrgServeHS256(t *testing.T, row servedOrgCensusRow, enf *Enforcer, served string) response {
-	t.Helper()
-	store := newStore()
-	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	guard := NewGuard(authenticator(t, store), quiet())
-	if enf != nil {
-		guard.SetEnforcer(enf)
-	}
-	mux := http.NewServeMux()
-	mux.Handle(row.pattern, guard.Wrap(row.level, echo))
-	method, _, _ := strings.Cut(row.pattern, " ")
-	return serve(mux, method, servedOrgRequestPath(row, served), validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
 }
 
 func servedOrgEnforcer(t *testing.T, pdp *testPDP, namespaces ...string) *Enforcer {
@@ -325,25 +310,26 @@ func TestServedOrgEnforcedCells(t *testing.T) {
 					t.Errorf("enforced, superuser, another org: %d %q, %d PDP calls, want 403 and none", got.status, got.body, len(pdp.calls()))
 				}
 			})
-			t.Run("the rule runs before the unjudged check: a legacy HS256 token", func(t *testing.T) {
+			t.Run("the rule runs before the unjudged check: a caller with no organization", func(t *testing.T) {
+				noOrg := userClaims(func(c *AccessTokenClaims) { c.OrgID = nil })
+				legacy := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg}, "acme")
 				rec := recordEnforce(t)
 				pdp := newTestPDP(t, allowAll)
-				legacy := servedOrgServeHS256(t, row, nil, ownOrg)
-				got := servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), ownOrg)
-				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/hs256"}) {
-					t.Errorf("HS256, same org: %d %q unjudged %v, want the legacy %d %q and [%s/hs256]", got.status, got.body, rec.unjudgedSnapshot(),
+				got := servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, "acme")
+				if got.status != legacy.status || got.body != legacy.body || !slices.Equal(rec.unjudgedSnapshot(), []string{row.pattern + "/no_org"}) {
+					t.Errorf("no token org, a slug: %d %q unjudged %v, want the legacy %d %q and [%s/no_org]", got.status, got.body, rec.unjudgedSnapshot(),
 						legacy.status, legacy.body, row.pattern)
 				}
 				rec = recordEnforce(t)
-				got = servedOrgServeHS256(t, row, servedOrgEnforcer(t, pdp, namespace), strangerOrg)
+				got = servedOrgServe(t, row, servedOrgSetup{who: personaSuperuser, claims: noOrg, enforcer: servedOrgEnforcer(t, pdp, namespace)}, strangerOrg)
 				if got.status != http.StatusForbidden || got.body != servedOrgDenyBody(row.level) {
-					t.Errorf("HS256, another org: %d %q, want 403 %s", got.status, got.body, servedOrgDenyBody(row.level))
+					t.Errorf("no token org, another org: %d %q, want 403 %s", got.status, got.body, servedOrgDenyBody(row.level))
 				}
 				if !slices.Equal(rec.snapshot(), []string{namespace + "/org_mismatch"}) || len(rec.unjudgedSnapshot()) != 0 {
-					t.Errorf("HS256, another org: outcomes %v unjudged %v, want [%s/org_mismatch] and none", rec.snapshot(), rec.unjudgedSnapshot(), namespace)
+					t.Errorf("no token org, another org: outcomes %v unjudged %v, want [%s/org_mismatch] and none", rec.snapshot(), rec.unjudgedSnapshot(), namespace)
 				}
 				if n := len(pdp.calls()); n != 0 {
-					t.Errorf("HS256: %d PDP calls, want 0", n)
+					t.Errorf("no token org: %d PDP calls, want 0", n)
 				}
 			})
 			t.Run("a token with no organization is refused on any named org", func(t *testing.T) {
@@ -471,17 +457,20 @@ func TestServedOrgARowOutsideTheCensusIsNotCompared(t *testing.T) {
 	}
 }
 
-// The rows the seam compares are the census: OrgFromPath on exactly its path rows, the query table on exactly its
-// org_id rows.
+// The rows the seam compares are the census: OrgFromPath on exactly its path rows, OrgFromQuery on exactly its
+// org_id rows, never both on one row.
 func TestServedOrgSeamRowsAreTheCensus(t *testing.T) {
 	var flagged, query, censusPath, censusQuery []string
 	for pattern, row := range servedOrgRows(t) {
+		if row.OrgFromPath && row.OrgFromQuery {
+			t.Errorf("%s reads its organization from the path and the query", pattern)
+		}
 		if row.OrgFromPath {
 			flagged = append(flagged, pattern)
 		}
-	}
-	for pattern := range goAPIQueryOrgRows {
-		query = append(query, pattern)
+		if row.OrgFromQuery {
+			query = append(query, pattern)
+		}
 	}
 	for _, row := range servedOrgCensus {
 		if row.query {

@@ -129,7 +129,7 @@ func newShadowREST(t *testing.T, decider pep.Decider, env map[string]string) (*g
 	quietStdLog(t)
 	shadowCounters(t)
 	m := newAccessMinter(t)
-	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+	f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -246,7 +246,7 @@ func TestRESTShadowOffBuildsNothing(t *testing.T) {
 		quietStdLog(t)
 		before := shadowCounters(t)
 		m := newAccessMinter(t)
-		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true)
+		f := newRESTFixture(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow))
 		gate := pdp.New(pdp.Config{Mode: mode, Decider: pepOf(t, srv.URL)})
 		if gate.Shadow() != nil {
 			t.Fatalf("mode %q built a shadow", mode)
@@ -369,7 +369,7 @@ func TestRESTShadowObservesEveryLegacyAllow(t *testing.T) {
 				if !routed {
 					setup = nil
 				}
-				f := newRESTFixture(t, newAccessStore(), setup, true)
+				f := newRESTFixture(t, newAccessStore(), setup)
 				reader := sdkmetric.NewManualReader()
 				provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 				t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
@@ -459,20 +459,22 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 	}
 }
 
-// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests.
+// 2k: AUTH_SHADOW_PDP_SAMPLE=50 asks for 50 of 100 requests. The in-flight cap is 100 so a slow PDP drops none.
 func TestRESTShadowSampleKnob(t *testing.T) {
 	srv := pdptest.New(t)
-	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50"})
+	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50", policy.EnvShadowPDPInFlight: "100"})
+	before := shadowCounters(t)
 	for i := 0; i < 100; i++ {
 		if got, _ := g.get(g.userToken()); got != gatedOK {
 			t.Fatalf("request %d: %+v", i, got)
 		}
 	}
-	for deadline := time.Now().Add(3 * time.Second); len(srv.Requests()) < 50 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-	}
-	time.Sleep(100 * time.Millisecond)
+	g.gate.Shadow().Wait()
 	if n := len(srv.Requests()); n != 50 {
 		t.Fatalf("PDP asked %d times for a 50 percent sample of 100, want 50", n)
+	}
+	if dropped := shadowDelta(before, shadowCounters(t))[shadowResultsMetric+"|reason=none,result=dropped"]; dropped != 0 {
+		t.Fatalf("%d sampled calls dropped, want 0", dropped)
 	}
 }
 
@@ -578,7 +580,7 @@ func TestRESTShadowLabelCensus(t *testing.T) {
 // 5.12 counters.
 func TestRESTEnforceUnchangedByTheShadowSwitch(t *testing.T) {
 	srv := pdptest.New(t)
-	g := newGatedREST(t, pdp.ModeEnforce, srv.URL, true)
+	g := newGatedREST(t, pdp.ModeEnforce, "analytics", srv.URL, true)
 	before := shadowCounters(t)
 	if got := g.do(http.MethodGet, g.userToken()); got != gatedOK {
 		t.Fatalf("allow: %+v", got)
@@ -616,7 +618,7 @@ func TestRESTShadowCallerKindFromTheVerifiedCaller(t *testing.T) {
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), nil)
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
-	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow), true)
+	g.f = newRESTFixture(t, store, testAccess(g.minter.keys, nil, accessTestNow))
 	g.handler = planeHandler(g.f.handler.(*http.ServeMux), g.gate)
 	before := shadowCounters(t)
 	if got, _ := g.get(g.userToken()); got != gatedOK {
@@ -672,7 +674,7 @@ func TestRESTShadowDecisionWithObligationsNeverChangesTheLegacyAnswerOrTheSQL(t 
 		t.Helper()
 		m := newAccessMinter(t)
 		client := &recordingHomeClient{}
-		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), true, newHomeGetHandler(client, nil))
+		f := newRESTFixtureServing(t, newAccessStore(), testAccess(m.keys, nil, accessTestNow), newHomeGetHandler(client, nil))
 		mux := f.handler.(*http.ServeMux)
 		var handler http.Handler = mux
 		if gate != nil {

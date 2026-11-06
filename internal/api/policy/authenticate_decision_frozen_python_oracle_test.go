@@ -100,7 +100,7 @@ func (authenticateStore) ActiveImpersonation(context.Context, uuid.UUID) (*polic
 	return nil, nil
 }
 
-// TestAuthenticateDecisionsMatchFrozenPython holds Authenticator.Authenticate
+// TestAuthenticateDecisionsMatchFrozenPython holds Verify + CheckClaims
 // to the decisions Python's authenticate_access_token gave for the same users
 // row and a token of the same shape: accepted or refused, and for an accepted
 // user the superuser flag (the row's, never the token's) and the token
@@ -148,11 +148,15 @@ func TestAuthenticateDecisionsMatchFrozenPython(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		authenticator, err := policy.NewAuthenticator(verifier, authenticateStore{row: c.Row}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		authenticator, err := policy.NewAuthenticator(authenticateStore{row: c.Row}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		user, authErr := authenticator.Authenticate(context.Background(), token)
+		var user *policy.User
+		verified, authErr := verifier.Verify(token)
+		if authErr == nil {
+			user, authErr = authenticator.CheckClaims(context.Background(), verified)
+		}
 		python := want[index]
 		if (authErr == nil) != python.Accepted {
 			t.Errorf("%s: Go accepted=%v (%v), Python accepted=%v", c.Name, authErr == nil, authErr, python.Accepted)

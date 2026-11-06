@@ -96,11 +96,11 @@ func edgeHarnessWith(t *testing.T, store *fakeEdgeStore, sw routeswitch.Switch) 
 	}
 	byDigest := map[string]string{digestHex(iaDocument): "probe", digestHex(edgeWriteDocument): "probeWrite"}
 	auth := ecEdgeAuth(t, store)
-	chain := graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
-		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes})
+	chain := onPattern("/graphql", graphQLEdgeChain(newDocumentDispatchHandler(os.Getenv, mux, byDigest, verifier, auth, store, "", nil),
+		graphQLEdgeDeps{auth: auth, corsOrigins: []string{"https://app.example"}, maxBytes: defaultGraphQLMaxQueryBytes}))
 	handler := chain.ServeHTTP
-	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
-	nonmember := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", role: "admin", tokenVersion: 5})
+	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
+	nonmember := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: "99999999-9999-9999-9999-999999999999", tokenVersion: 5})
 	envelope := iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})
 	return handler, ran, member, nonmember, envelope
 }
@@ -511,7 +511,7 @@ func TestGraphQLEdgeRefusesARequestNoChainPrepared(t *testing.T) {
 			nilStore = store
 		}
 		handler, seen := iaDispatchWithEdge(t, nil, auth, nilStore)
-		member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+		member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 		recorder := edgePostAs(t, newGraphQLEdgeHandler(handler), member)
 		if recorder.Code != http.StatusInternalServerError || len(*seen) != 0 || !strings.Contains(logged.String(), "reason=edge_not_bound") {
 			t.Errorf("%s: %d ran=%d logged %q, want the 500, nothing run, and the reason", name, recorder.Code, len(*seen), logged.String())
@@ -642,11 +642,16 @@ func TestGraphQLEdgeLogsWhyItRefused(t *testing.T) {
 		"envelope":                "reason=not_an_edge_token carrier=edge",
 		"two-bearers":             "reason=ambiguous_carrier carrier=authorization",
 		"internal-headers+member": "reason=internal_headers_on_edge_path carrier=headers",
-		"nonmember":               "reason=edge_not_a_member carrier=edge",
+		// The routed check refuses a token org without a membership row itself
+		// (accessroute_user.go), before the carrier's own membership read.
+		"nonmember": "api user access token for an org the user is not a member of",
 	} {
 		logged.Reset()
 		c := edgeCell{method: http.MethodPost, carrier: carrier, document: "query"}
 		recorder := serveEdge(handler, c, edgeRequest(t, c, member, nonmember, envelope))
+		if carrier == "nonmember" && !strings.Contains(logged.String(), "reason=edge_rejected carrier=edge") {
+			t.Errorf("nonmember: logged %q, want reason=edge_rejected", logged.String())
+		}
 		if recorder.Code != http.StatusUnauthorized || !strings.Contains(logged.String(), reason) {
 			t.Errorf("%s: %d, logged %q, want 401 and %q", carrier, recorder.Code, logged.String(), reason)
 		}
@@ -678,7 +683,7 @@ func TestGraphQLEdgeAnswersAnOperationThatIsNotEnabledAsAGraphQLError(t *testing
 	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query": `+jsonQuote(t, iaDocument)+`}`))
 	request.Header.Set("Authorization", "Bearer "+member)
 	recorder := httptest.NewRecorder()
-	queryHandler(recorder, request)
+	onQueryPattern(queryHandler)(recorder, request)
 	if recorder.Code != http.StatusNotFound {
 		t.Errorf("/query with the row off: %d, want the unchanged 404", recorder.Code)
 	}
@@ -728,7 +733,7 @@ func TestGraphQLEdgeAnswersAStoreItCannotReadAsTheUnhandled500(t *testing.T) {
 // impersonation session is not one of its reads: the middleware in front
 // reads it (TestGraphQLEdgeReadsTheImpersonationSessionOnce).
 func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testing.T) {
-	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "admin", tokenVersion: 5})
+	member := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		store *fakeEdgeStore
 		// want is the pipeline's outcome; -1 when the scope's Principal step
@@ -736,7 +741,7 @@ func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testi
 		want edgeOutcome
 	}{
 		"user state": {store: &fakeEdgeStore{errUserState: policy.ErrUnavailable}, want: -1},
-		"membership": {store: &fakeEdgeStore{states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("down")}, want: edgeUnavailable},
+		"membership": {store: &fakeEdgeStore{states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}}, found: map[uuid.UUID]bool{ecUser: true}, errIsMember: errors.New("down")}, want: -1},
 	} {
 		auth := ecEdgeAuth(t, tc.store)
 		var outcome edgeOutcome = -1
@@ -749,7 +754,7 @@ func TestGraphQLEdgeAuthenticatorReportsAStoreItCannotReadAsUnavailable(t *testi
 		}))))
 		request := httptest.NewRequest(http.MethodPost, "/graphql", nil)
 		request.Header.Set("Authorization", "Bearer "+member)
-		decided.ServeHTTP(recorder, request)
+		onPattern("/graphql", withRouteProfile(decided)).ServeHTTP(recorder, request)
 		if outcome != tc.want {
 			t.Errorf("%s: outcome %d, want %d", name, outcome, tc.want)
 		}
@@ -792,7 +797,7 @@ func edgeClaimsHarness(t *testing.T, store policy.Store) (http.Handler, *[]authc
 	}))
 	auth := ecEdgeAuth(t, store)
 	pipeline := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(iaDocument): "probe"}, verifier, auth, store, "", nil)
-	return internalidentity.Public(graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes})), seen
+	return internalidentity.Public(onPattern("/graphql", graphQLEdgeChain(pipeline, graphQLEdgeDeps{auth: auth, maxBytes: defaultGraphQLMaxQueryBytes}))), seen
 }
 
 func edgePostAs(t *testing.T, handler http.Handler, token string) *httptest.ResponseRecorder {
@@ -810,26 +815,24 @@ func edgePostAs(t *testing.T, handler http.Handler, token string) *httptest.Resp
 // middleware's, as they did on the Python edge (one contextvar, set by its
 // ImpersonationMiddleware). With two reads a session that ends between them
 // answered as the target while the resolvers ran as the admin, and one that
-// starts between them the reverse; and a live superuser whose token does not
-// claim it, whom the middleware never looks up, ran as the target without the
-// headers.
+// starts between them the reverse. Superuser is the live users row's (a routed
+// token cannot claim it), so a row superuser is looked up and, while a session
+// is live, runs as the target with the headers.
 func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 	targetOrg := uuid.MustParse("44444444-4444-4444-4444-444444444444")
 	session := &policy.Impersonation{AdminUserID: ecUser, TargetUserID: ecTarget, TargetOrgID: targetOrg, TargetRole: "viewer"}
 	admin := authctx.Claims{OrgID: ecOrg.String(), Role: "owner", IsSuperuser: true}
 	target := authctx.Claims{OrgID: targetOrg.String(), Role: "viewer", IsSuperuser: true, ImpersonationActive: true}
-	claimsSuper := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
-	claimsPlain := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		answers       []*policy.Impersonation
-		token         string
 		impersonating bool
 		want          authctx.Claims
 		reads         int
 	}{
-		"session ends between reads":               {[]*policy.Impersonation{session, nil}, claimsSuper, true, target, 1},
-		"session starts between reads":             {[]*policy.Impersonation{nil, session}, claimsSuper, false, admin, 1},
-		"token does not claim superuser, row does": {[]*policy.Impersonation{session}, claimsPlain, false, admin, 0},
+		"session ends between reads":   {[]*policy.Impersonation{session, nil}, true, target, 1},
+		"session starts between reads": {[]*policy.Impersonation{nil, session}, false, admin, 1},
+		"row superuser, live session":  {[]*policy.Impersonation{session}, true, target, 1},
 	} {
 		store := &sequencedSessionStore{fakeEdgeStore: &fakeEdgeStore{
 			states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -838,7 +841,7 @@ func TestGraphQLEdgeReadsTheImpersonationSessionOnce(t *testing.T) {
 			roles:   map[[2]uuid.UUID]string{{ecUser, ecOrg}: "owner"},
 		}, answers: tc.answers}
 		handler, seen := edgeClaimsHarness(t, store)
-		recorder := edgePostAs(t, handler, tc.token)
+		recorder := edgePostAs(t, handler, token)
 		headers := recorder.Header().Get("X-Impersonating") == "true" && recorder.Header().Get("X-Impersonated-User-Id") == ecTarget.String()
 		if recorder.Code != http.StatusOK || len(*seen) != 1 {
 			t.Errorf("%s: %d ran=%v, want 200 and one run", name, recorder.Code, *seen)
@@ -875,13 +878,13 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 	previous := log.Writer()
 	log.SetOutput(&logged)
 	t.Cleanup(func() { log.SetOutput(previous) })
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	for name, tc := range map[string]struct {
 		handler http.Handler
 		reason  string
 	}{
-		"no org scope":              {auth.ReadOnce(scope.Principal(scope.Impersonation(pipeline))), "reason=edge_org_undecided"},
-		"no impersonation decision": {auth.ReadOnce(scope.Principal(scope.OrgScope(pipeline))), "reason=edge_impersonation_undecided"},
+		"no org scope":              {onPattern("/graphql", withRouteProfile(auth.ReadOnce(scope.Principal(scope.Impersonation(pipeline))))), "reason=edge_org_undecided"},
+		"no impersonation decision": {onPattern("/graphql", withRouteProfile(auth.ReadOnce(scope.Principal(scope.OrgScope(pipeline))))), "reason=edge_impersonation_undecided"},
 	} {
 		logged.Reset()
 		ran = 0
@@ -893,7 +896,8 @@ func TestGraphQLEdgeRefusesARequestNoMiddlewareDecided(t *testing.T) {
 }
 
 // TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead: the middleware's session
-// read failing refuses with the unhandled 500 before anything runs.
+// read failing refuses with 503 Database temporarily unavailable before
+// anything runs.
 func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 	store := &fakeEdgeStore{
 		states:     map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -902,10 +906,10 @@ func TestGraphQLEdgeRefusesWhenTheSessionCannotBeRead(t *testing.T) {
 		errSession: errors.New("down"),
 	}
 	handler, seen := edgeClaimsHarness(t, store)
-	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), role: "owner", isSuperuser: true, tokenVersion: 5})
+	token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 	recorder := edgePostAs(t, handler, token)
-	if recorder.Code != http.StatusInternalServerError || recorder.Body.String() != `{"detail":"Internal Server Error"}` || len(*seen) != 0 {
-		t.Fatalf("%d %q ran=%v, want the unhandled 500 and nothing run", recorder.Code, recorder.Body.String(), *seen)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != restUnavailable || len(*seen) != 0 {
+		t.Fatalf("%d %q ran=%v, want the 503 and nothing run", recorder.Code, recorder.Body.String(), *seen)
 	}
 }
 
@@ -966,7 +970,7 @@ func TestGraphQLEdgeOrglessTokenNeedsALiveSuperuserRow(t *testing.T) {
 			sessions: map[uuid.UUID]*policy.Impersonation{ecUser: tc.session},
 		}
 		handler, seen := edgeClaimsHarness(t, store)
-		token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), role: "member", tokenVersion: 5})
+		token := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
 		recorder := edgePostAs(t, handler, token)
 		if recorder.Code != tc.code || len(*seen) != tc.ran {
 			t.Errorf("%s: %d ran=%d body=%q, want %d/%d", name, recorder.Code, len(*seen), recorder.Body.String(), tc.code, tc.ran)

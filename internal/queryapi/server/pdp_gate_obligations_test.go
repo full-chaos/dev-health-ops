@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/pep/pepfake"
 
+	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -35,7 +36,7 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	client := &teamScopeReachClient{}
@@ -56,7 +57,8 @@ func enforceAllowlistRunsNoOrgWideRead(t *testing.T, allowlist []string) {
 	org := strings.ToLower(ecOrg.String())
 	decider := pepfake.New(pepfake.Rule{PrincipalReference: token, Action: "git.read", ResourceType: "organization",
 		ResourceKey: org, OrganizationID: org, TenantScope: org, RepositoryAllowlist: allowlist})
-	gate := pdp.New(pdp.Config{Mode: pdp.ModeEnforce, Decider: decider, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	gate := pdp.New(pdp.Config{Mode: pdp.ModeEnforce, Decider: decider, Switch: authzenforce.Parse(authzenforce.QueryAPI, "git"),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/prs", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

@@ -71,7 +71,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 			if tc.routed {
 				setup = testAccess(m.keys, nil, accessTestNow)
 			}
-			f := newRESTFixture(t, newAccessStore(), setup, true)
+			f := newRESTFixture(t, newAccessStore(), setup)
 			org := ""
 			if tc.org {
 				org = ecOrg.String()
@@ -83,7 +83,7 @@ func TestRESTShadowDelegationAndOrgRequiredEveryPath(t *testing.T) {
 				if tc.delegated {
 					claims.impersonatingUserID = delegate
 				}
-				token = ecMintEdgeToken(t, claims)
+				token = ecMintHS256Token(t, claims)
 			case "user":
 				extra := map[string]any{"act": map[string]any{"sub": wirePrincipal(uuid.MustParse(delegate))}}
 				if !tc.org {

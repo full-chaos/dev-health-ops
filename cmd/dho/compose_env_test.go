@@ -60,6 +60,7 @@ var verbServices = map[string]string{
 	"auth-fence-init":                  "`auth-migrate restore-fence init -if-absent`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
 	"auth-workload-seed":               "`auth-migrate workloads seed -apply`: the same standalone binary; opens the database at once; its own DSN and role settings are not measured here",
 	"auth-workload-bootstrap":          "`auth-migrate workloads bootstrap-create -apply`: the same standalone binary; opens the database at once and writes the credential file; its own DSN and role settings are not measured here",
+	"auth-users-backfill":              "`dho auth users-backfill` (CHAOS-13107): opens the auth runtime pool at once; its AUTH_DATABASE_URI and AUTH_USERS_OWNED are pinned by internal/cigates/workflows TestComposeCopiesTheUsersBeforeAuthServiceServes; only the DSN groups are checked",
 	"go-sync-dispatch-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-finalize-route-activate":  "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",
 	"go-sync-post-route-activate":      "`dho workers routes apply`: opens the database at once; only the DSN groups are checked",

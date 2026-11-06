@@ -20,7 +20,6 @@ import (
 	authv1 "github.com/full-chaos/dev-health-ops/contracts/auth/v1"
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 )
@@ -148,11 +147,7 @@ func (p *allowPDP) asked() []string {
 // route bodies need a Postgres pool, which a unit test has none of.
 func seamHandler(t *testing.T, pattern string, level policy.Authz, invoices, superuser bool, decider pep.Decider) http.Handler {
 	t.Helper()
-	verifier, err := edgetoken.New(strings.Repeat("seam-fixture-", 3), "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(verifier, seamStore{superuser: superuser}, quiet())
+	auth, err := policy.NewAuthenticator(seamStore{superuser: superuser}, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}

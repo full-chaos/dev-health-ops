@@ -20,8 +20,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/edtokens"
 )
 
 var (
@@ -94,25 +94,10 @@ VALUES ($1, $2, 'old-row', 'team', 'r', '{}'::json, '{}'::json, 'success', now()
 		t.Fatal("the restricted login can read audit_logs, so the count cannot fail")
 	}
 
-	const jwtKey = "retention-failure-test-signing-key-32-bytes!"
-	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := signer.Access(edgetoken.AccessClaims{UserID: adminID.String(), Email: "ret-fail-admin@example.com",
-		OrgID: orgID.String(), Role: "admin"}, time.Now(), uuid.NewString())
-	if err != nil {
-		t.Fatal(err)
-	}
+	tokens := edtokens.New(t)
+	token := tokens.MustMint(t, edtokens.Claims{UserID: adminID, OrgID: orgID.String()})
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, quiet)
-	if err != nil {
-		t.Fatal(err)
-	}
+	auth := tokens.Authenticator(t, policy.PGStore{Pool: pool}, quiet)
 	serve := func(dbPool *pgxpool.Pool, logs *lockedBuffer) string {
 		t.Helper()
 		logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))

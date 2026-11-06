@@ -59,7 +59,6 @@ func newRoutedFixture(t *testing.T, store policy.Store, rows []accessverify.Row,
 		auth.DelegatedRows(delegated)
 		cfg := accessverify.Config{
 			Rows:   rows,
-			Legacy: legacyVerifier(auth.AuthenticateLegacy),
 			Meter:  sdkmetric.NewMeterProvider(sdkmetric.WithReader(f.reader)).Meter("test"),
 			Logger: quietLogger(),
 			Now:    func() time.Time { return now },
@@ -603,20 +602,17 @@ func TestGoAPIAccessRowsAreTheFullInventory(t *testing.T) {
 	if len(rows) != len(ids) || len(rows) < 234 {
 		t.Fatalf("%d rows, the inventory has %d for %s", len(rows), len(ids), goAPIAccessService)
 	}
-	legacy, user := 0, 0
+	user := 0
 	for _, row := range rows {
 		if row.Service != goAPIAccessService || !ids[row.Profile] {
 			t.Errorf("row %+v is not an inventory row", row)
-		}
-		if row.LegacyHS256 {
-			legacy++
 		}
 		if row.AcceptsUser {
 			user++
 		}
 	}
-	if legacy != 0 || user != 197 {
-		t.Errorf("%d legacy rows, %d user rows: want 0 (ops_access_token_hs256 is retired) and 197", legacy, user)
+	if user != 198 {
+		t.Errorf("%d user rows, want 198", user)
 	}
 }
 
@@ -635,22 +631,21 @@ func TestGoAPIAccessRowsRefuseABadTable(t *testing.T) {
 }
 
 // TestConfigure_RoutesTheAuthenticatorWhenIssuerIsSet: the prod construction
-// path routes go-api's Authenticator; unset, it stays unrouted.
+// path routes go-api's Authenticator. Unset, a start with a database is
+// refused (TestBuildAccessVerify_IssuerRequiredOnlyWithAPool).
 func TestConfigure_RoutesTheAuthenticatorWhenIssuerIsSet(t *testing.T) {
-	for _, set := range []bool{true, false} {
-		deps := configureForAccessVerify(t, set)
-		if deps.Auth == nil {
-			t.Fatal("no authenticator")
-		}
-		if deps.Auth.Routed() != set || (deps.AccessVerify != nil) != set {
-			t.Errorf("issuer set %v: routed %v, validator %v", set, deps.Auth.Routed(), deps.AccessVerify != nil)
-		}
+	deps := configureForAccessVerify(t, true)
+	if deps.Auth == nil {
+		t.Fatal("no authenticator")
+	}
+	if !deps.Auth.Routed() || deps.AccessVerify == nil {
+		t.Errorf("issuer set: routed %v, validator %v", deps.Auth.Routed(), deps.AccessVerify != nil)
 	}
 }
 
-// TestRoutedAccessVerifyMapsTheValidatorForPolicy: unavailable is
-// policy.ErrUnavailable, a refusal is no pass, a legacy result must be a
-// policy user, and a user token's claims reach policy unchanged.
+// TestRoutedAccessVerifyMapsTheValidatorForPolicy: a refusal is no pass (an
+// HS256 token on a user row too: its class is retired), and a user token's
+// claims reach policy unchanged.
 func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: probeIssuer, Audience: accessTokenAudienceAPI, Keys: minter.keys})
@@ -658,12 +653,9 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	const profile = "GET /p"
-	var legacyAnswer any
-	var legacyErr error
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:  []accessverify.Row{{Service: goAPIAccessService, Profile: profile, AcceptsUser: true, LegacyHS256: true}},
+		Rows:  []accessverify.Row{{Service: goAPIAccessService, Profile: profile, AcceptsUser: true}},
 		EdDSA: verifier, Meter: sdkmetric.NewMeterProvider().Meter("test"), Now: func() time.Time { return probeNow },
-		Legacy: func(context.Context, string) (any, error) { return legacyAnswer, legacyErr },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -675,29 +667,19 @@ func TestRoutedAccessVerifyMapsTheValidatorForPolicy(t *testing.T) {
 	if _, err := adapter.Validate(ctx, goAPIAccessService, "GET /unknown", hs256); err == nil || errors.Is(err, policy.ErrUnavailable) {
 		t.Errorf("unknown profile: %v, want a refusal", err)
 	}
-	legacyAnswer, legacyErr = nil, fmt.Errorf("down: %w", accessverify.ErrUnavailable)
-	if _, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); !errors.Is(err, policy.ErrUnavailable) {
-		t.Errorf("unavailable legacy: %v", err)
-	}
-	legacyAnswer, legacyErr = "not a user", nil
-	if result, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); err == nil || result != nil {
-		t.Errorf("a legacy answer of another type: %v %v", result, err)
-	}
-	want := &policy.User{UserID: probeUser.String()}
-	legacyAnswer = want
-	if result, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); err != nil || result.Legacy != want || result.Claims != nil {
-		t.Errorf("legacy user: %+v %v", result, err)
+	if result, err := adapter.Validate(ctx, goAPIAccessService, profile, hs256); err == nil || errors.Is(err, policy.ErrUnavailable) || result != nil {
+		t.Errorf("an HS256 token on a user row: %v %v, want a refusal", result, err)
 	}
 	result, err := adapter.Validate(ctx, goAPIAccessService, profile, minter.mint(probeUser, nil))
-	if err != nil || result.Legacy != nil || result.Claims == nil || result.Claims.Subject != wirePrincipal(probeUser) ||
+	if err != nil || result.Claims == nil || result.Claims.Subject != wirePrincipal(probeUser) ||
 		result.Claims.SessionID != sessionid.Wire(probeLiveSID) || result.Claims.OrgID == nil || *result.Claims.OrgID != probeOrg.String() {
 		t.Errorf("user token: %+v %v", result, err)
 	}
 }
 
 // TestIssuerSetCallerLookupOutageIsTheListener503 is D6666: a store outage
-// behind the validator answers through the api listener exactly as with the
-// issuer unset: OrgScope runs first and answers the guard's 503.
+// behind the validator answers through the api listener with the guard's 503
+// (OrgScope runs first).
 func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	minter := newEdDSAMinter(t)
 	store := newProbeStore()
@@ -705,20 +687,14 @@ func TestIssuerSetCallerLookupOutageIsTheListener503(t *testing.T) {
 	store.sessions[downSID] = policy.SessionRow{PrincipalID: probeDown, LegacyTokenVersion: i64ptr(0)}
 	legacy := probeHS256(t, probeKey, map[string]any{"sub": probeDown.String(), "org_id": probeOrg.String()})
 	user := minter.mint(probeDown, map[string]any{"sid": sessionid.Wire(downSID)})
-	unset := probeDo(probeServer(t, store, nil), probeRequest{"unset", http.MethodGet, probeAuthenticated, bearer(legacy)})
-	if unset.Status != http.StatusServiceUnavailable || unset.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
-		t.Fatalf("issuer unset: %d %s", unset.Status, unset.Body)
-	}
 	f := newRoutedFixture(t, store, userRows(t), probeIssuer, minter.keys, nil, probeNow)
 	if got := probeDo(f.handler, probeRequest{"legacy", http.MethodGet, probeAuthenticated, bearer(legacy)}); got.Status != http.StatusUnauthorized || got.Body != genericRefusal {
 		t.Errorf("legacy: issuer set answers %d %s, want the generic 401 (ops_access_token_hs256 is retired)", got.Status, got.Body)
 	}
 	for name, token := range map[string]string{"user": user} {
 		got := probeDo(f.handler, probeRequest{name, http.MethodGet, probeAuthenticated, bearer(token)})
-		a, _ := json.Marshal(probeAnswer{Status: got.Status, Headers: got.Headers, Body: got.Body})
-		b, _ := json.Marshal(probeAnswer{Status: unset.Status, Headers: unset.Headers, Body: unset.Body})
-		if !bytes.Equal(a, b) {
-			t.Errorf("%s: issuer set answers %s, issuer unset %s", name, a, b)
+		if got.Status != http.StatusServiceUnavailable || got.Body != `{"detail":{"message":"Database temporarily unavailable"}}` {
+			t.Errorf("%s: issuer set answers %d %s, want the listener 503", name, got.Status, got.Body)
 		}
 	}
 }

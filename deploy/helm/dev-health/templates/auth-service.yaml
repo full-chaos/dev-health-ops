@@ -24,6 +24,7 @@ stage-signing-key init container exists.
 {{- $tokenIssuer := include "dev-health.authTokenIssuer" . }}
 {{- $linkRoutes := eq (include "dev-health.authBool" (dict "value" .Values.authService.socialLinkRoutes "key" "authService.socialLinkRoutes")) "true" }}
 {{- $internalOn := eq (include "dev-health.authInternal" .) "true" }}
+{{- include "dev-health.authWorkloadClients" (dict "context" . "internalOn" (ternary "true" "" $internalOn)) }}
 {{- if eq (include "dev-health.authOn" (dict "flag" "service" "context" .)) "true" }}
 {{- $a := .Values.authService }}
 {{- include "dev-health.authConnectionBudget" . }}
@@ -646,8 +647,8 @@ spec:
 {{- if $internalOn }}
 ---
 {{- /*
-CHAOS-12661: the internal port's own boundary. It admits the pods of authService.internal.peers on that port and
-nothing else; it adds no egress, and the policy above stays the API port's whole ingress. NetworkPolicies are
+CHAOS-12661: the internal port's own boundary. It admits the pods of authService.internal.peers and of
+authService.networkPolicy.workloadClients (CHAOS-13130) on that port and nothing else; it adds no egress, and the policy above stays the API port's whole ingress. NetworkPolicies are
 additive, so this one only opens the internal port.
 */}}
 apiVersion: networking.k8s.io/v1
@@ -669,6 +670,15 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "dev-health.componentSelectorLabels" (dict "component" . "context" $) | nindent 14 }}
+        {{- end }}
+        {{- /* CHAOS-13130: the named workloads outside this release (acr-api), on this port alone (dev-health.authWorkloadClients). */}}
+        {{- range $a.networkPolicy.workloadClients }}
+        - podSelector:
+            {{- toYaml .podSelector | nindent 12 }}
+          {{- with .namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
         {{- end }}
       ports:
         - protocol: TCP

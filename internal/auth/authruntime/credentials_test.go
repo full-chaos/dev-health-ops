@@ -25,6 +25,7 @@ func credentialConfig(t *testing.T, owned string) authconfig.Config {
 		authconfig.EnvDatabaseURI:    "postgres://auth@127.0.0.1:1/devhealth",
 		authconfig.EnvSigningKeyFile: "/nonexistent",
 		authconfig.EnvSigningKeyID:   "credentials-test",
+		authconfig.EnvTokenIssuerURL: wellKnownIssuer,
 	})
 	if owned != "" {
 		env[authconfig.EnvUsersOwned] = owned
@@ -47,7 +48,7 @@ func TestCredentialRoutesOwnedUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), nil)
+	routes, components, err := credentialRoutes(credentialConfig(t, "true"), logger, pool, schema, mustLimits(t), keySigner(t))
 	if err != nil {
 		t.Fatal(err)
 	}

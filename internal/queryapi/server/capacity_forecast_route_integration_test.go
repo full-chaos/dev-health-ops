@@ -6,7 +6,6 @@ import (
 	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
@@ -36,7 +35,7 @@ func TestCapacityForecastRoute_IsServedByTheCatalog(t *testing.T) {
 	}
 	client := &cdClient{responses: []*cdScanner{{rows: throughput}, {rows: [][]any{{uint64(30)}}}}}
 
-	handler, _, _, _, _ := newQueryHandler(client, pool, verifier, itTestSchemaDigest, os.Getenv)
+	handler, _, _, _, _ := newQueryHandler(client, pool, verifier, itTestSchemaDigest, withIssuer)
 	token := signTestEnvelope(t, priv, "org-1")
 
 	t.Run("no_routing_row_is_served_by_the_catalog_rule", func(t *testing.T) {

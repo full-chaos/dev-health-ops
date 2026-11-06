@@ -27,7 +27,7 @@ func TestScopeRowsReadTheValidatorsClassField(t *testing.T) {
 	}
 	for _, access := range accessRows {
 		scope, ok := scopeRows[access.Profile]
-		if !ok || scope.AccessToken != (access.AcceptsUser || access.LegacyHS256) {
+		if !ok || scope.AccessToken != access.AcceptsUser {
 			t.Errorf("%s: scope %+v, validator %+v", access.Profile, scope, access)
 		}
 	}

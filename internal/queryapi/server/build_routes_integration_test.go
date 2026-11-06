@@ -53,6 +53,7 @@ func TestBuildWithEverythingConfiguredMountsEveryDeclaredRoute(t *testing.T) {
 		"GO_API_ENVELOPE_JWKS_PATH":    writeTestJWKS(t, pub),
 		"GO_API_ENVELOPE_ISSUER":       itTestIssuer,
 		"GO_API_ENVELOPE_AUDIENCE":     itTestAudience,
+		accessTokenIssuerEnvVar:        accessTestIssuer,
 		"DEV_HEALTH_ENV":               "ci",
 		"GO_API_PROOF_ROUTE_ENABLED":   "true",
 		edgeJWTSecretEnvVar:            "build-routes-edge-secret-32-bytes-long!!",

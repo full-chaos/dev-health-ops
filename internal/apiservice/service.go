@@ -532,6 +532,10 @@ func configureWith(
 		return nil, dependencyFailure(ctx, logger, "api_refresh_counter", "api_refresh_counter_invalid", err)
 	}
 	session.SetRefreshAccepted(refreshAccepted)
+	if err := startLegacyLinkCounter(); err != nil {
+		closeComponents(depComponents)
+		return nil, dependencyFailure(ctx, logger, "api_legacy_link_counter", "api_legacy_link_counter_invalid", err)
+	}
 	deps.RegisterLimit, err = registerLimit(envsecrets.ProcessLookup)
 	if err != nil {
 		closeComponents(depComponents)
@@ -700,9 +704,10 @@ type protection struct {
 	authSchema string
 }
 
-// newProtection builds the principal service. The api verifies the access
-// token the Python api mints, so with a database it needs the same key:
-// JWT_SECRET_KEY is required, and a missing or short key stops startup.
+// newProtection builds the principal service. Access tokens are verified by
+// the endpoint-profile row only (buildAccessVerify); JWT_SECRET_KEY keys the
+// local session signer and its refresh-token verifier, so with a database it
+// is required, and a missing or short key stops startup.
 func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned bool, logger *slog.Logger) (protection, error) {
 	if !cfg.APIJWTSecret.Configured() {
 		return protection{}, errors.New("JWT_SECRET_KEY is required by dho api when API_DATABASE_URI is set")
@@ -719,7 +724,7 @@ func newProtection(cfg config.Config, pool *pgxpool.Pool, platformRolesOwned boo
 	if err != nil {
 		return protection{}, err
 	}
-	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: pool, AuthSchema: authSchema, PlatformRolesOwned: platformRolesOwned}, logger)
 	if err != nil {
 		return protection{}, err
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	apisession "github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
@@ -212,7 +213,7 @@ func (f *validateFixture) goAPIHandler() http.Handler {
 		f.t.Fatal(err)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	auth, err := policy.NewAuthenticator(verifier, goAPIValidateStore{f}, logger)
+	auth, err := policy.NewAuthenticator(goAPIValidateStore{f}, logger)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -251,9 +252,15 @@ const goAPIAccessService = "dev-health-ops-api"
 // signs with, and the HS256 path as the legacy verifier.
 func (f *validateFixture) goAPIRouteAccess(auth *policy.Authenticator, logger *slog.Logger) {
 	f.t.Helper()
-	set, err := f.signer.KeySet(context.Background())
+	routeGoAPIAccess(f.t, auth, f.signer, logger)
+}
+
+// routeGoAPIAccess is goAPIRouteAccess over the keys signer signs with.
+func routeGoAPIAccess(t *testing.T, auth *policy.Authenticator, signer *token.Signer, logger *slog.Logger) {
+	t.Helper()
+	set, err := signer.KeySet(context.Background())
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	keys := authverify.StaticKeys{}
 	for _, key := range set.Published() {
@@ -261,20 +268,19 @@ func (f *validateFixture) goAPIRouteAccess(auth *policy.Authenticator, logger *s
 	}
 	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: goldenIssuer, Audience: "dev-health-api", Keys: keys})
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
 	validator, err := accessverify.New(accessverify.Config{
-		Rows:   goAPIAccessRows(f.t),
+		Rows:   goAPIAccessRows(t),
 		EdDSA:  verifier,
-		Legacy: goAPILegacyVerifier(auth.AuthenticateLegacy),
 		Meter:  otel.Meter("github.com/full-chaos/dev-health-ops/internal/auth/accessverify"),
 		Logger: logger,
 	})
 	if err != nil {
-		f.t.Fatal(err)
+		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(goAPIRoutedAccess{validator}, goAPIAccessService); err != nil {
-		f.t.Fatal(err)
+	if err := auth.RouteAccess(accessrouting.Adapter{Validator: validator}, goAPIAccessService); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -284,13 +290,10 @@ func goAPIAccessRows(t *testing.T) []accessverify.Row {
 	t.Helper()
 	var document struct {
 		Rows []struct {
-			Service    string   `json:"service"`
-			Method     string   `json:"method"`
-			Route      string   `json:"route"`
-			Classes    []string `json:"accepted_credential_classes"`
-			Validation *struct {
-				LegacyHS256 bool `json:"legacy_hs256"`
-			} `json:"access_token_validation"`
+			Service string   `json:"service"`
+			Method  string   `json:"method"`
+			Route   string   `json:"route"`
+			Classes []string `json:"accepted_credential_classes"`
 		} `json:"rows"`
 	}
 	if err := json.Unmarshal(authv1.GoAPIEndpointProfiles, &document); err != nil {
@@ -306,49 +309,9 @@ func goAPIAccessRows(t *testing.T) []accessverify.Row {
 			accepts = accepts || class == accessverify.ClassUser
 		}
 		rows = append(rows, accessverify.Row{Service: goAPIAccessService, Profile: entry.Method + " " + entry.Route,
-			AcceptsUser: accepts, LegacyHS256: entry.Validation != nil && entry.Validation.LegacyHS256})
+			AcceptsUser: accepts})
 	}
 	return rows
-}
-
-// goAPILegacyVerifier is apiservice legacyVerifier.
-func goAPILegacyVerifier(authenticate func(context.Context, string) (*policy.User, error)) accessverify.LegacyVerifier {
-	return func(ctx context.Context, token string) (any, error) {
-		user, err := authenticate(ctx, token)
-		switch {
-		case err == nil:
-			return user, nil
-		case policy.IsRefusal(err), policy.IsClaimTypeError(err):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-		}
-	}
-}
-
-// goAPIRoutedAccess is apiservice routedAccessVerify.
-type goAPIRoutedAccess struct{ validator *accessverify.Validator }
-
-func (r goAPIRoutedAccess) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
-	result, err := r.validator.Validate(ctx, service, profile, bearer)
-	switch {
-	case errors.Is(err, authverify.ErrKeySourceUnavailable):
-		return nil, fmt.Errorf("%w: %w", policy.ErrKeySourceUnavailable, err)
-	case errors.Is(err, accessverify.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
-	case err != nil:
-		return nil, err
-	}
-	switch {
-	case result.Class == accessverify.ClassLegacy:
-		if user, ok := result.Legacy.(*policy.User); ok && user != nil {
-			return &policy.RoutedResult{Legacy: user}, nil
-		}
-	case result.Class == accessverify.ClassUser && result.Claims != nil:
-		claims := result.Claims
-		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
-	}
-	return nil, errors.New("go-api access verify: result of an unexpected class")
 }
 
 func (f *validateFixture) post(server http.Handler, body string, header map[string]string) *httptest.ResponseRecorder {
@@ -443,29 +406,6 @@ func expectSamePlanes(t *testing.T, name string, compat, goAPI *httptest.Respons
 	}
 }
 
-// c1: a token without sid (one go-api issued) of an active user at the
-// current token_version is judged as go-api judges it: valid, with the
-// token's own members.
-func TestValidateCompatC1ASidlessTokenOfAnActiveUserIsValidAsInGoAPI(t *testing.T) {
-	f := newValidateFixture(t, false)
-	body := tokenBody(f.hs256Token(sidless))
-	compat, goAPI := f.post(f.server, body, nil), f.post(f.goAPI, body, nil)
-	expectAnswer(t, "sid-less token", compat, http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
-	expectSamePlanes(t, "sid-less token", compat, goAPI)
-}
-
-// c2, the HS256 class cell (answers-12395-3 D1): an HS256 token naming a live
-// session of an active user at the current token_version is valid, and the
-// answer is go-api's unrouted answer byte for byte (c1, c3 and c4 compare the
-// class's other rows the same way).
-func TestValidateCompatC2HS256AnswerIsGoAPIsAnswerByteForByte(t *testing.T) {
-	f := newValidateFixture(t, false)
-	body := tokenBody(f.hs256Token(nil))
-	compat, goAPI := f.post(f.server, body, nil), f.post(f.goAPI, body, nil)
-	expectAnswer(t, "live session", compat, http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
-	expectSamePlanes(t, "live session", compat, goAPI)
-}
-
 // c3: a revoked, expired or foreign session, a deactivated or unknown user, a
 // missing or stale pin and a stale token_version answer valid:false. Every
 // row but the two effective-state rows is go-api's answer too; those two are
@@ -503,23 +443,12 @@ func TestValidateCompatC3EndedSessionsAndStaleVersionsAreRefused(t *testing.T) {
 			user.IsActive = false
 			f.users.users[f.principal] = user
 		}},
-		{name: "deactivated, sid-less", arrange: func(f *validateFixture) {
-			user := f.users.users[f.principal]
-			user.IsActive = false
-			f.users.users[f.principal] = user
-		}, token: func(f *validateFixture) string { return f.hs256Token(sidless) }},
 		{name: "unknown user", arrange: func(f *validateFixture) { delete(f.users.users, f.principal) }},
 		{name: "stale pin", arrange: func(f *validateFixture) {
 			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal, LegacyTokenVersion: &stale}
 		}},
 		{name: "no pin", arrange: func(f *validateFixture) {
 			f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: f.principal}
-		}},
-		{name: "stale token_version", token: func(f *validateFixture) string {
-			return f.hs256Token(func(c *edgetoken.AccessClaims) { c.TokenVersion = 3 })
-		}},
-		{name: "stale token_version, sid-less", token: func(f *validateFixture) string {
-			return f.hs256Token(func(c *edgetoken.AccessClaims) { c.TokenVersion = 3; c.SessionID = nil })
 		}},
 		{name: "unknown session", arrange: func(f *validateFixture) { delete(f.rows.rows, f.record.ID) }},
 		{name: "session of another principal", arrange: func(f *validateFixture) {
@@ -530,11 +459,11 @@ func TestValidateCompatC3EndedSessionsAndStaleVersionsAreRefused(t *testing.T) {
 		}, goAPI: "valid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newValidateFixture(t, false)
+			f := newValidateFixture(t, true)
 			if tc.arrange != nil {
 				tc.arrange(f)
 			}
-			token := f.hs256Token(nil)
+			token := f.eddsaToken(contracts.PlatformAPIAudience)
 			if tc.token != nil {
 				token = tc.token(f)
 			}
@@ -553,7 +482,7 @@ func TestValidateCompatC3EndedSessionsAndStaleVersionsAreRefused(t *testing.T) {
 // surrogate and every body go-api refuses answer go-api's status and bytes,
 // and the recorded Python answers where the corpus has them.
 func TestValidateCompatC4RefusedInputsAnswerGoAPIsStatusAndBody(t *testing.T) {
-	f := newValidateFixture(t, false)
+	f := newValidateFixture(t, true)
 	refresh, err := f.hs256.Refresh(edgetoken.RefreshClaims{UserID: f.principal.String(), OrgID: f.org.String()}, time.Now(), uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
@@ -722,13 +651,6 @@ func TestValidateCompatC5TokenClassesAreGoAPIsAndNoWider(t *testing.T) {
 		f.rows.rows[f.record.ID] = policy.SessionRow{PrincipalID: other, LegacyTokenVersion: f.record.LegacyTokenVersion}
 		expectAnswer(t, "user token of another principal's session", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil), http.StatusOK, nullAnswer)
 	})
-	t.Run("hs256 only", func(t *testing.T) {
-		f := newValidateFixture(t, false)
-		expectAnswer(t, "HS256 token", f.post(f.server, tokenBody(f.hs256Token(nil)), nil),
-			http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
-		expectAnswer(t, "user token without the EdDSA configuration", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil),
-			http.StatusOK, nullAnswer)
-	})
 	t.Run("the route needs the user access token on its row", func(t *testing.T) {
 		f := newValidateFixture(t, true)
 		f.document = validateRowsHS256
@@ -753,15 +675,13 @@ func TestValidateCompatC6AStoreFaultIsThe503(t *testing.T) {
 	}
 	t.Cleanup(dead.Close)
 	want := `{"detail":{"message":"` + sessionissue.UnavailableText + `"}}`
-	for _, eddsa := range []bool{false, true} {
+	for _, eddsa := range []bool{true} {
 		for _, tc := range []struct {
 			name    string
 			arrange func(*validateFixture)
 			token   func(*validateFixture) string
 		}{
 			{name: "users read", arrange: func(f *validateFixture) { f.users.err = down }},
-			{name: "users read, sid-less", arrange: func(f *validateFixture) { f.users.err = down },
-				token: func(f *validateFixture) string { return f.hs256Token(sidless) }},
 			{name: "users read, dead pgx pool", arrange: func(f *validateFixture) { f.pgUsers = PGUsers{Pool: dead} }},
 			{name: "session row read", arrange: func(f *validateFixture) { f.rows.err = down }},
 			{name: "effective state read", arrange: func(f *validateFixture) { f.sessions.currentErr = errors.Join(session.ErrStore, down) }},
@@ -793,8 +713,8 @@ func TestValidateCompatLimitIsGoAPIsCountAndKey(t *testing.T) {
 	if validateLimit != (httpapi.Limit{ID: "auth_svc_validate", Count: httpapi.ValidateLimitCount, Window: httpapi.ValidateLimitWindow}) {
 		t.Fatalf("validate limit = %+v", validateLimit)
 	}
-	f := newValidateFixture(t, false)
-	token := tokenBody(f.hs256Token(nil))
+	f := newValidateFixture(t, true)
+	token := tokenBody(f.eddsaToken(contracts.PlatformAPIAudience))
 	for i := 0; i < 3; i++ {
 		f.post(f.server, `{}`, nil)
 	}
@@ -805,7 +725,7 @@ func TestValidateCompatLimitIsGoAPIsCountAndKey(t *testing.T) {
 	}
 	expectAnswer(t, "one over the count", f.post(f.server, token, nil), http.StatusTooManyRequests,
 		`{"detail":{"message":"Rate limit exceeded. Please try again later."}}`)
-	expectAnswer(t, "another token has its own bucket", f.post(f.server, tokenBody(f.hs256Token(sidless)), nil),
+	expectAnswer(t, "another token has its own bucket", f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil),
 		http.StatusOK, f.validAnswer("ada@example.com", f.org.String(), "admin"))
 	for i := 0; i < httpapi.ValidateLimitCount; i++ {
 		if r := f.post(f.server, tokenBody(""), nil); r.Code != http.StatusOK {
@@ -832,10 +752,11 @@ func validateKeyFor(t *testing.T, token string) string {
 	return key
 }
 
-// c8: the route mounts on its row of the embedded endpoint-profile document,
-// in HS256 mode and in EdDSA mode, and is a 404 on a document without it.
+// c8: the route mounts on its row of the embedded endpoint-profile document
+// in EdDSA mode, and is a 404 on a document without it. Without the issuer it
+// is not mounted (TestCompatValidateAndSwitchOrgNotMountedWithoutTheIssuer).
 func TestValidateCompatC8MountsOnItsEmbeddedProfileRow(t *testing.T) {
-	for _, eddsa := range []bool{false, true} {
+	for _, eddsa := range []bool{true} {
 		f := newValidateFixture(t, eddsa)
 		f.logs.Reset()
 		routes, err := CompatRoutes(f.deps())
@@ -856,7 +777,7 @@ func TestValidateCompatC8MountsOnItsEmbeddedProfileRow(t *testing.T) {
 		}
 		f.document = []byte(`{"rows":[]}`)
 		f.build()
-		if r := f.post(f.server, tokenBody(f.hs256Token(nil)), nil); r.Code != http.StatusNotFound {
+		if r := f.post(f.server, tokenBody(f.eddsaToken(contracts.PlatformAPIAudience)), nil); r.Code != http.StatusNotFound {
 			t.Fatalf("eddsa=%v: an empty document: %d %s", eddsa, r.Code, r.Body)
 		}
 	}
@@ -866,7 +787,7 @@ func TestValidateCompatC8MountsOnItsEmbeddedProfileRow(t *testing.T) {
 // embedded document's route set) writes its valid and its refused answer
 // with no writer violation.
 func TestValidateCompatProductionResponseModelRaisesNoWriterViolation(t *testing.T) {
-	for _, eddsa := range []bool{false, true} {
+	for _, eddsa := range []bool{true} {
 		f := newValidateFixture(t, eddsa)
 		routes, err := CompatRoutes(f.deps())
 		if err != nil {
@@ -876,10 +797,7 @@ func TestValidateCompatProductionResponseModelRaisesNoWriterViolation(t *testing
 		for _, route := range MarkResponseModels(routes) {
 			mux.Handle(route.Method+" "+route.Pattern, requestid.Middleware(flaggedHandler(route)))
 		}
-		tokens := map[string]string{"hs256": f.hs256Token(nil)}
-		if eddsa {
-			tokens = map[string]string{"eddsa": f.eddsaToken(contracts.PlatformAPIAudience)}
-		}
+		tokens := map[string]string{"eddsa": f.eddsaToken(contracts.PlatformAPIAudience)}
 		for name, token := range tokens {
 			expectNoViolation(t, fmt.Sprintf("eddsa=%v valid %s", eddsa, name), http.StatusOK, func() int {
 				r := f.post(mux, tokenBody(token), nil)

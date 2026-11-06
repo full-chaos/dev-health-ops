@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/pep"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -509,26 +508,6 @@ func TestShadowHighRiskRowAsksWhenTheSecondSwitchIsOn(t *testing.T) {
 	}
 	if _, results := rec.snapshot(); !slices.Equal(results, []string{"match"}) {
 		t.Fatalf("results %v", results)
-	}
-}
-
-func TestShadowLegacyHS256BearerIsSkipped(t *testing.T) {
-	rec := recordShadow(t)
-	pdp := newTestPDP(t, allowAll)
-	sh, _ := newShadowFor(t, pdp.client(t), nil)
-	store := newStore()
-	withClaimRole(store, claims(func(c jwt.MapClaims) { c["role"] = "admin" }))
-	guard := NewGuard(authenticator(t, store), quiet())
-	guard.SetShadow(sh)
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/admin/teams", guard.Wrap(AdminOrg, echo))
-	got := serve(mux, http.MethodGet, "/api/v1/admin/teams", validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
-	sh.wg.Wait()
-	if got.status != http.StatusOK {
-		t.Fatalf("status %d %s", got.status, got.body)
-	}
-	if _, results := rec.snapshot(); !slices.Equal(results, []string{"skipped"}) || len(pdp.calls()) != 0 {
-		t.Fatalf("results %v calls %d, want [skipped] and 0", results, len(pdp.calls()))
 	}
 }
 

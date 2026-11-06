@@ -26,7 +26,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/storage/postgres/authschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -132,55 +131,9 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 		t.Fatal("the api role reads sessions.expires_at: the session reader grant is wider than its columns")
 	}
 	store := policy.PGStore{Pool: api, AuthSchema: schemaName}
-	keyText := strings.Repeat("routed-store-signing-", 2)
-	edge, err := edgetoken.New(keyText, "dev-health-ops", "dev-health-api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auth, err := policy.NewAuthenticator(edge, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const issuer = "https://auth.routed.test"
-	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: issuer, Audience: "dev-health-api", Keys: authverify.StaticKeys{"routed-kid": pub}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	const profile = "GET /api/v1/auth/me"
-	validator, err := accessverify.New(accessverify.Config{
-		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: profile, AcceptsUser: true, LegacyHS256: true}},
-		EdDSA: verifier, Meter: noop.NewMeterProvider().Meter("routed"),
-		Legacy: func(ctx context.Context, token string) (any, error) {
-			user, err := auth.AuthenticateLegacy(ctx, token)
-			if errors.Is(err, policy.ErrUnavailable) {
-				return nil, fmt.Errorf("%w: %w", accessverify.ErrUnavailable, err)
-			}
-			return user, err
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := auth.RouteAccess(routedValidator{validator}, "dev-health-ops-api"); err != nil {
-		t.Fatal(err)
-	}
+	auth, mint := routedReaderAuth(t, store, principal)
 	now := time.Now().Unix()
-	mint := func(sid uuid.UUID, orgID *uuid.UUID) string {
-		claims := map[string]any{"iss": issuer, "aud": "dev-health-api", "sub": WirePrincipalID(principal), "principal_type": "human",
-			"sid": WireSessionID(sid), "jti": strings.Repeat("r", 24), "iat": now - 5, "nbf": now - 5, "exp": now + 300, "scope": "api:access"}
-		if orgID != nil {
-			claims["org_id"] = orgID.String()
-		}
-		header, _ := json.Marshal(map[string]any{"alg": "EdDSA", "typ": "at+jwt", "kid": "routed-kid"})
-		payload, _ := json.Marshal(claims)
-		signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
-		return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, []byte(signing)))
-	}
-	routed := policy.WithRouteProfile(ctx, profile)
+	routed := policy.WithRouteProfile(ctx, routedReaderProfile)
 
 	user, err := auth.Authenticate(routed, mint(live.Session.ID, &org))
 	if err != nil {
@@ -211,6 +164,7 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if _, err := auth.Authenticate(ctx, mint(live.Session.ID, &org)); !policy.IsRefusal(err) {
 		t.Errorf("no profile: err = %v, want a refusal", err)
 	}
+	keyText := strings.Repeat("routed-store-signing-", 2)
 	legacy, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub": principal.String(), "type": "access", "iss": "dev-health-ops", "aud": "dev-health-api",
 		"exp": now + 300, "iat": now, "tv": 2, "org_id": org.String(), "role": "admin",
@@ -218,9 +172,54 @@ func TestRoutedUserAccessTokenOnRealStores(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user, err := auth.Authenticate(routed, legacy); err != nil || user.ID != principal {
-		t.Fatalf("a legacy token on a legacy row: user %+v err %v", user, err)
+	if user, err := auth.Authenticate(routed, legacy); !policy.IsRefusal(err) || user != nil {
+		t.Fatalf("an HS256 token on a user row (its class is retired): user %+v err %v, want a refusal", user, err)
 	}
+}
+
+// routedReaderProfile is the one go-api user row routedReaderAuth routes.
+const routedReaderProfile = "GET /api/v1/auth/me"
+
+// routedReaderAuth is go-api's Authenticator over store, routed on routedReaderProfile over an EdDSA key of
+// its own, and mint: a user access token of principal naming sid (and orgID when not nil).
+func routedReaderAuth(t *testing.T, store policy.Store, principal uuid.UUID) (*policy.Authenticator, func(sid uuid.UUID, orgID *uuid.UUID) string) {
+	t.Helper()
+	auth, err := policy.NewAuthenticator(store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const issuer = "https://auth.routed.test"
+	verifier, err := authverify.NewVerifier(authverify.VerifierConfig{Issuer: issuer, Audience: "dev-health-api", Keys: authverify.StaticKeys{"routed-kid": pub}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validator, err := accessverify.New(accessverify.Config{
+		Rows:  []accessverify.Row{{Service: "dev-health-ops-api", Profile: routedReaderProfile, AcceptsUser: true}},
+		EdDSA: verifier, Meter: noop.NewMeterProvider().Meter("routed"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RouteAccess(routedValidator{validator}, "dev-health-ops-api"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	mint := func(sid uuid.UUID, orgID *uuid.UUID) string {
+		claims := map[string]any{"iss": issuer, "aud": "dev-health-api", "sub": WirePrincipalID(principal), "principal_type": "human",
+			"sid": WireSessionID(sid), "jti": strings.Repeat("r", 24), "iat": now - 5, "nbf": now - 5, "exp": now + 300, "scope": "api:access"}
+		if orgID != nil {
+			claims["org_id"] = orgID.String()
+		}
+		header, _ := json.Marshal(map[string]any{"alg": "EdDSA", "typ": "at+jwt", "kid": "routed-kid"})
+		payload, _ := json.Marshal(claims)
+		signing := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
+		return signing + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(priv, []byte(signing)))
+	}
+	return auth, mint
 }
 
 // routedValidator is go-api's adapter (internal/apiservice routedAccessVerify)
@@ -234,9 +233,6 @@ func (r routedValidator) Validate(ctx context.Context, service, profile, bearer 
 	}
 	if err != nil {
 		return nil, err
-	}
-	if user, ok := result.Legacy.(*policy.User); ok {
-		return &policy.RoutedResult{Legacy: user}, nil
 	}
 	if claims := result.Claims; claims != nil {
 		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil

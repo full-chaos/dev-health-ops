@@ -17,7 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
-	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
+	"github.com/full-chaos/dev-health-ops/internal/auth/contracts"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/auth/identity"
 	"github.com/full-chaos/dev-health-ops/internal/auth/session"
@@ -39,12 +39,47 @@ type delegatedLive struct {
 
 func newDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
 	t.Helper()
+	return newDelegatedLiveWith(t, ctx, hs256Issuer(t))
+}
+
+// newGoAPIDelegatedLive is newDelegatedLive whose issuer mints go-api's EdDSA access token (audience
+// dev-health-api, act = the actor) and whose authenticator is go-api's, routed over that issuer's keys.
+func newGoAPIDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	l := newDelegatedLiveWith(t, ctx, newEdDSAIssuer(t, signer, contracts.PlatformAPIAudience))
+	auth, err := policy.NewAuthenticator(policy.PGStore{Pool: l.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeGoAPIAccess(t, auth, signer, slog.New(slog.DiscardHandler))
+	l.authenticator = auth
+	return l
+}
+
+// newSessionBearerDelegatedLive is newDelegatedLive whose issuer mints the EdDSA session-route access token and
+// carries the access check, so the bearer routes mount (they mount only with the check).
+func newSessionBearerDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newDelegatedLiveWith(t, ctx, newEdDSAIssuer(t, signer, AccessTokenAudience).WithAccessCheck(check))
+}
+
+// goAPIDelegatedRow is a go-api row that takes a user access token and allows a delegated bearer.
+const goAPIDelegatedRow = "GET /api/v1/auth/me"
+
+func newDelegatedLiveWith(t *testing.T, ctx context.Context, issuer *Issuer) *delegatedLive {
+	t.Helper()
 	p := newPreflightStoreOwned(t, ctx, true)
 	id, err := identity.New(identity.Config{Pool: p.runtime, Schema: p.schema, UsersOwnedByAuth: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: hs256Issuer(t)}
+	l := &delegatedLive{preflightStore: p, identity: id, actor: uuid.New(), target: uuid.New(), org: uuid.New(), issuer: issuer}
 	for _, user := range []uuid.UUID{l.actor, l.target} {
 		if _, err := p.admin.Exec(ctx, `INSERT INTO public.users
 	(id, email, password_hash, auth_provider, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
@@ -79,13 +114,6 @@ VALUES ($1, $2, NULL, 'local', true, true, false, $3, now(), now())`, user, "d-"
 	l.users = &fakeUsers{
 		users: map[uuid.UUID]UserState{l.target: {Email: "t@example.test", IsActive: true, TokenVersion: delegatedTokenVersion}},
 		roles: map[[2]uuid.UUID]*string{{l.target, l.org}: &member},
-	}
-	verifier, err := edgetoken.New(testSecret, testIssuer, testAudience)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if l.authenticator, err = policy.NewAuthenticator(verifier, policy.PGStore{Pool: p.admin, AuthSchema: "auth"}, slog.New(slog.DiscardHandler)); err != nil {
-		t.Fatal(err)
 	}
 	return l
 }
@@ -215,9 +243,10 @@ func TestDelegatedEndRouteEndsOnlyADelegatedRow(t *testing.T) {
 func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
+	l := newGoAPIDelegatedLive(t, ctx)
 	server := l.server(t)
 	id, access := l.start(t, server)
+	ctx = policy.WithRouteProfile(ctx, goAPIDelegatedRow)
 	user, err := l.authenticator.Authenticate(ctx, access)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
@@ -236,12 +265,12 @@ func TestGoAPITakesTheDelegatedTokenUntilTheSessionEnds(t *testing.T) {
 func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
+	l := newGoAPIDelegatedLive(t, ctx)
 	_, access := l.start(t, l.server(t))
 	if _, err := l.store.Revoke(ctx, l.base, session.Actor{PrincipalID: &l.actor}); err != nil {
 		t.Fatalf("Revoke: %v", err)
 	}
-	if _, err := l.authenticator.Authenticate(ctx, access); err == nil {
+	if _, err := l.authenticator.Authenticate(policy.WithRouteProfile(ctx, goAPIDelegatedRow), access); err == nil {
 		t.Fatal("go-api took the token after its base ended")
 	}
 }
@@ -249,7 +278,7 @@ func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 func TestADelegatedBearerIsDeniedOverARealRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
+	l := newSessionBearerDelegatedLive(t, ctx)
 	id, access := l.start(t, l.server(t))
 	routes := l.bearerRoutes(t)
 	header := map[string]string{"Authorization": "Bearer " + access}

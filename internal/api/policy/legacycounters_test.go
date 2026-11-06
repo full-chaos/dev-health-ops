@@ -127,17 +127,6 @@ func TestLegacyRoleSourceMembershipRowAtAdmin(t *testing.T) {
 	}
 }
 
-func TestLegacyRoleSourceClaimFallbackWhenOrgMissing(t *testing.T) {
-	rec := recordLegacy(t)
-	store := newStore()
-	store.absentOrgs = map[uuid.UUID]bool{uuid.MustParse(ownOrg): true}
-	store.members = map[[2]uuid.UUID]bool{}
-	got := guardServe(t, AdminOrg, store, validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin" }))
-	if got.status != 200 || rec.get("role_source/claim_fallback") != 1 || rec.get("role_source/membership_row") != 0 {
-		t.Fatalf("status %d, counts %v", got.status, rec.keys())
-	}
-}
-
 func TestLegacyRoleSourceClaimFallbackWithoutTokenOrg(t *testing.T) {
 	rec := recordLegacy(t)
 	guardServe(t, Admin, newStore(), validAuth(t, func(c jwt.MapClaims) { c["role"] = "admin"; delete(c, "org_id") }))
@@ -182,7 +171,7 @@ func TestLegacyRoleSourceNotCountedWithoutADecisionSource(t *testing.T) {
 	}
 	rec := recordLegacy(t)
 	got := guardServe(t, Admin, tokenOrgStore(false, ""), validAuth(t, nil))
-	if got.status != 403 || rec.get("role_source/membership_row")+rec.get("role_source/claim_fallback") != 0 {
+	if got.status != 401 || rec.get("role_source/membership_row")+rec.get("role_source/claim_fallback") != 0 {
 		t.Fatalf("a caller without a membership row counted a role source: %d %v", got.status, rec.keys())
 	}
 }

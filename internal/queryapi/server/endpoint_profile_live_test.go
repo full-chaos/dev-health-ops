@@ -130,7 +130,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 	if shape != nil {
 		shape(store)
 	}
-	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow), true)
+	stack := newAccessStack(t, store, testAccess(minter.keys, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -139,7 +139,7 @@ func liveStack(t *testing.T, shape func(*accessStore)) *behaviourStack {
 func liveStackKeyDown(t *testing.T) *behaviourStack {
 	t.Helper()
 	minter := newAccessMinter(t)
-	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow), true)
+	stack := newAccessStack(t, newAccessStore(), testAccess(downKeys{}, nil, accessTestNow))
 	stack.user = minter.mint(ecUser, nil, nil)
 	return stack
 }
@@ -154,7 +154,7 @@ func withSession(s *accessStore) {
 
 func edgeBearer(t *testing.T, orgID string) string {
 	t.Helper()
-	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, role: "admin", tokenVersion: 5})
+	return ecMintHS256Token(t, ecEdgeClaims{sub: ecUser.String(), orgID: orgID, tokenVersion: 5})
 }
 
 type liveObs struct {
@@ -283,6 +283,9 @@ func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, session
 		s.errSession = fmt.Errorf("session store timeout")
 	})
 	o.wantStatus("session read fails (fail closed)", a, sessionFailureStatus)
+	if sessionFailureStatus == http.StatusServiceUnavailable && strings.TrimSpace(a.body) != restUnavailable {
+		o.fail("session read fails (fail closed): body %q, want %q", trim(a.body), restUnavailable)
+	}
 	o.wantNoRun("session read fails (fail closed)", stack)
 }
 
@@ -306,7 +309,7 @@ func newLiveREST(t *testing.T, pattern string, shape func(*accessStore)) *liveRE
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := routeEdgeVerifier(edge, setup.opts, true); err != nil {
+	if err := routeEdgeVerifier(edge, setup.opts); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
@@ -596,7 +599,10 @@ func driveGraphQL(t *testing.T, row liveRow) *liveObs {
 		if !strings.Contains(a.body, "UNREGISTERED_DOCUMENT") {
 			o.fail("unregistered document: body %q lacks UNREGISTERED_DOCUMENT", trim(a.body))
 		}
-		edgeSession(t, o, request(iaDocument, nil, ""), true, http.StatusInternalServerError)
+		edgeSession(t, o, request(iaDocument, nil, ""), true, http.StatusServiceUnavailable)
+		broken := liveStack(t, func(s *accessStore) { s.errUserState = fmt.Errorf("syntax error") })
+		o.wantStatus(listener+": user token, users store error", broken.live(request(iaDocument, nil, broken.user)), http.StatusInternalServerError)
+		o.wantNoRun(listener+": user token, users store error", broken)
 		down := liveStackKeyDown(t)
 		cell := listener + ": user token, token key source unreadable"
 		o.wantStatus(cell, down.live(request(iaDocument, nil, down.user)), http.StatusServiceUnavailable)
@@ -836,7 +842,7 @@ func TestLiveImpersonationCellsOnTheEdgeCarrier(t *testing.T) {
 		failure int
 	}{
 		"query":   {liveReq{listener: "internal", method: http.MethodPost, path: "/query", body: document}, false, http.StatusUnauthorized},
-		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusInternalServerError},
+		"graphql": {liveReq{listener: "query", method: http.MethodPost, path: "/graphql", body: document}, true, http.StatusServiceUnavailable},
 	}
 	cells := []string{
 		"live superuser with an active session",

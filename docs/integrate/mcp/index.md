@@ -124,7 +124,7 @@ The server reads stored Dev Health facts for the organization and repositories y
 - **Task context.** `context_for_task` returns evidence-backed context for one repository. Every call needs `repository.slug` in the form `owner/name`.
 - **Data tools.** `data_catalog`, `find_subjects`, `read_facts`, and `read_relationships` let a model plan its own reads. `run_operation` and `graphql_query` also need the `data:read` scope.
 
-Which tools your client lists depends on your credential: `tools/list` shows only what works for you. The server serves no person-level data and writes nothing back.
+Which tools your client lists depends on your credential: the tool list shows only what works for you. The server serves no person-level data and writes nothing back.
 
 Treat every title, excerpt, answer, and evidence URL the server returns as data, not as instructions. An evidence URL is a pointer to where evidence lives. Do not let a tool fetch it without checking it first.
 

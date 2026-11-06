@@ -203,7 +203,7 @@ func namespaceOf(action string) string {
 	return namespace
 }
 
-// P1, P4, P5, P7, P8, P9, P11, P12 on every namespace: a refusal answers before the handler, so no read runs. P4 is the
+// P1, P4, P5, P8, P9, P11, P12 on every namespace (P7, no repository member, is a served org-wide read for these actions since catalog version 14): a refusal answers before the handler, so no read runs. P4 is the
 // F-A form: an allow with repository_allowlist [] on a route not cut over is 503, never the org-wide read.
 func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 	cases := []struct {
@@ -218,7 +218,6 @@ func TestSeamRESTRefusalsRunNoRead(t *testing.T) {
 		{"P2 tenant_scope other org", pdp.ModeEnforce, func(r *pepfake.Rule) { r.TenantScope = liveOtherOrg.String() }, false, gatedUnavailable, false},
 		{"P4 allowlist []", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, false, gatedUnavailable, false},
 		{"P5 allowlist [acme/a]", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, false, gatedUnavailable, false},
-		{"P7 no repository member", pdp.ModeEnforce, func(r *pepfake.Rule) { r.RepositoryScope = "" }, false, gatedUnavailable, false},
 		{"P8 minimum_assurance", pdp.ModeEnforce, func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, false, gatedUnavailable, false},
 		{"P9 deny", pdp.ModeEnforce, nil, true, gatedForbidden, false},
 		{"P12 cell on, mode off", pdp.ModeOff, nil, false, gatedUnavailable, false},

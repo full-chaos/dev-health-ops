@@ -38,87 +38,87 @@ import (
 // gets the answer the legacy path gives. rule1NoOrgGolden is what main (0bf51eb9) answers on each REST handler for a
 // superuser with no org, recorded there by this test over rule1Client: status, body and a digest of every statement
 // with its bindings.
-const rule1NoOrgGolden = `{"edge token routed | drilldown_issues":{"body":"{\"items\":[]}",
+const rule1NoOrgGolden = `{"edge caller, user access token routed | drilldown_issues":{"body":"{\"items\":[]}",
 "digest":"884760750f97cf60",
 "statements":1,
 "status":200},
-"edge token routed | drilldown_prs":{"body":"{\"items\":[]}",
+"edge caller, user access token routed | drilldown_prs":{"body":"{\"items\":[]}",
 "digest":"42ba51aa626abc85",
 "statements":1,
 "status":200},
-"edge token routed | explain":{"body":"{\"metric\":\"blocked_work\",\"label\":\"Blocked Work\",\"unit\":\"hours\",\"value\":0.0,\"delta_pct\":null,\"drivers\":[],\"contributors\":[],\"drilldown_links\":{\"prs\":\"/api/v1/drilldown/prs?metric=blocked_work\",\"issues\":\"/api/v1/drilldown/issues?metric=blocked_work\"},\"repositories\":null,\"source_url\":null,\"has_data\":false,\"has_prior_data\":false,\"source\":null,\"link_tier\":null,\"rate_state\":null,\"evidence_basis\":null}",
+"edge caller, user access token routed | explain":{"body":"{\"metric\":\"blocked_work\",\"label\":\"Blocked Work\",\"unit\":\"hours\",\"value\":0.0,\"delta_pct\":null,\"drivers\":[],\"contributors\":[],\"drilldown_links\":{\"prs\":\"/api/v1/drilldown/prs?metric=blocked_work\",\"issues\":\"/api/v1/drilldown/issues?metric=blocked_work\"},\"repositories\":null,\"source_url\":null,\"has_data\":false,\"has_prior_data\":false,\"source\":null,\"link_tier\":null,\"rate_state\":null,\"evidence_basis\":null}",
 "digest":"a0950b0aeca0da55",
 "statements":5,
 "status":200},
-"edge token routed | filteroptions":{"body":"{\"teams\":[],\"repos\":[],\"services\":[],\"developers\":[],\"work_category\":[\"feature_delivery\",\"maintenance\",\"operational\",\"quality\",\"risk\",\"feature_delivery.customer\",\"feature_delivery.enablement\",\"feature_delivery.roadmap\",\"maintenance.debt\",\"maintenance.refactor\",\"maintenance.upgrade\",\"operational.incident_response\",\"operational.on_call\",\"operational.support\",\"quality.bugfix\",\"quality.reliability\",\"quality.testing\",\"risk.compliance\",\"risk.security\",\"risk.vulnerability\"],\"issue_type\":[],\"flow_stage\":[]}",
+"edge caller, user access token routed | filteroptions":{"body":"{\"teams\":[],\"repos\":[],\"services\":[],\"developers\":[],\"work_category\":[\"feature_delivery\",\"maintenance\",\"operational\",\"quality\",\"risk\",\"feature_delivery.customer\",\"feature_delivery.enablement\",\"feature_delivery.roadmap\",\"maintenance.debt\",\"maintenance.refactor\",\"maintenance.upgrade\",\"operational.incident_response\",\"operational.on_call\",\"operational.support\",\"quality.bugfix\",\"quality.reliability\",\"quality.testing\",\"risk.compliance\",\"risk.security\",\"risk.vulnerability\"],\"issue_type\":[],\"flow_stage\":[]}",
 "digest":"844346916457cb9d",
 "statements":8,
 "status":200},
-"edge token routed | flame":{"body":"{\"detail\":\"Issue not found\"}",
+"edge caller, user access token routed | flame":{"body":"{\"detail\":\"Issue not found\"}",
 "digest":"0c93624c7c068522",
 "statements":1,
 "status":404},
-"edge token routed | flame_aggregated":{"body":"{\"mode\":\"throughput\",\"unit\":\"items\",\"root\":{\"name\":\"Work Delivered\",\"value\":0.0,\"children\":[]},\"meta\":{\"window_start\":\"2026-01-01\",\"window_end\":\"2026-01-15\",\"filters\":{},\"notes\":[\"Work type classification unavailable. Using team-based grouping.\",\"No throughput data available for this window/scope.\"],\"approximation\":{\"used\":true,\"method\":\"inferred\"}}}",
+"edge caller, user access token routed | flame_aggregated":{"body":"{\"mode\":\"throughput\",\"unit\":\"items\",\"root\":{\"name\":\"Work Delivered\",\"value\":0.0,\"children\":[]},\"meta\":{\"window_start\":\"2026-01-01\",\"window_end\":\"2026-01-15\",\"filters\":{},\"notes\":[\"Work type classification unavailable. Using team-based grouping.\",\"No throughput data available for this window/scope.\"],\"approximation\":{\"used\":true,\"method\":\"inferred\"}}}",
 "digest":"476ad86b24082828",
 "statements":2,
 "status":200},
-"edge token routed | heatmap":{"body":"{\"axes\":{\"x\":[\"00\",\"01\",\"02\",\"03\",\"04\",\"05\",\"06\",\"07\",\"08\",\"09\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\",\"17\",\"18\",\"19\",\"20\",\"21\",\"22\",\"23\"],\"y\":[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\",\"Sun\"]},\"cells\":[],\"legend\":{\"unit\":\"hours\",\"scale\":\"linear\"},\"evidence\":null,\"repo_filter_applied\":null,\"filter_empty_reason\":null}",
+"edge caller, user access token routed | heatmap":{"body":"{\"axes\":{\"x\":[\"00\",\"01\",\"02\",\"03\",\"04\",\"05\",\"06\",\"07\",\"08\",\"09\",\"10\",\"11\",\"12\",\"13\",\"14\",\"15\",\"16\",\"17\",\"18\",\"19\",\"20\",\"21\",\"22\",\"23\"],\"y\":[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\",\"Sun\"]},\"cells\":[],\"legend\":{\"unit\":\"hours\",\"scale\":\"linear\"},\"evidence\":null,\"repo_filter_applied\":null,\"filter_empty_reason\":null}",
 "digest":"b6f3484c38784ef7",
 "statements":1,
 "status":200},
-"edge token routed | home":{"body":"{\"freshness\":{\"last_ingested_at\":null,\"latest_successful_sync_at\":null,\"sources\":{},\"coverage\":{\"repos_covered_pct\":null,\"prs_linked_to_issues_pct\":null,\"issues_with_cycle_states_pct\":null}},\"deltas\":[{\"metric\":\"cycle_time\",\"label\":\"Cycle Time\",\"value\":0.0,\"unit\":\"days\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"review_latency\",\"label\":\"Review Latency\",\"value\":0.0,\"unit\":\"hours\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"throughput\",\"label\":\"Throughput\",\"value\":0.0,\"unit\":\"items\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"deploy_freq\",\"label\":\"Deploy Frequency\",\"value\":0.0,\"unit\":\"deploys\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"churn\",\"label\":\"Code Churn\",\"value\":0.0,\"unit\":\"loc\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"wip_saturation\",\"label\":\"WIP Saturation\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"blocked_work\",\"label\":\"Blocked Work\",\"value\":0.0,\"unit\":\"hours\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"change_failure_rate\",\"label\":\"Change Failure Rate\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"rework_ratio\",\"label\":\"Rework Ratio\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"pr_rework_ratio\",\"label\":\"PR Rework Ratio\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"ci_success\",\"label\":\"CI Success Rate\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null}],\"rework_theme_allocation\":[],\"summary\":[],\"tiles\":{\"understand\":{\"title\":\"Understand\",\"subtitle\":\"Flow stages\",\"link\":\"/explore?view=understand\"},\"measure\":{\"title\":\"Measure\",\"subtitle\":\"Coverage & freshness\",\"link\":\"/explore?view=measure\"},\"align\":{\"title\":\"Align\",\"subtitle\":\"Investment mix\",\"link\":\"/investment\"},\"execute\":{\"title\":\"Execute\",\"subtitle\":\"Top opportunities\",\"link\":\"/opportunities\"}},\"constraint\":{\"title\":\"\",\"claim\":\"\",\"evidence\":[],\"experiments\":[]},\"events\":[],\"health_state\":{\"status\":\"no_data\",\"headline\":\"\",\"summary\":\"\",\"as_of\":null},\"signals\":[],\"limiting_factor\":{\"claim\":\"\",\"why_it_matters\":\"\",\"recommended_action\":\"\",\"confidence\":\"low\",\"evidence_ref\":null},\"data_confidence\":{\"level\":\"low\",\"coverage_pct\":null,\"connected_sources\":[],\"missing_sources\":[],\"caveats\":[\"Coverage could not be computed from available lineage fields.\"]},\"filter_empty_reason\":null}",
+"edge caller, user access token routed | home":{"body":"{\"freshness\":{\"last_ingested_at\":null,\"latest_successful_sync_at\":null,\"sources\":{},\"coverage\":{\"repos_covered_pct\":null,\"prs_linked_to_issues_pct\":null,\"issues_with_cycle_states_pct\":null}},\"deltas\":[{\"metric\":\"cycle_time\",\"label\":\"Cycle Time\",\"value\":0.0,\"unit\":\"days\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"review_latency\",\"label\":\"Review Latency\",\"value\":0.0,\"unit\":\"hours\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"throughput\",\"label\":\"Throughput\",\"value\":0.0,\"unit\":\"items\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"deploy_freq\",\"label\":\"Deploy Frequency\",\"value\":0.0,\"unit\":\"deploys\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"churn\",\"label\":\"Code Churn\",\"value\":0.0,\"unit\":\"loc\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"wip_saturation\",\"label\":\"WIP Saturation\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"blocked_work\",\"label\":\"Blocked Work\",\"value\":0.0,\"unit\":\"hours\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"change_failure_rate\",\"label\":\"Change Failure Rate\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"rework_ratio\",\"label\":\"Rework Ratio\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"pr_rework_ratio\",\"label\":\"PR Rework Ratio\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null},{\"metric\":\"ci_success\",\"label\":\"CI Success Rate\",\"value\":0.0,\"unit\":\"%\",\"delta_pct\":null,\"spark\":[],\"has_data\":false,\"has_prior_data\":false,\"rate_state\":null,\"repo_filter_applied\":null}],\"rework_theme_allocation\":[],\"summary\":[],\"tiles\":{\"understand\":{\"title\":\"Understand\",\"subtitle\":\"Flow stages\",\"link\":\"/explore?view=understand\"},\"measure\":{\"title\":\"Measure\",\"subtitle\":\"Coverage & freshness\",\"link\":\"/explore?view=measure\"},\"align\":{\"title\":\"Align\",\"subtitle\":\"Investment mix\",\"link\":\"/investment\"},\"execute\":{\"title\":\"Execute\",\"subtitle\":\"Top opportunities\",\"link\":\"/opportunities\"}},\"constraint\":{\"title\":\"\",\"claim\":\"\",\"evidence\":[],\"experiments\":[]},\"events\":[],\"health_state\":{\"status\":\"no_data\",\"headline\":\"\",\"summary\":\"\",\"as_of\":null},\"signals\":[],\"limiting_factor\":{\"claim\":\"\",\"why_it_matters\":\"\",\"recommended_action\":\"\",\"confidence\":\"low\",\"evidence_ref\":null},\"data_confidence\":{\"level\":\"low\",\"coverage_pct\":null,\"connected_sources\":[],\"missing_sources\":[],\"caveats\":[\"Coverage could not be computed from available lineage fields.\"]},\"filter_empty_reason\":null}",
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"edge token routed | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
+"edge caller, user access token routed | investment":{"body":"{\"theme_distribution\":{},\"subcategory_distribution\":{},\"evidence_quality_distribution\":{},\"evidence_quality_stats\":{\"mean\":null,\"stddev\":null,\"total\":0,\"band_counts\":{},\"quality_drivers\":[]},\"unit\":null,\"edges\":[],\"measure\":\"ISSUE_SIZE\",\"denominator\":0.0,\"unsized_unit_count\":0}",
 "digest":"b5df5396114b20f6",
 "statements":6,
 "status":200},
-"edge token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
+"edge caller, user access token routed | investment_explain":{"body":"{\"summary\":\"This mix suggests work leans toward the leading themes shown, with subcategories providing the specific intent behind that allocation.\",\"top_findings\":[],\"confidence\":{\"level\":\"unknown\",\"quality_mean\":null,\"quality_stddev\":null,\"band_mix\":{},\"drivers\":[]},\"what_to_check_next\":[{\"action\":\"Review the largest subcategories\",\"why\":\"They drive the overall theme distribution\",\"where\":\"Subcategory breakdown panel\"}],\"anti_claims\":[\"This does not measure individual productivity.\",\"This does not assign intent or correctness to any work.\"],\"status\":\"invalid_llm_output\"}",
 "digest":"4a41f4fd2e5d84be",
 "statements":4,
 "status":200},
-"edge token routed | investment_sunburst":{"body":"[]",
+"edge caller, user access token routed | investment_sunburst":{"body":"[]",
 "digest":"402e8ed713b32417",
 "statements":4,
 "status":200},
-"edge token routed | opportunities":{"body":"{\"items\":[{\"id\":\"opp-0\",\"title\":\"Maintain steady flow\",\"rationale\":\"Key metrics are stable. Focus on sustaining current practices.\",\"evidence_links\":[\"/api/v1/home?scope_type=org&scope_id=\"],\"suggested_experiments\":[\"Share the current playbook with new teams.\"],\"change_percent\":null,\"direction\":null,\"range_days\":14,\"compare_days\":14}]}",
+"edge caller, user access token routed | opportunities":{"body":"{\"items\":[{\"id\":\"opp-0\",\"title\":\"Maintain steady flow\",\"rationale\":\"Key metrics are stable. Focus on sustaining current practices.\",\"evidence_links\":[\"/api/v1/home?scope_type=org&scope_id=\"],\"suggested_experiments\":[\"Share the current playbook with new teams.\"],\"change_percent\":null,\"direction\":null,\"range_days\":14,\"compare_days\":14}]}",
 "digest":"5a624f4c74df2aec",
 "statements":40,
 "status":200},
-"edge token routed | people":{"body":"[]",
+"edge caller, user access token routed | people":{"body":"[]",
 "digest":"e10d9e413a46484d",
 "statements":1,
 "status":200},
-"edge token routed | people_drilldown_issues":{"body":"{\"detail\":\"Person not found\"}",
+"edge caller, user access token routed | people_drilldown_issues":{"body":"{\"detail\":\"Person not found\"}",
 "digest":"9d132ea4b5a411b8",
 "statements":1,
 "status":404},
-"edge token routed | people_drilldown_prs":{"body":"{\"detail\":\"Person not found\"}",
+"edge caller, user access token routed | people_drilldown_prs":{"body":"{\"detail\":\"Person not found\"}",
 "digest":"9d132ea4b5a411b8",
 "statements":1,
 "status":404},
-"edge token routed | people_metric":{"body":"{\"detail\":\"Person not found\"}",
+"edge caller, user access token routed | people_metric":{"body":"{\"detail\":\"Person not found\"}",
 "digest":"9d132ea4b5a411b8",
 "statements":1,
 "status":404},
-"edge token routed | people_summary":{"body":"{\"detail\":\"Person not found\"}",
+"edge caller, user access token routed | people_summary":{"body":"{\"detail\":\"Person not found\"}",
 "digest":"9d132ea4b5a411b8",
 "statements":1,
 "status":404},
-"edge token routed | quadrant":{"body":"{\"axes\":{\"x\":{\"metric\":\"wip\",\"label\":\"WIP\",\"unit\":\"items\"},\"y\":{\"metric\":\"throughput\",\"label\":\"Throughput\",\"unit\":\"items\"}},\"points\":[],\"annotations\":[],\"repo_filter_applied\":null,\"filter_empty_reason\":null}",
+"edge caller, user access token routed | quadrant":{"body":"{\"axes\":{\"x\":{\"metric\":\"wip\",\"label\":\"WIP\",\"unit\":\"items\"},\"y\":{\"metric\":\"throughput\",\"label\":\"Throughput\",\"unit\":\"items\"}},\"points\":[],\"annotations\":[],\"repo_filter_applied\":null,\"filter_empty_reason\":null}",
 "digest":"e3c344211fd54ae4",
 "statements":5,
 "status":200},
-"edge token routed | sankey":{"body":"{\"mode\":\"investment\",\"nodes\":[],\"links\":[],\"unit\":\"work_units\",\"label\":\"Investment flow\",\"description\":\"Where effort allocates across initiatives, areas, issue types, and work items.\",\"team_coverage\":null,\"repo_coverage\":null,\"distinct_team_targets\":null,\"distinct_repo_targets\":null,\"chosen_mode\":null,\"coverage\":null,\"unassigned_reasons\":null,\"flow_mode\":null,\"drill_category\":null,\"top_n_repos\":null}",
+"edge caller, user access token routed | sankey":{"body":"{\"mode\":\"investment\",\"nodes\":[],\"links\":[],\"unit\":\"work_units\",\"label\":\"Investment flow\",\"description\":\"Where effort allocates across initiatives, areas, issue types, and work items.\",\"team_coverage\":null,\"repo_coverage\":null,\"distinct_team_targets\":null,\"distinct_repo_targets\":null,\"chosen_mode\":null,\"coverage\":null,\"unassigned_reasons\":null,\"flow_mode\":null,\"drill_category\":null,\"top_n_repos\":null}",
 "digest":"4f7dc061cbb6787e",
 "statements":3,
 "status":200},
-"edge token routed | work_unit_explain":{"body":"{\"detail\":\"Work unit wu-1 not found\"}",
+"edge caller, user access token routed | work_unit_explain":{"body":"{\"detail\":\"Work unit wu-1 not found\"}",
 "digest":"b07b9c93eced2a3a",
 "statements":1,
 "status":404},
-"edge token routed | work_units":{"body":"[]",
+"edge caller, user access token routed | work_units":{"body":"[]",
 "digest":"325371161d20e39f",
 "statements":1,
 "status":200},
@@ -634,7 +634,9 @@ func rule1Classes() []rule1Class {
 	}
 	return []rule1Class{
 		{"edge token", false, "", "", edge},
-		{"edge token routed", true, "", "", edge},
+		// The superuser that came on the routed HS256 edge token on main f496ee5d (sub ecUser, no org) now comes on
+		// its user access token: CHAOS-13126 retired the routed HS256 class, the answers are main's for that caller.
+		{"edge caller, user access token routed", true, "", "", user},
 		{"user access token routed", true, "", "", user},
 		{"user access token routed, PDP shadow, cell off", true, pdp.ModeShadow, "", user},
 		{"envelope", false, "", "", func(t *testing.T, _ *accessMinter, f *restFixture) string {
@@ -709,6 +711,21 @@ func rule1Serve(t *testing.T, route rule1Route, class rule1Class) rule1Answer {
 	}
 	return rule1Answer{Status: recorder.Code, Body: strings.TrimSpace(string(body)), Statements: len(client.statements),
 		Digest: hex.EncodeToString(digest.Sum(nil))[:16]}
+}
+
+// CHAOS-13126: ops_access_token_hs256 is retired. The routed HS256 edge token of the superuser with no org is the
+// generic 401 on every REST handler of the table and runs no statement.
+func TestRule1RoutedEdgeTokenIsTheRetiredClass(t *testing.T) {
+	quietStdLog(t)
+	edge := rule1Class{"edge token routed", true, "", "", func(t *testing.T, _ *accessMinter, _ *restFixture) string {
+		return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), tokenVersion: 5})
+	}}
+	for _, route := range rule1Routes() {
+		got := rule1Serve(t, route, edge)
+		if got.Status != http.StatusUnauthorized || got.Body != restRefusal || got.Statements != 0 {
+			t.Errorf("%s: got %+v, want 401 %s and no statement", route.class, got, restRefusal)
+		}
+	}
 }
 
 func TestRule1PlatformAdminWithNoOrgGetsMainsRESTAnswers(t *testing.T) {

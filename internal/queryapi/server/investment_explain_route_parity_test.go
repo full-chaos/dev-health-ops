@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // unusedQueryClient panics if Query is ever called -- used where a
@@ -293,7 +294,7 @@ func TestInvestmentExplainWorkHandlerRejectsUnsupportedProviderPreStream(t *test
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=lmstudio", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -326,7 +327,7 @@ func TestInvestmentExplainWorkHandlerSupportedProviderStillStreams(t *testing.T)
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=mock", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -355,7 +356,7 @@ func TestInvestmentExplainWorkHandlerOpenAIUnconfiguredStaysRefused(t *testing.T
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=openai", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -400,7 +401,7 @@ func TestInvestmentExplainWorkHandlerOllamaExplicitProviderSucceeds(t *testing.T
 	handler := newInvestmentExplainWorkHandler(reader, nil, nil, nil, testPlatformGate{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain?llm_provider=ollama", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)
@@ -452,7 +453,7 @@ func TestInvestmentExplainWorkHandlerRejectsOversizedBodyInsteadOfTruncating(t *
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/investment/explain", bytes.NewReader(body))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 
 	handler(rec, req)

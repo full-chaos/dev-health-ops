@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/drilldown"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // errUnexpectedScopeFilter is returned by a fake ClickHouse client when a
@@ -85,7 +86,7 @@ func TestNewDrilldownIssuesGetHandlerRequiresAuthContext(t *testing.T) {
 func TestNewDrilldownIssuesGetHandlerHappyPathSetsDeprecatedHeader(t *testing.T) {
 	handler := newDrilldownIssuesGetHandler(newEmptyRowsDrilldownIssuesReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues?scope_type=team&scope_id=team-a&range_days=7", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -125,7 +126,7 @@ func TestNewDrilldownIssuesGetHandlerDefaultOrgScopeNoTeamFilter(t *testing.T) {
 	}
 	handler := newDrilldownIssuesGetHandler(reader)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -156,7 +157,7 @@ func TestNewDrilldownIssuesPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) 
 	handler := newDrilldownIssuesPostHandler(newEmptyRowsDrilldownIssuesReader(t))
 	body := `{"filters":{"scope":{"level":"team","ids":["team-a"]},"time":{"range_days":7}},"sort":"completed_at","limit":10}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -174,7 +175,7 @@ func TestNewDrilldownIssuesPostHandlerUsesPersistedBlockedItemsForCoercedTrue(t 
 	handler := newDrilldownIssuesPostHandler(newEmptyRowsDrilldownIssuesReader(t))
 	body := `{"filters":{"how":{"blocked":"true"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -206,7 +207,7 @@ func TestNewDrilldownIssuesPostHandlerKeepsFalseOnTheOrdinaryDrilldown(t *testin
 	handler := newDrilldownIssuesPostHandler(reader)
 	body := `{"filters":{"how":{"blocked":false}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -236,7 +237,7 @@ func TestNewDrilldownIssuesPostHandlerLimitFallback(t *testing.T) {
 	handler := newDrilldownIssuesPostHandler(reader)
 	body := `{"filters":{"scope":{"level":"org"}},"limit":0}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -265,7 +266,7 @@ func TestNewDrilldownIssuesPostHandlerNonTeamScopeIgnoresIDs(t *testing.T) {
 	handler := newDrilldownIssuesPostHandler(reader)
 	body := `{"filters":{"scope":{"level":"repo","ids":["some-repo"]}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(body)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -279,7 +280,7 @@ func TestNewDrilldownIssuesPostHandlerNonTeamScopeIgnoresIDs(t *testing.T) {
 func TestNewDrilldownIssuesGetHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newDrilldownIssuesGetHandler(newErroringDrilldownIssuesReader(t))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/drilldown/issues", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -295,7 +296,7 @@ func TestNewDrilldownIssuesGetHandlerClickHouseFailureIs503(t *testing.T) {
 func TestNewDrilldownIssuesPostHandlerClickHouseFailureIs503(t *testing.T) {
 	handler := newDrilldownIssuesPostHandler(newErroringDrilldownIssuesReader(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/drilldown/issues", bytes.NewReader([]byte(`{"filters":{}}`)))
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusServiceUnavailable {

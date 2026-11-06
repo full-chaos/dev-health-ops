@@ -200,6 +200,10 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "drilldown_prs", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		scopeType := lastQueryValue(query, "scope_type")
@@ -236,7 +240,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -250,7 +254,7 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(drilldownTimeFilterMap(rangeDays, startDatePtr, endDatePtr))
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_prs", org)
 			return
 		}
 
@@ -274,18 +278,18 @@ func newDrilldownPRsGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit: 50,
 		}
 
-		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:973-974).
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route (main.py:970-971),
 		// steering callers toward POST with an explicit filters body.
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)
+		writeDrilldownPRsResponse(w, r, org, resp)
 	}
 }
 
@@ -300,6 +304,10 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "drilldown_prs", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "drilldown_prs", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
@@ -309,7 +317,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			// a clean HTTP response in that case. This keeps the existing
 			// 400 status, only replacing the plain-text wire body with this
 			// package's one JSON envelope.
-			writeRESTError(w, r, "drilldown_prs", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "drilldown_prs", org, http.StatusBadRequest, "bad request")
 			return
 		}
 
@@ -323,17 +331,17 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		// (byte-identical response either way).
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -375,7 +383,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 		if limit == 0 {
@@ -394,7 +402,7 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 
 		startTS, endTS, windowErr := timeWindow(filters)
 		if windowErr != nil {
-			writeTimeWindowOverflow(w, r, "drilldown_prs", claims.OrgID)
+			writeTimeWindowOverflow(w, r, "drilldown_prs", org)
 			return
 		}
 
@@ -407,11 +415,11 @@ func newDrilldownPRsPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit:      limit,
 		}
 
-		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, claims.OrgID, params)
+		resp, err := drilldown.BuildPRsResponse(r.Context(), reader, org, params)
 		if err != nil {
-			writeRESTDataUnavailable(w, r, "drilldown_prs", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "drilldown_prs", org, err)
 			return
 		}
-		writeDrilldownPRsResponse(w, r, claims.OrgID, resp)
+		writeDrilldownPRsResponse(w, r, org, resp)
 	}
 }

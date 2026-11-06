@@ -218,6 +218,10 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 			writeRESTUnauthorized(w, r, "home", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "home", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 		scopeType := lastQueryValue(query, "scope_type")
@@ -258,7 +262,7 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -270,7 +274,7 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 		// never a 400/404, matching sankey_route.go's own identical
 		// precedent for the same _filters_from_query call.
 		if !homeValidScopeLevels[scopeType] {
-			writeRESTDataUnavailable(w, r, "home", claims.OrgID,
+			writeRESTDataUnavailable(w, r, "home", org,
 				fmt.Errorf("home: ScopeFilter construction: scope_type %q is not one of the valid levels", scopeType))
 			return
 		}
@@ -290,22 +294,22 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 			f.Time.EndDate = &endDate
 		}
 
-		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
+		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, org, f, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "home", org)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:503-518).
-			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "home", org, err)
 			return
 		}
 
 		// Python sets this header only on the GET route, and only once
 		// build_home_response has already succeeded (main.py:514-516).
 		w.Header().Set("X-DevHealth-Deprecated", "use POST with filters")
-		writeHomeResponse(w, r, claims.OrgID, resp)
+		writeHomeResponse(w, r, org, resp)
 	}
 }
 
@@ -322,30 +326,34 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 			writeRESTUnauthorized(w, r, "home", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "home", claims)
+		if !ok {
+			return
+		}
 
 		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, homeMaxBodyBytes+1))
 		if err != nil {
-			writeRESTError(w, r, "home", claims.OrgID, http.StatusBadRequest, "bad request")
+			writeRESTError(w, r, "home", org, http.StatusBadRequest, "bad request")
 			return
 		}
 		if len(bodyBytes) > homeMaxBodyBytes {
-			writeRESTError(w, r, "home", claims.OrgID, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			writeRESTError(w, r, "home", org, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
 			return
 		}
 
 		decoded, bodyIsEmptyOrNull, syntaxDetail := decodeRequestBody([]any{"body"}, bodyBytes)
 		if syntaxDetail != nil {
-			writePydanticValidationError(w, r, claims.OrgID, *syntaxDetail)
+			writePydanticValidationError(w, r, org, *syntaxDetail)
 			return
 		}
 		if bodyIsEmptyOrNull {
-			writePydanticValidationError(w, r, claims.OrgID, missingFieldError([]any{"body"}, nil))
+			writePydanticValidationError(w, r, org, missingFieldError([]any{"body"}, nil))
 			return
 		}
 
 		body, isObject := decoded.(*pyjson.Object)
 		if !isObject {
-			writePydanticValidationError(w, r, claims.OrgID, modelAttributesTypeError([]any{"body"}, decoded))
+			writePydanticValidationError(w, r, org, modelAttributesTypeError([]any{"body"}, decoded))
 			return
 		}
 
@@ -357,25 +365,25 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 			validationErrors = append(validationErrors, validateMetricFilter([]any{"body", "filters"}, filtersValue)...)
 		}
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
 		filtersMap, _ := legacyJSON(filtersValue).(map[string]any)
 		f := homeFiltersFromMap(filtersMap)
 
-		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
+		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, org, f, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "home", org)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:477-486).
-			writeRESTDataUnavailable(w, r, "home", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "home", org, err)
 			return
 		}
-		writeHomeResponse(w, r, claims.OrgID, resp)
+		writeHomeResponse(w, r, org, resp)
 	}
 }
 

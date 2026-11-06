@@ -27,7 +27,8 @@ type Scope struct {
 
 type keyList struct{ keys []string }
 
-// Legacy is the scope of a request the PDP does not decide. An empty org is no scope.
+// Legacy is the scope of a request the PDP does not decide. An empty org stays a Legacy scope that reads the empty
+// org, as today's path does for a platform admin with no org (product rule 1, D6773).
 func Legacy(org string) Scope { return build(org, KindLegacy, nil) }
 
 // Organization is an enforced allow over every repository of org. An empty org is no scope.
@@ -40,7 +41,7 @@ func Allowlist(org string, keys []string) Scope {
 }
 
 func build(org string, kind Kind, keys *keyList) Scope {
-	if org == "" {
+	if org == "" && kind != KindLegacy {
 		return Scope{}
 	}
 	return Scope{org: org, kind: kind, keys: keys}

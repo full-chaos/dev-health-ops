@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"io"
 	"log/slog"
 	"net"
@@ -271,7 +272,7 @@ func TestAnOrgGuardRefusalIsMarkedOnTheServerSpan(t *testing.T) {
 	handler := httpapi.TraceHandler(mux, httpapi.TraceOptions{Listener: "public", ProbePaths: queryProbePaths})
 	request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":"query Q($o: String!) { experiments(orgId: $o) { __typename } }","variables":{"o":"org-other"}}`))
 	request.Header.Set("Content-Type", "application/json")
-	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-own"}))
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-own", Scope: pepgate.Legacy("org-own")}))
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	if !strings.Contains(recorder.Body.String(), "Access denied") {

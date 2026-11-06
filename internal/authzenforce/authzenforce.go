@@ -104,10 +104,7 @@ func Load(service Service, lookup func(string) (string, bool), logger *slog.Logg
 	}
 	raw, _ := lookup(env)
 	sw := Parse(service, raw)
-	if sw.ignored > 0 {
-		if logger == nil {
-			logger = slog.Default()
-		}
+	if sw.ignored > 0 && logger != nil {
 		logger.ErrorContext(context.Background(), "authz enforcement switch: items ignored, their namespaces stay off",
 			slog.String("env", env), slog.String("service", string(service)),
 			slog.Int("ignored", sw.ignored), slog.Int("accepted", len(sw.on)))

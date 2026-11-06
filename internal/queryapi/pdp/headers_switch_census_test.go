@@ -1,7 +1,9 @@
 package pdp
 
 import (
-	"os"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -10,7 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// S-e (D6721): the header carrier's cells are read in one place: this package builds the switch, and only the
+// S-e (D6721): the header carrier's cells are read in one place: this package's gate builds the switch, and only the
 // declared-settings row names its variable. A second reader would be a switch the gate's caller class does not pick.
 func TestOnlyThePDPGateReadsTheHeaderCarrierCells(t *testing.T) {
 	root, err := moduleroot.Root()
@@ -22,31 +24,36 @@ func TestOnlyThePDPGateReadsTheHeaderCarrierCells(t *testing.T) {
 		t.Fatalf("git ls-files: %v", err)
 	}
 	want := map[string]bool{
-		"internal/authzenforce/authzenforce.go":        true,
 		"internal/platform/config/queryapi_options.go": true,
 		"internal/queryapi/pdp/pdp.go":                 true,
 	}
 	got := map[string]bool{}
+	fset := token.NewFileSet()
 	for _, rel := range strings.Split(string(out), "\x00") {
 		if rel == "" || strings.HasSuffix(rel, "_test.go") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(root, rel))
+		file, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, parser.SkipObjectResolution)
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(raw), "QueryAPIHeaders") {
-			got[rel] = true
-		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "QueryAPIHeaders" {
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "authzenforce" {
+					got[rel] = true
+				}
+			}
+			return true
+		})
 	}
 	for rel := range got {
 		if !want[rel] {
-			t.Errorf("%s names the header carrier's cells; only the pdp gate reads them", rel)
+			t.Errorf("%s reads authzenforce.QueryAPIHeaders; only the pdp gate and the settings row may", rel)
 		}
 	}
 	for rel := range want {
 		if !got[rel] {
-			t.Errorf("listed reader %s names no QueryAPIHeaders (stale list)", rel)
+			t.Errorf("listed reader %s reads no authzenforce.QueryAPIHeaders (stale list)", rel)
 		}
 	}
 }

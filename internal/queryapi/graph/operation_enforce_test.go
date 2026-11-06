@@ -62,8 +62,9 @@ func TestOperationEnforceRefusalSetsTheIngressStatus(t *testing.T) {
 	}
 }
 
-// G16: the organization a resolver reads in is the request claims' OrgID, written only by the org guard's superuser
-// rebind and by the decision (the scope's org on an enforced root). A new writer is a new way to serve an org nobody
+// G16: the organization a resolver reads in is the request claims' OrgID. Only the org guard's superuser rebind and
+// the decision (the scope's org on an enforced root) write it into the claims a resolver runs with: a function that
+// sets a claims OrgID and hands the claims to authctx.WithClaims. A new writer is a new way to serve an org nobody
 // decided; listed both ways.
 func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
 	want := map[string]bool{
@@ -95,18 +96,29 @@ func TestOnlyTheGuardAndTheDecisionWriteTheClaimsOrg(t *testing.T) {
 					site = name + " " + ident.Name + "." + fn.Name.Name
 				}
 			}
+			writes, hands := false, false
 			goast.Inspect(fn.Body, func(n goast.Node) bool {
-				assign, ok := n.(*goast.AssignStmt)
-				if !ok {
-					return true
-				}
-				for _, lhs := range assign.Lhs {
-					if sel, ok := lhs.(*goast.SelectorExpr); ok && sel.Sel.Name == "OrgID" {
-						got[site] = true
+				switch node := n.(type) {
+				case *goast.AssignStmt:
+					for _, lhs := range node.Lhs {
+						if sel, ok := lhs.(*goast.SelectorExpr); ok && sel.Sel.Name == "OrgID" {
+							if base, ok := sel.X.(*goast.Ident); ok && base.Name == "claims" {
+								writes = true
+							}
+						}
+					}
+				case *goast.CallExpr:
+					if sel, ok := node.Fun.(*goast.SelectorExpr); ok && sel.Sel.Name == "WithClaims" {
+						if pkg, ok := sel.X.(*goast.Ident); ok && pkg.Name == "authctx" {
+							hands = true
+						}
 					}
 				}
 				return true
 			})
+			if writes && hands {
+				got[site] = true
+			}
 		}
 	}
 	for site := range got {

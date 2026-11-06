@@ -83,7 +83,7 @@ type Scope struct {
 	logger       *slog.Logger
 	rows         func(profile string) (BearerRow, bool)
 	authenticate func(ctx context.Context, token string) (*User, error)
-	refuseLegacy bool
+	refuseLegacy legacyCallerOption
 }
 
 // NewScope builds the middlewares over auth.
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil || (!user.Holds(ActionAdminImpersonate) && (readMethod(r.Method) || !s.refusesLegacyCaller(r))) {
+		if user == nil || (!user.Holds(ActionAdminImpersonate) && (!s.refusesLegacyCaller(r) || s.refuseLegacy.reads(r))) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -274,10 +274,34 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 // impersonation caller (the admin's own bearer beside a live go-api session
 // row) on every route but the session's status and stop. Call it once,
 // before the Scope serves.
-func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = on }
+func (s *Scope) RefuseLegacyImpersonation(on bool) { s.refuseLegacy = legacyCallerOption{on: on} }
+
+// RefuseLegacyImpersonationReading is RefuseLegacyImpersonation for a surface
+// whose reads its HTTP method does not tell (a GraphQL POST is a query or a
+// mutation): reads answers whether r only reads, for the read limit of a
+// caller that does not hold admin.impersonate. It may read r's body; it must
+// hand the body on whole.
+func (s *Scope) RefuseLegacyImpersonationReading(on bool, reads func(r *http.Request) bool) {
+	s.refuseLegacy = legacyCallerOption{on: on, readsBy: reads}
+}
 
 // RefusesLegacyImpersonation reports what RefuseLegacyImpersonation set.
-func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy }
+func (s *Scope) RefusesLegacyImpersonation() bool { return s.refuseLegacy.on }
+
+// legacyCallerOption is the legacy caller option: on, and how a read is told
+// (readsBy; nil: by the request method, readMethod).
+type legacyCallerOption struct {
+	on      bool
+	readsBy func(r *http.Request) bool
+}
+
+// reads reports whether r only reads.
+func (l legacyCallerOption) reads(r *http.Request) bool {
+	if l.readsBy != nil {
+		return l.readsBy(r)
+	}
+	return readMethod(r.Method)
+}
 
 // legacySessionRoutes are the route templates where a refused legacy caller
 // is still served in its session: the admin's own bearer reads and ends it.
@@ -291,7 +315,7 @@ var legacySessionRoutes = map[string]bool{
 // template RouteProfiles recorded, whose method must be the request's own (a
 // GET template also matches HEAD); a request no route matches is refused.
 func (s *Scope) refusesLegacyCaller(r *http.Request) bool {
-	if !s.refuseLegacy {
+	if !s.refuseLegacy.on {
 		return false
 	}
 	profile := RouteProfileFrom(r.Context())

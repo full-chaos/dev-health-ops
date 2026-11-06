@@ -1,14 +1,18 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/digest"
 )
 
 // impersonationProxyEnv is go-api's AUTH_PROXY_IMPERSONATION: on, an
@@ -62,4 +66,35 @@ func withLegacyImpersonationRefused(ctx context.Context) context.Context {
 func legacyImpersonationRefused(ctx context.Context) bool {
 	refused, _ := ctx.Value(legacyImpersonationRefusedKey{}).(bool)
 	return refused
+}
+
+// graphQLEdgeReads is /graphql's read test for the read limit of the legacy
+// impersonation refusal (policy.Scope.RefuseLegacyImpersonationReading): a
+// request reads when its document is one query operation, by the document's
+// AST (digest.DocumentKind), for GET and POST alike. A body is read within
+// limit and handed on whole; a document that cannot be read or parsed, or is
+// not one query, is not a read.
+func graphQLEdgeReads(limit int) func(r *http.Request) bool {
+	return func(r *http.Request) bool {
+		var text string
+		if r.Method == http.MethodGet {
+			text = lastParam(parseQueryString(r.URL.RawQuery), "query")
+		} else {
+			body, err := io.ReadAll(io.LimitReader(r.Body, int64(limit)+1))
+			r.Body = handedOnBody{Reader: io.MultiReader(bytes.NewReader(body), r.Body), Closer: r.Body}
+			if err != nil || len(body) > limit {
+				return false
+			}
+			text, _ = graphQLEdgePOSTDocument(r, body)
+		}
+		kind, err := digest.DocumentKind(text)
+		return err == nil && kind == digest.KindQuery
+	}
+}
+
+// handedOnBody is a request body put back after a read: the bytes read, then
+// the rest, closed by the original.
+type handedOnBody struct {
+	io.Reader
+	io.Closer
 }

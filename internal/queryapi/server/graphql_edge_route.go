@@ -131,7 +131,7 @@ type graphQLEdgeDeps struct {
 // them. The provenance stamp is outermost, so every answer is bound to the build that gave it.
 func graphQLEdgeChain(query http.HandlerFunc, deps graphQLEdgeDeps) http.Handler {
 	scope := policy.NewScope(deps.auth, deps.logger)
-	scope.RefuseLegacyImpersonation(deps.refuseLegacyImpersonation)
+	scope.RefuseLegacyImpersonationReading(deps.refuseLegacyImpersonation, graphQLEdgeReads(deps.maxBytes))
 	var handler http.Handler = newGraphQLEdgeHandler(query)
 	handler = pyheaders.NewCORS(deps.corsOrigins).Wrap(handler)
 	handler = pyheaders.SecurityHeaders(handler)

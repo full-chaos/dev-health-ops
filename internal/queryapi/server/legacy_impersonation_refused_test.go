@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -237,6 +239,12 @@ func TestRefusesLegacyImpersonationReadsTheSwitchAsGoAPI(t *testing.T) {
 // legacyMutationDocument is a registered mutation on the access stack (the same resolver as iaDocument).
 const legacyMutationDocument = "mutation LegacyImpersonationWrite { probe }"
 
+// The same two kinds behind a leading comment: the operation type is the AST's, not the text's first word.
+const (
+	legacyNotedQueryDocument    = "# reads\nquery LegacyImpersonationNotedRead { probe }"
+	legacyNotedMutationDocument = "# writes\nmutation LegacyImpersonationNotedWrite { probe }"
+)
+
 // revokedHolderStore is legacyStore for an admin whose admin.impersonate was revoked (it still holds admin.orgs)
 // while its go-api row may stay live: the policy scope applies no row to it.
 func revokedHolderStore(session *policy.Impersonation, sessionErr error) *accessStore {
@@ -248,13 +256,14 @@ func revokedHolderStore(session *policy.Impersonation, sessionErr error) *access
 	return store
 }
 
-// legacyGraphQLDocument is legacyGraphQL with the document named.
+// legacyGraphQLDocument is legacyGraphQL with the document named (its POST body JSON-encoded).
 func legacyGraphQLDocument(s *behaviourStack, method, bearer, document string) legacyAnswer {
 	var request *http.Request
 	if method == http.MethodGet {
 		request = httptest.NewRequest(method, "/graphql?query="+url.QueryEscape(document), nil)
 	} else {
-		request = httptest.NewRequest(method, "/graphql", strings.NewReader(`{"query":`+jsonQuoteString(document)+`}`))
+		body, _ := json.Marshal(map[string]string{"query": document})
+		request = httptest.NewRequest(method, "/graphql", bytes.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
 	}
 	request.Header.Set("Authorization", "Bearer "+bearer)
@@ -313,6 +322,14 @@ func TestGraphQLRevokedHolderIsRefusedByOperationType(t *testing.T) {
 				}
 			})
 		}
+		t.Run(signing+" POST, a comment before the operation", func(t *testing.T) {
+			read := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), true)
+			servedAsItself(t, "commented query", legacyGraphQLDocument(read, http.MethodPost, token, legacyNotedQueryDocument), read)
+			write := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), true)
+			if got := legacyGraphQLDocument(write, http.MethodPost, token, legacyNotedMutationDocument); got.Status != http.StatusForbidden || len(*write.seen) != 0 {
+				t.Fatalf("commented mutation: got %d %s, resolver ran %d; want 403 and no run", got.Status, got.Body, len(*write.seen))
+			}
+		})
 		t.Run(signing+" POST mutation, unset or no live row: served as itself", func(t *testing.T) {
 			for name, s := range map[string]*behaviourStack{
 				"switch unset":      legacyStack(t, minter, revokedHolderStore(legacySession(), nil), false),

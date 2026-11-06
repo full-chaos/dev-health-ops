@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -83,19 +84,26 @@ func TestProofWriteRefusesADelegatedCaller(t *testing.T) {
 }
 
 // A delegated superuser (admin.orgs) whose token names an org it holds no
-// membership row in: the REST read is served (the live membership read skips
-// admin.orgs holders), and the write door refuses the bearer (/query needs the
-// membership in the token's own org even for a superuser, roleInOrg).
-func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) {
-	quietStdLog(t)
+// membership row in: the routed check refuses the bearer on the REST read and on
+// the write door alike (the token org needs a membership row of the token's
+// subject, accessroute_user.go; no admin.orgs skip). auth-service never mints
+// such a token: a delegated session's target must be a member of its org.
+func TestDelegatedSuperuserOnANonMemberOrg_ReadAndWriteRefused(t *testing.T) {
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	const notAMember = "api user access token for an org the user is not a member of"
 	delegated := ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5, impersonatingUserID: ecActor.String()})
 	store := newAccessStore()
 	store.states[ecUser] = policy.UserState{IsActive: true, IsSuperuser: true, TokenVersion: 5}
 	store.members = nil
-	f := newRESTFixture(t, store, nil)
-	if got := f.do(http.MethodGet, delegated); got.Status != http.StatusOK || got.Body != `{"org":"`+ecOrg.String()+`"}` {
-		t.Fatalf("REST read: got %+v, want 200 in the claimed org", got)
+	m := newAccessMinter(t)
+	f := newRESTFixture(t, store, testAccess(m.keys, nil, accessTestNow))
+	if got := f.do(http.MethodGet, m.mint(ecUser, map[string]any{"act": map[string]any{"sub": wirePrincipal(ecActor)}}, nil)); got.Status != http.StatusUnauthorized || !strings.Contains(logged.String(), notAMember) {
+		t.Fatalf("REST read: got %+v, logged %q, want 401 and the not-a-member refusal", got, logged.String())
 	}
+	logged.Reset()
 
 	wstore := &fakeEdgeStore{
 		states: map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, IsSuperuser: true, TokenVersion: 5}},
@@ -114,7 +122,7 @@ func TestDelegatedSuperuserOnANonMemberOrg_ReadServedWriteRefused(t *testing.T) 
 	req.Header.Set("Authorization", "Bearer "+delegated)
 	rec := httptest.NewRecorder()
 	handler(rec, req)
-	if rec.Code != http.StatusUnauthorized || ran != 0 {
-		t.Fatalf("write door: %d %s, ran %d; want 401 and no resolver", rec.Code, rec.Body.String(), ran)
+	if rec.Code != http.StatusUnauthorized || ran != 0 || !strings.Contains(logged.String(), notAMember) {
+		t.Fatalf("write door: %d %s, ran %d, logged %q; want 401, no resolver and the not-a-member refusal", rec.Code, rec.Body.String(), ran, logged.String())
 	}
 }

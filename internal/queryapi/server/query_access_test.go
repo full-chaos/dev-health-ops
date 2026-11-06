@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -134,12 +135,15 @@ func TestQueryAPIQueryAndGraphQLIssuerAloneServesOnlyTheUserToken(t *testing.T) 
 	}
 }
 
-// Q8 on /query and /graphql: an edge token whose users read fails. Issuer unset,
-// /query answers its bare 401 and /graphql answers as its scope middleware
-// decides a caller it could not read. Issuer set, the edge token is the retired
-// HS256 class: refused 401 before any users read.
+// Q8 on /query and /graphql: an edge token whose users read fails. The edge
+// token is the retired HS256 class: refused 401 before any users read, with the
+// issuer set or unset (unset, the authenticator has no access check; production
+// does not start that way, buildQueryEdgeAuthenticatorFromEnv).
 func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testing.T) {
-	quietStdLog(t)
+	var logged strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(previous) })
 	m := newAccessMinter(t)
 	type want struct{ query, graphql int }
 	for name, tc := range map[string]struct {
@@ -148,11 +152,11 @@ func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testi
 	}{
 		"users store error that is not unavailable": {
 			func(s *accessStore) { s.errUserState = errors.New("syntax error") },
-			want{http.StatusUnauthorized, http.StatusInternalServerError},
+			want{http.StatusUnauthorized, http.StatusUnauthorized},
 			want{http.StatusUnauthorized, http.StatusUnauthorized}},
 		"users store unavailable": {
 			func(s *accessStore) { s.errUserState = policy.ErrUnavailable },
-			want{http.StatusUnauthorized, http.StatusServiceUnavailable},
+			want{http.StatusUnauthorized, http.StatusUnauthorized},
 			want{http.StatusUnauthorized, http.StatusUnauthorized}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -165,11 +169,15 @@ func TestQueryAPIQueryAndGraphQLStoreFailureAnswersHoldWithTheIssuerSet(t *testi
 					keys, expect = m.keys, tc.set
 				}
 				stack := newAccessStack(t, store, testAccess(keys, nil, accessTestNow))
-				if got := stack.send("query", http.MethodPost, "/query", "edge", ""); got.Status != expect.query {
-					t.Errorf("issuer set %v: /query %d, want %d", routed, got.Status, expect.query)
-				}
-				if got := stack.send("query", http.MethodPost, "/graphql", "edge", ""); got.Status != expect.graphql {
-					t.Errorf("issuer set %v: /graphql %d, want %d", routed, got.Status, expect.graphql)
+				for _, path := range []string{"/query", "/graphql"} {
+					want := expect.query
+					if path == "/graphql" {
+						want = expect.graphql
+					}
+					logged.Reset()
+					if got := stack.send("query", http.MethodPost, path, "edge", ""); got.Status != want || !strings.Contains(logged.String(), "reason=edge_rejected") {
+						t.Errorf("issuer set %v: %s %d logged %q, want %d and reason=edge_rejected", routed, path, got.Status, logged.String(), want)
+					}
 				}
 			}
 		})

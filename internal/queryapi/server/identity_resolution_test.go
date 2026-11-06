@@ -134,8 +134,8 @@ func TestGraphQLEdgeResolvesOneIdentityPerRequest(t *testing.T) {
 		reads    string
 	}{
 		"no X-Org-Id: the token's org, the membership role there": {"", ecOrg, "member", false, irFacts(irUser(), irMember(ecOrg))},
-		"X-Org-Id B: B, the role held in B":                       {irOtherOrg.String(), irOtherOrg, "admin", true, irFacts(irUser(), irMember(irOtherOrg))},
-		"X-Org-Id B spelled without hyphens: still B":             {strings.ReplaceAll(irOtherOrg.String(), "-", ""), irOtherOrg, "admin", true, irFacts(irUser(), irMember(irOtherOrg))},
+		"X-Org-Id B: B, the role held in B":                       {irOtherOrg.String(), irOtherOrg, "admin", true, irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
+		"X-Org-Id B spelled without hyphens: still B":             {strings.ReplaceAll(irOtherOrg.String(), "-", ""), irOtherOrg, "admin", true, irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
 			states:  map[uuid.UUID]policy.UserState{ecUser: {IsActive: true, TokenVersion: 5}},

@@ -97,7 +97,13 @@ func irFacts(facts ...string) string {
 
 func irUser() string                { return "user " + ecUser.String() + "=1" }
 func irSession() string             { return "session " + ecUser.String() + "=1" }
-func irMember(org uuid.UUID) string { return "member " + ecUser.String() + " " + org.String() + "=1" }
+func irMember(org uuid.UUID) string { return irMemberReads(org, 1) }
+
+// irMemberReads is n reads of one membership row. /query has no ReadOnce: the
+// routed check and the carrier each read the token org's row.
+func irMemberReads(org uuid.UUID, n int) string {
+	return "member " + ecUser.String() + " " + org.String() + "=" + strconv.Itoa(n)
+}
 func irToken(t *testing.T, super bool) string {
 	return ecMintEdgeToken(t, ecEdgeClaims{sub: ecUser.String(), orgID: ecOrg.String(), tokenVersion: 5})
 }
@@ -114,12 +120,12 @@ func TestGraphQLEdgeReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		want     string
 	}{
 		"member":                             {plain, nil, false, "", irFacts(irUser(), irMember(ecOrg))},
-		"member naming an org it belongs to": {plain, nil, false, irOtherOrg.String(), irFacts(irUser(), irMember(irOtherOrg))},
+		"member naming an org it belongs to": {plain, nil, false, irOtherOrg.String(), irFacts(irUser(), irMember(ecOrg), irMember(irOtherOrg))},
 		"member naming its own org spelled another way": {plain, nil, false, strings.ReplaceAll(ecOrg.String(), "-", ""), irFacts(irUser(), irMember(ecOrg))},
 		"superuser":                              {super, nil, true, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
-		"superuser naming another org":           {super, nil, true, irOtherOrg.String(), irFacts(irUser(), irSession(), irMember(irOtherOrg))},
-		"impersonating superuser":                {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, true, "", irFacts(irUser(), irSession())},
-		"superuser row, token without the claim": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, false, "", irFacts(irUser(), irMember(ecOrg))},
+		"superuser naming another org":           {super, nil, true, irOtherOrg.String(), irFacts(irUser(), irSession(), irMember(ecOrg), irMember(irOtherOrg))},
+		"impersonating superuser":                {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, true, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
+		"superuser row, token without the claim": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, false, "", irFacts(irUser(), irSession(), irMember(ecOrg))},
 	} {
 		store := newCountingIdentityStore(&fakeEdgeStore{
 			states:   map[uuid.UUID]policy.UserState{ecUser: tc.state},
@@ -189,9 +195,9 @@ func TestQueryReadsEachIdentityFactOncePerRequest(t *testing.T) {
 		carrier  func(*http.Request)
 		want     string
 	}{
-		"edge token, member":                  {plain, nil, irBearer(irToken(t, false)), irFacts(irUser(), irMember(ecOrg))},
-		"edge token, superuser":               {super, nil, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
-		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession())},
+		"edge token, member":                  {plain, nil, irBearer(irToken(t, false)), irFacts(irUser(), irMemberReads(ecOrg, 2))},
+		"edge token, superuser":               {super, nil, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMemberReads(ecOrg, 2))},
+		"edge token, impersonating superuser": {super, map[uuid.UUID]*policy.Impersonation{ecUser: session}, irBearer(irToken(t, true)), irFacts(irUser(), irSession(), irMember(ecOrg))},
 		"envelope":                            {plain, nil, irBearer(iaEnvelope(t, priv, principal.Claims{OrgID: ecOrg.String(), Role: "admin"})), ""},
 		"internal headers":                    {plain, nil, iaHeaders(ecOrg.String(), "admin", false, false), ""},
 	} {

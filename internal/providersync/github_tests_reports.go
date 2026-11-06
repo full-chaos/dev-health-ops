@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -911,14 +910,12 @@ func parseGitHubTestsArtifact(
 		members = members[:githubTestsMaxArchiveEntries]
 	}
 	for _, member := range members {
-		if !isSafeGitHubTestsArchiveMemberName(member.Name) {
+		if !isSafeGitHubTestsArchiveMemberName(member.Name) || member.FileInfo().IsDir() {
+			result.NonReportOther++
 			continue
 		}
 		name := member.Name
 		lower := strings.ToLower(name)
-		if member.FileInfo().IsDir() {
-			continue
-		}
 		if !strings.HasSuffix(lower, ".xml") && !strings.HasSuffix(lower, ".info") {
 			if strings.HasSuffix(lower, ".json") {
 				result.NonReportJSON++
@@ -1664,7 +1661,7 @@ func coveragePercent(covered, total *int64) *float64 {
 // recordGitHubTestsNonReportMembers counts the members of one parsed artifact
 // that are not reports (CHAOS-13193): a bounded counter by extension class and
 // one Info line, counts only. It never touches the incomplete list.
-func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, claim Claim, repo, runID string, rows githubTestsReportRows) {
+func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, claim Claim, rows githubTestsReportRows) {
 	if rows.NonReportJSON+rows.NonReportOther == 0 {
 		return
 	}
@@ -1675,7 +1672,6 @@ func recordGitHubTestsNonReportMembers(client *providerfoundation.HTTPClient, cl
 	slog.Info(
 		"artifact members that are not test reports were skipped",
 		"provider", claim.Provider, "dataset", claim.Dataset, "unit", claim.ID,
-		"repository", repo, logging.ProviderIDAttr("run", runID),
 		"reports_parsed", rows.ReportsParsed, "skipped_json", rows.NonReportJSON, "skipped_other", rows.NonReportOther,
 		"suites", len(rows.Suites),
 	)

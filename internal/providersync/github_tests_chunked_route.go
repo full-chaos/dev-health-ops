@@ -1774,7 +1774,7 @@ func (handler GitHubTestsRouteHandler) CollectChunks(
 								cursor.SkippedArtifacts, cursor.SkippedArtifactsOverflow, cursor.SkippedArtifactCauseOverflow, cursor.SkippedArtifactCauseCount, marker,
 							)
 						}
-						recordGitHubTestsNonReportMembers(client, claim, cursor.Repo, pipeline.RunID, rows)
+						recordGitHubTestsNonReportMembers(client, claim, rows)
 						client.Metrics.RecordDuplicateTestCase(claim.Provider, claim.Dataset, rows.DuplicateCases)
 						if rows.DuplicateCases > 0 {
 							slog.Info(

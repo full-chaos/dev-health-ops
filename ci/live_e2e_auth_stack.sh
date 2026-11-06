@@ -132,7 +132,15 @@ migrate_run() {
 
 # principal_ref UUID: prn_ and the 16 bytes of the uuid as unpadded base64url.
 principal_ref() {
-  printf 'prn_%s' "$(printf '%s' "${1//-/}" | xxd -r -p | base64 -w0 | tr '+/' '-_' | tr -d '=')"
+  local hex="${1//-/}" alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_' out='' i n
+  [[ "${hex}" =~ ^[0-9A-Fa-f]{32}$ ]] || die "principal ${1} is not a uuid"
+  for ((i = 0; i < 30; i += 6)); do
+    n=$((16#${hex:i:6}))
+    out+="${alphabet:n>>18&63:1}${alphabet:n>>12&63:1}${alphabet:n>>6&63:1}${alphabet:n&63:1}"
+  done
+  n=$((16#${hex:30:2} << 4))
+  out+="${alphabet:n>>6&63:1}${alphabet:n&63:1}"
+  printf 'prn_%s' "${out}"
 }
 
 make_tls() {
@@ -150,7 +158,7 @@ make_tls() {
 up() {
   STATE="$(mkdir -p "$1" && cd "$1" && pwd)"
   local cmd
-  for cmd in openssl psql go curl xxd base64; do
+  for cmd in openssl psql go curl; do
     command -v "${cmd}" >/dev/null 2>&1 || die "${cmd} is required"
   done
   : "${PGUSER:?PGUSER (the Postgres superuser) is not set}" "${PGPASSWORD:?PGPASSWORD is not set}"

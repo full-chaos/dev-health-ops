@@ -235,6 +235,7 @@ internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	*.go
 internal/cigates/workflows	auth_corpus_queue_test.go	unexpressed	-	-
 internal/cigates/workflows	auth_proxy_local_login_compose_test.go	ci	dir	*
 internal/cigates/workflows	chart_started_selector_test.go	unexpressed	-	-
+internal/cigates/workflows	live_e2e_auth_stack_test.go	unexpressed	-	-
 internal/cigates/workflows	providerstub_not_release_test.go	.github/workflows	dir	*
 internal/cigates/workflows	race_json_artifact_test.go	unexpressed	-	-
 internal/cigates/workflows	registry_retry_test.go	unexpressed	-	-

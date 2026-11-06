@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // The whole served Home JSON is walked for every seeded id (CHAOS-9116): an id
@@ -112,7 +113,7 @@ SELECT ?, toDate('2026-08-24'), ?, ?, 0.8, 'high', 0.8, 0.8, NULL, NULL, 0.3, 0.
 			}
 			req = httptest.NewRequest(http.MethodGet, target, nil)
 		}
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

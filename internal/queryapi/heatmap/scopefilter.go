@@ -100,7 +100,7 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope, 
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 		}
 
-		filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
+		filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings, teamscope.NoCeiling(), "repo_id")
 		return filter, bindings, nil
 	}
 	return "", nil, nil
@@ -157,6 +157,6 @@ func selectedScopeFilter(ctx context.Context, client QueryClient, orgID, scopeTy
 	if len(conditionTeams) > 0 {
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", conditionTeams, asOf)
 	}
-	filterSQL, bindings = teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	filterSQL, bindings = teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings, params.Ceiling, "repo_id")
 	return filterSQL, bindings, selectedFilter{filter: filter}, nil
 }

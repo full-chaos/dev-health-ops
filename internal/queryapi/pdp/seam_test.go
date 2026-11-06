@@ -87,8 +87,8 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 	}{
 		"P1 tenant_scope absent":             {func(r *pepfake.Rule) { r.TenantScope = "" }, ReasonTenantMismatch},
 		"P2 tenant_scope other org":          {func(r *pepfake.Rule) { r.TenantScope = "66666666-6666-6666-6666-666666666666" }, ReasonTenantMismatch},
-		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonNotCarriedOut},
-		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonNotCarriedOut},
+		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonAllowlistRouteUnsupported},
+		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonAllowlistRouteUnsupported},
 		"P6 scope and allowlist (malformed)": {func(r *pepfake.Rule) { r.RepositoryAllowlist = []string{"acme/a"} }, pep.ReasonMalformed},
 		"P7 neither repository member":       {func(r *pepfake.Rule) { r.RepositoryScope = "" }, ReasonNoRepositoryRule},
 		"P8 redaction":                       {func(r *pepfake.Rule) { r.Redaction = []pep.RedactionClass{pep.RedactFreeText} }, ReasonNotCarriedOut},
@@ -189,15 +189,19 @@ func TestSeamAllowlistOnACutOverRoute(t *testing.T) {
 	}
 }
 
-// PR-1 cuts no route over: an allowlist decision is refused on every REST row until the cutover lists it.
-func TestSeamNoRouteCarriesAnAllowlistYet(t *testing.T) {
+// Only the rows of the narrowed classes carry an allowlist (CHAOS-13090): the gate's copy is the registry's, and each
+// of its profiles is a row.
+func TestSeamOnlyTheNarrowedRowsCarryAnAllowlist(t *testing.T) {
 	g := New(Config{Mode: ModeOff})
-	if len(g.carriesAllowlist) != 0 {
-		t.Fatalf("cut-over registry %v, want empty in PR-1", g.carriesAllowlist)
+	if len(g.carriesAllowlist) != 11 {
+		t.Fatalf("cut-over registry holds %d profiles, want the 11 rows of the 8 narrowed classes", len(g.carriesAllowlist))
 	}
-	for profile := range allowlistCutOver {
+	for profile := range g.carriesAllowlist {
 		if _, known := g.actions[profile]; !known {
 			t.Errorf("cut-over registry names %q, which is no row", profile)
+		}
+		if class, _ := RouteClassOf(profile); !AllowlistNarrowed(class) {
+			t.Errorf("%q is on the cut-over registry but its class %q is not narrowed", profile, class)
 		}
 	}
 }

@@ -154,6 +154,10 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "flame", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "flame", claims)
+		if !ok {
+			return
+		}
 
 		query := r.URL.Query()
 
@@ -175,7 +179,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "entity_id"}, nil))
 		}
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
@@ -183,18 +187,18 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 		// query-param KEYS present -- regardless of value -- is a 400.
 		for key := range query {
 			if flameForbiddenQueryParams[key] {
-				writeRESTError(w, r, "flame", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "flame", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := flame.BuildResponse(r.Context(), client, claims.OrgID, flame.Params{
+		resp, err := flame.BuildResponse(r.Context(), client, org, flame.Params{
 			EntityType: lastQueryValue(query, "entity_type"),
 			EntityID:   lastQueryValue(query, "entity_id"),
 		})
 		if err != nil {
 			if reqErr, ok := flame.AsRequestError(err); ok {
-				writeRESTError(w, r, "flame", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "flame", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -202,7 +206,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			// not one of build_flame_response's own typed HTTPExceptions
 			// degrades to a generic 503, never a raw ClickHouse error on
 			// the wire.
-			writeRESTDataUnavailable(w, r, "flame", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "flame", org, err)
 			return
 		}
 
@@ -210,7 +214,7 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 		// pydantic-core dump_json writes it (writeModelResponse).
 		if encodeErr := writeModelResponse(w, resp); encodeErr != nil {
 			log.Printf("query-api: flame: encode response failed: org_id=%s request_id=%s err=%v",
-				claims.OrgID, envelopeRequestID(r), encodeErr)
+				org, envelopeRequestID(r), encodeErr)
 			writeModelFailure(w)
 		}
 	}

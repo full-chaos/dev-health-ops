@@ -25,6 +25,7 @@ type QualityStatsFilters struct {
 	ReposNamed         bool // the request names repositories (teamscope.NamedRepoRefs)
 	TeamScopeCondition string
 	TeamScopeBindings  []dhclickhouse.Binding
+	Ceiling            teamscope.Ceiling
 	Themes             []string
 	Subcategories      []string
 }
@@ -78,7 +79,7 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 	}
 
 	categorySQL, categoryBindings := filters.categoryClause()
-	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings, filters.Ceiling)
 	scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource()) // the unit's repository rows (CHAOS-9221): counts, not effort
 
 	query := fmt.Sprintf(`

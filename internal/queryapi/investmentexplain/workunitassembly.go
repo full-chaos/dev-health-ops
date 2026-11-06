@@ -2,6 +2,7 @@ package investmentexplain
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 
 	"context"
 	"encoding/json"
@@ -66,6 +67,8 @@ type WorkUnitEvidenceOutput struct {
 	// StructuralOrdered is Structural as the route writes it: each entry
 	// in the key order work_units.py builds it. A Go map loses that order.
 	StructuralOrdered []*pyjson.Object
+	// StructuralOmitted marks a unit whose structural evidence is not served: the field is absent, not empty.
+	StructuralOmitted bool
 }
 
 // InvestmentBreakdownOutput ports api/models/schemas.py's
@@ -110,6 +113,7 @@ type BuildWorkUnitInvestmentsOptions struct {
 	Limit              int
 	IncludeText        bool
 	WorkUnitID         string
+	Ceiling            teamscope.Ceiling
 	ThemeFilters       []string
 	SubcategoryFilters []string
 }
@@ -165,6 +169,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		TeamScopeBindings:  opts.TeamScopeBindings,
 		Limit:              limit,
 		WorkUnitID:         opts.WorkUnitID,
+		Ceiling:            opts.Ceiling,
 	})
 	if err != nil {
 		return nil, err
@@ -185,11 +190,29 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		rows = filtered
 	}
 
+	// The quote text and the structural evidence of a unit that touches a repository outside the ceiling are never read
+	// nor served: both are unit-level and cannot be narrowed (acp Q3, R1).
+	var mixedUnits map[string]bool
+	if opts.Ceiling.Restricted() {
+		unitIDs := make([]string, 0, len(rows))
+		for _, row := range rows {
+			unitIDs = append(unitIDs, row.WorkUnitID)
+		}
+		var err error
+		if mixedUnits, err = reader.FetchUnitsTouchingOtherRepos(ctx, opts.OrgID, unitIDs, opts.Ceiling); err != nil {
+			return nil, err
+		}
+	}
+	omitQuotes := map[string]bool{}
+	if opts.IncludeText {
+		omitQuotes = mixedUnits
+	}
+
 	var unitRuns []WorkUnitRunPair
 	if opts.IncludeText {
 		for _, row := range rows {
 			runID := derefString(row.CategorizationRunID)
-			if row.WorkUnitID != "" && runID != "" {
+			if row.WorkUnitID != "" && runID != "" && !omitQuotes[row.WorkUnitID] {
 				unitRuns = append(unitRuns, WorkUnitRunPair{WorkUnitID: row.WorkUnitID, RunID: runID})
 			}
 		}
@@ -204,6 +227,9 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 	var issueIDs, prRefs []string
 	for _, row := range rows {
+		if mixedUnits[row.WorkUnitID] {
+			continue
+		}
 		payload := derefString(row.StructuralEvidenceJSON)
 		issueIDs = append(issueIDs, extractIssueIDs(payload)...)
 		prRefs = append(prRefs, extractPRRefs(payload)...)
@@ -236,7 +262,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				return err
 			}
 		}
-		sourceTitles = reader.quoteSourceTitles(groupCtx, opts.OrgID, quoteRows)
+		sourceTitles = reader.quoteSourceTitles(groupCtx, opts.OrgID, quoteRows, opts.Ceiling)
 		return nil
 	})
 	group.Go(func() error {
@@ -265,7 +291,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 	quotesByUnit := map[string][]WorkUnitInvestmentQuoteRow{}
 	for _, quote := range quoteRows {
-		if quote.WorkUnitID == "" {
+		if quote.WorkUnitID == "" || omitQuotes[quote.WorkUnitID] {
 			continue
 		}
 		quotesByUnit[quote.WorkUnitID] = append(quotesByUnit[quote.WorkUnitID], quote)
@@ -296,6 +322,10 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		var structuralEvidence []map[string]any
 		var structuralOrdered []*pyjson.Object
 		structuralPayload := derefString(row.StructuralEvidenceJSON)
+		structuralOmitted := mixedUnits[unitID]
+		if structuralOmitted {
+			structuralPayload = ""
+		}
 		if structuralPayload != "" {
 			if decoded, err := pyjson.Decode([]byte(structuralPayload)); err == nil {
 				if parsed, ok := decoded.(*pyjson.Object); ok {
@@ -411,6 +441,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 				Contextual: contextualEvidence,
 
 				StructuralOrdered: structuralOrdered,
+				StructuralOmitted: structuralOmitted,
 			},
 			ChangeSet: changeSetOf(row.EffortMetric, row.EffortValue),
 		})

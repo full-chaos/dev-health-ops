@@ -69,7 +69,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 
-	filter, bindings := teamscope.NarrowRepoScope(len(repoRefs) > 0, scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), teamCondition, teamBindings)
+	filter, bindings := teamscope.NarrowRepoScope(len(repoRefs) > 0, scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), teamCondition, teamBindings, teamscope.NoCeiling(), repoColumn)
 	return filter, bindings, nil
 }
 

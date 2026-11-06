@@ -328,7 +328,41 @@ func nonEmpty(ids []string) []string {
 // condition for an empty id list and ORed the team's repositories with the named
 // ones, so a filter that matched nothing served the unfiltered value and a named
 // repository outside the team widened the team's scope.
-func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickhouse.Binding, teamCondition string, teamBindings []dhclickhouse.Binding) (filterSQL string, bindings []dhclickhouse.Binding) {
+//
+// ceiling is the repositories the request may read at all (CHAOS-13090): it ANDs with the named repositories and the
+// team scope, over repoColumn (the column the named list tests, in the same form), and never replaces either. A
+// restricted ceiling with no id leaves nothing. NoCeiling() gives today's fragment byte for byte.
+func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickhouse.Binding, teamCondition string, teamBindings []dhclickhouse.Binding, ceiling Ceiling, repoColumn string) (filterSQL string, bindings []dhclickhouse.Binding) {
+	if !ceiling.restricted {
+		return narrowRepoScope(named, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	}
+	explicitCondition := strings.TrimPrefix(explicitSQL, " AND ")
+	if len(ceiling.ids) == 0 || named && explicitCondition == "" {
+		return " AND 1 = 0", nil
+	}
+	// The ceiling is one more membership test on the repository column, ANDed to the named repositories and to the team
+	// scope; it never replaces either (CHAOS-13090). The column keeps its type exactly as for the named list.
+	conditions := []string{ceiling.membership(repoColumn)}
+	bindings = ceiling.bindings()
+	if explicitCondition != "" {
+		conditions = []string{explicitCondition, conditions[0]}
+		bindings = append(append([]dhclickhouse.Binding(nil), explicitBindings...), bindings...)
+	}
+	if teamCondition == "" {
+		return " AND " + strings.Join(conditions, " AND "), bindings
+	}
+	bindings = append(bindings, teamBindings...)
+	if isTextRepoColumn(conditions[0]) {
+		for i := range conditions {
+			conditions[i] = textRepoMembership(conditions[i])
+		}
+		return " AND (" + strings.Join(conditions, " AND ") + " AND " + textRepoMembership(teamCondition) + ")", bindings
+	}
+	return " AND (" + strings.Join(conditions, " AND ") + " AND " + uuidOwnedRepoSubquery(teamCondition) + ")", bindings
+}
+
+// narrowRepoScope is NarrowRepoScope without a ceiling.
+func narrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickhouse.Binding, teamCondition string, teamBindings []dhclickhouse.Binding) (filterSQL string, bindings []dhclickhouse.Binding) {
 	explicitCondition := strings.TrimPrefix(explicitSQL, " AND ")
 	switch {
 	case named && explicitCondition == "":

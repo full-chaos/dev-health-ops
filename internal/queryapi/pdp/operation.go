@@ -173,7 +173,7 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 				return nil, &DenyError{Reason: decision.Reason()}
 			}
 		}
-		scope, refused := g.scopeOf(decision, root.Key, root.Action, orgID)
+		scope, refused, _ := g.scopeOf(decision, root.Key, root.Action, orgID)
 		if refused != "" {
 			g.count(ctx, ModeEnforce, ResultNotCarriedOut, root.Action)
 			return nil, &DenyError{Reason: refused, Local: true}

@@ -36,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // ErrUnavailable is returned when the reader is constructed without a
@@ -148,9 +150,9 @@ func scopeClause(repoIDs []string) (sql string, bindings []dhclickhouse.Binding)
 // (teamscope.NarrowRepoScope): both present = the repositories that are both
 // (AND, never the union); named repositories that resolved to nothing = no rows;
 // nothing named and no team = no clause, an org-wide read.
-func combinedScopeClause(reposNamed bool, repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding) (sql string, bindings []dhclickhouse.Binding) {
+func combinedScopeClause(reposNamed bool, repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding, ceiling teamscope.Ceiling) (sql string, bindings []dhclickhouse.Binding) {
 	explicitSQL, explicitBindings := scopeClause(repoIDs)
-	return teamscope.NarrowRepoScope(reposNamed, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	return teamscope.NarrowRepoScope(reposNamed, explicitSQL, explicitBindings, teamCondition, teamBindings, ceiling, "repo_id")
 }
 
 func dedupeStrings(values []string) []string {
@@ -194,4 +196,12 @@ func splitCategoryFilters(workCategory []string) (themes, subcategories []string
 		}
 	}
 	return dedupeStrings(themeList), dedupeStrings(subcategoryList)
+}
+
+// ResolveCeiling is the repository ceiling of a decision scope (CHAOS-13090): one matcher statement for an allowlist.
+func (r *Reader) ResolveCeiling(ctx context.Context, scope pepgate.Scope) (teamscope.Ceiling, error) {
+	if r == nil || r.client == nil {
+		return teamscope.Ceiling{}, ErrUnavailable
+	}
+	return teamscope.ResolveCeiling(ctx, r.client, scope)
 }

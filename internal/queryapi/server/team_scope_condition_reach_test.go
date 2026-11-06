@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/opportunities"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/sankey"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
@@ -48,7 +49,11 @@ const (
 type teamScopeReachClient struct {
 	// knownRepo, when set, is the repository id any repository-reference lookup
 	// (a statement over the repos table) resolves to; empty = nothing resolves.
-	knownRepo  string
+	knownRepo string
+	// matcher answers the stable-key matcher statement (CHAOS-13090): key -> the repository ids of that key.
+	matcher map[string][]string
+	// person, when set, is the identity every person lookup resolves to.
+	person     string
 	mu         sync.Mutex
 	statements []string
 	bindings   [][]dhclickhouse.Binding
@@ -61,6 +66,18 @@ func (c *teamScopeReachClient) Query(_ context.Context, statement string, bindin
 	c.mu.Unlock()
 
 	switch {
+	case strings.Contains(statement, "identity_path") && hasBinding(bindings, teamscope.BindingCeilingKeys):
+		out := &ceilingMatcherScan{}
+		for _, key := range bindingStringValues(bindings, teamscope.BindingCeilingKeys) {
+			if ids, ok := c.matcher[key]; ok {
+				out.paths, out.ids = append(out.paths, key), append(out.ids, ids)
+			}
+		}
+		return out, nil
+	case strings.Contains(statement, "AS sized_units") || strings.Contains(statement, "toString(max(computed_at))"):
+		return &ceilingZeroRow{}, nil
+	case c.person != "" && strings.Contains(statement, "lower(hex(MD5(identity)))"):
+		return &teamScopeReachRows{values: []string{c.person}}, nil
 	case strings.Contains(statement, "FROM system.tables"):
 		return &teamScopeReachRows{values: append(bindingStringValues(bindings, "table"), bindingStringValues(bindings, "tables")...)}, nil
 	case strings.Contains(statement, "FROM system.columns"):
@@ -181,7 +198,7 @@ func teamScopeConsumers() []struct {
 				query.Set("scope_id", scopeIDs[0])
 			}
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/work-units?"+query.Encode(), nil)
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitsGetHandler(reader)(httptest.NewRecorder(), request)
 		}},
 		{"POST /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
@@ -196,7 +213,7 @@ func teamScopeConsumers() []struct {
 				t.Fatalf("marshal body: %v", err)
 			}
 			request := httptest.NewRequest(http.MethodPost, "/api/v1/work-units", bytes.NewReader(body))
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitsPostHandler(reader)(httptest.NewRecorder(), request)
 		}},
 		{"POST /api/v1/investment/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
@@ -236,7 +253,7 @@ func teamScopeConsumers() []struct {
 			request := httptest.NewRequest(http.MethodPost,
 				"/api/v1/work-units/"+workUnitID+"/explain?"+query.Encode(), nil)
 			request.SetPathValue("work_unit_id", workUnitID)
-			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
+			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID, Scope: pepgate.Legacy(teamScopeReachOrgID)}))
 			newWorkUnitExplainHandler(reader, nil, nil, nil, testPlatformGate{})(httptest.NewRecorder(), request)
 		}},
 		{"GET/POST /api/v1/opportunities", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
@@ -349,3 +366,26 @@ func TestOrgScopeCarriesNoTeamCondition(t *testing.T) {
 		})
 	}
 }
+
+type ceilingMatcherScan struct {
+	paths []string
+	ids   [][]string
+	index int
+}
+
+func (r *ceilingMatcherScan) Next() bool { r.index++; return r.index <= len(r.paths) }
+func (r *ceilingMatcherScan) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.paths[r.index-1]
+	*(dest[1].(*[]string)) = r.ids[r.index-1]
+	return nil
+}
+func (r *ceilingMatcherScan) Err() error   { return nil }
+func (r *ceilingMatcherScan) Close() error { return nil }
+
+// ceilingZeroRow is one row whose columns all keep their zero value: the aggregate statements that always answer.
+type ceilingZeroRow struct{ done bool }
+
+func (r *ceilingZeroRow) Next() bool        { first := !r.done; r.done = true; return first }
+func (r *ceilingZeroRow) Scan(...any) error { return nil }
+func (r *ceilingZeroRow) Err() error        { return nil }
+func (r *ceilingZeroRow) Close() error      { return nil }

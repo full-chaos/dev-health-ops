@@ -104,6 +104,9 @@ internal/cigates/docstools	code	mkdocs.yml
 internal/cigates/docstools	test	.github
 internal/cigates/docstools	test	Makefile
 internal/cigates/docstools	test	ci
+internal/cigates/exceptionledger	code	ci
+internal/cigates/exceptionledger	code	contracts
+internal/cigates/exceptionledger	code	deploy
 internal/cigates/gitleaksignore	test	.gitleaksignore
 internal/cigates/integrationshards	test	ci
 internal/cigates/metricsproof	test	ci

@@ -24,15 +24,15 @@ func CheckProvider(provider string) (string, ConfigReason) {
 	return CheckProviderFor("", provider)
 }
 
-// CheckProviderFor is CheckProvider for a purpose: clef is known to the
-// categorize purpose only.
+// CheckProviderFor is CheckProvider for a purpose: clef and typesafe are known
+// to the categorize purpose only.
 func CheckProviderFor(purpose Purpose, provider string) (string, ConfigReason) {
 	name := normalizeProvider(provider)
 	switch name {
 	case "", "auto", "mock", "none":
 		return name, ConfigNotConfigured
 	}
-	if !isKnownProvider(name) && !(purpose == PurposeCategorize && name == ProviderClef) {
+	if !isKnownProvider(name) && !(purpose == PurposeCategorize && (name == ProviderClef || name == ProviderTypeSafe)) {
 		return name, ConfigUnknownProvider
 	}
 	return name, ConfigActive
@@ -68,6 +68,14 @@ func checkCredentials(ctx context.Context, provider, apiKey, baseURL string, key
 		// The host is fixed, so there is nothing to resolve: the exact account
 		// URL is the whole rule, and it must not carry the token.
 		if _, ok := ParseClefBaseURL(baseURL); !ok || BaseURLCarriesKey(baseURL, apiKey) {
+			return ConfigInvalidBaseURL, nil
+		}
+		return ConfigActive, nil
+	}
+	if provider == ProviderTypeSafe {
+		// The endpoint is fixed in code, so a saved base_url has no use: any
+		// value, even white space, is refused.
+		if baseURL != "" {
 			return ConfigInvalidBaseURL, nil
 		}
 		return ConfigActive, nil

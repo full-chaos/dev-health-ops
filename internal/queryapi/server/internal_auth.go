@@ -136,10 +136,26 @@ const (
 type edgeScope func(ctx context.Context, user *policy.User) (org string, session *policy.Impersonation, err error)
 
 // liveScope is /query's scope: nothing in front of /query decided anything,
-// so the org is the token's own and the session is read here, once, for a
-// caller the live users row confirms is a superuser.
+// so the org is the token's own and the session is read here, once. A
+// session is applied only to a live superuser that holds admin.impersonate
+// now. A caller without the action acts as itself, and on the write door its
+// row is read and a live one refuses the write; any other caller (a
+// non-superuser, the action held or not) acts as itself, its row unread.
 func liveScope(store policy.Store) edgeScope {
 	return func(ctx context.Context, user *policy.User) (string, *policy.Impersonation, error) {
+		if !user.Holds(policy.ActionAdminImpersonate) {
+			if !onWriteDoor(ctx) {
+				return user.OrgID, nil, nil
+			}
+			session, err := store.ActiveImpersonation(ctx, user.ID)
+			switch {
+			case err != nil:
+				return "", nil, err
+			case session != nil:
+				return "", nil, errRevokedImpersonatorWrite
+			}
+			return user.OrgID, nil, nil
+		}
 		if !user.IsSuperuser {
 			// A holder that is not a superuser is served as itself; with the
 			// switch on, its live (or unreadable) row refuses its non-query
@@ -246,6 +262,10 @@ func checkEdgeCarrier(r *http.Request, edgeAuth *policy.Authenticator, token str
 	orgID, session, scopeErr := scope(ctx, user)
 	if errors.Is(scopeErr, errLegacyImpersonationRefused) {
 		noteRefusal(r, "edge_legacy_impersonation_caller", "edge")
+		return authctx.Claims{}, edgeImpersonationRefused
+	}
+	if errors.Is(scopeErr, errRevokedImpersonatorWrite) {
+		noteRefusal(r, "edge_revoked_impersonator_write", "edge")
 		return authctx.Claims{}, edgeImpersonationRefused
 	}
 	if scopeErr != nil {

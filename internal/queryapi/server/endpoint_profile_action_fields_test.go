@@ -706,9 +706,9 @@ func queryAPIRoleReads(t *testing.T) map[string]int {
 // Each count was read against its file: the legacy gates are datahealth.RequireOperator (admin.stats or the admin, owner,
 // operator roles), producttelemetry.RequirePlatformAdmin (admin.telemetry, no impersonation), the org-less platform
 // admission and the cross-org superuser branch in operation_org_guard.go (admin.orgs), the MCP elevated-role refusal in
-// mcp_route.go, /query's live scope reading the row of an admin.impersonate holder that is not a superuser while the
-// legacy refusal is on (internal_auth.go liveScope: its writes are refused), and the plumbing that copies the role
-// into the claims or logs it.
+// mcp_route.go, /query's live scope applying an impersonation session only to a superuser that holds admin.impersonate
+// and reading the row of a holder that is not a superuser while the legacy refusal is on (internal_auth.go liveScope:
+// its writes are refused), and the plumbing that copies the role into the claims or logs it.
 var knownQueryAPIRoleReads = map[string]int{
 	"authctx/authctx.go":                   1,
 	"datahealth/datahealth.go":             3,
@@ -717,7 +717,7 @@ var knownQueryAPIRoleReads = map[string]int{
 	"internalidentity/internalidentity.go": 1,
 	"producttelemetry/platform.go":         2,
 	"server/graphql_edge_route.go":         1,
-	"server/internal_auth.go":              3,
+	"server/internal_auth.go":              4,
 	"server/mcp_route.go":                  1,
 }
 

@@ -93,6 +93,9 @@ type Report struct {
 	// parts are missing (never signed in) or do not key, e.g. a transient NameID (SubjectUnverifiable); each holds the
 	// users-owned guard until it has an identity.
 	SSOSubjectUnverifiable int
+	// InsertOnly is Options.InsertOnly; Kept counts the existing users it left as they are.
+	InsertOnly bool
+	Kept       int
 }
 
 // SkippedTotal is the number of users that were not written.
@@ -154,6 +157,9 @@ type Options struct {
 	// PlatformRolesOwned is AUTH_PLATFORM_ROLES_OWNED: the platform role leg
 	// writes nothing and counts each difference.
 	PlatformRolesOwned bool
+	// InsertOnly creates the auth users that are missing and never changes an
+	// existing one (identity.BackfillTarget.InsertOnly; `-insert-only`).
+	InsertOnly bool
 }
 
 // Run copies every user. Per-user failures are counted by class and the run

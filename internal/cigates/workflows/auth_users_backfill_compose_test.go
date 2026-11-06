@@ -17,8 +17,10 @@ func TestComposeCopiesTheUsersBeforeAuthServiceServes(t *testing.T) {
 	if !ok {
 		t.Fatal("compose.yml has no service auth-users-backfill: auth-service owns users and never becomes ready on a fresh install")
 	}
-	if got := strings.Join(backfill.Command, " "); got != "auth users-backfill" {
-		t.Errorf("auth-users-backfill command = %q, want \"auth users-backfill\"", got)
+	// acp ruling on #5795: insert-only. auth-service owns users, so an existing auth user is never set back to a
+	// stale public.users value; only the missing ones are created.
+	if got := strings.Join(backfill.Command, " "); got != "auth users-backfill -insert-only" {
+		t.Errorf("auth-users-backfill command = %q, want \"auth users-backfill -insert-only\"", got)
 	}
 	if owned, _ := envString(t, backfill, "AUTH_USERS_OWNED"); owned != "false" {
 		t.Errorf("auth-users-backfill AUTH_USERS_OWNED = %q, want the literal false: the verb refuses while users are owned", owned)

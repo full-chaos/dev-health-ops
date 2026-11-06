@@ -37,6 +37,12 @@ type BackfillTarget struct {
 	// platform roles, so the backfill neither grants nor revokes one; a
 	// difference is reported as RoleSkipped.
 	PlatformRolesOwned bool
+	// InsertOnly creates the user when the auth schema does not hold it and
+	// never changes an existing one (CHAOS-13107: compose's auth-users-backfill,
+	// where auth-service owns users and public.users may be stale). An existing
+	// principal is reported as Kept. Off, the default, an existing user is made
+	// to agree with t.
+	InsertOnly bool
 }
 
 // notExpiredSQL is the expiry half of the platform role store's rule, over the
@@ -71,6 +77,8 @@ type BackfillResult struct {
 	// RoleExpiredGranted is the id of an expired assignment a person granted
 	// to a superuser: the backfill leaves it and reports it.
 	RoleExpiredGranted *uuid.UUID
+	// Kept is set when InsertOnly found the principal and wrote nothing.
+	Kept bool
 }
 
 type backfillState struct {

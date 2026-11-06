@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 )
 
 // The legacy impersonation caller: the admin's own bearer while go-api holds a
@@ -230,5 +231,101 @@ func TestRefusesLegacyImpersonationReadsTheSwitchAsGoAPI(t *testing.T) {
 		if deps.refuseLegacyImpersonation != want.on || (depsErr != nil) != want.err {
 			t.Errorf("%s=%q: /graphql deps refuse=%v error=%v; want %v, error %v", impersonationProxyEnv, raw, deps.refuseLegacyImpersonation, depsErr, want.on, want.err)
 		}
+	}
+}
+
+// legacyMutationDocument is a registered mutation on the access stack (the same resolver as iaDocument).
+const legacyMutationDocument = "mutation LegacyImpersonationWrite { probe }"
+
+// revokedHolderStore is legacyStore for an admin whose admin.impersonate was revoked (it still holds admin.orgs)
+// while its go-api row may stay live: the policy scope applies no row to it.
+func revokedHolderStore(session *policy.Impersonation, sessionErr error) *accessStore {
+	store := legacyStore(session, sessionErr)
+	platform := rule.PlatformOf(rule.ActionAdminOrgs)
+	state := store.states[ecUser]
+	state.Platform = &platform
+	store.states[ecUser] = state
+	return store
+}
+
+// legacyGraphQLDocument is legacyGraphQL with the document named.
+func legacyGraphQLDocument(s *behaviourStack, method, bearer, document string) legacyAnswer {
+	var request *http.Request
+	if method == http.MethodGet {
+		request = httptest.NewRequest(method, "/graphql?query="+url.QueryEscape(document), nil)
+	} else {
+		request = httptest.NewRequest(method, "/graphql", strings.NewReader(`{"query":`+jsonQuoteString(document)+`}`))
+		request.Header.Set("Content-Type", "application/json")
+	}
+	request.Header.Set("Authorization", "Bearer "+bearer)
+	recorder := httptest.NewRecorder()
+	s.handlers["query"].ServeHTTP(recorder, request)
+	header := recorder.Header().Clone()
+	header.Del("X-Request-ID")
+	return legacyAnswer{recorder.Code, strings.TrimSpace(recorder.Body.String()), header}
+}
+
+// servedAsItself fails unless the resolver ran once for the admin in its own org, with no impersonation.
+func servedAsItself(t *testing.T, label string, got legacyAnswer, s *behaviourStack) {
+	t.Helper()
+	if got.Status != http.StatusOK || len(*s.seen) != 1 || (*s.seen)[0].OrgID != ecOrg.String() || (*s.seen)[0].ImpersonationActive ||
+		got.Header.Get("X-Impersonated-User-Id") != "" {
+		t.Fatalf("%s: got %d %s %v claims=%+v, want 200 served as the admin itself", label, got.Status, got.Body, got.Header, *s.seen)
+	}
+}
+
+// TestGraphQLRevokedHolderIsRefusedByOperationType: with the switch on, a caller that no longer holds
+// admin.impersonate beside a live row is refused on a mutation document (the read limit) and served as itself on a
+// query document, by the document's operation type (its AST), not the HTTP method: GET and POST alike. A query whose
+// row read fails answers as the GET of that query.
+func TestGraphQLRevokedHolderIsRefusedByOperationType(t *testing.T) {
+	quietStdLog(t)
+	minter := newAccessMinter(t)
+	readFails := errors.New("session store timeout")
+	for signing, token := range legacyTokens(t, minter) {
+		for _, method := range legacyMethods {
+			t.Run(signing+" "+method+" query, live row", func(t *testing.T) {
+				on := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), true)
+				got := legacyGraphQLDocument(on, method, token, iaDocument)
+				servedAsItself(t, "switch on", got, on)
+				unset := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), false)
+				if was := legacyGraphQLDocument(unset, method, token, iaDocument); !got.equal(was) {
+					t.Fatalf("switch on %+v differs from unset %+v", got, was)
+				}
+			})
+			t.Run(signing+" "+method+" query, row read fails", func(t *testing.T) {
+				on := legacyStack(t, minter, revokedHolderStore(nil, readFails), true)
+				got := legacyGraphQLDocument(on, method, token, iaDocument)
+				servedAsItself(t, "switch on", got, on)
+				get := legacyStack(t, minter, revokedHolderStore(nil, readFails), true)
+				if viaGET := legacyGraphQLDocument(get, http.MethodGet, token, iaDocument); got.Status != viaGET.Status || got.Body != viaGET.Body {
+					t.Fatalf("%s answer %d %s differs from the GET answer %d %s", method, got.Status, got.Body, viaGET.Status, viaGET.Body)
+				}
+			})
+			t.Run(signing+" "+method+" mutation, live row", func(t *testing.T) {
+				on := legacyStack(t, minter, revokedHolderStore(legacySession(), nil), true)
+				got := legacyGraphQLDocument(on, method, token, legacyMutationDocument)
+				if got.Status != http.StatusForbidden || got.Body != legacyRefusalBody || len(*on.seen) != 0 {
+					t.Fatalf("switch on: got %d %s, resolver ran %d; want 403 %s and no run", got.Status, got.Body, len(*on.seen), legacyRefusalBody)
+				}
+				if got.Header.Get("X-Impersonating") != "" || got.Header.Get("X-Impersonated-User-Id") != "" {
+					t.Fatalf("switch on: impersonation headers %v on a refusal", got.Header)
+				}
+			})
+		}
+		t.Run(signing+" POST mutation, unset or no live row: served as itself", func(t *testing.T) {
+			for name, s := range map[string]*behaviourStack{
+				"switch unset":      legacyStack(t, minter, revokedHolderStore(legacySession(), nil), false),
+				"switch on, no row": legacyStack(t, minter, revokedHolderStore(nil, nil), true),
+			} {
+				servedAsItself(t, name, legacyGraphQLDocument(s, http.MethodPost, token, legacyMutationDocument), s)
+			}
+		})
+		t.Run(signing+" POST mutation, row read fails", func(t *testing.T) {
+			on := legacyStack(t, minter, revokedHolderStore(nil, readFails), true)
+			if got := legacyGraphQLDocument(on, http.MethodPost, token, legacyMutationDocument); got.Status != http.StatusServiceUnavailable || len(*on.seen) != 0 {
+				t.Fatalf("switch on: got %d %s, resolver ran %d; want 503 and no run", got.Status, got.Body, len(*on.seen))
+			}
+		})
 	}
 }

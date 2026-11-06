@@ -85,6 +85,9 @@ type AuthProxyConfig struct {
 	OrgProvisioning bool
 	// Impersonation is AUTH_PROXY_IMPERSONATION.
 	Impersonation bool
+	// impersonationInvalidLength is the length of an AUTH_PROXY_IMPERSONATION value that is neither true nor false
+	// (the switch is then off); 0 when the value is valid or unset.
+	impersonationInvalidLength int
 	// ClientAddrKey is AUTH_CLIENT_ADDR_SIGNING_KEY: with it every forward and every session issue carries a proof of
 	// the X-Forwarded-For value (internal/auth/clientaddr, CHAOS-11645). nil sends no proof.
 	ClientAddrKey *clientaddr.ProofKey
@@ -99,6 +102,16 @@ func (c AuthProxyConfig) OrgProvisioningOn() bool { return c.Upstream != nil && 
 
 // ImpersonationOn reports whether go-api starts and ends the admin impersonation session through auth-service.
 func (c AuthProxyConfig) ImpersonationOn() bool { return c.Upstream != nil && c.Impersonation }
+
+// WarnInvalidImpersonation logs one WARN when AUTH_PROXY_IMPERSONATION held a value that is neither true nor false:
+// the switch is off and go-api starts (D6465). The line names the variable and the value's length, never the value.
+func (c AuthProxyConfig) WarnInvalidImpersonation(ctx context.Context, logger *slog.Logger) {
+	if c.impersonationInvalidLength == 0 {
+		return
+	}
+	logger.WarnContext(ctx, "AUTH_PROXY_IMPERSONATION is neither true nor false; the impersonation switch is off",
+		slog.String("env", EnvAuthProxyImpersonation), slog.Int("value_length", c.impersonationInvalidLength))
+}
 
 // ParseAuthProxyConfig reads AUTH_PROXY_URL and the AUTH_PROXY_<aggregate>
 // flags. Every flag defaults off. It refuses a flag without a URL, a URL
@@ -136,12 +149,12 @@ func ParseAuthProxyConfig(lookup func(string) (string, bool)) (AuthProxyConfig, 
 		anyOn = anyOn || on
 	}
 	if raw, ok := lookup(EnvAuthProxyImpersonation); ok && strings.TrimSpace(raw) != "" {
-		on, err := strconv.ParseBool(strings.TrimSpace(raw))
-		if err != nil {
-			return AuthProxyConfig{}, fmt.Errorf("%s must be true or false", EnvAuthProxyImpersonation)
+		if on, err := strconv.ParseBool(strings.TrimSpace(raw)); err != nil {
+			cfg.impersonationInvalidLength = len(raw)
+		} else {
+			cfg.Impersonation = on
+			anyOn = anyOn || on
 		}
-		cfg.Impersonation = on
-		anyOn = anyOn || on
 	}
 	raw, _ := lookup(EnvAuthProxyURL)
 	raw = strings.TrimSpace(raw)

@@ -410,6 +410,7 @@ func configureWith(
 			return nil, dependencyFailure(ctx, logger, "api_auth_proxy", "api_auth_proxy_config_invalid", err)
 		}
 	}
+	authProxy.WarnInvalidImpersonation(ctx, logger)
 	acrProjectScope, err := ParseACRAccessProjectScope(envsecrets.ProcessLookup)
 	if err != nil {
 		return nil, dependencyFailure(ctx, logger, "api_acr_project_scope", "api_acr_project_scope_config_invalid", err)

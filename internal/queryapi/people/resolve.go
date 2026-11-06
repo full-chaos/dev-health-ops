@@ -57,7 +57,8 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
 		// table, which holds no item and no repository.
 		var workTerm string
 		workTerm, workBindings = scope.itemTerm()
-		workArm = `SELECT assignee AS identity
+		// assignee is Nullable(String): coalesce keeps the union column String, as the *string scan needs.
+		workArm = `SELECT coalesce(assignee, '') AS identity
             FROM work_item_cycle_times FINAL
             WHERE assignee != ''
               AND org_id = {org_id:String}` + workTerm

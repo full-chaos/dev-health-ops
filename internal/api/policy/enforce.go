@@ -65,7 +65,7 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. A caller with a live go-api
 // impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
 // delegation: it is refused before any call, except on the stop route. A delegated session's own bearer is decided
-// like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
+// by the decision point as its target user on a read row; on any other row it is refused before any call. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
 // organization route with no organization): that request keeps the legacy answer, which is the same answer the
 // route gives with its cell off.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
@@ -142,6 +142,8 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// delegated: the bearer is a delegated session's own (an act claim, User.ImpersonatedBy).
+	delegated bool
 	// served: the organization a path or query parameter names for the handler to serve (servedOrgOf).
 	served servedOrg
 }
@@ -161,6 +163,12 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 	if o.impersonating && o.pattern != stopImpersonationPattern {
 		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
+			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+		return enforceImpersonationRefused
+	}
+	if o.delegated && !readAction(row.Action) {
+		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
+		e.logger.WarnContext(ctx, "api enforcement: delegated bearer refused on an enforced row whose action is not a read",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
 		return enforceImpersonationRefused
 	}
@@ -228,9 +236,17 @@ func unjudgedReason(o enforceObservation, row ShadowRow, org string) string {
 	return ""
 }
 
+// readAction reports whether action is a catalog read (policycatalog Action.ReadOnly). A delegated bearer is judged
+// as its target on these actions only.
+func readAction(action string) bool {
+	a, err := policycatalog.Default().Action(action)
+	return err == nil && a.ReadOnly()
+}
+
 // obligationsCarriedOut reports whether go-api carries out every obligation of an allow for request. A tenant scope
 // is carried out when it is the request's organization; a repository allowlist or the organization repository
-// scope only on a route with no repository dimension; redaction, minimum assurance and step-up never. An allow with
+// scope only on a route with no repository dimension; a minimum assurance of aal1 (every session bearer go-api accepts
+// is aal1); redaction, a higher or unknown assurance and step-up never. An allow with
 // one obligation not carried out is no verdict: it is neither served nor a deny.
 func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryDimension bool) bool {
 	if tenant, ok := o.TenantScope(); ok && tenant != request.OrganizationID {
@@ -239,7 +255,7 @@ func obligationsCarriedOut(o pep.Obligations, request pep.Request, noRepositoryD
 	if (o.RepositoryRestricted() || o.RepositoryScopeOrganization()) && !noRepositoryDimension {
 		return false
 	}
-	if _, ok := o.MinimumAssurance(); ok {
+	if level, ok := o.MinimumAssurance(); ok && level != pep.AssuranceAAL1 {
 		return false
 	}
 	return len(o.Redaction()) == 0 && !o.StepUpRequired()
@@ -262,10 +278,11 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string) enfor
 	}
 	ctx := r.Context()
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
+		userAccessToken: user.accessToken, impersonating: ImpersonationFrom(ctx) != nil, delegated: user.ImpersonatedBy != nil,
+		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
-	// impersonation_refused without a decision point call.
-	if verdict == enforceImpersonationRefused {
+	// impersonation_refused without a decision point call. A delegated bearer's refusal is not a shadow result.
+	if verdict == enforceImpersonationRefused && ImpersonationFrom(ctx) != nil {
 		g.observeShadow(r, user, bearer, false)
 	}
 	return verdict

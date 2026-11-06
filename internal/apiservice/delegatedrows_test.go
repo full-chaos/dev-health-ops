@@ -87,17 +87,47 @@ func underAdmin(route string) bool {
 	return route == "/api/v1/admin" || strings.HasPrefix(route, "/api/v1/admin/")
 }
 
-// delegatedRule is the deny table's rule (PLAN-10991 G-51, acp): a row admits
-// a delegated bearer only outside /api/v1/admin, never with a catalog-denied
-// action, and only for a GET or HEAD or a catalog-allowed action. A write with
-// no action stays denied: a support need comes as a row with a catalog action.
-func delegatedRule(row map[string]any, catalog map[string]string) string {
+// catalogReads is the set of read actions of the catalog: organization actions
+// of risk class low (policycatalog Action.ReadOnly).
+func catalogReads(t *testing.T) map[string]bool {
+	t.Helper()
+	raw, err := os.ReadFile(actionsCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Actions []struct {
+			Action    string `json:"action"`
+			Scope     string `json:"scope"`
+			RiskClass string `json:"risk_class"`
+		} `json:"actions"`
+	}
+	if err := json.Unmarshal(raw, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]bool{}
+	for _, action := range catalog.Actions {
+		out[action.Action] = action.Scope == "organization" && action.RiskClass == "low"
+	}
+	return out
+}
+
+// delegatedRule is the deny table's rule (PLAN-10991 G-51, acp; D6714 Q2): a
+// row admits a delegated bearer outside /api/v1/admin, never with a
+// catalog-denied action, and only for a GET or HEAD or a catalog-allowed
+// action; under /api/v1/admin only a GET whose action is a catalog read (the
+// PDP judges the target's role there). A write with no action stays denied: a
+// support need comes as a row with a catalog action.
+func delegatedRule(row map[string]any, catalog map[string]string, reads map[string]bool) string {
 	method, _ := row["method"].(string)
 	route, _ := row["route"].(string)
 	action, _ := row["action"].(string)
 	verdict := catalog[action]
 	read := method == http.MethodGet || method == http.MethodHead
-	if !underAdmin(route) && verdict != "denied" && (read || verdict == "allowed") {
+	switch {
+	case !underAdmin(route) && verdict != "denied" && (read || verdict == "allowed"):
+		return "allowed"
+	case underAdmin(route) && method == http.MethodGet && reads[action]:
 		return "allowed"
 	}
 	return "denied"
@@ -106,10 +136,12 @@ func delegatedRule(row map[string]any, catalog map[string]string) string {
 // TestDelegatedBearerRowsFollowTheRule is the contract of delegated_bearer on
 // the go-api rows: every row the Guard's delegated refusal reaches for a user
 // bearer has a value, no other row has one, and each value is the rule's. An
-// allowed row is never under /api/v1/admin and never carries a catalog-denied
-// action; POST /api/v1/auth/logout is denied.
+// allowed row under /api/v1/admin is a GET with a catalog read action, an
+// allowed row never carries a catalog-denied action; POST /api/v1/auth/logout
+// is denied.
 func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 	catalog := catalogImpersonation(t)
+	reads := catalogReads(t)
 	counts := map[string]int{}
 	outside := map[string]string{}
 	for _, row := range loadGoAPIRows(t) {
@@ -131,13 +163,13 @@ func TestDelegatedBearerRowsFollowTheRule(t *testing.T) {
 			continue
 		}
 		counts[value]++
-		if want := delegatedRule(row, catalog); value != want {
+		if want := delegatedRule(row, catalog, reads); value != want {
 			t.Errorf("%s: delegated_bearer %q, the rule says %q", key, value, want)
 		}
 		route, _ := row["route"].(string)
 		action, _ := row["action"].(string)
-		if value == "allowed" && (underAdmin(route) || catalog[action] == "denied") {
-			t.Errorf("%s: allowed under /api/v1/admin or with the catalog-denied action %q", key, action)
+		if value == "allowed" && (underAdmin(route) && !reads[action] || catalog[action] == "denied") {
+			t.Errorf("%s: allowed under /api/v1/admin with no read action, or with the catalog-denied action %q", key, action)
 		}
 	}
 	if counts["allowed"] == 0 || counts["denied"] < 150 {

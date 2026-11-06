@@ -208,6 +208,7 @@ internal/providersync	census_load_test.go	unexpressed
 internal/providersync	project_id_test.go	unexpressed
 internal/providersync	work_item_row_base_census_test.go	unexpressed
 internal/queryapi/pepgate	census_test.go	unexpressed
+internal/queryapi/pepgate	legacy_site_census_test.go	unexpressed
 internal/queryapi/principal	verifier.go	unexpressed
 internal/queryapi/scancensus	census_test.go	internal/queryapi/...
 internal/queryapi/scancensus	census_test.go	internal/storage/...

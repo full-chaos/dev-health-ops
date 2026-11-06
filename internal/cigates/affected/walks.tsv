@@ -441,6 +441,7 @@ internal/queryapi/server	mcp_proof_route_retired_test.go	unexpressed	-	*.go
 internal/queryapi/server	org_scope_census_test.go	unexpressed	-	-
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	*.go
 internal/queryapi/server	registered_document_field_gate_test.go	unexpressed	-	-
+internal/queryapi/server	rest_allowlist_census_test.go	unexpressed	-	-
 internal/queryapi/server	rest_error_response_test.go	unexpressed	-	-
 internal/queryapi/server	rest_routes_test.go	unexpressed	-	-
 internal/queryapi/server	result_row_bound_census_test.go	unexpressed	-	-

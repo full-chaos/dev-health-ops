@@ -20,6 +20,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // D5863: a repository's linked items give one row per item and day, far more than the
@@ -66,7 +67,7 @@ func TestRepoLinkedReadAnswersOnTheProductionClientsOfBothRoutes(t *testing.T) {
 	target := "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25&scope_type=repo&scope_id=" + repo.String()
 	read := func() map[string]restDelta {
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

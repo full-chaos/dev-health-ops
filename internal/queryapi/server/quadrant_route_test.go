@@ -15,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
@@ -129,7 +130,7 @@ func TestNewQuadrantWorkHandlerRequiresAuthContext(t *testing.T) {
 func TestNewQuadrantWorkHandlerRequiresType(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -158,7 +159,7 @@ func TestNewQuadrantWorkHandlerRequiresType(t *testing.T) {
 func TestNewQuadrantWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&start_date=bad", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -188,7 +189,7 @@ func TestNewQuadrantWorkHandlerAggregatesMultipleValidationErrors(t *testing.T) 
 func TestNewQuadrantWorkHandlerBadRangeDaysIs422(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&range_days=abc", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -216,7 +217,7 @@ func TestNewQuadrantWorkHandlerBadRangeDaysIs422(t *testing.T) {
 func TestNewQuadrantWorkHandlerUnknownTypeIs404(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=not_a_real_type", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -233,7 +234,7 @@ func TestNewQuadrantWorkHandlerUnknownTypeIs404(t *testing.T) {
 func TestNewQuadrantWorkHandlerHappyPathShape(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=repo&bucket=week", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusOK {
@@ -267,7 +268,7 @@ func TestNewQuadrantWorkHandlerHappyPathShape(t *testing.T) {
 func TestNewQuadrantWorkHandlerPersonScopeRequiresScopeID(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -287,7 +288,7 @@ func TestNewQuadrantWorkHandlerPersonScopeIndividualNotFound(t *testing.T) {
 	t.Setenv("IDENTITY_MAPPING_PATH", filepath.Join(t.TempDir(), "missing.yaml"))
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&scope_type=person&scope_id=deadbeef", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -340,7 +341,7 @@ func TestNewQuadrantWorkHandlerRejectsComparativeParams(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?type=wip_throughput&"+key+"=x", nil)
-			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 			rec := httptest.NewRecorder()
 			serveRoute(t, handler, rec, req)
 			if rec.Code != http.StatusBadRequest {
@@ -361,7 +362,7 @@ func TestNewQuadrantWorkHandlerRejectsComparativeParams(t *testing.T) {
 func TestNewQuadrantWorkHandlerComparativeParamCheckedAfterValidation(t *testing.T) {
 	handler := newQuadrantWorkHandler(emptyRowsQuadrantClient{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/quadrant?range_days=abc&rank=1", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	rec := httptest.NewRecorder()
 	serveRoute(t, handler, rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -396,7 +397,7 @@ func TestNewQuadrantWorkHandlerServesTheSelectedFilterKeysLast(t *testing.T) {
 		t.Helper()
 		handler := newQuadrantWorkHandler(client)
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 		rec := httptest.NewRecorder()
 		serveRoute(t, handler, rec, req)
 		if rec.Code != http.StatusOK {

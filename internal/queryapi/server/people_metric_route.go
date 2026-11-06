@@ -151,6 +151,10 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 			writeRESTUnauthorized(w, r, "people_metric", "Not authenticated")
 			return
 		}
+		org, ok := restScopeOrg(w, r, "people_metric", claims)
+		if !ok {
+			return
+		}
 
 		personID := r.PathValue("person_id")
 		query := r.URL.Query()
@@ -185,18 +189,18 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		}
 
 		if len(validationErrors) > 0 {
-			writePydanticValidationError(w, r, claims.OrgID, validationErrors...)
+			writePydanticValidationError(w, r, org, validationErrors...)
 			return
 		}
 
 		for key := range query {
 			if peopleForbiddenQueryParams[key] {
-				writeRESTError(w, r, "people_metric", claims.OrgID, http.StatusBadRequest, "Comparative parameters are not supported.")
+				writeRESTError(w, r, "people_metric", org, http.StatusBadRequest, "Comparative parameters are not supported.")
 				return
 			}
 		}
 
-		resp, err := people.BuildMetricResponse(r.Context(), reader, claims.OrgID, people.MetricParams{
+		resp, err := people.BuildMetricResponse(r.Context(), reader, org, people.MetricParams{
 			PersonID:    personID,
 			Metric:      metric,
 			RangeDays:   rangeDays,
@@ -205,18 +209,18 @@ func newPeopleMetricHandler(reader *people.Reader) http.HandlerFunc {
 		})
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
-				writeTimeWindowOverflow(w, r, "people_metric", claims.OrgID)
+				writeTimeWindowOverflow(w, r, "people_metric", org)
 				return
 			}
 			if reqErr, ok := people.AsRequestError(err); ok {
-				writeRESTError(w, r, "people_metric", claims.OrgID, reqErr.Status, reqErr.Message)
+				writeRESTError(w, r, "people_metric", org, reqErr.Status, reqErr.Message)
 				return
 			}
 			// Python's outer `except Exception: raise HTTPException(503,
 			// "Data unavailable")` (main.py:1119-1120).
-			writeRESTDataUnavailable(w, r, "people_metric", claims.OrgID, err)
+			writeRESTDataUnavailable(w, r, "people_metric", org, err)
 			return
 		}
-		writePeopleMetricResponse(w, r, claims.OrgID, resp)
+		writePeopleMetricResponse(w, r, org, resp)
 	}
 }

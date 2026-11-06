@@ -19,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 )
 
 // CHAOS-9101 (D5846): through the real GET /api/v1/explain handler, for the
@@ -115,7 +116,7 @@ func TestRESTExplainDriversNeedAValueOnOneSideForEveryAggregatorClass(t *testing
 		t.Helper()
 		target := fmt.Sprintf("/api/v1/explain?metric=%s&range_days=1&compare_days=1&end_date=%s", metric, current.Format("2006-01-02"))
 		req := httptest.NewRequest(http.MethodGet, target, nil)
-		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Scope: pepgate.Legacy(org), Role: "owner"}))
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {

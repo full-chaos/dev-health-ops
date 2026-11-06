@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/programoracle"
 )
 
@@ -182,7 +183,7 @@ func goBodyAnswer(handler http.HandlerFunc, path, body string) (status int, text
 	}()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/"+path, bytes.NewReader([]byte(body)))
 	request.Header.Set("Content-Type", "application/json")
-	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+	request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1", Scope: pepgate.Legacy("org-1")}))
 	recorder := httptest.NewRecorder()
 	handler(recorder, request)
 	return recorder.Code, recorder.Body.String()

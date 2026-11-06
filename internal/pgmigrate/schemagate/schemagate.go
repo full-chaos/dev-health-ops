@@ -48,7 +48,9 @@ var (
 )
 
 // transientClasses are the read classes a retry can clear: a first dial of a new process that the network or the
-// name service refuses for a moment. A grant, a missing table, a TLS failure or a database error is not retried.
+// name service refuses for a moment. A grant, a missing table, a TLS failure or a database error is not retried, and
+// neither is a refused dial to a loopback address or a unix socket (dial_refused_local): no network policy or name
+// service sits on that path.
 var transientClasses = map[string]bool{"dial_refused": true, "dns": true, "conn_reset": true, "timeout": true, "unreachable": true}
 
 // Recorder is the optional capability of a process database that can read the revisions
@@ -110,6 +112,9 @@ func readClass(err error) string {
 		return "dns"
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
+		if localDial(err) {
+			return "dial_refused_local"
+		}
 		return "dial_refused"
 	}
 	if errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -124,6 +129,19 @@ func readClass(err error) string {
 		return "tls"
 	}
 	return "unreachable"
+}
+
+// localDial reports whether err is a dial to a unix socket or a loopback address.
+func localDial(err error) bool {
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	if opErr.Net == "unix" {
+		return true
+	}
+	tcp, ok := opErr.Addr.(*net.TCPAddr)
+	return ok && tcp.IP.IsLoopback()
 }
 
 func errorClass(err error) string {

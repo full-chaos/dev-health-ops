@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate/schemagate/schemagatetest"
@@ -134,7 +135,7 @@ func TestCheckRetriesStayInsideTheBudgetWhenReadsAreSlow(t *testing.T) {
 }
 
 func TestCheckDoesNotRetryAPermanentClass(t *testing.T) {
-	for _, class := range []string{"permission_denied", "table_missing", "database_error", "tls", "no_pool"} {
+	for _, class := range []string{"permission_denied", "table_missing", "database_error", "tls", "no_pool", "dial_refused_local"} {
 		clock := useFakeClock(t)
 		recorder := &flaky{clock: clock, failures: 100, err: &ReadError{Class: class}}
 		logs, err := checkWith(t, recorder)
@@ -159,21 +160,31 @@ func TestCheckStopsRetryingWhenTheStartIsCancelled(t *testing.T) {
 }
 
 func TestReadClassNamesTheFailureWithoutDriverText(t *testing.T) {
-	refused := &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}}
+	refusedErr := &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}
+	refused := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("10.43.0.12"), Port: 5432}, Err: refusedErr}
+	refusedLoopback := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 1}, Err: refusedErr}
+	refusedLoopback6 := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv6loopback, Port: 1}, Err: refusedErr}
+	refusedUnix := &net.OpError{Op: "dial", Net: "unix", Addr: &net.UnixAddr{Name: "/var/run/postgresql/.s.PGSQL.5432", Net: "unix"}, Err: refusedErr}
 	reset := &net.OpError{Op: "read", Net: "tcp", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}
 	for want, err := range map[string]error{
-		"permission_denied": &pgconn.PgError{Code: "42501"},
-		"table_missing":     fmt.Errorf("query: %w", &pgconn.PgError{Code: "42P01"}),
-		"database_error":    &pgconn.PgError{Code: "57P03"},
-		"timeout":           fmt.Errorf("connect: %w", context.DeadlineExceeded),
-		"dns":               fmt.Errorf("connect: %w", &net.DNSError{Err: "no such host", Name: "db.internal", IsNotFound: true}),
-		"dial_refused":      fmt.Errorf("connect: %w", refused),
-		"conn_reset":        fmt.Errorf("query: %w", reset),
-		"tls":               fmt.Errorf("tls: %w", x509.UnknownAuthorityError{}),
-		"unreachable":       errors.New("dial tcp 10.0.0.1:5432: something else"),
+		"permission_denied":  &pgconn.PgError{Code: "42501"},
+		"table_missing":      fmt.Errorf("query: %w", &pgconn.PgError{Code: "42P01"}),
+		"database_error":     &pgconn.PgError{Code: "57P03"},
+		"timeout":            fmt.Errorf("connect: %w", context.DeadlineExceeded),
+		"dns":                fmt.Errorf("connect: %w", &net.DNSError{Err: "no such host", Name: "db.internal", IsNotFound: true}),
+		"dial_refused":       fmt.Errorf("connect: %w", refused),
+		"dial_refused_local": fmt.Errorf("connect: %w", refusedLoopback),
+		"conn_reset":         fmt.Errorf("query: %w", reset),
+		"tls":                fmt.Errorf("tls: %w", x509.UnknownAuthorityError{}),
+		"unreachable":        errors.New("dial tcp 10.0.0.1:5432: something else"),
 	} {
 		if got := readClass(err); got != want {
 			t.Errorf("readClass(%v) = %q, want %q", err, got, want)
+		}
+	}
+	for _, err := range []error{fmt.Errorf("connect: %w", refusedLoopback6), fmt.Errorf("connect: %w", refusedUnix)} {
+		if got := readClass(err); got != "dial_refused_local" {
+			t.Errorf("readClass(%v) = %q, want dial_refused_local", err, got)
 		}
 	}
 	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF} {
@@ -186,7 +197,9 @@ func TestReadClassNamesTheFailureWithoutDriverText(t *testing.T) {
 	}
 }
 
-func TestPoolRecordedClassesARefusedDialThroughTheDriver(t *testing.T) {
+// A refused loopback dial through pgx keeps the driver's dial address, so it is classed local and is not retried:
+// service tests that start against 127.0.0.1:1 on purpose do not wait for the retries.
+func TestPoolRecordedClassesARefusedLoopbackDialThroughTheDriver(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -204,8 +217,13 @@ func TestPoolRecordedClassesARefusedDialThroughTheDriver(t *testing.T) {
 	defer pool.Close()
 	_, err = PoolRecorded(context.Background(), pool)
 	var read *ReadError
-	if !errors.As(err, &read) || read.Class != "dial_refused" || strings.Contains(err.Error(), "secret-word") {
-		t.Fatalf("error = %v, want a dial_refused ReadError with no driver text", err)
+	if !errors.As(err, &read) || read.Class != "dial_refused_local" || strings.Contains(err.Error(), "secret-word") {
+		t.Fatalf("error = %v, want a dial_refused_local ReadError with no driver text", err)
+	}
+	start := time.Now()
+	logs, gateErr := checkWith(t, poolRecorder{pool: pool})
+	if gateErr != nil || !strings.Contains(logs, "class=dial_refused_local") || !strings.Contains(logs, "attempts=1") || time.Since(start) > 3*time.Second {
+		t.Fatalf("error = %v, log = %q, took %v; want one fast read and a skip", gateErr, logs, time.Since(start))
 	}
 }
 
@@ -217,4 +235,10 @@ func TestRetryBoundHoldsAStartAtMostEightSeconds(t *testing.T) {
 	if retryBudget > 8*time.Second || sum >= retryBudget || len(retryDelays) == 0 {
 		t.Fatalf("budget %v, delays %v (sum %v): the retries must fit inside at most 8 s", retryBudget, retryDelays, sum)
 	}
+}
+
+type poolRecorder struct{ pool *pgxpool.Pool }
+
+func (r poolRecorder) RecordedRevisions(ctx context.Context) ([]string, error) {
+	return PoolRecorded(ctx, r.pool)
 }

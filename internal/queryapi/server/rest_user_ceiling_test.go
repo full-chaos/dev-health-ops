@@ -1,11 +1,14 @@
 package server
 
 import (
+	"net/http"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
@@ -324,5 +327,42 @@ func TestUserCeiling_TheUserClassesAreNarrowed(t *testing.T) {
 		if kind, _ := pdp.ClassKind(class); kind != pdp.KindNarrowable || !pdp.AllowlistNarrowed(class) {
 			t.Errorf("class %s kind %q narrowed %t, want N and narrowed", class, kind, pdp.AllowlistNarrowed(class))
 		}
+	}
+}
+
+// C13 (acp 11-06): a bound of the recompute (30 s, 200,000 rows) is a typed 503 with the stated reason, never a bare
+// 500 and never an empty answer; the organization-wide aggregate is not read after it.
+func TestUserCeiling_RecomputeBoundHitIsATypedError(t *testing.T) {
+	const reason = "ceiling recompute bound exceeded"
+	served := 0
+	for _, tc := range userCeilingCases() {
+		for name, code := range map[string]int32{"rows 396": 396, "time 159": 159} {
+			t.Run(tc.class+"/"+name, func(t *testing.T) {
+				client := &teamScopeReachClient{matcher: ceilingMatcherRows(), person: "alice@example.com",
+					failOn: "FROM work_items FINAL", failErr: &chdriver.Exception{Code: code}}
+				got := tc.runWith(t, client, authctx.Claims{OrgID: restScopeClaimsOrg, Scope: pepgate.Allowlist(restTestScopeOrg, []string{"acme/a"})})
+				planted := false
+				for _, statement := range got.statements {
+					if strings.Contains(statement, "FROM work_items FINAL") {
+						planted = true
+					}
+				}
+				if !planted {
+					return
+				}
+				served++
+				if got.status != http.StatusServiceUnavailable || !strings.Contains(got.body, reason) {
+					t.Fatalf("a bound hit answered %d %q, want 503 with %q", got.status, got.body, reason)
+				}
+				for _, statement := range got.statements {
+					if readsAny(statement, aggregateTables) {
+						t.Fatalf("an organization-wide aggregate was read after the bound hit:\n%s", statement)
+					}
+				}
+			})
+		}
+	}
+	if served == 0 {
+		t.Fatal("no handler reached the recompute")
 	}
 }

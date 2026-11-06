@@ -44,8 +44,11 @@ var rowClaims = map[string]map[string]rowClaim{
 		"impersonation_policy": {value: "subject_to_impersonation_override", proofs: []claimProof{
 			{file: "graphql_edge_route.go", decl: "graphQLEdgeChain", needles: []string{"scope.Impersonation(handler)"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 Authentication required (authenticateGraphQLEdge); 403 for an X-Org-Id the caller may not use (scope.OrgScope); 403 Not allowed in an impersonation session for the legacy impersonation caller (the admin's own bearer beside a live go-api impersonation row) while AUTH_PROXY_IMPERSONATION is on (scope.Impersonation, RefuseLegacyImpersonation); 404 for a browser GET; 404 UNREGISTERED_DOCUMENT for an authenticated unregistered document; 500 when an identity read (the users row, the membership or the impersonation session) fails for any reason other than policy.ErrUnavailable: the request fails closed and is not served (policy.Scope middleware -> WriteInternal; authenticateGraphQLEdge answers the same 500 on edgeUnavailable); 503 when the caller lookup is policy.ErrUnavailable: the users store is unavailable, or the token key source is unreadable on the user access token path (writeCallerLookupFailure -> policy.WriteAuthFailure)", proofs: []claimProof{
 			{file: "graphql_edge_route.go", decl: "authenticateGraphQLEdge", needles: []string{"policy.WriteDetail(w, http.StatusUnauthorized, \"Authentication required\", nil)"}, anyOf: []string{}},
+			{file: "graphql_edge_route.go", decl: "graphQLEdgeChain", needles: []string{"scope.RefuseLegacyImpersonation(deps.refuseLegacyImpersonation)"}, anyOf: []string{}},
+			{file: "../../api/policy/scope.go", decl: "Scope.Impersonation", needles: []string{"s.refusesLegacyCaller(r)", "WriteDetail(w, http.StatusForbidden, msgImpersonationReadOnly, nil)"}, anyOf: []string{}},
+			{file: "legacy_impersonation_refused_test.go", decl: "TestGraphQLRefusesTheLegacyImpersonationCaller", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "graphql_edge_route.go", decl: "authenticateGraphQLEdge", needles: []string{"case edgeUnavailable:", "policy.WriteInternal(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/scope.go", decl: "Scope.Impersonation", needles: []string{"session lookup failed; refusing the request", "WriteInternal(w)"}, anyOf: []string{}},
 			{file: "../../api/policy/callerlookup.go", decl: "writeCallerLookupFailure", needles: []string{"WriteInternal(w)"}, anyOf: []string{}},
@@ -64,9 +67,13 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"ImpersonationActive: claims.ImpersonationActive"}, anyOf: []string{}},
 			{file: "internal_auth.go", decl: "checkEdgeCarrier", needles: []string{"impersonationActive := session != nil"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 404 for an authenticated unregistered document (shared dispatcher)", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 403 Not allowed in an impersonation session for the legacy impersonation caller (the admin's own bearer beside a live go-api impersonation row) while AUTH_PROXY_IMPERSONATION is on (checkEdgeCarrier, policy.WriteImpersonationRefused); 404 for an authenticated unregistered document (shared dispatcher)", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"http.Error(w, \"unauthorized\", http.StatusUnauthorized)"}, anyOf: []string{}},
 			{file: "query_route.go", decl: "newDocumentDispatchHandler", needles: []string{"operationForDocument(query, operationByDigest)"}, anyOf: []string{}},
+			{file: "internal_auth.go", decl: "liveScope", needles: []string{"legacyImpersonationRefused(ctx)"}, anyOf: []string{}},
+			{file: "internal_auth.go", decl: "authenticateEdgeCarrier", needles: []string{"policy.WriteImpersonationRefused(w)"}, anyOf: []string{}},
+			{file: "../../api/policy/impersonation_refused.go", decl: "WriteImpersonationRefused", needles: []string{"http.StatusForbidden", "msgImpersonationReadOnly"}, anyOf: []string{}},
+			{file: "legacy_impersonation_query_test.go", decl: "TestQueryRefusesTheLegacyImpersonationCaller", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "internal_auth_test.go", decl: "TestQueryStillAnswers404ForAnUnregisteredDocumentOnceAuthenticated", needles: []string{"http.StatusNotFound"}, anyOf: []string{}},
 		}},
 	},
@@ -80,9 +87,13 @@ var rowClaims = map[string]map[string]rowClaim{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"ImpersonationActive: claims.ImpersonationActive"}, anyOf: []string{}},
 			{file: "internal_auth.go", decl: "checkEdgeCarrier", needles: []string{"impersonationActive := session != nil"}, anyOf: []string{}},
 		}},
-		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 403 for an organization not on the go_api_proof_orgs allowlist", proofs: []claimProof{
+		"disclosure_behavior": {value: "401 for a missing or failing credential (authenticateInternalRequest); 403 Not allowed in an impersonation session for the legacy impersonation caller (the admin's own bearer beside a live go-api impersonation row) while AUTH_PROXY_IMPERSONATION is on (checkEdgeCarrier, policy.WriteImpersonationRefused); 403 for an organization not on the go_api_proof_orgs allowlist", proofs: []claimProof{
 			{file: "internal_auth.go", decl: "authenticateInternalRequest", needles: []string{"http.Error(w, \"unauthorized\", http.StatusUnauthorized)"}, anyOf: []string{}},
 			{file: "query_route.go", decl: "newDocumentDispatchHandler", needles: []string{"http.Error(w, \"this org is not enabled for proof-write\", http.StatusForbidden)"}, anyOf: []string{}},
+			{file: "internal_auth.go", decl: "liveScope", needles: []string{"legacyImpersonationRefused(ctx)"}, anyOf: []string{}},
+			{file: "internal_auth.go", decl: "authenticateEdgeCarrier", needles: []string{"policy.WriteImpersonationRefused(w)"}, anyOf: []string{}},
+			{file: "../../api/policy/impersonation_refused.go", decl: "WriteImpersonationRefused", needles: []string{"http.StatusForbidden", "msgImpersonationReadOnly"}, anyOf: []string{}},
+			{file: "legacy_impersonation_query_test.go", decl: "TestProofWriteDoorRefusesTheLegacyImpersonationCaller", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 			{file: "proof_write_dispatch_test.go", decl: "TestProofWriteRefusesAnOrgNotOnTheAllowlist", needles: []string{"http.StatusForbidden"}, anyOf: []string{}},
 		}},
 	},

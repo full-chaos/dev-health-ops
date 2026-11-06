@@ -44,12 +44,13 @@ func legacyQuery(s *behaviourStack, listener, path, bearer string) (legacyAnswer
 		legacyRaw{recorder.Code, recorder.Body.String(), recorder.Header().Get("Content-Type")}
 }
 
-// legacyQueryRoutes are the /query mounts: the public listener and the
-// internal one.
+// legacyQueryRoutes are the mounts of the /query pipeline (newDocumentDispatchHandler), on each listener that serves them.
 var legacyQueryRoutes = []struct{ listener, path string }{
 	{"query", "/query"},
 	{"internal", "/query"},
+	{"query", "/query/proof"},
 	{"internal", "/query/proof-write"},
+	{"internal", "/query/run-operation"},
 }
 
 // TestQueryRefusesTheLegacyImpersonationCaller: switch unset, the admin's own
@@ -208,8 +209,14 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 // and returns the answer with the claims the route ran with.
 func restAs(t *testing.T, store *accessStore, minter *accessMinter, bearer string, org uuid.UUID) (answer, []authctx.Claims) {
 	t.Helper()
+	return restAsWith(t, store, testAccess(minter.keys, nil, accessTestNow), bearer, org)
+}
+
+// restAsWith is restAs over setup (nil: no access-token issuer, the edge token's own path).
+func restAsWith(t *testing.T, store *accessStore, setup *accessSetup, bearer string, org uuid.UUID) (answer, []authctx.Claims) {
+	t.Helper()
 	var seen []authctx.Claims
-	f := newRESTFixtureServing(t, store, testAccess(minter.keys, nil, accessTestNow), true, func(w http.ResponseWriter, r *http.Request) {
+	f := newRESTFixtureServing(t, store, setup, true, func(w http.ResponseWriter, r *http.Request) {
 		claims, _ := authctx.FromContext(r.Context())
 		seen = append(seen, claims)
 		w.WriteHeader(http.StatusOK)
@@ -227,9 +234,12 @@ func restAs(t *testing.T, store *accessStore, minter *accessMinter, bearer strin
 // TestRESTServesTheLegacyAdminBearerAsTheAdmin: a REST row never reads the
 // go-api row, so the admin's own bearer beside a live row acts as the admin:
 // (a) in the admin's own org, never the target's; (b) an X-Org-Id naming the
-// target org is not read: the same answer, the admin's org; (c) an admin who is
-// a member of the target org and names it in the token acts there with its own
-// membership, never the target user's role or the impersonation.
+// target org is not read: the same answer, the admin's org (resource_resolver
+// organization_from_credential: the org is the credential's, rest_access.go:31
+// (edge token) and rest_access.go:38 (user access token) with the access-token
+// issuer set, rest_error_response.go:293 (edge token) without it);
+// (c) an admin who is a member of the target org and names it in the token acts
+// there with its own membership, never the target user's role or the impersonation.
 func TestRESTServesTheLegacyAdminBearerAsTheAdmin(t *testing.T) {
 	quietStdLog(t)
 	minter := newAccessMinter(t)
@@ -244,6 +254,12 @@ func TestRESTServesTheLegacyAdminBearerAsTheAdmin(t *testing.T) {
 				t.Fatalf("(b) X-Org-Id target: got %+v claims=%+v, want %+v claims=%+v (the header is not read)", withHeader, seenHeader, got, seen)
 			}
 		})
+	}
+	edge := legacyTokens(t, minter)["HS256"]
+	plain, seenPlain := restAsWith(t, legacyStore(legacySession(), nil), nil, edge, uuid.Nil)
+	withHeader, seenHeader := restAsWith(t, legacyStore(legacySession(), nil), nil, edge, irTargetOrg)
+	if plain.Status != http.StatusOK || len(seenPlain) != 1 || seenPlain[0].OrgID != ecOrg.String() || withHeader != plain || len(seenHeader) != 1 || seenHeader[0] != seenPlain[0] {
+		t.Fatalf("(a)(b) no access-token issuer: %+v %+v, with X-Org-Id %+v %+v; want the admin's own org both times", plain, seenPlain, withHeader, seenHeader)
 	}
 	member := legacyStore(legacySession(), nil)
 	member.members[[2]uuid.UUID{ecUser, irTargetOrg}] = true

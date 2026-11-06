@@ -285,6 +285,27 @@ func edgeSession(t *testing.T, o *liveObs, q liveReq, rebindHeader bool, session
 	})
 	o.wantStatus("session read fails (fail closed)", a, sessionFailureStatus)
 	o.wantNoRun("session read fails (fail closed)", stack)
+	const legacy = "legacy impersonation caller, AUTH_PROXY_IMPERSONATION on"
+	stack = liveStackRefusing(t, func(s *accessStore) { asSuperuser(s); withSession(s) })
+	q2 := q
+	q2.bearer = token
+	a = stack.live(q2)
+	o.wantStatus(legacy, a, http.StatusForbidden)
+	o.wantNoRun(legacy, stack)
+	if !strings.Contains(a.body, "Not allowed in an impersonation session") {
+		o.fail("%s: body %q lacks %q", legacy, trim(a.body), "Not allowed in an impersonation session")
+	}
+}
+
+// liveStackRefusing is liveStack with AUTH_PROXY_IMPERSONATION on.
+func liveStackRefusing(t *testing.T, shape func(*accessStore)) *behaviourStack {
+	t.Helper()
+	minter := newAccessMinter(t)
+	store := newAccessStore()
+	shape(store)
+	stack := newAccessStackRefusing(t, newQueryAPIUserStoreFrom(store), testAccess(minter.keys, nil, accessTestNow), true, true)
+	stack.user = minter.mint(ecUser, nil, nil)
+	return stack
 }
 
 type liveREST struct {

@@ -9,6 +9,8 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/linkscope"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // pullRequestRow is one row fetch_pull_request (api/queries/flame.py:9-41)
@@ -91,13 +93,13 @@ const fetchPullRequestQuery = `
         FROM git_pull_requests FINAL
         WHERE org_id = {org_id:String}
           AND toString(repo_id) = {repo_id:String}
-          AND number = {number:UInt32}
+          AND number = {number:UInt32}%s
         LIMIT 1
     `
 
 // fetchPullRequest ports fetch_pull_request (api/queries/flame.py:9-41).
 // nil, nil means "not found" (Python's `rows[0] if rows else None`).
-func fetchPullRequest(ctx context.Context, client QueryClient, repoID string, number int, orgID string) (*pullRequestRow, error) {
+func fetchPullRequest(ctx context.Context, client QueryClient, repoID string, number int, orgID string, ceiling teamscope.Ceiling) (*pullRequestRow, error) {
 	canonicalID, err := canonicalRepoID(repoID)
 	if err != nil {
 		return nil, err
@@ -107,7 +109,8 @@ func fetchPullRequest(ctx context.Context, client QueryClient, repoID string, nu
 		{Name: "repo_id", Value: canonicalID},
 		{Name: "number", Value: number},
 	}
-	rows, err := client.Query(ctx, fetchPullRequestQuery, bindings)
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	rows, err := client.Query(ctx, fmt.Sprintf(fetchPullRequestQuery, ceilingSQL), append(bindings, ceilingBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("flame: fetch_pull_request query: %w", err)
 	}
@@ -187,18 +190,19 @@ const fetchIssueQuery = `
             completed_at
         FROM work_item_cycle_times FINAL
         WHERE work_item_id = {work_item_id:String}
-          AND org_id = {org_id:String}
+          AND org_id = {org_id:String}%s
         ORDER BY day DESC
         LIMIT 1
     `
 
 // fetchIssue ports fetch_issue (api/queries/flame.py:74-102).
-func fetchIssue(ctx context.Context, client QueryClient, workItemID, orgID string) (*issueRow, error) {
+func fetchIssue(ctx context.Context, client QueryClient, workItemID, orgID string, ceiling teamscope.Ceiling) (*issueRow, error) {
 	bindings := []dhclickhouse.Binding{
 		{Name: "work_item_id", Value: workItemID},
 		{Name: "org_id", Value: orgID},
 	}
-	rows, err := client.Query(ctx, fetchIssueQuery, bindings)
+	linkSQL, linkBindings := linkscope.ItemCondition(ceiling, "work_item_id")
+	rows, err := client.Query(ctx, fmt.Sprintf(fetchIssueQuery, linkSQL), append(bindings, linkBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("flame: fetch_issue query: %w", err)
 	}
@@ -233,12 +237,12 @@ const fetchDeploymentQuery = `
         FROM deployments FINAL
         WHERE org_id = {org_id:String}
           AND toString(repo_id) = {repo_id:String}
-          AND deployment_id = {deployment_id:String}
+          AND deployment_id = {deployment_id:String}%s
         LIMIT 1
     `
 
 // fetchDeployment ports fetch_deployment (api/queries/flame.py:105-143).
-func fetchDeployment(ctx context.Context, client QueryClient, repoID, deploymentID, orgID string) (*deploymentRow, error) {
+func fetchDeployment(ctx context.Context, client QueryClient, repoID, deploymentID, orgID string, ceiling teamscope.Ceiling) (*deploymentRow, error) {
 	canonicalID, err := canonicalRepoID(repoID)
 	if err != nil {
 		return nil, err
@@ -248,7 +252,8 @@ func fetchDeployment(ctx context.Context, client QueryClient, repoID, deployment
 		{Name: "repo_id", Value: canonicalID},
 		{Name: "deployment_id", Value: deploymentID},
 	}
-	rows, err := client.Query(ctx, fetchDeploymentQuery, bindings)
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	rows, err := client.Query(ctx, fmt.Sprintf(fetchDeploymentQuery, ceilingSQL), append(bindings, ceilingBindings...))
 	if err != nil {
 		return nil, fmt.Errorf("flame: fetch_deployment query: %w", err)
 	}
@@ -296,7 +301,10 @@ type issueIdentity struct {
 // fetchIssueIdentity returns no title when none is stored: the response then
 // carries a null title and the web shows "Unresolved". It returns no
 // repository id when none or several repositories hold the work item.
-func fetchIssueIdentity(ctx context.Context, client QueryClient, workItemID, orgID string) (issueIdentity, error) {
+func fetchIssueIdentity(ctx context.Context, client QueryClient, workItemID, orgID string, ceiling teamscope.Ceiling) (issueIdentity, error) {
+	if ceiling.Restricted() {
+		return fetchCeilingIssueIdentity(ctx, client, workItemID, orgID, ceiling)
+	}
 	rows, err := client.Query(ctx, fetchIssueIdentityQuery, []dhclickhouse.Binding{
 		{Name: "work_item_id", Value: workItemID},
 		{Name: "org_id", Value: orgID},
@@ -323,4 +331,74 @@ func fetchIssueIdentity(ctx context.Context, client QueryClient, workItemID, org
 		identity.RepoID = &repoID
 	}
 	return identity, rows.Err()
+}
+
+// fetchIssueTitleQuery reads the work item's newest stored title and nothing of its repository: for an allowlist
+// caller a repository comes only from the item's linked pull requests (CHAOS-13085).
+const fetchIssueTitleQuery = `
+        SELECT title
+        FROM work_items FINAL
+        WHERE work_item_id = {work_item_id:String}
+          AND org_id = {org_id:String}
+        ORDER BY last_synced DESC
+        LIMIT 1
+    `
+
+// fetchLinkedAllowedRepoQuery is the repositories of the allowed ceiling that hold a linked pull request of the item.
+const fetchLinkedAllowedRepoQuery = `
+        SELECT DISTINCT toString(repo_id) AS repo_id
+        FROM work_graph_issue_pr FINAL
+        WHERE org_id = {org_id:String}
+          AND work_item_id = {work_item_id:String}%s
+        ORDER BY repo_id ASC
+    `
+
+// fetchCeilingIssueIdentity is fetchIssueIdentity for an allowlist caller: the title from work_items, the repository
+// id only when exactly one allowed repository holds a linked pull request of the item.
+func fetchCeilingIssueIdentity(ctx context.Context, client QueryClient, workItemID, orgID string, ceiling teamscope.Ceiling) (issueIdentity, error) {
+	bindings := []dhclickhouse.Binding{
+		{Name: "work_item_id", Value: workItemID},
+		{Name: "org_id", Value: orgID},
+	}
+	var identity issueIdentity
+	titles, err := client.Query(ctx, fetchIssueTitleQuery, bindings)
+	if err != nil {
+		return issueIdentity{}, fmt.Errorf("flame: fetch_issue_title query: %w", err)
+	}
+	defer titles.Close()
+	if titles.Next() {
+		var title string
+		if err := titles.Scan(&title); err != nil {
+			return issueIdentity{}, fmt.Errorf("flame: fetch_issue_title scan: %w", err)
+		}
+		if strings.TrimSpace(title) != "" {
+			identity.Title = &title
+		}
+	}
+	if err := titles.Err(); err != nil {
+		return issueIdentity{}, err
+	}
+	ceilingSQL, ceilingBindings := ceiling.RepoTerm("toString(repo_id)")
+	repos, err := client.Query(ctx, fmt.Sprintf(fetchLinkedAllowedRepoQuery, ceilingSQL), append(bindings, ceilingBindings...))
+	if err != nil {
+		return issueIdentity{}, fmt.Errorf("flame: fetch_issue_linked_repo query: %w", err)
+	}
+	defer repos.Close()
+	var ids []string
+	for repos.Next() {
+		var id string
+		if err := repos.Scan(&id); err != nil {
+			return issueIdentity{}, fmt.Errorf("flame: fetch_issue_linked_repo scan: %w", err)
+		}
+		if strings.TrimSpace(id) != "" {
+			ids = append(ids, id)
+		}
+	}
+	if err := repos.Err(); err != nil {
+		return issueIdentity{}, err
+	}
+	if len(ids) == 1 {
+		identity.RepoID = &ids[0]
+	}
+	return identity, nil
 }

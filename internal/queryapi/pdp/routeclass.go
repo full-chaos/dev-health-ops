@@ -22,10 +22,11 @@ var routeClassKind = map[string]string{
 	"heatmap": KindNarrowable, "investment": KindNarrowable, "investment_sunburst": KindNarrowable,
 	"investment_explain": KindNarrowable, "drilldown_prs": KindNarrowable, "work_units": KindNarrowable,
 	"work_unit_explain": KindNarrowable, "people_drilldown_prs": KindNarrowable,
+	"drilldown_issues": KindNarrowable, "people_drilldown_issues": KindNarrowable, "flame": KindNarrowable,
 
 	"quadrant": KindMixed, "sankey": KindMixed, "home": KindMixed, "opportunities": KindMixed,
-	"filteroptions": KindMixed, "drilldown_issues": KindMixed, "people": KindMixed, "people_summary": KindMixed,
-	"people_metric": KindMixed, "people_drilldown_issues": KindMixed, "explain": KindMixed, "flame": KindMixed,
+	"filteroptions": KindMixed, "people": KindMixed, "people_summary": KindMixed,
+	"people_metric": KindMixed, "explain": KindMixed,
 	"flame_aggregated": KindMixed,
 }
 
@@ -62,11 +63,14 @@ var routeClassOf = map[string]string{
 	"GET /api/v1/flame/aggregated":                    "flame_aggregated",
 }
 
-// allowlistNarrowed is the classes whose handlers narrow every read to a repository ceiling (CHAOS-13090): the eight
-// narrowable classes. CHAOS-13083 adds a mixed class here only with its code and its census entry.
+// allowlistNarrowed is the classes whose handlers narrow every read to a repository ceiling: the eight narrowable
+// classes of CHAOS-13090 and the item-grain classes of CHAOS-13085, whose work-item reads are narrowed by the link of
+// an item to an allowed repository (internal/queryapi/linkscope). CHAOS-13083 adds a mixed class here only with its
+// code and its census entry, and moves it to narrowable in the same change.
 var allowlistNarrowed = map[string]bool{
 	"heatmap": true, "investment": true, "investment_sunburst": true, "investment_explain": true,
 	"drilldown_prs": true, "work_units": true, "work_unit_explain": true, "people_drilldown_prs": true,
+	"drilldown_issues": true, "people_drilldown_issues": true, "flame": true,
 }
 
 // allowlistCutOver is the cut-over registry: the row profiles ("METHOD /route") whose class is narrowed. An

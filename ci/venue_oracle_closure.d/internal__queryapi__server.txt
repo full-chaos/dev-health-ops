@@ -185,6 +185,7 @@ internal/queryapi/internalidentity
 internal/queryapi/investment
 internal/queryapi/investmentexplain
 internal/queryapi/linkeditems
+internal/queryapi/linkscope
 internal/queryapi/meta
 internal/queryapi/newestrow
 internal/queryapi/operatingreview

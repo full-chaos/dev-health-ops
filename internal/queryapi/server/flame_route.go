@@ -33,6 +33,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/flame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // flameOperation is this route's routeswitch operation name -- a
@@ -192,9 +193,16 @@ func newFlameWorkHandler(client flame.QueryClient) http.HandlerFunc {
 			}
 		}
 
+		ceiling, err := teamscope.ResolveCeiling(r.Context(), client, claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "flame", org, err)
+			return
+		}
+
 		resp, err := flame.BuildResponse(r.Context(), client, org, flame.Params{
 			EntityType: lastQueryValue(query, "entity_type"),
 			EntityID:   lastQueryValue(query, "entity_id"),
+			Ceiling:    ceiling,
 		})
 		if err != nil {
 			if reqErr, ok := flame.AsRequestError(err); ok {

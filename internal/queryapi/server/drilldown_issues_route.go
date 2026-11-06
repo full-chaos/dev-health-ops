@@ -242,6 +242,13 @@ func newDrilldownIssuesGetHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit: 50,
 		}
 
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
+			return
+		}
+		params.Ceiling = ceiling
+
 		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, org, params)
 		if err != nil {
 			// Python's outer `except Exception: raise HTTPException(503,
@@ -366,6 +373,13 @@ func newDrilldownIssuesPostHandler(reader *drilldown.Reader) http.HandlerFunc {
 			Limit:       limit,
 			BlockedOnly: blockedOnlyFromMetricFilter(filtersValue),
 		}
+
+		ceiling, err := reader.ResolveCeiling(r.Context(), claims.Scope)
+		if err != nil {
+			writeRESTDataUnavailable(w, r, "drilldown_issues", org, err)
+			return
+		}
+		params.Ceiling = ceiling
 
 		resp, err := drilldown.BuildIssuesResponse(r.Context(), reader, org, params)
 		if err != nil {

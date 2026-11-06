@@ -48,6 +48,7 @@ internal/pythonparity/pyunicodedata
 internal/queryapi/activeteams
 internal/queryapi/deltarule
 internal/queryapi/linkeditems
+internal/queryapi/linkscope
 internal/queryapi/people
 internal/queryapi/pepgate
 internal/queryapi/quadrant

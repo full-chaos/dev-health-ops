@@ -22,9 +22,9 @@ import (
 
 var (
 	narrowableClasses = []string{"heatmap", "investment", "investment_sunburst", "investment_explain", "drilldown_prs",
-		"work_units", "work_unit_explain", "people_drilldown_prs"}
-	mixedClasses = []string{"quadrant", "sankey", "home", "opportunities", "filteroptions", "drilldown_issues", "people",
-		"people_summary", "people_metric", "people_drilldown_issues", "explain", "flame", "flame_aggregated"}
+		"work_units", "work_unit_explain", "people_drilldown_prs", "drilldown_issues", "people_drilldown_issues", "flame"}
+	mixedClasses = []string{"quadrant", "sankey", "home", "opportunities", "filteroptions", "people",
+		"people_summary", "people_metric", "explain", "flame_aggregated"}
 )
 
 func restRows(t *testing.T) map[string]string {
@@ -179,13 +179,14 @@ func TestAllowlistOnANarrowableRouteIsCarried(t *testing.T) {
 			}
 		})
 	}
-	if seen != 11 {
-		t.Fatalf("%d narrowable rows, want 11", seen)
+	if seen != 15 {
+		t.Fatalf("%d narrowable rows, want 15", seen)
 	}
 }
 
-// The registry narrows exactly the eight N classes (CHAOS-13090): no mixed class, no narrowable class left out.
-func TestNarrowedClassesAreExactlyTheEightNarrowable(t *testing.T) {
+// The registry narrows exactly the N classes (the eight of CHAOS-13090 and the three item-grain classes of
+// CHAOS-13085): no mixed class, no narrowable class left out.
+func TestNarrowedClassesAreExactlyTheNarrowable(t *testing.T) {
 	var narrowable, narrowed []string
 	for _, class := range RouteClassNames() {
 		if kind, _ := ClassKind(class); kind == KindNarrowable {
@@ -195,7 +196,7 @@ func TestNarrowedClassesAreExactlyTheEightNarrowable(t *testing.T) {
 			narrowed = append(narrowed, class)
 		}
 	}
-	if len(narrowable) != 8 || !slices.Equal(narrowable, narrowed) {
+	if len(narrowable) != 11 || !slices.Equal(narrowable, narrowed) {
 		t.Fatalf("narrowed %v, want the narrowable classes %v", narrowed, narrowable)
 	}
 }

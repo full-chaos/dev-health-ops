@@ -845,7 +845,6 @@ internal/testsupport/venueoracle	golden.go	internal/auth/signedtoken
 internal/testsupport/venueoracle	golden.go	internal/backfillrun
 internal/testsupport/venueoracle	golden.go	internal/chmigrate
 internal/testsupport/venueoracle	golden.go	internal/cli
-internal/testsupport/venueoracle	golden.go	internal/edgetokenmint
 internal/testsupport/venueoracle	golden.go	internal/externalrecompute
 internal/testsupport/venueoracle	golden.go	internal/fixturescli
 internal/testsupport/venueoracle	golden.go	internal/fixturesgen

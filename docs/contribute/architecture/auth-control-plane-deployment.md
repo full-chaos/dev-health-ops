@@ -289,7 +289,7 @@ deploy change.
 The chart refuses the keys the phase replaces, whatever their value:
 `goApi.authProxy.*`, `authService.enabled`, `authService.usersOwned` and
 `authService.orgsOwned`. The choices that are not steps of the ladder stay small
-named keys: `authService.accessToken.class` (empty, `hs256_compat` or `eddsa`;
+named keys: `authService.accessToken.class` (empty or `eddsa`; the retired `hs256_compat` does not start;
 phase 2 or more; `eddsa` needs `authService.accessToken.issuerURL`, which the
 chart renders for auth-service and for go-api's verifier),
 `authService.socialLinkRoutes` (phase 2 or more) and `authService.sso.oidc` /

@@ -213,10 +213,10 @@ func (a *Authenticator) Membership(ctx context.Context, userID, orgID string) (s
 }
 
 // Impersonation is ImpersonationMiddleware. For a caller mayImpersonate lets
-// in, a live session row marks the request as in a session (RefuseImpersonation
-// refuses it) whatever the caller's actions; only a holder of admin.impersonate
-// acts as the target: the target's org, the impersonation context, and the
-// X-Impersonating / X-Impersonated-User-Id headers. A session lookup failure
+// in who holds admin.impersonate, an active session makes the target's org the
+// request's org, sets the impersonation context, and stamps X-Impersonating /
+// X-Impersonated-User-Id on the response; the row it read is kept for the
+// write and platform refusals (Guard.sessionRow). A session lookup failure
 // refuses the request with 503, the dependency failure (fail closed, logged).
 func (s *Scope) Impersonation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,7 +234,7 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			writeCallerLookupFailure(w, err)
 			return
 		}
-		if user == nil {
+		if user == nil || !user.Holds(ActionAdminImpersonate) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -250,12 +250,8 @@ func (s *Scope) Impersonation(next http.Handler) http.Handler {
 			WriteAuthFailure(w, "", ErrUnavailable)
 			return
 		}
+		ctx := context.WithValue(r.Context(), sessionRowKey{}, rowRead{session: session})
 		if session == nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-		ctx := context.WithValue(r.Context(), sessionRowKey{}, session)
-		if !user.Holds(ActionAdminImpersonate) {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}

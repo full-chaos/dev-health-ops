@@ -43,10 +43,10 @@ func requireMutationOrg(ctx context.Context, orgID string) error {
 		return fail("A valid organization ID is required")
 	}
 	claims, ok := authctx.FromContext(ctx)
-	if !ok || claims.OrgID == "" {
+	if !ok || servedOrg(claims) == "" {
 		return fail("Authorization required")
 	}
-	if claims.OrgID != orgID {
+	if servedOrg(claims) != orgID {
 		return fail("Access denied: cannot query org '" + orgID + "'")
 	}
 	return nil

@@ -24,6 +24,7 @@ func graphQLEnforce() graph.OperationEnforce {
 		}
 		caller := graphQLCaller(ctx)
 		caller.Unscoped = claims.Scope.Kind() == pepgate.KindNone
+		caller.LegacyImpersonation = claims.ImpersonationActive && !claims.Delegated
 		scopes, err := pdp.FromContext(ctx).AuthorizeOperation(ctx, caller, claims.OrgID, asked)
 		if err == nil {
 			return scopes, nil

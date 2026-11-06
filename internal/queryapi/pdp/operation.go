@@ -40,6 +40,10 @@ type Caller struct {
 	// Unscoped is true when the ingress set no scope on the request (pepgate KindNone): every ingress sets one, so an
 	// operation without it is refused while a cell of any of its roots is on.
 	Unscoped bool
+	// LegacyImpersonation is a go-api impersonation session carried by the admin's own token: the request runs as the
+	// target while its bearer is the admin's, so the decision point would judge the actor in the target's organization
+	// (D6714). A delegated bearer is not one: the decision point judges it as the target.
+	LegacyImpersonation bool
 }
 
 // Root is one root field of an operation: its key ("Query.name", "Mutation.name") and its catalog action.
@@ -54,6 +58,8 @@ const (
 	ReasonNoPrincipal pep.Reason = "authz_enforce_no_principal"
 	// ReasonNoScope is an operation whose ingress set no scope, with a cell of one of its roots on.
 	ReasonNoScope pep.Reason = "authz_enforce_no_scope"
+	// ReasonLegacyImpersonation is a user caller in a legacy impersonation session with a cell of one of its roots on.
+	ReasonLegacyImpersonation pep.Reason = "legacy_impersonation"
 )
 
 // rootCutOver is the GraphQL cut-over registry: the root keys whose resolvers narrow every read to a scope's
@@ -128,6 +134,10 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 		return legacy(), nil
 	}
 	label := enforced[0].Action
+	if caller.Class == CallerUser && caller.LegacyImpersonation {
+		g.count(ctx, ModeEnforce, ResultDeny, label)
+		return nil, &DenyError{Reason: ReasonLegacyImpersonation}
+	}
 	switch {
 	case g.mode == modeInvalid:
 		g.count(ctx, modeInvalid, ResultNotConfigured, label)

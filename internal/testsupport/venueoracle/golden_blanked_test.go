@@ -103,7 +103,6 @@ func TestAGoOnlyBlankedDeclarationIsRefusedWhenItIsNotOneExactUnlistedPatternWit
 	}{
 		"no reason":                {path, digest, map[string]string{"body $.session_access_token": " "}, "reason"},
 		"a glob":                   {path, digest, map[string]string{"body $.*": "a fresh token per run"}, "glob"},
-		"listed by the recording":  {path, digest, map[string]string{"body $.access_token": "a fresh token per run"}, "already lists"},
 		"a golden with no blanked": {unlistedPath, unlistedDigest, map[string]string{"body $.session_access_token": "a fresh token per run"}, "lists no blanked"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -116,5 +115,49 @@ func TestAGoOnlyBlankedDeclarationIsRefusedWhenItIsNotOneExactUnlistedPatternWit
 	if _, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest,
 		GoBlanked: map[string]string{"body $.session_access_token": "a fresh token per run"}}, "TestSample"); err != nil {
 		t.Fatalf("a well-formed declaration was refused: %v", err)
+	}
+}
+
+// CHAOS-13107: a pattern the recording's header lists (a token it projected to its claims) may be declared too, when the
+// Go plane's projection differs from the recording's by design: the test then compares that leaf by a place holder on
+// both planes, checks the value itself, and reports each such comparison with Unvalued. The projection alone never
+// counts as a use, so a declaration the test never reports is still refused at Finish.
+func TestAHeaderListedGoBlankedPatternCountsOnlyWhereTheTestComparesItUnvalued(t *testing.T) {
+	file := sampleGolden(sampleRequests())
+	file.Header.Blanked = map[string]int{"body $.access_token": 1}
+	path, digest := writeGoldenFile(t, t.TempDir(), file)
+	const reason = "EdDSA class: issuer URL iss + prn_ sub differ from the HS256 recording by design (13107)"
+	golden, err := openGolden(GoldenSpec{Path: path, PythonBuild: goldenBuild, SHA256: digest,
+		GoBlanked: map[string]string{"body $.access_token": reason}}, "TestSample")
+	if err != nil {
+		t.Fatalf("a declared pattern the header lists was refused: %v", err)
+	}
+	token := mintJWT(`{"alg":"EdDSA","typ":"at+jwt"}`, `{"iss":"https://issuer.example","sub":"prn_AAAAAAAAAAAAAAAAAAAAAA"}`, "signature")
+	if _, err := golden.projectResponseAt("", Response{Body: `{"access_token":"` + token + `"}`}); err != nil {
+		t.Fatalf("the projection of a listed pattern was refused: %v", err)
+	}
+	if err := golden.unusedGoBlanked(); err == nil || !strings.Contains(err.Error(), "body $.access_token") {
+		t.Fatalf("the projection alone counted as a use of the declaration: %v", err)
+	}
+	for name, pattern := range map[string]string{"undeclared": "body $.refresh_token", "declared nowhere, empty": ""} {
+		if err := golden.Unvalued(pattern); err == nil {
+			t.Errorf("%s: Unvalued(%q) was accepted", name, pattern)
+		}
+	}
+	if err := golden.Unvalued("body $.access_token"); err != nil {
+		t.Fatalf("Unvalued of the declared listed pattern: %v", err)
+	}
+	if err := golden.unusedGoBlanked(); err != nil {
+		t.Fatalf("a declaration the test compared unvalued is reported unused: %v", err)
+	}
+	// A declared pattern the header does not list is noted by the projection, never by Unvalued.
+	unlisted := &Golden{spec: GoldenSpec{Path: "g.json", PythonBuild: goldenBuild,
+		GoBlanked: map[string]string{"body $.session_access_token": "a fresh token per run"}}}
+	unlisted.loaded.Header.Blanked = map[string]int{"body $.access_token": 1}
+	if err := unlisted.Unvalued("body $.session_access_token"); err == nil || !strings.Contains(err.Error(), "does not list") {
+		t.Fatalf("Unvalued of a pattern the header does not list was accepted: %v", err)
+	}
+	if err := unlisted.unusedGoBlanked(); err == nil {
+		t.Fatal("a refused Unvalued counted as a use")
 	}
 }

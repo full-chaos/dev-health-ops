@@ -175,3 +175,6 @@ func (g *Golden) unusedGoBlanked() error {
 	sort.Strings(unused)
 	return fmt.Errorf("golden %s: GoldenSpec.GoBlanked declares %s, but no Go answer blanked a leaf of it: drop the declaration", g.spec.Path, strings.Join(unused, ", "))
 }
+
+// Unvalued records that the test compared the leaf of a declared, header-listed GoldenSpec.GoBlanked pattern unvalued.
+func (g *Golden) Unvalued(pattern string) error { return nil }

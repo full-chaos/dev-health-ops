@@ -382,6 +382,9 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 	var ready func(context.Context) error
 	var probes []ReadinessProbe
 	var registryPool *pgxpool.Pool
+	// AUTH_PROXY_IMPERSONATION is read before the routes are: a value that does not parse starts the
+	// process with one WARN and refuses the legacy caller (fail closed), configured routes or not.
+	warnInvalidImpersonationSwitch(getenv)
 	if routeCfg, ok := loadQueryRouteConfig(getenv); ok {
 		handlers, readyFn, cleanup, buildErr := buildQueryRoute(getenv, routeCfg)
 		if buildErr != nil {
@@ -395,11 +398,8 @@ func BuildWithLookup(lookup func(string) (string, bool)) (*Plane, error) {
 		if edgeErr != nil {
 			return fail(edgeErr)
 		}
-		// An AUTH_PROXY_IMPERSONATION go-api would refuse refuses startup here too.
-		edgeDeps, depsErr := newGraphQLEdgeDeps(getenv, lookup, edgeAuth, slog.Default())
-		if depsErr != nil {
-			return fail(depsErr)
-		}
+		// A switch value that does not parse refuses (warnInvalidImpersonationSwitch, above).
+		edgeDeps := newGraphQLEdgeDeps(getenv, lookup, edgeAuth, slog.Default())
 		mountQueryRouteSets(getenv, mux, internalMux, mcpMux, handlers, edgeDeps)
 		ready = readyFn
 		probes = handlers.Probes

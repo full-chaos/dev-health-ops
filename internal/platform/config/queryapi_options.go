@@ -59,7 +59,7 @@ var queryAPIOptions = func() []Option {
 		{
 			Flag: "auth-proxy-impersonation", Env: "AUTH_PROXY_IMPERSONATION", Kind: KindString,
 			Services: q, Group: GroupRuntime,
-			Usage: "true while go-api starts impersonation as an auth-service delegated session (go-api's flag): /graphql then refuses the admin's own bearer beside a live impersonation row (403); unset or false = off, any other value refuses startup",
+			Usage: "true while go-api starts impersonation as an auth-service delegated session (go-api's flag): /graphql then refuses the admin's own bearer beside a live impersonation row (403); unset or false = off, any other value starts the process with one WARN and refuses (fail closed)",
 		},
 		{
 			Flag: "auth-platform-roles-owned", Env: "AUTH_PLATFORM_ROLES_OWNED", Kind: KindString,

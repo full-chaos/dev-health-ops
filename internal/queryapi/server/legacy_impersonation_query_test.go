@@ -194,7 +194,7 @@ func TestProofWriteDoorRefusesTheLegacyImpersonationCaller(t *testing.T) {
 			if got := post(unset, token); got.Code != http.StatusOK || len(*seenUnset) != 1 || (*seenUnset)[0].OrgID != irTargetOrg.String() {
 				t.Fatalf("switch unset: %d %s claims=%+v, want the mutation served in the target org (main's behavior)", got.Code, got.Body.String(), *seenUnset)
 			}
-			// "yes" refuses startup; a handler built with it anyway fails closed.
+			// "yes" starts the process with one WARN and fails closed (TestInvalidImpersonationSwitchStartsWithOneWarnAndRefuses).
 			for _, value := range []string{"true", "yes"} {
 				on, seenOn := door(t, value)
 				if got := post(on, token); got.Code != http.StatusForbidden || strings.TrimSpace(got.Body.String()) != legacyRefusalBody || len(*seenOn) != 0 {

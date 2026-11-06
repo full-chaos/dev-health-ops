@@ -21,9 +21,10 @@ import (
 // own bearer.
 const impersonationProxyEnv = "AUTH_PROXY_IMPERSONATION"
 
-// refusesLegacyImpersonation reads AUTH_PROXY_IMPERSONATION as go-api reads
-// it: unset or empty is off, true or false as strconv.ParseBool reads them,
-// any other value an error.
+// refusesLegacyImpersonation reads AUTH_PROXY_IMPERSONATION: unset or empty
+// is off, true or false as strconv.ParseBool reads them, any other value an
+// error, which every reader treats as on (fail closed) and which never stops
+// the process (warnInvalidImpersonationSwitch).
 func refusesLegacyImpersonation(getenv getenvFunc) (bool, error) {
 	raw := strings.TrimSpace(getenv(impersonationProxyEnv))
 	if raw == "" {
@@ -36,19 +37,27 @@ func refusesLegacyImpersonation(getenv getenvFunc) (bool, error) {
 	return on, nil
 }
 
-// newGraphQLEdgeDeps is /graphql's middleware dependencies from the settings.
-func newGraphQLEdgeDeps(getenv getenvFunc, lookup func(string) (string, bool), auth *policy.Authenticator, logger *slog.Logger) (graphQLEdgeDeps, error) {
-	refuse, err := refusesLegacyImpersonation(getenv)
-	if err != nil {
-		return graphQLEdgeDeps{}, err
+// warnInvalidImpersonationSwitch writes the one WARN for an
+// AUTH_PROXY_IMPERSONATION that does not parse: the process starts, and the
+// legacy caller is refused as with the switch on.
+func warnInvalidImpersonationSwitch(getenv getenvFunc) {
+	if _, err := refusesLegacyImpersonation(getenv); err != nil {
+		slog.Warn("query-api: the impersonation switch does not parse; the legacy impersonation caller is refused as with it on",
+			slog.String("variable", impersonationProxyEnv), slog.String("accepted", "unset, true or false (as strconv.ParseBool reads them)"))
 	}
+}
+
+// newGraphQLEdgeDeps is /graphql's middleware dependencies from the settings.
+// A switch value that does not parse refuses (fail closed).
+func newGraphQLEdgeDeps(getenv getenvFunc, lookup func(string) (string, bool), auth *policy.Authenticator, logger *slog.Logger) graphQLEdgeDeps {
+	refuse, err := refusesLegacyImpersonation(getenv)
 	return graphQLEdgeDeps{
 		auth:                      auth,
 		corsOrigins:               corsAllowedOrigins(lookup),
 		maxBytes:                  graphQLMaxQueryBytes(getenv),
 		logger:                    logger,
-		refuseLegacyImpersonation: refuse,
-	}, nil
+		refuseLegacyImpersonation: refuse || err != nil,
+	}
 }
 
 // errLegacyImpersonationRefused is liveScope's answer for the legacy caller
@@ -57,15 +66,40 @@ var errLegacyImpersonationRefused = errors.New("legacy impersonation caller refu
 
 type legacyImpersonationRefusedKey struct{}
 
+// legacyRefusal is the request's refusal state: liveScope sets holderRowLive
+// for a holder of admin.impersonate that is not a superuser (its row is never
+// applied) when its row is live or cannot be read, and the dispatch then
+// refuses its non-query documents.
+type legacyRefusal struct{ holderRowLive bool }
+
 // withLegacyImpersonationRefused marks the request so liveScope refuses the
 // admin's own bearer beside a live go-api row instead of serving it as the target.
 func withLegacyImpersonationRefused(ctx context.Context) context.Context {
-	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, true)
+	return context.WithValue(ctx, legacyImpersonationRefusedKey{}, &legacyRefusal{})
 }
 
 func legacyImpersonationRefused(ctx context.Context) bool {
-	refused, _ := ctx.Value(legacyImpersonationRefusedKey{}).(bool)
+	_, refused := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal)
 	return refused
+}
+
+func markHolderRowLive(ctx context.Context) {
+	if state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal); ok {
+		state.holderRowLive = true
+	}
+}
+
+func holderRowLive(ctx context.Context) bool {
+	state, ok := ctx.Value(legacyImpersonationRefusedKey{}).(*legacyRefusal)
+	return ok && state.holderRowLive
+}
+
+// legacyDocumentReads reports whether text, the document the resolver runs,
+// is one query operation by its AST (digest.DocumentKind); a mutation, a
+// subscription and a text that does not parse are not.
+func legacyDocumentReads(text string) bool {
+	kind, err := digest.DocumentKind(text)
+	return err == nil && kind == digest.KindQuery
 }
 
 // graphQLEdgeReads is /graphql's read test for the read limit of the legacy

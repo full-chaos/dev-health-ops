@@ -463,16 +463,18 @@ func TestRESTShadowInFlightFullIsDropped(t *testing.T) {
 func TestRESTShadowSampleKnob(t *testing.T) {
 	srv := pdptest.New(t)
 	g, _ := newShadowREST(t, pepOf(t, srv.URL), map[string]string{policy.EnvShadowPDPSample: "50"})
+	before := shadowCounters(t)
 	for i := 0; i < 100; i++ {
 		if got, _ := g.get(g.userToken()); got != gatedOK {
 			t.Fatalf("request %d: %+v", i, got)
 		}
 	}
-	for deadline := time.Now().Add(3 * time.Second); len(srv.Requests()) < 50 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-	}
-	time.Sleep(100 * time.Millisecond)
+	g.gate.Shadow().Wait()
 	if n := len(srv.Requests()); n != 50 {
 		t.Fatalf("PDP asked %d times for a 50 percent sample of 100, want 50", n)
+	}
+	if dropped := shadowDelta(before, shadowCounters(t))[shadowResultsMetric+"|reason=none,result=dropped"]; dropped != 0 {
+		t.Fatalf("%d sampled calls dropped, want 0", dropped)
 	}
 }
 

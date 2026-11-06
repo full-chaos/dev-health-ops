@@ -1,6 +1,11 @@
 package authorization
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/auth/policycatalog"
+)
 
 var productRule2OrgWideReads = []string{"metrics.read", "analytics.read", "analytics.export", "git.read", "work_items.read"}
 
@@ -31,4 +36,24 @@ func TestProductRule2ReadWithNoGrantRowsCarriesOnlyTheTenantScope(t *testing.T) 
 			t.Errorf("%s: %+v %+v, want an allow with the tenant scope alone", action, d, d.Obligations)
 		}
 	}
+}
+
+// filteredOrgCatalog marks the five product-rule-2 reads `filtered` again. The real catalog no longer holds an
+// organization action that is filtered, so the narrowing machinery (organizationAllow, repositoryScope) is exercised
+// through this view only.
+type filteredOrgCatalog struct{ base catalogView }
+
+func (c filteredOrgCatalog) Version() int { return c.base.Version() }
+func (c filteredOrgCatalog) Action(id string) (policycatalog.Action, error) {
+	a, err := c.base.Action(id)
+	if err == nil && slices.Contains(productRule2OrgWideReads, id) {
+		a.RepositoryScope = policycatalog.RepositoryScopeFiltered
+	}
+	return a, err
+}
+func (c filteredOrgCatalog) Role(id string) (policycatalog.Role, error) { return c.base.Role(id) }
+func (c filteredOrgCatalog) Allows(role, action string) bool            { return c.base.Allows(role, action) }
+
+func filteredOrgEvaluator() *Evaluator {
+	return newEvaluator(filteredOrgCatalog{base: NewEvaluator().cat})
 }

@@ -15,8 +15,10 @@ type productRule2Snapshot struct {
 	grants []authorization.Grant
 }
 
-func (s productRule2Snapshot) PrincipalStatus() authorization.Status { return authorization.StatusActive }
-func (s productRule2Snapshot) PlatformRole() string                  { return "" }
+func (s productRule2Snapshot) PrincipalStatus() authorization.Status {
+	return authorization.StatusActive
+}
+func (s productRule2Snapshot) PlatformRole() string { return "" }
 func (s productRule2Snapshot) OrganizationStatus(string) authorization.Status {
 	return authorization.StatusActive
 }

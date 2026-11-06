@@ -90,7 +90,6 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 		"P4 allowlist [] not cut over":       {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{} }, ReasonNotCarriedOut},
 		"P5 allowlist [acme/a] not cut over": {func(r *pepfake.Rule) { r.RepositoryScope, r.RepositoryAllowlist = "", []string{"acme/a"} }, ReasonNotCarriedOut},
 		"P6 scope and allowlist (malformed)": {func(r *pepfake.Rule) { r.RepositoryAllowlist = []string{"acme/a"} }, pep.ReasonMalformed},
-		"P7 neither repository member":       {func(r *pepfake.Rule) { r.RepositoryScope = "" }, ReasonNoRepositoryRule},
 		"P8 redaction":                       {func(r *pepfake.Rule) { r.Redaction = []pep.RedactionClass{pep.RedactFreeText} }, ReasonNotCarriedOut},
 		"P8 minimum_assurance":               {func(r *pepfake.Rule) { r.MinimumAssurance = pep.AssuranceAAL2 }, ReasonNotCarriedOut},
 		"P8 step_up":                         {func(r *pepfake.Rule) { r.StepUp = true }, ReasonNotCarriedOut},
@@ -104,6 +103,24 @@ func TestSeamAllowNotCarriedOutIs503(t *testing.T) {
 				t.Fatalf("asked %d times, want 1", decider.calls.Load())
 			}
 		})
+	}
+}
+
+// P7: a filtered action (an ACR read) with neither repository member is refused; a metrics read, org-wide for every
+// member (product rule 2), is served as the tenant alone.
+func TestSeamNeitherRepositoryMember(t *testing.T) {
+	_, cfg := newMeter(t)
+	cfg.Mode, cfg.Switch = ModeEnforce, cells("analytics,acr")
+	cfg.Decider = pepfake.New(allowRule(func(r *pepfake.Rule) { r.RepositoryScope = "" }),
+		allowRule(func(r *pepfake.Rule) { r.Action, r.RepositoryScope = "acr.context.read", "" }))
+	g := New(cfg)
+	g.actions[acrTestProfile] = "acr.context.read"
+	scope, err := g.Authorize(context.Background(), acrTestProfile, testBearer, seamOrg)
+	wantLocal(t, err, ReasonNoRepositoryRule)
+	wantNoScope(t, scope)
+	scope, err = g.Authorize(context.Background(), testProfile, testBearer, seamOrg)
+	if err != nil || scope.Kind() != pepgate.KindOrganization {
+		t.Fatalf("metrics read with the tenant alone: answered %v kind %v, want Organization", err, scope.Kind())
 	}
 }
 
@@ -376,14 +393,14 @@ func TestSeamRepositoryScopeNoneAction(t *testing.T) {
 			r.Action, r.RepositoryScope, r.RepositoryAllowlist = "org.read", "", []string{"acme/widgets"}
 		}, false},
 		"tenant other org":    {func(r *pepfake.Rule) { r.Action, r.RepositoryScope, r.TenantScope = "org.read", "", "other-org" }, false},
-		"filtered, no member": {func(r *pepfake.Rule) { r.RepositoryScope = "" }, false},
+		"filtered, no member": {func(r *pepfake.Rule) { r.Action, r.RepositoryScope = "acr.context.read", "" }, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, cfg := newMeter(t)
 			cfg.Mode, cfg.Decider, cfg.Switch = ModeEnforce, pepfake.New(allowRule(tc.edit)), cells("analytics,org")
 			p := profile
 			if name == "filtered, no member" {
-				p = testProfile
+				p = acrTestProfile
 			}
 			scope, err := New(cfg).Authorize(context.Background(), p, testBearer, seamOrg)
 			if !tc.pass {

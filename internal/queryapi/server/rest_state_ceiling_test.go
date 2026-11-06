@@ -8,18 +8,20 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/explain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
-// CHAOS-13088 (PR-D of CHAOS-13083): sankey and filter options read only the repositories of an allowlist decision.
+// CHAOS-13088 (PR-D of CHAOS-13083): sankey, filter options, explain and the aggregated flame read only the
+// repositories of an allowlist decision.
 // Repository-keyed reads carry the ceiling; item reads go through the link of an item to an allowed repository; the
 // daily aggregates that hold no item (work_item_metrics_daily, work_item_state_durations_daily,
 // work_item_user_metrics_daily) are never read: their rows, and the status list, are recomputed from the linked items.
 // Every cell drives the real handler over the recording client of the ceiling cells.
 
-var stateScopeClasses = []string{"sankey", "filteroptions"}
+var stateScopeClasses = []string{"sankey", "filteroptions", "explain", "flame_aggregated"}
 
 func isStateScopeClass(class string) bool {
 	return slices.Contains(stateScopeClasses, strings.TrimSuffix(class, "_post"))
@@ -27,7 +29,8 @@ func isStateScopeClass(class string) bool {
 
 var sankeyModes = []string{"investment", "expense", "state", "hotspot"}
 
-// stateCeilingCases are the handlers of PR-D: sankey GET and POST in each mode, and filter options.
+// stateCeilingCases are the handlers of PR-D: sankey GET and POST in each mode, filter options, explain GET and POST
+// for each metric, and the aggregated flame in each mode.
 func stateCeilingCases() []restOrgCase {
 	base := map[string]restOrgCase{}
 	for _, tc := range append(restOrgCases(), restOrgPostCases()...) {
@@ -41,7 +44,20 @@ func stateCeilingCases() []restOrgCase {
 		post.class, post.body = "sankey_post_"+mode, `{"mode":"`+mode+`","filters":{"time":{"start_date":"2026-01-01","end_date":"2026-01-15"}}}`
 		out = append(out, get, post)
 	}
-	return append(out, base["filteroptions"])
+	out = append(out, base["filteroptions"])
+	for _, metric := range explain.MetricNames() {
+		get := base["explain"]
+		get.class, get.target = "explain_"+metric, "/api/v1/explain?metric="+metric+"&start_date=2026-01-01&end_date=2026-01-15"
+		post := base["explain_post"]
+		post.class, post.body = "explain_post_"+metric, `{"metric":"`+metric+`","filters":{"time":{"start_date":"2026-01-01","end_date":"2026-01-15"}}}`
+		out = append(out, get, post)
+	}
+	for _, mode := range []string{"cycle_breakdown", "code_hotspots", "throughput"} {
+		flame := base["flame_aggregated"]
+		flame.class, flame.target = "flame_aggregated_"+mode, "/api/v1/flame/aggregated?mode="+mode+"&start_date=2026-01-01&end_date=2026-01-15"
+		out = append(out, flame)
+	}
+	return out
 }
 
 func stateCase(t *testing.T, class string) restOrgCase {
@@ -59,7 +75,8 @@ var (
 	// stateItemTables are keyed by a work item: a read goes through the link.
 	stateItemTables = []string{"work_items", "work_item_cycle_times", "work_item_team_attributions", "work_item_transitions"}
 	// stateRepoTables are keyed by a repository column.
-	stateRepoTables = []string{"work_unit_investments", "file_metrics_daily", "user_metrics_daily"}
+	stateRepoTables = []string{"work_unit_investments", "file_metrics_daily", "user_metrics_daily", "repo_metrics_daily",
+		"deploy_metrics_daily", "repo_change_failure_daily"}
 )
 
 // isMatcher reports the one statement that resolves the allowlist keys (it reads repos by name, with no ceiling).
@@ -192,10 +209,16 @@ func TestStateCeiling_NamedRepositoryOutsideTheCeilingReadsNothing(t *testing.T)
 // marked so; a repository-keyed flow needs no mark; filter options list the lists they do not serve, with the reason.
 func TestStateCeiling_TheAnswerSaysWhatItHolds(t *testing.T) {
 	for class, want := range map[string][]string{
-		"sankey_expense":      {`"narrowed_counts":[{"kind":"expense","scope":"repository ceiling"}]`},
-		"sankey_post_state":   {`"narrowed_counts":[{"kind":"state","scope":"repository ceiling"}]`},
-		"sankey_investment":   nil,
-		"sankey_post_hotspot": nil,
+		"sankey_expense":                   {`"narrowed_counts":[{"kind":"expense","scope":"repository ceiling"}]`},
+		"sankey_post_state":                {`"narrowed_counts":[{"kind":"state","scope":"repository ceiling"}]`},
+		"sankey_investment":                nil,
+		"sankey_post_hotspot":              nil,
+		"explain_throughput":               {`"narrowed_counts":[{"kind":"throughput","scope":"repository ceiling"}]`},
+		"explain_post_blocked_work":        {`"narrowed_counts":[{"kind":"blocked_work","scope":"repository ceiling"}]`},
+		"explain_review_latency":           nil,
+		"flame_aggregated_cycle_breakdown": {`"narrowed_counts":[{"kind":"cycle_breakdown","scope":"repository ceiling"}]`},
+		"flame_aggregated_throughput":      {`"narrowed_counts":[{"kind":"throughput","scope":"repository ceiling"}]`},
+		"flame_aggregated_code_hotspots":   nil,
 		"filteroptions": {
 			`"omitted_signals":[{"kind":"issue_type","reason":"not scoped to repositories"},{"kind":"team_catalog","reason":"not scoped to repositories"}]`,
 			`"narrowed_counts":[{"kind":"filter_options","scope":"repository ceiling"}]`,
@@ -218,17 +241,16 @@ func TestStateCeiling_TheAnswerSaysWhatItHolds(t *testing.T) {
 	}
 }
 
-// C5: the two classes are carried now, each by its own rows; explain and the aggregated flame are still M, and an
-// allowlist on them is still refused.
-func TestStateCeiling_SankeyAndFilterOptionsAreNarrowed(t *testing.T) {
+// C5: the four classes are carried now, each by its own rows; no route class is M any more.
+func TestStateCeiling_TheLastMixedClassesAreNarrowed(t *testing.T) {
 	for _, class := range stateScopeClasses {
 		if kind, _ := pdp.ClassKind(class); kind != pdp.KindNarrowable || !pdp.AllowlistNarrowed(class) {
 			t.Errorf("class %s kind %q narrowed %t, want N and narrowed", class, kind, pdp.AllowlistNarrowed(class))
 		}
 	}
-	for _, class := range []string{"explain", "flame_aggregated"} {
-		if kind, _ := pdp.ClassKind(class); kind != pdp.KindMixed || pdp.AllowlistNarrowed(class) {
-			t.Errorf("class %s kind %q narrowed %t, want M and not narrowed (PR-D2)", class, kind, pdp.AllowlistNarrowed(class))
+	for _, class := range pdp.RouteClassNames() {
+		if kind, _ := pdp.ClassKind(class); kind != pdp.KindNarrowable {
+			t.Errorf("class %s is %q: every class narrows its reads since CHAOS-13088", class, kind)
 		}
 	}
 }

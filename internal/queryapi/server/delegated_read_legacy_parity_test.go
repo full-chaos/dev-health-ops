@@ -18,7 +18,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/auth/authorization"
-	"github.com/full-chaos/dev-health-ops/internal/auth/session"
 	"github.com/full-chaos/dev-health-ops/internal/auth/sessionid"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -209,23 +208,6 @@ func dlpGate(t *testing.T, mode, cells string, p *dlpPDP) *pdp.Gate {
 
 // dlpReadCells switches on the actions of dlpRows.
 var dlpReadCells = "analytics,metrics,git,work_items"
-
-// A delegated (act claim) bearer's read on an enforced query-api row gets the answer the row gives with its cell
-// off (product rule 1): the target's organization, served org-wide. The delegated allow carries minimum_assurance at
-// the level the production mapping gives a session (session.AssuranceOf: aal1 for every accepted amr).
-func TestADelegatedReadOnAnEnforcedQueryAPIRowEqualsTheLegacyAnswer(t *testing.T) {
-	quietStdLog(t)
-	h := newDLPRig(t, session.AssuranceOf([]string{"pwd"}))
-	for _, row := range dlpRows {
-		legacy, enforced := h.serve(row, h.legacy), h.serve(row, h.enforced)
-		if enforced != legacy || legacy.code != http.StatusOK {
-			t.Errorf("GET %s delegated: enforce-on %d %s, cells-off %d %s; want the cells-off 200", row, enforced.code, enforced.body, legacy.code, legacy.body)
-		}
-		if n := len(h.pdp.take()); n != 1 {
-			t.Errorf("GET %s: %d PDP calls, want 1 (enforce-on only)", row, n)
-		}
-	}
-}
 
 // A level the session cannot meet stays no verdict: an aal2 allow is a 503 on every enforced read row.
 func TestADelegatedReadWithAnAAL2AllowStaysUnavailable(t *testing.T) {

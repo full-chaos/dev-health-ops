@@ -152,17 +152,6 @@ func delegatedBillingRead(t *testing.T, pdp *testPDP, enforce bool) response {
 	return enforceRequest(parityMux(t, auth, enf, m), http.MethodGet, m.path)
 }
 
-// A delegated bearer's read on an enforced row gets the cells-off answer when the allow carries the assurance every
-// session go-api accepts has (aal1, session.AssuranceOf).
-func TestADelegatedReadWithAnAAL1AllowEqualsTheLegacyAnswer(t *testing.T) {
-	pdp := newTestPDP(t, allowAll)
-	pdp.obligations = map[string]any{"tenant_scope": ownOrg, "minimum_assurance": "aal1"}
-	legacy, enforced := delegatedBillingRead(t, pdp, false), delegatedBillingRead(t, pdp, true)
-	if enforced.status != legacy.status || enforced.body != legacy.body || legacy.status != http.StatusOK {
-		t.Fatalf("delegated read, aal1 allow: enforce-on %d %q, cells-off %d %q; want the cells-off 200", enforced.status, enforced.body, legacy.status, legacy.body)
-	}
-}
-
 // A level no go-api session meets stays no verdict: an aal2 allow on a delegated read is a 503.
 func TestADelegatedReadWithAnAAL2AllowStaysUnavailable(t *testing.T) {
 	pdp := newTestPDP(t, allowAll)

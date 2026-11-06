@@ -163,9 +163,11 @@ There is no refresh: the session lasts at most 15 minutes, not the
 at auth-service and answers `200` with `status` `stopped`; with no open session
 it answers `400` "No active impersonation session" as before. Stop needs the
 administrator's own session: the delegated bearer is refused on every
-`/api/v1/admin` route. go-api refuses an impersonation caller fail-closed on
-PDP-enforced rows (outcome `impersonation_refused`, CHAOS-12814); the stop
-route is exempt and is decided by the PDP with the administrator's own bearer.
+`/api/v1/admin` route. go-api refuses an impersonation caller's write, and its
+request to a platform wrap, fail-closed on PDP-enforced rows (outcome
+`impersonation_refused`, CHAOS-12814); its read keeps the legacy answer
+(unjudged `impersonation`). The stop route is exempt and is decided by the PDP
+with the administrator's own bearer.
 With the web change below live, the Superadmin UI is refused in every tab while
 a delegated token is live.
 

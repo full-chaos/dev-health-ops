@@ -64,10 +64,12 @@ var enforceOutcomes = []string{enforceOutcomeAllow, enforceOutcomeDeny, enforceO
 // because a guard that cannot get a verdict must not fall back to the check the switch replaced. An allow with an
 // obligation go-api does not carry out (see obligationsCarriedOut) is such a failure. A caller with a live go-api
 // impersonation row presents the admin's own bearer, which the decision point would judge as the admin, not as the
-// delegation: it is refused before any call, except on the stop route. A delegated session's own bearer is decided
+// delegation: its read of a route that is not a platform wrap keeps the legacy answer (served as the target
+// organization, product rule 1) and any other request is refused, as the legacy platform wrap refuses it, both before
+// any call, except on the stop route. A delegated session's own bearer is decided
 // like any other. The one exception is a caller the decision point cannot judge (a legacy HS256 token, an
-// organization route with no organization): that request keeps the legacy answer, which is the same answer the
-// route gives with its cell off.
+// organization route with no organization, an impersonation read): that request keeps the legacy answer, which is the
+// same answer the route gives with its cell off.
 // Operator runbook: docs/operate/runbooks/auth-pdp-outage-and-rollback.md
 type Enforcer struct {
 	decider pep.Decider
@@ -145,6 +147,10 @@ type enforceObservation struct {
 	userAccessToken bool
 	// impersonating: a live go-api impersonation row is in force for the caller's own bearer.
 	impersonating bool
+	// read: the request method writes nothing (readMethod, the legacy RefuseImpersonation's rule).
+	read bool
+	// platform: the route is a platform wrap, whose legacy guard refuses a live row itself (Guard.wrap, Superuser).
+	platform bool
 	// served: the organization a path or query parameter names for the handler to serve (servedOrgOf).
 	served servedOrg
 }
@@ -174,6 +180,12 @@ func (e *Enforcer) decide(ctx context.Context, o enforceObservation) enforceVerd
 		return enforceNoDecisionPoint
 	}
 	if o.impersonating && !liveRowExempt(o.pattern) {
+		if o.read && !o.platform {
+			countEnforceUnjudged(ctx, o.pattern, enforceUnjudgedImpersonation)
+			e.logger.DebugContext(ctx, "api enforcement: an impersonation read keeps the legacy answer",
+				slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
+			return enforceLegacy
+		}
 		countEnforce(ctx, row.Namespace, enforceOutcomeImpersonationRefused)
 		e.logger.WarnContext(ctx, "api enforcement: impersonation caller refused on an enforced row",
 			slog.String("route", o.pattern), slog.String("namespace", row.Namespace))
@@ -294,7 +306,8 @@ func (g *Guard) enforceVerdict(r *http.Request, user *User, bearer string, platf
 		impersonating = session != nil
 	}
 	verdict := g.pdp.enforcer.decide(ctx, enforceObservation{pattern: r.Pattern, bearer: bearer, orgID: user.OrgID,
-		userAccessToken: user.accessToken, impersonating: impersonating, served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
+		userAccessToken: user.accessToken, impersonating: impersonating, read: readMethod(r.Method), platform: platform,
+		served: servedOrgOf(r, g.pdp.enforcer.rows[r.Pattern])})
 	// The refusal returns before the legacy checks that observe the shadow, so the shadow is told here: it counts
 	// impersonation_refused without a decision point call.
 	if verdict == enforceImpersonationRefused {

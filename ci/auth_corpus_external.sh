@@ -123,6 +123,7 @@ fi
     printf 'export AUTH_CORPUS_OPERATOR_PORT=%s\n' "${OPERATOR_PORT}"
     printf 'export AUTH_CORPUS_STUB_DIR=%q\n' "${STUB_DIR}"
     printf 'export JWT_SECRET_KEY=%q\n' "${JWT_KEY}"
+    printf 'export LINK_TOKEN_SECRET=%q\n' "${JWT_KEY}"
     printf 'export EMAIL_PROVIDER=%q\n' "smtp"
     printf 'export EMAIL_FROM_ADDRESS=%q\n' "Dev Health <auth@example.test>"
     if [ "${LEG}" = "acp" ]; then

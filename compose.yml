@@ -1175,6 +1175,8 @@ services:
         - *jwt-secret-key
         - *state-secret-keys
         - *settings-encryption-key
+      # Signs and accepts invite, verification and reset links; unset, those routes answer 503 config_missing. Local-only placeholder.
+      LINK_TOKEN_SECRET: ${LINK_TOKEN_SECRET:-local-dev-link-token-secret-0123456789abcdef}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       STRIPE_PRICE_ID_TEAM: ${STRIPE_PRICE_ID_TEAM:-}

@@ -21,6 +21,7 @@ int-build	integrate	/integrate/build-an-integration/	Build a supported integrati
 int-provider	int-build	/integrate/build-an-integration/provider/	Build a provider integration	task-guide	true	public	planned	false	
 int-contracts	int-build	/integrate/build-an-integration/data-contracts/	Use canonical data contracts	concept	true	public	planned	false	
 int-test	int-build	/integrate/build-an-integration/testing/	Test an integration	task-guide	true	public	planned	false	
+int-mcp	integrate	/integrate/mcp/	Connect an agent to the hosted MCP server	task-guide	true	public	active	false	
 int-troubleshoot	integrate	/integrate/troubleshooting/	Troubleshoot integrations	troubleshooting-index	true	public	planned	false	
 int-auth-fail	int-troubleshoot	/integrate/troubleshooting/authentication/	Authentication and authorization errors	troubleshooting	true	public	planned	false	
 int-token-verification	int-troubleshoot	/integrate/troubleshooting/token-verification/	Token verification problems	troubleshooting	true	public	active	false	

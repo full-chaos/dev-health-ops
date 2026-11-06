@@ -27,8 +27,8 @@ func TestImpersonationSessionLookupErrorIsRefused(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("GET /x/{id}", scope.Principal(scope.Impersonation(echo)))
 	got := serve(mux, http.MethodGet, "/x/an-unbounded-id", map[string]string{"Authorization": "Bearer " + token})
-	if got.status != http.StatusInternalServerError {
-		t.Fatalf("status %d body %q, want 500: the active-session lookup failed", got.status, got.body)
+	if got.status != http.StatusServiceUnavailable {
+		t.Fatalf("status %d body %q, want 503: the active-session lookup failed", got.status, got.body)
 	}
 	if got.header.Get("X-Impersonating") != "" || strings.Contains(got.body, "org=") {
 		t.Fatalf("a refused request reached the route or stamped impersonation: %q %v", got.body, got.header)

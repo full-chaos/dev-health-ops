@@ -84,8 +84,9 @@ link them.
 1. Record the choice in an ADR addendum (standard library first; why not).
 2. Pin it in `go.mod`; the image build runs with `-mod=readonly`.
 3. The [auth gate](auth-control-plane-go-gates.md) runs a pinned `govulncheck`
-   over the auth packages with **no ignore list**: any reachable finding fails
-   the gate, so a vulnerable dependency cannot merge.
+   over the auth packages: any reachable finding fails the gate, so a vulnerable
+   dependency cannot merge. The only exception is an exact advisory+module+version
+   row of `ci/auth-vuln-exceptions.tsv` for an advisory with no fixed version.
 4. State the update owner and the replacement plan in the ADR.
 
 ## Verified against

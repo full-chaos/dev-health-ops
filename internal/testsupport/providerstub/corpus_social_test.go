@@ -77,7 +77,9 @@ func TestStubHostsResolveOnlyProviderNames(t *testing.T) {
 				inAliases = false
 			}
 		}
-		if found == 0 {
+		// CHAOS-13107: go-api's and auth-service's aliases are both the main override's (both legs reach auth-service);
+		// the acp override may hold none, and any it holds are checked above.
+		if found == 0 && name == "auth_corpus_external.override.yml" {
 			t.Errorf("%s has no extra_hosts alias for the stub", name)
 		}
 	}

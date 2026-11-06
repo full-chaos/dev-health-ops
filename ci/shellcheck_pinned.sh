@@ -168,6 +168,8 @@ FILES=(
   "${ROOT}/ci/lib/auth_workload_session_issue_k3s.sh"
   # CHAOS-11596: the merge queue relevance of the external auth corpus.
   "${ROOT}/ci/auth_corpus_queue_relevance.sh"
+  # CHAOS-12702: the auth side of the web live e2e (auth-service as a bare process).
+  "${ROOT}/ci/live_e2e_auth_stack.sh"
   "${ROOT}/ci/run_tests.sh"
   "${ROOT}/docker/init-extra-dbs.sh"
   "${ROOT}/.github/docs-legacy/examples/customer-push/generic-runner.sh"

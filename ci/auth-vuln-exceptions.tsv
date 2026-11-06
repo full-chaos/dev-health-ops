@@ -1,0 +1,6 @@
+# Excepted reachable govulncheck findings for the auth gate (ci/check_go.sh auth vuln).
+# Columns: osv<TAB>module<TAB>version<TAB>ticket<TAB>reason. A row excepts exactly that advisory in
+# that module at that version, and only while the advisory has no fixed version: once one exists the
+# gate fails until the row is removed. No date field. A malformed row fails the gate.
+# A new or changed row needs a pm/chris ruling id in the ticket field's issue.
+GO-2026-6909	github.com/crewjam/saml	v0.5.1	CHAOS-13172	crewjam/saml ServiceProvider.ParseXMLResponse nil-pointer panic and namespace-blind NameID on a signed assertion; no fixed version. SAML is dark on prod. Remove this row when a fixed version exists.

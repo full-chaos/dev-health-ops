@@ -68,6 +68,11 @@ const (
 	// (go-api's and the worker domain login's). Both empty leaves the function unexecutable.
 	envPushWriter  = "AUTH_PUSH_LIFECYCLE_WRITER_ROLE"
 	envPushCallers = "AUTH_PUSH_LIFECYCLE_CALLER_ROLES"
+	// envRepoIdentityWriter is the NOLOGIN role that owns the repository identity append function, and
+	// envRepoIdentityCallers the one login that may execute it (the worker domain login). Both empty leaves the
+	// function unexecutable.
+	envRepoIdentityWriter  = "AUTH_REPO_IDENTITY_WRITER_ROLE"
+	envRepoIdentityCallers = "AUTH_REPO_IDENTITY_CALLER_ROLES"
 )
 
 const (
@@ -253,6 +258,18 @@ func execute(
 			return 1
 		}
 	}
+	repoIdentityWriter := valueOr(lookup, envRepoIdentityWriter, "")
+	repoIdentityCallers, err := roleList(lookup, envRepoIdentityCallers)
+	if err != nil {
+		fmt.Fprintf(stderr, "configuration error: %v\n", err)
+		return 1
+	}
+	if repoIdentityWriter != "" {
+		if err := authschema.ValidateIdentifier(repoIdentityWriter); err != nil {
+			fmt.Fprintf(stderr, "configuration error: %s is not a usable role name\n", envRepoIdentityWriter)
+			return 1
+		}
+	}
 
 	ownerRole, err := schemaOwnerRole(lookup)
 	if err != nil {
@@ -269,6 +286,8 @@ func execute(
 			Logger:                   logger,
 			PushLifecycleWriterRole:  pushWriter,
 			PushLifecycleCallerRoles: pushCallers,
+			RepoIdentityWriterRole:   repoIdentityWriter,
+			RepoIdentityCallerRoles:  repoIdentityCallers,
 			UsersOwned:               usersOwned,
 			PlatformRolesOwned:       platformRolesOwned,
 			SchemaOwnerRole:          ownerRole,
@@ -291,6 +310,8 @@ func execute(
 		Logger:                   logger,
 		PushLifecycleWriterRole:  pushWriter,
 		PushLifecycleCallerRoles: pushCallers,
+		RepoIdentityWriterRole:   repoIdentityWriter,
+		RepoIdentityCallerRoles:  repoIdentityCallers,
 		UsersOwned:               usersOwned,
 		PlatformRolesOwned:       platformRolesOwned,
 		SchemaOwnerRole:          ownerRole,

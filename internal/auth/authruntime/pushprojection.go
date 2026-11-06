@@ -62,10 +62,10 @@ func organizationProjector(identities *identity.Store) func(context.Context, uui
 
 func isOrganizationNotFound(err error) bool { return errors.Is(err, identity.ErrOrganizationNotFound) }
 
-// organizationProjectorFor builds the identity store the engine projects organizations through, only when the
-// projection is on.
+// organizationProjectorFor builds the identity store the projections copy organizations through, only when a
+// projection (External Push or repository identity) is on.
 func organizationProjectorFor(cfg authconfig.Config, logger *slog.Logger, pool *pgxpool.Pool, schema authschema.ValidatedIdentifier) (func(context.Context, uuid.UUID) (bool, error), error) {
-	if !cfg.PushProjection {
+	if !cfg.PushProjection && !cfg.RepoIdentityProjection {
 		return nil, nil
 	}
 	identities, err := identity.New(identityConfig(cfg, logger, pool, schema))

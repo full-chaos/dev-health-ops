@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
+	"github.com/full-chaos/dev-health-ops/internal/auth/platformrole/rule"
 	"github.com/full-chaos/dev-health-ops/internal/auth/workloadinput"
 	"github.com/full-chaos/dev-health-ops/internal/authzenforce"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
@@ -490,15 +492,32 @@ func TestGraphQLEnforceEnforcedRootIsNotShadowed(t *testing.T) {
 	}
 }
 
-// G8: the platform root's action is not organization-scoped: with its namespace on it is never asked about an
-// organization, it is refused.
-func TestGraphQLEnforcePlatformRootIsNotAskedAsAnOrganization(t *testing.T) {
-	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
-	gate, _ := enforceGate(t, pdp.ModeShadow, "admin", decider)
+// Product rule 1 (D6773): a root whose action is not organization-scoped (the platform dashboard) is never decided
+// as an organization: with every cell on, the admin namespace included, it answers as main does (RequirePlatformAdmin
+// decides), asks nothing, for an org member and for an org-less platform caller whose ingress set no scope.
+func TestGraphQLEnforcePlatformRootAnswersAsMain(t *testing.T) {
 	doc := `query Q { productTelemetryPlatformDashboard(input: {startDate: "2026-01-01", endDate: "2026-01-02"}) { __typename } }`
-	runGraphQLEnforce(t, gate, callerUser, doc).code503(t, string(pdp.ReasonNotCarriedOut))
-	if n := len(decider.requests()); n != 0 {
-		t.Fatalf("asked %d times about a platform root", n)
+	every := strings.Join(authzenforce.Namespaces(), ",")
+	member := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
+	orgless := authctx.Claims{Platform: func() *rule.Platform { p := rule.PlatformOf(rule.ActionAdminTelemetry); return &p }()}
+	subject := graphQLShadowSubject(newAccessMinter(t).mint(ecUser, nil, nil))
+	for name, claims := range map[string]authctx.Claims{"org member": member, "org-less platform caller": orgless} {
+		t.Run(name, func(t *testing.T) {
+			legacy, _, _ := runRootsAs(t, nil, nil, claims, subject, doc)
+			for mode, m := range map[string]string{"enforce": pdp.ModeEnforce, "shadow": pdp.ModeShadow} {
+				decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+				gate, _ := enforceGate(t, m, every, decider)
+				got, _, _ := runRootsAs(t, gate, nil, claims, subject, doc)
+				if got != legacy {
+					t.Fatalf("%s mode, every cell on: %+v, want main's answer %+v", mode, got, legacy)
+				}
+				for _, req := range decider.requests() {
+					if req.Action == rule.ActionAdminTelemetry {
+						t.Fatalf("%s mode: the platform action was asked about an organization: %+v", mode, req)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -556,26 +575,30 @@ func runRootsAs(t *testing.T, gate *pdp.Gate, decider *countingDecider, claims a
 	return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements), roots: int(roots.Load())}, asks, orgs
 }
 
-// D6714 (acp review of #5825, item 1): a legacy impersonation session (go-api's row, the admin's own user access
-// token) is never judged as the admin in the target org: with a cell of the operation's roots on, the operation is
-// refused FORBIDDEN, reads and mutations alike, no ask, no read. With every cell off it runs as today.
-func TestGraphQLEnforceLegacyImpersonationIsRefused(t *testing.T) {
+// Known flaw F1 (13211 lists the only accepted impersonation narrowing): a legacy impersonation session (go-api's
+// row, the admin's own token) answers as main does with every cell on: served as the target, never decided as the
+// actor in the target's organization (no ask); in shadow mode it is still observed.
+func TestGraphQLEnforceLegacyImpersonationAnswersAsMain(t *testing.T) {
 	impersonating := enforceCaller{user: true, impersonate: true}
 	doc := `query Q { securityOverview(orgId: "` + servedOrgB.String() + `") { __typename } }`
 	legacy := runGraphQLEnforce(t, nil, impersonating, doc)
 	if legacy.code != http.StatusOK || strings.Contains(legacy.body, `"errors"`) || legacy.statements == 0 || legacy.roots != 1 {
-		t.Fatalf("today's impersonated answer %+v, want served as the target org, its one root field run", legacy)
+		t.Fatalf("main's impersonated answer %+v, want served as the target org, its one root field run", legacy)
 	}
 	srv := pdptest.New(t)
+	srv.Deny("no_membership")
 	decider := &countingDecider{next: pepOf(t, srv.URL)}
-	off, _ := enforceGate(t, pdp.ModeShadow, "git", decider)
-	if got := runGraphQLEnforce(t, off, impersonating, doc); got != legacy {
-		t.Fatalf("cells off: %+v, want today's %+v", got, legacy)
+	on, _ := enforceGate(t, pdp.ModeEnforce, strings.Join(authzenforce.Namespaces(), ","), decider)
+	if got := runGraphQLEnforce(t, on, impersonating, doc); got != legacy {
+		t.Fatalf("enforce, every cell on: %+v, want main's answer %+v", got, legacy)
 	}
-	on, _ := enforceGate(t, pdp.ModeEnforce, "analytics", decider)
-	runGraphQLEnforce(t, on, impersonating, doc).forbidden(t)
 	if n := len(decider.requests()); n != 0 {
 		t.Fatalf("asked the PDP %d times for a legacy impersonation session", n)
+	}
+	shadowDecider := &countingDecider{next: pepOf(t, srv.URL)}
+	shadow, _ := enforceGate(t, pdp.ModeShadow, "analytics", shadowDecider)
+	if got := runGraphQLEnforce(t, shadow, impersonating, doc); got != legacy {
+		t.Fatalf("shadow, cell on: %+v, want main's answer %+v", got, legacy)
 	}
 }
 
@@ -620,46 +643,30 @@ func TestGraphQLEnforceEnvelopeIsExempt(t *testing.T) {
 	}
 }
 
-// Q11: an enforced root reads in the scope's organization, the decided one, in its canonical spelling: a root that
-// takes no orgId argument binds the scope org; an orgId argument that is not the scope org's spelling is refused with
-// no read. With the cells off the root reads as today (the ingress's spelling).
+// Q11 + product rule 1: an enforced root reads in the organization the PDP decided, as the ingress spelled it: every
+// root (one with an orgId argument, one that takes none, one that reads the claims' org itself) answers and reads as
+// main does with the cells off, for any spelling of the org's UUID; the scope's org is the same UUID.
 func TestGraphQLEnforceReadsTheScopeOrganization(t *testing.T) {
 	upper := strings.ToUpper("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-	canonical := strings.ToLower(upper)
 	claims := authctx.Claims{OrgID: upper, Role: "admin", Scope: pepgate.Legacy(upper)}
 	subject := graphQLShadowSubject(newAccessMinter(t).mint(ecUser, nil, nil))
-	noArg := `query Q { improveOpportunities(limit: 5, windowDays: 30) { __typename } }`
-	_, _, orgs := runRootsAs(t, nil, nil, claims, subject, noArg)
-	if len(orgs) == 0 || orgs[0] != upper {
-		t.Fatalf("cells off bound %v, want today's spelling %s", orgs, upper)
-	}
-	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
-	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics,metrics", decider)
-	_, _, orgs = runRootsAs(t, gate, decider, claims, subject, noArg)
-	for _, org := range orgs {
-		if org != canonical {
-			t.Fatalf("enforced root bound %v, want only the scope org %s", orgs, canonical)
-		}
-	}
-	if len(orgs) == 0 {
-		t.Fatal("enforced root read nothing")
-	}
-	withArg := `query Q { securityOverview(orgId: "` + upper + `") { __typename } }`
-	got, _, _ := runRootsAs(t, gate, decider, claims, subject, withArg)
-	if got.statements != 0 || !strings.Contains(got.body, `"errors"`) {
-		t.Fatalf("an orgId spelled unlike the scope org: %+v, want refused with no read", got)
-	}
-	// A root that reads the claims' org itself (no org helper; its orgId sits in an input the guard does not read)
-	// reads in the scope's org too.
-	claimsReader := `query Q { hotspots(input: {orgId: "` + upper + `", sinceUtc: "2026-01-01T00:00:00Z", untilUtc: "2026-01-15T00:00:00Z"}) { __typename } }`
-	_, _, orgs = runRootsAs(t, gate, decider, claims, subject, claimsReader)
-	if len(orgs) == 0 {
-		t.Fatal("the claims-reading root read nothing")
-	}
-	for _, org := range orgs {
-		if org != canonical {
-			t.Fatalf("a root reading the claims' org bound %v, want only the scope org %s", orgs, canonical)
-		}
+	for name, doc := range map[string]string{
+		"orgId argument":       `query Q { securityOverview(orgId: "` + upper + `") { __typename } }`,
+		"no org argument":      `query Q { improveOpportunities(limit: 5, windowDays: 30) { __typename } }`,
+		"reads the claims org": `query Q { hotspots(input: {orgId: "` + upper + `", sinceUtc: "2026-01-01T00:00:00Z", untilUtc: "2026-01-15T00:00:00Z"}) { __typename } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			legacy, _, legacyOrgs := runRootsAs(t, nil, nil, claims, subject, doc)
+			if legacy.statements == 0 || len(legacyOrgs) == 0 {
+				t.Fatalf("main's run read nothing: %+v", legacy)
+			}
+			decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+			gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics,metrics", decider)
+			got, asks, orgs := runRootsAs(t, gate, decider, claims, subject, doc)
+			if got != legacy || !reflect.DeepEqual(orgs, legacyOrgs) || asks != 1 {
+				t.Fatalf("enforced: %+v bound %v with %d asks, want main's %+v bound %v and one ask", got, orgs, asks, legacy, legacyOrgs)
+			}
+		})
 	}
 }
 
@@ -673,5 +680,31 @@ func TestGraphQLEnforceHeaderOrgAndArgumentOrgDifferIsTheGuardsRefusal(t *testin
 	got := runGraphQLEnforce(t, gate, caller, enforceDocAnalytics)
 	if got != legacy || got.statements != 0 || !strings.Contains(got.body, `"errors"`) || len(decider.requests()) != 0 {
 		t.Fatalf("got %+v with %d asks, want the guard's refusal %+v, no read, no ask", got, len(decider.requests()), legacy)
+	}
+}
+
+// The guard lets a verified superuser name another org in any spelling of its UUID; with every cell on and a PDP allow
+// the operation answers as main does (the org ids are compared as the ingress spelled them, the decision as UUIDs).
+func TestGraphQLEnforceSuperuserNamingAnOrgInAnotherSpellingAnswersAsMain(t *testing.T) {
+	upper := strings.ToUpper("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	superuser := enforceCaller{user: true, superuser: true}
+	for name, doc := range map[string]string{
+		"orgId argument": `query Q { securityOverview(orgId: "` + upper + `") { __typename } }`,
+		"two roots":      `query Q { securityOverview(orgId: "` + upper + `") { __typename } busFactor(orgId: "` + upper + `") { __typename } }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			legacy := runGraphQLEnforce(t, nil, superuser, doc)
+			if legacy.code != http.StatusOK || strings.Contains(legacy.body, `"errors"`) {
+				t.Fatalf("main's answer %+v, want served", legacy)
+			}
+			decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+			gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics,metrics", decider)
+			if got := runGraphQLEnforce(t, gate, superuser, doc); got != legacy {
+				t.Fatalf("every cell on, PDP allow: %+v, want main's answer %+v", got, legacy)
+			}
+			if len(decider.requests()) == 0 {
+				t.Fatal("the PDP was not asked")
+			}
+		})
 	}
 }

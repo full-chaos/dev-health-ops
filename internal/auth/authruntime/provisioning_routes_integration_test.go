@@ -654,8 +654,8 @@ func TestProvisioningServiceAccountsThroughConfigure(t *testing.T) {
 	for event, want := range map[string]int{"created": 1, "disabled": 1, "owner_changed": 1, "enabled": 1} {
 		var n int
 		if err := e.admin.QueryRow(ctx, `SELECT count(*) FROM auth.security_audit_events WHERE event_type = $1 AND subject_principal_id = $2
-AND actor_principal_id = $3 AND attributes ? 'credential_id'`, "auth.service_account."+event, id, boss).Scan(&n); err != nil || n != want {
-			t.Fatalf("%d %s audit rows naming the actor and the caller credential (%v), want %d", n, event, err, want)
+AND actor_principal_id = $3 AND attributes ? 'workload_jti'`, "auth.service_account."+event, id, boss).Scan(&n); err != nil || n != want {
+			t.Fatalf("%d %s audit rows naming the actor and the calling workload token (%v), want %d", n, event, err, want)
 		}
 	}
 	ghost := uuid.New()
@@ -877,8 +877,8 @@ func TestProvisioningGrantsThroughConfigure(t *testing.T) {
 		t.Fatalf("the update answer carries the repository key: %s", upd.body)
 	}
 	if n := count(`SELECT count(*) FROM auth.security_audit_events WHERE event_type = 'auth.resource_grant.updated' AND attributes->>'target_id' = $1
-AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'credential_id' AND actor_principal_id = $2`, secondID, boss); n != 1 {
-		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the caller credential, want 1", n)
+AND attributes->'changed_fields' = '["expires_at"]'::jsonb AND attributes ? 'workload_jti' AND actor_principal_id = $2`, secondID, boss); n != 1 {
+		t.Fatalf("%d expiry-only update audit rows naming only expires_at, the actor and the calling workload token, want 1", n)
 	}
 	if got := post(authapi.PatternGrantUpdate, map[string]any{"organization_id": org.String(), "actor_principal_id": boss.String(), "grant_id": secondID,
 		"role": "admin", "expected_revision": 1}); got.status != http.StatusConflict || object(t, got)["reason_code"] != "revision_conflict" {

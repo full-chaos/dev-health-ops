@@ -268,18 +268,17 @@ func TestProvisioningWorkloadTokenReactivate(t *testing.T) {
 	w.wantWorkloadCaller(t, ctx, "auth.organization.reactivated", org, nil, jti)
 }
 
-// I7: the invite revoke route takes no workload token: a valid one is a 401
-// that writes nothing (the invite stays pending, no revoke audit row), and the
-// session issuer credential still works on it.
-func TestProvisioningWorkloadTokenIsRefusedOnRevoke(t *testing.T) {
+// I7: the invite revoke route takes the go-api workload token, as every provisioning route does; the retired session
+// issuer credential is a 401 that writes nothing (the invite stays pending, no revoke audit row).
+func TestProvisioningWorkloadTokenRevokesAnInvite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	w := newWorkloadProvisioningEnv(t, ctx)
 	owner, org := w.seed(t, ctx)
-	id := w.createInvite(t, w.svc, org, owner)
-	header, _ := w.mint(t, ctx, nil)
-	if got := w.revokeVia(t, header, org, owner, id); got.status != http.StatusUnauthorized {
-		t.Fatalf("revoke on the workload token: %d %s, want 401", got.status, got.body)
+	create, _ := w.mint(t, ctx, nil)
+	id := w.createInvite(t, create, org, owner)
+	if got := w.revokeVia(t, w.svc, org, owner, id); got.status != http.StatusUnauthorized {
+		t.Fatalf("revoke on the retired service credential: %d %s, want 401", got.status, got.body)
 	}
 	if pub, auth := w.inviteStatuses(t, ctx, id); pub != "pending" || auth != "pending" {
 		t.Fatalf("after the refused revoke: public %q auth %q", pub, auth)
@@ -287,9 +286,14 @@ func TestProvisioningWorkloadTokenIsRefusedOnRevoke(t *testing.T) {
 	if n := w.revokeAudits(t, ctx, org); n != 0 {
 		t.Fatalf("revoke audit rows after the refused revoke = %d, want 0", n)
 	}
-	if got := w.revokeVia(t, w.svc, org, owner, id); got.status != http.StatusOK || object(t, got)["status"] != "revoked" {
-		t.Fatalf("revoke on the service credential: %d %s", got.status, got.body)
+	header, jti := w.mint(t, ctx, nil)
+	if got := w.revokeVia(t, header, org, owner, id); got.status != http.StatusOK || object(t, got)["status"] != "revoked" {
+		t.Fatalf("revoke on the workload token: %d %s", got.status, got.body)
 	}
+	if n := w.revokeAudits(t, ctx, org); n != 1 {
+		t.Fatalf("revoke audit rows after the workload revoke = %d, want 1", n)
+	}
+	w.wantWorkloadCaller(t, ctx, "auth.invite.revoked", org, nil, jti)
 }
 
 // I8: a superuser suspends on the workload token; the audit row names the

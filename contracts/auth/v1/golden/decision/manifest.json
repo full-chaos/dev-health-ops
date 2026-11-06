@@ -19,6 +19,16 @@
       "layer": "pdp"
     },
     {
+      "file": "allow-platform-admin-member-writes-org-settings.json",
+      "id": "allow-platform-admin-member-writes-org-settings",
+      "layer": "pdp"
+    },
+    {
+      "file": "allow-platform-admin-no-membership-reads-org-integrations.json",
+      "id": "allow-platform-admin-no-membership-reads-org-integrations",
+      "layer": "pdp"
+    },
+    {
       "file": "cross-org-grant-in-a-leaves-b-on-the-default.json",
       "id": "cross-org-grant-in-a-leaves-b-on-the-default",
       "layer": "pdp"

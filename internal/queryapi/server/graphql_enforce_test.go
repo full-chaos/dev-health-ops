@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/pdp/pdptest"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/pepgate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -117,14 +118,15 @@ func runGraphQLEnforce(t *testing.T, gate *pdp.Gate, caller enforceCaller, docum
 }
 
 // runMCPEnforce sends one document through the MCP listener's GraphQL server, the header carrier: the org comes from
-// the X-DH-Internal-* headers, and no user bearer exists.
+// the X-DH-Internal-* headers, no bearer exists, and the ingress set today's scope (CHAOS-13164's ingress fact).
 func runMCPEnforce(t *testing.T, gate *pdp.Gate, document string) enforceRun {
 	t.Helper()
 	client := &teamScopeReachClient{}
 	gql := newMCPGraphQLServer(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: client}}), mcpDefaultLimits())
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":`+jsonQuote(t, document)+`}`))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := pdp.WithGate(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: ecOrg.String(), Role: "admin"}), gate)
+	claims := authctx.Claims{OrgID: ecOrg.String(), Role: "admin", Scope: pepgate.Legacy(ecOrg.String())}
+	ctx := pdp.WithGate(authctx.WithClaims(req.Context(), claims), gate)
 	rec := httptest.NewRecorder()
 	gql.ServeHTTP(rec, req.WithContext(ctx))
 	gate.Wait()
@@ -364,30 +366,38 @@ func TestGraphQLEnforceOneDeniedRootRefusesTheOperation(t *testing.T) {
 	runGraphQLEnforce(t, gate, callerUser, enforceDocTwo).forbidden(t)
 }
 
-// A root whose cell is on, reached with no caller on the context at all (an ingress that names no carrier), is
-// refused: an operation is never served on the legacy path because its caller class is unknown.
-func TestGraphQLEnforceUnknownCarrierIsRefused(t *testing.T) {
-	decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
-	gate, _ := enforceGate(t, pdp.ModeEnforce, "analytics", decider)
-	server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: &teamScopeReachClient{}}, 1000, 10)
-	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":`+jsonQuote(t, enforceDocAnalytics)+`}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	server.ServeHTTP(rec, req.WithContext(pdp.WithGate(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: ecOrg.String()}), gate)))
+// An operation whose ingress set no scope (pepgate KindNone) is refused while a cell of one of its roots is on, in
+// either cell list, whatever its caller; with every such cell off it runs as today.
+func TestGraphQLEnforceUnscopedOperationIsRefused(t *testing.T) {
+	serve := func(cells string) (enforceRun, int) {
+		decider := &countingDecider{next: pepOf(t, pdptest.New(t).URL)}
+		gate, _ := enforceGate(t, pdp.ModeShadow, cells, decider)
+		client := &teamScopeReachClient{}
+		server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
+		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":`+jsonQuote(t, enforceDocAnalytics)+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		ctx := graph.WithShadowSubject(req.Context(), graphQLShadowSubject(newAccessMinter(t).mint(ecUser, nil, nil)))
+		server.ServeHTTP(rec, req.WithContext(pdp.WithGate(authctx.WithClaims(ctx, authctx.Claims{OrgID: ecOrg.String()}), gate)))
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements)}, len(decider.requests())
+	}
+	got, asks := serve("analytics")
 	var body struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
 			Extensions map[string]any `json:"extensions"`
 		} `json:"errors"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || len(body.Errors) != 1 || string(body.Data) != "null" ||
-		body.Errors[0].Extensions["reason"] != reasonNoPrincipal || len(decider.requests()) != 0 {
-		t.Fatalf("got %s with %d asks, want one %s refusal, data null, no ask", rec.Body.String(), len(decider.requests()), reasonNoPrincipal)
+	if err := json.Unmarshal([]byte(got.body), &body); err != nil || len(body.Errors) != 1 || string(body.Data) != "null" ||
+		body.Errors[0].Extensions["reason"] != string(pdp.ReasonNoScope) || got.statements != 0 || asks != 0 {
+		t.Fatalf("got %s with %d statements and %d asks, want one %s refusal, data null, no read, no ask", got.body, got.statements, asks, pdp.ReasonNoScope)
+	}
+	if got, _ := serve("git"); strings.Contains(got.body, `"errors"`) || got.statements == 0 {
+		t.Fatalf("cells of other namespaces only: got %+v, want today's answer", got)
 	}
 }
-
-// reasonNoPrincipal is the closed reason of an enforced root whose caller has no principal the PDP can judge.
-const reasonNoPrincipal = "authz_enforce_no_principal"
 
 // S-a..S-d (D6721, the F9a/F9b split): the user caller follows QUERY_API_AUTHZ_ENFORCE, the header carrier (MCP)
 // follows QUERY_API_HEADERS_AUTHZ_ENFORCE. A header carrier with its cell on has no principal to ask about: refused
@@ -418,7 +428,7 @@ func TestGraphQLEnforceCallerClassPicksTheCell(t *testing.T) {
 			asks := len(srv.Requests())
 			mcp := runMCPEnforce(t, enforceGateFromEnv(t, srv, env), enforceDocAnalytics)
 			if tc.headersRefused {
-				if !strings.Contains(mcp.body, `"reason":"`+reasonNoPrincipal+`"`) || !strings.Contains(mcp.body, `"data":null`) || mcp.statements != 0 {
+				if !strings.Contains(mcp.body, `"reason":"`+string(pdp.ReasonNoPrincipal)+`"`) || !strings.Contains(mcp.body, `"data":null`) || mcp.statements != 0 {
 					t.Fatalf("header carrier: %d %s with %d statements, want the no-principal refusal and no read", mcp.code, mcp.body, mcp.statements)
 				}
 			} else if strings.Contains(mcp.body, `"errors"`) || mcp.statements == 0 {
@@ -466,33 +476,22 @@ func TestGraphQLEnforcePlatformRootIsNotAskedAsAnOrganization(t *testing.T) {
 	}
 }
 
-// S-e on /query: the X-DH-Internal-* header carrier is marked by its ingress, so the headers cell judges it, a user
-// cell never does; the refusal is HTTP 503.
-func TestGraphQLEnforceQueryHeaderCarrierFollowsTheHeadersCell(t *testing.T) {
-	serve := func(env map[string]string) enforceRun {
-		srv := pdptest.New(t)
-		gate := enforceGateFromEnv(t, srv, env)
-		client := &teamScopeReachClient{}
-		server := newGraphQLServerWithLimits(&graph.Resolver{ClickHouse: client}, 1000, 10)
-		mux := routeswitch.NewMux(routeswitch.StaticSwitch{"gql": true})
-		mux.Register("gql", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			server.ServeHTTP(w, r.WithContext(pdp.WithGate(r.Context(), gate)))
-		}))
-		verifier, _ := iaVerifier(t)
-		handler := newDocumentDispatchHandler(os.Getenv, mux, map[string]string{digestHex(enforceDocAnalytics): "gql"}, verifier, nil, nil, "", nil)
-		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(`{"query":`+jsonQuote(t, enforceDocAnalytics)+`}`))
-		req.Header.Set("Content-Type", "application/json")
-		iaHeaders(ecOrg.String(), "admin", false, false)(req)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		gate.Wait()
-		if n := len(srv.Requests()); n != 0 {
-			t.Fatalf("the header carrier asked the PDP %d times", n)
-		}
-		client.mu.Lock()
-		defer client.mu.Unlock()
-		return enforceRun{code: rec.Code, body: rec.Body.String(), statements: len(client.statements)}
+// S4 on the MCP listener: a refused header-carrier operation answers HTTP 503 with the refusal body, and no read.
+func TestGraphQLEnforceMCPListenerAnswers503(t *testing.T) {
+	srv := pdptest.New(t)
+	gate := enforceGateFromEnv(t, srv, map[string]string{pdp.EnvMode: pdp.ModeShadow, "QUERY_API_HEADERS_AUTHZ_ENFORCE": "metrics"})
+	ch := &countingMCPClient{}
+	getenv := getenvFunc(func(string) string { return "" })
+	mcpMux := http.NewServeMux()
+	mountQueryRouteSets(getenv, http.NewServeMux(), http.NewServeMux(), mcpMux, queryRouteHandlers{
+		Query:     http.NotFound,
+		Registry:  http.NotFound,
+		BuildInfo: http.NotFound,
+		MCP:       newMCPHandlerWithLimits(ch, nil, allMCPRootsEnabled(), getenv, mcpDefaultLimits()),
+	}, graphQLEdgeDeps{auth: ecEdgeAuth(t, &fakeEdgeStore{}), maxBytes: defaultGraphQLMaxQueryBytes})
+	listener := MCPListener("127.0.0.1:0", &Plane{Handler: http.NewServeMux(), InternalHandler: http.NewServeMux(), MCPHandler: withGate(mcpMux, gate)}, nil)
+	rec := mcpDo(listener.server.Handler, http.MethodPost, validMCPHeaders(), mcpBody(t, mcpHotspotsQuery, mcpHotspotsVariables(mcpTestOrg)))
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"code":"`+graph.CodeAuthzUnavailable+`"`) || ch.calls.Load() != 0 || len(srv.Requests()) != 0 {
+		t.Fatalf("got %d %s with %d ClickHouse calls and %d asks, want 503 %s, no read, no ask", rec.Code, rec.Body.String(), ch.calls.Load(), len(srv.Requests()), graph.CodeAuthzUnavailable)
 	}
-	serve(map[string]string{pdp.EnvMode: pdp.ModeShadow, "QUERY_API_AUTHZ_ENFORCE": "analytics"}).served(t)
-	serve(map[string]string{pdp.EnvMode: pdp.ModeShadow, "QUERY_API_HEADERS_AUTHZ_ENFORCE": "analytics"}).code503(t, reasonNoPrincipal)
 }

@@ -28,12 +28,11 @@ func graphQLShadow() graph.OperationShadow {
 }
 
 // useGraphQLGuards is the guard slot of every GraphQL server: the shadow first, then the org guard, then the decision
-// (CHAOS-10865), which decides for the organization the guard admitted. fallback is the caller class of a request
-// whose ingress named none.
-func useGraphQLGuards(gql *gqlhandler.Server, fallback pdp.CallerClass) {
+// (CHAOS-10865), which decides for the organization the guard admitted.
+func useGraphQLGuards(gql *gqlhandler.Server) {
 	gql.Use(graphQLShadow())
 	gql.Use(graph.OperationOrgGuard{})
-	gql.Use(graphQLEnforce(fallback))
+	gql.Use(graphQLEnforce())
 }
 
 // graphQLShadowRows are the shadow's rows of the GraphQL roots: "Query.name" and "Mutation.name", each the catalog row

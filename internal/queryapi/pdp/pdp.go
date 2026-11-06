@@ -121,8 +121,8 @@ type Config struct {
 	Meter metric.Meter
 	// Switch is query-api's 5.17 cell set: a route is enforced only while the cell of its action namespace is on.
 	Switch authzenforce.Switch
-	// HeaderSwitch is the cell set of the header carrier's GraphQL operations (authzenforce.QueryAPIHeaders, D6721).
-	HeaderSwitch authzenforce.Switch
+	// HeadersSwitch is the cell set of the header carrier's GraphQL operations (authzenforce.QueryAPIHeaders, D6721).
+	HeadersSwitch authzenforce.Switch
 	// Lookup reads the 5.12 shadow knobs (AUTH_SHADOW_PDP_SAMPLE, _MAX_IN_FLIGHT, _HIGH_RISK) in shadow mode; nil
 	// reads none, so every knob has its default.
 	Lookup func(string) (string, bool)
@@ -163,16 +163,16 @@ func FromSettingsWithRows(lookup func(string) (string, bool), logger *slog.Logge
 	mode := strings.TrimSpace(raw)
 	switch mode {
 	case "", ModeOff:
-		return build(Config{Mode: ModeOff, Logger: logger, Switch: cells, HeaderSwitch: headerCells})
+		return build(Config{Mode: ModeOff, Logger: logger, Switch: cells, HeadersSwitch: headerCells})
 	case ModeShadow, ModeEnforce:
 	default:
-		return invalid(Config{Logger: logger, Switch: cells, HeaderSwitch: headerCells}, EnvMode)
+		return invalid(Config{Logger: logger, Switch: cells, HeadersSwitch: headerCells}, EnvMode)
 	}
 	decider, variable := newDecider(lookup)
 	if decider == nil {
-		return invalid(Config{Logger: logger, Switch: cells, HeaderSwitch: headerCells}, variable)
+		return invalid(Config{Logger: logger, Switch: cells, HeadersSwitch: headerCells}, variable)
 	}
-	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, HeaderSwitch: headerCells, Lookup: lookup, ExtraShadowRows: extra})
+	return New(Config{Mode: mode, Decider: decider, Logger: logger, Switch: cells, HeadersSwitch: headerCells, Lookup: lookup, ExtraShadowRows: extra})
 }
 
 // newDecider builds the PEP client in go-api's form (#5605): the workload client over the origin of AUTH_PROXY_URL,
@@ -234,7 +234,7 @@ func build(cfg Config) *Gate {
 	if meter == nil {
 		meter = otel.Meter(meterName)
 	}
-	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger, cells: cfg.Switch, headerCells: cfg.HeaderSwitch,
+	g := &Gate{mode: cfg.Mode, decider: cfg.Decider, logger: cfg.Logger, cells: cfg.Switch, headerCells: cfg.HeadersSwitch,
 		carriesAllowlist: maps.Clone(allowlistCutOver), carriesRoots: maps.Clone(rootCutOver)}
 	if g.logger == nil {
 		g.logger = slog.Default()

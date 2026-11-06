@@ -9,7 +9,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/internalidentity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 )
@@ -375,13 +374,4 @@ func noteRefusal(r *http.Request, reason, carrier string) {
 	internalidentity.RecordOutcome(carrier, reason)
 	log.Printf("query-api: internal request refused: reason=%s carrier=%s path=%s request_id=%s",
 		reason, carrier, r.URL.Path, envelopeRequestID(r))
-}
-
-// markHeaderCarrier marks an accepted request that carried the X-DH-Internal-* headers as the header carrier, whose
-// GraphQL operations have cells of their own (D6721).
-func markHeaderCarrier(ctx context.Context, r *http.Request) context.Context {
-	if internalidentity.Present(r.Header) {
-		return graph.WithHeaderCarrier(ctx)
-	}
-	return ctx
 }

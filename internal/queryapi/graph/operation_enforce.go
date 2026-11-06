@@ -17,6 +17,14 @@ type EnforceRoot struct {
 	Action string
 }
 
+// The codes of a refused operation's one error (extensions.code).
+const (
+	// CodeForbidden is a decision point's deny: HTTP 200 on /graphql and /query, the org guard's form.
+	CodeForbidden = "FORBIDDEN"
+	// CodeAuthzUnavailable is no verdict, or an obligation not carried out: HTTP 503, extensions.reason names why.
+	CodeAuthzUnavailable = "SERVICE_UNAVAILABLE"
+)
+
 // EnforceRefusal refuses a whole operation. Forbidden is a decision point's deny; otherwise no verdict exists or an
 // obligation is not carried out, and the operation is unavailable. Reason is the closed reason.
 type EnforceRefusal struct {
@@ -30,8 +38,8 @@ type EnforceRefusal struct {
 // the guard's form; anything else with code SERVICE_UNAVAILABLE and its reason, and the HTTP status 503 where the
 // ingress carries a RefusalStatus. An admitted operation runs each root field with the scope decided for it.
 type OperationEnforce struct {
-	// Authorize decides the roots for org; nil is off (the operation runs as without it).
-	Authorize func(ctx context.Context, org string, roots []EnforceRoot) (map[string]pepgate.Scope, *EnforceRefusal)
+	// Authorize decides the roots for the caller of claims; nil is off (the operation runs as without it).
+	Authorize func(ctx context.Context, claims authctx.Claims, roots []EnforceRoot) (map[string]pepgate.Scope, *EnforceRefusal)
 }
 
 var _ interface {
@@ -56,7 +64,7 @@ func (e OperationEnforce) InterceptOperation(ctx context.Context, next graphql.O
 		roots = append(roots, EnforceRoot{Key: key, Action: fieldActions[key]})
 	}
 	claims, _ := authctx.FromContext(ctx)
-	scopes, refusal := e.Authorize(ctx, claims.OrgID, roots)
+	scopes, refusal := e.Authorize(ctx, claims, roots)
 	if refusal != nil {
 		response := refusalResponse(ctx, refusal)
 		return func(context.Context) *graphql.Response { return response }
@@ -81,20 +89,25 @@ func (OperationEnforce) InterceptRootField(ctx context.Context, next graphql.Roo
 }
 
 func refusalResponse(ctx context.Context, refusal *EnforceRefusal) *graphql.Response {
+	status, _ := ctx.Value(refusalStatusKey{}).(*RefusalStatus)
 	if refusal.Forbidden {
-		return &graphql.Response{Errors: gqlerror.List{{Message: "Not authorized", Extensions: map[string]any{"code": "FORBIDDEN"}}}}
+		if status != nil {
+			status.forbidden.Store(true)
+		}
+		return &graphql.Response{Errors: gqlerror.List{{Message: "Not authorized", Extensions: map[string]any{"code": CodeForbidden}}}}
 	}
-	if status, ok := ctx.Value(refusalStatusKey{}).(*RefusalStatus); ok {
+	if status != nil {
 		status.unavailable.Store(true)
 	}
 	return &graphql.Response{Errors: gqlerror.List{{Message: "Authorization unavailable",
-		Extensions: map[string]any{"code": "SERVICE_UNAVAILABLE", "reason": refusal.Reason}}}}
+		Extensions: map[string]any{"code": CodeAuthzUnavailable, "reason": refusal.Reason}}}}
 }
 
-// RefusalStatus is how an ingress learns that OperationEnforce refused an operation as unavailable, so it can answer
-// HTTP 503 rather than 200.
+// RefusalStatus is how an ingress learns that OperationEnforce refused an operation, so it can answer with its own
+// status (503 for unavailable; the MCP listener also 403 for a deny).
 type RefusalStatus struct {
 	unavailable atomic.Bool
+	forbidden   atomic.Bool
 }
 
 type refusalStatusKey struct{}
@@ -107,15 +120,5 @@ func WithRefusalStatus(ctx context.Context, status *RefusalStatus) context.Conte
 // Unavailable reports whether the operation was refused as unavailable.
 func (s *RefusalStatus) Unavailable() bool { return s != nil && s.unavailable.Load() }
 
-type headerCarrierKey struct{}
-
-// WithHeaderCarrier marks the request's caller as the X-DH-Internal-* header carrier.
-func WithHeaderCarrier(ctx context.Context) context.Context {
-	return context.WithValue(ctx, headerCarrierKey{}, true)
-}
-
-// HeaderCarrierFrom reports whether WithHeaderCarrier marked the request.
-func HeaderCarrierFrom(ctx context.Context) bool {
-	marked, _ := ctx.Value(headerCarrierKey{}).(bool)
-	return marked
-}
+// Forbidden reports whether the operation was refused by a decision point's deny.
+func (s *RefusalStatus) Forbidden() bool { return s != nil && s.forbidden.Load() }

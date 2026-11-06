@@ -26,6 +26,7 @@ var constructorSites = map[string][]string{
 	"Legacy": {
 		"internal/queryapi/pdp/operation.go",
 		"internal/queryapi/pdp/pdp.go",
+		"internal/queryapi/server/graphql_enforce.go",
 		"internal/queryapi/server/rest_access.go",
 	},
 }

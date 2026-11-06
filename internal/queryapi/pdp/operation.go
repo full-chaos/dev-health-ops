@@ -19,7 +19,7 @@ import (
 type CallerClass uint8
 
 const (
-	// CallerUnknown is an ingress that named no class. A root whose cell is on in either set is refused.
+	// CallerUnknown names no class: a root whose cell is on in either set is decided, and refused (no principal).
 	CallerUnknown CallerClass = iota
 	// CallerUser is a user access token: the PDP judges its bearer.
 	CallerUser
@@ -37,6 +37,9 @@ type Caller struct {
 	Bearer string
 	// ExemptClass is the ExemptClasses entry of a CallerExempt.
 	ExemptClass string
+	// Unscoped is true when the ingress set no scope on the request (pepgate KindNone): every ingress sets one, so an
+	// operation without it is refused while a cell of any of its roots is on.
+	Unscoped bool
 }
 
 // Root is one root field of an operation: its key ("Query.name", "Mutation.name") and its catalog action.
@@ -45,8 +48,13 @@ type Root struct {
 	Action string
 }
 
-// ReasonNoPrincipal is the closed reason of an enforced root whose caller has no principal the PDP can judge.
-const ReasonNoPrincipal pep.Reason = "authz_enforce_no_principal"
+// The closed reasons of a refused GraphQL operation the gate makes itself.
+const (
+	// ReasonNoPrincipal is an enforced root whose caller has no principal the PDP can judge.
+	ReasonNoPrincipal pep.Reason = "authz_enforce_no_principal"
+	// ReasonNoScope is an operation whose ingress set no scope, with a cell of one of its roots on.
+	ReasonNoScope pep.Reason = "authz_enforce_no_scope"
+)
 
 // rootCutOver is the GraphQL cut-over registry: the root keys whose resolvers narrow every read to a scope's
 // repository allowlist. An allowlist decision on an operation with an enforced root not listed is not carried out
@@ -88,6 +96,14 @@ func (g *Gate) AuthorizeOperation(ctx context.Context, caller Caller, orgID stri
 	}
 	if g == nil {
 		return legacy(), nil
+	}
+	if caller.Unscoped {
+		for _, root := range roots {
+			if g.RootEnforced(CallerUnknown, root.Action) {
+				g.count(ctx, ModeEnforce, ResultUnavailable, root.Action)
+				return nil, &DenyError{Reason: ReasonNoScope, Local: true}
+			}
+		}
 	}
 	if caller.Class == CallerExempt {
 		for _, action := range distinctActions(roots) {

@@ -57,6 +57,18 @@ func newGoAPIDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
 	return l
 }
 
+// newSessionBearerDelegatedLive is newDelegatedLive whose issuer mints the EdDSA session-route access token and
+// carries the access check, so the bearer routes mount (they mount only with the check).
+func newSessionBearerDelegatedLive(t *testing.T, ctx context.Context) *delegatedLive {
+	t.Helper()
+	signer, _, _ := fileSigner(t)
+	check, err := NewAccessCheck(AccessCheckConfig{IssuerURL: goldenIssuer, Keys: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newDelegatedLiveWith(t, ctx, newEdDSAIssuer(t, signer, AccessTokenAudience).WithAccessCheck(check))
+}
+
 // goAPIDelegatedRow is a go-api row that takes a user access token and allows a delegated bearer.
 const goAPIDelegatedRow = "GET /api/v1/auth/me"
 
@@ -266,7 +278,7 @@ func TestGoAPIRefusesTheDelegatedTokenAfterItsBaseIsRevoked(t *testing.T) {
 func TestADelegatedBearerIsDeniedOverARealRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	l := newDelegatedLive(t, ctx)
+	l := newSessionBearerDelegatedLive(t, ctx)
 	id, access := l.start(t, l.server(t))
 	routes := l.bearerRoutes(t)
 	header := map[string]string{"Authorization": "Bearer " + access}

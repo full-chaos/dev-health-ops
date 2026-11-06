@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	apisession "github.com/full-chaos/dev-health-ops/internal/api/session"
 	"github.com/full-chaos/dev-health-ops/internal/api/sessionissue"
+	"github.com/full-chaos/dev-health-ops/internal/apiservice/accessrouting"
 	"github.com/full-chaos/dev-health-ops/internal/audit"
 	"github.com/full-chaos/dev-health-ops/internal/auth/accessverify"
 	"github.com/full-chaos/dev-health-ops/internal/auth/acrmint"
@@ -278,7 +279,7 @@ func routeGoAPIAccess(t *testing.T, auth *policy.Authenticator, signer *token.Si
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := auth.RouteAccess(goAPIRoutedAccess{validator}, goAPIAccessService); err != nil {
+	if err := auth.RouteAccess(accessrouting.Adapter{Validator: validator}, goAPIAccessService); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -311,26 +312,6 @@ func goAPIAccessRows(t *testing.T) []accessverify.Row {
 			AcceptsUser: accepts})
 	}
 	return rows
-}
-
-// goAPIRoutedAccess is apiservice routedAccessVerify.
-type goAPIRoutedAccess struct{ validator *accessverify.Validator }
-
-func (r goAPIRoutedAccess) Validate(ctx context.Context, service, profile, bearer string) (*policy.RoutedResult, error) {
-	result, err := r.validator.Validate(ctx, service, profile, bearer)
-	switch {
-	case errors.Is(err, authverify.ErrKeySourceUnavailable):
-		return nil, fmt.Errorf("%w: %w", policy.ErrKeySourceUnavailable, err)
-	case errors.Is(err, accessverify.ErrUnavailable):
-		return nil, fmt.Errorf("%w: %w", policy.ErrUnavailable, err)
-	case err != nil:
-		return nil, err
-	}
-	if result.Class == accessverify.ClassUser && result.Claims != nil {
-		claims := result.Claims
-		return &policy.RoutedResult{Claims: &policy.AccessTokenClaims{Subject: claims.Subject, SessionID: claims.SessionID, OrgID: claims.OrgID}}, nil
-	}
-	return nil, errors.New("go-api access verify: result of an unexpected class")
 }
 
 func (f *validateFixture) post(server http.Handler, body string, header map[string]string) *httptest.ResponseRecorder {

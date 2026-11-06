@@ -74,13 +74,15 @@ func Reap(
 // reader must lose none, whatever the row's age. The mark moves only over rows
 // older than the reader's horizon, and a push row with no cursor row at all is
 // kept. A parked row is safe above or below the mark: its body is in the retry
-// table.
+// table. A repository identity row is kept the same way, until the repository
+// identity reader's mark has passed it.
 func reapSelection(table, cursorTable string) string {
 	return `SELECT e.id
 		    FROM ` + table + ` AS e
 		    WHERE e.published_at IS NOT NULL
 		      AND e.published_at < $1
 		      AND (e.aggregate_type <> 'external_push_credential' OR e.id <= COALESCE((SELECT c.low_water FROM ` + cursorTable + ` AS c WHERE c.stream = 'external_push'), 0))
+		      AND (e.aggregate_type <> 'repository_identity' OR e.id <= COALESCE((SELECT c.low_water FROM ` + cursorTable + ` AS c WHERE c.stream = 'repository_identity'), 0))
 		    ORDER BY e.published_at, e.id
 		    FOR UPDATE SKIP LOCKED
 		    LIMIT $2`

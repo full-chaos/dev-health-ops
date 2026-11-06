@@ -21,8 +21,8 @@ lifecycle: active
 The shadow asks the policy decision point (PDP) the same question the legacy go-api guard has already answered, and counts every difference. It never changes a response.
 {: .fc-page-lede }
 
-!!! warning "Status: shadow is dark; no service calls ShadowFromEnv yet, as of e590f357b896"
-    The shadow core is on `main`, but no service builds it, so `AUTH_SHADOW_PDP` has no effect in any deployment and the series below have no data. The pull request that wires it into go-api updates this banner. Until then this page is the procedure to follow once it is wired.
+!!! warning "Status: go-api builds the shadow; it is off unless `AUTH_SHADOW_PDP` is true"
+    go-api builds the shadow at start (`newShadow` in `internal/apiservice/shadow.go`) and reports its series under `service.name` `dev-health-api`. With `AUTH_SHADOW_PDP` unset or false the shadow is off: `dev_health_api_shadow_enabled` is 0 and the counters have no series.
 
 ## What is compared
 

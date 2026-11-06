@@ -55,6 +55,7 @@ var goMessageForProvisioningKeyword = map[string]string{
 	"type":          "type:",
 	"minItems":      "minItems:",
 	"maxItems":      "maxItems:",
+	"maxLength":     "maxLength:",
 	"not":           "not:",
 }
 
@@ -87,6 +88,9 @@ var provisioningSurfaces = []provisioningSurface{
 	}},
 	{AcrCredentialLifecycleEventSurface, "contracts/auth/v1/examples/acr-credential-lifecycle-event", func(root string, raw []byte) error {
 		_, err := ParseAcrCredentialLifecycleEvent(root, raw)
+		return err
+	}}, {RepositoryIdentityEventSurface, "contracts/auth/v1/examples/repository-identity-event", func(root string, raw []byte) error {
+		_, err := ParseRepositoryIdentityEvent(root, raw)
 		return err
 	}},
 }
@@ -392,6 +396,9 @@ func TestParsedTypesCarryEverySchemaMember(t *testing.T) {
 		{"ProvisioningPayload", reflect.TypeOf(ProvisioningPayload{}), ProvisioningEventSurface, []string{"payload"}},
 		{"AuditEvent", reflect.TypeOf(AuditEvent{}), AuditEventSurface, nil},
 		{"AuditAttributes", reflect.TypeOf(AuditAttributes{}), AuditEventSurface, []string{"attributes"}},
+		{"RepositoryIdentityEvent", reflect.TypeOf(RepositoryIdentityEvent{}), RepositoryIdentityEventSurface, nil},
+		{"RepositoryIdentityPayload", reflect.TypeOf(RepositoryIdentityPayload{}), RepositoryIdentityEventSurface, []string{"payload"}},
+		{"RepositoryIdentityChange", reflect.TypeOf(RepositoryIdentityChange{}), RepositoryIdentityEventSurface, []string{"payload", "change"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := jsonTags(tc.typ)

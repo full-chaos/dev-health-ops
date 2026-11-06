@@ -24,16 +24,18 @@ const (
 	shadowCountersRel  = "internal/api/policy/shadowcounters.go"
 	shadowRel          = "internal/api/policy/shadow.go"
 	shadowLabelsRel    = "internal/platform/otlpmetrics/labels.tsv"
+	shadowServiceRel   = "internal/platform/config/config.go"
 )
 
 var (
-	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "service.name": true, "deployment.environment": true}
-	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "reason", "instance_id"}, prohibitedLabels...)
+	shadowAllowedKeys = map[string]bool{"namespace": true, "caller": true, "class": true, "result": true, "reason": true, "service.name": true, "deployment.environment": true}
+	shadowBannedKeys  = append([]string{"organization", "user", "route", "action", "decision_id", "reason_code", "instance_id"}, prohibitedLabels...)
 	shadowFilterKey   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_.]*)\s*(?:!=|=~|=|\bNOT IN\b|\bIN\b|\bNOT LIKE\b|\bLIKE\b|\bEXISTS\b)`)
 	shadowQuoted      = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 	shadowPromMatcher = regexp.MustCompile(`\{([^}]*)\}`)
 	shadowPromBy      = regexp.MustCompile(`\b(?:by|without)\s*\(([^)]*)\)`)
 	shadowPromKey     = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!=|=)`)
+	shadowServiceName = regexp.MustCompile(`(?m)^const APIServiceName = "([^"]+)"$`)
 )
 
 func shadowAlertsAreTheGroup(g *guard) {
@@ -104,7 +106,7 @@ func shadowMetricNamesAreEmitted(g *guard) {
 
 func shadowCheckKeys(g *guard, where string, keys []string) {
 	for _, k := range keys {
-		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, service.name, deployment.environment}", where, k)
+		g.expect(shadowAllowedKeys[k], "%s uses the label %q, outside the allowlist {namespace, caller, class, result, reason, service.name, deployment.environment}", where, k)
 		for _, b := range shadowBannedKeys {
 			g.expect(k != b, "%s uses the prohibited label %q", where, k)
 		}
@@ -128,7 +130,7 @@ func shadowLabelsStayInAllowlist(g *guard) {
 		}
 	}
 	g.expect(rows[shadowMismatch] == "caller,class,namespace", "%s row for %s is %q, want caller,class,namespace", shadowLabelsRel, shadowMismatch, rows[shadowMismatch])
-	g.expect(rows[shadowResults] == "result", "%s row for %s is %q, want result", shadowLabelsRel, shadowResults, rows[shadowResults])
+	g.expect(rows[shadowResults] == "reason,result", "%s row for %s is %q, want reason,result", shadowLabelsRel, shadowResults, rows[shadowResults])
 
 	expr := str(alertNamed(g, shadowAlert)["expr"])
 	var keys []string
@@ -363,6 +365,38 @@ func shadowScalarPanelsReduce(g *guard) {
 	}
 }
 
+// go-api reports the service.name of its shell spec (internal/apiservice/service.go Spec), config.APIServiceName; a panel
+// filtered on any other name reads no series.
+func shadowDashboardFiltersNameTheAPIService(g *guard) {
+	m := shadowServiceName.FindStringSubmatch(g.read(shadowServiceRel))
+	if m == nil {
+		g.failf("%s has no `const APIServiceName = \"...\"`, the service.name go-api reports", shadowServiceRel)
+		return
+	}
+	want := "service.name = '" + m[1] + "'"
+	for id, p := range shadowPanels(g) {
+		for _, q := range p.queries {
+			expr := str(mp(q["filter"])["expression"])
+			g.expect(strings.Count(expr, "service.name") == 1 && strings.Contains(expr, want),
+				"dashboard panel %s filter is %q, want exactly one service clause %s (config.APIServiceName in %s)", id, expr, want, shadowServiceRel)
+		}
+	}
+}
+
+func TestShadowDashboardServiceGuardPlantedDefects(t *testing.T) {
+	files := []string{shadowDashboardRel, shadowServiceRel}
+	clause := "service.name = 'dev-health-api'"
+	want := "want exactly one service clause"
+	runPlanted(t, []planted{
+		{"one-panel-names-go-api", files, mut(shadowDashboardRel, clause, "service.name = 'go-api'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-drops-the-service-clause", files, mut(shadowDashboardRel, " AND "+clause, ""), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-adds-a-second-service", files, mut(shadowDashboardRel, clause, clause+" OR service.name = 'auth-service'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"one-panel-negates-the-service", files, mut(shadowDashboardRel, clause, "service.name != 'dev-health-api'"), shadowDashboardFiltersNameTheAPIService, want},
+		{"api-service-name-changes", files, mut(shadowServiceRel, `const APIServiceName = "dev-health-api"`, `const APIServiceName = "dev-health-go-api"`), shadowDashboardFiltersNameTheAPIService, want},
+		{"api-service-name-const-gone", files, mut(shadowServiceRel, `const APIServiceName = "dev-health-api"`, `const APIServiceNameOld = "dev-health-api"`), shadowDashboardFiltersNameTheAPIService, "has no `const APIServiceName"},
+	})
+}
+
 func TestShadowAlertGuardsRealTree(t *testing.T) {
 	runReal(t,
 		check{"shadow-alerts-are-the-group", shadowAlertsAreTheGroup},
@@ -374,5 +408,6 @@ func TestShadowAlertGuardsRealTree(t *testing.T) {
 		check{"shadow-dashboard-panels", shadowDashboardPanels},
 		check{"shadow-panel-fields-are-v6", shadowPanelFieldsAreV6},
 		check{"shadow-scalar-panels-reduce", shadowScalarPanelsReduce},
+		check{"shadow-dashboard-filters-name-the-api-service", shadowDashboardFiltersNameTheAPIService},
 	)
 }

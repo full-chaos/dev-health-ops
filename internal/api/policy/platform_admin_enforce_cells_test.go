@@ -361,6 +361,29 @@ func TestPlatformAdminRowsKeepTheLegacyAnswerWithTheCellOff(t *testing.T) {
 	}
 }
 
+// Rule 1 parity yardstick (product rules, D6773): a platform admin on a platform-admin row gets the answer the legacy
+// HS256 path gave at base ad73c1cc1 with the admin cell on: 200, the route reached as the caller (logs/13154-legacy-b-1.log
+// 833044a56374). The routed caller is the same principal (superuser on its users row, role "member" in its token's org)
+// and is judged by the production evaluator over a platform_admin state, as auth-service judges it. HS256 skipped the
+// decision point; a users-row superuser without an auth platform role is held in CHAOS-13209.
+const legacyPlatformAdminBody = "org= user=11111111-1111-4111-8111-111111111111 imp=-"
+
+func TestPlatformAdminRowsKeepTheLegacyAnswerForARoutedPlatformAdmin(t *testing.T) {
+	for pattern, route := range platformAdminRoutes {
+		t.Run(pattern, func(t *testing.T) {
+			pdp := newTestPDP(t, evaluatorVerdict(pdpState{authorization.StatusActive, rule.PlatformAdmin, true}))
+			got := serveCell(cellHandler(t, legacyStore(true, "member"), userClaims(nil), productionEnforcer(t, pdp, "admin")), pattern, cellBearer())
+			if got.status != http.StatusOK || got.body != legacyPlatformAdminBody {
+				t.Fatalf("routed platform admin: %d %q; want the legacy 200 %q", got.status, got.body, legacyPlatformAdminBody)
+			}
+			want := pdpSeen{Principal: shadowBearer, Action: route.action, Type: "platform", Key: "platform", Service: "dev-health-ops-api"}
+			if calls := pdp.calls(); len(calls) != 1 || calls[0] != want {
+				t.Fatalf("PDP saw %+v, want one platform question %+v", calls, want)
+			}
+		})
+	}
+}
+
 // GAP (flips in 10863 PR-1/PR-2): the platform-admin rows with no action are not judged by the decision point with
 // the admin cell on. A decision point that denies everything is never asked, and go-api's own superuser flag admits
 // the caller cross-org.

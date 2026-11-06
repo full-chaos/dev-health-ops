@@ -64,6 +64,7 @@ func TestProvisionerFromEnv(t *testing.T) {
 		wantErr bool
 	}{
 		{"workload", map[string]string{"AUTH_PROXY_URL": url, "AUTH_WORKLOAD_BOOTSTRAP_FILE": bootstrap, "AUTH_WORKLOAD_ISSUER": issuer}, false, false},
+		{"kubernetes subject file", map[string]string{"AUTH_PROXY_URL": url, "AUTH_WORKLOAD_SUBJECT_FILE": bootstrap, "AUTH_WORKLOAD_ISSUER": issuer}, false, false},
 		{"workload beside the retired credential", map[string]string{"AUTH_PROXY_URL": url, "AUTH_WORKLOAD_BOOTSTRAP_FILE": bootstrap,
 			"AUTH_WORKLOAD_ISSUER": issuer, "AUTH_SESSION_ISSUE_TOKEN": token}, false, false},
 		{"the retired credential alone", map[string]string{"AUTH_PROXY_URL": url, "AUTH_SESSION_ISSUE_TOKEN": token}, true, false},

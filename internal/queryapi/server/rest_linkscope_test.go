@@ -19,7 +19,7 @@ import (
 
 const linkBinding = "link_repo_ids"
 
-var linkScopeClasses = []string{"drilldown_issues", "drilldown_issues_post", "people_drilldown_issues", "flame"}
+var linkScopeClasses = []string{"drilldown_issues", "drilldown_issues_post", "people_drilldown_issues", "flame", "home", "home_post", "opportunities", "opportunities_post"}
 
 func isLinkScopeClass(class string) bool { return slices.Contains(linkScopeClasses, class) }
 
